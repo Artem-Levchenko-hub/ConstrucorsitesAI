@@ -5,7 +5,7 @@ import os
 import sys
 from pathlib import Path
 
-from omnia_api.ops.production_canary import (
+from yleum_api.ops.production_canary import (
     CanaryConfig,
     CanaryConfigurationError,
     CanaryFailure,

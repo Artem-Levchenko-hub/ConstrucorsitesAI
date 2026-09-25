@@ -287,22 +287,22 @@ async def assert_records(url: str, cookie: str, version: str, expected: list[dic
 async def run(args) -> None:
     import docker
 
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
-    from omnia_orchestrator.core.config import Settings, get_settings
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-    from omnia_orchestrator.routers.workspace import (
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
+    from yleum_orchestrator.core.config import Settings, get_settings
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+    from yleum_orchestrator.routers.workspace import (
         _read_agent_workspace_files,
         _workspace_revision,
     )
-    from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
-    from omnia_orchestrator.services import machine_adapter, nginx_writer
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
-    from omnia_orchestrator.services.cell_reservations import CellCapacityReservationStore
-    from omnia_orchestrator.services.cell_state import CellStateStore
-    from omnia_orchestrator.services.docker_machine_backend import _archive_file
-    from omnia_orchestrator.services.published_machine_backend import PublishedMachineBackend
-    from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
+    from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
+    from yleum_orchestrator.services import machine_adapter, nginx_writer
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.cell_reservations import CellCapacityReservationStore
+    from yleum_orchestrator.services.cell_state import CellStateStore
+    from yleum_orchestrator.services.docker_machine_backend import _archive_file
+    from yleum_orchestrator.services.published_machine_backend import PublishedMachineBackend
+    from yleum_orchestrator.services.workspace_provider_factory import build_workspace_provider
 
     require(os.name == "posix", "Linux host with local Docker is required")
     require(re.fullmatch(r"sha256:[0-9a-f]{64}", args.core_image) is not None, "core image must be immutable")
@@ -562,7 +562,7 @@ async def run(args) -> None:
             await assert_records(url, other, "v2", [])
             record("all-stopped-public-runtime-recovers-with-production-data")
             # A signed owner-preview cookie must fail on the distinct public identity.
-            from omnia_orchestrator.services.machine_boundary import verified_user
+            from yleum_orchestrator.services.machine_boundary import verified_user
             require(verified_user(user.split("=", 1)[1], adapter.secret(source_id)) is None,
                     "public and private signing identities overlap")
             for invalid_cookie in (
@@ -652,7 +652,7 @@ def self_check() -> None:
         if name.endswith(".cjs"):
             result = subprocess.run(["node", "--check"], input=source, text=True, capture_output=True, timeout=10)
             require(result.returncode == 0, f"fixture JavaScript syntax failed: {name}")
-    from omnia_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.core.project_machine import MachineManifest
 
     manifest = MachineManifest.from_files(fixture_files("v1"))
     require(manifest is not None and any(task.role == "full_build" for task in manifest.tasks),

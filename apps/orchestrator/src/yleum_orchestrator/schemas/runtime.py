@@ -1,0 +1,251 @@
+"""Pydantic DTOs for the internal orchestrator API.
+
+These shapes are consumed by apps/api (which forwards from web). Keep in
+sync with docs/01-api-contract.md V2 section.
+"""
+
+from __future__ import annotations
+
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+Tier = Literal["free", "pro", "business"]
+RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
+
+
+_SLUG_PATTERN = r"^[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])?$"
+
+
+class ProvisionRequest(BaseModel):
+    project_id: UUID
+    slug: str = Field(min_length=3, max_length=63, pattern=_SLUG_PATTERN)
+    template: str  # e.g. "nextjs-postgres-drizzle"
+    tier: Tier = "free"
+    initial_env: dict[str, str] = Field(default_factory=dict)
+
+
+class ProvisionResponse(BaseModel):
+    project_id: UUID
+    container_name: str
+    port: int
+    dev_url: str  # https://<slug>.preview.<base_domain>
+    state: RuntimeState
+
+
+class MaxPreviewSessionResponse(BaseModel):
+    """One-time bootstrap URL for a development MAX Mini App preview.
+
+    The signature is deliberately part of the URL rather than this response's
+    separate fields: the caller only needs to navigate to ``bootstrap_url``.
+    It expires quickly and is validated inside the project container.
+    """
+
+    project_id: UUID
+    bootstrap_url: str
+    expires_at: str  # ISO8601 UTC
+
+
+class WakeRequest(BaseModel):
+    project_id: UUID
+
+
+class WakeResponse(BaseModel):
+    project_id: UUID
+    state: RuntimeState
+    ready_in_seconds: int  # estimated wake time
+
+
+class StopRequest(BaseModel):
+    project_id: UUID
+    pause: bool = True  # True = docker pause (keep memory), False = docker stop
+
+
+class KeepAliveRequest(BaseModel):
+    project_id: UUID
+    enabled: bool
+
+
+class KeepAliveResponse(BaseModel):
+    project_id: UUID
+    enabled: bool
+
+
+class HotReloadRequest(BaseModel):
+    project_id: UUID
+    # files: dict path → content. Same shape as `<file path="...">...</file>` extraction
+    # from apps/api/src/yleum_api/services/file_extractor.py.
+    files: dict[str, str]
+    # Optional disambiguation for legitimate zero-byte files. Paths listed here
+    # must also exist in `files` with `""` content; other empty strings keep the
+    # legacy delete semantics for backward compatibility.
+    empty_files: list[str] = Field(default_factory=list)
+    # Optional compare-and-swap token returned by exec-sandbox. When present,
+    # the orchestrator refuses to apply a stale shell diff over newer edits.
+    base_workspace_revision: str | None = Field(
+        default=None, min_length=64, max_length=64, pattern=r"^[0-9a-f]{64}$"
+    )
+
+    @model_validator(mode="after")
+    def _validate_empty_files(self) -> HotReloadRequest:
+        seen: set[str] = set()
+        for path in self.empty_files:
+            if path in seen:
+                raise ValueError("empty_files must not contain duplicates")
+            seen.add(path)
+            if self.files.get(path) != "":
+                raise ValueError(
+                    "empty_files paths must also appear in files with empty string content"
+                )
+        return self
+
+
+class AgentSandboxExecRequest(BaseModel):
+    slug: str = Field(min_length=1, max_length=128)
+    cmd: str = Field(min_length=1, max_length=262_144)
+
+
+class StatusResponse(BaseModel):
+    project_id: UUID
+    state: RuntimeState
+    container_name: str | None = None
+    port: int | None = None
+    dev_url: str | None = None
+    last_activity_at: str | None = None  # ISO8601
+    cpu_pct: float | None = None
+    memory_mb: int | None = None
+    logs_tail_url: str | None = None  # signed url for last 200 lines
+    keep_alive: bool = False
+    # Area C (DARK): {email, auth_secret} for the gate's seed operator account,
+    # populated ONLY when the orchestrator runs with OMNIA_GATE_SEED=1. Null on
+    # every normal deployment, so the public contract is unchanged.
+    gate_seed: dict[str, str] | None = None
+
+
+class DeployTargetCreds(BaseModel):
+    """BYO-VPS: расшифрованные SSH-креды чужого сервера (от apps/api)."""
+
+    host: str
+    port: int = 22
+    user: str
+    auth_type: str
+    secret: str
+    known_host_key: str
+    resolved_ip: str
+    label: str | None = None
+    id: str | None = None
+
+
+class DeployRequest(BaseModel):
+    project_id: UUID
+    # Optional: we deploy the live container state, not a git commit (runtime
+    # has no git history — hot-reload writes files straight into the container).
+    # Kept for forward-compat (future rollback-by-sha).
+    commit_sha: str | None = None
+    # BYO-VPS: если задан — деплоим собранный образ на этот чужой VPS по SSH,
+    # а не на наш хост. None = наш хостинг.
+    target: DeployTargetCreds | None = None
+    # Подключённые к проекту домены — при деплое на свой VPS агент сам поднимает
+    # edge (Caddy, авто-HTTPS) для них на машине пользователя.
+    domains: list[str] | None = None
+    # Secret runtime-only variables. They are never written into build context,
+    # deployment records or logs; the builder clears the mutable dict on exit.
+    runtime_env: dict[str, str] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+
+    @field_validator("runtime_env")
+    @classmethod
+    def _safe_runtime_env(cls, value: dict[str, str]) -> dict[str, str]:
+        allowed = {"MAX_BOT_TOKEN", "MAX_WEBHOOK_SECRET", "MAX_API_BASE_URL"}
+        if len(value) > len(allowed) or any(key not in allowed for key in value):
+            raise ValueError("runtime_env contains an unsupported key")
+        if any(not item or len(item) > 8192 for item in value.values()):
+            raise ValueError("runtime_env contains an invalid value")
+        return value
+
+
+# Phases match apps/api DeployStatus so the api forwards them unchanged.
+DeployPhase = Literal[
+    "idle",
+    "queued",
+    "building",
+    "pushing",
+    "swapping",
+    "cancelling",
+    "cancelled",
+    "done",
+    "failed",
+]
+
+
+class DeployProgress(BaseModel):
+    """Transfer progress of the current stage; an unknown total stays None."""
+
+    bytes_done: int = 0
+    bytes_total: int | None = None
+    files_done: int | None = None
+
+
+class DeployStage(BaseModel):
+    stage: str
+    started_at: str | None = None
+    finished_at: str | None = None
+    elapsed_ms: int | None = None
+    bytes_done: int | None = None
+    bytes_total: int | None = None
+
+
+class DeployResponse(BaseModel):
+    project_id: UUID
+    run_id: str | None = None
+    snapshot_id: UUID | None = None
+    commit_sha: str | None = None
+    phase: DeployPhase
+    prod_url: str | None = None
+    image_tag: str | None = None
+    error: str | None = None
+    detail: str | None = None
+    target_label: str | None = None
+    target_id: str | None = None
+    can_cancel: bool = False
+    logs: list[str] = Field(default_factory=list)
+    started_at: str | None = None
+    finished_at: str | None = None
+    # P01 (format_version 2): durable substages, heartbeat and metrics. Absent on
+    # responses written by an older controller — that means "unknown", not idle.
+    format_version: int = 1
+    stage: str | None = None
+    stage_started_at: str | None = None
+    heartbeat_at: str | None = None
+    progress: DeployProgress | None = None
+    stages: list[DeployStage] = Field(default_factory=list)
+    metrics: dict[str, int] = Field(default_factory=dict)
+    error_stage: str | None = None
+    reason_code: str | None = None
+
+
+class LogsResponse(BaseModel):
+    project_id: UUID
+    container_name: str | None = None
+    tail: int
+    logs: str  # raw stdout+stderr concatenated, UTF-8, newline-separated
+
+
+class CompileStatusResponse(BaseModel):
+    project_id: UUID
+    # True = dev server is compiling cleanly (or no outstanding error); False =
+    # the AI-written code currently fails to compile / errors at render.
+    ok: bool
+    error: str | None = None  # compact, ANSI-stripped excerpt of the error block
+    file: str | None = None  # first implicated project source file (e.g. src/app/page.tsx)
+
+
+class RuntimeStatusResponse(BaseModel):
+    project_id: UUID
+    # True = the running app served its route without a server error (or there's
+    # nothing to probe); False = the rendered route returned 5xx.
+    ok: bool
+    status_code: int | None = None  # HTTP status the probe observed (None = no response)
+    error: str | None = None  # parsed Next.js error excerpt from the dev logs
+    file: str | None = None  # first implicated project source file

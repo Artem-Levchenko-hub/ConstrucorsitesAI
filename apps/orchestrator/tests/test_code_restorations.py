@@ -5,8 +5,8 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.schemas.code_restoration import (
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.schemas.code_restoration import (
     CodeRestorationApply,
     CodeRestorationCancel,
     CodeRestorationPrepare,
@@ -14,7 +14,7 @@ from omnia_orchestrator.schemas.code_restoration import (
 
 
 def test_observed_preserves_verified_source_revision():
-    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+    from yleum_orchestrator.services.code_restorations import CodeRestorationService
 
     body = apply_request(request())
     proof = dict(
@@ -31,7 +31,7 @@ def test_observed_preserves_verified_source_revision():
 
 
 def test_observed_accepts_explicit_effect_free_superseded_receipt():
-    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+    from yleum_orchestrator.services.code_restorations import CodeRestorationService
 
     body = apply_request(request())
     proof = {
@@ -97,7 +97,7 @@ def binding_payload(**changes):
 
 
 def apply_request(value):
-    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV2
+    from yleum_orchestrator.schemas.code_restoration import RestorationSourceBindingV2
 
     return CodeRestorationApply(
         **{
@@ -182,7 +182,7 @@ class Engine:
 
 
 def service(tmp_path, engine):
-    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+    from yleum_orchestrator.services.code_restorations import CodeRestorationService
 
     return CodeRestorationService(root=tmp_path, engine=engine)
 
@@ -242,7 +242,7 @@ async def test_v2_prepare_without_binding_never_becomes_ready(tmp_path):
 
 
 async def test_legacy_ready_without_binding_cannot_start_apply(tmp_path):
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     value = request(binding_contract_version=None)
     engine = Engine()
@@ -274,7 +274,7 @@ async def test_legacy_ready_without_binding_cannot_start_apply(tmp_path):
 
 
 async def test_legacy_applying_reconciles_only_from_existing_activation_journal(tmp_path):
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     value = request(binding_contract_version=None)
     engine = Engine()
@@ -330,7 +330,7 @@ async def test_database_observation_survives_coordinator_restart(tmp_path, datab
 
 @pytest.mark.parametrize("database_state", [False, [], "assumed_empty"])
 async def test_invalid_database_observation_cannot_be_ready(tmp_path, database_state):
-    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+    from yleum_orchestrator.services.code_restorations import CodeRestorationService
 
     prepared = await Engine().prepare(request())
     prepared["report"]["database_state"] = database_state
@@ -653,8 +653,8 @@ async def test_internal_routes_auth_identity_and_durable_status(tmp_path, monkey
     import httpx
     from fastapi import FastAPI
 
-    from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
-    from omnia_orchestrator.routers import code_restorations
+    from yleum_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+    from yleum_orchestrator.routers import code_restorations
 
     svc = service(tmp_path, Engine())
     monkeypatch.setattr(code_restorations, "get_code_restoration_service", lambda: svc)
@@ -694,8 +694,8 @@ async def test_internal_cancel_accepts_exact_pre_apply_failure(tmp_path, monkeyp
     import httpx
     from fastapi import FastAPI
 
-    from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
-    from omnia_orchestrator.routers import code_restorations
+    from yleum_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+    from yleum_orchestrator.routers import code_restorations
 
     engine = Engine()
 

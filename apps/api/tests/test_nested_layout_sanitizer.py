@@ -7,7 +7,7 @@ so the engine strips it on write. A correct layout passes through byte-identical
 
 from __future__ import annotations
 
-from omnia_api.services import agent_builder as ab
+from yleum_api.services import agent_builder as ab
 
 
 def test_strips_html_body_from_nested_layout():

@@ -3,13 +3,13 @@ import importlib.util
 
 import pytest
 
-from omnia_orchestrator.core.project_machine import MachineManifest
 from tests.test_project_machine import fixture
 from tests.test_project_machine_manifest import payload
+from yleum_orchestrator.core.project_machine import MachineManifest
 
 
 def module():
-    name = "omnia_orchestrator.services.machine_services"
+    name = "yleum_orchestrator.services.machine_services"
     assert importlib.util.find_spec(name) is not None, "machine supervision is missing"
     return importlib.import_module(name)
 

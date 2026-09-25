@@ -9,9 +9,9 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from omnia_api.services import payment_state
-from omnia_api.services.billing_cycle import BillingCycleState, run_billing_loop
-from omnia_api.workers.billing import build_health_app
+from yleum_api.services import payment_state
+from yleum_api.services.billing_cycle import BillingCycleState, run_billing_loop
+from yleum_api.workers.billing import build_health_app
 
 T0 = datetime(2026, 9, 23, 12, 0, tzinfo=UTC)
 

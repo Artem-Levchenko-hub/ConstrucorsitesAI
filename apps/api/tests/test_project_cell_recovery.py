@@ -11,20 +11,20 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-import omnia_api.services.project_cell_recovery as recovery_service
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.orchestrator_client import (
+import yleum_api.services.project_cell_recovery as recovery_service
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.orchestrator_client import (
     EnsureProjectCellResourcesRequest,
     OrchestratorUnavailable,
     ProjectCellCapacityRejection,
     ProjectCellCapacityWait,
     ProjectCellResourceResponse,
 )
-from omnia_api.services.project_cell_recovery import recover_ensure_operation
-from omnia_api.services.project_cells import (
+from yleum_api.services.project_cell_recovery import recover_ensure_operation
+from yleum_api.services.project_cells import (
     ProjectCellStateConflict,
     _advisory_lock,
     claim_cell_operation_committed,

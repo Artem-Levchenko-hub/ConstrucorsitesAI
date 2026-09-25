@@ -9,15 +9,15 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.security import create_access_token
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.max_project_config import MaxProjectConfig
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.routers import product_advice as advice_router
-from omnia_api.services.product_advisor import AdviceItem, ProductAdviceResult
+from yleum_api.core.config import get_settings
+from yleum_api.core.security import create_access_token
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.routers import product_advice as advice_router
+from yleum_api.services.product_advisor import AdviceItem, ProductAdviceResult
 
 
 class FakeRedis:
@@ -434,7 +434,7 @@ async def test_model_outage_returns_retryable_error_and_does_not_cache(
     db_session,
     monkeypatch,
 ) -> None:
-    from omnia_api.services import llm_client
+    from yleum_api.services import llm_client
 
     owner = await _user(db_session, "owner-unavailable@example.com")
     project, _, _ = await _project_with_snapshots(db_session, owner)

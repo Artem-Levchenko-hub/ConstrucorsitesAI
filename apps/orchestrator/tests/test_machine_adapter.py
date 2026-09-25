@@ -5,13 +5,13 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
 from tests.test_project_machine_manifest import payload
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
 
 
 def module():
-    name = "omnia_orchestrator.services.machine_adapter"
+    name = "yleum_orchestrator.services.machine_adapter"
     assert importlib.util.find_spec(name) is not None, "portable provider integration is missing"
     return importlib.import_module(name)
 
@@ -117,7 +117,7 @@ async def test_publication_checkpoint_can_capture_only_release_workspace_without
     tmp_path, monkeypatch
 ):
     api = module()
-    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
 
     workspace_id = uuid4()
     manifest = MachineManifest.model_validate(payload())
@@ -209,7 +209,7 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activ
 
     runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
     runtime.parts = lambda state: (Machine(), object())
-    from omnia_orchestrator.services.machine_services import MachineServiceFailed
+    from yleum_orchestrator.services.machine_services import MachineServiceFailed
 
     runtime._activate_runtime = AsyncMock(
         side_effect=MachineServiceFailed("service web readiness failed: missing build")
@@ -277,8 +277,8 @@ async def test_missing_manifest_tests_is_not_a_successful_build(tmp_path):
 
 
 async def test_explicit_legacy_restore_clears_marker_only_selection(tmp_path):
-    from omnia_orchestrator.services.machine_identity import is_portable_workspace
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.machine_identity import is_portable_workspace
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     api = module()
     workspace = uuid4()
@@ -326,8 +326,8 @@ async def test_preview_resume_uses_only_consumed_halt_receipt(
     import json
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
     from tests.test_docker_machine_backend import retained_preview_fixture
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     api = module()
     backend, reference, *_ = retained_preview_fixture(tmp_path)
@@ -533,7 +533,7 @@ async def test_apply_total_timeout_drains_then_cleans_up(monkeypatch):
 async def test_apply_shielded_readiness_uses_remaining_budget_and_cleanup_reserve(monkeypatch):
     import http.client
 
-    from omnia_orchestrator.services import project_machine
+    from yleum_orchestrator.services import project_machine
 
     api = module()
     clock = [0.0]
@@ -592,8 +592,8 @@ async def test_apply_timeout_cleans_up_after_shielded_helper_raises(monkeypatch)
     import asyncio
     import threading
 
-    from omnia_orchestrator.core.cell_resources import CellResourceError
-    from omnia_orchestrator.services.project_machine import machine_effect
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.project_machine import machine_effect
 
     api = module()
     monkeypatch.setattr(api, "MACHINE_APPLY_TIMEOUT_SECONDS", 0.02)
@@ -642,7 +642,7 @@ async def test_apply_timeout_cleans_up_after_shielded_helper_raises(monkeypatch)
 
 
 async def test_apply_cleans_all_resources_when_nested_execute_reports_timeout():
-    from omnia_orchestrator.services.docker_cell_resources import DockerCommandResult
+    from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 
     runtime = module().MachineAdapter(SimpleNamespace(), SimpleNamespace())
     events = []

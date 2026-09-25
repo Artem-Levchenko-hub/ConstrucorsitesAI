@@ -6,18 +6,18 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.models.project_cell import (
-    ProjectCellActivityLease,
-    ProjectCellCandidate,
-    ProjectCellProofResult,
-)
-from omnia_api.services.max_finalization import MaxFinalizationStatus
-from omnia_api.services.project_cell_executor import ProjectCellCommandRole
 from tests.test_max_finalization import (
     _files,
     _install_exact_release_probe,
     _new_harness,
 )
+from yleum_api.models.project_cell import (
+    ProjectCellActivityLease,
+    ProjectCellCandidate,
+    ProjectCellProofResult,
+)
+from yleum_api.services.max_finalization import MaxFinalizationStatus
+from yleum_api.services.project_cell_executor import ProjectCellCommandRole
 
 
 @pytest.fixture(autouse=True)

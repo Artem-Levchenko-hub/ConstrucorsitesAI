@@ -12,7 +12,7 @@ import pytest
 
 
 def module():
-    name = "omnia_orchestrator.services.machine_boundary"
+    name = "yleum_orchestrator.services.machine_boundary"
     assert importlib.util.find_spec(name) is not None, "framework-neutral MAX boundary is missing"
     return importlib.import_module(name)
 

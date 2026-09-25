@@ -5,7 +5,7 @@ import asyncio
 import pytest
 from fastapi import FastAPI
 
-from omnia_api import main
+from yleum_api import main
 
 # How long a test waits for a background task to reach a checkpoint. The
 # assertion is that the checkpoint happens at all, not that it is fast: a

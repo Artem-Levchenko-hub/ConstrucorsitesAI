@@ -14,7 +14,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from omnia_api.services.max_runtime_probe import probe_signed_business_endpoint
+from yleum_api.services.max_runtime_probe import probe_signed_business_endpoint
 
 _ORIGIN = "https://cell-canary-dev.preview.example"
 
@@ -172,7 +172,7 @@ async def test_the_cell_probe_refuses_a_green_page_with_a_broken_data_route(
     """The whole point of LIVE-04: the page renders, the data route is 500."""
     from types import SimpleNamespace
 
-    from omnia_api.services import max_runtime_probe as probe_module
+    from yleum_api.services import max_runtime_probe as probe_module
 
     async def signed_runtime(*args: object, **kwargs: object) -> probe_module.MaxRuntimeProbe:
         return probe_module.MaxRuntimeProbe(True, "product page served")
@@ -205,7 +205,7 @@ async def test_without_a_contract_route_the_probe_is_unchanged(
 ) -> None:
     from types import SimpleNamespace
 
-    from omnia_api.services import max_runtime_probe as probe_module
+    from yleum_api.services import max_runtime_probe as probe_module
 
     async def signed_runtime(*args: object, **kwargs: object) -> probe_module.MaxRuntimeProbe:
         return probe_module.MaxRuntimeProbe(True, "product page served")

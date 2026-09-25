@@ -6,9 +6,9 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-import omnia_api.models  # noqa: F401  — register all model classes on Base.metadata
-from omnia_api.core.config import get_settings
-from omnia_api.models.base import Base
+import yleum_api.models  # noqa: F401  — register all model classes on Base.metadata
+from yleum_api.core.config import get_settings
+from yleum_api.models.base import Base
 
 config = context.config
 

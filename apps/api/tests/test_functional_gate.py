@@ -7,7 +7,7 @@ check (e.g. one leak) fails the whole gate, since security has no partial credit
 
 from __future__ import annotations
 
-from omnia_api.services.functional_gate import Check, summarize
+from yleum_api.services.functional_gate import Check, summarize
 
 
 def test_all_pass_ships() -> None:

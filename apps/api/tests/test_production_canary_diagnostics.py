@@ -14,8 +14,6 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.ops import production_canary as canary_module
-from omnia_api.ops.production_canary import CanaryConfig, CanaryFailure, ProductionCanary
 from tests.production_canary_fakes import (
     OTHER_RELEASE_SHA,
     PROJECT_ID,
@@ -23,6 +21,8 @@ from tests.production_canary_fakes import (
     canary_env,
     matrix,
 )
+from yleum_api.ops import production_canary as canary_module
+from yleum_api.ops.production_canary import CanaryConfig, CanaryFailure, ProductionCanary
 
 
 def _run(production: FakeProduction, events: list[dict[str, object]] | None = None) -> None:

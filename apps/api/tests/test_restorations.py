@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services import repo
+from yleum_api.services import repo
 
 
 def source_binding(**changes):
@@ -50,7 +50,7 @@ def source_binding_v3(**changes):
 def ready_source_resources(monkeypatch):
     from types import SimpleNamespace
 
-    from omnia_api.services import project_cell_runtime
+    from yleum_api.services import project_cell_runtime
 
     async def resources(workspace_id):
         return SimpleNamespace(state="resources_ready")
@@ -252,7 +252,7 @@ def test_restore_bundle_preserves_binary_bytes(tmp_path):
 def test_restoration_request_and_runtime_contracts_are_strict():
     from pydantic import ValidationError
 
-    from omnia_api.schemas.restoration import RestoreRequest, RuntimeRestoration
+    from yleum_api.schemas.restoration import RestoreRequest, RuntimeRestoration
 
     with pytest.raises(ValidationError):
         RestoreRequest(
@@ -282,7 +282,7 @@ def test_adaptive_cancel_projection_uses_controller_ponr_not_legacy_exact_flag()
     from datetime import UTC, datetime
     from types import SimpleNamespace
 
-    from omnia_api.services.restorations import public_operation
+    from yleum_api.services.restorations import public_operation
 
     operation = SimpleNamespace(
         id=uuid4(),
@@ -320,13 +320,13 @@ def test_adaptive_cancel_projection_uses_controller_ponr_not_legacy_exact_flag()
 def test_activation_receipt_journal_accepts_phase_advance_and_rejects_regression():
     from types import SimpleNamespace
 
-    from omnia_api.core.errors import ApiError
-    from omnia_api.schemas.restoration import (
+    from tests.test_orchestrator_client import _activation_contract
+    from yleum_api.core.errors import ApiError
+    from yleum_api.schemas.restoration import (
         RestorationAdaptationActivationStatus,
         canonical_activation_digest,
     )
-    from omnia_api.services.restorations import _validate_activation_receipt_progression
-    from tests.test_orchestrator_client import _activation_contract
+    from yleum_api.services.restorations import _validate_activation_receipt_progression
 
     _, _command, activated_raw = _activation_contract()
 
@@ -366,8 +366,8 @@ def test_activation_receipt_journal_accepts_phase_advance_and_rejects_regression
 def test_restore_request_policy_is_strict_and_changes_the_durable_request_digest():
     from pydantic import ValidationError
 
-    from omnia_api.schemas.restoration import RestoreRequest
-    from omnia_api.services.restorations import _digest, restoration_request_digest
+    from yleum_api.schemas.restoration import RestoreRequest
+    from yleum_api.services.restorations import _digest, restoration_request_digest
 
     identity = {
         "target_version_id": uuid4(),
@@ -398,8 +398,8 @@ def test_restore_request_policy_is_strict_and_changes_the_durable_request_digest
 
 
 def test_runtime_observation_must_match_planned_activation():
-    from omnia_api.schemas.restoration import RuntimeRestoration
-    from omnia_api.services.restorations import validate_runtime_response
+    from yleum_api.schemas.restoration import RuntimeRestoration
+    from yleum_api.services.restorations import validate_runtime_response
 
     identity = {
         key: str(uuid4()) for key in ("operation_id", "workspace_id", "project_id", "owner_id")
@@ -438,7 +438,7 @@ class FakeRuntime:
         self.lose_apply_reply = False
 
     async def prepare(self, request):
-        from omnia_api.schemas.restoration import (
+        from yleum_api.schemas.restoration import (
             RuntimeRestoration,
             RuntimeSourceBindingV2,
             RuntimeSourceBindingV3,
@@ -470,7 +470,7 @@ class FakeRuntime:
         return self.result
 
     async def status(self, request):
-        from omnia_api.core.errors import ApiError
+        from yleum_api.core.errors import ApiError
 
         if self.result is None:
             raise ApiError("not_found", "operation not found", 404)
@@ -487,7 +487,7 @@ class FakeRuntime:
                 "can_cancel": False,
             }
         )
-        from omnia_api.schemas.restoration import RuntimeObserved
+        from yleum_api.schemas.restoration import RuntimeObserved
 
         self.result.observed = RuntimeObserved(
             candidate_id=request["candidate_id"],
@@ -519,7 +519,7 @@ class FakeRuntime:
 def test_runtime_source_binding_digest_is_canonical_and_secret_free():
     from pydantic import ValidationError
 
-    from omnia_api.schemas.restoration import RuntimeSourceBindingV2, RuntimeSourceBindingV3
+    from yleum_api.schemas.restoration import RuntimeSourceBindingV2, RuntimeSourceBindingV3
 
     first = RuntimeSourceBindingV2.model_validate(source_binding())
     second = RuntimeSourceBindingV2.model_validate(dict(reversed(list(source_binding().items()))))
@@ -551,12 +551,12 @@ def test_runtime_source_binding_digest_is_canonical_and_secret_free():
 
 @pytest.mark.parametrize("contract_version", [2, 3])
 def test_runtime_ready_requires_the_exact_requested_binding_contract(contract_version):
-    from omnia_api.schemas.restoration import (
+    from yleum_api.schemas.restoration import (
         RuntimeRestoration,
         RuntimeSourceBindingV2,
         RuntimeSourceBindingV3,
     )
-    from omnia_api.services.restorations import validate_runtime_response
+    from yleum_api.services.restorations import validate_runtime_response
 
     identity = {
         key: str(uuid4())
@@ -609,12 +609,12 @@ def test_runtime_ready_requires_the_exact_requested_binding_contract(contract_ve
 
 
 async def restoration_fixture(db):
-    from omnia_api.models.project import Project
-    from omnia_api.models.project_cell import ProjectCellWorkspace
-    from omnia_api.models.project_version import ProjectVersion
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.models.user import User
-    from omnia_api.schemas.restoration import RestoreRequest
+    from yleum_api.models.project import Project
+    from yleum_api.models.project_cell import ProjectCellWorkspace
+    from yleum_api.models.project_version import ProjectVersion
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.models.user import User
+    from yleum_api.schemas.restoration import RestoreRequest
 
     user = User(email=f"{uuid4()}@restoration.test")
     db.add(user)
@@ -662,10 +662,10 @@ async def restoration_fixture(db):
 async def test_db_restoration_prepares_without_head_change_then_applies_once(db_session):
     from sqlalchemy import func, select
 
-    from omnia_api.models.project_version import ProjectVersion
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.models.project_version import ProjectVersion
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, old, current, _, workspace, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -705,9 +705,9 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
 async def test_db_legacy_manual_idempotency_replays_but_cannot_be_upgraded_to_automatic(
     db_session,
 ):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -732,9 +732,9 @@ async def test_db_legacy_manual_idempotency_replays_but_cannot_be_upgraded_to_au
 
 
 async def test_db_restoration_overlays_complete_current_max_kit_when_configured(db_session):
-    from omnia_api.models.max_project_config import MaxProjectConfig
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.services import restorations as service
+    from yleum_api.models.max_project_config import MaxProjectConfig
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     db_session.add(
@@ -764,10 +764,10 @@ async def test_db_restoration_overlays_complete_current_max_kit_when_configured(
 
 
 async def test_db_v3_binding_is_durable_and_required_before_apply(db_session):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -797,8 +797,8 @@ async def test_db_v3_binding_is_durable_and_required_before_apply(db_session):
 
 
 def test_v2_runtime_observation_requires_saved_binding_digest():
-    from omnia_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
-    from omnia_api.services.restorations import validate_runtime_response
+    from yleum_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
+    from yleum_api.services.restorations import validate_runtime_response
 
     identity = {
         key: str(uuid4()) for key in ("operation_id", "workspace_id", "project_id", "owner_id")
@@ -843,8 +843,8 @@ async def test_db_same_revision_receipt_is_noop_only_when_semantically_identical
 
     from sqlalchemy.orm.attributes import flag_modified
 
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.services import restorations as service
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, workspace, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -892,8 +892,8 @@ async def test_db_same_revision_receipt_is_noop_only_when_semantically_identical
 
 
 async def test_db_lost_apply_reply_reconciles_without_second_activation(db_session):
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, workspace, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -921,9 +921,9 @@ async def test_db_lost_apply_reply_reconciles_without_second_activation(db_sessi
 
 @pytest.mark.parametrize("conflict", ["head", "report", "epoch"])
 async def test_db_stale_apply_rejected_before_runtime(db_session, conflict):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, old, current, _, workspace, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -950,8 +950,8 @@ async def test_db_stale_apply_rejected_before_runtime(db_session, conflict):
 
 
 async def test_db_admission_blocks_active_restore_and_rebound_key(db_session):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -975,8 +975,8 @@ async def test_db_admission_blocks_active_restore_and_rebound_key(db_session):
 
 
 async def test_db_disabled_routes_owner_scope_and_no_dispatch(client, db_session, monkeypatch):
-    from omnia_api.core.security import create_access_token
-    from omnia_api.routers import restorations as routes
+    from yleum_api.core.security import create_access_token
+    from yleum_api.routers import restorations as routes
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     monkeypatch.setattr(routes.get_settings(), "max_code_restoration_enabled", False)
@@ -992,9 +992,9 @@ async def test_db_disabled_routes_owner_scope_and_no_dispatch(client, db_session
 
 
 async def test_db_every_operation_rejects_foreign_actor(db_session):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -1026,7 +1026,7 @@ async def test_db_every_operation_rejects_foreign_actor(db_session):
 
 
 async def test_runtime_wire_shape_and_deadlines(monkeypatch):
-    from omnia_api.services import restoration_runtime as transport
+    from yleum_api.services import restoration_runtime as transport
 
     calls = []
     identity = {
@@ -1094,7 +1094,7 @@ async def test_runtime_wire_shape_and_deadlines(monkeypatch):
 
 
 async def test_db_lost_initial_dispatch_resumes_same_operation(db_session, monkeypatch):
-    from omnia_api.services import restorations as service
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -1119,8 +1119,8 @@ async def test_db_lost_initial_dispatch_replays_persisted_legacy_v2_payload_unch
 ):
     from sqlalchemy.orm.attributes import flag_modified
 
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.services import restorations as service
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.services import restorations as service
 
     class CapturingRuntime(FakeRuntime):
         def __init__(self):
@@ -1162,10 +1162,10 @@ async def test_db_lost_initial_dispatch_replays_persisted_legacy_v2_payload_unch
 async def test_db_database_commit_failure_after_activation_is_recoverable(db_session, monkeypatch):
     from sqlalchemy import func, select
 
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     owner_id, project_id, current_id = owner.id, project.id, current.id
@@ -1206,8 +1206,8 @@ async def test_db_database_commit_failure_after_activation_is_recoverable(db_ses
 
 @pytest.mark.parametrize("field", ["owner_id", "source_commit_sha", "fencing_epoch"])
 async def test_db_wrong_observed_activation_never_advances_draft(db_session, monkeypatch, field):
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -1243,10 +1243,10 @@ async def test_db_wrong_observed_activation_never_advances_draft(db_session, mon
 
 
 async def test_db_generation_blocks_restore_before_external_dispatch(db_session):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.models.generation_run import GenerationRun
-    from omnia_api.models.message import Message
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.message import Message
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     message = Message(project_id=project.id, role="user", content="fixture")
@@ -1280,9 +1280,9 @@ async def test_db_busy_project_lock_rejects_restoration_admission_without_writes
     from sqlalchemy import func, select, text
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.core.errors import ApiError
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -1320,7 +1320,7 @@ async def test_db_busy_project_lock_rejects_restoration_admission_without_writes
 def test_runtime_completion_rejects_coerced_applied_flags(flag):
     from pydantic import ValidationError
 
-    from omnia_api.schemas.restoration import RuntimeObserved
+    from yleum_api.schemas.restoration import RuntimeObserved
 
     with pytest.raises(ValidationError):
         RuntimeObserved(
@@ -1353,12 +1353,12 @@ def test_restore_source_symlink_is_rejected_without_activation():
 
 @pytest.mark.parametrize("consumer", ["generation", "preview", "publication", "deletion"])
 async def test_db_active_restoration_blocks_real_mutating_consumers(db_session, consumer):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.services import restorations as service
-    from omnia_api.services.cell_publication import submit_publication
-    from omnia_api.services.generation_runs import reserve_generation_run
-    from omnia_api.services.project_cell_deletion import teardown_project_cell
-    from omnia_api.services.project_cell_runtime import _try_preview_project_lock
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services import restorations as service
+    from yleum_api.services.cell_publication import submit_publication
+    from yleum_api.services.generation_runs import reserve_generation_run
+    from yleum_api.services.project_cell_deletion import teardown_project_cell
+    from yleum_api.services.project_cell_runtime import _try_preview_project_lock
 
     owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
     workspace.provider = "docker_owner_canary"
@@ -1394,7 +1394,7 @@ async def test_db_active_restoration_blocks_real_mutating_consumers(db_session, 
 
 
 async def test_db_lost_cancel_reply_replays_as_status(db_session, monkeypatch):
-    from omnia_api.services import restorations as service
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -1421,10 +1421,10 @@ async def test_db_lost_cancel_reply_replays_as_status(db_session, monkeypatch):
 
 
 async def test_db_capacity_skips_restoration_until_cancelled(db_session):
-    from omnia_api.models.generation_run import GenerationRun
-    from omnia_api.models.project import Project
-    from omnia_api.services import restorations as service
-    from omnia_api.services.project_cell_capacity import claim_idle_hibernation_victim
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.project import Project
+    from yleum_api.services import restorations as service
+    from yleum_api.services.project_cell_capacity import claim_idle_hibernation_victim
 
     owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -1456,8 +1456,8 @@ async def test_db_capacity_skips_restoration_until_cancelled(db_session):
 
 
 async def test_db_router_completed_returns_actual_snapshot(client, db_session, monkeypatch):
-    from omnia_api.core.security import create_access_token
-    from omnia_api.routers import restorations as routes
+    from yleum_api.core.security import create_access_token
+    from yleum_api.routers import restorations as routes
 
     owner, project, old, current, _, _, request = await restoration_fixture(db_session)
     monkeypatch.setattr(routes.get_settings(), "max_code_restoration_enabled", True)
@@ -1489,8 +1489,8 @@ async def test_db_router_completed_returns_actual_snapshot(client, db_session, m
 def test_verified_negative_runtime_receipt_is_failed_only():
     from pydantic import ValidationError
 
-    from omnia_api.schemas.restoration import RuntimeRestoration
-    from omnia_api.services.restorations import validate_runtime_response
+    from yleum_api.schemas.restoration import RuntimeRestoration
+    from yleum_api.services.restorations import validate_runtime_response
 
     identity = {key: uuid4() for key in ("operation_id", "workspace_id", "project_id", "owner_id")}
     observed = {
@@ -1605,9 +1605,9 @@ def test_verified_negative_runtime_receipt_is_failed_only():
 async def test_db_apply_failure_keeps_claim_until_verified_recovery(
     db_session, monkeypatch, verified
 ):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.schemas.restoration import RestoreApplyRequest, RuntimeRestoration
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.schemas.restoration import RestoreApplyRequest, RuntimeRestoration
+    from yleum_api.services import restorations as service
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -1653,11 +1653,11 @@ async def test_db_apply_failure_keeps_claim_until_verified_recovery(
 
 @pytest.mark.parametrize("active", [False, True])
 async def test_db_source_releases_only_real_terminal_lease(db_session, monkeypatch, active):
-    from omnia_api.core.errors import ApiError
-    from omnia_api.models.generation_run import GenerationRun
-    from omnia_api.models.message import Message
-    from omnia_api.services import project_cell_capacity
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.message import Message
+    from yleum_api.services import project_cell_capacity
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
     message = Message(project_id=project.id, role="user", content="Existing source build")
@@ -1705,10 +1705,10 @@ async def test_db_source_releases_only_real_terminal_lease(db_session, monkeypat
 async def test_db_source_lost_wake_reuses_durable_operation(db_session, monkeypatch):
     from types import SimpleNamespace
 
-    from omnia_api.core.errors import ApiError
-    from omnia_api.models.project_cell import ProjectCellOperation
-    from omnia_api.services import project_cell_runtime as cell
-    from omnia_api.services import restorations as service
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services import project_cell_runtime as cell
+    from yleum_api.services import restorations as service
 
     owner, project, _, _, _, workspace, request = await restoration_fixture(db_session)
     workspace.state = "stopped"
@@ -1753,9 +1753,9 @@ async def test_db_source_lost_wake_reuses_durable_operation(db_session, monkeypa
 
 
 async def test_db_restored_publication_loads_real_version_without_generation(db_session):
-    from omnia_api.schemas.restoration import RestoreApplyRequest
-    from omnia_api.services import restorations as service
-    from omnia_api.services.cell_publication import load_publication_evidence
+    from yleum_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.services import restorations as service
+    from yleum_api.services.cell_publication import load_publication_evidence
 
     owner, project, _, current, _, workspace, request = await restoration_fixture(db_session)
     workspace.provider = "docker_owner_canary"

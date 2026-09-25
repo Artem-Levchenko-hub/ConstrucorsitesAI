@@ -32,7 +32,7 @@ V2 Phase A runtime orchestrator: управляет dev-контейнерами
 ```bash
 cd apps/orchestrator
 uv sync --extra dev
-uv run uvicorn omnia_orchestrator.main:app --reload --port 8003
+uv run uvicorn yleum_orchestrator.main:app --reload --port 8003
 ```
 
 ## Запуск на VPS
@@ -41,7 +41,7 @@ uv run uvicorn omnia_orchestrator.main:app --reload --port 8003
 
 ## TODO для sprint A1
 
-См. `TODO:` маркеры в `src/omnia_orchestrator/`. Главное:
+См. `TODO:` маркеры в `src/yleum_orchestrator/`. Главное:
 - `services/provisioner.py` — собственно flow provision (Docker + Postgres + nginx).
 - `services/hibernate.py` — таймер + tier-aware pause/stop.
 - `services/builder.py` — docker build для deploy.

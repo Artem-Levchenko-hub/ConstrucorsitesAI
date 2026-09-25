@@ -7,7 +7,7 @@ import { EASE_OUT } from "@/lib/motion";
 /**
  * The warm landing a remixer sees instead of a cold empty chat (NORTH STAR
  * pillar 4 — viral shareability). Backend seeds a `<remix>` message on fork
- * (apps/api/src/omnia_api/services/fork_recap.py); this renders it as a recap
+ * (apps/api/src/yleum_api/services/fork_recap.py); this renders it as a recap
  * card: what was remixed, its captured design DNA, and one-tap starter edits.
  *
  * `onSuggest` submits a starter prompt through the normal chat pipeline (same

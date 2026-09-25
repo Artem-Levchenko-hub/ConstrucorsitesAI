@@ -1,0 +1,154 @@
+"""Yleum V2 — Orchestrator FastAPI app (:8003).
+
+Single entry point. apps/api talks to us over internal HTTP with a shared
+secret in `X-Internal-Token`. Web clients never reach this surface.
+"""
+
+from __future__ import annotations
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import structlog
+from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+
+from yleum_orchestrator.core.cell_resources import WorkspaceLockTimeout
+from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.errors import (
+    OrchestratorError,
+    orchestrator_error_handler,
+    unhandled_error_handler,
+    workspace_busy_handler,
+)
+from yleum_orchestrator.core.sentry import init_sentry
+from yleum_orchestrator.routers import (
+    build_exe,
+    byo,
+    cell_publication,
+    code_restorations,
+    health,
+    ingress,
+    publication_artifacts,
+    runtime,
+    workspace,
+)
+from yleum_orchestrator.services import nginx_writer
+from yleum_orchestrator.services.cell_reservation_recovery import (
+    recover_workspace_provider_capacity,
+)
+from yleum_orchestrator.services.hibernate import (
+    start_hibernate_loop,
+    stop_hibernate_loop,
+)
+
+_log = structlog.get_logger("yleum_orchestrator.main")
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Upgrade vhosts provisioned before wake-on-request landed. Fail-soft: a
+    # broken render rolls back and never takes the shared nginx down.
+    try:
+        await nginx_writer.refresh_vhosts()
+    except Exception as exc:  # never block startup on a best-effort migration
+        _log.warning("startup.refresh_vhosts_failed", err=str(exc))
+    try:
+        await recover_workspace_provider_capacity(get_settings())
+    except Exception as exc:
+        # Recovery is fail-closed: an unreadable ledger is preserved and new
+        # admission will continue to account for it.
+        _log.warning("startup.capacity_reservation_recovery_failed", err=str(exc))
+    try:
+        from yleum_orchestrator.services.restoration_adaptation_workspace import (
+            get_restoration_adaptation_workspace_service,
+        )
+
+        await get_restoration_adaptation_workspace_service().recover()
+    except Exception as exc:
+        _log.warning("startup.restoration_adaptation_recovery_failed", err=str(exc))
+    try:
+        from yleum_orchestrator.services.restoration_adaptation_activation_service import (
+            get_restoration_adaptation_activation_service,
+        )
+
+        batch = await get_restoration_adaptation_activation_service().recover_all()
+        for failure in batch.failures:
+            _log.warning(
+                "startup.restoration_adaptation_activation_journal_failed",
+                **failure.model_dump(),
+            )
+    except Exception as exc:
+        _log.warning("startup.restoration_adaptation_activation_recovery_failed", err=str(exc))
+    await start_hibernate_loop()
+    from yleum_orchestrator.services.cell_publication import start_publication_recovery
+
+    publication_recovery = start_publication_recovery()
+    from yleum_orchestrator.services.code_restorations import start_restoration_recovery
+
+    restoration_recovery = start_restoration_recovery()
+    from yleum_orchestrator.services.restoration_adaptation_workspace import (
+        start_restoration_adaptation_recovery,
+    )
+
+    adaptation_recovery = start_restoration_adaptation_recovery()
+    from yleum_orchestrator.services.restoration_adaptation_activation_service import (
+        start_restoration_adaptation_activation_recovery,
+    )
+
+    adaptation_activation_recovery = start_restoration_adaptation_activation_recovery()
+    try:
+        yield
+    finally:
+        publication_recovery.cancel()
+        restoration_recovery.cancel()
+        adaptation_recovery.cancel()
+        adaptation_activation_recovery.cancel()
+        import asyncio
+
+        await asyncio.gather(
+            publication_recovery,
+            restoration_recovery,
+            adaptation_recovery,
+            adaptation_activation_recovery,
+            return_exceptions=True,
+        )
+        from yleum_orchestrator.services.code_restorations import get_code_restoration_service
+
+        await get_code_restoration_service().close()
+        await stop_hibernate_loop()
+
+
+def create_app() -> FastAPI:
+    # Sentry first — so any FastAPI / Starlette integration patches happen
+    # before routers are registered. No-op when SENTRY_DSN is unset.
+    init_sentry()
+    app = FastAPI(
+        title="Yleum Orchestrator",
+        version="0.0.1",
+        lifespan=lifespan,
+        # Internal API — no auto-generated public docs/openapi in prod.
+        docs_url="/internal/docs",
+        redoc_url=None,
+        openapi_url="/internal/openapi.json",
+    )
+
+    app.add_exception_handler(OrchestratorError, orchestrator_error_handler)
+    app.add_exception_handler(WorkspaceLockTimeout, workspace_busy_handler)
+    app.add_exception_handler(RequestValidationError, unhandled_error_handler)
+    app.add_exception_handler(Exception, unhandled_error_handler)
+
+    app.include_router(health.router)
+    app.include_router(runtime.router)
+    app.include_router(ingress.router)
+    app.include_router(build_exe.router)
+    app.include_router(byo.router)
+    app.include_router(workspace.router)
+    app.include_router(cell_publication.router)
+    app.include_router(publication_artifacts.router)
+    app.include_router(code_restorations.router)
+
+    return app
+
+
+app = create_app()

@@ -8,7 +8,7 @@ import pytest
 
 
 def module():
-    name = "omnia_orchestrator.services.machine_environment"
+    name = "yleum_orchestrator.services.machine_environment"
     assert importlib.util.find_spec(name) is not None, "environment recovery is missing"
     return importlib.import_module(name)
 
@@ -92,7 +92,7 @@ def test_streaming_capture_stops_at_parent_deadline_without_publishing_artifact(
 ):
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services import project_machine
+    from yleum_orchestrator.services import project_machine
 
     clock = [0]
     monkeypatch.setattr(project_machine, "time", SimpleNamespace(monotonic=lambda: clock[0]))

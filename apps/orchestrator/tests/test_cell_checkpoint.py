@@ -7,24 +7,24 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from tests._cell_fakes import FakeDockerBackend
+from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellResourceNames,
     CellResourceProfile,
     CellRestoreFailed,
     LifecycleMutation,
 )
-from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
-from omnia_orchestrator.services.cell_checkpoint import CellCheckpointManager
-from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
-from omnia_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
-from omnia_orchestrator.services.docker_cell_resources import (
+from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
+from yleum_orchestrator.services.cell_checkpoint import CellCheckpointManager
+from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
+from yleum_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
+from yleum_orchestrator.services.docker_cell_resources import (
     DockerCellResourceManager,
     DockerContainerRecord,
     DockerContainerSpec,
 )
-from tests._cell_fakes import FakeDockerBackend
 
 
 def _profile(state_path: Path) -> CellResourceProfile:
@@ -269,7 +269,7 @@ def test_archive_round_trip_preserves_leading_dot_paths() -> None:
 
     archived = CellCheckpointManager.__module__
     _ = archived
-    from omnia_orchestrator.services.cell_checkpoint import _archive_bytes, _extract_archive
+    from yleum_orchestrator.services.cell_checkpoint import _archive_bytes, _extract_archive
 
     restored = _extract_archive(_archive_bytes(payload))
 

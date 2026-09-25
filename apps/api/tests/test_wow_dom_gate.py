@@ -12,8 +12,8 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.services import wow_dom_gate as g
-from omnia_api.services.wow_dom_gate import (
+from yleum_api.services import wow_dom_gate as g
+from yleum_api.services.wow_dom_gate import (
     composite,
     contrast_ratio,
     evaluate_observation,

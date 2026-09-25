@@ -11,13 +11,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from omnia_api.core.crypto import decrypt_strong, encrypt_strong
-from omnia_api.core.errors import ApiError
-from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
-from omnia_api.models.user import User
-from omnia_api.services import integration_oauth
-from omnia_api.services.integration_credentials import load_credentials
 from tests.test_app_integrations_api import _register_and_create
+from yleum_api.core.crypto import decrypt_strong, encrypt_strong
+from yleum_api.core.errors import ApiError
+from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
+from yleum_api.models.user import User
+from yleum_api.services import integration_oauth
+from yleum_api.services.integration_credentials import load_credentials
 
 _HTTP_CLIENT = httpx.AsyncClient
 

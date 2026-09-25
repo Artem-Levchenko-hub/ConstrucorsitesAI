@@ -1,0 +1,500 @@
+"""Render the Yleum-managed MAX application kit without calling a model."""
+
+# ruff: noqa: E501
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import Mapping
+from pathlib import Path
+from uuid import UUID
+
+from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+
+# Increment whenever the managed file set changes in a way that existing MAX
+# projects must receive. It deliberately does not follow the public config
+# schema version: this is a deployment revision of platform-owned source files.
+MAX_MANAGED_KIT_VERSION = 22
+# Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
+# platform-owned paths. v20 materializes trusted gateway subjects in the
+# isolated product DB before business tables can enforce max_users FKs. v21
+# adds owner-scoped item CRUD used by fail-closed activation health checks.
+# v22 stops reading and storing the MAX visitor profile (sessions carry the MAX
+# user id only) and drops requisites from the app's documents: the operator is a
+# display name, the policy may be the owner's own link (152-ФЗ ст. 5).
+MAX_RETIRED_MANAGED_FILES = frozenset(
+    {
+        "src/app/api/omnia/data/[...path]/route.ts",
+        "src/lib/secure-data/crypto.ts",
+        "src/lib/secure-data/store.ts",
+        "src/lib/secure-data/validation.ts",
+        "src/lib/secure-data/http.ts",
+        "src/lib/secure-data/runtime.ts",
+        "src/lib/omnia/data-client.ts",
+        "drizzle/0003_secure_records.sql",
+        # Переименован в YleumCompliance.tsx 25.09.2026: у приложений, собранных
+        # раньше, старый файл надо удалить, иначе останется мёртвый дубль.
+        "src/components/OmniaCompliance.tsx",
+    }
+)
+# Принимаем оба префикса: управляемые файлы уже переименованы в Yleum*, а kit
+# может встретиться с приложением, собранным до переименования.
+_MANAGED_COMPONENT_IMPORT_RE = re.compile(
+    r"""from\s+["']@/components/((?:Yleum|Omnia)[A-Za-z0-9_/-]+)["']"""
+)
+
+
+def _template_candidates(
+    relative_path: str,
+    source_file: Path | None = None,
+) -> tuple[Path, ...]:
+    source = (source_file or Path(__file__)).resolve()
+    return (
+        Path("/orchestrator/templates/max-miniapp-nextjs") / relative_path,
+        *(
+            parent / "apps" / "orchestrator" / "templates" / "max-miniapp-nextjs" / relative_path
+            for parent in source.parents
+        ),
+    )
+
+
+def _template_file(relative_path: str) -> str:
+    """Read one platform-owned MAX template file from dev or the API mount."""
+    for candidate in _template_candidates(relative_path):
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    raise RuntimeError(f"MAX managed template file is unavailable: {relative_path}")
+
+
+def _json(config: MaxProjectConfigPayload) -> str:
+    return json.dumps(
+        config.model_dump(mode="json", exclude={"max_url_attached"}),
+        ensure_ascii=False,
+        indent=2,
+        separators=(",", ": "),
+    )
+
+
+_CONFIG_TYPES = """export type YleumMaxContentItem = {
+  id: string;
+  title: string;
+  description: string;
+  price: string;
+  action_label: string;
+  active: boolean;
+};
+
+export type YleumMaxConfig = {
+  app_name: string;
+  app_type: "loyalty" | "catalog" | "booking" | "event" | "education" | "custom";
+  summary: string;
+  audience: string;
+  primary_action: string;
+  features: string[];
+  style: "brand" | "clean" | "bright";
+  brand_colors: string;
+  content: YleumMaxContentItem[];
+  operator: { legal_name: string };
+  support: { email: string | null; response_time: string };
+  legal: {
+    age_rating: "0+" | "6+" | "12+" | "16+" | "18+";
+    has_sales: boolean;
+    has_user_content: boolean;
+    marketing_notifications: boolean;
+    personal_data_consent: boolean;
+    terms_accepted: boolean;
+    policy_url: string;
+  };
+};
+"""
+
+
+def _validate_managed_component_graph(files: dict[str, str]) -> None:
+    """Refuse an incomplete platform kit before it reaches a project snapshot.
+
+    Yleum-prefixed components are owned by the platform, so every such import
+    must travel in the same atomic managed-file set. This keeps a future kit
+    edit from turning a valid user app into a runtime `Module not found` error.
+    """
+    required = {
+        f"src/components/{component}.tsx"
+        for content in files.values()
+        for component in _MANAGED_COMPONENT_IMPORT_RE.findall(content)
+    }
+    missing = sorted(required.difference(files))
+    if missing:
+        raise RuntimeError(f"MAX managed kit is missing imported files: {', '.join(missing)}")
+
+
+def render_max_managed_files(
+    config: MaxProjectConfigPayload, project_id: UUID | str | None = None
+) -> dict[str, str]:
+    """Files safe to apply to both a starter and an already-generated app."""
+    data = _json(config)
+    project_literal = json.dumps(str(project_id) if project_id else "")
+    preview_session_route = _template_file("src/app/api/omnia/preview-session/route.ts").replace(
+        '"__OMNIA_PROJECT_ID__"', project_literal, 1
+    )
+    files = {
+        "postcss.config.mjs": _template_file("postcss.config.mjs"),
+        "src/app/layout.tsx": _template_file("src/app/layout.tsx"),
+        "src/app/api/omnia/health/route.ts": _template_file("src/app/api/omnia/health/route.ts"),
+        "src/components/MaxAppProvider.tsx": _template_file("src/components/MaxAppProvider.tsx"),
+        "src/components/YleumCompliance.tsx": _template_file("src/components/YleumCompliance.tsx"),
+        "src/lib/db/index.ts": _template_file("src/lib/db/index.ts"),
+        "src/lib/max/bot-api.ts": _template_file("src/lib/max/bot-api.ts"),
+        "src/lib/max/bridge.ts": _template_file("src/lib/max/bridge.ts"),
+        "src/lib/max/validate-init-data.ts": _template_file("src/lib/max/validate-init-data.ts"),
+        "src/app/api/max/session/route.ts": _template_file("src/app/api/max/session/route.ts"),
+        "src/app/api/max/webhook/route.ts": _template_file("src/app/api/max/webhook/route.ts"),
+        "src/lib/max/session.ts": _template_file("src/lib/max/session.ts"),
+        "src/app/api/omnia/preview-session/route.ts": preview_session_route,
+        "src/app/api/omnia/actions/route.ts": _template_file("src/app/api/omnia/actions/route.ts"),
+        "src/app/api/omnia/actions/[id]/route.ts": _template_file(
+            "src/app/api/omnia/actions/[id]/route.ts"
+        ),
+        "src/app/api/omnia/consents/route.ts": _template_file(
+            "src/app/api/omnia/consents/route.ts"
+        ),
+        "src/app/api/omnia/events/route.ts": _template_file("src/app/api/omnia/events/route.ts"),
+        "src/lib/omnia/client.ts": _template_file("src/lib/omnia/client.ts"),
+        "src/lib/omnia/max-config.ts": (
+            "/* Generated by Yleum. Edit the business profile in Yleum, not this file. */\n"
+            f"{_CONFIG_TYPES}\n"
+            f"export const omniaMaxConfig: YleumMaxConfig = {data};\n"
+        ),
+        "src/app/api/omnia/config/route.ts": """import { NextResponse } from "next/server";
+
+import { omniaMaxConfig } from "@/lib/omnia/max-config";
+
+export const dynamic = "force-dynamic";
+
+export function GET() {
+  return NextResponse.json(omniaMaxConfig, {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+""",
+        "src/lib/omnia/integration-client.ts": _template_file(
+            "src/lib/omnia/integration-client.ts"
+        ),
+        "src/app/api/omnia/integrations/[...path]/route.ts": _template_file(
+            "src/app/api/omnia/integrations/[...path]/route.ts"
+        ).replace('process.env.OMNIA_PROJECT_ID || ""', project_literal, 1),
+        "src/app/legal/privacy/page.tsx": """import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
+
+export const metadata = { title: `Политика конфиденциальности — ${app.app_name}` };
+
+export default function PrivacyPage() {
+  const operator = app.operator.legal_name || app.app_name;
+  if (app.legal.policy_url) {
+    return (
+      <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
+        <h1>Политика конфиденциальности</h1>
+        <p>
+          Обработка данных в мини-приложении «{app.app_name}» регулируется политикой владельца:{" "}
+          <a href={app.legal.policy_url} rel="noopener noreferrer">{app.legal.policy_url}</a>.
+        </p>
+        <p>Возрастная маркировка: {app.legal.age_rating}.</p>
+      </main>
+    );
+  }
+  return (
+    <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
+      <h1>Политика конфиденциальности</h1>
+      <p><strong>Оператор:</strong> {operator}</p>
+      {app.support.email && <p><strong>Контакт по вопросам данных:</strong> {app.support.email}</p>}
+      <h2>Какие данные обрабатываются</h2>
+      <p>
+        Приложение получает от MAX только идентификатор пользователя — он нужен, чтобы
+        различать пользователей и хранить их действия, заказы, записи и обращения. Имя,
+        фамилия, имя пользователя, язык и фотография из MAX не запрашиваются и не сохраняются.
+        Другие сведения приложение запрашивает у пользователя явно и только для конкретной функции.
+      </p>
+      <h2>Цели и срок обработки</h2>
+      <p>
+        Данные используются для исполнения запросов пользователя, поддержки, безопасности
+        и улучшения сервиса. Они хранятся не дольше, чем требуют эти цели и закон.
+      </p>
+      <h2>Права пользователя</h2>
+      <p>
+        Пользователь может запросить сведения, исправление или удаление данных через
+        страницу поддержки. Согласие на необязательные уведомления можно отозвать.
+      </p>
+      <p>Возрастная маркировка: {app.legal.age_rating}.</p>
+      <p>Дата актуализации: {new Date().toLocaleDateString("ru-RU")}.</p>
+    </main>
+  );
+}
+""",
+        "src/app/legal/terms/page.tsx": """import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
+
+export const metadata = { title: `Условия использования — ${app.app_name}` };
+
+export default function TermsPage() {
+  const operator = app.operator.legal_name || app.app_name;
+  return (
+    <main style={{ maxWidth: 760, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
+      <h1>Условия использования</h1>
+      <p>
+        Эти условия регулируют использование мини-приложения «{app.app_name}».
+        Владелец сервиса: {operator}.
+      </p>
+      <h2>Возможности сервиса</h2>
+      <p>{app.summary}</p>
+      <h2>Правила</h2>
+      <p>
+        Нельзя нарушать закон, права других лиц, пытаться получить чужие данные,
+        вмешиваться в работу сервиса или использовать его для спама и обмана.
+      </p>
+      {app.legal.has_sales && (
+        <>
+          <h2>Заказы и оплата</h2>
+          <p>
+            Итоговая цена, состав заказа, способ оплаты, отмены и возврата показываются
+            до подтверждения. Платёж обрабатывает указанный при оформлении провайдер.
+          </p>
+        </>
+      )}
+      {app.legal.has_user_content && (
+        <>
+          <h2>Пользовательский контент</h2>
+          <p>
+            Запрещён незаконный и оскорбительный контент. Владелец вправе ограничить
+            доступ и удалить нарушение; жалобу можно отправить через поддержку.
+          </p>
+        </>
+      )}
+      <p>Возрастная маркировка: {app.legal.age_rating}.</p>
+    </main>
+  );
+}
+""",
+        "src/app/support/page.tsx": """import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
+
+export const metadata = { title: `Поддержка — ${app.app_name}` };
+
+export default function SupportPage() {
+  return (
+    <main style={{ maxWidth: 680, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
+      <h1>Поддержка</h1>
+      <p>Опишите проблему, ожидаемый результат и время, когда она возникла.</p>
+      {app.support.email && <p><strong>Email:</strong> <a href={`mailto:${app.support.email}`}>{app.support.email}</a></p>}
+      <p>{app.support.response_time}</p>
+      <nav style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 28 }}>
+        <a href="/legal/privacy">Конфиденциальность</a>
+        <a href="/legal/terms">Условия использования</a>
+      </nav>
+    </main>
+  );
+}
+""",
+    }
+    _validate_managed_component_graph(files)
+    return files
+
+
+def render_max_managed_kit_update(
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str | None = None,
+) -> dict[str, str]:
+    """Managed files plus deletions (empty content) of retired managed paths."""
+    return {
+        **{path: "" for path in sorted(MAX_RETIRED_MANAGED_FILES)},
+        **render_max_managed_files(config, project_id),
+    }
+
+
+MAX_SECURITY_LOCKED_FILES = frozenset(
+    {
+        "src/components/MaxAppProvider.tsx",
+        "src/components/YleumCompliance.tsx",
+        "src/app/layout.tsx",
+        "src/app/api/omnia/health/route.ts",
+        "next.config.ts",
+        "drizzle.config.ts",
+        "postcss.config.mjs",
+        "docker-entrypoint.sh",
+        "Dockerfile.dev",
+        "Dockerfile.prod",
+        "scripts/apply-migrations.mjs",
+        "src/lib/db/index.ts",
+        "src/lib/max/bot-api.ts",
+        "src/lib/max/bridge.ts",
+        "src/lib/max/validate-init-data.ts",
+        "src/app/api/max/session/route.ts",
+        "src/app/api/max/webhook/route.ts",
+        "src/lib/max/session.ts",
+        "src/app/api/omnia/preview-session/route.ts",
+        "src/app/api/omnia/actions/route.ts",
+        "src/app/api/omnia/actions/[id]/route.ts",
+        "src/app/api/omnia/consents/route.ts",
+        "src/app/api/omnia/events/route.ts",
+        "src/lib/omnia/max-config.ts",
+        "src/lib/omnia/client.ts",
+        "src/app/api/omnia/config/route.ts",
+        "src/lib/omnia/integration-client.ts",
+        "src/app/api/omnia/integrations/[...path]/route.ts",
+        "src/app/legal/privacy/page.tsx",
+        "src/app/legal/terms/page.tsx",
+        "src/app/support/page.tsx",
+    }
+)
+
+# Legacy fallback used when the disposable sandbox is disabled or cannot be
+# attested.  A ready project-owner sandbox narrows this to the security core
+# above, so the agent can choose dependencies and design real relational data.
+MAX_MODEL_LOCKED_FILES = frozenset(
+    {
+        *MAX_SECURITY_LOCKED_FILES,
+        "package.json",
+        "pnpm-lock.yaml",
+        "postcss.config.mjs",
+        "src/lib/db/schema.ts",
+    }
+)
+
+MAX_MODEL_DIRECTIVE = """
+MAX PLATFORM CORE CONTRACT
+The existing MAX files are a secure runtime substrate, not a product UI template.
+Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
+and integration clients, webhook security and generated business config. Do not
+rewrite platform-owned files.
+
+The owner edits business data in Studio's Main, Content, Owner and Policies tabs.
+Read `src/lib/omnia/max-config.ts` to understand that saved brief. In product
+screens load owner-editable names, descriptions, actions and catalogs with
+`getYleumAppConfig()` from `@/lib/omnia/integration-client`, on mount and when the
+app regains focus. Render only active content items, keep their stable ids and
+handle loading, empty and failed reads honestly. Do not copy this mutable data
+into constants or invent catalog entries. Keep runtime business configuration
+separate from user-owned actions. Saved feature/style/policy choices are a brief
+to implement, not proof that a payment, consent or marketing flow exists.
+
+On a FULL BUILD, there is deliberately no product home page or visual template.
+Create src/app/page.tsx, the product styling, domain screens, components and API
+behaviour required by the brief from scratch. A thin shell, decorative tabs,
+static demo response or fake timer is not a finished application. Persist user actions with
+`createMaxAction` and read them with `getMaxActions` (optionally paginated with
+`{ limit, cursor }`), both from `@/lib/omnia/integration-client`. Never fabricate the current user's history,
+profile, progress, workouts, meals or metrics with demo/mock/test constants.
+Load user-owned state from `getMaxActions`; if no records exist, show an honest
+empty/onboarding state. Static immutable reference catalogs are allowed only when
+they are clearly separate from user activity. In an attested project-owner sandbox
+you may extend `src/lib/db/schema.ts`, use Drizzle in product routes, and create
+feature APIs outside the reserved `/api/max/*` and `/api/omnia/*` namespaces.
+Every user-owned query MUST call `requireMaxUser()` and scope reads/writes by
+`maxUserId: user.id`; never trust an id from the request body. Without the attested
+sandbox, fall back to the managed action client.
+When the brief requests AI, use the exact typed call
+`const { answer } = await requestYleumAI({ message, instructions, context })`
+from `@/lib/omnia/integration-client`; the managed Google model runs server-side.
+Never embed a provider key in source or expose one to the browser. If a user pastes
+a credential into chat, do not write it or create an .env file: Yleum handles
+credentials only through the encrypted Studio Integration Hub.
+
+If the project sandbox shell is available, `bash` runs only inside the isolated
+project container without network: use it for offline generators, tests,
+migrations and data transforms, not as host/root access. Follow the appended
+MAX DATA EVOLUTION POLICY for persistent data. Add dependencies by
+editing `package.json`; Yleum installs them separately with lifecycle scripts
+disabled. Managed MAX files stay locked even when shell is available. If shell
+is unavailable, fall back to read_file/edit_file/write_file. On a later surgical
+edit, preserve working behaviour and change only the relevant product files.
+""".strip()
+
+
+def include_portable_manifest(
+    starter_files: Mapping[str, str],
+    workspace_files: Mapping[str, str],
+) -> dict[str, str]:
+    """Preserve platform runtime metadata without adopting pre-existing product code."""
+    files = dict(starter_files)
+    if ".omnia/cell.json" in workspace_files:
+        files[".omnia/cell.json"] = workspace_files[".omnia/cell.json"]
+    return files
+
+
+def render_portable_max_session(project_id: UUID | str) -> str:
+    """Adapt product auth to the secretless, gateway-authenticated runtime.
+
+    The trusted core owns the browser session, while portable product tables use
+    their isolated project database. Materialize the authenticated subject there
+    before product routes can insert rows with a ``max_users`` foreign key.
+    """
+    source = _template_file("src/lib/max/session.ts")
+    source = source.replace(
+        'import { cookies, headers } from "next/headers";\n',
+        'import { cookies, headers } from "next/headers";\n\n'
+        'import { db, schema } from "@/lib/db";\n',
+        1,
+    )
+    start = source.index("export async function getMaxUser()")
+    end = source.index("export async function requireMaxUser()", start)
+    helper = """export async function getMaxUser(): Promise<MaxSessionUser | null> {
+  // Only the portable product server uses this adapter. Its gateway strips
+  // incoming identity headers and injects the authenticated session identity.
+  const incoming = await headers();
+  const id = incoming.get("x-omnia-user-id");
+  const projectId = incoming.get("x-omnia-project-id");
+  const epoch = incoming.get("x-omnia-session-epoch");
+  if (!id?.trim() || projectId !== __PROJECT_ID__ || !epoch || !/^[0-9]+$/.test(epoch)) {
+    return null;
+  }
+  await db
+    .insert(schema.maxUsers)
+    .values({ maxUserId: id, firstName: "" })
+    .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
+  return { id };
+}
+
+""".replace("__PROJECT_ID__", json.dumps(str(project_id)))
+    return source[:start] + helper + source[end:]
+
+
+def render_portable_max_managed_files(
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str,
+) -> dict[str, str]:
+    """Current managed kit for a secretless portable product runtime."""
+    files = render_max_managed_files(config, project_id)
+    files["src/lib/max/session.ts"] = render_portable_max_session(project_id)
+    return files
+
+
+def render_max_starter_files(
+    config: MaxProjectConfigPayload,
+    project_id: UUID | str | None = None,
+    *,
+    portable: bool = False,
+) -> dict[str, str]:
+    """Buildable MAX platform core with no generated product UI.
+
+    Security/session/legal primitives stay deterministic.  Product design and
+    feature architecture do not: the Google agent must create the home page and
+    product styling from scratch instead of inheriting a deceptively finished UI.
+    """
+    files = {
+        # Seed-only project-owned files. Config saves and managed-kit upgrades
+        # must never overwrite dependencies or a relational schema the agent
+        # has evolved after the first build.
+        "package.json": _template_file("package.json"),
+        "pnpm-lock.yaml": _template_file("pnpm-lock.yaml"),
+        "tests/starter.test.mjs": _template_file("tests/starter.test.mjs"),
+        "src/lib/db/schema.ts": _template_file("src/lib/db/schema.ts"),
+        # The migrations that create the platform tables. They already exist in
+        # the materialized workspace, but until they were seeded here the file
+        # set the platform reasons about did not contain them at all — so losing
+        # them could not be noticed until a signed request hit a table that had
+        # never been created (LIVE-04).
+        "drizzle/0000_max_core.sql": _template_file("drizzle/0000_max_core.sql"),
+        "drizzle/0001_business_core.sql": _template_file("drizzle/0001_business_core.sql"),
+        **render_max_managed_files(config, project_id),
+        "src/app/globals.css": _template_file("src/app/globals.css"),
+    }
+    if portable:
+        if project_id is None:
+            raise ValueError("portable MAX starter requires a project identity")
+        files.update(render_portable_max_managed_files(config, project_id))
+    return files

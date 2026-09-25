@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from omnia_orchestrator.schemas.restoration_recovery import (
+from yleum_orchestrator.schemas.restoration_recovery import (
     MUTATING_PHASES,
     RecoveryFinding,
     RecoveryReport,
@@ -125,7 +125,7 @@ class _Recorder:
         self.answers = answers or {}
 
     def run(self, args, *, timeout: float = 600.0):  # type: ignore[no-untyped-def]
-        from omnia_orchestrator.services.restoration_recovery import CommandResult
+        from yleum_orchestrator.services.restoration_recovery import CommandResult
 
         self.calls.append(list(args))
         key = " ".join(args[:2])
@@ -146,7 +146,7 @@ def _registry(intent) -> dict[str, object]:  # type: ignore[no-untyped-def]
 
 
 def test_inspection_never_starts_postgres_or_writes_original_volume() -> None:
-    from omnia_orchestrator.services.restoration_recovery import inspect_recovery
+    from yleum_orchestrator.services.restoration_recovery import inspect_recovery
 
     intent = _intent()
     recorder = _Recorder()
@@ -167,7 +167,7 @@ def test_inspection_never_starts_postgres_or_writes_original_volume() -> None:
 
 
 def test_inspection_refuses_a_registry_that_names_another_volume() -> None:
-    from omnia_orchestrator.services.restoration_recovery import inspect_recovery
+    from yleum_orchestrator.services.restoration_recovery import inspect_recovery
 
     intent = _intent()
     registry = _registry(intent) | {
@@ -181,7 +181,7 @@ def test_inspection_refuses_a_registry_that_names_another_volume() -> None:
 
 
 def test_inspection_stops_when_something_still_holds_the_database() -> None:
-    from omnia_orchestrator.services.restoration_recovery import CommandResult, inspect_recovery
+    from yleum_orchestrator.services.restoration_recovery import CommandResult, inspect_recovery
 
     intent = _intent()
     recorder = _Recorder({"ps --filter": CommandResult(0, "abc123\n")})
@@ -193,7 +193,7 @@ def test_inspection_stops_when_something_still_holds_the_database() -> None:
 
 
 def test_the_witness_mounts_the_original_read_only_and_starts_only_the_clone() -> None:
-    from omnia_orchestrator.services.restoration_recovery import (
+    from yleum_orchestrator.services.restoration_recovery import (
         SCRATCH_PREFIX,
         CommandResult,
         clone_witness,
@@ -224,7 +224,7 @@ def test_the_witness_mounts_the_original_read_only_and_starts_only_the_clone() -
 
 
 def test_the_witness_removes_only_its_own_resources_even_on_failure() -> None:
-    from omnia_orchestrator.services.restoration_recovery import (
+    from yleum_orchestrator.services.restoration_recovery import (
         SCRATCH_PREFIX,
         CommandResult,
         clone_witness,
@@ -253,7 +253,7 @@ def test_the_witness_removes_only_its_own_resources_even_on_failure() -> None:
 
 
 def test_a_read_only_sql_failure_is_reported_not_swallowed() -> None:
-    from omnia_orchestrator.services.restoration_recovery import CommandResult, clone_witness
+    from yleum_orchestrator.services.restoration_recovery import CommandResult, clone_witness
 
     intent = _intent()
     recorder = _Recorder({"exec --env": CommandResult(1, "", "relation does not exist")})
@@ -273,7 +273,7 @@ def test_a_read_only_sql_failure_is_reported_not_swallowed() -> None:
 
 
 def test_refusing_to_touch_a_resource_outside_this_recovery() -> None:
-    from omnia_orchestrator.services.restoration_recovery import ScratchPool
+    from yleum_orchestrator.services.restoration_recovery import ScratchPool
 
     pool = ScratchPool(_Recorder())
     pool.volumes.append("omnia-machine-891ed2449b00458babf49f23f194aaab-db-x")
@@ -330,7 +330,7 @@ def _trusted_inventory(source: _Source) -> dict[str, str]:
 
 
 def test_recovery_replaces_only_known_stale_page() -> None:
-    from omnia_orchestrator.services.restoration_recovery import source_sync
+    from yleum_orchestrator.services.restoration_recovery import source_sync
 
     source = _tree()
     report = source_sync(
@@ -349,7 +349,7 @@ def test_recovery_replaces_only_known_stale_page() -> None:
 
 
 def test_a_page_that_is_not_the_observed_one_stops_the_recovery() -> None:
-    from omnia_orchestrator.services.restoration_recovery import source_sync
+    from yleum_orchestrator.services.restoration_recovery import source_sync
 
     source = _tree(page=b"someone edited this meanwhile\n")
     report = source_sync(
@@ -367,7 +367,7 @@ def test_a_page_that_is_not_the_observed_one_stops_the_recovery() -> None:
 
 
 def test_an_already_restored_page_is_reported_not_rewritten() -> None:
-    from omnia_orchestrator.services.restoration_recovery import source_sync
+    from yleum_orchestrator.services.restoration_recovery import source_sync
 
     source = _tree(page=_TRUSTED)
     report = source_sync(
@@ -385,7 +385,7 @@ def test_an_already_restored_page_is_reported_not_rewritten() -> None:
 
 
 def test_drift_in_another_file_cancels_instead_of_blanket_restore() -> None:
-    from omnia_orchestrator.services.restoration_recovery import source_sync
+    from yleum_orchestrator.services.restoration_recovery import source_sync
 
     source = _tree()
     trusted = _trusted_inventory(source)
@@ -406,7 +406,7 @@ def test_drift_in_another_file_cancels_instead_of_blanket_restore() -> None:
 
 
 def test_a_missing_file_is_not_silently_accepted() -> None:
-    from omnia_orchestrator.services.restoration_recovery import source_sync
+    from yleum_orchestrator.services.restoration_recovery import source_sync
 
     source = _tree()
     trusted = _trusted_inventory(source)
@@ -425,7 +425,7 @@ def test_a_missing_file_is_not_silently_accepted() -> None:
 
 
 def test_the_result_is_checked_again_after_the_write() -> None:
-    from omnia_orchestrator.services.restoration_recovery import source_sync
+    from yleum_orchestrator.services.restoration_recovery import source_sync
 
     class _Liar(_Source):
         def write(self, path: str, data: bytes) -> bool:
@@ -455,7 +455,7 @@ def test_the_result_is_checked_again_after_the_write() -> None:
 
 
 def _start_recorder():  # type: ignore[no-untyped-def]
-    from omnia_orchestrator.services.restoration_recovery import CommandResult
+    from yleum_orchestrator.services.restoration_recovery import CommandResult
 
     calls: list[str] = []
 
@@ -467,7 +467,7 @@ def _start_recorder():  # type: ignore[no-untyped-def]
 
 
 def _volumes_runner(intent):  # type: ignore[no-untyped-def]
-    from omnia_orchestrator.services.restoration_recovery import CommandResult
+    from yleum_orchestrator.services.restoration_recovery import CommandResult
 
     return _Recorder(
         {
@@ -479,7 +479,7 @@ def _volumes_runner(intent):  # type: ignore[no-untyped-def]
 
 
 def test_start_current_reuses_the_bound_database_and_creates_nothing() -> None:
-    from omnia_orchestrator.services.restoration_recovery import start_current
+    from yleum_orchestrator.services.restoration_recovery import start_current
 
     intent = _intent()
     runner = _volumes_runner(intent)
@@ -503,7 +503,7 @@ def test_start_current_reuses_the_bound_database_and_creates_nothing() -> None:
 
 
 def test_start_current_refuses_without_a_sql_witness() -> None:
-    from omnia_orchestrator.services.restoration_recovery import start_current
+    from yleum_orchestrator.services.restoration_recovery import start_current
 
     intent = _intent()
     start, started = _start_recorder()
@@ -523,7 +523,7 @@ def test_start_current_refuses_without_a_sql_witness() -> None:
 
 
 def test_start_current_refuses_before_the_source_is_reconciled() -> None:
-    from omnia_orchestrator.services.restoration_recovery import start_current
+    from yleum_orchestrator.services.restoration_recovery import start_current
 
     intent = _intent()
     start, started = _start_recorder()
@@ -543,7 +543,7 @@ def test_start_current_refuses_before_the_source_is_reconciled() -> None:
 
 
 def test_a_migration_the_live_schema_never_saw_is_a_blocking_finding() -> None:
-    from omnia_orchestrator.services.restoration_recovery import start_current
+    from yleum_orchestrator.services.restoration_recovery import start_current
 
     intent = _intent()
     start, started = _start_recorder()
@@ -565,7 +565,7 @@ def test_a_migration_the_live_schema_never_saw_is_a_blocking_finding() -> None:
 
 
 def test_a_missing_retained_volume_stops_before_start() -> None:
-    from omnia_orchestrator.services.restoration_recovery import CommandResult, start_current
+    from yleum_orchestrator.services.restoration_recovery import CommandResult, start_current
 
     intent = _intent()
     runner = _Recorder({"volume ls": CommandResult(0, "some-other-volume\n")})
@@ -591,7 +591,7 @@ def test_a_missing_retained_volume_stops_before_start() -> None:
 
 
 def _observation(**overrides):  # type: ignore[no-untyped-def]
-    from omnia_orchestrator.services.restoration_recovery import OwnerBoundaryObservation
+    from yleum_orchestrator.services.restoration_recovery import OwnerBoundaryObservation
 
     payload = {
         "owner_status": 200,
@@ -608,7 +608,7 @@ def _observation(**overrides):  # type: ignore[no-untyped-def]
 
 
 def test_the_owner_boundary_passes_only_when_every_part_holds() -> None:
-    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+    from yleum_orchestrator.services.restoration_recovery import verify_owner_boundary
 
     report = verify_owner_boundary(_observation())
 
@@ -616,7 +616,7 @@ def test_the_owner_boundary_passes_only_when_every_part_holds() -> None:
 
 
 def test_a_second_signed_identity_that_sees_the_row_fails_the_phase() -> None:
-    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+    from yleum_orchestrator.services.restoration_recovery import verify_owner_boundary
 
     report = verify_owner_boundary(_observation(stranger_status=200, stranger_rows=1))
 
@@ -625,7 +625,7 @@ def test_a_second_signed_identity_that_sees_the_row_fails_the_phase() -> None:
 
 
 def test_an_anonymous_read_that_succeeds_fails_the_phase() -> None:
-    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+    from yleum_orchestrator.services.restoration_recovery import verify_owner_boundary
 
     report = verify_owner_boundary(_observation(anonymous_status=200))
 
@@ -634,7 +634,7 @@ def test_an_anonymous_read_that_succeeds_fails_the_phase() -> None:
 
 
 def test_a_changed_baseline_row_fails_even_if_everything_else_is_green() -> None:
-    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+    from yleum_orchestrator.services.restoration_recovery import verify_owner_boundary
 
     report = verify_owner_boundary(_observation(baseline_digest_after="e" * 64))
 
@@ -643,7 +643,7 @@ def test_a_changed_baseline_row_fails_even_if_everything_else_is_green() -> None
 
 
 def test_reading_the_row_is_not_enough_without_the_full_temporary_lifecycle() -> None:
-    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+    from yleum_orchestrator.services.restoration_recovery import verify_owner_boundary
 
     # Создали и изменили, но удаление не прошло — приложение не доказано рабочим.
     report = verify_owner_boundary(_observation(temporary_row_lifecycle=(201, 200, 200, 500)))
@@ -653,7 +653,7 @@ def test_reading_the_row_is_not_enough_without_the_full_temporary_lifecycle() ->
 
 
 def test_an_empty_owner_read_is_not_a_pass() -> None:
-    from omnia_orchestrator.services.restoration_recovery import verify_owner_boundary
+    from yleum_orchestrator.services.restoration_recovery import verify_owner_boundary
 
     report = verify_owner_boundary(_observation(owner_rows=0))
 
@@ -667,7 +667,7 @@ def test_an_empty_owner_read_is_not_a_pass() -> None:
 
 
 def _completion(**overrides):  # type: ignore[no-untyped-def]
-    from omnia_orchestrator.services.restoration_recovery import CompletionObservation
+    from yleum_orchestrator.services.restoration_recovery import CompletionObservation
 
     payload = {
         "current_version_number": 7,
@@ -687,7 +687,7 @@ def _completion(**overrides):  # type: ignore[no-untyped-def]
 
 
 def test_a_clean_recovery_completes() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     report = complete_recovery(_intent(), _completion())
 
@@ -695,7 +695,7 @@ def test_a_clean_recovery_completes() -> None:
 
 
 def test_recovery_that_created_a_version_is_not_a_recovery() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     report = complete_recovery(_intent(), _completion(version_count_after=9))
 
@@ -705,7 +705,7 @@ def test_recovery_that_created_a_version_is_not_a_recovery() -> None:
 
 
 def test_recovery_must_not_spend_quota_or_settle() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     for field in ("settlements_during_recovery", "generation_runs_during_recovery"):
         report = complete_recovery(_intent(), _completion(**{field: 1}))
@@ -714,7 +714,7 @@ def test_recovery_must_not_spend_quota_or_settle() -> None:
 
 
 def test_the_failed_attempt_stays_failed() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     # Упавшая версия стала текущей — историю переписали.
     report = complete_recovery(_intent(), _completion(current_version_number=8))
@@ -724,7 +724,7 @@ def test_the_failed_attempt_stays_failed() -> None:
 
 
 def test_serving_code_must_be_the_restored_commit() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     report = complete_recovery(_intent(), _completion(serving_commit_sha="0" * 40))
 
@@ -733,7 +733,7 @@ def test_serving_code_must_be_the_restored_commit() -> None:
 
 
 def test_an_editable_tree_that_still_differs_blocks_completion() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     report = complete_recovery(_intent(), _completion(editable_inventory_digest="e" * 64))
 
@@ -742,7 +742,7 @@ def test_an_editable_tree_that_still_differs_blocks_completion() -> None:
 
 
 def test_an_open_lease_blocks_completion() -> None:
-    from omnia_orchestrator.services.restoration_recovery import complete_recovery
+    from yleum_orchestrator.services.restoration_recovery import complete_recovery
 
     report = complete_recovery(_intent(), _completion(open_leases=1))
 

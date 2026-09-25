@@ -8,8 +8,8 @@ addition earns the expensive BUILD orchestration. Build-noun follow-ups
 
 from __future__ import annotations
 
-from omnia_api.services.discovery import detect_appification
-from omnia_api.services.intent_triage import (
+from yleum_api.services.discovery import detect_appification
+from yleum_api.services.intent_triage import (
     CHEAP,
     EXPLAIN_FAILED_BUILD,
     ORCHESTRATE,

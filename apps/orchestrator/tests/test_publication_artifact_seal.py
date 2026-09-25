@@ -11,18 +11,18 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.services import machine_adapter as adapter_module
-from omnia_orchestrator.services.machine_environment import (
+from tests.test_machine_environment import ArchiveBackend
+from tests.test_project_machine_manifest import payload
+from tests.test_publication_early_preflight import Captured, build, release_for
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services import machine_adapter as adapter_module
+from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentRef,
     MachineEnvironmentStore,
     VolumeEnvironmentRef,
 )
-from omnia_orchestrator.services.publication_trace import PublicationTrace
-from omnia_orchestrator.services.published_machine_backend import PublishedMachineBackend
-from tests.test_machine_environment import ArchiveBackend
-from tests.test_project_machine_manifest import payload
-from tests.test_publication_early_preflight import Captured, build, release_for
+from yleum_orchestrator.services.publication_trace import PublicationTrace
+from yleum_orchestrator.services.published_machine_backend import PublishedMachineBackend
 
 SEALED_SCHEMA = "e" * 64
 
@@ -76,9 +76,9 @@ async def test_persisted_checkpoint_records_revision_and_schema_but_warm_capture
     async def files(_manager, _volume):
         return {"src/app/page.tsx": "export default () => null"}
 
-    monkeypatch.setattr("omnia_orchestrator.routers.workspace._read_agent_workspace_files", files)
+    monkeypatch.setattr("yleum_orchestrator.routers.workspace._read_agent_workspace_files", files)
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.runtime._workspace_revision", lambda _f: "r" * 64
+        "yleum_orchestrator.routers.runtime._workspace_revision", lambda _f: "r" * 64
     )
     monkeypatch.setattr(PublishedMachineBackend, "schema_digest", lambda _self: SEALED_SCHEMA)
     state = SimpleNamespace(workspace_id=workspace_id)
@@ -96,7 +96,7 @@ async def test_persisted_checkpoint_records_revision_and_schema_but_warm_capture
     async def broken(_manager, _volume):
         raise OSError("helper unavailable")
 
-    monkeypatch.setattr("omnia_orchestrator.routers.workspace._read_agent_workspace_files", broken)
+    monkeypatch.setattr("yleum_orchestrator.routers.workspace._read_agent_workspace_files", broken)
     await runtime.checkpoint(state)
     saved = json.loads(metadata_path.read_text())
     assert "environment_revision" not in saved and "environment_schema_digest" not in saved

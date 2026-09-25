@@ -29,7 +29,7 @@ def candidate_container(value, *, container_id="a" * 64, created="2026-09-20T00:
 
 
 def test_attempt_journal_is_durable_identity_only_and_tombstone_blocks_late_exec(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import (
+    from yleum_orchestrator.services.restoration_execution import (
         RestorationExecutionCancelled,
         RestorationExecutionJournal,
     )
@@ -83,7 +83,7 @@ class ExactApi:
 
 
 async def test_restart_kills_only_exact_candidate_id_and_rejects_reused_identity(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     first = RestorationExecutionJournal(tmp_path)
@@ -122,7 +122,7 @@ async def test_restart_kills_only_exact_candidate_id_and_rejects_reused_identity
 
 
 async def test_empty_database_migration_attempt_is_exactly_cancellable(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     container = candidate_container(value)
@@ -151,7 +151,7 @@ async def test_empty_database_migration_attempt_is_exactly_cancellable(tmp_path)
 
 
 async def test_tampered_receipt_cannot_authorize_killing_live_container(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     journal = RestorationExecutionJournal(tmp_path)
@@ -177,7 +177,7 @@ async def test_tampered_receipt_cannot_authorize_killing_live_container(tmp_path
 
 
 async def test_invalid_attempt_state_fails_closed(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     journal = RestorationExecutionJournal(tmp_path)
@@ -203,7 +203,7 @@ async def test_invalid_attempt_state_fails_closed(tmp_path):
 
 
 async def test_producer_receipt_blocks_terminal_cancel_until_producer_stops(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     journal = RestorationExecutionJournal(tmp_path)
@@ -232,9 +232,9 @@ async def test_producer_receipt_blocks_terminal_cancel_until_producer_stops(tmp_
 
 
 async def test_cancel_racing_ensure_waits_for_provisioning_producer(tmp_path, monkeypatch):
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
-    from omnia_orchestrator.services.restoration_execution import (
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from yleum_orchestrator.services.restoration_execution import (
         RestorationExecutionCancelled,
     )
 
@@ -260,7 +260,7 @@ async def test_cancel_racing_ensure_waits_for_provisioning_producer(tmp_path, mo
         machine_runtime=SimpleNamespace(parts=lambda _state: (machine, backend)),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        "yleum_orchestrator.services.cell_publication_capacity.production_manager",
         lambda *_args: candidate_manager,
     )
     monkeypatch.setattr(module, "replace", lambda value, **_changes: value)
@@ -291,7 +291,7 @@ async def test_cancel_racing_ensure_waits_for_provisioning_producer(tmp_path, mo
 
 
 async def test_exec_uses_the_exact_container_bound_in_attempt_receipt(tmp_path):
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
 
     value = request()
 
@@ -331,7 +331,7 @@ async def test_exec_uses_the_exact_container_bound_in_attempt_receipt(tmp_path):
 
 
 async def test_transport_error_after_exec_admission_keeps_attempt_unknown(tmp_path):
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
 
     value = request()
     container = candidate_container(value)
@@ -363,7 +363,7 @@ async def test_transport_error_after_exec_admission_keeps_attempt_unknown(tmp_pa
 
 
 async def test_daemon_timeout_stays_pending_and_does_not_use_default_pool(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     journal = RestorationExecutionJournal(tmp_path)
@@ -388,7 +388,7 @@ async def test_daemon_timeout_stays_pending_and_does_not_use_default_pool(tmp_pa
 
 
 async def test_repeated_timeouts_are_deduped_so_fifth_kill_can_run(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     journal = RestorationExecutionJournal(tmp_path)
     first = request()
@@ -436,7 +436,7 @@ async def test_repeated_timeouts_are_deduped_so_fifth_kill_can_run(tmp_path):
 
 
 def test_dedicated_docker_client_has_short_transport_timeout(monkeypatch):
-    from omnia_orchestrator.services import restoration_execution as module
+    from yleum_orchestrator.services import restoration_execution as module
 
     calls = []
     api = object()
@@ -462,8 +462,8 @@ def test_dedicated_docker_client_has_short_transport_timeout(monkeypatch):
 async def test_full_engine_cancel_kills_before_saturated_default_pool_recovers(
     tmp_path, monkeypatch
 ):
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
 
     value = request()
     engine = object.__new__(CodeRestorationEngine)
@@ -521,7 +521,7 @@ async def test_full_engine_cancel_kills_before_saturated_default_pool_recovers(
 
 
 async def test_cancel_uses_dedicated_pool_when_default_pool_is_saturated(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     journal = RestorationExecutionJournal(tmp_path)
@@ -548,7 +548,7 @@ async def test_cancel_uses_dedicated_pool_when_default_pool_is_saturated(tmp_pat
 
 
 async def test_docker_unavailable_keeps_attempt_nonterminal(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+    from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
     value = request()
     journal = RestorationExecutionJournal(tmp_path)
@@ -609,7 +609,7 @@ async def test_cancel_worker_bypasses_running_execution_drive(tmp_path):
 
 
 async def test_service_does_not_terminalize_while_provisioning_producer_runs(tmp_path):
-    from omnia_orchestrator.services.restoration_execution import (
+    from yleum_orchestrator.services.restoration_execution import (
         RestorationExecutionCancelled,
         RestorationExecutionJournal,
     )

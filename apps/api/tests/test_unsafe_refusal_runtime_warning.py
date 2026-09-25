@@ -23,10 +23,10 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.services.generation import agent_verification
-from omnia_api.services.generation import runtime as generation_runtime
-from omnia_api.services.max_generation_contract import unsafe_max_backend_paths  # noqa: F401
+from yleum_api.core.errors import ApiError
+from yleum_api.services.generation import agent_verification
+from yleum_api.services.generation import runtime as generation_runtime
+from yleum_api.services.max_generation_contract import unsafe_max_backend_paths  # noqa: F401
 
 # Точный текст из runtime.py — предупреждение владельцу на английском.
 _WARNING = "the runtime may still show"
@@ -120,8 +120,8 @@ async def test_a_successful_rollback_never_warns(monkeypatch: pytest.MonkeyPatch
 
 def test_the_absent_runtime_is_recognised_by_the_upstream_refusal() -> None:
     """Признак берётся из ответа оркестратора, а не из догадки."""
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
-    from omnia_api.services.project_cell_executor import draft_runtime_absent
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.project_cell_executor import draft_runtime_absent
 
     assert draft_runtime_absent(
         OrchestratorBadRequest("draft runtime is not running", status_code=409)

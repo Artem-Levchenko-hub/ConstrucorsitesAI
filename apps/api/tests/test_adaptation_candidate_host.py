@@ -26,8 +26,8 @@ from uuid import uuid4
 import pytest
 from pydantic import SecretStr
 
-from omnia_api.services import orchestrator_client, orchestrator_hosts, readiness
-from omnia_api.services.orchestrator_hosts import (
+from yleum_api.services import orchestrator_client, orchestrator_hosts, readiness
+from yleum_api.services.orchestrator_hosts import (
     bind_candidate_to_source_host,
     forget_bindings,
     host_for_path,
@@ -70,7 +70,7 @@ def _configure(monkeypatch: pytest.MonkeyPatch, hosts: str, default: str = "core
         gate_preview_resolver_rules="MAP *.dev.yleum.ru 172.19.0.1",
         orchestrator_internal_token=SecretStr("t"),
     )
-    from omnia_api.core import config
+    from yleum_api.core import config
 
     for module in (config, orchestrator_client, readiness):
         monkeypatch.setattr(module, "get_settings", lambda settings=settings: settings)

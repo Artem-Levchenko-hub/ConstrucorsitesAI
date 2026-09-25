@@ -8,8 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
-from omnia_api.models.user import User
+from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
+from yleum_api.models.user import User
 
 pytestmark = pytest.mark.asyncio
 
@@ -93,8 +93,8 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import payments as payments_router
-    from omnia_api.services import yookassa
+    from yleum_api.routers import payments as payments_router
+    from yleum_api.services import yookassa
 
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
     registered = await client.post(

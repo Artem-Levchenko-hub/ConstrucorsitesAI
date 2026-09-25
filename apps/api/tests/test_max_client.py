@@ -8,7 +8,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes
 
-from omnia_api.services import max_client
+from yleum_api.services import max_client
 
 
 def test_max_ca_is_the_official_russian_trusted_root() -> None:

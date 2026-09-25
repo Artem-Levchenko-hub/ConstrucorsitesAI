@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from rq.utils import import_attribute
 
-from omnia_api.services import queue
+from yleum_api.services import queue
 
 JOBS = sorted(name for name in vars(queue) if name.endswith("_JOB"))
 

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.sections import palettes as pl
+from yleum_api.sections import palettes as pl
 
 
 def test_palette_catalog_nonempty() -> None:

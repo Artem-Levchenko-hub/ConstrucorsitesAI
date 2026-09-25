@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.services import runtime_probe
+from yleum_orchestrator.services import runtime_probe
 
 _X = chr(0x2A2F)  # Turbopack error glyph
 

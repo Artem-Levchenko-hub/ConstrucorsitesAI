@@ -62,7 +62,7 @@ def _admin_result(main, template=None):
 
 
 def test_empty_witness_is_one_repeatable_read_exact_snapshot(monkeypatch):
-    from omnia_orchestrator.services import restoration_empty as module
+    from yleum_orchestrator.services import restoration_empty as module
 
     seen = []
     monkeypatch.setattr(
@@ -97,7 +97,7 @@ def test_empty_witness_is_one_repeatable_read_exact_snapshot(monkeypatch):
 
 
 def test_empty_witness_fails_closed_for_nonzero_unknown_or_advanced_state(monkeypatch):
-    from omnia_orchestrator.services import restoration_empty as module
+    from yleum_orchestrator.services import restoration_empty as module
 
     unsafe = [
         _payload(
@@ -152,7 +152,7 @@ def test_empty_witness_fails_closed_for_nonzero_unknown_or_advanced_state(monkey
 
 
 def test_quiesced_witness_matches_prepare_semantics_but_has_distinct_receipt(monkeypatch):
-    from omnia_orchestrator.services import restoration_empty as module
+    from yleum_orchestrator.services import restoration_empty as module
 
     monkeypatch.setattr(module, "admin_sql", _admin_result(_payload()))
     kwargs = dict(
@@ -172,7 +172,7 @@ def test_quiesced_witness_matches_prepare_semantics_but_has_distinct_receipt(mon
 
 
 def test_canonical_max_users_rows_are_identity_state_not_business_data(monkeypatch):
-    from omnia_orchestrator.services import restoration_empty as module
+    from yleum_orchestrator.services import restoration_empty as module
 
     attestation = {
         "owner_is_controller": True,
@@ -249,7 +249,7 @@ def test_canonical_max_users_rows_are_identity_state_not_business_data(monkeypat
 
 
 def test_template1_must_be_independently_proven_stock_and_empty(monkeypatch):
-    from omnia_orchestrator.services import restoration_empty as module
+    from yleum_orchestrator.services import restoration_empty as module
 
     kwargs = dict(
         operation_id=UUID(int=1),
@@ -270,7 +270,7 @@ def test_template1_must_be_independently_proven_stock_and_empty(monkeypatch):
 
 
 def test_missing_database_layout_attestation_fails_closed(monkeypatch):
-    from omnia_orchestrator.services import restoration_empty as module
+    from yleum_orchestrator.services import restoration_empty as module
 
     payload = _payload()
     del payload["database_layout_valid"]

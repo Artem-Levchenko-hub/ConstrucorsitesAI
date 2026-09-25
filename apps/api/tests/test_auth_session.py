@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.services.auth_session import derive_seed_password, establish_session
+from yleum_api.services.auth_session import derive_seed_password, establish_session
 
 # ── pure derivation ─────────────────────────────────────────────────────────
 
@@ -234,7 +234,7 @@ def test_preview_resolver_args_empty_by_default(monkeypatch):
     """Default (empty setting) → no launch args (authenticated path off)."""
     from types import SimpleNamespace
 
-    from omnia_api.services import auth_session
+    from yleum_api.services import auth_session
 
     monkeypatch.setattr(
         auth_session,
@@ -242,7 +242,7 @@ def test_preview_resolver_args_empty_by_default(monkeypatch):
         lambda: SimpleNamespace(gate_preview_resolver_rules=""),
         raising=False,
     )
-    import omnia_api.core.config as cfg
+    import yleum_api.core.config as cfg
 
     monkeypatch.setattr(
         cfg, "get_settings", lambda: SimpleNamespace(gate_preview_resolver_rules="")
@@ -254,8 +254,8 @@ def test_preview_resolver_args_emits_host_resolver_rule(monkeypatch):
     """When set → a single --host-resolver-rules Chromium arg (b2)."""
     from types import SimpleNamespace
 
-    import omnia_api.core.config as cfg
-    from omnia_api.services import auth_session
+    import yleum_api.core.config as cfg
+    from yleum_api.services import auth_session
 
     rule = "MAP *.preview.lead-generator.ru 172.21.0.1"
     monkeypatch.setattr(

@@ -2,7 +2,7 @@ from pathlib import Path
 
 from scripts.verify_project_machine_boundary import fixture_profile, template_text_files
 
-from omnia_orchestrator.core.template_materialization import TEMPLATES, shared_public_files
+from yleum_orchestrator.core.template_materialization import TEMPLATES, shared_public_files
 
 
 def test_real_max_fixture_includes_materialized_public_assets():

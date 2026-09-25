@@ -20,13 +20,13 @@ from pydantic import SecretStr
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.config import get_settings
-from omnia_api.models.account import AuthSession, LegalAcceptance
-from omnia_api.models.billing import Subscription
-from omnia_api.models.oauth_login import OAuthLoginState, UserIdentity
-from omnia_api.models.user import User
-from omnia_api.routers import auth_oauth
-from omnia_api.services import oauth_login
+from yleum_api.core.config import get_settings
+from yleum_api.models.account import AuthSession, LegalAcceptance
+from yleum_api.models.billing import Subscription
+from yleum_api.models.oauth_login import OAuthLoginState, UserIdentity
+from yleum_api.models.user import User
+from yleum_api.routers import auth_oauth
+from yleum_api.services import oauth_login
 
 WEB = "http://web.example.test"
 LEGAL_VERSION = get_settings().legal_document_version
@@ -455,7 +455,7 @@ async def test_existing_account_is_linked_by_verified_email_and_signed_in(
     provider: Provider,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import auth as auth_router
+    from yleum_api.routers import auth as auth_router
 
     async def no_letter(_user: User, _token: str) -> None:
         return None

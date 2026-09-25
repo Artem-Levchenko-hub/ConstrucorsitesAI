@@ -16,8 +16,8 @@ from uuid import uuid4
 
 import docker  # type: ignore[import-untyped]
 
-from omnia_orchestrator.services.docker_cell_resources import DockerVolumeRecord
-from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
+from yleum_orchestrator.services.docker_cell_resources import DockerVolumeRecord
+from yleum_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 
 
 class ConcurrentReader(DockerPyCellBackend):

@@ -8,9 +8,9 @@ from uuid import uuid4
 import pytest
 from docker.errors import NotFound
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.services.machine_adapter import MachineAdapter
-from omnia_orchestrator.services.machine_business_config import apply_core_config, config_source
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.services.machine_adapter import MachineAdapter
+from yleum_orchestrator.services.machine_business_config import apply_core_config, config_source
 
 
 def test_configuration_is_json_data_and_only_trusted_core_files_are_written(monkeypatch):
@@ -47,7 +47,7 @@ async def test_saved_metadata_replays_without_touching_product_or_generation(tmp
     path = tmp_path / "machine.json"
     state = SimpleNamespace(project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5)
     manifest = {"version": 1, "tasks": [], "services": [], "routes": []}
-    from omnia_orchestrator.services.machine_defaults import next_machine_manifest
+    from yleum_orchestrator.services.machine_defaults import next_machine_manifest
 
     manifest = next_machine_manifest().model_dump(mode="json")
     machine = SimpleNamespace(path=path, state=lambda: {"manifest": manifest, "epoch": 4})
@@ -74,7 +74,7 @@ async def test_saved_metadata_replays_without_touching_product_or_generation(tmp
 
 @pytest.mark.asyncio
 async def test_sleeping_metadata_is_durable_without_starting_resources(tmp_path, monkeypatch):
-    from omnia_orchestrator.services.machine_defaults import next_machine_manifest
+    from yleum_orchestrator.services.machine_defaults import next_machine_manifest
 
     state = SimpleNamespace(project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5)
     machine = SimpleNamespace(

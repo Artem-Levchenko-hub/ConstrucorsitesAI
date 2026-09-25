@@ -4,9 +4,9 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services.generation import runtime
-from omnia_api.services.max_project_kit import _template_file
 from tests.test_project_cell_executor import _prepare_executor
+from yleum_api.services.generation import runtime
+from yleum_api.services.max_project_kit import _template_file
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
@@ -116,8 +116,8 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
 
 
 async def test_generation_retires_encrypted_crud_files_from_existing_projects():
-    from omnia_api.services.max_managed_generation import refresh_integration_sdk
-    from omnia_api.services.max_project_kit import MAX_RETIRED_MANAGED_FILES
+    from yleum_api.services.max_managed_generation import refresh_integration_sdk
+    from yleum_api.services.max_project_kit import MAX_RETIRED_MANAGED_FILES
 
     canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
     tree = {
@@ -156,8 +156,8 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     db_session,
     test_engine,
 ):
-    from omnia_api.services import project_cell_executor
-    from omnia_api.services.max_managed_generation import refresh_integration_sdk
+    from yleum_api.services import project_cell_executor
+    from yleum_api.services.max_managed_generation import refresh_integration_sdk
 
     original = {
         SDK_PATH: "old SDK",

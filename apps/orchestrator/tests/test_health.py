@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.routers import health
+from yleum_orchestrator.routers import health
 
 
 @pytest.mark.asyncio

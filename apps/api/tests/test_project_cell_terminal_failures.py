@@ -3,9 +3,9 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services.agent_builder import AgentResult
-from omnia_api.services.generation import agent_recovery, agent_verification
-from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+from yleum_api.services.agent_builder import AgentResult
+from yleum_api.services.generation import agent_recovery, agent_verification
+from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
 
 def fatal():
@@ -81,7 +81,7 @@ async def test_first_max_core_recovery_preserves_fatal_infrastructure_error(monk
 
 @pytest.mark.asyncio
 async def test_max_seed_keeps_primary_fatal_code_instead_of_repairable_agent_result():
-    from omnia_api.services.generation import agent_seed
+    from yleum_api.services.generation import agent_seed
 
     async def render():
         return {}
@@ -111,7 +111,7 @@ async def test_max_seed_keeps_primary_fatal_code_instead_of_repairable_agent_res
 
 @pytest.mark.asyncio
 async def test_finalization_fatal_skips_source_repair_and_preserves_code(monkeypatch):
-    from omnia_api.services.generation import agent_finalization
+    from yleum_api.services.generation import agent_finalization
 
     calls = []
 
@@ -147,8 +147,8 @@ async def test_finalization_fatal_skips_source_repair_and_preserves_code(monkeyp
 async def test_sealed_adaptation_failure_preserves_candidate_for_forward_recovery(
     monkeypatch,
 ):
-    from omnia_api.services.generation import agent_finalization
-    from omnia_api.services.max_finalization import (
+    from yleum_api.services.generation import agent_finalization
+    from yleum_api.services.max_finalization import (
         AdaptationActivationRecoveryRequired,
     )
 
@@ -188,8 +188,8 @@ async def test_terminal_adaptation_cancel_stops_pipeline_without_source_rollback
 ):
     import asyncio
 
-    from omnia_api.services.generation import agent_finalization
-    from omnia_api.services.max_finalization import MaxFinalizationStatus
+    from yleum_api.services.generation import agent_finalization
+    from yleum_api.services.max_finalization import MaxFinalizationStatus
 
     calls = []
 

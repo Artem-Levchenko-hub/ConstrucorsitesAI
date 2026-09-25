@@ -16,8 +16,8 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core import postgres_admin
-from omnia_orchestrator.services import demo_seed_writer, demo_seeder
+from yleum_orchestrator.core import postgres_admin
+from yleum_orchestrator.services import demo_seed_writer, demo_seeder
 
 PROJECT_ID = UUID("01234567-89ab-cdef-0123-456789abcdef")
 

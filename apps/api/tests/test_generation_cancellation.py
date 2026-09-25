@@ -14,13 +14,13 @@ from sqlalchemy import select
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from omnia_api.core import config
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services import generation_runs, project_memory
+from yleum_api.core import config
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services import generation_runs, project_memory
 
 MARKER = "[Отменено пользователем]"
 

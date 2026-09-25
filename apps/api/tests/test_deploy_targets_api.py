@@ -5,10 +5,10 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from omnia_api.models.deploy_target import DeployTarget
-from omnia_api.routers import projects as projects_router
-from omnia_api.services import orchestrator_client
-from omnia_api.services import repo as repo_svc
+from yleum_api.models.deploy_target import DeployTarget
+from yleum_api.routers import projects as projects_router
+from yleum_api.services import orchestrator_client
+from yleum_api.services import repo as repo_svc
 
 pytestmark = pytest.mark.asyncio
 

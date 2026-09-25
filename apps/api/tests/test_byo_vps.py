@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import re
 
-from omnia_api.core.crypto import (
+from yleum_api.core.crypto import (
     decrypt_secret,
     decrypt_strong,
     encrypt_secret,
     encrypt_strong,
 )
-from omnia_api.core.ssh_keys import generate_ssh_keypair
-from omnia_api.routers.domains import _HOST_RE
+from yleum_api.core.ssh_keys import generate_ssh_keypair
+from yleum_api.routers.domains import _HOST_RE
 
 
 def test_encrypt_strong_roundtrip() -> None:

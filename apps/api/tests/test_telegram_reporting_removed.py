@@ -4,10 +4,10 @@ ROOT = Path(__file__).resolve().parents[3]
 
 REMOVED_FILES = (
     "apps/api/scripts/dev_generation_telegram_acceptance.py",
-    "apps/api/src/omnia_api/models/generation_telegram_report.py",
-    "apps/api/src/omnia_api/services/generation_telegram_delivery.py",
-    "apps/api/src/omnia_api/services/generation_telegram_reports.py",
-    "apps/api/src/omnia_api/workers/generation_reports.py",
+    "apps/api/src/yleum_api/models/generation_telegram_report.py",
+    "apps/api/src/yleum_api/services/generation_telegram_delivery.py",
+    "apps/api/src/yleum_api/services/generation_telegram_reports.py",
+    "apps/api/src/yleum_api/workers/generation_reports.py",
     "infra/monitoring/telegram_generation_report.py",
 )
 

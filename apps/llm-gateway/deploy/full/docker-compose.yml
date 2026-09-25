@@ -202,7 +202,7 @@ services:
     command:
       - /bin/sh
       - -c
-      - /app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/uvicorn omnia_api.main:app --host 0.0.0.0 --port 8000
+      - /app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/uvicorn yleum_api.main:app --host 0.0.0.0 --port 8000
     depends_on:
       postgres:
         condition: service_healthy
@@ -456,7 +456,7 @@ services:
   generation-worker:
     image: ${API_IMAGE:-omnia-api:prod}
     container_name: omnia-prod-generation-worker
-    command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.generation"]
+    command: ["/app/.venv/bin/python", "-m", "yleum_api.workers.generation"]
     volumes:
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
     environment:
@@ -481,7 +481,7 @@ services:
     container_name: omnia-prod-worker
     # Stack templates come baked in the image (see api.build.additional_contexts).
     # Same uv-run bypass as api — direct python from the venv.
-    command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.run"]
+    command: ["/app/.venv/bin/python", "-m", "yleum_api.workers.run"]
     depends_on:
       api:
         condition: service_healthy

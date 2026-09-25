@@ -5,12 +5,12 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.services.cell_publication import (
+from tests.test_project_machine_manifest import payload
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services.cell_publication import (
     runtime_needs_package_stores,
     warm_volume_names,
 )
-from tests.test_project_machine_manifest import payload
 
 
 def _manifest(*argvs: list[str]) -> MachineManifest:

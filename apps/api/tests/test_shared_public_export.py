@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.services import project_export
+from yleum_api.services import project_export
 
 GOLDEN = json.loads(
     (
@@ -86,7 +86,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
     # Match the image's /app/src plus /orchestrator/templates relationship, with no
     # installed orchestrator or checkout on sys.path. This uses the real API reader.
     source_root = tmp_path / "app/src"
-    service = source_root / "omnia_api/services/project_export.py"
+    service = source_root / "yleum_api/services/project_export.py"
     service.parent.mkdir(parents=True)
     shutil.copy2(Path(project_export.__file__), service)
     (service.parent / "__init__.py").touch()

@@ -1,7 +1,7 @@
 # max-app — one published MAX Studio mini-app on Kubernetes.
 #
 # Every default below is traced to the Docker runtime the orchestrator runs
-# today (apps/orchestrator/src/omnia_orchestrator/...). Where this chart has to
+# today (apps/orchestrator/src/yleum_orchestrator/...). Where this chart has to
 # deviate from that runtime the deviation is called out in a comment and in
 # README.md. Nothing here is a production switch yet — see "What is NOT covered
 # yet" in README.md.

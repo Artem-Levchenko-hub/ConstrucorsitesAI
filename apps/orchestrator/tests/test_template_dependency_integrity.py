@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.core import template_materialization
+from yleum_orchestrator.core import template_materialization
 
 # templates/ sits next to the orchestrator package dir; this file is
 # apps/orchestrator/tests/, so templates is ../templates.

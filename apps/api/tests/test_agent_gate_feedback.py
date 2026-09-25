@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnia_api.services.agent_gate_feedback import (
+from yleum_api.services.agent_gate_feedback import (
     GateOutcome,
     all_passed,
     build_fix_instruction,
@@ -58,7 +58,7 @@ class _Check:
 
 
 def test_outcome_from_checks_maps_only_failures() -> None:
-    from omnia_api.services.agent_gate_feedback import outcome_from_checks
+    from yleum_api.services.agent_gate_feedback import outcome_from_checks
 
     checks = [
         _Check("signup", True),
@@ -73,7 +73,7 @@ def test_outcome_from_checks_maps_only_failures() -> None:
 
 
 def test_outcome_from_checks_all_pass() -> None:
-    from omnia_api.services.agent_gate_feedback import outcome_from_checks
+    from yleum_api.services.agent_gate_feedback import outcome_from_checks
 
     o = outcome_from_checks("functional", True, [_Check("a", True), _Check("b", True)])
     assert o.passed is True and o.failures == []

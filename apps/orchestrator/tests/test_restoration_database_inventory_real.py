@@ -2,12 +2,12 @@
 
 import json
 
-from omnia_orchestrator.services.restoration_catalog import (
+from tests._versioning_pg import RESET_DISPOSABLE_DATABASE_SQL
+from tests.test_restoration_database import database  # noqa: F401
+from yleum_orchestrator.services.restoration_catalog import (
     DATABASE_INVENTORY_SQL,
     database_presence_query,
 )
-from tests._versioning_pg import RESET_DISPOSABLE_DATABASE_SQL
-from tests.test_restoration_database import database  # noqa: F401
 
 
 async def test_row_inventory_includes_unpublished_rows_and_later_writes(database):  # noqa: F811

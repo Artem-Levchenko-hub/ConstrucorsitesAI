@@ -9,12 +9,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.project_machine import MachineManifest
 from tests.test_project_machine_manifest import payload
+from yleum_orchestrator.core.project_machine import MachineManifest
 
 
 def backend(tmp_path, **overrides):
-    name = "omnia_orchestrator.services.docker_machine_backend"
+    name = "yleum_orchestrator.services.docker_machine_backend"
     assert importlib.util.find_spec(name) is not None, "Docker machine execution is missing"
     module = importlib.import_module(name)
     values = dict(
@@ -52,7 +52,7 @@ def restoration_volume_fixture(
 ):
     import docker
 
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     operation_id = UUID("12345678-1234-5678-1234-567812345678")
     binding_digest = "b" * 64
@@ -148,7 +148,7 @@ def restoration_volume_fixture(
 
 
 def test_private_restoration_database_import_is_exact_and_does_not_switch_metadata(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     fixture = restoration_volume_fixture(tmp_path)
     before = fixture.runtime._metadata()
@@ -183,7 +183,7 @@ def test_private_restoration_database_import_is_exact_and_does_not_switch_metada
     ],
 )
 def test_private_restoration_database_import_rejects_ambiguous_identity(tmp_path, fault):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     changes = {}
     if fault == "operation_label":
@@ -245,7 +245,7 @@ def test_reverted_restoration_cleanup_removes_only_exact_detached_pair_and_retri
 
 
 def test_reverted_restoration_cleanup_retains_tampered_volume(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     fixture = restoration_volume_fixture(
         tmp_path,
@@ -346,7 +346,7 @@ def test_reverted_restoration_cleanup_retains_volume_attached_by_foreign_helper(
 
     fixture.runtime.client.containers.list = list_containers
 
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     with pytest.raises(CellIdentityConflict, match="attached restoration volume"):
         fixture.runtime.cleanup_reverted_restoration(
@@ -361,7 +361,7 @@ def test_reverted_restoration_cleanup_retains_volume_attached_by_foreign_helper(
 
 
 def test_controller_metadata_selects_active_database_volume(tmp_path):
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     legacy = runtime.stem + "-app-postgres-data"
@@ -378,8 +378,8 @@ def test_controller_metadata_selects_active_database_volume(tmp_path):
 
 
 def test_controller_metadata_rejects_untrusted_database_volume(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     write_controller_json(runtime.metadata_path, {"active_database_volume": "foreign-volume"})
@@ -418,11 +418,11 @@ def test_development_pid_one_handles_stop_signal_without_waiting_for_kill(tmp_pa
 def retained_preview_fixture(tmp_path, *, restored_code=False):
     import docker
 
-    from omnia_orchestrator.services.machine_environment import (
+    from yleum_orchestrator.services.machine_environment import (
         MachineEnvironmentRef,
         VolumeEnvironmentRef,
     )
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     if restored_code:
@@ -560,7 +560,7 @@ def test_restored_code_volume_can_record_and_consume_halt_receipt(tmp_path):
 
 @pytest.mark.parametrize("key", ["omnia.owner_id", "omnia.project_id", "omnia.workspace_id"])
 def test_restored_code_volume_still_requires_exact_ownership(tmp_path, key):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     runtime, reference, volumes, *_ = retained_preview_fixture(tmp_path, restored_code=True)
     volumes[runtime.workspace_volume].attrs["Labels"][key] = str(uuid4())
@@ -583,7 +583,7 @@ def test_restored_code_volume_still_requires_exact_ownership(tmp_path, key):
     ],
 )
 def test_retained_receipt_binds_trusted_runtime_and_still_fences_product(tmp_path, fault):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     runtime, reference, _volumes, _image, attached = retained_preview_fixture(tmp_path)
     original_get = runtime.client.containers.get
@@ -769,8 +769,8 @@ def test_interrupted_stat_helper_is_removed_without_certifying_volumes(
     ],
 )
 def test_retained_preview_never_trusts_stale_or_unsafe_resources(tmp_path, fault):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime, reference, volumes, image, attached = retained_preview_fixture(tmp_path)
     assert runtime.record_retained_preview(reference, epoch=7)
@@ -890,8 +890,8 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
 def test_rootfs_reuse_requires_stopped_unchanged_trusted_image(tmp_path, fault):
     import docker
 
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
 
     runtime = backend(tmp_path)
     image_id = "sha256:" + "d" * 64
@@ -1080,7 +1080,7 @@ def test_blocking_readiness_cannot_extend_parent_budget(tmp_path, monkeypatch, p
     import http.client
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services import docker_machine_backend, project_machine
+    from yleum_orchestrator.services import docker_machine_backend, project_machine
 
     runtime = backend(tmp_path)
     clock = [0.0]
@@ -1250,7 +1250,7 @@ def test_project_postgres_seed_start_repairs_only_pgdata_root_mode_without_reini
 
 
 def test_restore_reference_allows_legacy_machine_artifact_without_project_postgres_volume(tmp_path):
-    from omnia_orchestrator.services.machine_environment import (
+    from yleum_orchestrator.services.machine_environment import (
         MachineEnvironmentRef,
         VolumeEnvironmentRef,
     )
@@ -1343,8 +1343,8 @@ def test_tmpfs_command_logs_use_bounded_exec_read_not_docker_archive(tmp_path):
 def test_restore_removes_old_rootfs_and_only_activates_complete_target(tmp_path):
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     manifest = MachineManifest.model_validate(payload())
@@ -1442,7 +1442,7 @@ def test_is_running_reports_live_project_postgres_even_without_machine_process(t
 def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path):
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     before = MachineManifest.model_validate(payload())
@@ -1505,7 +1505,7 @@ def test_snapshot_uses_export_import_without_inherited_docker_commit_config(tmp_
 def test_failed_quiesce_cannot_be_bypassed_by_stopped_retry(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     value = payload()
@@ -1530,7 +1530,7 @@ def test_failed_quiesce_cannot_be_bypassed_by_stopped_retry(tmp_path, monkeypatc
     runtime.exec_start = lambda *args: "hung"
     ticks = iter([0, 999999])
     monkeypatch.setattr(
-        "omnia_orchestrator.services.docker_machine_backend.time.monotonic", lambda: next(ticks)
+        "yleum_orchestrator.services.docker_machine_backend.time.monotonic", lambda: next(ticks)
     )
     with pytest.raises(Exception, match=r"quiesce.*timed out"):
         runtime.prepare_capture()
@@ -1543,7 +1543,7 @@ def test_crash_surviving_recovery_helper_is_removed_before_restore_activation(tm
 
     import docker
 
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     events = []
@@ -1581,7 +1581,7 @@ def test_crash_surviving_recovery_helper_is_removed_before_restore_activation(tm
 
 
 def test_pending_quiesce_cannot_restart_before_explicit_restore(tmp_path):
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = backend(tmp_path)
     write_controller_json(runtime.metadata_path, {"quiesce_state": "pending"})

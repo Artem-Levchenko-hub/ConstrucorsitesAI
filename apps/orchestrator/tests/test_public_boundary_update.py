@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.services import machine_business_config
-from omnia_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, MachineAdapter
+from yleum_orchestrator.services import machine_business_config
+from yleum_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, MachineAdapter
 
 
 @pytest.mark.parametrize("configured", [True, False])
@@ -120,7 +120,7 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         _lookup=lambda _, name, _kind: containers.get(name),
         address=lambda: "127.0.0.2", labels=lambda kind: {"kind": kind},
     )
-    from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
+    from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 
     backend.trusted_container_identity = lambda item, kind: (
         DockerMachineBackend.trusted_container_identity(backend, item, kind)
@@ -178,7 +178,7 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     if fault in {"health", "budget", "cancelled"}:
         import asyncio
 
-        from omnia_orchestrator.core.cell_resources import CellResourceError
+        from yleum_orchestrator.core.cell_resources import CellResourceError
 
         error_type = {"health": CellResourceError, "budget": TimeoutError,
                       "cancelled": asyncio.CancelledError}[fault]

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omnia_api.services import project_export as pe
+from yleum_api.services import project_export as pe
 
 
 def _make_skeleton(root: Path, name: str) -> Path:

@@ -4,9 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.services.machine_business_config import apply_core_config
 from tests.test_machine_core_recovery import FileCore
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.services.machine_business_config import apply_core_config
 
 
 class CompiledCore(FileCore):

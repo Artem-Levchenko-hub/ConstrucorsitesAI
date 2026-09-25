@@ -11,14 +11,14 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
-from omnia_orchestrator.schemas.restoration_adaptation_activation import (
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     ActivationBusinessProbe,
     ActivationObservedIdentity,
     ActivationPreparedTarget,
     RestorationAdaptationActivationRequest,
 )
-from omnia_orchestrator.services.restoration_adaptation_activation import (
+from yleum_orchestrator.services.restoration_adaptation_activation import (
     RestorationAdaptationActivationEngine,
     _durable_mkdir,
 )

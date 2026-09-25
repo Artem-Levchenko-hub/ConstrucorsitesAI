@@ -7,11 +7,11 @@ import pytest
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.project import Project
-from omnia_api.routers import max_studio
-from omnia_api.routers import projects as projects_router
-from omnia_api.services import max_client, orchestrator_client
-from omnia_api.services import repo as repo_svc
+from yleum_api.models.project import Project
+from yleum_api.routers import max_studio
+from yleum_api.routers import projects as projects_router
+from yleum_api.services import max_client, orchestrator_client
+from yleum_api.services import repo as repo_svc
 
 pytestmark = pytest.mark.asyncio
 

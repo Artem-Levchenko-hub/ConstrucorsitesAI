@@ -7,13 +7,13 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.config import FREE_GENERATION_LIMIT, get_settings
-from omnia_api.models.user import User
-from omnia_api.models.wallet import Wallet
-from omnia_api.routers import auth as auth_router
-from omnia_api.routers import max_accounts as max_accounts_router
-from omnia_api.routers import projects as projects_router
-from omnia_api.services import repo as repo_svc
+from yleum_api.core.config import FREE_GENERATION_LIMIT, get_settings
+from yleum_api.models.user import User
+from yleum_api.models.wallet import Wallet
+from yleum_api.routers import auth as auth_router
+from yleum_api.routers import max_accounts as max_accounts_router
+from yleum_api.routers import projects as projects_router
+from yleum_api.services import repo as repo_svc
 
 pytestmark = pytest.mark.asyncio
 

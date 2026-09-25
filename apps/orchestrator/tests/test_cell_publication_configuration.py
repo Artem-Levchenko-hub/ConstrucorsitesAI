@@ -5,10 +5,10 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.services.cell_publication import CellPublicationService
-from omnia_orchestrator.services.project_machine import write_controller_json
 from tests.test_cell_publication import request
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.services.cell_publication import CellPublicationService
+from yleum_orchestrator.services.project_machine import write_controller_json
 
 
 async def test_public_configuration_survives_restart_without_changing_release(tmp_path):
@@ -190,10 +190,10 @@ async def test_disable_tombstone_precedes_ingress_removal_and_is_retryable(tmp_p
     )
     remove = AsyncMock(side_effect=RuntimeError("nginx temporarily unavailable"))
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.unpublish", remove
+        "yleum_orchestrator.services.cell_publication.nginx_writer.unpublish", remove
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.prod_host",
+        "yleum_orchestrator.services.cell_publication.nginx_writer.prod_host",
         lambda slug: slug,
     )
     with pytest.raises(RuntimeError):

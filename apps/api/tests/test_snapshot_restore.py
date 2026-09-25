@@ -3,8 +3,8 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.services import snapshot_restore as restore
+from yleum_api.core.errors import ApiError
+from yleum_api.services import snapshot_restore as restore
 
 
 def test_max_restore_is_rejected_before_activation():

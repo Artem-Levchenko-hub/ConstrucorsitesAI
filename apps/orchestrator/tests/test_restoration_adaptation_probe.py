@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
 
 
 def _contract(*, include_visits: bool = False) -> dict[str, object]:

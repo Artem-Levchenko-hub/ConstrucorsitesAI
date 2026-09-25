@@ -8,14 +8,14 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services.generation import agent_messages, runtime, supervisor
+from yleum_api.services.generation import agent_messages, runtime, supervisor
 
 os.environ.setdefault("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/test")
 os.environ.setdefault("JWT_SECRET", "test-jwt-secret-at-least-32-bytes")
 
-from omnia_api.core.errors import ApiError
-from omnia_api.services.agent_builder import Action
-from omnia_api.services.generation_runs import promote_generation_after_admission
+from yleum_api.core.errors import ApiError
+from yleum_api.services.agent_builder import Action
+from yleum_api.services.generation_runs import promote_generation_after_admission
 
 
 async def test_failed_repair_restores_changed_deleted_and_empty_source_files():

@@ -1,13 +1,13 @@
 from sqlalchemy import select
 
-from omnia_api.core.security import create_access_token
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_version import ProjectVersion
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services.project_versions import ensure_generation_version, record_restored_version
+from yleum_api.core.security import create_access_token
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_version import ProjectVersion
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services.project_versions import ensure_generation_version, record_restored_version
 
 
 async def fixture(db):
@@ -209,8 +209,8 @@ async def test_current_version_survives_managed_technical_child_commit(client, d
 def test_reconstructed_preview_label_is_explicit_and_backward_compatible():
     from uuid import uuid4
 
-    from omnia_api.schemas.project_version import VersionPreview
-    from omnia_api.services.project_versions import preview_fields
+    from yleum_api.schemas.project_version import VersionPreview
+    from yleum_api.services.project_versions import preview_fields
 
     sid, pid = uuid4(), uuid4()
     item = {
@@ -240,7 +240,7 @@ def test_reconstructed_preview_label_is_explicit_and_backward_compatible():
 def test_unfinished_versions_never_present_base_version_image():
     from uuid import uuid4
 
-    from omnia_api.services.project_versions import version_preview_fields
+    from yleum_api.services.project_versions import version_preview_fields
 
     sid, pid = uuid4(), uuid4()
     base = Snapshot(

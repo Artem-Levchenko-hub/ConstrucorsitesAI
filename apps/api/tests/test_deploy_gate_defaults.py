@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import inspect
 
-from omnia_api.core.config import Settings
-from omnia_api.services.deploy_attestation import blocking_required
+from yleum_api.core.config import Settings
+from yleum_api.services.deploy_attestation import blocking_required
 
 
 def test_deploy_gate_advisory_by_default() -> None:
@@ -26,7 +26,7 @@ def test_deploy_gate_is_always_blocking_in_production() -> None:
 
 
 def test_trigger_deploy_consults_the_attestation() -> None:
-    from omnia_api.routers import runtime
+    from yleum_api.routers import runtime
 
     src = inspect.getsource(runtime.trigger_deploy)
     assert "resolve_deploy_proof" in src

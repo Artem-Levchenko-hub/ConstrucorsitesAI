@@ -5,13 +5,13 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellFenceRejected, LifecycleMutation
-from omnia_orchestrator.core.project_machine import MachineManifest
 from tests.test_project_machine_manifest import payload
+from yleum_orchestrator.core.cell_resources import CellFenceRejected, LifecycleMutation
+from yleum_orchestrator.core.project_machine import MachineManifest
 
 
 def module():
-    name = "omnia_orchestrator.services.project_machine"
+    name = "yleum_orchestrator.services.project_machine"
     assert importlib.util.find_spec(name) is not None, "persistent machine controller is missing"
     return importlib.import_module(name)
 

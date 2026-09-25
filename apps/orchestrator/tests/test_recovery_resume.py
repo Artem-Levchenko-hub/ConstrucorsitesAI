@@ -18,8 +18,8 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.schemas.restoration_recovery import RecoveryFinding, RecoveryReport
-from omnia_orchestrator.services.restoration_recovery import (
+from yleum_orchestrator.schemas.restoration_recovery import RecoveryFinding, RecoveryReport
+from yleum_orchestrator.services.restoration_recovery import (
     RecoveryConflict,
     advance_recovery,
     intent_digest,

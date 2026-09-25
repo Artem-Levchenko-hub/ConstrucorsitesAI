@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.services.provisioner import _load_or_create_auth_secret
+from yleum_orchestrator.services.provisioner import _load_or_create_auth_secret
 
 
 @pytest.fixture(autouse=True)
@@ -26,7 +26,7 @@ def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("SECRETS_ROOT", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 

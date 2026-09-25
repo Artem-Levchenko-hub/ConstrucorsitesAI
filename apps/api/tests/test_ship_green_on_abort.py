@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 
-from omnia_api.services import agent_builder as ab
+from yleum_api.services import agent_builder as ab
 
 
 def _green_build_then_cycle(build_ok: bool):

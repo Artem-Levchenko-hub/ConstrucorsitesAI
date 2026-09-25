@@ -22,7 +22,7 @@ from urllib.parse import unquote, urlparse
 
 import pytest
 
-from omnia_api.services import chip_pixel_gate, wow_dom_gate
+from yleum_api.services import chip_pixel_gate, wow_dom_gate
 
 RESOLVER_ARGS = ["--host-resolver-rules=MAP preview.test 10.0.0.7"]
 SESSION_STATE = {"cookies": [{"name": "authjs.session-token", "value": "x"}], "origins": []}

@@ -20,12 +20,12 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from omnia_orchestrator.core.config import get_settings
-from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
-from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-from omnia_orchestrator.routers import workspace
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
+from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.routers import workspace
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 
 _TOKEN = "test-internal-token-not-a-real-secret"
 _PAGE = "src/app/page.tsx"

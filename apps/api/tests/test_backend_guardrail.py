@@ -7,7 +7,7 @@ may. Pure — no container needed.
 
 from __future__ import annotations
 
-from omnia_api.services.backend_guardrail import (
+from yleum_api.services.backend_guardrail import (
     check_backend,
     scan_backend_safety,
     summarize,

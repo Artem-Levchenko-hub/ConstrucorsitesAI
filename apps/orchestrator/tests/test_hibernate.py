@@ -24,8 +24,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.services import hibernate
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.services import hibernate
 
 
 @pytest.fixture(autouse=True)
@@ -41,7 +41,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "false")
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     hibernate._last_activity.clear()
@@ -84,7 +84,7 @@ def test_should_pause_paid_only_after_explicit_opt_in(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -341,7 +341,7 @@ async def test_sweep_pauses_pro_tier_when_warm_pause_is_explicitly_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     hibernate._last_activity[PID_PRO_IDLE] = time.time() - 61 * 60
@@ -398,7 +398,7 @@ async def test_sweep_keeps_paused_paid_container_when_warm_pause_is_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("HIBERNATE_WARM_PAUSE_PAID", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     hibernate._last_activity[PID_PAUSED] = time.time() - 24 * 60 * 60

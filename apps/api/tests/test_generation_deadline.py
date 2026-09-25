@@ -16,23 +16,6 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.core.config import get_settings
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project_cell import ProjectCellActivityLease, ProjectCellWorkspace
-from omnia_api.models.restoration import Restoration
-from omnia_api.services.generation_deadline import (
-    generation_deadline,
-    note_proof_sealed,
-    note_proof_settled,
-    note_repair_stage_started,
-)
-from omnia_api.services.max_finalization import (
-    generation_deadline_wait,
-    run_generation_deadline_watchdog,
-    watch_generation_deadline,
-)
-from omnia_api.services.orchestrator_client import RestorationAdaptationProof
-from omnia_api.services.project_cell_proofs import ProofIdentity
 from tests.test_max_finalization import (
     _CLIENTS_ROUTE,
     _VISITS_ROUTE,
@@ -40,6 +23,23 @@ from tests.test_max_finalization import (
     _install_exact_release_probe,
     _new_harness,
 )
+from yleum_api.core.config import get_settings
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project_cell import ProjectCellActivityLease, ProjectCellWorkspace
+from yleum_api.models.restoration import Restoration
+from yleum_api.services.generation_deadline import (
+    generation_deadline,
+    note_proof_sealed,
+    note_proof_settled,
+    note_repair_stage_started,
+)
+from yleum_api.services.max_finalization import (
+    generation_deadline_wait,
+    run_generation_deadline_watchdog,
+    watch_generation_deadline,
+)
+from yleum_api.services.orchestrator_client import RestorationAdaptationProof
+from yleum_api.services.project_cell_proofs import ProofIdentity
 
 _T0 = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
 _EDIT = timedelta(seconds=1500)
@@ -509,7 +509,7 @@ async def test_a_repair_is_not_started_with_too_little_time_left(
 async def test_a_repair_that_runs_out_of_time_says_so(
     db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from omnia_api.services import max_finalization
+    from yleum_api.services import max_finalization
 
     harness = await _new_harness(db_session, test_engine)
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
@@ -531,7 +531,7 @@ async def test_a_repair_that_runs_out_of_time_says_so(
 async def test_the_real_adaptive_path_seals_the_proof_against_the_deadline(
     db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from omnia_api.services import restorations
+    from yleum_api.services import restorations
 
     harness = await _new_harness(db_session, test_engine)
     operation_id = await _adaptation_run(db_session, harness)
@@ -640,7 +640,7 @@ async def test_the_real_adaptive_path_seals_the_proof_against_the_deadline(
 async def test_the_watchdog_outlives_a_sealed_proof_and_then_enforces_the_limit(
     db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from omnia_api.services import max_finalization
+    from yleum_api.services import max_finalization
 
     run, _operation, factory = await _bound_adaptation(db_session, test_engine)
     run.started_at = datetime.now(UTC) - timedelta(hours=2)
@@ -669,7 +669,7 @@ async def test_the_watchdog_outlives_a_sealed_proof_and_then_enforces_the_limit(
 async def test_the_watchdog_ends_with_the_run(
     db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from omnia_api.services import max_finalization
+    from yleum_api.services import max_finalization
 
     run, _operation, factory = await _bound_adaptation(db_session, test_engine)
     _seal(run)

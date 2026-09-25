@@ -7,13 +7,13 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.routers import rollback, runtime
-from omnia_api.schemas.runtime import RuntimeStatus
-from omnia_api.services.generation import lifecycle
-from omnia_api.workers import preview
+from yleum_api.core.errors import ApiError
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.routers import rollback, runtime
+from yleum_api.schemas.runtime import RuntimeStatus
+from yleum_api.services.generation import lifecycle
+from yleum_api.workers import preview
 
 BROWSER_CONTAINERS = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
 NON_BROWSER = ("blank", "landing", "portfolio", "blog", "api", "tgbot", "code")

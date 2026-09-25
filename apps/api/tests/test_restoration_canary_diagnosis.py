@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from omnia_api.ops.restoration_canary_diagnosis import diagnose_canary
+from yleum_api.ops.restoration_canary_diagnosis import diagnose_canary
 
 _EXTERNAL_502 = {"hop": "external", "health": 502, "webhook": 502}
 

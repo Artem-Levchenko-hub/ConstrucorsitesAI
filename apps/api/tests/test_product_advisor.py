@@ -5,9 +5,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.services import llm_client
-from omnia_api.services.product_advisor import (
+from yleum_api.core.errors import ApiError
+from yleum_api.services import llm_client
+from yleum_api.services.product_advisor import (
     AdviceContext,
     SnapshotInput,
     build_advice_context,

@@ -10,17 +10,17 @@ import pytest
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.deps import get_current_user
-from omnia_api.main import app
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services import orchestrator_client as oc
-from omnia_api.services import project_cell_runtime as runtime
-from omnia_api.services.project_cells import (
+from yleum_api.core.config import get_settings
+from yleum_api.core.deps import get_current_user
+from yleum_api.main import app
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services import orchestrator_client as oc
+from yleum_api.services import project_cell_runtime as runtime
+from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
     recover_interrupted_cell_operations,
 )
@@ -193,7 +193,7 @@ async def test_unsupported_cell_actions_fail_closed(client, db_session, monkeypa
 async def test_cell_config_save_applies_without_generation_or_source_changes(
     client, db_session, monkeypatch, first_apply_fails,
 ):
-    from omnia_api.models.max_project_config import MaxProjectConfig
+    from yleum_api.models.max_project_config import MaxProjectConfig
 
     _, project, run, workspace = await _seed(db_session, monkeypatch)
     workspace.generation_run_id = None
@@ -237,7 +237,7 @@ async def test_cell_config_save_applies_without_generation_or_source_changes(
 
 
 async def test_cell_config_does_not_mutate_during_generation(client, db_session, monkeypatch):
-    from omnia_api.models.max_project_config import MaxProjectConfig
+    from yleum_api.models.max_project_config import MaxProjectConfig
 
     _, project, _, _ = await _seed(db_session, monkeypatch, active=True)
     base = f"/api/projects/{project.id}/max/config"
@@ -396,7 +396,7 @@ async def test_owner_start_wakes_paused_cell_with_durable_retry_and_no_agent_lea
 ):
     from sqlalchemy import select
 
-    from omnia_api.models.project_cell import ProjectCellOperation
+    from yleum_api.models.project_cell import ProjectCellOperation
 
     _owner, project, _run, workspace = await _seed(db_session, monkeypatch)
     workspace.generation_run_id = None

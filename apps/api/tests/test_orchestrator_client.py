@@ -6,7 +6,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
-from omnia_api.schemas.restoration import (
+from yleum_api.schemas.restoration import (
     ActivationBusinessProbe,
     ActivationBusinessWitness,
     ActivationPreparedTarget,
@@ -15,8 +15,8 @@ from omnia_api.schemas.restoration import (
     RestorationAdaptationActivationOfferRequest,
     canonical_activation_digest,
 )
-from omnia_api.services import orchestrator_client
-from omnia_api.services.orchestrator_client import (
+from yleum_api.services import orchestrator_client
+from yleum_api.services.orchestrator_client import (
     ControlProjectCellResourcesRequest,
     EnsureProjectCellResourcesRequest,
     HttpProjectCellOrchestratorClient,

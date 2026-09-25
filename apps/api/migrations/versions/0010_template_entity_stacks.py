@@ -10,7 +10,7 @@ templates fails with `ck_projects_template_allowed` violation, blocking
 the whole entity-engine stack in production.
 
 This migration realigns the constraint with the `Template` literal in
-`apps/api/src/omnia_api/schemas/project.py`. The allowlist is hardcoded
+`apps/api/src/yleum_api/schemas/project.py`. The allowlist is hardcoded
 (not imported from app code) so the migration stays a frozen point-in-time
 snapshot. As in 0004 we DROP and re-ADD — Postgres rewrites only the
 constraint metadata, so it's fast regardless of table size.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.routers import ingress
+from yleum_orchestrator.routers import ingress
 
 
 @pytest.fixture(autouse=True)
@@ -20,7 +20,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("RUNTIME_HOST_SUFFIX", "preview.omniadevelop.ru")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 

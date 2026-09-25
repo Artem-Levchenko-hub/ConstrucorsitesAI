@@ -13,7 +13,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.engine import make_url
 
-from omnia_api.core.config import get_settings
+from yleum_api.core.config import get_settings
 
 API_ROOT = Path(__file__).resolve().parents[1]
 REMOVED_TABLE = "generation_telegram_reports"

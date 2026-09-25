@@ -10,8 +10,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
-from omnia_api.services import build_plan as bp
-from omnia_api.services.build_plan import (
+from yleum_api.services import build_plan as bp
+from yleum_api.services.build_plan import (
     BuildPlan,
     Capability,
     merge_plan_into_spec,

@@ -7,8 +7,8 @@ from uuid import uuid4
 import pytest
 from PIL import Image
 
-from omnia_api.services import snapshot_preview_capture as capture
-from omnia_api.workers.preview import LiveCaptureReport
+from yleum_api.services import snapshot_preview_capture as capture
+from yleum_api.workers.preview import LiveCaptureReport
 
 
 def png(width):
@@ -157,7 +157,7 @@ async def test_upload_uses_private_projects_bucket(monkeypatch):
 
 
 async def test_legacy_max_worker_never_reads_live_source(monkeypatch):
-    from omnia_api.workers import preview
+    from yleum_api.workers import preview
 
     sid, pid = uuid4(), uuid4()
     session = AsyncMock()

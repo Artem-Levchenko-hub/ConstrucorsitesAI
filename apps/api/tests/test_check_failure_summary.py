@@ -13,7 +13,7 @@
 
 from __future__ import annotations
 
-from omnia_api.services.generation.agent_messages import summarize_check_failure
+from yleum_api.services.generation.agent_messages import summarize_check_failure
 
 # Дословный (с сокращениями) отчёт прогона c9b8d59a с прода 23.09.2026.
 LIVE_REPORT = """[typecheck]

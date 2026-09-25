@@ -12,16 +12,16 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from omnia_api.core.security import create_access_token
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
-from omnia_api.models.project_version import ProjectVersion
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services import draft_changes, orchestrator_client, repo
-from omnia_api.services.draft_changes import draft_reset_patch
-from omnia_api.services.orchestrator_client import (
+from yleum_api.core.security import create_access_token
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellWorkspace
+from yleum_api.models.project_version import ProjectVersion
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services import draft_changes, orchestrator_client, repo
+from yleum_api.services.draft_changes import draft_reset_patch
+from yleum_api.services.orchestrator_client import (
     ProjectCellAgentWriteResponse,
     ProjectCellDraftFiles,
 )

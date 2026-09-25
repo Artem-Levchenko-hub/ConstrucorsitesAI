@@ -9,10 +9,10 @@ from uuid import uuid4
 import docker  # type: ignore[import-untyped]
 import pytest
 
-from omnia_orchestrator.core.cell_resources import LifecycleMutation
-from omnia_orchestrator.core.workspace_provider import ControlAction, WorkspaceSpec
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
-from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
+from yleum_orchestrator.core.cell_resources import LifecycleMutation
+from yleum_orchestrator.core.workspace_provider import ControlAction, WorkspaceSpec
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from yleum_orchestrator.services.workspace_provider_factory import build_workspace_provider
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMNIA_CELL_LIVE_DOCKER") != "1",

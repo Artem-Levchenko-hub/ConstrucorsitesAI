@@ -5,7 +5,7 @@ from copy import deepcopy
 import pytest
 from pydantic import ValidationError
 
-from omnia_orchestrator.services.restoration_data_contract import (
+from yleum_orchestrator.services.restoration_data_contract import (
     DataContract,
     assess_contract,
 )

@@ -14,8 +14,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.services.discovery import PlannedQuestion
-from omnia_api.services.generation import onboarding
+from yleum_api.services.discovery import PlannedQuestion
+from yleum_api.services.generation import onboarding
 
 
 def _settings(*, router: bool, clarify: bool) -> SimpleNamespace:

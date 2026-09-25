@@ -6,7 +6,7 @@ from typing import Any
 
 import pytest
 
-from omnia_api.services import agent_builder, agent_native
+from yleum_api.services import agent_builder, agent_native
 
 
 @pytest.mark.parametrize(

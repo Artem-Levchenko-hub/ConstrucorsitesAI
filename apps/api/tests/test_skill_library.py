@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.services import skill_library
+from yleum_api.services import skill_library
 
 
 def test_palettes_load_current_snapshot() -> None:

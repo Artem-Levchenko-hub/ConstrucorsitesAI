@@ -14,7 +14,7 @@ import json
 
 import pytest
 
-from omnia_orchestrator.core import event_publisher
+from yleum_orchestrator.core import event_publisher
 
 
 @pytest.fixture(autouse=True)
@@ -25,7 +25,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("REDIS_URL", "redis://127.0.0.1:6379/0")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     # Reset module state so each test starts with a fresh client.

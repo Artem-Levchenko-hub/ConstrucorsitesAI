@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services import project_cell_executor
-from omnia_api.services.orchestrator_client import ProjectCellAgentWorkspaceSnapshot
+from yleum_api.services import project_cell_executor
+from yleum_api.services.orchestrator_client import ProjectCellAgentWorkspaceSnapshot
 
 
 def test_bootstrap_transports_real_provider_capability_and_legacy_remains_empty():
@@ -50,8 +50,8 @@ def test_adaptation_execution_requires_controller_attested_copy():
 
 
 def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
-    from omnia_api.services import agent_native
-    from omnia_api.services.portable_cell_contract import machine_stack_guide
+    from yleum_api.services import agent_native
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
 
     legacy = "MAX PLATFORM CORE CONTRACT\nlegacy Next guide"
     assert machine_stack_guide(legacy, {"portable_machine": True}, {}) == legacy
@@ -70,7 +70,7 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("portable,new_product", [(True, False), (False, False), (False, True)])
 async def test_prompt_assembly_awaits_real_executor_snapshot(portable, new_product):
-    from omnia_api.services.portable_cell_contract import machine_stack_guide_from_executor
+    from yleum_api.services.portable_cell_contract import machine_stack_guide_from_executor
 
     called = []
 
@@ -101,7 +101,7 @@ async def test_prompt_assembly_awaits_real_executor_snapshot(portable, new_produ
 
 @pytest.mark.asyncio
 async def test_portable_build_client_sends_task_role_and_stable_operation_id(monkeypatch):
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     captured = []
 

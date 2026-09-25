@@ -67,7 +67,7 @@ statement (DDL only — never a credential).
 
 ### Runtime contract this chart is derived from
 
-Paths are relative to `apps/orchestrator/src/omnia_orchestrator`.
+Paths are relative to `apps/orchestrator/src/yleum_orchestrator`.
 
 | Fact | Evidence |
 |---|---|

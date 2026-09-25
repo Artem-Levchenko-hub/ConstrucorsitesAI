@@ -6,15 +6,15 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
     CellFenceRejected,
     CellResourceProfile,
     HostCapacitySnapshot,
     LifecycleMutation,
 )
-from omnia_orchestrator.services.cell_admission import CellAdmissionGate
-from omnia_orchestrator.services.cell_reservations import CellCapacityReservationStore
+from yleum_orchestrator.services.cell_admission import CellAdmissionGate
+from yleum_orchestrator.services.cell_reservations import CellCapacityReservationStore
 
 
 def _profile(state_path: Path) -> CellResourceProfile:

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, call
 
 import pytest
 
-from omnia_api.workers import preview
+from yleum_api.workers import preview
 
 
 def _fake_playwright(page: object):

@@ -147,7 +147,7 @@ if [ -n "$LEGAL" ]; then
   ./kube-tunnel.sh up >/dev/null 2>&1 || true
   export KUBECONFIG="$HOME/.kube/max-studio.yaml"
   echo "secret LEGAL_DOCUMENT_VERSION = $(kubectl --context max-commerce -n billing get secret billing-worker-env -o jsonpath='{.data.LEGAL_DOCUMENT_VERSION}' | base64 -d)"
-  kubectl --context max-commerce -n billing exec deploy/billing-worker -- sh -c 'P=/app/.venv/bin/python; [ -x "$P" ] || P=python; "$P" -c "from omnia_api.core.config import get_settings; print(\"воркер: legal_document_version =\", get_settings().legal_document_version)"'
+  kubectl --context max-commerce -n billing exec deploy/billing-worker -- sh -c 'P=/app/.venv/bin/python; [ -x "$P" ] || P=python; "$P" -c "from yleum_api.core.config import get_settings; print(\"воркер: legal_document_version =\", get_settings().legal_document_version)"'
 fi
 
 fi

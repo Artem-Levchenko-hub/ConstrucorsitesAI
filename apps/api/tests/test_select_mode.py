@@ -5,8 +5,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from omnia_api.routers.public import _INSPECTOR_JS, _KIT_ASSETS
-from omnia_api.schemas.message import PromptRequest, SelectedElement
+from yleum_api.routers.public import _INSPECTOR_JS, _KIT_ASSETS
+from yleum_api.schemas.message import PromptRequest, SelectedElement
 
 # ── schema clamps (R-10 fail-fast at the boundary) ───────────────────────────
 
@@ -42,10 +42,10 @@ def test_prompt_request_backward_compatible_without_field() -> None:
 
 
 def test_inspector_copies_stay_in_sync() -> None:
-    from omnia_api.services.project_export import read_template_tree
+    from yleum_api.services.project_export import read_template_tree
 
     repo = Path(__file__).resolve().parents[3]  # apps/api/tests/<file> -> repo root
-    canonical = repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+    canonical = repo / "apps/api/src/yleum_api/static/omnia-inspector.js"
     copies = [
         repo / "apps/orchestrator/templates/nextjs-postgres-drizzle/public/omnia-inspector.js",
         repo / "apps/orchestrator/templates/nextjs-entities/public/omnia-inspector.js",
@@ -71,7 +71,7 @@ def test_inspector_reports_runtime_errors() -> None:
     guard above)."""
     src = (
         Path(__file__).resolve().parents[3]
-        / "apps/api/src/omnia_api/static/omnia-inspector.js"
+        / "apps/api/src/yleum_api/static/omnia-inspector.js"
     ).read_text(encoding="utf-8")
     assert 'post({ type: "omnia:preview:error"' in src
     assert 'addEventListener(\n    "error"' in src or 'addEventListener("error"' in src
@@ -85,7 +85,7 @@ def test_inspector_atomic_editor_mode_contract() -> None:
     messages cannot race a newly-enabled mode."""
     repo = Path(__file__).resolve().parents[3]
     src = (
-        repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+        repo / "apps/api/src/yleum_api/static/omnia-inspector.js"
     ).read_text(encoding="utf-8")
     assert 'case "omnia:editor:set-mode"' in src
     assert 'post({ type: "omnia:editor:state", mode: mode })' in src
@@ -95,7 +95,7 @@ def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
     """The universal copy must validate unique selectors and trust only Omnia."""
     repo = Path(__file__).resolve().parents[3]
     src = (
-        repo / "apps/api/src/omnia_api/static/omnia-inspector.js"
+        repo / "apps/api/src/yleum_api/static/omnia-inspector.js"
     ).read_text(encoding="utf-8")
     assert "selectorMatchesOnly" in src
     assert '"data-omnia-id"' in src

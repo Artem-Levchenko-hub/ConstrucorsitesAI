@@ -5,8 +5,8 @@ from pathlib import Path
 import httpx
 import pytest
 
-from omnia_api.ops import production_canary as canary_module
-from omnia_api.ops.production_canary import CanaryConfig, CanaryConfigurationError
+from yleum_api.ops import production_canary as canary_module
+from yleum_api.ops.production_canary import CanaryConfig, CanaryConfigurationError
 
 RELEASE_SHA = "a7c4fc22"
 PROJECT_ID = "10000000-0000-4000-8000-000000000001"

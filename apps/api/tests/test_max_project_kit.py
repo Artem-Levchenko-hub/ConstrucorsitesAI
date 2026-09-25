@@ -13,20 +13,20 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.max_project_config import MaxProjectConfig
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.usage import Usage
-from omnia_api.models.user import User
-from omnia_api.routers import max_studio
-from omnia_api.schemas.max_studio import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.usage import Usage
+from yleum_api.models.user import User
+from yleum_api.routers import max_studio
+from yleum_api.schemas.max_studio import (
     MaxContentItem,
     MaxProjectConfigPayload,
     MaxUrlAttachedPayload,
 )
-from omnia_api.services import max_project_kit as max_project_kit_svc
-from omnia_api.services.max_project_kit import (
+from yleum_api.services import max_project_kit as max_project_kit_svc
+from yleum_api.services.max_project_kit import (
     MAX_MANAGED_KIT_VERSION,
     MAX_MODEL_LOCKED_FILES,
     MAX_RETIRED_MANAGED_FILES,
@@ -221,7 +221,7 @@ def test_managed_kit_refuses_a_missing_platform_component(monkeypatch) -> None:
 def test_template_lookup_does_not_depend_on_repository_depth() -> None:
     candidates = _template_candidates(
         "missing.ts",
-        Path("/app/src/omnia_api/services/max_project_kit.py"),
+        Path("/app/src/yleum_api/services/max_project_kit.py"),
     )
 
     assert len(candidates) >= 2
@@ -274,7 +274,7 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
         if path.is_file() and not {"node_modules", ".next", ".git"}.intersection(path.parts)
     }
     machine_defaults_path = (
-        orchestrator_source / "omnia_orchestrator" / "services" / "machine_defaults.py"
+        orchestrator_source / "yleum_orchestrator" / "services" / "machine_defaults.py"
     )
     spec = importlib.util.spec_from_file_location(
         "max_starter_machine_defaults", machine_defaults_path
@@ -688,7 +688,7 @@ def test_portable_starter_requires_project_identity() -> None:
 
 
 def test_preseeded_portable_manifest_satisfies_real_completion_without_agent_rewrite():
-    from omnia_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
 
     starter = render_max_starter_files(_config(), uuid4(), portable=True)
     manifest = json.dumps(
@@ -736,7 +736,7 @@ def test_preseeded_portable_manifest_satisfies_real_completion_without_agent_rew
 
 
 def test_long_brief_survives_config_and_prompt_validation() -> None:
-    from omnia_api.schemas.message import PromptRequest
+    from yleum_api.schemas.message import PromptRequest
 
     brief = ("Товары, движения, история.\n" * 800)[:19_992] + "КОНЕЦ ТЗ"
     config = MaxProjectConfigPayload.model_validate({**_config().model_dump(), "summary": brief})
@@ -748,7 +748,7 @@ def test_long_brief_survives_config_and_prompt_validation() -> None:
 def test_brief_limits_reject_instead_of_truncating() -> None:
     from pydantic import ValidationError
 
-    from omnia_api.schemas.message import PromptRequest
+    from yleum_api.schemas.message import PromptRequest
 
     with pytest.raises(ValidationError):
         MaxProjectConfigPayload.model_validate({**_config().model_dump(), "summary": "я" * 20_001})

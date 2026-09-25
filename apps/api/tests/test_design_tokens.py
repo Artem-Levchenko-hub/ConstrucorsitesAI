@@ -1,9 +1,9 @@
 """Design-token spread + determinism (Phase 11, Sprint 1.3)."""
 
-from omnia_api.sections.palettes import all_palettes
-from omnia_api.services import design_tokens
-from omnia_api.services.design_tokens import tokens_for_project
-from omnia_api.services.skill_library import font_supports_cyrillic
+from yleum_api.sections.palettes import all_palettes
+from yleum_api.services import design_tokens
+from yleum_api.services.design_tokens import tokens_for_project
+from yleum_api.services.skill_library import font_supports_cyrillic
 
 
 def test_deterministic_per_project():

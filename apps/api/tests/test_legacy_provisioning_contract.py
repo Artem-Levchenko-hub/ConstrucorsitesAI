@@ -7,12 +7,12 @@ from uuid import UUID
 
 import pytest
 
-from omnia_api.core.config import Settings
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.services import restoration_adaptation
-from omnia_api.services.generation import (
+from yleum_api.core.config import Settings
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.services import restoration_adaptation
+from yleum_api.services.generation import (
     acceptance,
     agent_generation,
     agent_pipeline,

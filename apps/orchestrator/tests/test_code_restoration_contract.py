@@ -26,7 +26,7 @@ def file(path, content=b"export default 1", mode="100644"):
 
 
 def test_current_source_manifest_is_immutable_and_path_validated():
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     payload = envelope([file("src/page.ts")])
     payload["current_files"] = [
@@ -44,7 +44,7 @@ def test_current_source_manifest_is_immutable_and_path_validated():
 
 
 def test_bundle_preserves_binary_empty_and_executable_source():
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     request = CodeRestorationPrepare.model_validate(
         envelope(
@@ -85,7 +85,7 @@ def test_bundle_preserves_binary_empty_and_executable_source():
     ],
 )
 def test_unsafe_paths_never_reach_candidate(path):
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     with pytest.raises(ValidationError):
         CodeRestorationPrepare.model_validate(envelope([file(path)]))
@@ -102,14 +102,14 @@ def test_unsafe_paths_never_reach_candidate(path):
     ],
 )
 def test_conflicting_or_unverifiable_entries_are_rejected(entries):
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     with pytest.raises(ValidationError):
         CodeRestorationPrepare.model_validate(envelope(entries))
 
 
 def test_canonical_digest_binds_identity_files_modes_and_fence_not_entry_order():
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     wire = envelope([file("a.ts", b"a"), file("b.ts", b"b")])
     original = CodeRestorationPrepare.model_validate(wire)

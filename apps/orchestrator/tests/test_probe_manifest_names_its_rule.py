@@ -32,8 +32,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from omnia_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
 from tests.test_probe_rehearsal_names_its_leg import _prove_fixture
+from yleum_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
 
 _FIELD = "reason_detail"
 
@@ -107,7 +107,7 @@ def test_every_rule_the_validator_can_raise_fits_the_field() -> None:
 
     Проверяются настоящие строки из проверяющего модуля, а не их пересказ.
     """
-    from omnia_orchestrator.services import restoration_adaptation_probe as probe
+    from yleum_orchestrator.services import restoration_adaptation_probe as probe
 
     source = Path(probe.__file__).read_text(encoding="utf-8")
     sentences = set(re.findall(r'CellIdentityConflict\(\s*"([^"]+)"', source))
@@ -123,7 +123,7 @@ async def test_an_invalid_manifest_reports_the_rule_it_broke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Главное: конкретное правило доходит до отчёта, а не теряется."""
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     class _Rehearser:
         async def rehearse_candidate(self, **_kwargs):  # pragma: no cover - не дойдёт
@@ -131,7 +131,7 @@ async def test_an_invalid_manifest_reports_the_rule_it_broke(
 
     engine, request, proof = _prove_fixture(monkeypatch, _Rehearser())
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
+        "yleum_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
         lambda *_args: (_ for _ in ()).throw(
             CellIdentityConflict("adaptation business witness value is not text")
         ),
@@ -145,7 +145,7 @@ async def test_an_invalid_manifest_reports_the_rule_it_broke(
 
 async def test_a_rehearsal_failure_carries_no_rule(monkeypatch: pytest.MonkeyPatch) -> None:
     """Правило есть только у манифеста; у провала репетиции его выдумывать нечего."""
-    from omnia_orchestrator.services.restoration_adaptation_health import ProbeRehearsalFailure
+    from yleum_orchestrator.services.restoration_adaptation_health import ProbeRehearsalFailure
 
     class _Rehearser:
         async def rehearse_candidate(self, **_kwargs):
@@ -168,11 +168,11 @@ def test_the_missing_columns_are_named_not_merely_counted() -> None:
     момент, когда отказывает, — значит и называть их должна сразу, а не по одной
     за круг.
     """
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services.restoration_adaptation_probe import (
+    from tests.test_restoration_adaptation_probe import _files
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.restoration_adaptation_probe import (
         validate_probe_contract,
     )
-    from tests.test_restoration_adaptation_probe import _files
 
     # Зеркало живого случая: колонка добавлена позже, обязательная, с ДЕЛОВЫМ
     # умолчанием. Техническим считается только now()/gen_random_uuid() и им
@@ -238,7 +238,7 @@ def test_the_platform_accepts_the_new_field() -> None:
         Path(__file__).resolve().parents[2]
         / "api"
         / "src"
-        / "omnia_api"
+        / "yleum_api"
         / "services"
         / "orchestrator_client.py"
     ).read_text(encoding="utf-8")

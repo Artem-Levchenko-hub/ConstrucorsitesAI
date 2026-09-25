@@ -21,10 +21,10 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from omnia_orchestrator.core import docker_client
-from omnia_orchestrator.core.config import Settings
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.services import builder, buildkit
+from yleum_orchestrator.core import docker_client
+from yleum_orchestrator.core.config import Settings
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.services import builder, buildkit
 
 IMAGE_ID = "sha256:" + "a" * 64
 DIGEST = "sha256:" + "b" * 64

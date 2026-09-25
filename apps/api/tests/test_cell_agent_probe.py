@@ -5,8 +5,8 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services import agent_probe, functional_gate, orchestrator_client
-from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+from yleum_api.services import agent_probe, functional_gate, orchestrator_client
+from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
 
 @pytest.mark.asyncio

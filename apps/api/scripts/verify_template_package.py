@@ -38,15 +38,15 @@ def content_hashes(files: dict[str, str | bytes]) -> dict[str, str]:
 def verify(manifest_path: Path, package_root: Path) -> None:
     import pygit2
 
-    import omnia_api
-    from omnia_api.services import repo
-    from omnia_api.services.project_export import build_runnable_export, read_template_tree
-    from omnia_api.services.template_materialization import TEMPLATES, materialize_template
+    import yleum_api
+    from yleum_api.services import repo
+    from yleum_api.services.project_export import build_runnable_export, read_template_tree
+    from yleum_api.services.template_materialization import TEMPLATES, materialize_template
 
-    actual_package = Path(omnia_api.__file__).resolve().parent
-    expected_package = package_root.resolve() / "omnia_api"
+    actual_package = Path(yleum_api.__file__).resolve().parent
+    expected_package = package_root.resolve() / "yleum_api"
     if actual_package != expected_package:
-        raise AssertionError("omnia_api was not imported from the expected installed package")
+        raise AssertionError("yleum_api was not imported from the expected installed package")
     if TEMPLATES.resolve() != actual_package / "templates":
         raise AssertionError("templates must belong to the verified installed package")
     golden = json.loads(manifest_path.read_text(encoding="utf-8"))["templates"]
@@ -54,7 +54,7 @@ def verify(manifest_path: Path, package_root: Path) -> None:
         raise AssertionError("golden must contain all five bundled project templates")
     # This consumer reads assets at import time; a correct materializer alone
     # cannot prove the packaged API still starts with its public asset routes.
-    from omnia_api.routers.public import _KIT_ASSETS
+    from yleum_api.routers.public import _KIT_ASSETS
 
     for name in ("omnia-kit.css", "omnia-kit.js", "anime.min.js"):
         if hashlib.sha256(_KIT_ASSETS[name]).hexdigest() != golden["blank"][
@@ -119,7 +119,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("manifest", type=Path, help="absolute path to the frozen golden JSON")
     parser.add_argument("--package-root", required=True, type=Path,
-                        help="directory containing the expected installed omnia_api package")
+                        help="directory containing the expected installed yleum_api package")
     arguments = parser.parse_args()
     if not arguments.manifest.is_absolute() or not arguments.package_root.is_absolute():
         parser.error("manifest and package-root must be absolute paths")

@@ -17,8 +17,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.services.max_finalization import _migration_required_reason
-from omnia_api.services.orchestrator_client import _PROBE_RULE_NAME
+from yleum_api.services.max_finalization import _migration_required_reason
+from yleum_api.services.orchestrator_client import _PROBE_RULE_NAME
 
 _RULE = "adaptation business witness value is not text"
 
@@ -31,7 +31,7 @@ def test_a_proof_can_still_be_built_without_the_rule() -> None:
     требуют настоящей базы и здесь не запускаются, красноту нашёл CI. Поэтому
     проверка стоит отдельно и базы не требует.
     """
-    from omnia_api.services.orchestrator_client import RestorationAdaptationProof
+    from yleum_api.services.orchestrator_client import RestorationAdaptationProof
 
     proof = RestorationAdaptationProof(
         **{

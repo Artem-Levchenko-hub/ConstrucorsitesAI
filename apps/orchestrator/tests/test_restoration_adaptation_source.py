@@ -3,7 +3,7 @@ import io
 import tarfile
 from pathlib import Path
 
-from omnia_orchestrator.services.restoration_adaptation_source import (
+from yleum_orchestrator.services.restoration_adaptation_source import (
     canonical_source_files,
     source_manifest,
     write_source_archive,

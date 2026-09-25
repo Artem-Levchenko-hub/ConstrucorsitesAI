@@ -27,19 +27,19 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from tests.test_docker_cell_resources import _make_manager
+from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
     CellVerificationBudgetTooSmall,
     HostCapacitySnapshot,
     LifecycleMutation,
 )
-from omnia_orchestrator.services.cell_admission import CellAdmissionGate
-from omnia_orchestrator.services.cell_publication_capacity import production_manager
-from omnia_orchestrator.services.cell_reservations import (
+from yleum_orchestrator.services.cell_admission import CellAdmissionGate
+from yleum_orchestrator.services.cell_publication_capacity import production_manager
+from yleum_orchestrator.services.cell_reservations import (
     CellCapacityReservationStore,
     ReservedCapacity,
 )
-from tests.test_docker_cell_resources import _make_manager
 
 _DIGEST = "a" * 64
 
@@ -114,7 +114,7 @@ def _shipped_default_budget() -> float:
     Иначе тест переживёт понижение значения по умолчанию — ровно ту правку,
     которая и сделала откат невозможным на проде.
     """
-    from omnia_orchestrator.core.config import Settings
+    from yleum_orchestrator.core.config import Settings
 
     return float(Settings.model_fields["cell_verification_cpu_cores"].default)
 

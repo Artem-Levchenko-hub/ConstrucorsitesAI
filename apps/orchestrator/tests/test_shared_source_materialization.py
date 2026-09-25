@@ -9,9 +9,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.core import docker_client
-from omnia_orchestrator.core import template_materialization as materialization
-from omnia_orchestrator.services.provisioner import _copy_template
+from yleum_orchestrator.core import docker_client
+from yleum_orchestrator.core import template_materialization as materialization
+from yleum_orchestrator.services.provisioner import _copy_template
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 MAPPING = json.loads(

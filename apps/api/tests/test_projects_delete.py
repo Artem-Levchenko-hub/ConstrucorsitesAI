@@ -18,14 +18,14 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.deps import get_current_user
-from omnia_api.main import app
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.usage import Usage
-from omnia_api.models.user import User
+from yleum_api.core.deps import get_current_user
+from yleum_api.main import app
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.usage import Usage
+from yleum_api.models.user import User
 
 pytestmark = pytest.mark.asyncio
 
@@ -78,9 +78,9 @@ async def fake_teardown(monkeypatch):
         calls["repo"].append(project_id)
 
     monkeypatch.setattr(
-        "omnia_api.services.orchestrator_client.destroy", _destroy
+        "yleum_api.services.orchestrator_client.destroy", _destroy
     )
-    monkeypatch.setattr("omnia_api.services.repo.delete_repo", _delete_repo)
+    monkeypatch.setattr("yleum_api.services.repo.delete_repo", _delete_repo)
     return calls
 
 
@@ -277,7 +277,7 @@ async def _cell_project(session: AsyncSession) -> tuple[User, Project, ProjectCe
 
 
 def _destroyed_cell(request):
-    from omnia_api.services.orchestrator_client import ProjectCellResourceResponse
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
 
     return ProjectCellResourceResponse(
         workspace_id=request.workspace_id, state="retained", provider_ref="deleted-cell",
@@ -291,7 +291,7 @@ async def test_delete_cell_confirms_teardown_before_removing_project(
 ):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+    from yleum_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
 
     owner, project, workspace = await _cell_project(db_session)
     project_id, workspace_id = project.id, workspace.id
@@ -322,7 +322,7 @@ async def test_delete_cell_failure_preserves_project_and_retries_same_operation(
 ):
     from sqlalchemy import select
 
-    from omnia_api.services.orchestrator_client import (
+    from yleum_api.services.orchestrator_client import (
         HttpProjectCellOrchestratorClient,
         OrchestratorUnavailable,
     )
@@ -362,8 +362,8 @@ async def test_delete_rechecks_stale_completed_destroy_without_replaying_it(
 ):
     from dataclasses import replace
 
-    from omnia_api.services import project_cell_runtime
-    from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+    from yleum_api.services import project_cell_runtime
+    from yleum_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
 
     owner, project, workspace = await _cell_project(db_session)
     project_id, workspace_id = project.id, workspace.id
@@ -403,7 +403,7 @@ async def test_deleting_cell_rejects_old_preview_start(
 ):
     from datetime import UTC, datetime
 
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     owner, project, workspace = await _cell_project(db_session)
     workspace.state = "deleting"
@@ -426,7 +426,7 @@ async def test_deleting_cell_rejects_old_preview_start(
 async def test_deleting_cell_cannot_accept_new_work(db_session, entrypoint):
     from datetime import UTC, datetime
 
-    from omnia_api.services.project_cells import (
+    from yleum_api.services.project_cells import (
         ProjectCellStateConflict,
         get_or_create_workspace,
         reserve_cell_operation,
@@ -454,8 +454,8 @@ async def test_deleting_cell_cannot_accept_new_work(db_session, entrypoint):
 async def test_delete_preserves_wallet_charges_without_deleted_message_reference(
     client, db_session, as_user, fake_teardown,
 ):
-    from omnia_api.models.billing import BillingAccount
-    from omnia_api.models.wallet_charge import WalletCharge
+    from yleum_api.models.billing import BillingAccount
+    from yleum_api.models.wallet_charge import WalletCharge
 
     owner = await _make_user(db_session, "delete-charged-project@example.com")
     project = await _make_project(db_session, owner)
@@ -491,7 +491,7 @@ async def test_delete_recovers_partial_docker_failure_with_fenced_observation(
 ):
     from dataclasses import replace
 
-    from omnia_api.services.orchestrator_client import (
+    from yleum_api.services.orchestrator_client import (
         HttpProjectCellOrchestratorClient,
         OrchestratorBadRequest,
         OrchestratorUnavailable,
@@ -547,8 +547,8 @@ async def test_delete_recovers_partial_docker_failure_with_fenced_observation(
 async def test_delete_cancels_undispatched_owner_wake_without_allocating_cpu(
     client, db_session, as_user, fake_teardown, monkeypatch, wake_state,
 ):
-    from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
-    from omnia_api.services.project_cells import reserve_cell_operation
+    from yleum_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+    from yleum_api.services.project_cells import reserve_cell_operation
 
     owner, project, workspace = await _cell_project(db_session)
     operation, _ = await reserve_cell_operation(
@@ -584,12 +584,12 @@ async def test_delete_removes_cell_release_evidence_before_runs(
     to remove it explicitly, otherwise PostgreSQL cascades projects →
     generation_runs before the workspace cascade reaches the proofs and the
     DELETE fails with an IntegrityError (live on 2026-09-22)."""
-    from omnia_api.models.project_cell import (
+    from yleum_api.models.project_cell import (
         ProjectCellCandidate,
         ProjectCellProof,
         ProjectCellProofResult,
     )
-    from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+    from yleum_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
 
     async def destroy(_self, request):
         return _destroyed_cell(request)

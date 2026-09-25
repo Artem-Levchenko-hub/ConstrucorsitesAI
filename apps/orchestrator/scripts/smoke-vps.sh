@@ -100,7 +100,7 @@ echo "[4/5] starting orchestrator on 127.0.0.1:8003 (logs at $LOG_FILE)"
     # shellcheck disable=SC1090
     source "$ENV_FILE"
     set +a
-    nohup uv run uvicorn omnia_orchestrator.main:app \
+    nohup uv run uvicorn yleum_orchestrator.main:app \
         --host 127.0.0.1 --port 8003 >>"$LOG_FILE" 2>&1 &
     echo $! > "$PID_FILE"
 )

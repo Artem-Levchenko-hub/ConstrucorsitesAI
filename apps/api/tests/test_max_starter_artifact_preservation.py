@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.services.max_starter_artifacts import (
+from yleum_api.services.max_starter_artifacts import (
     STARTER_APPLY_SCRIPT,
     STARTER_DRIZZLE_CONFIG,
     STARTER_MIGRATIONS,
@@ -171,8 +171,8 @@ def test_the_first_build_seed_carries_the_starter_migrations() -> None:
     в наборе файлов, с которым работает платформа, их не было вовсе — поэтому их
     пропажу было некому заметить. Теперь они засеваются как обычные файлы проекта.
     """
-    from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-    from omnia_api.services.max_project_kit import render_max_starter_files
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_project_kit import render_max_starter_files
 
     files = render_max_starter_files(
         MaxProjectConfigPayload(app_name="Проверка", app_type="custom", summary="тест"),
@@ -186,7 +186,7 @@ def test_the_first_build_seed_carries_the_starter_migrations() -> None:
 
 def test_a_bundle_that_dropped_a_starter_migration_is_not_complete() -> None:
     """Потеря должна остановить работу агента, а не всплыть 500-й в бою."""
-    from omnia_api.services.max_generation_contract import max_source_completion_gap
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
 
     files = _bundle()
     files.pop(STARTER_MIGRATIONS[0])
@@ -200,7 +200,7 @@ def test_a_bundle_that_dropped_a_starter_migration_is_not_complete() -> None:
 
 
 def test_an_intact_bundle_is_never_blocked_by_the_starter_check() -> None:
-    from omnia_api.services.max_starter_artifacts import starter_artifact_gap
+    from yleum_api.services.max_starter_artifacts import starter_artifact_gap
 
     assert starter_artifact_gap(_bundle()) is None
 
@@ -212,7 +212,7 @@ def test_a_fragment_without_a_declared_schema_is_not_judged() -> None:
     точечная правка). Требовать от них стартовые миграции значит ругаться не на
     того и блокировать работу, которая ничего не теряла.
     """
-    from omnia_api.services.max_starter_artifacts import starter_artifact_gap
+    from yleum_api.services.max_starter_artifacts import starter_artifact_gap
 
     fragment = {"src/app/page.tsx": "export default function Page() { return null }"}
 
@@ -224,7 +224,7 @@ def test_the_check_ignores_files_the_platform_never_carries() -> None:
 
     Пока они проверялись здесь, полностью исправная сборка объявлялась незавершённой.
     """
-    from omnia_api.services.max_starter_artifacts import starter_artifact_gap
+    from yleum_api.services.max_starter_artifacts import starter_artifact_gap
 
     files = _bundle()
     files.pop(STARTER_APPLY_SCRIPT)
@@ -234,7 +234,7 @@ def test_the_check_ignores_files_the_platform_never_carries() -> None:
 
 
 def test_the_starter_gap_names_every_lost_file_at_once() -> None:
-    from omnia_api.services.max_starter_artifacts import starter_artifact_gap
+    from yleum_api.services.max_starter_artifacts import starter_artifact_gap
 
     files = _bundle()
     for name in STARTER_MIGRATIONS:

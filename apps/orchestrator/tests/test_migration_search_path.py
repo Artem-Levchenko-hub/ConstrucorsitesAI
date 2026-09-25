@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.services import builder
+from yleum_orchestrator.services import builder
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 

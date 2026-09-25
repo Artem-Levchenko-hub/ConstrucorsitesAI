@@ -4,12 +4,12 @@ import json
 
 import pytest
 
-from omnia_orchestrator.services.restoration_catalog import normalize_type
+from yleum_orchestrator.services.restoration_catalog import normalize_type
 
 
 @pytest.mark.parametrize("self_reference", [False, True])
 def test_foreign_key_cycles_are_ordinary_compatible_schema(self_reference):
-    from omnia_orchestrator.services.restoration_data_contract import (
+    from yleum_orchestrator.services.restoration_data_contract import (
         DataContract,
         assess_contract,
     )
@@ -50,11 +50,11 @@ def test_postgresql_aliases_are_normalized_exactly(alias, canonical):
 
 
 def test_table_without_owner_column_is_an_ordinary_compatible_table():
-    from omnia_orchestrator.services.restoration_catalog import (
+    from yleum_orchestrator.services.restoration_catalog import (
         contract_from_catalog,
         infer_ownership,
     )
-    from omnia_orchestrator.services.restoration_data_contract import assess_contract
+    from yleum_orchestrator.services.restoration_data_contract import assess_contract
 
     tables = infer_ownership([{"name": "prices", "columns": [{"name": "note", "type": "text"}]}])
     assert "owner_column" not in tables[0] and "owner_reference" not in tables[0]
@@ -75,7 +75,7 @@ def test_table_without_owner_column_is_an_ordinary_compatible_table():
 
 
 def test_schema_changes_compare_primary_unique_and_fk_update():
-    from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
+    from yleum_orchestrator.services.restoration_data_contract import DataContract, assess_contract
 
     base = {
         "version": 1,
@@ -133,7 +133,7 @@ def catalog_payload():
 
 @pytest.mark.parametrize("flag", ["custom_indexes", "custom_constraints", "composite_foreign_keys"])
 def test_unmodeled_catalog_constraints_are_blockers(flag):
-    from omnia_orchestrator.services.restoration_catalog import contract_from_catalog
+    from yleum_orchestrator.services.restoration_catalog import contract_from_catalog
 
     data = catalog_payload()
     data["tables"][0][flag] = True
@@ -142,14 +142,14 @@ def test_unmodeled_catalog_constraints_are_blockers(flag):
 
 
 def test_enabled_event_trigger_blocks_even_empty_database():
-    from omnia_orchestrator.services.restoration_catalog import contract_from_catalog
+    from yleum_orchestrator.services.restoration_catalog import contract_from_catalog
 
     _, blockers = contract_from_catalog({"tables": [], "event_triggers": True})
     assert blockers == ["enabled_event_triggers"]
 
 
 def test_live_catalog_never_invents_json_semantics():
-    from omnia_orchestrator.services.restoration_catalog import contract_from_catalog
+    from yleum_orchestrator.services.restoration_catalog import contract_from_catalog
 
     live, _ = contract_from_catalog(catalog_payload())
     assert live.tables[0].columns[2].json_keys is None
@@ -157,11 +157,11 @@ def test_live_catalog_never_invents_json_semantics():
 
 
 def test_historical_read_only_claim_cannot_green_unknown_live_json_writes():
-    from omnia_orchestrator.services.restoration_catalog import (
+    from yleum_orchestrator.services.restoration_catalog import (
         candidate_contract,
         contract_from_catalog,
     )
-    from omnia_orchestrator.services.restoration_data_contract import assess_contract
+    from yleum_orchestrator.services.restoration_data_contract import assess_contract
 
     live, _ = contract_from_catalog(catalog_payload())
     historical = candidate_contract(
@@ -194,7 +194,7 @@ def test_historical_read_only_claim_cannot_green_unknown_live_json_writes():
 
 
 def test_json_named_user_trigger_is_not_controller_proof():
-    from omnia_orchestrator.services.restoration_catalog import contract_from_catalog
+    from yleum_orchestrator.services.restoration_catalog import contract_from_catalog
 
     data = catalog_payload()
     data["tables"][0]["triggers"] = [{"name": "json_legitimate_looking"}]
@@ -203,7 +203,7 @@ def test_json_named_user_trigger_is_not_controller_proof():
 
 
 def test_startup_sql_is_rejected_before_candidate_execution():
-    from omnia_orchestrator.services.restoration_catalog import candidate_contract
+    from yleum_orchestrator.services.restoration_catalog import candidate_contract
 
     with pytest.raises(ValueError, match="startup"):
         candidate_contract(

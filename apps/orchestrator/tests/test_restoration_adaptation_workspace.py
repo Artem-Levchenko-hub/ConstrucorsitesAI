@@ -10,25 +10,25 @@ from uuid import UUID, uuid4, uuid5
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.schemas.restoration_adaptation import (
+from tests._versioning_pg import pg  # noqa: F401
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.schemas.restoration_adaptation import (
     RestorationAdaptationCleanup,
     RestorationAdaptationOwnerStatus,
     RestorationAdaptationPrepare,
     RestorationAdaptationProofRequest,
 )
-from omnia_orchestrator.schemas.restoration_adaptation_activation import (
+from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     RestorationAdaptationActivationOfferRequest,
 )
-from omnia_orchestrator.services.restoration_adaptation_workspace import (
+from yleum_orchestrator.services.restoration_adaptation_workspace import (
     AdaptationProofMaterialization,
     AdaptationWorkspaceMaterialization,
     DockerAdaptationWorkspaceEngine,
     RestorationAdaptationWorkspaceService,
     content_inventory_partition_digests,
 )
-from omnia_orchestrator.services.versioning.contracts import InventoryObject, InventoryReport
-from tests._versioning_pg import pg  # noqa: F401
+from yleum_orchestrator.services.versioning.contracts import InventoryObject, InventoryReport
 
 
 def _request() -> RestorationAdaptationPrepare:
@@ -228,14 +228,14 @@ def _docker_prepare_fixture(
     resume_fault: bool = False,
     running: bool = False,
 ):
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.routers.runtime import _workspace_revision
-    from omnia_orchestrator.services import restoration_adaptation_workspace as module
-    from omnia_orchestrator.services.machine_environment import (
+    from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.services import restoration_adaptation_workspace as module
+    from yleum_orchestrator.services.machine_environment import (
         MachineEnvironmentRef,
         VolumeEnvironmentRef,
     )
-    from tests.test_project_machine_manifest import payload
 
     request = _request()
     files = {".omnia/cell.json": "{}", "app.py": "print('current')\n"}
@@ -436,7 +436,7 @@ def _docker_prepare_fixture(
         return files
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files",
         read_agent_files,
     )
     monkeypatch.setattr(module, "validate_supported_runtime", lambda observed_files: manifest)
@@ -535,8 +535,8 @@ async def test_docker_prepare_matching_running_pair_is_idempotent(
 async def test_docker_proof_keeps_phase_labels_out_of_physical_inventory_provenance(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_orchestrator.routers.runtime import _workspace_revision
-    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+    from yleum_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.services import restoration_adaptation_workspace as module
 
     request = _request()
     source_files = {"src/app/page.tsx": "export default function Page(){return 'source'}"}
@@ -618,11 +618,11 @@ async def test_docker_proof_keeps_phase_labels_out_of_physical_inventory_provena
         lambda *_args: ("d" * 64, "e" * 64),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        "yleum_orchestrator.services.cell_publication_capacity.production_manager",
         lambda _manager, _settings: candidate_manager,
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.core.config.get_settings",
+        "yleum_orchestrator.core.config.get_settings",
         lambda: object(),
     )
 
@@ -633,7 +633,7 @@ async def test_docker_proof_keeps_phase_labels_out_of_physical_inventory_provena
         return candidate_files
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files",
         read_files,
     )
     observed: list[str] = []
@@ -656,7 +656,7 @@ async def test_docker_proof_keeps_phase_labels_out_of_physical_inventory_provena
         lambda *_args: ("b" * 64, "c" * 64),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
+        "yleum_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
         lambda *_args: (_ for _ in ()).throw(CellIdentityConflict("invalid probe")),
     )
 
@@ -858,7 +858,7 @@ def test_content_digest_detects_same_count_update_without_returning_rows(
     monkeypatch: pytest.MonkeyPatch,
     changed_partition: str,
 ) -> None:
-    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+    from yleum_orchestrator.services import restoration_adaptation_workspace as module
 
     calls: list[str] = []
     values = [
@@ -893,7 +893,7 @@ def test_content_digest_detects_same_count_update_without_returning_rows(
 def test_content_digest_detects_same_count_delete_insert_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+    from yleum_orchestrator.services import restoration_adaptation_workspace as module
 
     evidence = iter(
         (
@@ -918,7 +918,7 @@ def test_content_digest_real_database_detects_same_count_source_and_candidate_ch
     pg,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+    from yleum_orchestrator.services import restoration_adaptation_workspace as module
 
     pg.run(
         "CREATE TABLE public.items (id bigint PRIMARY KEY, visible text, hidden text);"
@@ -1497,8 +1497,8 @@ async def test_docker_cleanup_continues_after_successful_reconcile(
     tmp_path: Path,
     kind: str,
 ) -> None:
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
     from tests.test_docker_cell_resources import _make_manager, _spec
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
 
     request = _request().model_copy(
         update={
@@ -1556,11 +1556,11 @@ async def test_docker_cleanup_continues_after_successful_reconcile(
         state_store.mark_indeterminate(candidate_id, mutation=destroy)
 
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        "yleum_orchestrator.services.cell_publication_capacity.production_manager",
         lambda _manager, _settings: manager,
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.core.config.get_settings",
+        "yleum_orchestrator.core.config.get_settings",
         lambda: object(),
     )
     engine = DockerAdaptationWorkspaceEngine()
@@ -1583,8 +1583,8 @@ async def test_docker_cleanup_reconciles_own_indeterminate_lifecycle_operation(
     tmp_path: Path,
     kind: str,
 ) -> None:
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
     from tests.test_docker_cell_resources import _make_manager, _spec
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
 
     request = _request().model_copy(
         update={
@@ -1641,11 +1641,11 @@ async def test_docker_cleanup_reconciles_own_indeterminate_lifecycle_operation(
         state_store.mark_indeterminate(candidate_id, mutation=destroy)
 
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        "yleum_orchestrator.services.cell_publication_capacity.production_manager",
         lambda _manager, _settings: manager,
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.core.config.get_settings",
+        "yleum_orchestrator.core.config.get_settings",
         lambda: object(),
     )
     engine = DockerAdaptationWorkspaceEngine()
@@ -1745,7 +1745,7 @@ async def test_docker_cleanup_reconciles_own_indeterminate_lifecycle_operation(
 async def test_cleanup_reconcile_chain_rejects_foreign_retry() -> None:
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.cell_state import CellOperationRecord, CellWorkspaceState
+    from yleum_orchestrator.services.cell_state import CellOperationRecord, CellWorkspaceState
 
     request = _request()
     candidate_id = uuid4()
@@ -1821,7 +1821,7 @@ async def test_cleanup_reconcile_chain_rejects_foreign_retry() -> None:
 async def test_cleanup_reconcile_chain_has_bounded_depth() -> None:
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.cell_state import CellOperationRecord, CellWorkspaceState
+    from yleum_orchestrator.services.cell_state import CellOperationRecord, CellWorkspaceState
 
     request = _request()
     candidate_id = uuid4()

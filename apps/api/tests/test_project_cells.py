@@ -11,21 +11,21 @@ import pytest_asyncio
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import (
     ProjectCellCandidate,
     ProjectCellOperation,
     ProjectCellWorkspace,
 )
-from omnia_api.models.user import User
-from omnia_api.services.project_cell_candidates import (
+from yleum_api.models.user import User
+from yleum_api.services.project_cell_candidates import (
     _matching_candidate,
     cancel_candidate,
     prepare_candidate,
     promote_candidate,
 )
-from omnia_api.services.project_cells import (
+from yleum_api.services.project_cells import (
     ProjectCellBusy,
     ProjectCellIdempotencyConflict,
     ProjectCellNotFound,
@@ -1941,7 +1941,7 @@ async def test_operation_reservation_serializes_with_real_advisory_lock(
 
 
 async def test_api_recovery_preserves_worker_owned_cell_operation(db_session, test_engine, owner):
-    from omnia_api.services.generation_execution_context import execution_run_id
+    from yleum_api.services.generation_execution_context import execution_run_id
 
     project = await _new_project(db_session, owner, "worker-operation")
     workspace = await _new_workspace(db_session, project, owner)

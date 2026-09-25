@@ -8,7 +8,7 @@ import pytest
 
 
 def _binding(**changes):
-    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV2
+    from yleum_orchestrator.schemas.code_restoration import RestorationSourceBindingV2
 
     value = {
         "version": 2,
@@ -35,7 +35,7 @@ def _binding(**changes):
 
 
 def test_binding_digest_is_canonical_and_contains_no_secret_values():
-    from omnia_orchestrator.services.restoration_binding import canonical_digest
+    from yleum_orchestrator.services.restoration_binding import canonical_digest
 
     binding = _binding()
     first = binding.digest()
@@ -50,7 +50,7 @@ def test_binding_digest_is_canonical_and_contains_no_secret_values():
 def test_v3_empty_database_binding_requires_both_artifact_and_witness():
     from pydantic import ValidationError
 
-    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV3
+    from yleum_orchestrator.schemas.code_restoration import RestorationSourceBindingV3
 
     value = _binding().model_dump(mode="json")
     value.update(
@@ -72,7 +72,7 @@ def test_v3_empty_database_binding_requires_both_artifact_and_witness():
 def test_v3_preserved_database_cannot_carry_empty_replacement_evidence():
     from pydantic import ValidationError
 
-    from omnia_orchestrator.schemas.code_restoration import RestorationSourceBindingV3
+    from yleum_orchestrator.schemas.code_restoration import RestorationSourceBindingV3
 
     value = _binding().model_dump(mode="json")
     value.update(
@@ -116,7 +116,7 @@ def test_live_identity_rejects_recreated_resource_with_same_name():
 def test_database_oid_query_casts_pg_oid_to_canonical_json_number(monkeypatch):
     import json
 
-    from omnia_orchestrator.services import restoration_binding as module
+    from yleum_orchestrator.services import restoration_binding as module
 
     backend = SimpleNamespace(project_database_env=lambda: {"PGDATABASE": "app", "PGUSER": "app"})
 
@@ -146,8 +146,8 @@ def test_database_oid_query_casts_pg_oid_to_canonical_json_number(monkeypatch):
 
 
 def test_inventory_partitions_business_and_technical_rows():
-    from omnia_orchestrator.services.restoration_binding import inventory_partition_digests
-    from omnia_orchestrator.services.versioning.contracts import InventoryReport
+    from yleum_orchestrator.services.restoration_binding import inventory_partition_digests
+    from yleum_orchestrator.services.versioning.contracts import InventoryReport
 
     source = InventoryReport.model_validate(
         {
@@ -187,7 +187,7 @@ def test_inventory_partitions_business_and_technical_rows():
 
 
 def _live_source_fixture(monkeypatch):
-    from omnia_orchestrator.services import restoration_binding as module
+    from yleum_orchestrator.services import restoration_binding as module
 
     expected = {
         "DATABASE_URL": "postgresql://app:secret@db/app",
@@ -284,7 +284,7 @@ def _legacy_release_state(
     immediate=True,
     release_detail=None,
 ):
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     generation_run_id = UUID(int=20)
     predecessor_id, release_id = UUID(int=21), UUID(int=23)
@@ -362,7 +362,7 @@ def test_detached_application_database_binding_fails_closed(monkeypatch):
 
 
 def test_live_source_canonicalizes_controller_resource_workspace_uuid(monkeypatch):
-    from omnia_orchestrator.core.cell_resources import CellResourceNames
+    from yleum_orchestrator.core.cell_resources import CellResourceNames
 
     module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
     state.resource_names = CellResourceNames.for_workspace(
@@ -396,8 +396,8 @@ def test_generation_aba_changes_live_source_identity(monkeypatch):
 
 
 def test_stale_large_table_estimates_are_never_copy_proof(monkeypatch):
-    from omnia_orchestrator.services import restoration_binding as module
-    from omnia_orchestrator.services.versioning.contracts import InventoryReport
+    from yleum_orchestrator.services import restoration_binding as module
+    from yleum_orchestrator.services.versioning.contracts import InventoryReport
 
     inventory = InventoryReport.model_validate(
         {
@@ -527,7 +527,7 @@ def test_explicit_release_receipt_is_authoritative_but_machine_bound(monkeypatch
 
 
 def test_live_source_stays_detached_until_stale_ready_epoch_is_reproved(monkeypatch):
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
     release = CellOperationRecord(
@@ -575,7 +575,7 @@ def test_live_source_stays_detached_until_stale_ready_epoch_is_reproved(monkeypa
 
 
 def test_two_rejections_keep_actual_serving_epoch_for_next_prepare(monkeypatch):
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     module, backend, machine, state, _ = _live_source_fixture(monkeypatch)
     first_id, second_id = UUID(int=8), UUID(int=9)

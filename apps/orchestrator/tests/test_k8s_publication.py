@@ -10,8 +10,8 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.services import k8s_publication as kp
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services import k8s_publication as kp
 
 PROJECT = UUID("6cd1e70b-55b8-4025-b703-63f6d51745a8")
 OWNER = UUID("b2aec0fc-1dae-4498-8c49-8d655e24234c")
@@ -628,7 +628,7 @@ def test_artifact_link_serves_the_archive_once_then_404(
     the same link is dead afterwards and unknown links look identical to it."""
     from fastapi.testclient import TestClient
 
-    from omnia_orchestrator.routers import publication_artifacts
+    from yleum_orchestrator.routers import publication_artifacts
 
     archive = tmp_path / "abc.tar"
     archive.write_bytes(b"warm-data")
@@ -637,7 +637,7 @@ def test_artifact_link_serves_the_archive_once_then_404(
 
     from fastapi import FastAPI
 
-    from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+    from yleum_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
 
     app = FastAPI()
     app.add_exception_handler(OrchestratorError, orchestrator_error_handler)

@@ -8,12 +8,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_event import GenerationEvent
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.user import User
-from omnia_api.services.generation import progress
+from yleum_api.models.generation_event import GenerationEvent
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.user import User
+from yleum_api.services.generation import progress
 
 pytestmark = pytest.mark.asyncio
 

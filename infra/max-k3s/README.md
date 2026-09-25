@@ -102,7 +102,7 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
 - **Биллинговый воркер в commerce** (Фаза 3, «Commerce-кластер», код готов 23.09, не включён —
   ждёт кредов ЮKassa) — `commerce/10-billing-workloads.sh` (`plan` / `all` / `handover` /
   `rollback`, всё с `--dry-run`) + манифесты `k8s/commerce/*.yaml`: Deployment `billing/billing-worker`
-  (`python -m omnia_api.workers.billing`, образ api из реестра по digest, `/health` на :8090),
+  (`python -m yleum_api.workers.billing`, образ api из реестра по digest, `/health` на :8090),
   NetworkPolicy, Secret из `/etc/max-studio/billing-worker.env` на core по ssh-потоку. База
   платформы — хостовый PostgreSQL core по WireGuard (`10.10.0.1:5432`; роль `max_billing` только с
   правами на биллинговые таблицы, строки pg_hba и ufw только для commerce). Пока тик живёт потоком RQ-воркера на core

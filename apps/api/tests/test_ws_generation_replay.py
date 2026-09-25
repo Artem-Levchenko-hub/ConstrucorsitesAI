@@ -5,11 +5,11 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.user import User
-from omnia_api.routers.ws import _send_generation_replay, _SequencedSocket
-from omnia_api.services.generation_events import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.user import User
+from yleum_api.routers.ws import _send_generation_replay, _SequencedSocket
+from yleum_api.services.generation_events import (
     append_generation_event,
     generation_event_envelope,
     generation_event_high_water,

@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from omnia_orchestrator.core.template_materialization import TEMPLATES, materialize_template
+from yleum_orchestrator.core.template_materialization import TEMPLATES, materialize_template
 
 
 def main() -> None:

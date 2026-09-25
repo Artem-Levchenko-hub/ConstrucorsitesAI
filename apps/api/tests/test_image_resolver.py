@@ -8,7 +8,7 @@ with no tags passes through byte-identical.
 
 import asyncio
 
-from omnia_api.services.image_resolver import resolve_images
+from yleum_api.services.image_resolver import resolve_images
 
 
 def test_photo_tag_stripped_when_source_off() -> None:
@@ -32,7 +32,7 @@ def test_no_tags_passthrough() -> None:
 
 
 def test_strip_unresolved_tags_removes_broken_imgs() -> None:
-    from omnia_api.services.image_resolver import strip_unresolved_tags
+    from yleum_api.services.image_resolver import strip_unresolved_tags
 
     files = {
         "index.html": (
@@ -52,7 +52,7 @@ def test_strip_unresolved_tags_removes_broken_imgs() -> None:
 
 
 def test_strip_unresolved_tags_noop_when_resolved() -> None:
-    from omnia_api.services.image_resolver import strip_unresolved_tags
+    from yleum_api.services.image_resolver import strip_unresolved_tags
 
     files = {"index.html": '<img src="https://cdn/x.png" alt="ok">'}
     out, n = strip_unresolved_tags(files)
@@ -65,7 +65,7 @@ def test_openverse_photo_resolved(monkeypatch) -> None:
     # fetcher (dispatched by _fetch_stock_photo); the tag is rewritten to the
     # cached MinIO URL. Network + MinIO are stubbed — this locks the dispatch +
     # replacement wiring, complementing the off-path strip test above.
-    import omnia_api.services.image_resolver as ir
+    import yleum_api.services.image_resolver as ir
 
     class _S:
         use_image_gen = False
@@ -98,7 +98,7 @@ def test_extract_jsx_template_gen_tag() -> None:
     # leaves every catalog card with an empty src (the "blank product grid"
     # bug). The interpolation ${...} is dropped (unknown at build time); the
     # static descriptors become the prompt, group-collapsed to one real image.
-    from omnia_api.services.image_resolver import extract_image_tags
+    from yleum_api.services.image_resolver import extract_image_tags
 
     files = {
         "src/app/page.tsx": (
@@ -124,7 +124,7 @@ def test_extract_jsx_template_gen_tag() -> None:
 def test_static_and_jsx_gen_tags_coexist() -> None:
     # A page mixing a static hero tag and a templated catalog tag must yield
     # BOTH — the string-literal hero and the JSX-expression catalog card.
-    from omnia_api.services.image_resolver import extract_image_tags
+    from yleum_api.services.image_resolver import extract_image_tags
 
     files = {
         "page.tsx": (
@@ -142,7 +142,7 @@ def test_static_and_jsx_gen_tags_coexist() -> None:
 def test_fetch_stock_photo_off_returns_none(monkeypatch) -> None:
     # The dispatcher is the single seam that knows the provider — "off" yields
     # None so resolve_images strips the tag (no broken <img>).
-    import omnia_api.services.image_resolver as ir
+    import yleum_api.services.image_resolver as ir
 
     class _S:
         photo_source = "off"

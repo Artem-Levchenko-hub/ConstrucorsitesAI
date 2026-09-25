@@ -5,7 +5,7 @@ import pytest
 
 
 def module():
-    name = "omnia_orchestrator.services.machine_egress"
+    name = "yleum_orchestrator.services.machine_egress"
     assert importlib.util.find_spec(name) is not None, "enforced machine egress is missing"
     return importlib.import_module(name)
 

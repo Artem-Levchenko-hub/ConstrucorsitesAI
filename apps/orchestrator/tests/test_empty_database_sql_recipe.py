@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.services.code_restoration_engine import (
+from yleum_orchestrator.services.code_restoration_engine import (
     empty_materializer_blocker,
     historical_sql_migrations,
 )

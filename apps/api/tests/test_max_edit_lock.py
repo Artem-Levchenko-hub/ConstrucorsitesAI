@@ -1,6 +1,6 @@
 """MAX projects stay MAX projects on the agent edit path."""
 
-from omnia_api.services import agent_builder
+from yleum_api.services import agent_builder
 
 
 def test_agent_edit_prompt_includes_max_template_contract() -> None:

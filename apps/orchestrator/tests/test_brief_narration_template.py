@@ -18,7 +18,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.core.template_materialization import materialize_template
+from yleum_orchestrator.core.template_materialization import materialize_template
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 _ENTITIES = _TEMPLATES / "nextjs-entities"

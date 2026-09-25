@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 from uuid import uuid4
 
-from omnia_orchestrator.services.machine_adapter import MachineAdapter
+from yleum_orchestrator.services.machine_adapter import MachineAdapter
 
 
 def test_public_token_rotation_invalidates_sessions_without_changing_preview_secret(tmp_path):

@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from omnia_api.services import dev_container
-from omnia_api.services.generation import lifecycle
-from omnia_api.workers import preview
+from yleum_api.services import dev_container
+from yleum_api.services.generation import lifecycle
+from yleum_api.workers import preview
 
 
 def test_preview_alias_points_at_shared_resolver() -> None:

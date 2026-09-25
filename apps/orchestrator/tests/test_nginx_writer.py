@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.services import nginx_writer
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.services import nginx_writer
 
 
 @pytest.fixture(autouse=True)
@@ -22,7 +22,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("RUNTIME_HOST_SUFFIX", "preview.omniadevelop.ru")
     monkeypatch.setenv("ENABLE_TLS", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -44,7 +44,7 @@ def test_dev_url_uses_https_when_tls_enabled() -> None:
 
 def test_dev_url_uses_http_when_tls_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ENABLE_TLS", "false")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     assert nginx_writer.dev_url("x").startswith("http://")
@@ -269,11 +269,11 @@ async def test_refresh_vhosts_idempotent_and_upgrades(
 ) -> None:
     """refresh_vhosts upgrades legacy confs once and skips already-upgraded
     ones; the reload is gated, so we stub it green."""
-    import omnia_orchestrator.services.nginx_writer as nw
-    from omnia_orchestrator.core.shell import CmdResult
+    import yleum_orchestrator.services.nginx_writer as nw
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -302,11 +302,11 @@ async def test_refresh_vhosts_upgrades_wake_enabled_but_inspectorless_conf(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """c389a2e-era vhosts already had wake logic; they still need this migration."""
-    import omnia_orchestrator.services.nginx_writer as nw
-    from omnia_orchestrator.core.shell import CmdResult
+    import yleum_orchestrator.services.nginx_writer as nw
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -334,11 +334,11 @@ async def test_refresh_vhosts_rolls_back_on_bad_config(
 ) -> None:
     """If nginx -t rejects the new render, every file reverts to its prior
     bytes — a broken template can't take the shared box down."""
-    import omnia_orchestrator.services.nginx_writer as nw
-    from omnia_orchestrator.core.shell import CmdResult
+    import yleum_orchestrator.services.nginx_writer as nw
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -370,11 +370,11 @@ async def test_publish_http_keeps_legacy_loopback_default(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Legacy callers still render loopback upstreams without passing the kwarg."""
-    import omnia_orchestrator.services.nginx_writer as nw
-    from omnia_orchestrator.core.shell import CmdResult
+    import yleum_orchestrator.services.nginx_writer as nw
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -392,10 +392,10 @@ async def test_publish_http_rejects_invalid_upstream_before_write(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Unsafe upstreams must fail before we touch the vhost file."""
-    import omnia_orchestrator.services.nginx_writer as nw
+    import yleum_orchestrator.services.nginx_writer as nw
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -409,11 +409,11 @@ async def test_ensure_tls_writes_private_upstream(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """TLS publish preserves a validated private bridge IP upstream."""
-    import omnia_orchestrator.services.nginx_writer as nw
-    from omnia_orchestrator.core.shell import CmdResult
+    import yleum_orchestrator.services.nginx_writer as nw
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -439,8 +439,8 @@ async def test_repeated_wildcard_preview_reuses_confirmed_tls_but_repairs_change
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     monkeypatch.setenv("OMNIA_WILDCARD_CERT_ROOT", "/certs")
@@ -468,8 +468,8 @@ async def test_repeated_wildcard_preview_reuses_confirmed_tls_but_repairs_change
 async def test_tls_confirmation_expires_and_does_not_trust_existing_file(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     monkeypatch.setenv("OMNIA_WILDCARD_CERT_ROOT", "/certs")
@@ -489,8 +489,8 @@ async def test_tls_confirmation_expires_and_does_not_trust_existing_file(tmp_pat
 async def test_failed_tls_reload_is_never_cached_as_success(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     monkeypatch.setenv("OMNIA_WILDCARD_CERT_ROOT", "/certs")
@@ -508,10 +508,10 @@ async def test_ensure_tls_rejects_invalid_upstream_before_cert_issue(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Unsafe upstreams must fail before any cert issuance side effect."""
-    import omnia_orchestrator.services.nginx_writer as nw
+    import yleum_orchestrator.services.nginx_writer as nw
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -534,8 +534,8 @@ async def test_ensure_tls_rejects_invalid_upstream_before_cert_issue(
 async def test_private_cell_policy_survives_http_tls_and_fallback(
     tmp_path, monkeypatch: pytest.MonkeyPatch, tls_reload_ok: bool,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -569,8 +569,8 @@ async def test_private_cell_policy_survives_http_tls_and_fallback(
 async def test_republishing_preview_never_drops_existing_tls(
     tmp_path, monkeypatch: pytest.MonkeyPatch, upstream: str,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -603,8 +603,8 @@ async def test_republishing_preview_never_drops_existing_tls(
 async def test_republish_failure_restores_existing_https(
     tmp_path, monkeypatch: pytest.MonkeyPatch, operation: str,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -642,8 +642,8 @@ async def test_republish_failure_restores_existing_https(
 async def test_failed_preview_publication_only_removes_http_site(
     tmp_path, monkeypatch: pytest.MonkeyPatch, existing_tls: bool,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.core.shell import CmdResult
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -680,7 +680,7 @@ def test_tls_confirmation_outlives_the_reconcile_sweep_period() -> None:
 async def test_wait_live_polls_until_new_workers_answer(monkeypatch: pytest.MonkeyPatch) -> None:
     """Old nginx workers still answer for ~200 ms after `systemctl reload`; the
     publish must block until a probe against the host succeeds."""
-    import omnia_orchestrator.services.nginx_writer as nw
+    import yleum_orchestrator.services.nginx_writer as nw
 
     answers = iter([False, False, True])
     seen: list[tuple[str, bool]] = []
@@ -700,7 +700,7 @@ async def test_wait_live_gives_up_after_deadline_without_raising(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A stuck reload is logged and tolerated — never turned into a failed publish."""
-    import omnia_orchestrator.services.nginx_writer as nw
+    import yleum_orchestrator.services.nginx_writer as nw
 
     async def _never(host: str, *, tls: bool) -> bool:
         return False
@@ -716,7 +716,7 @@ async def test_probe_live_treats_missing_listener_as_nothing_to_wait_for() -> No
     """No nginx on this box (tests, dev) → the wait is a no-op, not a 5 s stall."""
     import socket
 
-    import omnia_orchestrator.services.nginx_writer as nw
+    import yleum_orchestrator.services.nginx_writer as nw
 
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -741,12 +741,12 @@ async def test_ensure_tls_waits_for_https_liveness_before_reporting_live(
 ) -> None:
     """`ensure_tls` returns True only after the https vhost answers, so an api
     probe issued on return cannot race the old workers' self-signed cert."""
-    import omnia_orchestrator.services.nginx_writer as nw
-    from omnia_orchestrator.core.shell import CmdResult
+    import yleum_orchestrator.services.nginx_writer as nw
+    from yleum_orchestrator.core.shell import CmdResult
 
     monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
     monkeypatch.setenv("ENABLE_TLS", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     order: list[str] = []

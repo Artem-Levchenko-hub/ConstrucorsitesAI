@@ -116,5 +116,5 @@ generation canary из шага 7.
 Для проверки с уже заданными переменными и без сторонних Python-зависимостей:
 
 ```bash
-PYTHONPATH=apps/api/src python3 -S -m omnia_api.ops.production_smoke
+PYTHONPATH=apps/api/src python3 -S -m yleum_api.ops.production_smoke
 ```

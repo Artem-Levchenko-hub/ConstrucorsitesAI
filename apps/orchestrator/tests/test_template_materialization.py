@@ -14,9 +14,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from omnia_orchestrator.core import docker_client
-from omnia_orchestrator.core import template_materialization as materialization
-from omnia_orchestrator.services.provisioner import _copy_template
+from yleum_orchestrator.core import docker_client
+from yleum_orchestrator.core import template_materialization as materialization
+from yleum_orchestrator.services.provisioner import _copy_template
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 GOLDEN = json.loads((Path(__file__).parent / "fixtures/shared_public_git_golden.json").read_text())
@@ -232,8 +232,8 @@ async def test_cancellation_keeps_build_context_until_worker_exits(
 async def test_real_production_builder_materializes_before_live_public_overlay(
     name, tmp_path, monkeypatch
 ):
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.services import builder
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.services import builder
 
     class BuildBoundary(BaseException):
         pass
@@ -380,7 +380,7 @@ def test_shell_builds_materialized_contexts_and_cleans_after_failure(
             encoding="utf-8",
             newline="\n",
         )
-    core = bundle / "src/omnia_orchestrator/core"
+    core = bundle / "src/yleum_orchestrator/core"
     core.mkdir(parents=True)
     shutil.copy2(Path(materialization.__file__), core / "template_materialization.py")
     shutil.copytree(TEMPLATES / "shared-public", bundle / "templates/shared-public")

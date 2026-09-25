@@ -11,17 +11,17 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
-from omnia_orchestrator.schemas.runtime import DeployResponse
-from omnia_orchestrator.services.cell_publication import CellPublicationService
-from omnia_orchestrator.services.machine_environment import MachineEnvironmentStore
-from omnia_orchestrator.services.publication_trace import (
+from tests.test_cell_publication import request
+from tests.test_machine_environment import ArchiveBackend
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+from yleum_orchestrator.schemas.runtime import DeployResponse
+from yleum_orchestrator.services.cell_publication import CellPublicationService
+from yleum_orchestrator.services.machine_environment import MachineEnvironmentStore
+from yleum_orchestrator.services.publication_trace import (
     FORMAT_VERSION,
     PublicationTrace,
     reason_code,
 )
-from tests.test_cell_publication import request
-from tests.test_machine_environment import ArchiveBackend
 
 RELEASE = {"prod_url": "https://app.example.test", "image_id": "sha256:" + "a" * 64}
 
@@ -320,9 +320,9 @@ async def test_start_hands_the_trace_to_the_boundary_as_observer(tmp_path, monke
     publication trace; without a trace nothing changes."""
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services import cell_publication as module
     from tests.test_cell_publication import restored_request
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.services import cell_publication as module
 
     service = module.CellPublicationService(SimpleNamespace(), root=tmp_path)
     value = restored_request()
@@ -374,7 +374,7 @@ def test_gateway_starts_with_a_full_core_and_settles_at_the_steady_quota():
     the steady quota before its identity receipt is taken."""
     import inspect
 
-    from omnia_orchestrator.services import machine_adapter as module
+    from yleum_orchestrator.services import machine_adapter as module
 
     assert module._GATEWAY_BOOST_QUOTA == module._GATEWAY_CPU_PERIOD  # one core
     assert module._GATEWAY_STEADY_QUOTA * 20 == module._GATEWAY_CPU_PERIOD  # 5%

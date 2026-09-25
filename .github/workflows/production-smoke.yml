@@ -7,7 +7,7 @@ on:
     branches: [main]
     paths:
       - ".github/workflows/production-smoke.yml"
-      - "apps/api/src/omnia_api/ops/production_smoke.py"
+      - "apps/api/src/yleum_api/ops/production_smoke.py"
       - "apps/api/tests/test_production_smoke.py"
   workflow_dispatch:
     inputs:
@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
-          PYTHONPATH=apps/api/src python3 -S -m omnia_api.ops.production_smoke
+          PYTHONPATH=apps/api/src python3 -S -m yleum_api.ops.production_smoke
 
       - name: Open one incident issue
         if: github.event_name == 'schedule' && steps.smoke.outcome == 'failure'

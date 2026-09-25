@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from docker.errors import NotFound
 
-from omnia_orchestrator.services.machine_business_config import apply_public_core_overlay
+from yleum_orchestrator.services.machine_business_config import apply_public_core_overlay
 
 
 @pytest.mark.parametrize("canonical_cwd", [True, False])

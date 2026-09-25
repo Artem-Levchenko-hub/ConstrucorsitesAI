@@ -4,11 +4,11 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.routers import cell_publication as routes
-from omnia_orchestrator.schemas.runtime import DeployResponse
 from tests.test_cell_publication import request
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.routers import cell_publication as routes
+from yleum_orchestrator.schemas.runtime import DeployResponse
 
 
 async def test_publication_route_rejects_project_mismatch_before_dispatch(monkeypatch):

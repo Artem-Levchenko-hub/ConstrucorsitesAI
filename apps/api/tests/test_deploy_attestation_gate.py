@@ -8,20 +8,20 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.deps import get_current_user
-from omnia_api.main import app
-from omnia_api.models.attestation import Attestation
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services.attestation import build_attestation
-from omnia_api.services.deploy_attestation import (
+from yleum_api.core.config import get_settings
+from yleum_api.core.deps import get_current_user
+from yleum_api.main import app
+from yleum_api.models.attestation import Attestation
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellWorkspace
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services.attestation import build_attestation
+from yleum_api.services.deploy_attestation import (
     ensure_current_release_proof,
     resolve_deploy_proof,
 )
-from omnia_api.services.functional_gate import Check, FunctionalVerdict
+from yleum_api.services.functional_gate import Check, FunctionalVerdict
 
 pytestmark = pytest.mark.asyncio
 
@@ -136,19 +136,19 @@ async def test_missing_current_proof_is_reissued_from_exact_live_tree(
         )
 
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.repo_svc.read_files",
+        "yleum_api.services.deploy_attestation.repo_svc.read_files",
         read_files,
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.get_status",
+        "yleum_api.services.deploy_attestation.orchestrator_client.get_status",
         status,
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+        "yleum_api.services.deploy_attestation.orchestrator_client.hot_reload",
         hot_reload,
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.run_release_proof",
+        "yleum_api.services.deploy_attestation.run_release_proof",
         release_proof,
     )
 
@@ -174,8 +174,8 @@ async def test_release_proof_stops_when_runtime_reports_migration_failure(
 ) -> None:
     from types import SimpleNamespace
 
-    from omnia_api.services import deploy_attestation
-    from omnia_api.services.deploy_attestation import DeployProof
+    from yleum_api.services import deploy_attestation
+    from yleum_api.services.deploy_attestation import DeployProof
 
     project_id = uuid.uuid4()
     snapshot_id = uuid.uuid4()
@@ -203,18 +203,18 @@ async def test_release_proof_stops_when_runtime_reports_migration_failure(
     )
 
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.repo_svc.read_files",
+        "yleum_api.services.deploy_attestation.repo_svc.read_files",
         lambda _project_id, _commit_sha: {
             "scripts/apply-migrations.mjs": "// platform-owned",
             "drizzle/0004.sql": "SELECT 4;",
         },
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.get_status",
+        "yleum_api.services.deploy_attestation.orchestrator_client.get_status",
         AsyncMock(return_value={"state": "running"}),
     )
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+        "yleum_api.services.deploy_attestation.orchestrator_client.hot_reload",
         AsyncMock(return_value={
             "state": "hot_reloaded",
             "drizzle_exit_code": "1",
@@ -223,7 +223,7 @@ async def test_release_proof_stops_when_runtime_reports_migration_failure(
     )
     release_proof = AsyncMock(side_effect=AssertionError("proof must not run"))
     monkeypatch.setattr(
-        "omnia_api.services.deploy_attestation.run_release_proof",
+        "yleum_api.services.deploy_attestation.run_release_proof",
         release_proof,
     )
 
@@ -262,9 +262,9 @@ async def test_cell_proof_never_refreshes_legacy_runtime(
     async def forbidden(*_args, **_kwargs):
         pytest.fail("cell proof must not inspect or hot-reload a legacy runtime")
 
-    monkeypatch.setattr("omnia_api.services.deploy_attestation.orchestrator_client.get_status",
+    monkeypatch.setattr("yleum_api.services.deploy_attestation.orchestrator_client.get_status",
                         forbidden)
-    monkeypatch.setattr("omnia_api.services.deploy_attestation.orchestrator_client.hot_reload",
+    monkeypatch.setattr("yleum_api.services.deploy_attestation.orchestrator_client.hot_reload",
                         forbidden)
     proof = await ensure_current_release_proof(db_session, project)
     assert proof.passed is False
@@ -294,8 +294,8 @@ async def test_production_deploy_blocks_unproven_and_allows_proven(
         update={"env": "prod", "deploy_attestation_blocking": False}
     )
     app.dependency_overrides[get_current_user] = current_user
-    monkeypatch.setattr("omnia_api.routers.runtime.get_settings", lambda: prod_settings)
-    monkeypatch.setattr("omnia_api.routers.runtime.orchestrator_client.deploy", deploy)
+    monkeypatch.setattr("yleum_api.routers.runtime.get_settings", lambda: prod_settings)
+    monkeypatch.setattr("yleum_api.routers.runtime.orchestrator_client.deploy", deploy)
     try:
         blocked = await client.post(f"/api/projects/{project.id}/deploy", json={})
         assert blocked.status_code == 409
@@ -327,8 +327,8 @@ async def test_production_deploy_fails_closed_when_proof_store_is_unavailable(
 
     prod_settings = get_settings().model_copy(update={"env": "production"})
     app.dependency_overrides[get_current_user] = current_user
-    monkeypatch.setattr("omnia_api.routers.runtime.get_settings", lambda: prod_settings)
-    monkeypatch.setattr("omnia_api.routers.runtime.resolve_deploy_proof", unavailable)
+    monkeypatch.setattr("yleum_api.routers.runtime.get_settings", lambda: prod_settings)
+    monkeypatch.setattr("yleum_api.routers.runtime.resolve_deploy_proof", unavailable)
     try:
         response = await client.post(f"/api/projects/{project.id}/deploy", json={})
         assert response.status_code == 503

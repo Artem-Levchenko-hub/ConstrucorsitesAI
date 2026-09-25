@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from omnia_orchestrator.core.config import Settings
-from omnia_orchestrator.services import workspace_provider_factory
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
-from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
+from yleum_orchestrator.core.config import Settings
+from yleum_orchestrator.services import workspace_provider_factory
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from yleum_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 
 
 @pytest.mark.parametrize("cpu,memory", [(2.0, 4 * 1024**3), (1.0, 1024**3)])

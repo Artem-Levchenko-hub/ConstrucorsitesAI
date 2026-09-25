@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import asyncio
 
-from omnia_api.services import agent_builder as ab
-from omnia_api.services import orchestrator_client
+from yleum_api.services import agent_builder as ab
+from yleum_api.services import orchestrator_client
 
 
 def test_enrich_attaches_real_exports(monkeypatch) -> None:

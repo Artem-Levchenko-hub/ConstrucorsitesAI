@@ -1,0 +1,257 @@
+"""Bounded, immutable historical source; never accepts a database archive."""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import hashlib
+import json
+import unicodedata
+from pathlib import PurePosixPath
+from typing import Annotated, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+GitSha = Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
+Sha256 = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+RestorationDatabaseState = Literal["empty", "present", "unknown"]
+MAX_SOURCE_BYTES = 32 * 1024 * 1024
+
+
+class RestorationSourceBindingV2(BaseModel):
+    """Secret-free controller receipt binding one preparation to its live source."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[2] = 2
+    serving_route_digest: Sha256
+    serving_release_digest: Sha256
+    controller_resource_digest: Sha256
+    controller_incarnation_digest: Sha256
+    controller_generation_digest: Sha256
+    provider_digest: Sha256
+    source_artifact_digest: Sha256
+    database_identity_digest: Sha256
+    database_schema_digest: Sha256
+    database_role_binding_digest: Sha256
+    # Diagnostic only. Database identity also binds database/role/resource identity.
+    database_system_identifier: str | None = Field(default=None, max_length=128)
+    database_export_digest: Sha256
+    source_business_inventory_digest: Sha256
+    candidate_business_inventory_digest: Sha256
+    source_technical_inventory_digest: Sha256
+    candidate_technical_inventory_digest: Sha256
+    candidate_artifact_digest: Sha256
+
+    def digest(self) -> str:
+        from yleum_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(self.model_dump(mode="json"))
+
+    def live_identity_digest(self) -> str:
+        from yleum_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(
+            {
+                name: getattr(self, name)
+                for name in (
+                    "version",
+                    "serving_route_digest",
+                    "serving_release_digest",
+                    "controller_resource_digest",
+                    "controller_incarnation_digest",
+                    "controller_generation_digest",
+                    "provider_digest",
+                    "source_artifact_digest",
+                    "database_identity_digest",
+                    "database_schema_digest",
+                    "database_role_binding_digest",
+                )
+            }
+        )
+
+
+class RestorationSourceBindingV3(BaseModel):
+    """V2 source seal plus an explicit, crash-recoverable database strategy."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[3] = 3
+    serving_route_digest: Sha256
+    serving_release_digest: Sha256
+    controller_resource_digest: Sha256
+    controller_incarnation_digest: Sha256
+    controller_generation_digest: Sha256
+    provider_digest: Sha256
+    source_artifact_digest: Sha256
+    database_identity_digest: Sha256
+    database_schema_digest: Sha256
+    database_role_binding_digest: Sha256
+    database_system_identifier: str | None = Field(default=None, max_length=128)
+    database_export_digest: Sha256
+    source_business_inventory_digest: Sha256
+    candidate_business_inventory_digest: Sha256
+    source_technical_inventory_digest: Sha256
+    candidate_technical_inventory_digest: Sha256
+    candidate_artifact_digest: Sha256
+    database_strategy: Literal["preserve_current", "replace_verified_empty"]
+    witness_digest: Sha256 | None = None
+    target_database_artifact_digest: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def strategy_evidence_is_complete(self) -> RestorationSourceBindingV3:
+        evidence = (self.witness_digest, self.target_database_artifact_digest)
+        if self.database_strategy == "replace_verified_empty":
+            if any(value is None for value in evidence):
+                raise ValueError("verified empty replacement requires witness and artifact")
+        elif any(value is not None for value in evidence):
+            raise ValueError("preserved database cannot carry replacement evidence")
+        return self
+
+    def digest(self) -> str:
+        from yleum_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(self.model_dump(mode="json"))
+
+    def live_identity_digest(self) -> str:
+        from yleum_orchestrator.services.restoration_binding import canonical_digest
+
+        return canonical_digest(
+            {
+                name: getattr(self, name)
+                for name in (
+                    "version",
+                    "serving_route_digest",
+                    "serving_release_digest",
+                    "controller_resource_digest",
+                    "controller_incarnation_digest",
+                    "controller_generation_digest",
+                    "provider_digest",
+                    "source_artifact_digest",
+                    "database_identity_digest",
+                    "database_schema_digest",
+                    "database_role_binding_digest",
+                )
+            }
+        )
+
+
+class RestorationSourceFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    path: str = Field(min_length=1, max_length=1024)
+    content_base64: str = Field(max_length=12 * 1024 * 1024, repr=False)
+    mode: Literal["100644", "100755"] = "100644"
+
+    @field_validator("path")
+    @classmethod
+    def safe_path(cls, value: str) -> str:
+        parts = value.split("/")
+        forbidden = {".git", ".next", "node_modules", ".ssh", ".aws", ".npmrc"}
+        if (
+            value.startswith("/")
+            or "\\" in value
+            or ":" in value
+            or any(part in {"", ".", ".."} for part in parts)
+            or str(PurePosixPath(value)) != value
+            or any(unicodedata.category(c) in {"Cc", "Cf"} for c in value)
+            or any(part.casefold() in forbidden for part in parts)
+            or any(
+                part.casefold().startswith(".env")
+                and part.casefold() not in {".env.example", ".env.sample"}
+                for part in parts
+            )
+        ):
+            raise ValueError("unsafe historical source path")
+        return value
+
+    @field_validator("content_base64")
+    @classmethod
+    def canonical_base64(cls, value: str) -> str:
+        try:
+            raw = base64.b64decode(value, validate=True)
+        except (ValueError, binascii.Error) as exc:
+            raise ValueError("invalid historical source encoding") from exc
+        if base64.b64encode(raw).decode("ascii") != value:
+            raise ValueError("noncanonical historical source encoding")
+        return value
+
+    def decoded(self) -> bytes:
+        return base64.b64decode(self.content_base64, validate=True)
+
+
+class RestorationCurrentFile(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    path: str = Field(min_length=1, max_length=1024)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: Literal["100644", "100755"] = "100644"
+
+    @field_validator("path")
+    @classmethod
+    def safe_path(cls, value: str) -> str:
+        return RestorationSourceFile.safe_path(value)
+
+
+class RestorationIdentity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    expected_source_head: GitSha
+    target_commit_sha: GitSha
+    planned_commit_sha: GitSha
+    fencing_epoch: int = Field(ge=1, strict=True)
+
+
+class CodeRestorationPrepare(RestorationIdentity):
+    # Optional only so journals admitted by an older controller remain parseable.
+    # CodeRestorationService rejects a new operation unless this is exactly v2.
+    binding_contract_version: Literal[2, 3] | None = None
+    files: list[RestorationSourceFile] = Field(min_length=1, max_length=20_000, repr=False)
+    current_files: list[RestorationCurrentFile] = Field(
+        default_factory=list, max_length=20_000, repr=False
+    )
+
+    @model_validator(mode="after")
+    def unique_bounded_source(self) -> CodeRestorationPrepare:
+        names = {file.path for file in self.files}
+        if len(names) != len(self.files):
+            raise ValueError("duplicate historical source path")
+        for name in names:
+            if any(str(parent) in names for parent in PurePosixPath(name).parents):
+                raise ValueError("historical source file/directory collision")
+        if sum(len(file.decoded()) for file in self.files) > MAX_SOURCE_BYTES:
+            raise ValueError("historical source exceeds candidate budget")
+        current_names = {file.path for file in self.current_files}
+        if len(current_names) != len(self.current_files):
+            raise ValueError("duplicate current source path")
+        for name in current_names:
+            if any(str(parent) in current_names for parent in PurePosixPath(name).parents):
+                raise ValueError("current source file/directory collision")
+        return self
+
+    def digest(self) -> str:
+        value = self.model_dump(mode="json")
+        value["files"] = sorted(value["files"], key=lambda file: file["path"])
+        value["current_files"] = sorted(value["current_files"], key=lambda file: file["path"])
+        return hashlib.sha256(
+            json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+class CodeRestorationApply(RestorationIdentity):
+    candidate_id: UUID
+    report_revision: int = Field(gt=0, strict=True)
+    expected_fencing_epoch: int = Field(ge=1, strict=True)
+    # Missing only in an already-admitted legacy journal. It never authorizes a
+    # new effect on a v2 candidate.
+    binding_digest: Sha256 | None = None
+
+
+class CodeRestorationCancel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID

@@ -2,7 +2,7 @@
 
 import pytest
 
-from omnia_api.core import config
+from yleum_api.core import config
 
 
 class _Settings:

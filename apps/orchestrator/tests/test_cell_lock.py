@@ -7,9 +7,9 @@ from uuid import uuid4
 
 import pytest
 
-import omnia_orchestrator.services.cell_lock as cell_lock_module
-from omnia_orchestrator.core.cell_resources import WorkspaceLockTimeout, WorkspaceLockUnavailable
-from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
+import yleum_orchestrator.services.cell_lock as cell_lock_module
+from yleum_orchestrator.core.cell_resources import WorkspaceLockTimeout, WorkspaceLockUnavailable
+from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 
 
 @pytest.mark.asyncio

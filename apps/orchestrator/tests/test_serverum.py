@@ -10,8 +10,8 @@ from typing import Any
 import httpx
 import pytest
 
-from omnia_orchestrator import serverum_cli
-from omnia_orchestrator.services.serverum import (
+from yleum_orchestrator import serverum_cli
+from yleum_orchestrator.services.serverum import (
     DRY_RUN_PLANS,
     OrderRequest,
     ServerumAuthError,

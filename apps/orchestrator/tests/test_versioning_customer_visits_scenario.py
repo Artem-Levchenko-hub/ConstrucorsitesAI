@@ -21,23 +21,23 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.services.code_restoration_engine import (
+from tests._versioning_pg import pg  # noqa: F401
+from yleum_orchestrator.services.code_restoration_engine import (
     blocking_explanations,
     preparation_report,
 )
-from omnia_orchestrator.services.restoration_catalog import (
+from yleum_orchestrator.services.restoration_catalog import (
     CATALOG_SQL,
     DRIZZLE_CATALOG_JS,
     describe_catalog,
 )
-from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
-from omnia_orchestrator.services.versioning.compatibility import (
+from yleum_orchestrator.services.restoration_data_contract import DataContract, assess_contract
+from yleum_orchestrator.services.versioning.compatibility import (
     capability_diff,
     checks_from_diagnostics,
     delete_warnings,
 )
-from omnia_orchestrator.services.versioning.inventory import observe_inventory
-from tests._versioning_pg import pg  # noqa: F401
+from yleum_orchestrator.services.versioning.inventory import observe_inventory
 
 FIXTURES = Path(__file__).parent / "fixtures" / "versioning" / "customer_visits"
 
@@ -179,7 +179,7 @@ def test_real_drizzle_v1_schema_matches_live_check(scenario, tmp_path):
         env={**os.environ, "OMNIA_WORKSPACE": str(workspace)}, check=False,
     )
     assert outcome.returncode == 0, outcome.stderr[-500:]
-    from omnia_orchestrator.services.restoration_catalog import (
+    from yleum_orchestrator.services.restoration_catalog import (
         _merge_migration_checks,
         normalize_type,
     )
@@ -200,7 +200,7 @@ def test_real_drizzle_v1_schema_matches_live_check(scenario, tmp_path):
 
 
 def test_apply_accepts_a_contract_prepared_before_format_2(scenario):
-    from omnia_orchestrator.services.code_restoration_engine import contract_matches
+    from yleum_orchestrator.services.code_restoration_engine import contract_matches
 
     catalog = json.loads(scenario.run(CATALOG_SQL))
     contract, _, _ = describe_catalog(catalog)
@@ -217,14 +217,14 @@ def test_apply_accepts_a_contract_prepared_before_format_2(scenario):
 
 
 def test_durable_operation_keeps_format_2_fields():
-    from omnia_orchestrator.services.code_restorations import CodeRestorationService
+    from yleum_orchestrator.services.code_restorations import CodeRestorationService
 
     inventory = {"presence": "present", "coverage": "complete", "schema_analysis": "complete",
                  "observed_on": "source", "objects": []}
     report = preparation_report(
         blockers=["x"],
         inventory=__import__(
-            "omnia_orchestrator.services.versioning.contracts", fromlist=["InventoryReport"]
+            "yleum_orchestrator.services.versioning.contracts", fromlist=["InventoryReport"]
         ).InventoryReport.model_validate(inventory),
         checks=[],
         capabilities=capability_diff(source("v2"), source("v1")),

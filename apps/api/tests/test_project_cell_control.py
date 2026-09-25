@@ -10,17 +10,17 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_api.models.user import User
-from omnia_api.routers import messages
-from omnia_api.services import project_cell_control
-from omnia_api.services.project_cell_access import ProjectCellAccessDecision
-from omnia_api.services.project_cell_control import (
+from yleum_api.models.user import User
+from yleum_api.routers import messages
+from yleum_api.services import project_cell_control
+from yleum_api.services.project_cell_access import ProjectCellAccessDecision
+from yleum_api.services.project_cell_control import (
     ProjectCellControlReadiness,
     inspect_project_cell_control,
 )
 
-_CONTROL_MODULE = "omnia_api.services.project_cell_control"
-_ORCHESTRATOR_CLIENT_MODULE = "omnia_api.services.orchestrator_client"
+_CONTROL_MODULE = "yleum_api.services.project_cell_control"
+_ORCHESTRATOR_CLIENT_MODULE = "yleum_api.services.orchestrator_client"
 _CONTROL_CALLS = frozenset({"inspect_project_cell_control", "get_project_cell_capabilities"})
 
 
@@ -57,7 +57,7 @@ def _public_prompt_boundary_violations(tree: ast.AST) -> list[str]:
                 ):
                     violations.add(f"import:{qualified}@{node.lineno}")
                     forbidden_function_aliases.add(bound_name)
-                elif module == "omnia_api.services" and alias.name == "project_cell_control":
+                elif module == "yleum_api.services" and alias.name == "project_cell_control":
                     violations.add(f"import:{qualified}@{node.lineno}")
                     forbidden_module_aliases.add(bound_name)
 
@@ -329,9 +329,9 @@ def test_control_readiness_is_immutable() -> None:
 
 def test_control_coordinator_has_no_persistence_imports() -> None:
     forbidden_service_origins = (
-        "omnia_api.services.project_cells",
-        "omnia_api.models.project_cell",
-        "omnia_api.models.generation_run",
+        "yleum_api.services.project_cells",
+        "yleum_api.models.project_cell",
+        "yleum_api.models.generation_run",
         "sqlalchemy",
     )
     coordinator_origins = {
@@ -349,7 +349,7 @@ def test_public_prompt_ast_guard_detects_function_local_control_import_and_call(
     mutated_router = ast.parse(
         """
 async def public_prompt(project_id):
-    from omnia_api.services.orchestrator_client import (
+    from yleum_api.services.orchestrator_client import (
         get_project_cell_capabilities as capability,
     )
     return await capability(project_id)

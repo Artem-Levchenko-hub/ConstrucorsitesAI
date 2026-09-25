@@ -12,14 +12,14 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import SecretStr
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
-from omnia_orchestrator.services import k8s_publication as kp
-from omnia_orchestrator.services.cell_publication import CellPublicationService
-from omnia_orchestrator.services.k8s_placement import KubernetesPlacement
-from omnia_orchestrator.services.project_machine import write_controller_json
-from omnia_orchestrator.services.publication_trace import PublicationTrace
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
+from yleum_orchestrator.services import k8s_publication as kp
+from yleum_orchestrator.services.cell_publication import CellPublicationService
+from yleum_orchestrator.services.k8s_placement import KubernetesPlacement
+from yleum_orchestrator.services.project_machine import write_controller_json
+from yleum_orchestrator.services.publication_trace import PublicationTrace
 
 PROJECT = UUID("6cd1e70b-55b8-4025-b703-63f6d51745a8")
 OWNER = UUID("b2aec0fc-1dae-4498-8c49-8d655e24234c")
@@ -688,7 +688,7 @@ async def test_moving_a_docker_release_into_the_cluster_retires_the_host_bundle(
     async def probe(url: str, *, timeout_seconds: float) -> None:
         return None
 
-    from omnia_orchestrator.services import nginx_writer
+    from yleum_orchestrator.services import nginx_writer
 
     monkeypatch.setattr(nginx_writer, "unpublish", unpublish)
     monkeypatch.setattr(nginx_writer, "prod_host", lambda slug: f"{slug}.apps.yleum.ru")

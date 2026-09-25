@@ -7,12 +7,12 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.deps import get_current_user
-from omnia_api.main import app
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.user import User
+from yleum_api.core.deps import get_current_user
+from yleum_api.main import app
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.user import User
 
 pytestmark = pytest.mark.asyncio
 

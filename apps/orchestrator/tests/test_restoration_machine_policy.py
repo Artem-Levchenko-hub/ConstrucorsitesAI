@@ -4,9 +4,9 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
-from omnia_orchestrator.services.restoration_database import read_controller_output
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
+from yleum_orchestrator.services.restoration_database import read_controller_output
 
 
 def backend(tmp_path):

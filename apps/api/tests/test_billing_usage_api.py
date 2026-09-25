@@ -20,16 +20,16 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.config import get_settings
-from omnia_api.models.billing import BillingAccount, BillingPlan, Subscription
-from omnia_api.models.billing_usage_event import BillingUsageEvent
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.usage import Usage
-from omnia_api.models.user import User
-from omnia_api.models.wallet_charge import WalletCharge
-from omnia_api.services import integration_providers, orchestrator_client, project_cell_runtime
-from omnia_api.services import repo as repo_svc
 from tests.test_cell_publication_api import seed as seed_publication
+from yleum_api.core.config import get_settings
+from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
+from yleum_api.models.billing_usage_event import BillingUsageEvent
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.usage import Usage
+from yleum_api.models.user import User
+from yleum_api.models.wallet_charge import WalletCharge
+from yleum_api.services import integration_providers, orchestrator_client, project_cell_runtime
+from yleum_api.services import repo as repo_svc
 
 pytestmark = pytest.mark.asyncio
 
@@ -531,8 +531,8 @@ async def test_deleting_a_project_frees_its_publish_slot_but_keeps_the_history(
     async def _destroy(project_id, slug):
         return {"state": "destroyed"}
 
-    monkeypatch.setattr("omnia_api.services.orchestrator_client.destroy", _destroy)
-    monkeypatch.setattr("omnia_api.services.repo.delete_repo", lambda project_id: None)
+    monkeypatch.setattr("yleum_api.services.orchestrator_client.destroy", _destroy)
+    monkeypatch.setattr("yleum_api.services.repo.delete_repo", lambda project_id: None)
     user = await _register(client, db_session, "slot-release@example.com")
     project_id = (await _create_project(client, "Опубликованное")).json()["id"]
     account = (

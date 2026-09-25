@@ -6,17 +6,17 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.services import (
+from yleum_api.core.errors import ApiError
+from yleum_api.services import (
     agent_builder,
     agent_native,
     autoheal,
     max_generation_contract,
 )
-from omnia_api.services.generation import (
+from yleum_api.services.generation import (
     agent_verification,
 )
-from omnia_api.services.generation import (
+from yleum_api.services.generation import (
     runtime as generation_runtime,
 )
 
@@ -24,7 +24,7 @@ POLICY_HEADER = "MAX DATA EVOLUTION POLICY v1"
 
 
 def test_max_migration_contract_accepts_only_canonical_forward_migration():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     before = {
         "src/lib/db/schema.ts": "export const tasks = oldTasks;",
@@ -61,7 +61,7 @@ def test_max_migration_contract_accepts_only_canonical_forward_migration():
     ],
 )
 def test_max_migration_contract_rejects_destructive_sql_before_execution(sql, keyword):
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/0004.sql"
 
@@ -72,7 +72,7 @@ def test_max_migration_contract_rejects_destructive_sql_before_execution(sql, ke
 
 
 def test_max_migration_contract_ignores_destructive_words_in_comments_and_literals():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/0004.sql"
     sql = "-- never DROP storage\nINSERT INTO audit(message) VALUES ('DELETE is disabled');"
@@ -81,7 +81,7 @@ def test_max_migration_contract_ignores_destructive_words_in_comments_and_litera
 
 
 def test_max_migration_contract_allows_foreign_key_delete_action():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/0004.sql"
     sql = (
@@ -93,7 +93,7 @@ def test_max_migration_contract_allows_foreign_key_delete_action():
 
 
 def test_max_migration_contract_allows_dollar_quoted_data_literal():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/0004.sql"
     sql = "INSERT INTO audit(message) VALUES ($$DROP is disabled$$);"
@@ -102,7 +102,7 @@ def test_max_migration_contract_allows_dollar_quoted_data_literal():
 
 
 def test_max_migration_contract_allows_upsert_do_nothing():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/0004.sql"
     sql = "INSERT INTO tasks(id) VALUES (1) ON CONFLICT (id) DO NOTHING;"
@@ -120,7 +120,7 @@ def test_max_migration_contract_allows_upsert_do_nothing():
     ],
 )
 def test_max_migration_contract_rejects_alternative_migration_paths(path):
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     before = {"scripts/apply-migrations.mjs": "// platform-owned"}
     after = {**before, path: "SELECT 1;"}
@@ -133,7 +133,7 @@ def test_max_migration_contract_rejects_alternative_migration_paths(path):
 
 
 def test_max_migration_contract_rejects_schema_change_without_new_canonical_migration():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     before = {
         "src/lib/db/schema.ts": "export const tasks = oldTasks;",
@@ -148,7 +148,7 @@ def test_max_migration_contract_rejects_schema_change_without_new_canonical_migr
 
 
 def test_max_migration_contract_rejects_changes_to_platform_runner():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     before = {"scripts/apply-migrations.mjs": "// platform-owned"}
     after = {"scripts/apply-migrations.mjs": "// model-owned replacement"}
@@ -160,7 +160,7 @@ def test_max_migration_contract_rejects_changes_to_platform_runner():
 
 @pytest.mark.parametrize("replacement", ["ALTER TABLE tasks ADD COLUMN x text;", None])
 def test_max_migration_contract_rejects_rewrite_or_delete_of_existing_migration(replacement):
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/0003_existing.sql"
     before = {path: "CREATE TABLE tasks(id uuid);"}
@@ -172,7 +172,7 @@ def test_max_migration_contract_rejects_rewrite_or_delete_of_existing_migration(
 
 
 def test_max_migration_contract_rejects_nested_sql_ignored_by_platform_runner():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     path = "drizzle/generated/0004.sql"
 
@@ -182,7 +182,7 @@ def test_max_migration_contract_rejects_nested_sql_ignored_by_platform_runner():
 
 
 def test_max_migration_contract_allows_removing_legacy_nested_sql_during_conversion():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     runner = "scripts/apply-migrations.mjs"
     legacy = "drizzle/generated/0004.sql"
@@ -196,7 +196,7 @@ def test_max_migration_contract_allows_removing_legacy_nested_sql_during_convers
 
 
 def test_max_migration_contract_rejects_modifying_legacy_nested_sql():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     runner = "scripts/apply-migrations.mjs"
     path = "drizzle/generated/0004.sql"
@@ -208,7 +208,7 @@ def test_max_migration_contract_rejects_modifying_legacy_nested_sql():
 
 
 def test_max_migration_contract_rejects_new_package_script_using_custom_runner():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     before = {"package.json": '{"scripts":{"db:push":"drizzle-kit push"}}'}
     after = {
@@ -231,7 +231,7 @@ def test_max_migration_contract_rejects_new_package_script_using_custom_runner()
     ],
 )
 def test_max_migration_contract_allows_controlled_legacy_removal(legacy_path):
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     runner = "scripts/apply-migrations.mjs"
     before = {runner: "// platform-owned", legacy_path: "legacy"}
@@ -241,7 +241,7 @@ def test_max_migration_contract_allows_controlled_legacy_removal(legacy_path):
 
 
 def test_max_migration_contract_rejects_non_append_canonical_migration():
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     runner = "scripts/apply-migrations.mjs"
     before = {
@@ -274,7 +274,7 @@ def test_max_migration_contract_rejects_non_append_canonical_migration():
     ],
 )
 def test_max_migration_contract_rejects_alias_collision_and_traversal(after):
-    from omnia_api.services.max_data_evolution import max_migration_contract_errors
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
     errors = max_migration_contract_errors(
         {"scripts/apply-migrations.mjs": "// platform-owned"},
@@ -331,7 +331,7 @@ async def test_agent_verification_aborts_schema_only_max_candidate_before_backen
 
 @pytest.mark.parametrize("stale", [{}, {"database_admin": "protected", "secure_data_crud": True}])
 def test_project_database_guide_grants_ordinary_development_admin_access(stale):
-    from omnia_api.services.portable_cell_contract import machine_stack_guide
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
 
     guide = machine_stack_guide(
         "legacy",
@@ -347,7 +347,7 @@ def test_project_database_guide_grants_ordinary_development_admin_access(stale):
 
 
 def test_shared_evolution_guidance_has_no_protected_controller_command():
-    from omnia_api.services.max_data_evolution import MAX_DATA_EVOLUTION_POLICY
+    from yleum_api.services.max_data_evolution import MAX_DATA_EVOLUTION_POLICY
 
     assert "omnia-db" not in MAX_DATA_EVOLUTION_POLICY
     assert "protected database" not in MAX_DATA_EVOLUTION_POLICY
@@ -357,7 +357,7 @@ def test_shared_evolution_guidance_has_no_protected_controller_command():
 @pytest.mark.parametrize("mode", ["build", "edit", "native"])
 @pytest.mark.parametrize("provider", ["legacy", "cell-legacy", "portable", "missing-manifest"])
 async def test_agent_policy_survives_provider_replacement_and_all_prompt_protocols(mode, provider):
-    from omnia_api.services.max_data_evolution import build_max_agent_guide
+    from yleum_api.services.max_data_evolution import build_max_agent_guide
 
     legacy = "MAX PLATFORM CORE CONTRACT\nLEGACY-ONLY-INSTRUCTIONS"
     snapshot = AsyncMock(

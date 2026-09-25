@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services import app_errors
+from yleum_api.services import app_errors
 
 
 def test_render_block_basic_shape() -> None:

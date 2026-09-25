@@ -12,7 +12,7 @@ from datetime import date
 
 import pytest
 
-from omnia_orchestrator.services import demo_seeder as ds
+from yleum_orchestrator.services import demo_seeder as ds
 
 # ── shared fixtures ──────────────────────────────────────────────────────────
 

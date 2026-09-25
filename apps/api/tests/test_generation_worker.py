@@ -7,21 +7,21 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
-from omnia_api.models.restoration import Restoration
-from omnia_api.models.user import User
-from omnia_api.services.generation import lifecycle, supervisor
-from omnia_api.services.generation_runs import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellWorkspace
+from yleum_api.models.restoration import Restoration
+from yleum_api.models.user import User
+from yleum_api.services.generation import lifecycle, supervisor
+from yleum_api.services.generation_runs import (
     GenerationDispatch,
     recover_interrupted_generation_runs,
     retry_terminal_adaptation_notifications,
     store_generation_dispatch,
     terminalize_generation_run_locked,
 )
-from omnia_api.workers import generation
+from yleum_api.workers import generation
 
 pytestmark = pytest.mark.asyncio
 
@@ -120,8 +120,8 @@ async def _bind_adaptation_proof_handoff(
     session: AsyncSession,
     run: GenerationRun,
 ) -> Restoration:
-    from omnia_api.services import restorations
-    from omnia_api.services.promotion_permit import canonical_files_digest
+    from yleum_api.services import restorations
+    from yleum_api.services.promotion_permit import canonical_files_digest
 
     operation = await _bind_adaptation(session, run)
     workspace = await session.get(ProjectCellWorkspace, operation.workspace_id)
@@ -183,7 +183,7 @@ async def _bind_adaptation_proof_handoff(
 async def test_adaptive_pre_offer_cancel_terminalizes_run_and_sets_tombstone(
     db_session,
 ) -> None:
-    from omnia_api.services.restorations import cancel_restoration, public_operation
+    from yleum_api.services.restorations import cancel_restoration, public_operation
 
     run = await _queued_dispatch(db_session)
     run.status = "running"
@@ -219,7 +219,7 @@ async def test_adaptive_pre_offer_cancel_terminalizes_run_and_sets_tombstone(
 async def test_adaptive_proof_intent_cancel_terminalizes_without_replay(
     db_session,
 ) -> None:
-    from omnia_api.services.restorations import cancel_restoration
+    from yleum_api.services.restorations import cancel_restoration
 
     run = await _queued_dispatch(db_session)
     run.status = "running"
@@ -261,8 +261,8 @@ async def test_delayed_manifest_read_does_not_block_or_overwrite_adaptive_cancel
     test_engine,
     monkeypatch,
 ) -> None:
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.schemas.restoration import (
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.schemas.restoration import (
         ActivationBusinessProbe,
         ActivationPreparedTarget,
         RestorationAdaptationActivationCommand,
@@ -270,8 +270,8 @@ async def test_delayed_manifest_read_does_not_block_or_overwrite_adaptive_cancel
         RestorationAdaptationActivationStatus,
         canonical_activation_digest,
     )
-    from omnia_api.services import repo, restorations
-    from omnia_api.services.promotion_permit import canonical_files_digest
+    from yleum_api.services import repo, restorations
+    from yleum_api.services.promotion_permit import canonical_files_digest
 
     run = await _queued_dispatch(db_session)
     run.status = "running"
@@ -578,7 +578,7 @@ async def test_claimed_orphan_terminalizes_bound_adaptation(
 ):
     from sqlalchemy import text
 
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
@@ -664,7 +664,7 @@ async def test_claimed_adaptation_proof_handoff_waits_for_reconciliation(
 async def test_claimed_proof_ready_offer_handoff_waits_for_reconciliation(
     db_session, test_engine, monkeypatch
 ):
-    from omnia_api.services import restorations
+    from yleum_api.services import restorations
 
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
@@ -722,7 +722,7 @@ async def test_claimed_proof_ready_offer_handoff_waits_for_reconciliation(
 async def test_claimed_adaptation_mismatched_proof_outbox_fails_closed(
     db_session, test_engine, monkeypatch
 ):
-    from omnia_api.services import restorations
+    from yleum_api.services import restorations
 
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
@@ -759,7 +759,7 @@ async def test_claimed_adaptation_mismatched_proof_outbox_fails_closed(
 async def test_claimed_adaptation_matching_malformed_proof_outbox_is_orphaned(
     db_session, test_engine, monkeypatch, field, malformed
 ):
-    from omnia_api.services import restorations
+    from yleum_api.services import restorations
 
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
@@ -876,7 +876,7 @@ async def test_cancelled_generation_bridges_only_pre_ponr_activation(
 async def test_terminal_callback_and_activation_lock_order_cannot_deadlock(
     db_session, test_engine
 ):
-    from omnia_api.services.restorations import _owned_operation
+    from yleum_api.services.restorations import _owned_operation
 
     run = await _queued_dispatch(db_session)
     run.status = "running"
@@ -935,7 +935,7 @@ async def test_cancel_before_dispatch_never_executes(db_session, test_engine, mo
 async def test_terminal_run_cleanup_waits_for_execution_lock(db_session, test_engine, monkeypatch):
     from sqlalchemy import text
 
-    from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+    from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"

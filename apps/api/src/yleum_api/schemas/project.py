@@ -1,0 +1,171 @@
+from datetime import datetime
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, computed_field
+
+from yleum_api.services.design_presets import PRESETS
+
+# Only `max_miniapp` can be created (see `ProjectCreate`); the other values stay
+# so rows and code written for the separated site builder still read and type.
+# Template values fall into two classes:
+#
+# 1. Static V1 (`blank/landing/portfolio/blog`) — pure HTML kept in the
+#    project's bare git. No orchestrator container.
+#
+# 2. Container-backed V2 — runs inside an orchestrator-provisioned Docker
+#    container, accessed via `runtime.dev_url`:
+#    * `fullstack`      → `nextjs-postgres-drizzle` (Next.js 15 + Postgres + auth)
+#    * `nextjs_entities`→ `nextjs-entities`         (Base44-style: fixed entity-engine
+#                                                    backend + generative React frontend)
+#    * `spa`            → `vite-react-spa`           (Vite + React, no backend)
+#    * `tgbot`          → `telegram-bot-aiogram`     (aiogram 3 + Postgres)
+#    * `api`            → `fastapi-postgres`         (FastAPI + SQLAlchemy + JWT)
+#
+# All container-backed templates share the `<file path="...">` AI contract
+# and the same per-project Postgres schema (provisioned by
+# `orchestrator.postgres_admin`).
+# `code` (added 2026-06-18) — language-agnostic source (Python script, Go CLI,
+# a parser, anything). Like the static class it has NO orchestrator container
+# (intentionally omitted from `_ORCHESTRATOR_TEMPLATE_BY_API` below, so
+# `is_fullstack`/`orchestrator_template` treat it as non-container). The model
+# writes arbitrary files via the same `<file path="...">` contract; we store,
+# version and let the user download / GitHub-push them — we never force a website
+# or "preview" them as one (owner directive: don't lock the builder to a language).
+Template = Literal[
+    "blank",
+    "landing",
+    "portfolio",
+    "blog",
+    "fullstack",
+    "nextjs_entities",
+    "spa",
+    "tgbot",
+    "api",
+    "code",
+    "realtime",
+    "max_miniapp",
+]
+
+# Map from API-side `template` value → orchestrator's template directory
+# name (which becomes `omnia-template-<name>:dev` image tag and the
+# `templates/<name>/` source dir). Single source of truth — runtime.py
+# imports this rather than hardcoding.
+_ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
+    "fullstack": "nextjs-postgres-drizzle",
+    "nextjs_entities": "nextjs-entities",
+    "spa": "vite-react-spa",
+    "tgbot": "telegram-bot-aiogram",
+    "api": "fastapi-postgres",
+    # G001 — real-time stack: Next.js 15 + SSE/Redis pub-sub hub + membership ACL
+    # + presence (messengers, live-chat CRMs). Template dir: templates/nextjs-realtime.
+    "realtime": "nextjs-realtime",
+    "max_miniapp": "max-miniapp-nextjs",
+}
+
+
+# Browser-container family used by generation, live preview and legacy HMR.
+# This is distinct from all container backends (which include api/tgbot) and
+# from database requirements. Consumers retain their own admission guards;
+# membership does not grant preview, restore or Project Cell permissions.
+CONTAINER_BROWSER_TEMPLATES = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
+
+
+def is_fullstack(template: str) -> bool:
+    """Single source of truth: which templates run inside a dev container.
+
+    Renamed scope: still called "fullstack" for backward-compat with
+    existing api-internal calls, but now means "container-backed" (any of
+    fullstack/spa/tgbot/api). Static templates still return False.
+    """
+    return template in _ORCHESTRATOR_TEMPLATE_BY_API
+
+
+def orchestrator_template(template: str) -> str | None:
+    """Map an API-side template value to its orchestrator directory name.
+
+    Returns None for static templates (blank/landing/portfolio/blog) —
+    those don't have a Docker image, the caller (`routers/runtime.py`)
+    treats None as "no container needed".
+
+    BARE experiment (owner 2026-06-30): when `bare_build_experiment` is ON, every
+    CONTAINER-backed stack is swapped to the blank `bare-nextjs` image+dir, so the
+    agent builds from scratch with no substrate. This is the single chokepoint
+    both provisioning (runtime.py) and the build prompt (messages.py) flow through.
+    Static templates (None) are left alone — no container, nothing to swap.
+    """
+    base = _ORCHESTRATOR_TEMPLATE_BY_API.get(template)
+    if base is None:
+        return None
+    try:
+        from yleum_api.core.config import get_settings
+
+        if get_settings().bare_build_experiment:
+            return "bare-nextjs"
+    except Exception:
+        pass
+    return base
+
+
+class ProjectCreate(BaseModel):
+    """Only MAX Mini Apps are created here; `Template` stays wide for reading old rows."""
+
+    name: str = Field(min_length=1, max_length=100)
+    template: Literal["max_miniapp"] = "max_miniapp"
+    language: str | None = None
+
+
+class ProjectUpdate(BaseModel):
+    """Partial update — fields the owner can toggle from the workspace.
+
+    Only `image_gen_enabled` is exposed for now (TopBar 🎨 toggle). Adding more
+    fields here later (e.g. rename) is just a matter of declaring them
+    Optional and applying them in the PATCH handler.
+    """
+
+    image_gen_enabled: bool | None = None
+    # BYO-VPS: выбор цели деплоя. Передать UUID своего сервера, чтобы деплоить на
+    # него; передать null, чтобы вернуться на наш хостинг. Чтобы отличить
+    # «явный null» от «поле не прислали», PATCH-хендлер смотрит model_fields_set,
+    # а не значение — поэтому default тут None безопасен.
+    deploy_target_id: UUID | None = None
+
+
+class ProjectPublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    owner_id: UUID
+    name: str
+    slug: str
+    template: Template
+    language: str = "ru"
+    design_preset_id: str | None = None
+    image_gen_enabled: bool = True
+    # Import provenance (migration 0019). "native" for all organic projects;
+    # "imported" when seeded from an external GitHub repo.
+    source: str = "native"
+    external_repo_url: str | None = None
+    # Remix lineage of the separated site builder. Forking is gone, so new
+    # projects never carry it; the fields stay on the wire for old clients and
+    # the two resolved names are always None.
+    forked_from: UUID | None = None
+    forked_from_name: str | None = None
+    forked_from_slug: str | None = None
+    # BYO-VPS: цель деплоя проекта. None = наш хостинг (по умолчанию).
+    deploy_target_id: UUID | None = None
+    current_snapshot_id: UUID | None
+    # Thumbnail of the current snapshot (its rendered preview PNG), or None until
+    # the first preview render lands. Not a mapped column — the projects router
+    # sets it from the current snapshot's preview_key.
+    preview_url: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def design_preset_name(self) -> str | None:
+        """Human-readable preset name derived from id (for read-only UI badge)."""
+        if self.design_preset_id and (preset := PRESETS.get(self.design_preset_id)):
+            return preset.name
+        return None

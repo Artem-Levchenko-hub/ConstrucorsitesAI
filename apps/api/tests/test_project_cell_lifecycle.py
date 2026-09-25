@@ -11,23 +11,23 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.orchestrator_client import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
     ProjectCellCapacityRejection,
     ProjectCellCapacityWait,
     ProjectCellResourceResponse,
 )
-from omnia_api.services.project_cell_lifecycle import (
+from yleum_api.services.project_cell_lifecycle import (
     execute_cell_operation,
     reconcile_indeterminate_cell_operation,
     replay_indeterminate_cell_operation,
 )
-from omnia_api.services.project_cells import (
+from yleum_api.services.project_cells import (
     ClaimedCellOperation,
     claim_cell_operation_committed,
     mark_cell_operation_indeterminate,
@@ -307,7 +307,7 @@ async def test_cancellation_after_own_claim_receipt_becomes_indeterminate(
     monkeypatch: pytest.MonkeyPatch,
     replay: bool,
 ) -> None:
-    from omnia_api.services import project_cell_lifecycle
+    from yleum_api.services import project_cell_lifecycle
 
     factory = _factory(test_engine)
     workspace, operation = await _reserve_operation(
@@ -367,7 +367,7 @@ async def test_cancelled_competing_claim_does_not_reclassify_foreign_running_ope
     monkeypatch: pytest.MonkeyPatch,
     replay: bool,
 ) -> None:
-    from omnia_api.services import project_cell_lifecycle
+    from yleum_api.services import project_cell_lifecycle
 
     factory = _factory(test_engine)
     workspace, operation = await _reserve_operation(
@@ -956,12 +956,12 @@ async def test_reconcile_cannot_switch_durable_target(
 )
 def test_public_code_has_no_lifecycle_caller() -> None:
     repo = Path(__file__).resolve().parents[1]
-    generation_paths = sorted((repo / "src/omnia_api/services/generation").glob("*.py"))
+    generation_paths = sorted((repo / "src/yleum_api/services/generation").glob("*.py"))
     for relative_path in (
         *generation_paths,
-        "src/omnia_api/routers/messages.py",
-        "src/omnia_api/services/agent_native.py",
-        "src/omnia_api/services/agent_builder.py",
+        "src/yleum_api/routers/messages.py",
+        "src/yleum_api/services/agent_native.py",
+        "src/yleum_api/services/agent_builder.py",
     ):
         content = (repo / relative_path).read_text(encoding="utf-8")
         for name in _LIFECYCLE_NAMES:

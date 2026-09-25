@@ -9,7 +9,7 @@ matches — never silently returning an empty list to the prompt builder.
 
 from __future__ import annotations
 
-from omnia_api.services.skill_library import (
+from yleum_api.services.skill_library import (
     _load_awwwards_corpus,
     _load_design_patterns,
     lookup_awwwards_reference,

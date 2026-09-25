@@ -1,5 +1,5 @@
-# Фаза 3 / commerce: биллинговый воркер платформы — `python -m omnia_api.workers.billing`
-# (apps/api/src/omnia_api/workers/billing.py): продления подписок, льготный период,
+# Фаза 3 / commerce: биллинговый воркер платформы — `python -m yleum_api.workers.billing`
+# (apps/api/src/yleum_api/workers/billing.py): продления подписок, льготный период,
 # перевод на Free, сверка зависших заказов ЮKassa, heartbeat omnia:health:billing-worker.
 #
 # Тот же образ, что у api/worker на core (omnia-api:prod), опубликованный в реестр
@@ -49,7 +49,7 @@ spec:
         - name: worker
           image: "__IMAGE__"
           imagePullPolicy: IfNotPresent
-          command: ["/app/.venv/bin/python", "-m", "omnia_api.workers.billing"]
+          command: ["/app/.venv/bin/python", "-m", "yleum_api.workers.billing"]
           envFrom:
             - secretRef:
                 name: billing-worker-env

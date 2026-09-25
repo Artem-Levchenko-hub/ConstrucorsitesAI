@@ -3,7 +3,7 @@
 import ast
 from pathlib import Path
 
-SOURCE = Path(__file__).parents[1] / "src" / "omnia_api"
+SOURCE = Path(__file__).parents[1] / "src" / "yleum_api"
 
 
 def test_messages_router_does_not_own_generation_execution() -> None:
@@ -23,6 +23,6 @@ def test_generation_services_do_not_import_http_router() -> None:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
-                assert node.module != "omnia_api.routers.messages", path
-                if node.module == "omnia_api.routers":
+                assert node.module != "yleum_api.routers.messages", path
+                if node.module == "yleum_api.routers":
                     assert "messages" not in {alias.name for alias in node.names}, path

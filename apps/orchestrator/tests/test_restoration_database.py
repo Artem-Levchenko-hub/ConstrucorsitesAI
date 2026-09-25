@@ -84,8 +84,8 @@ async def database():
 
 
 async def test_ordinary_tables_without_owner_columns_are_compatible(database):
-    from omnia_orchestrator.services.restoration_catalog import CATALOG_SQL, contract_from_catalog
-    from omnia_orchestrator.services.restoration_data_contract import DataContract, assess_contract
+    from yleum_orchestrator.services.restoration_catalog import CATALOG_SQL, contract_from_catalog
+    from yleum_orchestrator.services.restoration_data_contract import DataContract, assess_contract
 
     live, blockers = contract_from_catalog(
         json.loads(await database.admin.fetchval(CATALOG_SQL))
@@ -110,7 +110,7 @@ async def test_ordinary_tables_without_owner_columns_are_compatible(database):
     "behavior", ["default", "generated", "domain", "domain_array", "partition", "rule", "event"]
 )
 async def test_actual_catalog_blocks_unmodeled_execution_and_relations(database, behavior):
-    from omnia_orchestrator.services.restoration_catalog import CATALOG_SQL, contract_from_catalog
+    from yleum_orchestrator.services.restoration_catalog import CATALOG_SQL, contract_from_catalog
 
     statements = {
         "default": "CREATE FUNCTION public.dangerous_default() RETURNS text LANGUAGE plpgsql "

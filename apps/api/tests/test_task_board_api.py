@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.task_board import TaskBoardAttachmentCleanup, TaskBoardTask
+from yleum_api.models.task_board import TaskBoardAttachmentCleanup, TaskBoardTask
 
 
 async def test_task_board_crud_and_status_move(client: httpx.AsyncClient) -> None:
@@ -98,7 +98,7 @@ async def test_task_board_rejects_unknown_members_and_empty_titles(
 async def test_task_board_allocates_unique_positions_under_concurrent_writes(
     test_engine,
 ) -> None:
-    from omnia_api.routers.task_board import _next_position
+    from yleum_api.routers.task_board import _next_position
 
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 
@@ -128,7 +128,7 @@ async def test_task_board_rejects_creates_after_capacity(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
+    from yleum_api.routers import task_board
 
     monkeypatch.setattr(task_board, "_BOARD_TASK_LIMIT", 1)
     first = await client.post(
@@ -149,7 +149,7 @@ async def test_task_board_uploads_downloads_and_deletes_html_attachment(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
+    from yleum_api.routers import task_board
 
     stored: dict[str, bytes] = {}
 
@@ -224,7 +224,7 @@ async def test_task_board_rejects_oversized_and_accepts_any_safe_filename(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
+    from yleum_api.routers import task_board
 
     monkeypatch.setattr(task_board, "_MAX_ATTACHMENT_BYTES", 5, raising=False)
     monkeypatch.setattr(
@@ -264,7 +264,7 @@ async def test_task_board_enforces_per_task_and_board_attachment_quotas(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
+    from yleum_api.routers import task_board
 
     monkeypatch.setattr(task_board, "_MAX_ATTACHMENTS_PER_TASK", 1)
     monkeypatch.setattr(task_board, "_BOARD_ATTACHMENT_BYTES_LIMIT", 5)
@@ -313,8 +313,8 @@ async def test_task_board_reports_storage_download_failures(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
-    from omnia_api.services.task_board_attachments import AttachmentStorageError
+    from yleum_api.routers import task_board
+    from yleum_api.services.task_board_attachments import AttachmentStorageError
 
     monkeypatch.setattr(
         task_board,
@@ -350,7 +350,7 @@ async def test_task_board_queues_object_deletion_in_durable_cleanup_outbox(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
+    from yleum_api.routers import task_board
 
     object_key = "tasks/task/attachment.html"
     monkeypatch.setattr(task_board, "_store_attachment", lambda *_args: object_key)
@@ -383,8 +383,8 @@ async def test_task_board_queues_ambiguous_upload_for_cleanup(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
-    from omnia_api.services.task_board_attachments import AttachmentUploadError
+    from yleum_api.routers import task_board
+    from yleum_api.services.task_board_attachments import AttachmentUploadError
 
     object_key = "tasks/ambiguous/upload.html"
 
@@ -414,9 +414,9 @@ async def test_attachment_cleanup_worker_retries_and_releases_pending_quota(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.routers import task_board
-    from omnia_api.services import task_board_attachment_cleanup as cleanup_service
-    from omnia_api.services.task_board_attachments import AttachmentStorageError
+    from yleum_api.routers import task_board
+    from yleum_api.services import task_board_attachment_cleanup as cleanup_service
+    from yleum_api.services.task_board_attachments import AttachmentStorageError
 
     pending = TaskBoardAttachmentCleanup(object_key="tasks/pending.bin", size=5)
     db_session.add(pending)

@@ -7,7 +7,7 @@
 #   ./60-order-cell-host.sh --name cells3 --enable                        # после DNS *.dev3.<домен> → хост: enabled=true
 #
 # Шаги (каждый идемпотентен; --from-step N продолжает с шага N, тогда IP берутся из inventory.env):
-#    1 order        Serverum: заказ VPS + ожидание IP (apps/orchestrator: python -m omnia_orchestrator.serverum_cli)
+#    1 order        Serverum: заказ VPS + ожидание IP (apps/orchestrator: python -m yleum_orchestrator.serverum_cli)
 #    2 inventory    inventory.env: строка хоста (WG 10.10.0.N, pod/svc CIDR, порт туннеля); ~/.ssh/config: Host max-<name>
 #    3 bootstrap    remote/00-bootstrap.sh: ключ в /etc/ssh/authorized_keys.d, ufw, fail2ban, sysctl (панель Serverum
 #                   обнуляет ~/.ssh/authorized_keys каждые 5 минут — шаг запускается сразу после появления IP)
@@ -99,7 +99,7 @@ step_order() {
   if [ -f "$ADMIN_PUBKEY_FILE" ]; then keyflag="--ssh-key-file $ADMIN_PUBKEY_FILE"; else echo "  нет $ADMIN_PUBKEY_FILE — заказ без ключа, вход по паролю из панели (bootstrap положит ключ сам)"; fi
   local json
   # shellcheck disable=SC2086
-  json=$(cd "$ORCH_DIR" && uv run --frozen python -m omnia_orchestrator.serverum_cli $flags --json order \
+  json=$(cd "$ORCH_DIR" && uv run --frozen python -m yleum_orchestrator.serverum_cli $flags --json order \
     --plan "$PLAN" --hostname "$NAME" $keyflag --note "MAX Studio cells host" --wait --timeout 900 --poll "$(dry && echo 0 || echo 15)")
   SERVER_ID=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')
   PUBLIC_IP=$(echo "$json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["public_ip"] or "")')

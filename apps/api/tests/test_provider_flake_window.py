@@ -16,7 +16,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
-from omnia_api.services import agent_native
+from yleum_api.services import agent_native
 
 _URL = "https://gateway.test/v1/messages"
 

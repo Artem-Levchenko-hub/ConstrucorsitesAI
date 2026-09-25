@@ -5,22 +5,22 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import (
+from yleum_api.core.errors import ApiError
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import (
     ProjectCellCandidate,
     ProjectCellProof,
     ProjectCellProofResult,
     ProjectCellWorkspace,
 )
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 
 
 def restored_evidence():
-    from omnia_api.models.project_version import ProjectVersion
-    from omnia_api.models.restoration import Restoration
+    from yleum_api.models.project_version import ProjectVersion
+    from yleum_api.models.restoration import Restoration
 
     data = evidence()
     project, workspace, snapshot = (data[key] for key in ("project", "workspace", "snapshot"))
@@ -105,7 +105,7 @@ def restored_evidence():
 
 
 def test_completed_restoration_publication_has_distinct_provenance():
-    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+    from yleum_api.services.cell_publication import validate_restoration_publication_evidence
 
     data = restored_evidence()
     result = validate_restoration_publication_evidence(**data)
@@ -130,7 +130,7 @@ def test_completed_restoration_publication_has_distinct_provenance():
 def test_publication_normalizes_legacy_report_defaults(runtime_state, persisted_state):
     from copy import deepcopy
 
-    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+    from yleum_api.services.cell_publication import validate_restoration_publication_evidence
 
     data = restored_evidence()
     operation = data["restoration"]
@@ -158,7 +158,7 @@ def test_publication_rejects_different_explicit_database_observations(
 ):
     from copy import deepcopy
 
-    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+    from yleum_api.services.cell_publication import validate_restoration_publication_evidence
 
     data = restored_evidence()
     operation = data["restoration"]
@@ -186,7 +186,7 @@ def test_publication_rejects_different_explicit_database_observations(
 def test_publication_rejects_invalid_or_changed_persisted_report(change):
     data = restored_evidence()
     data["restoration"].report = {**data["restoration"].report, **change}
-    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+    from yleum_api.services.cell_publication import validate_restoration_publication_evidence
 
     with pytest.raises(ApiError) as error:
         validate_restoration_publication_evidence(**data)
@@ -213,7 +213,7 @@ def test_publication_rejects_invalid_or_changed_persisted_report(change):
 def test_restoration_publication_rejects_unbound_evidence(tamper):
     from copy import deepcopy
 
-    from omnia_api.services.cell_publication import validate_restoration_publication_evidence
+    from yleum_api.services.cell_publication import validate_restoration_publication_evidence
 
     data = restored_evidence()
     operation = data["restoration"]
@@ -361,7 +361,7 @@ def evidence():
 
 
 def test_released_generation_keeps_its_exact_proven_candidate_publishable():
-    from omnia_api.services.cell_publication import validate_publication_evidence
+    from yleum_api.services.cell_publication import validate_publication_evidence
 
     data = evidence()
     value = validate_publication_evidence(**data)
@@ -373,7 +373,7 @@ def test_released_generation_keeps_its_exact_proven_candidate_publishable():
 
 
 def test_public_deploy_status_keeps_exact_snapshot_binding():
-    from omnia_api.routers.runtime import _to_deploy_status
+    from yleum_api.routers.runtime import _to_deploy_status
 
     snapshot_id = uuid4()
     value = _to_deploy_status(
@@ -408,7 +408,7 @@ def test_public_deploy_status_keeps_exact_snapshot_binding():
     ],
 )
 def test_unrelated_or_unfinished_evidence_never_authorizes_publication(target, field, value):
-    from omnia_api.services.cell_publication import validate_publication_evidence
+    from yleum_api.services.cell_publication import validate_publication_evidence
 
     data = evidence()
     setattr(data[target], field, value)
@@ -419,7 +419,7 @@ def test_unrelated_or_unfinished_evidence_never_authorizes_publication(target, f
 
 @pytest.mark.parametrize("change", ["red", "missing", "wrong_build", "wrong_workspace"])
 def test_release_proof_must_cover_this_build_and_workspace(change):
-    from omnia_api.services.cell_publication import validate_publication_evidence
+    from yleum_api.services.cell_publication import validate_publication_evidence
 
     data = evidence()
     result = data["results"][-1]

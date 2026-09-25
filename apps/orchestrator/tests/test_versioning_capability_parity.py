@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from omnia_orchestrator.services.versioning.compatibility import (
+from yleum_orchestrator.services.versioning.compatibility import (
     capability_diff,
     describe_capability,
     route_capabilities,

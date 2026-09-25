@@ -12,8 +12,8 @@ from types import SimpleNamespace
 import pytest
 from fastapi import Request
 
-from omnia_api.core import ratelimit
-from omnia_api.core.errors import ApiError
+from yleum_api.core import ratelimit
+from yleum_api.core.errors import ApiError
 
 
 def _request(ip: str, *, xff: bool = True) -> Request:

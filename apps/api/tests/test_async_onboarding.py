@@ -16,9 +16,9 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core import redis as event_bus
-from omnia_api.services.discovery import PlannedQuestion
-from omnia_api.services.generation import lightweight_turns
+from yleum_api.core import redis as event_bus
+from yleum_api.services.discovery import PlannedQuestion
+from yleum_api.services.generation import lightweight_turns
 
 
 class _FakeSession:

@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from omnia_api.ops.production_smoke import (
+from yleum_api.ops.production_smoke import (
     ReleaseIdentity,
     smoke_artifact,
     validate_smoke_identity,

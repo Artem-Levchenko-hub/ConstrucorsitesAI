@@ -9,9 +9,9 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.routers import runtime
-from omnia_orchestrator.schemas.runtime import HotReloadRequest
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.routers import runtime
+from yleum_orchestrator.schemas.runtime import HotReloadRequest
 
 PROJECT_ID = UUID("00000000-0000-0000-0000-000000000042")
 LEDGER_PREFIX = "__OMNIA_MIGRATION_LEDGER__"

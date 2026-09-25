@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.services.versioning.compatibility import capability_diff
+from yleum_orchestrator.services.versioning.compatibility import capability_diff
 
 FIXTURES = Path(__file__).parent / "fixtures" / "versioning_v4"
 CATALOG = json.loads((FIXTURES / "mutations.json").read_text(encoding="utf-8"))
@@ -65,7 +65,7 @@ def test_source_mutations_are_detected_or_proven_harmless(mutation):
         # The star hides the handlers: the historical version "restores" them,
         # and the unresolved route is never reported as "no routes".
         assert ("GET", "/api/visits") in restored and lost == []
-        from omnia_orchestrator.services.versioning.compatibility import route_manifest
+        from yleum_orchestrator.services.versioning.compatibility import route_manifest
 
         assert "/api/visits" in route_manifest(after).unresolved
     elif mutation == "platform_route_deleted":

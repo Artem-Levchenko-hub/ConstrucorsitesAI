@@ -6,7 +6,7 @@ a Python/Node project runs locally right after download. Pure + deterministic.
 
 from __future__ import annotations
 
-from omnia_api.services.run_bundle import _pick_python_entry, build_launchers
+from yleum_api.services.run_bundle import _pick_python_entry, build_launchers
 
 
 def test_python_project_gets_launchers_running_the_entry() -> None:

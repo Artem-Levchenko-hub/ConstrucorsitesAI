@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.services import security_gate
-from omnia_api.services.security_gate import (
+from yleum_api.services import security_gate
+from yleum_api.services.security_gate import (
     OWNER_PREVIEW_FRAMING_POLICY,
     PUBLIC_MAX_FRAMING_POLICY,
     SecCheck,
@@ -219,7 +219,7 @@ async def test_signed_embedded_gate_checks_protected_api_and_final_document(
 ) -> None:
     import playwright.async_api
 
-    from omnia_api.services import auth_session
+    from yleum_api.services import auth_session
 
     base_url = "https://cell-123-dev.preview.test"
     bootstrap_url = (

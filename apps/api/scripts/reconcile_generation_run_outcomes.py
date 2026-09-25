@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from omnia_api.services.generation_runs import reconcile_completed_build_runs
+from yleum_api.services.generation_runs import reconcile_completed_build_runs
 
 
 async def main() -> None:

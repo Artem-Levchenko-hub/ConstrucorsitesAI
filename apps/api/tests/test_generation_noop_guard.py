@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.services.generation.agent_finalization import (
+from yleum_api.services.generation.agent_finalization import (
     source_change_allows_partial_save,
     validate_edit_source_change,
 )

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.services import builder, remote_deploy
+from yleum_orchestrator.services import builder, remote_deploy
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ behaviour is covered by the DB-backed suite / CI-with-Postgres.)
 
 from __future__ import annotations
 
-from omnia_api.core.config import Settings
+from yleum_api.core.config import Settings
 
 
 def test_stub_topup_is_closed_by_default() -> None:
@@ -21,7 +21,7 @@ def test_wallet_router_gates_topup_on_the_flag() -> None:
     # refactor that drops the guard). Assert the source references it.
     import inspect
 
-    from omnia_api.routers import wallet
+    from yleum_api.routers import wallet
 
     src = inspect.getsource(wallet.topup_wallet)
     assert "allow_stub_topup" in src

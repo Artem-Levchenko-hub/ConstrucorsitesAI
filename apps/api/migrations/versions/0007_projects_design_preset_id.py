@@ -1,7 +1,7 @@
 """add projects.design_preset_id (Awwwards-tier design preset, auto-classified)
 
 Nullable text column: stores one of the keys from
-``omnia_api.services.design_presets.PRESETS`` (e.g. ``saas-product``,
+``yleum_api.services.design_presets.PRESETS`` (e.g. ``saas-product``,
 ``festival-brutalist``). Set by auto-classifier on project create (heuristic
 keyword match) or on first prompt (Haiku LLM fallback). NULL = not yet
 classified — classifier will fill on next prompt.

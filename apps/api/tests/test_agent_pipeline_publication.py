@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from omnia_api.services.generation.agent_pipeline import publish_finalized_candidate_once
+from yleum_api.services.generation.agent_pipeline import publish_finalized_candidate_once
 
 
 @pytest.mark.parametrize("activation_consumed, expected", [(True, 0), (False, 1)])

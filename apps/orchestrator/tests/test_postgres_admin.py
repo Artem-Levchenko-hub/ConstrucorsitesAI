@@ -13,8 +13,8 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core import postgres_admin
-from omnia_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.core import postgres_admin
+from yleum_orchestrator.core.errors import OrchestratorError
 
 PROJECT_ID = UUID("01234567-89ab-cdef-0123-456789abcdef")
 
@@ -29,7 +29,7 @@ def _admin_dsn(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     # Clear the settings cache so the monkeypatched env actually takes effect.
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -89,7 +89,7 @@ def test_build_dsn_default_port_when_missing(monkeypatch: pytest.MonkeyPatch) ->
         "DATABASE_URL",
         "postgresql+asyncpg://omnia_root:rootpw@localhost/omnia_users",
     )
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     dsn = postgres_admin.build_dsn("role", "pw", "schema")

@@ -1,4 +1,4 @@
-from omnia_api.services.agent_progress import (
+from yleum_api.services.agent_progress import (
     REDACTED,
     bounded_redacted_text,
     redact_sensitive_text,

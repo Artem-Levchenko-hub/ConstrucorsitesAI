@@ -19,12 +19,12 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.exc import IntegrityError
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.routers import projects
-from omnia_api.schemas.project import ProjectCreate
+from yleum_api.core.errors import ApiError
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.routers import projects
+from yleum_api.schemas.project import ProjectCreate
 
 OWNER = UUID("00000000-0000-0000-0000-000000000002")
 
@@ -89,7 +89,7 @@ async def _create(session: Session) -> Project:
 
 @pytest.fixture
 def world(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
-    from omnia_api.core import minio
+    from yleum_api.core import minio
 
     settings = SimpleNamespace(
         minio_public_url="https://objects.example.test/", minio_bucket_previews="previews"

@@ -18,7 +18,7 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from omnia_api.ops.restoration_qa.contracts import CheckResult, QaManifest, QaScopeRefused
+from yleum_api.ops.restoration_qa.contracts import CheckResult, QaManifest, QaScopeRefused
 
 _SHA = "a" * 40
 _DIGEST = "b" * 64
@@ -77,7 +77,7 @@ def test_a_manifest_that_has_already_expired_is_refused() -> None:
 
 def test_bootstrap_refuses_existing_foreign_project() -> None:
     """Песочница создаётся, а не занимается: чужой проект — это отказ."""
-    from omnia_api.ops.restoration_qa.contracts import assert_bootstrap_scope
+    from yleum_api.ops.restoration_qa.contracts import assert_bootstrap_scope
 
     existing = UUID("361b3326-97b4-4c73-94d5-c8d277a69dc6")
 
@@ -88,7 +88,7 @@ def test_bootstrap_refuses_existing_foreign_project() -> None:
 
 
 def test_bootstrap_accepts_only_a_project_it_created_itself() -> None:
-    from omnia_api.ops.restoration_qa.contracts import assert_bootstrap_scope
+    from yleum_api.ops.restoration_qa.contracts import assert_bootstrap_scope
 
     fresh = uuid4()
 
@@ -101,7 +101,7 @@ def test_runner_rejects_non_qa_database_before_connect() -> None:
     Подключение к чужой базе уже и есть то, чего нельзя допустить, поэтому
     проверять после connect бессмысленно.
     """
-    from omnia_api.ops.restoration_qa.contracts import assert_qa_database
+    from yleum_api.ops.restoration_qa.contracts import assert_qa_database
 
     manifest = _manifest()
     for dsn in (
@@ -116,7 +116,7 @@ def test_runner_rejects_non_qa_database_before_connect() -> None:
 
 
 def test_the_runner_accepts_its_own_disposable_database() -> None:
-    from omnia_api.ops.restoration_qa.contracts import assert_qa_database
+    from yleum_api.ops.restoration_qa.contracts import assert_qa_database
 
     manifest = _manifest()
     dsn = f"postgresql://postgres@127.0.0.1:5432/omnia-qa-{manifest.run_id.hex}"
@@ -125,7 +125,7 @@ def test_the_runner_accepts_its_own_disposable_database() -> None:
 
 
 def test_the_refusal_never_carries_the_connection_string() -> None:
-    from omnia_api.ops.restoration_qa.contracts import assert_qa_database
+    from yleum_api.ops.restoration_qa.contracts import assert_qa_database
 
     manifest = _manifest()
     secret = "postgresql://omnia:hunter2@127.0.0.1:5432/omnia"
@@ -143,7 +143,7 @@ def test_fixture_setup_creates_no_generation_runs() -> None:
     Свидетель ещё не достроен: запускать настоящую генерацию на этом этапе —
     значит платить за прогон, который ничего не доказывает.
     """
-    from omnia_api.ops.restoration_qa.contracts import assert_setup_spent_nothing
+    from yleum_api.ops.restoration_qa.contracts import assert_setup_spent_nothing
 
     assert_setup_spent_nothing(generation_runs=0, settlements=0)
 
@@ -156,7 +156,7 @@ def test_fixture_setup_creates_no_generation_runs() -> None:
 
 def test_adaptive_requires_explicit_consent_profile() -> None:
     """Адаптацию запускает явное согласие, а не автоматическая политика."""
-    from omnia_api.ops.restoration_qa.contracts import assert_adaptive_consent
+    from yleum_api.ops.restoration_qa.contracts import assert_adaptive_consent
 
     assert_adaptive_consent(profile="incompatible", explicit_prompt="верни экраны версии 5")
 
@@ -212,7 +212,7 @@ def test_the_fixture_sql_touches_only_its_own_tables() -> None:
     трогающая что-то помимо таблиц фикстуры, разрушает это: мы перестаём знать,
     что именно изменилось и чьё оно.
     """
-    from omnia_api.ops.restoration_qa.fixtures import load_fixture
+    from yleum_api.ops.restoration_qa.fixtures import load_fixture
 
     bundle = load_fixture("incompatible")
 
@@ -234,7 +234,7 @@ def _referenced_tables(sql: str) -> set[str]:
 
 def test_the_fixture_rows_have_stable_identifiers() -> None:
     """Идентификаторы строк закреплены: свидетель должен быть сравним с собой."""
-    from omnia_api.ops.restoration_qa.fixtures import load_fixture
+    from yleum_api.ops.restoration_qa.fixtures import load_fixture
 
     first = load_fixture("incompatible")
     second = load_fixture("incompatible")
@@ -246,7 +246,7 @@ def test_the_fixture_rows_have_stable_identifiers() -> None:
 
 def test_a_tampered_fixture_is_refused_not_used() -> None:
     """Отпечаток сверяется с объявленным: подменённая фикстура — отказ."""
-    from omnia_api.ops.restoration_qa.fixtures import fixture_digest_mismatch
+    from yleum_api.ops.restoration_qa.fixtures import fixture_digest_mismatch
 
     assert fixture_digest_mismatch(declared="a" * 64, observed="a" * 64) is None
     assert fixture_digest_mismatch(declared="a" * 64, observed="b" * 64) == "fixture_tampered"
@@ -258,7 +258,7 @@ def test_the_two_versions_differ_where_the_profile_promises() -> None:
     Если версии отличаются только косметикой, вся цепочка доказательств
     проверяет не то: адаптация не понадобится, и «completed» ничего не скажет.
     """
-    from omnia_api.ops.restoration_qa.fixtures import load_fixture
+    from yleum_api.ops.restoration_qa.fixtures import load_fixture
 
     bundle = load_fixture("incompatible")
 
@@ -275,7 +275,7 @@ def test_the_two_versions_differ_where_the_profile_promises() -> None:
 
 def test_forbidden_keys_never_appear_in_fixture_output() -> None:
     """В отчёт не должны утечь секреты — даже из синтетики."""
-    from omnia_api.ops.restoration_qa.fixtures import FORBIDDEN_OUTPUT_KEYS, load_fixture
+    from yleum_api.ops.restoration_qa.fixtures import FORBIDDEN_OUTPUT_KEYS, load_fixture
 
     bundle = load_fixture("incompatible")
     rendered = (
@@ -296,7 +296,7 @@ def test_polling_uses_a_monotonic_deadline_not_wall_clock() -> None:
     Стенные часы могут прыгнуть назад — тогда прогон, считающий по ним, будет
     ждать дольше отпущенного и займёт песочницу, которая уже истекла.
     """
-    from omnia_api.ops.restoration_qa.runner import PollBudget
+    from yleum_api.ops.restoration_qa.runner import PollBudget
 
     # Первый тик — момент создания бюджета: ждать начинают тогда, когда его завели.
     ticks = iter([100.0, 101.0, 130.0, 161.0])
@@ -308,7 +308,7 @@ def test_polling_uses_a_monotonic_deadline_not_wall_clock() -> None:
 
 
 def test_a_poll_never_sleeps_past_its_own_deadline() -> None:
-    from omnia_api.ops.restoration_qa.runner import PollBudget
+    from yleum_api.ops.restoration_qa.runner import PollBudget
 
     ticks = iter([0.0, 55.0, 55.0])
     budget = PollBudget(seconds=60.0, clock=lambda: next(ticks))
@@ -318,7 +318,7 @@ def test_a_poll_never_sleeps_past_its_own_deadline() -> None:
 
 def test_a_resume_marker_survives_and_identifies_its_own_attempt() -> None:
     """Возобновление продолжает ТО ЖЕ, а не начинает похожее."""
-    from omnia_api.ops.restoration_qa.runner import ResumeMarker
+    from yleum_api.ops.restoration_qa.runner import ResumeMarker
 
     marker = ResumeMarker(
         operation_id=uuid4(), idempotency_key="qa-adapt-once-0001", terminal=False
@@ -334,7 +334,7 @@ def test_a_resume_marker_survives_and_identifies_its_own_attempt() -> None:
 
 def test_a_terminal_failure_is_never_resumed_under_the_old_identity() -> None:
     """Новый провал — новая попытка, иначе двa прогона сольются в один отчёт."""
-    from omnia_api.ops.restoration_qa.runner import ResumeMarker
+    from yleum_api.ops.restoration_qa.runner import ResumeMarker
 
     finished = ResumeMarker(uuid4(), "qa-adapt-once-0001", terminal=True)
     retry = ResumeMarker(finished.operation_id, finished.idempotency_key, terminal=False)
@@ -348,8 +348,8 @@ def test_incompatibility_is_recorded_before_any_adaptive_prompt() -> None:
     Если адаптацию запустить раньше, чем записан `needs_changes`, нечем будет
     показать, что она вообще требовалась.
     """
-    from omnia_api.ops.restoration_qa.contracts import QaScopeRefused
-    from omnia_api.ops.restoration_qa.runner import assert_adaptive_order
+    from yleum_api.ops.restoration_qa.contracts import QaScopeRefused
+    from yleum_api.ops.restoration_qa.runner import assert_adaptive_order
 
     assert_adaptive_order(needs_changes_recorded=True, automatic_policy_started_generation=False)
 
@@ -361,8 +361,8 @@ def test_incompatibility_is_recorded_before_any_adaptive_prompt() -> None:
 
 
 def test_automatic_policy_must_not_have_started_a_generation() -> None:
-    from omnia_api.ops.restoration_qa.contracts import QaScopeRefused
-    from omnia_api.ops.restoration_qa.runner import assert_adaptive_order
+    from yleum_api.ops.restoration_qa.contracts import QaScopeRefused
+    from yleum_api.ops.restoration_qa.runner import assert_adaptive_order
 
     with pytest.raises(QaScopeRefused) as caught:
         assert_adaptive_order(

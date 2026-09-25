@@ -63,13 +63,13 @@ def modules(monkeypatch):
 
     monkeypatch.setattr(socket.socket, "connect", connect)
     result = {
-        name: importlib.import_module("omnia_api.routers." + name)
+        name: importlib.import_module("yleum_api.routers." + name)
         for name in ("rollback", "snapshots")
     }
     result["generation_publication"] = importlib.import_module(
-        "omnia_api.services.generation.publication"
+        "yleum_api.services.generation.publication"
     )
-    from omnia_api.core import minio
+    from yleum_api.core import minio
 
     settings = SimpleNamespace(
         minio_public_url="https://objects.example.test/", minio_bucket_previews="previews"
@@ -79,7 +79,7 @@ def modules(monkeypatch):
 
 
 def snapshot(case):
-    from omnia_api.models.snapshot import Snapshot
+    from yleum_api.models.snapshot import Snapshot
 
     preview, prompt, model, parent, created = case
     return Snapshot(
@@ -115,7 +115,7 @@ def expected(row):
     "case", CASES, ids=["null-utc", "empty-naive", "full-offset", "unicode-utc"]
 )
 def test_existing_serializers_and_json_contract(modules, case):
-    from omnia_api.schemas.snapshot import SnapshotPublic
+    from yleum_api.schemas.snapshot import SnapshotPublic
 
     row = snapshot(case)
     value = expected(row)
@@ -147,7 +147,7 @@ def test_existing_serializers_and_json_contract(modules, case):
 async def test_actual_mutation_consumers_preserve_response_and_event(
     modules, monkeypatch, name, case
 ):
-    from omnia_api.schemas.snapshot import RollbackRequest, SnapshotPublic
+    from yleum_api.schemas.snapshot import RollbackRequest, SnapshotPublic
 
     module = modules[name]
     row = snapshot(case)
@@ -223,9 +223,9 @@ async def test_actual_list_and_get_consumers(modules, monkeypatch, case):
 
 @pytest.mark.parametrize("case", [CASES[0], CASES[2]])
 async def test_restoration_consumer_keeps_snapshot_response(modules, case):
-    from omnia_api.routers import restorations
-    from omnia_api.schemas.restoration import RestoreOperation
-    from omnia_api.schemas.snapshot import SnapshotPublic
+    from yleum_api.routers import restorations
+    from yleum_api.schemas.restoration import RestoreOperation
+    from yleum_api.schemas.snapshot import SnapshotPublic
 
     row = snapshot(case)
     operation = RestoreOperation(

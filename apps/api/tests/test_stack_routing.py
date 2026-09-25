@@ -15,9 +15,9 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services import orchestrator_client, stack_routing
-from omnia_api.services import repo as repo_svc
-from omnia_api.services.discovery import (
+from yleum_api.services import orchestrator_client, stack_routing
+from yleum_api.services import repo as repo_svc
+from yleum_api.services.discovery import (
     _infer_max_miniapp_from_text,
     _infer_realtime_from_text,
     _infer_stack_from_text,
@@ -164,7 +164,7 @@ def test_stack_mapping(stack: str, expected: str | None) -> None:
     strict=False,
 )
 def test_tgbot_should_be_a_discovery_stack() -> None:
-    from omnia_api.services.discovery import _STACKS
+    from yleum_api.services.discovery import _STACKS
 
     assert "tgbot" in _STACKS
 
@@ -182,7 +182,7 @@ def test_tgbot_is_currently_unreachable_evidence() -> None:
     """Evidence lock (not desired behavior): documents that, TODAY, tgbot is
     orphaned from the NL pipeline on BOTH surfaces. If either changes, the xfails
     above start XPASSing and all three markers should be revisited together."""
-    from omnia_api.services.discovery import _STACKS
+    from yleum_api.services.discovery import _STACKS
 
     assert "tgbot" not in _STACKS
     assert stack_routing.discovery_stack_to_template("tgbot") is None

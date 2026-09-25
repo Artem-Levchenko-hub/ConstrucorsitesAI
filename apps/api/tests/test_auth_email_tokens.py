@@ -17,12 +17,12 @@ import pytest_asyncio
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.db import get_session
-from omnia_api.models.account import AuthSession, AuthToken
-from omnia_api.models.user import User
-from omnia_api.routers import auth as auth_router
-from omnia_api.services.transactional_email import (
+from yleum_api.core.config import get_settings
+from yleum_api.core.db import get_session
+from yleum_api.models.account import AuthSession, AuthToken
+from yleum_api.models.user import User
+from yleum_api.routers import auth as auth_router
+from yleum_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
 )
@@ -243,7 +243,7 @@ async def test_undeliverable_letter_is_a_503_not_a_silent_success(client, outbox
 
 @pytest_asyncio.fixture
 async def site(test_engine, db_session):  # db_session: table cleanup only
-    from omnia_api.main import app
+    from yleum_api.main import app
 
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
 

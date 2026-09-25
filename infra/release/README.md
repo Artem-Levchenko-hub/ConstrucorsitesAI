@@ -203,7 +203,7 @@ docker run -d --name "$preflight_api" --network "$preflight_network" \
   -e SECRETS_ENCRYPTION_KEY=rollback-preflight-encryption-key \
   -e "OMNIA_RELEASE_SHA=$ROLLBACK_SHA" \
   "$rollback_api_image" \
-  /app/.venv/bin/uvicorn omnia_api.main:app --host 0.0.0.0 --port 8000 \
+  /app/.venv/bin/uvicorn yleum_api.main:app --host 0.0.0.0 --port 8000 \
   >/dev/null
 preflight_api_ready=false
 for _attempt in $(seq 1 60); do

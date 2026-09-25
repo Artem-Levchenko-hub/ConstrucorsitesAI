@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from fastapi import APIRouter
+from sqlalchemy import select
+
+from yleum_api.core.config import FREE_GENERATION_LIMIT, get_settings
+from yleum_api.core.deps import CurrentUserDep, SessionDep
+from yleum_api.core.errors import ApiError
+from yleum_api.models.wallet import Wallet
+from yleum_api.models.wallet_charge import WalletCharge
+from yleum_api.schemas.wallet import (
+    ChargePublic,
+    TopupRequest,
+    TopupResponse,
+    WalletPublic,
+)
+from yleum_api.services.billing import topup as topup_svc
+from yleum_api.services.billing_accounts import resolve_billing_account
+
+router = APIRouter(prefix="/api/wallet", tags=["wallet"])
+
+
+@router.get("", response_model=WalletPublic)
+async def get_wallet(session: SessionDep, current_user: CurrentUserDep) -> WalletPublic:
+    account = await resolve_billing_account(session, current_user.id)
+    wallet = (
+        await session.execute(
+            select(Wallet).where(Wallet.billing_account_id == account.id)
+        )
+    ).scalar_one_or_none()
+    if wallet is None:
+        raise ApiError("not_found", "wallet not initialized", 404)
+    res = await session.execute(
+        select(WalletCharge)
+        .where(WalletCharge.billing_account_id == account.id)
+        .order_by(WalletCharge.created_at.desc())
+        .limit(20)
+    )
+    charges = [ChargePublic.model_validate(c) for c in res.scalars().all()]
+    used = current_user.free_generations_used or 0
+    return WalletPublic(
+        balance_rub=wallet.balance_rub,
+        recent_charges=charges,
+        free_generations_left=max(0, FREE_GENERATION_LIMIT - used),
+        free_generation_limit=FREE_GENERATION_LIMIT,
+    )
+
+
+@router.post("/topup", response_model=TopupResponse)
+async def topup_wallet(
+    payload: TopupRequest, session: SessionDep, current_user: CurrentUserDep
+) -> TopupResponse:
+    # Self-credit guard: the MVP stub credits the caller's OWN wallet with no
+    # payment. Closed by default; opened for closed beta via ALLOW_STUB_TOPUP,
+    # flipped OFF once real YooKassa payment lands (see core.config).
+    if not get_settings().allow_stub_topup:
+        raise ApiError(
+            "topup_disabled",
+            "Пополнение временно недоступно — идёт подключение оплаты.",
+            403,
+        )
+    new_balance = await topup_svc(
+        session, current_user.id, payload.amount_rub, "Top-up (MVP stub)"
+    )
+    await session.commit()
+    # Шлём wallet.updated всем проектам пользователя? В MVP — только если открыт WS.
+    # Здесь fan-out по project_id невозможен без list проектов; шлём по user-каналу.
+    # TODO когда будет user-канал в WS hub — публиковать туда.
+    return TopupResponse(balance_rub=new_balance)

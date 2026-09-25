@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnia_orchestrator.services.compile_status import parse_next_compile_error
+from yleum_orchestrator.services.compile_status import parse_next_compile_error
 
 # Turbopack's error-line glyph (U+2A2F), built via chr() so the literal doesn't
 # trip ambiguous-unicode linting.

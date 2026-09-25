@@ -4,18 +4,18 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_version import ProjectVersion
-from omnia_api.models.restoration import Restoration
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.schemas.message import RestorationAdaptationReference
+from yleum_api.core.errors import ApiError
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_version import ProjectVersion
+from yleum_api.models.restoration import Restoration
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.schemas.message import RestorationAdaptationReference
 
 
 def test_restoration_probe_source_contract_accepts_real_qa_tasks_shape() -> None:
-    from omnia_api.services.restoration_adaptation import restoration_probe_source_gap
+    from yleum_api.services.restoration_adaptation import restoration_probe_source_gap
 
     files = {
         ".omnia/restoration-probe.json": json.dumps(
@@ -60,8 +60,8 @@ def test_restoration_probe_source_contract_accepts_real_qa_tasks_shape() -> None
     ],
 )
 def test_canonical_environment_credentials_are_source_references(path):
-    from omnia_api.services.max_project_kit import _template_file
-    from omnia_api.services.restoration_adaptation import _source_files
+    from yleum_api.services.max_project_kit import _template_file
+    from yleum_api.services.restoration_adaptation import _source_files
 
     content = _template_file(path)
     files, excluded = _source_files({path: content})
@@ -78,8 +78,8 @@ def test_canonical_environment_credentials_are_source_references(path):
     ],
 )
 def test_complete_environment_reference_declarations_preserve_source(content):
-    from omnia_api.services.restoration_adaptation import _source_files
-    from omnia_api.services.secret_safety import contains_provider_secret
+    from yleum_api.services.restoration_adaptation import _source_files
+    from yleum_api.services.secret_safety import contains_provider_secret
 
     # The general prompt detector remains conservative; only source has syntax context.
     assert contains_provider_secret(content)
@@ -108,7 +108,7 @@ def test_complete_environment_reference_declarations_preserve_source(content):
     ],
 )
 def test_source_environment_exception_does_not_hide_other_secret_matches(content):
-    from omnia_api.services.restoration_adaptation import _source_files
+    from yleum_api.services.restoration_adaptation import _source_files
 
     with pytest.raises(ApiError) as caught:
         _source_files({"source.ts": content})
@@ -116,7 +116,7 @@ def test_source_environment_exception_does_not_hide_other_secret_matches(content
 
 
 def test_environment_reference_exception_does_not_apply_to_plain_text():
-    from omnia_api.services.restoration_adaptation import _source_files
+    from yleum_api.services.restoration_adaptation import _source_files
 
     with pytest.raises(ApiError):
         _source_files({"README.md": "const token = process.env.MAX_BOT_TOKEN;"})
@@ -124,7 +124,7 @@ def test_environment_reference_exception_does_not_apply_to_plain_text():
 
 @pytest.mark.parametrize("path", ["source.jsx", "source.tsx", "source.js"])
 def test_jsx_text_cannot_authorize_environment_reference_exception(path):
-    from omnia_api.services.restoration_adaptation import _source_files
+    from yleum_api.services.restoration_adaptation import _source_files
 
     with pytest.raises(ApiError):
         _source_files(
@@ -136,7 +136,7 @@ def test_jsx_text_cannot_authorize_environment_reference_exception(path):
 
 @pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
 def test_unrecognized_js_line_terminator_leaves_secret_check_conservative(separator):
-    from omnia_api.services.restoration_adaptation import _source_files
+    from yleum_api.services.restoration_adaptation import _source_files
 
     content = "// comment" + separator + "const text = `\n"
     content += "const token = process.env.MAX_BOT_TOKEN;\n`;"
@@ -145,7 +145,7 @@ def test_unrecognized_js_line_terminator_leaves_secret_check_conservative(separa
 
 
 def test_source_budget_rejects_before_allocating_lexical_scan(monkeypatch):
-    from omnia_api.services import restoration_adaptation as service
+    from yleum_api.services import restoration_adaptation as service
 
     monkeypatch.setattr(
         service, "_source_secret_scan_text", lambda *_: pytest.fail("oversized scan")
@@ -156,7 +156,7 @@ def test_source_budget_rejects_before_allocating_lexical_scan(monkeypatch):
 
 @pytest.fixture
 def source_case(monkeypatch):
-    from omnia_api.services import restoration_adaptation as service
+    from yleum_api.services import restoration_adaptation as service
 
     project = SimpleNamespace(
         id=uuid4(), owner_id=uuid4(), template="max_miniapp", current_snapshot_id=uuid4()
@@ -320,13 +320,13 @@ async def test_db_adaptation_admission_is_atomic_and_blocks_competing_work(
 ):
     from types import SimpleNamespace
 
-    from omnia_api.services import project_cell_runtime, restorations
-    from omnia_api.services import restoration_adaptation as service
-    from omnia_api.services.generation_runs import (
+    from tests.test_restorations import FakeRuntime, restoration_fixture
+    from yleum_api.services import project_cell_runtime, restorations
+    from yleum_api.services import restoration_adaptation as service
+    from yleum_api.services.generation_runs import (
         _finalize_generation_run,
         reserve_generation_run,
     )
-    from tests.test_restorations import FakeRuntime, restoration_fixture
 
     async def ready_resources(_workspace_id):
         return SimpleNamespace(state="resources_ready")
@@ -391,11 +391,11 @@ async def test_db_adaptation_admission_is_atomic_and_blocks_competing_work(
         return None
 
     monkeypatch.setattr(
-        "omnia_api.services.orchestrator_client."
+        "yleum_api.services.orchestrator_client."
         "project_cell_update_restoration_adaptation_owner_status",
         notified,
     )
-    from omnia_api.services.generation_runs import retry_terminal_adaptation_notifications
+    from yleum_api.services.generation_runs import retry_terminal_adaptation_notifications
 
     assert await retry_terminal_adaptation_notifications(db_session) == 1
     await db_session.refresh(bound)
@@ -411,9 +411,9 @@ async def test_delayed_legacy_cancel_response_cannot_overwrite_adapting(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.services import project_cell_runtime, restoration_adaptation, restorations
-    from omnia_api.services.generation_runs import reserve_generation_run
     from tests.test_restorations import FakeRuntime, restoration_fixture
+    from yleum_api.services import project_cell_runtime, restoration_adaptation, restorations
+    from yleum_api.services.generation_runs import reserve_generation_run
 
     class DelayedCancelRuntime(FakeRuntime):
         def __init__(self) -> None:
@@ -505,10 +505,10 @@ async def test_delayed_legacy_cancel_response_cannot_overwrite_adapting(
 async def test_startup_recovery_retries_terminal_adaptation_status(
     db_session, monkeypatch
 ):
-    from omnia_api.models.project_cell import ProjectCellWorkspace
-    from omnia_api.models.user import User
-    from omnia_api.services import orchestrator_client
-    from omnia_api.services.generation_runs import recover_interrupted_generation_runs
+    from yleum_api.models.project_cell import ProjectCellWorkspace
+    from yleum_api.models.user import User
+    from yleum_api.services import orchestrator_client
+    from yleum_api.services.generation_runs import recover_interrupted_generation_runs
 
     owner = User(email=f"adapt-recovery-{uuid4().hex}@example.test", password_hash="fixture")
     db_session.add(owner)
@@ -576,10 +576,10 @@ async def test_startup_recovery_retries_terminal_adaptation_status(
 async def test_startup_recovery_keeps_sealed_proof_for_bounded_activation_handoff(
     db_session, monkeypatch
 ):
-    from omnia_api.models.project_cell import ProjectCellWorkspace
-    from omnia_api.models.user import User
-    from omnia_api.services import orchestrator_client
-    from omnia_api.services.generation_runs import recover_interrupted_generation_runs
+    from yleum_api.models.project_cell import ProjectCellWorkspace
+    from yleum_api.models.user import User
+    from yleum_api.services import orchestrator_client
+    from yleum_api.services.generation_runs import recover_interrupted_generation_runs
 
     owner = User(email=f"sealed-recovery-{uuid4().hex}@example.test", password_hash="fixture")
     db_session.add(owner)
@@ -846,7 +846,7 @@ def test_contract_diff_provenance_requires_an_observed_database_state(
     database_state,
     current_source,
 ):
-    from omnia_api.services.restoration_adaptation import _data_contract_diff
+    from yleum_api.services.restoration_adaptation import _data_contract_diff
 
     report = {
         "database_state": database_state,
@@ -1107,8 +1107,8 @@ async def test_actual_dispatch_context_statements_keep_public_prompt_separate(so
     import asyncio
     from pathlib import Path
 
-    from omnia_api.services.generation import agent_preparation, agent_prompt, lifecycle
-    from omnia_api.services.generation.contracts import ProjectGenerationFacts
+    from yleum_api.services.generation import agent_preparation, agent_prompt, lifecycle
+    from yleum_api.services.generation.contracts import ProjectGenerationFacts
 
     service, session, project, _, run, reference, historical, _ = source_case
     run.agent_state = {
@@ -1239,13 +1239,13 @@ async def test_disposable_db_worker_reads_private_accepted_bundle(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.models.message import Message
-    from omnia_api.models.user import User
-    from omnia_api.schemas.message import GenerationRunPublic
-    from omnia_api.services import restoration_adaptation as service
-    from omnia_api.services.generation import lifecycle, supervisor
-    from omnia_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
-    from omnia_api.workers import generation
+    from yleum_api.models.message import Message
+    from yleum_api.models.user import User
+    from yleum_api.schemas.message import GenerationRunPublic
+    from yleum_api.services import restoration_adaptation as service
+    from yleum_api.services.generation import lifecycle, supervisor
+    from yleum_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
+    from yleum_api.workers import generation
 
     owner = User(email=f"adapt-{uuid4().hex}@example.test", password_hash="fixture")
     db_session.add(owner)

@@ -14,8 +14,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from omnia_orchestrator.services.machine_egress import GuardPolicy
 from tests.test_docker_machine_backend import backend
+from yleum_orchestrator.services.machine_egress import GuardPolicy
 
 
 class _Guard:

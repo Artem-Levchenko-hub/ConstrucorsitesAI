@@ -6,10 +6,10 @@ from unittest.mock import AsyncMock
 import pytest
 from pydantic import ValidationError
 
-from omnia_orchestrator.schemas.runtime import DeployRequest
-from omnia_orchestrator.services import builder
-from omnia_orchestrator.services.build_artifact_inventory import filtered_inventory
-from omnia_orchestrator.services.builder import _is_next_template
+from yleum_orchestrator.schemas.runtime import DeployRequest
+from yleum_orchestrator.services import builder
+from yleum_orchestrator.services.build_artifact_inventory import filtered_inventory
+from yleum_orchestrator.services.builder import _is_next_template
 
 _BUILT_IMAGE_ID = "sha256:" + "a" * 64
 
@@ -34,8 +34,8 @@ async def _run_max_builder(
     image_inventory: dict[str, str] | None = None,
 ) -> tuple[AsyncMock, AsyncMock, dict[str, object]]:
     """Exercise the real builder while replacing only Docker/network boundaries."""
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.services import provisioner
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.services import provisioner
 
     project_id = "00000000-0000-0000-0000-000000000001"
     monkeypatch.setenv(
@@ -259,8 +259,8 @@ async def test_max_starts_the_exact_verified_image_id(
 async def test_max_production_container_uses_same_isolated_runtime_profile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.services import provisioner
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.services import provisioner
 
     project_id = "00000000-0000-0000-0000-000000000001"
     monkeypatch.setenv(

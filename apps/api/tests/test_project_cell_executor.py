@@ -17,23 +17,23 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from omnia_api.core.config import get_settings
-from omnia_api.models.base import Base
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.routers import messages
-from omnia_api.services import project_cell_capacity, project_cell_executor
-from omnia_api.services.agent_builder import Action
-from omnia_api.services.generation import supervisor
-from omnia_api.services.generation_runs import (
+from yleum_api.core.config import get_settings
+from yleum_api.models.base import Base
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.routers import messages
+from yleum_api.services import project_cell_capacity, project_cell_executor
+from yleum_api.services.agent_builder import Action
+from yleum_api.services.generation import supervisor
+from yleum_api.services.generation_runs import (
     finalize_generation_run,
     promote_generation_after_admission,
     write_capacity_dispatch_claim,
 )
-from omnia_api.services.orchestrator_client import (
+from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
     ProjectCellAgentExecResponse,
@@ -46,9 +46,9 @@ from omnia_api.services.orchestrator_client import (
     ProjectCellResourceResponse,
     ProjectCellWorkspaceIdentity,
 )
-from omnia_api.services.project_cell_control import ProjectCellControlReadiness
-from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity
-from omnia_api.services.project_cells import (
+from yleum_api.services.project_cell_control import ProjectCellControlReadiness
+from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
+from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
     complete_cell_operation,
     mark_cell_operation_indeterminate,
@@ -738,7 +738,7 @@ async def _prepare_executor(
     monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", fake_exec)
     monkeypatch.setattr(project_cell_executor, "project_cell_apply_draft", fake_hot_reload)
     monkeypatch.setattr(project_cell_executor, "project_cell_create_preview_session", fake_preview)
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     def forbidden_legacy(*args, **kwargs):
         pytest.fail("selected cell must never call a legacy runtime")
@@ -1432,7 +1432,7 @@ async def test_preview_checks_recover_stopped_draft_but_never_replay_auth_failur
     db_session,
     test_engine,
 ) -> None:
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
     await harness.handle.sync_preview()
@@ -1597,7 +1597,7 @@ async def test_cell_runtime_check_uses_workspace_session_not_legacy(
     db_session,
     test_engine,
 ) -> None:
-    from omnia_api.services import max_runtime_probe
+    from yleum_api.services import max_runtime_probe
 
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
 
@@ -1617,7 +1617,7 @@ async def test_portable_cell_runtime_check_falls_back_when_home_page_is_missing(
     db_session,
     test_engine,
 ) -> None:
-    from omnia_api.services import max_runtime_probe
+    from yleum_api.services import max_runtime_probe
 
     harness = await _prepare_executor(
         monkeypatch,

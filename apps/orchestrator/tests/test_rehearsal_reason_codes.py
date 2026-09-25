@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
+from yleum_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
 
 _KNOWN = set(RestorationAdaptationProof.model_fields["reason_code"].annotation.__args__[0].__args__)
 
@@ -67,7 +67,7 @@ def test_the_platform_accepts_every_code_the_orchestrator_can_send() -> None:
         Path(__file__).resolve().parents[2]
         / "api"
         / "src"
-        / "omnia_api"
+        / "yleum_api"
         / "services"
         / "orchestrator_client.py"
     ).read_text(encoding="utf-8")

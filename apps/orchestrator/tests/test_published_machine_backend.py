@@ -6,12 +6,12 @@ import pytest
 
 
 def published_backend(tmp_path, release_id=None):
-    from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend
-    from omnia_orchestrator.services.published_machine_backend import (
+    from tests.test_docker_machine_backend import backend
+    from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
+    from yleum_orchestrator.services.published_machine_backend import (
         PublishedMachineBackend,
         release_volume_mapping,
     )
-    from tests.test_docker_machine_backend import backend
 
     release_id = release_id or UUID(int=1)
     original = backend(tmp_path, workspace_id=UUID(int=9))
@@ -131,7 +131,7 @@ def test_public_delete_quiesces_data_and_removes_owned_compute_only(tmp_path, qu
 
 
 def test_preparing_next_release_does_not_replace_live_service_metadata(tmp_path):
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     first = published_backend(tmp_path)
     second = published_backend(tmp_path, UUID(int=2))
@@ -143,7 +143,7 @@ def test_preparing_next_release_does_not_replace_live_service_metadata(tmp_path)
 
 
 def test_warm_release_reuses_verified_image_and_creates_only_release_local_volumes(tmp_path):
-    from omnia_orchestrator.services.machine_environment import MachineEnvironmentRef
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
 
     runtime = published_backend(tmp_path)
     image_id = "sha256:" + "a" * 64
@@ -193,9 +193,9 @@ def test_warm_release_reuses_verified_image_and_creates_only_release_local_volum
 
 
 def test_healthy_public_reconcile_preserves_service_processes_and_never_restores_data(tmp_path):
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services.project_machine import write_controller_json
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = published_backend(tmp_path)
     manifest = MachineManifest.model_validate(payload())
@@ -232,9 +232,9 @@ def test_healthy_public_reconcile_preserves_service_processes_and_never_restores
 
 @pytest.mark.parametrize("physical_change", ["image", "mount", "epoch"])
 def test_interrupted_candidate_cannot_be_reconciled_as_previous_release(tmp_path, physical_change):
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services.project_machine import write_controller_json
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     runtime = published_backend(tmp_path)
     manifest = MachineManifest.model_validate(payload())
@@ -284,7 +284,7 @@ def test_seed_refuses_existing_production_database_before_archive_import(tmp_pat
 
 
 def test_release_layout_keeps_business_data_stable_and_source_isolated():
-    from omnia_orchestrator.services.published_machine_backend import release_volume_mapping
+    from yleum_orchestrator.services.published_machine_backend import release_volume_mapping
 
     production = UUID("11111111-1111-1111-1111-111111111111")
     first = release_volume_mapping(production, UUID(int=1), ["uploads"])
@@ -297,7 +297,7 @@ def test_release_layout_keeps_business_data_stable_and_source_isolated():
 
 
 def test_test_namespace_cannot_seed_production_named_volumes():
-    from omnia_orchestrator.services.published_machine_backend import release_volume_mapping
+    from yleum_orchestrator.services.published_machine_backend import release_volume_mapping
 
     layout = release_volume_mapping(UUID(int=1), UUID(int=2), [], namespace="test")
     assert all(value.startswith("omnia-machine-test-") for value in layout.values())
@@ -377,7 +377,7 @@ def test_seeded_postgres_rotation_closes_response_before_raw_socket(tmp_path):
 async def test_managed_infrastructure_restart_requires_existing_data_and_starts_sidecars(tmp_path):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services.published_machine_backend import ensure_managed_infrastructure
+    from yleum_orchestrator.services.published_machine_backend import ensure_managed_infrastructure
 
     names = SimpleNamespace(
         postgres_volume="owned-pg-data",
@@ -430,10 +430,10 @@ async def test_managed_infrastructure_restart_requires_existing_data_and_starts_
 def test_update_quiesces_actual_previous_manifest_before_removal(
     tmp_path, monkeypatch, quiesce_fails
 ):
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services.project_machine import write_controller_json
-    from omnia_orchestrator.services.published_machine_backend import PublishedMachineBackend
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.published_machine_backend import PublishedMachineBackend
 
     old = published_backend(tmp_path, UUID(int=1))
     incoming = published_backend(tmp_path, UUID(int=2))
@@ -470,7 +470,7 @@ def test_update_quiesces_actual_previous_manifest_before_removal(
     monkeypatch.setattr(PublishedMachineBackend, "stop_machine", lambda _r: events.append("stop"))
     monkeypatch.setattr(PublishedMachineBackend, "stop", lambda _r: events.append("stop-all"))
     if quiesce_fails:
-        from omnia_orchestrator.services.published_machine_backend import (
+        from yleum_orchestrator.services.published_machine_backend import (
             PublicationRecoveryRequired,
         )
 
@@ -483,7 +483,7 @@ def test_update_quiesces_actual_previous_manifest_before_removal(
 
 
 def test_incompatible_update_fails_before_data_or_code_changes():
-    from omnia_orchestrator.services.published_machine_backend import assert_compatible_update
+    from yleum_orchestrator.services.published_machine_backend import assert_compatible_update
 
     old = {"schema_digest": "a" * 64, "data_contract_digest": "b" * 64}
     assert_compatible_update(old, old)
@@ -494,7 +494,7 @@ def test_incompatible_update_fails_before_data_or_code_changes():
 
 
 def test_publication_rejects_unsafe_slug_and_unscoped_secrets():
-    from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
+    from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
 
     request = dict(
         workspace_id=UUID(int=1),
@@ -520,8 +520,8 @@ def test_publication_rejects_unsafe_slug_and_unscoped_secrets():
 
 
 def test_restoration_publication_requires_its_own_discriminator_without_fake_generation_proofs():
-    from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
     from tests.test_cell_publication import request
+    from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
 
     original = request().model_dump()
     proof_fields = {"proof_key", "schema_data_digest", "build_ref", "verification_ref"}

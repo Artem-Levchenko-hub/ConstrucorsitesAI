@@ -4,8 +4,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.services.generation_metrics import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.services.generation_metrics import (
     GenerationPhase,
     increment_generation_counter,
     record_phase_finished,

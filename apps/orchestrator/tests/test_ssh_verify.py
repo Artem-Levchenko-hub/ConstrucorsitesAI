@@ -6,8 +6,8 @@ from collections.abc import Iterator
 
 import pytest
 
-from omnia_orchestrator.core import ssh
-from omnia_orchestrator.core.shell import CmdResult
+from yleum_orchestrator.core import ssh
+from yleum_orchestrator.core.shell import CmdResult
 
 HOST_KEY = "203.0.113.9 ssh-ed25519 QUJDREVGR0g="
 
@@ -26,7 +26,7 @@ def _settings_env(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
         "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     yield

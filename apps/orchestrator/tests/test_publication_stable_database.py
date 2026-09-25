@@ -9,9 +9,9 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
 from tests.test_docker_machine_backend import backend
 from tests.test_published_machine_backend import published_backend
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
 
 def _postgres(epoch: int, *, removed: list | None = None):
@@ -86,7 +86,7 @@ def test_switch_code_keeps_the_database_and_quiesces_the_product(tmp_path, monke
     monkeypatch.setattr(runtime, "remove", lambda *_a, **_k: calls.append("remove_all"))
     monkeypatch.setattr(runtime, "_metadata", lambda: {})
     monkeypatch.setattr(
-        "omnia_orchestrator.services.published_machine_backend.write_controller_json",
+        "yleum_orchestrator.services.published_machine_backend.write_controller_json",
         lambda *_a, **_k: calls.append("metadata"),
     )
     monkeypatch.setattr(runtime, "restart_infrastructure", lambda: calls.append("infra"))
@@ -97,7 +97,7 @@ def test_switch_code_keeps_the_database_and_quiesces_the_product(tmp_path, monke
 
 
 def test_quiesce_current_stops_the_product_not_the_database(tmp_path, monkeypatch):
-    from omnia_orchestrator.services import published_machine_backend as module
+    from yleum_orchestrator.services import published_machine_backend as module
 
     runtime = published_backend(tmp_path)
     events: list[str] = []

@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.services.max_generation_contract import (
+from yleum_api.services.max_generation_contract import (
     build_max_product_contract,
     max_completion_gap,
     max_source_completion_gap,

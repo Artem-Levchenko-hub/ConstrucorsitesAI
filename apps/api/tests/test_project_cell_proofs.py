@@ -8,11 +8,11 @@ from uuid import UUID
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellProof, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.project_cell_proofs import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellProof, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.project_cell_proofs import (
     ProjectCellProofConflict,
     ProofDimension,
     ProofIdentity,

@@ -19,13 +19,13 @@ from uuid import uuid4
 
 import docker
 
-from omnia_orchestrator.core.cell_resources import LifecycleMutation
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.services.docker_machine_backend import DockerMachineBackend, _archive_file
-from omnia_orchestrator.services.machine_environment import MachineEnvironmentStore
-from omnia_orchestrator.services.machine_network_allocation import create_pool_network
-from omnia_orchestrator.services.machine_services import MachineServices
-from omnia_orchestrator.services.project_machine import ProjectMachine
+from yleum_orchestrator.core.cell_resources import LifecycleMutation
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend, _archive_file
+from yleum_orchestrator.services.machine_environment import MachineEnvironmentStore
+from yleum_orchestrator.services.machine_network_allocation import create_pool_network
+from yleum_orchestrator.services.machine_services import MachineServices
+from yleum_orchestrator.services.project_machine import ProjectMachine
 
 
 async def command(machine, argv, epoch=1, timeout_seconds=600):

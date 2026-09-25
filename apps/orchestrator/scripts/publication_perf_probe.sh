@@ -15,7 +15,7 @@ case " $ALLOW " in *" $P "*) ;; *) echo "refusing: $P is not a QA measurement pr
 OUT=/tmp/pubperf/$LABEL-$(date +%H%M%S); mkdir -p "$OUT"
 q() { printf '%s\n' "$1" > /tmp/.q.sql; sudo docker exec -i omnia-prod-postgres sh -c 'psql -U $POSTGRES_USER -d $POSTGRES_DB -At' < /tmp/.q.sql; }
 OWNER=$(q "select owner_id from projects where id='$P'")
-T=$(sudo docker exec omnia-prod-api /app/.venv/bin/python -c "from omnia_api.core.security import create_access_token; from uuid import UUID; print(create_access_token(UUID('$OWNER')))")
+T=$(sudo docker exec omnia-prod-api /app/.venv/bin/python -c "from yleum_api.core.security import create_access_token; from uuid import UUID; print(create_access_token(UUID('$OWNER')))")
 H="Authorization: Bearer $T"; A=http://127.0.0.1:8200/api/projects/$P
 echo "deploy before: $(curl -s -H "$H" $A/deploy | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('phase'), d.get('snapshot_id'), 'format', d.get('format_version'))")"
 echo "head: $(curl -s -H "$H" $A | python3 -c "import json,sys; print(json.load(sys.stdin)['current_snapshot_id'])")"

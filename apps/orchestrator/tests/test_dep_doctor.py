@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 
-from omnia_orchestrator.services import dep_doctor
+from yleum_orchestrator.services import dep_doctor
 
 _PJ = json.dumps(
     {
@@ -115,7 +115,7 @@ def test_agent_build_clears_only_stale_next_route_validators() -> None:
     source = (
         Path(__file__).parents[1]
         / "src"
-        / "omnia_orchestrator"
+        / "yleum_orchestrator"
         / "routers"
         / "runtime.py"
     ).read_text(encoding="utf-8")

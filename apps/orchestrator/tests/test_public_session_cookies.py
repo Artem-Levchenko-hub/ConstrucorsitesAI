@@ -11,7 +11,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.services import machine_boundary as boundary
+from yleum_orchestrator.services import machine_boundary as boundary
 
 ORIGIN = "https://app.example.test"
 CANONICAL = "__Host-max_session"

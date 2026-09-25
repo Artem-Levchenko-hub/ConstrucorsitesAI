@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services.generation import agent_recovery
+from yleum_api.services.generation import agent_recovery
 
 
 @pytest.mark.parametrize("kind", ["snapshot", "max_core"])

@@ -6,11 +6,11 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.routers import workspace
-from omnia_orchestrator.services.docker_cell_resources import DockerCommandResult
 from tests.test_project_machine_manifest import payload
 from tests.test_workspace_router import _client, _ready_provider
 from tests.test_workspace_router import _internal_settings as _internal_settings
+from yleum_orchestrator.routers import workspace
+from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 
 
 class PortableRuntime:
@@ -82,8 +82,8 @@ async def test_machine_lifecycle_removes_dead_gateway_ingress_and_reads_service_
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     workspace_id = uuid4()
     _provider, manager, _docker, _run_id = await _ready_provider(tmp_path, workspace_id)
@@ -116,7 +116,7 @@ async def test_new_pristine_seed_gets_main_stack_machine_before_writes(
 ):
     from pathlib import Path
 
-    from omnia_orchestrator.core.template_materialization import materialize_template
+    from yleum_orchestrator.core.template_materialization import materialize_template
 
     workspace_id = uuid4()
     _provider, manager, _docker, _run_id = await _ready_provider(tmp_path, workspace_id)
@@ -340,7 +340,7 @@ async def test_guest_manifest_deletion_cannot_downgrade_sticky_machine_to_creden
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     workspace_id = uuid4()
     provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
@@ -391,7 +391,7 @@ async def test_first_manifest_patch_retires_credentialed_legacy_before_shared_so
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services.machine_identity import is_portable_workspace
+    from yleum_orchestrator.services.machine_identity import is_portable_workspace
 
     workspace_id = uuid4()
     provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)

@@ -18,14 +18,14 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.services.code_restoration_engine import (
+from yleum_orchestrator.services.code_restoration_engine import (
     CodeRestorationEngine,
     PreparationNeedsChanges,
     owner_visible_tail,
     stage_failure_details,
     stage_output_tail,
 )
-from omnia_orchestrator.services.restoration_execution import RestorationExecutionJournal
+from yleum_orchestrator.services.restoration_execution import RestorationExecutionJournal
 
 _WORKSPACE = "93602ee5-d028-5747-ab7d-777a3fb1919e"
 _BUILD_LOG = (

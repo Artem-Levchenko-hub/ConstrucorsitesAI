@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 from minio.error import S3Error
 
-from omnia_api.services import task_board_attachments as storage
+from yleum_api.services import task_board_attachments as storage
 
 
 def _settings(bucket: str = "task-board") -> SimpleNamespace:

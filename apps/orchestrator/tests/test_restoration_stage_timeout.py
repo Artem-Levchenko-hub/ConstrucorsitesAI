@@ -24,7 +24,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.services.code_restoration_engine import (
+from yleum_orchestrator.services.code_restoration_engine import (
     CodeRestorationEngine,
     PreparationNeedsChanges,
     stage_timeout_seconds,

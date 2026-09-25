@@ -11,19 +11,19 @@ from uuid import UUID
 
 import pytest
 
-from omnia_api.core import config as core_config
-from omnia_api.core.config import Settings
-from omnia_api.models.max_project_config import MaxProjectConfig
-from omnia_api.models.project import Project
-from omnia_api.schemas.max_studio import MaxProjectConfigPayload
-from omnia_api.services import (
+from yleum_api.core import config as core_config
+from yleum_api.core.config import Settings
+from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.project import Project
+from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+from yleum_api.services import (
     agent_native,
     integration_generation,
     max_data_evolution,
     max_project_kit,
     restoration_adaptation,
 )
-from omnia_api.services.generation import (
+from yleum_api.services.generation import (
     acceptance,
     agent_generation,
     agent_pipeline,
@@ -38,7 +38,7 @@ from omnia_api.services.generation import (
     onboarding,
     progress,
 )
-from omnia_api.services.generation import (
+from yleum_api.services.generation import (
     runtime as generation_runtime,
 )
 

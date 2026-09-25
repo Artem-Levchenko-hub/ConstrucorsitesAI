@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.services import preset_classifier as pc
+from yleum_api.services import preset_classifier as pc
 
 # ── _build_classifier_prompt threads the spec as a hint ───────────────────────
 

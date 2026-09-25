@@ -8,7 +8,7 @@ import os
 os.environ.setdefault("DATABASE_URL", "postgresql+asyncpg://x:x@localhost/x")
 os.environ.setdefault("JWT_SECRET", "test-secret")
 
-from omnia_api.core.config import (
+from yleum_api.core.config import (
     DEFAULT_ROLE_MODEL,
     FREE_GENERATION_LIMIT,
     PRIMARY_LLM_MODEL,

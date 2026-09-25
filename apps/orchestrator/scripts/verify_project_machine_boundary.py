@@ -14,18 +14,18 @@ from uuid import uuid4
 
 import docker
 
-from omnia_orchestrator.core.cell_resources import LifecycleMutation
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.core.template_materialization import materialized_template
-from omnia_orchestrator.routers.runtime import _max_preview_bootstrap_signature
-from omnia_orchestrator.services import machine_adapter
-from omnia_orchestrator.services.cell_state import CellCredentialStore
-from omnia_orchestrator.services.docker_machine_backend import _archive_file
-from omnia_orchestrator.services.machine_environment import (
+from yleum_orchestrator.core.cell_resources import LifecycleMutation
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.core.template_materialization import materialized_template
+from yleum_orchestrator.routers.runtime import _max_preview_bootstrap_signature
+from yleum_orchestrator.services import machine_adapter
+from yleum_orchestrator.services.cell_state import CellCredentialStore
+from yleum_orchestrator.services.docker_machine_backend import _archive_file
+from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentRef,
     MachineEnvironmentStore,
 )
-from omnia_orchestrator.services.machine_network_allocation import create_pool_network
+from yleum_orchestrator.services.machine_network_allocation import create_pool_network
 
 
 def template_text_files(template: Path) -> dict[str, str]:
@@ -89,7 +89,7 @@ def project_postgres_sql(backend, sql):
 
 
 def next_fixture():
-    from omnia_orchestrator.services.machine_defaults import next_machine_seed
+    from yleum_orchestrator.services.machine_defaults import next_machine_seed
 
     template = Path(__file__).resolve().parents[1] / "templates" / "max-miniapp-nextjs"
     files = next_machine_seed(template_text_files(template))
@@ -281,7 +281,7 @@ async def run(args):
                 "/workspace", _archive_file(path, value.encode())
             )
         if args.next:
-            from omnia_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
+            from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
 
             installed = await adapter.execute(
                 state,

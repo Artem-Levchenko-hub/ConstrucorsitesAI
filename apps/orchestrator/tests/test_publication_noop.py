@@ -11,17 +11,17 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.services.cell_publication import CellPublicationService
-from omnia_orchestrator.services.project_machine import write_controller_json
-from omnia_orchestrator.services.publication_identity import (
+from tests.test_cell_publication import request
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.services.cell_publication import CellPublicationService
+from yleum_orchestrator.services.project_machine import write_controller_json
+from yleum_orchestrator.services.publication_identity import (
     classify_publication,
     fingerprint_key,
     fingerprint_payload,
     release_fingerprint,
     source_identity,
 )
-from tests.test_cell_publication import request
 
 TOKEN = "old-test-token"
 

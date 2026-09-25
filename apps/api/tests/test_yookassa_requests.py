@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from omnia_api.services import yookassa
+from yleum_api.services import yookassa
 
 LONG = "Подписка MAX Studio: " + "очень длинное описание тарифа " * 8
 

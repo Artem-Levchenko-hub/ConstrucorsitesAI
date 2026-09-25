@@ -19,9 +19,9 @@ from typing import Any
 import docker  # type: ignore[import-untyped]
 import pytest
 
-from omnia_orchestrator.core import docker_client
-from omnia_orchestrator.core.docker_client import ContainerSpec
-from omnia_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.core import docker_client
+from yleum_orchestrator.core.docker_client import ContainerSpec
+from yleum_orchestrator.core.errors import OrchestratorError
 
 
 @pytest.fixture(autouse=True)
@@ -31,7 +31,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
         "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -1182,7 +1182,7 @@ def test_read_bounded_archive_rejects_oversized_stream() -> None:
 def test_sandbox_archive_rejects_traversal_without_replacing_workspace(
     tmp_path: Path,
 ) -> None:
-    from omnia_orchestrator.core.errors import OrchestratorError
+    from yleum_orchestrator.core.errors import OrchestratorError
 
     workspace = tmp_path / "workspace"
     workspace.mkdir()
@@ -1255,8 +1255,8 @@ async def test_start_container_creates_per_project_network_when_set(
 async def test_start_container_uses_configured_explicit_network_pool(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.services import machine_network_allocation
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.services import machine_network_allocation
 
     monkeypatch.setenv("CELL_NETWORK_POOL", "10.253.0.0/16")
     get_settings.cache_clear()  # type: ignore[attr-defined]
@@ -1555,7 +1555,7 @@ def test_wake_if_stopped_running_is_noop() -> None:
 
 
 def test_wake_if_stopped_raises_structured_409_when_wake_fails() -> None:
-    from omnia_orchestrator.core.errors import OrchestratorError
+    from yleum_orchestrator.core.errors import OrchestratorError
 
     c = _WakeFakeContainer(status="exited", fail_start=True)
     with pytest.raises(OrchestratorError) as ei:
@@ -1616,7 +1616,7 @@ async def test_template_build_uses_writable_docker_config(
     docker_config_dir = tmp_path / "docker-cli"
     monkeypatch.setenv("DOCKER_CLI_CONFIG_DIR", str(docker_config_dir))
 
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     monkeypatch.setattr(docker_client, "_image_created_epoch", lambda _tag: None)

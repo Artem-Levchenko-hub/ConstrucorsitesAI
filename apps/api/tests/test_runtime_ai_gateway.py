@@ -7,14 +7,14 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.crypto import encrypt_strong
-from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
-from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.models.project import Project
-from omnia_api.routers import integration_runtime
-from omnia_api.services import llm_client
 from tests.test_app_integrations_api import _max_init_data, _register_and_create
+from yleum_api.core.config import get_settings
+from yleum_api.core.crypto import encrypt_strong
+from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
+from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.models.project import Project
+from yleum_api.routers import integration_runtime
+from yleum_api.services import llm_client
 
 
 async def fixture(client, db_session, monkeypatch):

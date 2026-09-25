@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from omnia_api.services.versioning_capabilities import (
+from yleum_api.services.versioning_capabilities import (
     assess_capabilities,
     blank_comments_and_strings,
     capability_gap,

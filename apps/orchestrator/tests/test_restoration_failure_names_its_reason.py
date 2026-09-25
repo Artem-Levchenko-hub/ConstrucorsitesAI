@@ -21,11 +21,11 @@ import json
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from tests.test_code_restorations import Engine, request, service, status
+from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
     CellVerificationBudgetTooSmall,
 )
-from tests.test_code_restorations import Engine, request, service, status
 
 _BLANKET = "Не удалось завершить проверку восстановления."
 

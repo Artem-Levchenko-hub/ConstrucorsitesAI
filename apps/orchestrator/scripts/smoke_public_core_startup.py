@@ -59,8 +59,8 @@ def run(args):
     import docker
     from docker.errors import NotFound
 
-    from omnia_orchestrator.services import machine_adapter
-    from omnia_orchestrator.services.project_machine import machine_budget
+    from yleum_orchestrator.services import machine_adapter
+    from yleum_orchestrator.services.project_machine import machine_budget
 
     require(os.name == "posix", "Linux required")
     parent = Path(args.qa_parent).resolve(strict=True)

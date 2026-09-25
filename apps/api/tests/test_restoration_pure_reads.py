@@ -7,19 +7,19 @@ import pytest
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from omnia_api.core.errors import ApiError
-from omnia_api.core.security import create_access_token
-from omnia_api.models.restoration import Restoration
-from omnia_api.schemas.restoration import RestoreApplyRequest
-from omnia_api.services import repo
-from omnia_api.services import restorations as service
-from omnia_api.services.restoration_reconciliation import reconcile_due_restorations
 from tests.test_restorations import FakeRuntime, restoration_fixture
+from yleum_api.core.errors import ApiError
+from yleum_api.core.security import create_access_token
+from yleum_api.models.restoration import Restoration
+from yleum_api.schemas.restoration import RestoreApplyRequest
+from yleum_api.services import repo
+from yleum_api.services import restorations as service
+from yleum_api.services.restoration_reconciliation import reconcile_due_restorations
 
 
 @pytest.fixture(autouse=True)
 def ready_source_resources(monkeypatch):
-    from omnia_api.services import project_cell_runtime
+    from yleum_api.services import project_cell_runtime
 
     async def resources(_workspace_id):
         return SimpleNamespace(state="resources_ready")
@@ -28,7 +28,7 @@ def ready_source_resources(monkeypatch):
 
 
 async def test_service_detail_read_needs_only_read_models_and_never_a_runtime():
-    from omnia_api.models.project import Project
+    from yleum_api.models.project import Project
 
     owner_id, project_id, operation_id = uuid4(), uuid4(), uuid4()
     project = SimpleNamespace(id=project_id, owner_id=owner_id)
@@ -87,7 +87,7 @@ async def test_service_list_authorization_never_enters_the_write_lock_domain():
 async def test_public_detail_get_is_a_pure_projection_across_one_hundred_reads(
     client, db_session, monkeypatch
 ):
-    from omnia_api.routers import restorations as routes
+    from yleum_api.routers import restorations as routes
 
     owner, project, _, _, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()
@@ -136,7 +136,7 @@ async def test_public_detail_get_is_a_pure_projection_across_one_hundred_reads(
 async def test_public_detail_get_never_observes_or_redispatches_runtime_404(
     client, db_session, monkeypatch
 ):
-    from omnia_api.routers import restorations as routes
+    from yleum_api.routers import restorations as routes
 
     class MissingRuntime(FakeRuntime):
         def __init__(self):
@@ -192,7 +192,7 @@ async def test_public_list_uses_no_advisory_or_row_write_locks(
 async def test_worker_owns_lost_dispatch_replay_and_completed_apply(
     db_session, test_engine, monkeypatch
 ):
-    from omnia_api.services import restoration_reconciliation as reconciliation
+    from yleum_api.services import restoration_reconciliation as reconciliation
 
     owner, project, _, current, _, _, request = await restoration_fixture(db_session)
     runtime = FakeRuntime()

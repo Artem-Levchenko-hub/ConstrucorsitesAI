@@ -5,7 +5,7 @@ import pytest
 
 
 def allocator():
-    name = "omnia_orchestrator.services.machine_network_allocation"
+    name = "yleum_orchestrator.services.machine_network_allocation"
     assert importlib.util.find_spec(name) is not None, "explicit cell subnet allocation is missing"
     return importlib.import_module(name).choose_subnet
 
@@ -33,8 +33,8 @@ def test_allocator_rejects_overlapping_host_routes_and_exhaustion():
 async def test_existing_cell_network_creation_uses_explicit_ipam_before_machine_start():
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
     from tests.test_docker_py_cell_backend import _labels
+    from yleum_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 
     created = []
 
@@ -62,7 +62,7 @@ async def test_existing_cell_network_creation_uses_explicit_ipam_before_machine_
 def test_host_and_none_docker_networks_have_null_ipam_config():
     from types import SimpleNamespace
 
-    from omnia_orchestrator.services.machine_network_allocation import docker_network_subnets
+    from yleum_orchestrator.services.machine_network_allocation import docker_network_subnets
 
     client = SimpleNamespace(
         networks=SimpleNamespace(
@@ -80,7 +80,7 @@ def test_parallel_pool_collision_rescans_and_retries_only_overlap():
 
     import docker
 
-    from omnia_orchestrator.services import machine_network_allocation as allocation
+    from yleum_orchestrator.services import machine_network_allocation as allocation
 
     occupied = []
     attempts = []
@@ -114,7 +114,7 @@ def test_pool_collision_retry_is_bounded_and_other_errors_are_not_retried():
 
     import docker
 
-    from omnia_orchestrator.services import machine_network_allocation as allocation
+    from yleum_orchestrator.services import machine_network_allocation as allocation
 
     attempts = []
 

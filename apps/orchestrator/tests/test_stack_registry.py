@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_orchestrator.core.stack_registry import STACKS, StackSpec, get_stack
+from yleum_orchestrator.core.stack_registry import STACKS, StackSpec, get_stack
 
 _TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
 

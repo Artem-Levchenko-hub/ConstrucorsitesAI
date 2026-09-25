@@ -5,8 +5,8 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.admin_audit import AdminAuditEvent
-from omnia_api.models.user import User
+from yleum_api.models.admin_audit import AdminAuditEvent
+from yleum_api.models.user import User
 
 pytestmark = pytest.mark.asyncio
 

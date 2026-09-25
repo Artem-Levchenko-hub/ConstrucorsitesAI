@@ -12,16 +12,16 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.crypto import decrypt_strong, encrypt_strong
-from omnia_api.models.app_integration import (
+from yleum_api.core.config import get_settings
+from yleum_api.core.crypto import decrypt_strong, encrypt_strong
+from yleum_api.models.app_integration import (
     AccountIntegration,
     ProjectIntegrationBinding,
 )
-from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.routers import projects as projects_router
-from omnia_api.services import integration_oauth, integration_providers
-from omnia_api.services import repo as repo_svc
+from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.routers import projects as projects_router
+from yleum_api.services import integration_oauth, integration_providers
+from yleum_api.services import repo as repo_svc
 
 
 async def _register_and_create(

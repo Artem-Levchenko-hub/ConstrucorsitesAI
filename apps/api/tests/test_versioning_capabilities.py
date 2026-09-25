@@ -1,6 +1,6 @@
 """AV06 source check: which draft functions an adapted result dropped."""
 
-from omnia_api.services.versioning_capabilities import (
+from yleum_api.services.versioning_capabilities import (
     capability_gap,
     lost_capabilities,
     route_capabilities,

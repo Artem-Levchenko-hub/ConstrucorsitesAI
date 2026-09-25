@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 
-from omnia_api.services.attestation import (
+from yleum_api.services.attestation import (
     build_attestation,
     to_log_line,
     verify_digest,

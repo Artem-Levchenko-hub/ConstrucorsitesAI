@@ -9,12 +9,12 @@ from uuid import UUID, uuid5
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.schemas.restoration_adaptation import (
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.schemas.restoration_adaptation import (
     RestorationAdaptationPrepare,
     RestorationAdaptationProof,
 )
-from omnia_orchestrator.schemas.restoration_adaptation_activation import (
+from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     ActivationBusinessProbe,
     ActivationObservedIdentity,
     ActivationPreparedTarget,
@@ -24,11 +24,11 @@ from omnia_orchestrator.schemas.restoration_adaptation_activation import (
     RestorationAdaptationActivationRecoveryBatch,
     RestorationAdaptationActivationRequest,
 )
-from omnia_orchestrator.services.restoration_adaptation_activation_service import (
+from yleum_orchestrator.services.restoration_adaptation_activation_service import (
     ActivationOfferMaterialization,
     RestorationAdaptationActivationService,
 )
-from omnia_orchestrator.services.restoration_adaptation_workspace import (
+from yleum_orchestrator.services.restoration_adaptation_workspace import (
     RestorationAdaptationWorkspaceService,
 )
 
@@ -206,7 +206,7 @@ class ActivationEngine:
 
     @staticmethod
     def _receipt(request, state="activated"):
-        from omnia_orchestrator.services.restoration_binding import canonical_digest
+        from yleum_orchestrator.services.restoration_binding import canonical_digest
 
         source = ActivationPreparedTarget(
             workspace_id=request.source_workspace_id,
@@ -359,7 +359,7 @@ def component_service(
     adapter: OfferAdapter,
     effects: ComponentEffects,
 ) -> RestorationAdaptationActivationService:
-    from omnia_orchestrator.services.restoration_adaptation_activation import (
+    from yleum_orchestrator.services.restoration_adaptation_activation import (
         RestorationAdaptationActivationEngine,
     )
 
@@ -425,7 +425,7 @@ async def test_apply_reloads_controller_proof_and_binds_planned_commit(tmp_path:
 
 
 async def test_activation_digest_is_canonical_and_rejects_substitution(tmp_path: Path):
-    from omnia_orchestrator.services.restoration_binding import canonical_digest
+    from yleum_orchestrator.services.restoration_binding import canonical_digest
 
     activation = service(tmp_path)
     offered = await activation.offer(offer_request())
@@ -964,8 +964,8 @@ async def test_internal_activation_routes_require_auth_and_exact_path_binding(
     import httpx
     from fastapi import FastAPI
 
-    from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
-    from omnia_orchestrator.routers import code_restorations
+    from yleum_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+    from yleum_orchestrator.routers import code_restorations
 
     activation = service(tmp_path)
     value = offer_request()

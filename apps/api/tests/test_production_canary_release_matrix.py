@@ -11,18 +11,18 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.ops.production_canary import (
-    CanaryConfig,
-    CanaryConfigurationError,
-    CanaryFailure,
-    ProductionCanary,
-)
 from tests.production_canary_fakes import (
     OTHER_RELEASE_SHA,
     RELEASE_SHA,
     FakeProduction,
     canary_env,
     matrix,
+)
+from yleum_api.ops.production_canary import (
+    CanaryConfig,
+    CanaryConfigurationError,
+    CanaryFailure,
+    ProductionCanary,
 )
 
 WEB_SHA = "c0ffee1"

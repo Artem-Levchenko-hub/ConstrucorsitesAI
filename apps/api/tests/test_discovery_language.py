@@ -17,7 +17,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from omnia_api.services.lang_detect import _reply_language_line
+from yleum_api.services.lang_detect import _reply_language_line
 
 # ─── 1. _reply_language_line ────────────────────────────────────────────────
 
@@ -56,56 +56,56 @@ def test_reply_language_line_contains_language_code():
 
 
 def test_english_build_now_signal_fires_build_it():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("build it")
 
 
 def test_english_build_now_signal_fires_just_build():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("just build it now")
 
 
 def test_english_build_now_signal_fires_make_it():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("ok, make it")
 
 
 def test_english_build_now_signal_fires_go_ahead():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("go ahead and start")
 
 
 def test_english_build_now_signal_fires_create_it():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("create it please")
 
 
 def test_english_build_now_signal_fires_generate_now():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("generate now")
 
 
 def test_english_build_now_signal_fires_skip_questions():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("skip questions and build")
 
 
 def test_english_build_now_signal_fires_start_building():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("start building")
 
 
 def test_ru_build_now_still_fires():
     """RU stems must remain functional after adding EN equivalents."""
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     assert wants_build_now("генерируй")
     assert wants_build_now("просто сделай")
@@ -113,7 +113,7 @@ def test_ru_build_now_still_fires():
 
 
 def test_innocent_english_does_not_fire_build_now():
-    from omnia_api.services.discovery import wants_build_now
+    from yleum_api.services.discovery import wants_build_now
 
     # Generic words that should NOT trigger build-now
     assert not wants_build_now("I need a landing page for my coffee shop")
@@ -124,7 +124,7 @@ def test_innocent_english_does_not_fire_build_now():
 
 
 def test_english_login_routes_to_entities():
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert (
         _infer_stack_from_text("users need to login and see their dashboard") == "nextjs_entities"
@@ -132,32 +132,32 @@ def test_english_login_routes_to_entities():
 
 
 def test_english_signup_routes_to_entities():
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert _infer_stack_from_text("sign up page with user profiles") == "nextjs_entities"
 
 
 def test_english_register_routes_to_entities():
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert _infer_stack_from_text("users can register and manage their orders") == "nextjs_entities"
 
 
 def test_english_checkout_routes_to_entities():
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert _infer_stack_from_text("shopping cart and checkout flow") == "nextjs_entities"
 
 
 def test_english_booking_routes_to_entities():
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert _infer_stack_from_text("appointment booking system") == "nextjs_entities"
 
 
 def test_english_negated_login_does_not_route():
     """'no login' / 'without auth' should NOT trip the backend signal."""
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     # Negation guard should suppress this
     result = _infer_stack_from_text("no login required, just a public landing page")
@@ -168,14 +168,14 @@ def test_english_negated_login_does_not_route():
 
 def test_ru_backend_signal_still_fires():
     """RU stems must remain functional."""
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert _infer_stack_from_text("магазин с корзиной и личным кабинетом") == "nextjs_entities"
     assert _infer_stack_from_text("регистрация пользователей") == "nextjs_entities"
 
 
 def test_innocent_english_no_backend():
-    from omnia_api.services.discovery import _infer_stack_from_text
+    from yleum_api.services.discovery import _infer_stack_from_text
 
     assert _infer_stack_from_text("a landing page for my coffee shop") is None
     assert _infer_stack_from_text("portfolio website with dark theme") is None
@@ -210,7 +210,7 @@ def _ask_reply(message: str = "What is your goal?") -> dict[str, Any]:
 @pytest.mark.asyncio
 async def test_run_discovery_ru_system_prompt_unchanged():
     """For RU the system prompt passed to the gateway must be exactly _SYSTEM."""
-    from omnia_api.services import discovery as disc
+    from yleum_api.services import discovery as disc
 
     captured: list[dict] = []
 
@@ -224,7 +224,7 @@ async def test_run_discovery_ru_system_prompt_unchanged():
     )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
+    with patch("yleum_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
         await disc.run_discovery([], "build me a coffee shop site", asked_count=0, language="ru")
 
     assert captured, "No gateway call was made"
@@ -238,7 +238,7 @@ async def test_run_discovery_ru_system_prompt_unchanged():
 @pytest.mark.asyncio
 async def test_run_discovery_en_system_prompt_has_suffix():
     """For EN the system prompt must contain the language instruction suffix."""
-    from omnia_api.services import discovery as disc
+    from yleum_api.services import discovery as disc
 
     captured: list[dict] = []
 
@@ -252,7 +252,7 @@ async def test_run_discovery_en_system_prompt_has_suffix():
     )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
+    with patch("yleum_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
         await disc.run_discovery([], "build me a landing page", asked_count=0, language="en")
 
     assert captured
@@ -270,7 +270,7 @@ async def test_run_discovery_en_system_prompt_has_suffix():
 @pytest.mark.asyncio
 async def test_plan_discovery_ru_system_prompt_unchanged():
     """For RU plan_discovery_questions must pass _PLAN_SYSTEM unmodified."""
-    from omnia_api.services import discovery as disc
+    from yleum_api.services import discovery as disc
 
     captured: list[dict] = []
 
@@ -300,7 +300,7 @@ async def test_plan_discovery_ru_system_prompt_unchanged():
     )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
+    with patch("yleum_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
         await disc.plan_discovery_questions("coffee shop", language="ru")
 
     assert captured
@@ -313,7 +313,7 @@ async def test_plan_discovery_ru_system_prompt_unchanged():
 @pytest.mark.asyncio
 async def test_plan_discovery_en_system_prompt_has_suffix():
     """For EN plan_discovery_questions must append the language suffix."""
-    from omnia_api.services import discovery as disc
+    from yleum_api.services import discovery as disc
 
     captured: list[dict] = []
 
@@ -343,7 +343,7 @@ async def test_plan_discovery_en_system_prompt_has_suffix():
     )
     mock_client.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("omnia_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
+    with patch("yleum_api.services.discovery.httpx.AsyncClient", return_value=mock_client):
         await disc.plan_discovery_questions("coffee shop", language="en")
 
     assert captured

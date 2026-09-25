@@ -8,7 +8,7 @@ from urllib.parse import urlparse
 import httpx
 import pytest
 
-from omnia_api.services import integration_providers, provider_docs
+from yleum_api.services import integration_providers, provider_docs
 
 
 class _AsyncContent(httpx.AsyncByteStream):

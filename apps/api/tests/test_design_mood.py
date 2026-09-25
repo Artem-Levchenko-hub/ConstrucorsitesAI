@@ -8,7 +8,7 @@ build prompt so each app is built in a distinct look.
 
 from __future__ import annotations
 
-from omnia_api.services.design_dna import design_mood_directive
+from yleum_api.services.design_dna import design_mood_directive
 
 
 def test_mood_is_stable_per_project() -> None:

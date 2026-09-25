@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, MachineAdapter
+from yleum_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, MachineAdapter
 
 
 @pytest.mark.parametrize("old_runtime", ["dev-command", "image"])
@@ -79,7 +79,7 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
 
     original.reload = after_reload
     network = {"qa-internal": {"IPAddress": "127.0.0.1"}}
-    from omnia_orchestrator.services import machine_business_config
+    from yleum_orchestrator.services import machine_business_config
 
     monkeypatch.setattr(machine_business_config, "apply_public_core_overlay",
                         lambda _: (_ for _ in ()).throw(ObserveStartup()))
@@ -117,7 +117,7 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
 @pytest.mark.parametrize("image_ref, protocol", [("", "1"), ("untrusted:latest", "1"),
                                                ("sha256:" + "a" * 64, "0")])
 def test_invalid_public_image_is_rejected_before_changing_live_auth(image_ref, protocol):
-    from omnia_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.core.cell_resources import CellResourceError
 
     adapter = MachineAdapter(SimpleNamespace(), SimpleNamespace(cell_public_core_image=image_ref))
 
@@ -138,7 +138,7 @@ def test_invalid_public_image_is_rejected_before_changing_live_auth(image_ref, p
 def test_preview_rejects_unpinned_or_incompatible_image_before_any_runtime_change(
     image_ref, protocol,
 ):
-    from omnia_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.core.cell_resources import CellResourceError
 
     adapter = MachineAdapter(SimpleNamespace(), SimpleNamespace(cell_preview_core_image=image_ref))
     adapter.secret = lambda _: pytest.fail("must validate image before accessing live secrets")
@@ -151,7 +151,7 @@ def test_preview_rejects_unpinned_or_incompatible_image_before_any_runtime_chang
 
 
 def test_draft_core_receives_current_trusted_routes_before_serving(tmp_path, monkeypatch):
-    from omnia_orchestrator.services import machine_business_config
+    from yleum_orchestrator.services import machine_business_config
 
     manager = SimpleNamespace(state_store=SimpleNamespace(root=tmp_path))
     adapter = MachineAdapter(manager, SimpleNamespace())

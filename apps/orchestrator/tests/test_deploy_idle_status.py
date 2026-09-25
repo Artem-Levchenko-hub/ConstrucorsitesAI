@@ -2,7 +2,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.routers import runtime
+from yleum_orchestrator.routers import runtime
 
 
 @pytest.mark.asyncio

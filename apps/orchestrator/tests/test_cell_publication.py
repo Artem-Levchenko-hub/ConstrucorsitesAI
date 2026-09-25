@@ -4,7 +4,7 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
+from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
 
 
 def restored_request(**overrides):
@@ -21,8 +21,8 @@ def restored_request(**overrides):
 
 @pytest.mark.parametrize("changed", [None, "state", "owner_id", "source_revision", "metadata"])
 def test_restored_publication_requires_active_durable_exact_proof(tmp_path, changed):
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     value = restored_request()
     service = CellPublicationService(SimpleNamespace(cell_state_path=tmp_path / "cells"))
@@ -55,9 +55,9 @@ def test_restored_publication_requires_active_durable_exact_proof(tmp_path, chan
 async def test_restoration_publication_prepares_without_a_database_policy(tmp_path, monkeypatch):
     from contextlib import asynccontextmanager
 
-    from omnia_orchestrator.routers import runtime, workspace
-    from omnia_orchestrator.services import cell_deletion
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.routers import runtime, workspace
+    from yleum_orchestrator.services import cell_deletion
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     class ReachedSchemaProbe(Exception):
         pass
@@ -104,8 +104,8 @@ async def test_restoration_publication_prepares_without_a_database_policy(tmp_pa
 
 
 def _manifest():
-    from omnia_orchestrator.core.project_machine import MachineManifest
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
 
     return MachineManifest.model_validate(payload()).model_dump(mode="json")
 
@@ -117,8 +117,8 @@ async def test_restored_release_starts_on_plain_database_ignoring_old_policy_fie
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services import cell_publication as module
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.services import cell_publication as module
 
     assert not hasattr(module, "load_policy") and not hasattr(module, "install_policy")
     calls = []
@@ -187,7 +187,7 @@ def request(**overrides):
 
 
 async def test_durable_submit_deduplicates_and_never_exposes_secrets(tmp_path):
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
     calls = []
@@ -210,7 +210,7 @@ async def test_durable_submit_deduplicates_and_never_exposes_secrets(tmp_path):
 
 
 def test_production_identity_stable_across_new_releases(tmp_path):
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
     one = service.production_identity(request())
@@ -222,7 +222,7 @@ def test_production_identity_stable_across_new_releases(tmp_path):
 async def test_delete_waits_for_inflight_prepare_and_prevents_late_admission(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
     value = request()
@@ -238,10 +238,10 @@ async def test_delete_waits_for_inflight_prepare_and_prevents_late_admission(tmp
 
     service._prepare_locked = prepare_locked
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.unpublish", AsyncMock()
+        "yleum_orchestrator.services.cell_publication.nginx_writer.unpublish", AsyncMock()
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.prod_host",
+        "yleum_orchestrator.services.cell_publication.nginx_writer.prod_host",
         lambda _: "owned-host",
     )
     preparing = asyncio.create_task(service._prepare(value, str(UUID(int=30))))
@@ -269,8 +269,8 @@ async def test_publication_failure_has_safe_internal_location_without_exception_
     tmp_path,
     monkeypatch,
 ):
-    from omnia_orchestrator.core.cell_resources import CellResourceError
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     entries = []
     logger = SimpleNamespace(warning=lambda event, **fields: entries.append((event, fields)))
@@ -293,7 +293,7 @@ async def test_publication_failure_has_safe_internal_location_without_exception_
 
 
 async def test_publication_records_prepare_activate_and_total_timings(tmp_path):
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     value = request()
     run_id = str(UUID(int=25))
@@ -340,9 +340,9 @@ async def test_crash_after_candidate_start_reconciles_previous_code_without_rese
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     value = request()
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
@@ -384,11 +384,11 @@ async def test_crash_after_candidate_start_reconciles_previous_code_without_rese
 
     service._start = start
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.ensure_tls",
+        "yleum_orchestrator.services.cell_publication.nginx_writer.ensure_tls",
         AsyncMock(return_value=True),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.prod_host",
+        "yleum_orchestrator.services.cell_publication.nginx_writer.prod_host",
         lambda _slug: "app.example.test",
     )
     result = await service.reconcile()
@@ -403,9 +403,9 @@ async def test_crash_after_candidate_start_reconciles_previous_code_without_rese
 async def test_failed_public_data_quiesce_retains_runtime_and_requires_recovery(tmp_path):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
-    from omnia_orchestrator.services.published_machine_backend import PublicationRecoveryRequired
+    from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+    from yleum_orchestrator.services.published_machine_backend import PublicationRecoveryRequired
 
     value = request()
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
@@ -445,9 +445,9 @@ async def test_public_delete_releases_admission_without_restoring_business_data(
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
     from tests.test_cell_checkpoint import _make_fixture, _spec
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     manager, _, docker = _make_fixture(tmp_path / "manager")
     value = request()
@@ -470,10 +470,10 @@ async def test_public_delete_releases_admission_without_restoring_business_data(
     calls = []
     service._backend = lambda *_args: SimpleNamespace(retire_compute=lambda: calls.append("retire"))
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.unpublish", AsyncMock()
+        "yleum_orchestrator.services.cell_publication.nginx_writer.unpublish", AsyncMock()
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.prod_host",
+        "yleum_orchestrator.services.cell_publication.nginx_writer.prod_host",
         lambda _: "owned-host",
     )
     await service.disable(value.project_id, value.slug)
@@ -493,10 +493,10 @@ async def test_delete_interrupted_first_seed_never_releases_capacity_with_live_h
 ):
     from unittest.mock import AsyncMock
 
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
-    from omnia_orchestrator.services.cell_publication import CellPublicationService
     from tests.test_cell_checkpoint import _make_fixture, _spec
     from tests.test_published_machine_backend import interrupted_seed_backend
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
 
     manager, _, _ = _make_fixture(tmp_path / "manager")
     value = request()
@@ -520,10 +520,10 @@ async def test_delete_interrupted_first_seed_never_releases_capacity_with_live_h
         },
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.unpublish", AsyncMock()
+        "yleum_orchestrator.services.cell_publication.nginx_writer.unpublish", AsyncMock()
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication.nginx_writer.prod_host", lambda _: "owned"
+        "yleum_orchestrator.services.cell_publication.nginx_writer.prod_host", lambda _: "owned"
     )
     if removal_confirmed:
         await service.disable(value.project_id, value.slug)

@@ -7,9 +7,9 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.schemas.code_restoration import CodeRestorationApply
-from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
-from omnia_orchestrator.services.project_machine import write_controller_json
+from yleum_orchestrator.schemas.code_restoration import CodeRestorationApply
+from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+from yleum_orchestrator.services.project_machine import write_controller_json
 
 
 @pytest.fixture
@@ -18,9 +18,9 @@ def cleanup_engine(tmp_path, monkeypatch):
     from unittest.mock import AsyncMock, Mock
     from uuid import uuid5
 
-    from omnia_orchestrator.core.cell_resources import CellFenceRejected
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationCancel
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.core.cell_resources import CellFenceRejected
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationCancel
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     req = CodeRestorationCancel(
         operation_id=UUID(int=1),
@@ -92,7 +92,7 @@ def cleanup_engine(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        "yleum_orchestrator.services.cell_publication_capacity.production_manager",
         lambda *_: manager,
     )
     engine = object.__new__(CodeRestorationEngine)
@@ -145,7 +145,7 @@ async def test_completed_candidate_cleanup_retries_failed_volume_removal(cleanup
     ],
 )
 async def test_candidate_cleanup_rejects_changed_identity(cleanup_engine, field, value):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine, req, candidate_id, manager, state, _ = cleanup_engine
     await engine._cleanup_candidate(manager, req, candidate_id)
@@ -171,7 +171,7 @@ async def test_candidate_cleanup_rejects_changed_identity(cleanup_engine, field,
 async def test_candidate_cleanup_rejects_changed_receipt(cleanup_engine, field, value):
     from dataclasses import replace
 
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine, req, candidate_id, manager, state, _ = cleanup_engine
     await engine._cleanup_candidate(manager, req, candidate_id)
@@ -185,7 +185,7 @@ async def test_candidate_cleanup_rejects_changed_receipt(cleanup_engine, field, 
 
 @pytest.mark.parametrize("resource", ["containers", "networks"])
 async def test_completed_candidate_cleanup_rejects_remaining_compute(cleanup_engine, resource):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine, req, candidate_id, manager, _, _ = cleanup_engine
     await engine._cleanup_candidate(manager, req, candidate_id)
@@ -197,7 +197,7 @@ async def test_completed_candidate_cleanup_rejects_remaining_compute(cleanup_eng
 
 @pytest.mark.parametrize("label", ["workspace_id", "project_id", "owner_id"])
 async def test_candidate_cleanup_checks_all_volume_labels_before_any_removal(cleanup_engine, label):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine, req, candidate_id, manager, _, volumes = cleanup_engine
     volumes[-1].labels["omnia." + label] = str(UUID(int=99))
@@ -227,7 +227,7 @@ async def test_running_candidate_cleanup_reuses_admitted_fence(cleanup_engine):
 def test_current_source_inventory_rejects_untracked_business_files():
     import hashlib
 
-    from omnia_orchestrator.services.code_restoration_engine import verify_source_inventory
+    from yleum_orchestrator.services.code_restoration_engine import verify_source_inventory
 
     expected = [{"path": "src/app/page.tsx", "sha256": hashlib.sha256(b"source").hexdigest()}]
     verify_source_inventory(
@@ -244,7 +244,7 @@ def test_current_source_inventory_rejects_untracked_business_files():
 def test_source_inventory_checks_binary_and_empty_files():
     import hashlib
 
-    from omnia_orchestrator.services.code_restoration_engine import verify_source_inventory
+    from yleum_orchestrator.services.code_restoration_engine import verify_source_inventory
 
     actual = {"public/photo.png": b"\x00\xff", "src/empty": b""}
     expected = [
@@ -263,7 +263,7 @@ class Lock:
 
 
 def test_controller_socket_closes_owning_response_before_raw_socket():
-    from omnia_orchestrator.services.restoration_database import close_controller_socket
+    from yleum_orchestrator.services.restoration_database import close_controller_socket
 
     events = []
 
@@ -397,7 +397,7 @@ class ForwardEngine(Engine):
 
 
 async def test_forward_recovery_missing_target_volume_fails_without_old_recovery(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine = ForwardEngine(tmp_path, volumes={"new-code"})
     value, path = save_empty_forward_intent(engine)
@@ -520,7 +520,7 @@ async def test_reverted_pair_cleanup_receipt_retries_exact_bound_operation(tmp_p
 
 @pytest.mark.parametrize("state", ["target_recovery", "target_writers_admitted", "active"])
 async def test_forward_or_active_pair_is_never_cleanup_eligible(tmp_path, state):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine = Engine(tmp_path)
     value = request().model_copy(update={"binding_digest": "b" * 64})
@@ -556,8 +556,8 @@ async def test_empty_database_import_failure_recovers_old_and_cleans_exact_pair(
     import hashlib
     from dataclasses import dataclass
 
-    from omnia_orchestrator.routers.runtime import _workspace_revision
-    from omnia_orchestrator.services.restoration_empty import EmptyDatabaseWitness
+    from yleum_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.services.restoration_empty import EmptyDatabaseWitness
 
     value = request().model_copy(update={"binding_digest": "b" * 64})
     engine = Engine(tmp_path)
@@ -631,7 +631,7 @@ async def test_empty_database_import_failure_recovers_old_and_cleans_exact_pair(
         return {"src/page.tsx": "current"}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", read_workspace
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", read_workspace
     )
     witness = EmptyDatabaseWitness(
         project_id=value.project_id,
@@ -646,7 +646,7 @@ async def test_empty_database_import_failure_recovers_old_and_cleans_exact_pair(
         identity_relations=[],
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.code_restoration_engine.observe_empty_database",
+        "yleum_orchestrator.services.code_restoration_engine.observe_empty_database",
         lambda *_args, **_kwargs: witness,
     )
     directory = engine._directory(value.operation_id)
@@ -718,7 +718,7 @@ async def test_old_operation_cannot_revert_newer_generation(tmp_path):
 
 
 def untouched_engine(tmp_path, monkeypatch, *, target_exists=False, physical_epoch=3):
-    from omnia_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.routers.runtime import _workspace_revision
 
     engine = Engine(tmp_path)
     engine.state.fencing_epoch = 3
@@ -743,7 +743,7 @@ def untouched_engine(tmp_path, monkeypatch, *, target_exists=False, physical_epo
     async def read(*_):
         return {"src/page.tsx": "current"}
 
-    monkeypatch.setattr("omnia_orchestrator.routers.workspace._read_agent_workspace_files", read)
+    monkeypatch.setattr("yleum_orchestrator.routers.workspace._read_agent_workspace_files", read)
     return engine, {
         "workspace_revision": _workspace_revision({"src/page.tsx": "current"}),
         "source_runtime": engine._runtime_identity(engine.backend, machine),
@@ -784,8 +784,8 @@ async def test_missing_journal_with_possible_external_effect_cannot_claim_safe_r
 def rejection_engine(tmp_path):
     from dataclasses import replace
 
-    from omnia_orchestrator.core.cell_resources import CellResourceNames
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.core.cell_resources import CellResourceNames
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     receipts = {}
     state = SimpleNamespace(
@@ -842,8 +842,8 @@ def rejection_engine(tmp_path):
 
 
 async def test_pre_effect_binding_rejection_is_durable_and_restart_safe(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.restoration_binding import serving_fencing_epoch
 
     engine, manager, state, receipts = rejection_engine(tmp_path)
     value = request().model_copy(update={"binding_digest": "f" * 64})
@@ -887,8 +887,8 @@ async def test_pre_effect_binding_rejection_is_durable_and_restart_safe(tmp_path
 
 
 async def test_consecutive_rejections_retain_actual_serving_epoch(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.restoration_binding import serving_fencing_epoch
 
     engine, _, state, receipts = rejection_engine(tmp_path)
     engine._state = lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -916,7 +916,7 @@ async def test_consecutive_rejections_retain_actual_serving_epoch(tmp_path):
 
 
 async def test_rejection_restart_carries_serving_epoch_across_fence_change(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine, manager, state, _ = rejection_engine(tmp_path)
     value = request().model_copy(update={"binding_digest": "c" * 64})
@@ -944,7 +944,7 @@ async def test_rejection_restart_carries_serving_epoch_across_fence_change(tmp_p
 
 
 async def test_interrupted_unbound_preflight_is_superseded_by_newer_lifecycle(tmp_path):
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     engine, manager, state, receipts = rejection_engine(tmp_path)
     value = request().model_copy(update={"binding_digest": "b" * 64})
@@ -984,7 +984,7 @@ async def test_interrupted_unbound_preflight_is_superseded_by_newer_lifecycle(tm
 
 
 async def test_equal_target_fence_foreign_owner_is_terminal_superseded(tmp_path):
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     engine, manager, state, receipts = rejection_engine(tmp_path)
     value = request().model_copy(update={"binding_digest": "a" * 64})
@@ -1071,7 +1071,7 @@ async def test_cancel_at_each_preflight_await_recovers_safe_negative(tmp_path, c
 async def test_rejected_archive_cleanup_retries_after_failure(tmp_path, monkeypatch):
     from pathlib import Path
 
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 
     engine, manager, state, _ = rejection_engine(tmp_path)
     value = request().model_copy(update={"binding_digest": "d" * 64})
@@ -1105,8 +1105,8 @@ async def test_rejected_archive_cleanup_retries_after_failure(tmp_path, monkeypa
 
 
 def test_ddl_during_dump_is_rejected_before_ready():
-    from omnia_orchestrator.services.code_restoration_engine import verify_post_dump_catalog
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.code_restoration_engine import verify_post_dump_catalog
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     before = DataContract(version=1, tables=[])
     after = DataContract.model_validate(
@@ -1122,14 +1122,14 @@ def test_ddl_during_dump_is_rejected_before_ready():
 async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, monkeypatch):
     import base64
 
-    from omnia_orchestrator.schemas.code_restoration import (
+    from tests.test_code_restorations import binding_payload
+    from yleum_orchestrator.schemas.code_restoration import (
         CodeRestorationPrepare,
         RestorationSourceBindingV2,
     )
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.code_restorations import CodeRestorationService
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
-    from tests.test_code_restorations import binding_payload
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.code_restorations import CodeRestorationService
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     engine, prepared = untouched_engine(tmp_path / "engine", monkeypatch)
     _, rejection_manager, _, _ = rejection_engine(tmp_path / "rejection-state")
@@ -1222,7 +1222,7 @@ async def test_coordinator_restart_closes_gap_before_engine_journal(tmp_path, mo
 def plain_prepare_request():
     import base64
 
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     return CodeRestorationPrepare(
         **request().model_dump(
@@ -1242,7 +1242,7 @@ def plain_prepare_request():
 def bound_prepare_request():
     import hashlib
 
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     value = plain_prepare_request()
     return CodeRestorationPrepare.model_validate(
@@ -1285,17 +1285,17 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     expected_resumes,
     expect_error,
 ):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services import project_machine
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
-    from omnia_orchestrator.services.machine_environment import (
+    from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services import project_machine
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.machine_environment import (
         MachineEnvironmentRef,
         VolumeEnvironmentRef,
     )
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
-    from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     for removed in ("load_policy", "stage_policy", "install_policy", "recover_policy"):
         assert not hasattr(module, removed)
@@ -1398,7 +1398,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
             "epoch": prepare_request.fencing_epoch,
             "environment_ref": reference.model_dump(mode="json"),
             "environment_revision": __import__(
-                "omnia_orchestrator.routers.runtime",
+                "yleum_orchestrator.routers.runtime",
                 fromlist=["_workspace_revision"],
             )._workspace_revision({"src/page.tsx": "current"}),
             "environment_schema_digest": "c" * 64,
@@ -1486,7 +1486,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         return {"src/page.tsx": "current"}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
     )
 
     def catalog(backend):
@@ -1498,7 +1498,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         return b""
 
     def inventory(backend, *, observed_on):
-        from omnia_orchestrator.services.versioning.contracts import InventoryReport
+        from yleum_orchestrator.services.versioning.contracts import InventoryReport
 
         events.append("inventory:" + backend.name)
         return InventoryReport(
@@ -1528,7 +1528,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
     }
 
     def observe_live(_source, _machine, observed_state, **kwargs):
-        from omnia_orchestrator.services.restoration_binding import serving_fencing_epoch
+        from yleum_orchestrator.services.restoration_binding import serving_fencing_epoch
 
         assert observed_state is state
         assert serving_fencing_epoch(state, machine_state=kwargs["machine_state"]) == serving_epoch
@@ -1594,7 +1594,7 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
 
 
 def test_prepare_legacy_release_repair_uses_exact_proven_epochs():
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
 
     request = plain_prepare_request()
     generation_run_id = UUID(int=31)
@@ -1661,8 +1661,8 @@ def test_prepare_legacy_release_repair_uses_exact_proven_epochs():
 
 
 async def test_activation_and_recovery_reuse_live_database_without_policy(tmp_path):
-    from omnia_orchestrator.core.project_machine import MachineManifest
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
 
     manifest = MachineManifest.model_validate(payload()).model_dump(mode="json")
     events = []
@@ -1739,8 +1739,8 @@ async def test_preserved_database_start_failure_after_admission_is_forward_only(
     import hashlib
     from dataclasses import dataclass
 
-    from omnia_orchestrator.core.cell_resources import CellResourceError
-    from omnia_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.routers.runtime import _workspace_revision
 
     value = request().model_copy(update={"binding_digest": "b" * 64})
     engine = Engine(tmp_path)
@@ -1796,14 +1796,14 @@ async def test_preserved_database_start_failure_after_admission_is_forward_only(
         return {"src/page.tsx": "current"}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", read_workspace
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", read_workspace
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.code_restoration_engine.catalog_contract",
+        "yleum_orchestrator.services.code_restoration_engine.catalog_contract",
         lambda _backend: ({"version": 1, "tables": []}, []),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.code_restoration_engine.contract_matches",
+        "yleum_orchestrator.services.code_restoration_engine.contract_matches",
         lambda _actual, _expected: True,
     )
     directory = engine._directory(value.operation_id)
@@ -1855,10 +1855,10 @@ def _activation_replay_fixture(monkeypatch, *, services_ready: bool):
     import hashlib
     from uuid import uuid5
 
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
-    from omnia_orchestrator.services.project_machine import MachineManifest
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.project_machine import MachineManifest
 
     manifest = MachineManifest.model_validate(payload())
     workspace_id = UUID(int=82)
@@ -1960,7 +1960,7 @@ def _activation_replay_fixture(monkeypatch, *, services_ready: bool):
         return {"src/page.tsx": "candidate"}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files",
         workspace_files,
     )
     expected_operation_id = uuid5(workspace_id, "code-activation-" + str(target_epoch))
@@ -2093,8 +2093,8 @@ async def test_source_restart_replay_repairs_boundary_without_duplicate_writer_s
 
 @pytest.mark.asyncio
 async def test_empty_activation_and_recovery_switch_code_and_database_as_one_pair(tmp_path):
-    from omnia_orchestrator.core.project_machine import MachineManifest
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
 
     events = []
     manifest = MachineManifest.model_validate(payload()).model_dump(mode="json")
@@ -2167,9 +2167,9 @@ async def test_empty_activation_and_recovery_switch_code_and_database_as_one_pai
 
 @pytest.mark.asyncio
 async def test_empty_apply_stops_writers_then_fails_closed_on_race_insert(monkeypatch):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.restoration_empty import EmptyDatabaseWitness
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.restoration_empty import EmptyDatabaseWitness
 
     events = []
     prepared_witness = EmptyDatabaseWitness(
@@ -2232,15 +2232,15 @@ async def test_prepare_rejects_unbound_sleeping_source_before_resume(
     monkeypatch,
     changed,
 ):
-    from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.cell_state import CellOperationRecord
-    from omnia_orchestrator.services.machine_environment import (
+    from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.cell_state import CellOperationRecord
+    from yleum_orchestrator.services.machine_environment import (
         MachineEnvironmentRef,
         VolumeEnvironmentRef,
     )
-    from tests.test_project_machine_manifest import payload
 
     manifest = MachineManifest.model_validate(payload())
     prepare_request = bound_prepare_request()
@@ -2278,7 +2278,7 @@ async def test_prepare_rejects_unbound_sleeping_source_before_resume(
                 )
             }
         )
-    from omnia_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.routers.runtime import _workspace_revision
 
     metadata = {
         "environment_ref": reference.model_dump(mode="json"),
@@ -2400,7 +2400,7 @@ async def test_prepare_rejects_unbound_sleeping_source_before_resume(
         return files
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files",
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files",
         workspace_files,
     )
     monkeypatch.setattr(

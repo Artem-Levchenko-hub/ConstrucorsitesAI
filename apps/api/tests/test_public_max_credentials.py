@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.routers import max_integrations as routes
+from yleum_api.routers import max_integrations as routes
 
 
 @pytest.mark.parametrize("deleted", [False, True])
@@ -12,7 +12,7 @@ async def test_delayed_connect_sync_uses_locked_current_record_not_stale_credent
     monkeypatch,
     deleted,
 ):
-    from omnia_api.services import cell_publication
+    from yleum_api.services import cell_publication
 
     project = SimpleNamespace(id=uuid4(), owner_id=uuid4())
     stale = SimpleNamespace(bot_token_enc="stale", owner_id=project.owner_id)

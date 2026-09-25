@@ -12,14 +12,14 @@ import pytest
 from fastapi import FastAPI, Request
 from pydantic import SecretStr
 
-from omnia_api.services import orchestrator_client
+from yleum_api.services import orchestrator_client
 
 
 @pytest.fixture
 def wire_schemas(monkeypatch):
     schema_path = (
         Path(__file__).resolve().parents[2]
-        / "orchestrator/src/omnia_orchestrator/schemas/workspace.py"
+        / "orchestrator/src/yleum_orchestrator/schemas/workspace.py"
     )
     spec = importlib.util.spec_from_file_location("cell_wire_contract", schema_path)
     assert spec is not None and spec.loader is not None

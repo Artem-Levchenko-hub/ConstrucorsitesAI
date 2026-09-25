@@ -9,24 +9,24 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.orchestrator_client import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
     ProjectCellCapacityRejection,
     ProjectCellCapacityWait,
     ProjectCellResourceResponse,
 )
-from omnia_api.services.project_cell_capacity import (
+from yleum_api.services.project_cell_capacity import (
     hibernate_one_idle_workspace,
     release_one_stale_generation_lease,
     wait_for_capacity,
 )
-from omnia_api.services.project_cell_lifecycle import execute_cell_operation
-from omnia_api.services.project_cells import (
+from yleum_api.services.project_cell_lifecycle import execute_cell_operation
+from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
     complete_cell_operation,
     mark_cell_operation_indeterminate,
@@ -142,7 +142,7 @@ async def test_durable_running_ensure_waits_until_bounded_capacity_deadline(
     monkeypatch: pytest.MonkeyPatch,
     with_initial_attempt: bool,
 ) -> None:
-    from omnia_api.services import project_cell_capacity
+    from yleum_api.services import project_cell_capacity
 
     monkeypatch.setattr(
         project_cell_capacity,

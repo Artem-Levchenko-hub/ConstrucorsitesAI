@@ -4,9 +4,9 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.config import Settings
-from omnia_api.models.user import User
-from omnia_api.services.project_cell_access import decide_project_cell_access
+from yleum_api.core.config import Settings
+from yleum_api.models.user import User
+from yleum_api.services.project_cell_access import decide_project_cell_access
 
 
 @pytest.fixture

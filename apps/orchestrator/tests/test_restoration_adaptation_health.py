@@ -14,19 +14,19 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.schemas.restoration_adaptation_activation import (
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     RestorationAdaptationActivationRequest,
 )
-from omnia_orchestrator.services.restoration_adaptation_activation_effects import (
+from yleum_orchestrator.services.restoration_adaptation_activation_effects import (
     ActivationHealthTarget,
 )
-from omnia_orchestrator.services.restoration_adaptation_health import (
+from yleum_orchestrator.services.restoration_adaptation_health import (
     DockerRestorationAdaptationHealthProber,
     _BoundedHttpClient,
 )
-from omnia_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
-from omnia_orchestrator.services.restoration_binding import canonical_digest
+from yleum_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
+from yleum_orchestrator.services.restoration_binding import canonical_digest
 
 ORIGIN = "https://cell-000000000005-dev.preview.example.test"
 SECRET = "health-probe-test-secret-that-must-stay-private"
@@ -344,11 +344,11 @@ class FakeCodeEngine:
 def _prober(monkeypatch: pytest.MonkeyPatch, api: ProbeApi):
     request = _request()
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_health.nginx_writer.dev_url",
+        "yleum_orchestrator.services.restoration_adaptation_health.nginx_writer.dev_url",
         lambda _slug: ORIGIN,
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_health.nginx_writer.dev_host",
+        "yleum_orchestrator.services.restoration_adaptation_health.nginx_writer.dev_host",
         lambda _slug: "cell-000000000005-dev.preview.example.test",
     )
 
@@ -659,7 +659,7 @@ async def test_health_prober_rejects_origin_outside_expected_workspace(
     api = ProbeApi()
     prober = _prober(monkeypatch, api)
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_health.nginx_writer.dev_url",
+        "yleum_orchestrator.services.restoration_adaptation_health.nginx_writer.dev_url",
         lambda _slug: "https://attacker.example.test",
     )
     request = _request()

@@ -1,11 +1,11 @@
 import json
 from pathlib import Path
 
-from omnia_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.core.project_machine import MachineManifest
 
 
 def test_default_max_environment_is_next_with_extensible_dependencies_not_product_ui():
-    from omnia_orchestrator.services.machine_defaults import next_machine_seed
+    from yleum_orchestrator.services.machine_defaults import next_machine_seed
 
     template = Path(__file__).parents[1] / "templates" / "max-miniapp-nextjs"
     files = {}

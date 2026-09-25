@@ -21,7 +21,7 @@ successfully in 2.3min», список собранных маршрутов и 
 
 from __future__ import annotations
 
-from omnia_api.services.project_cell_proofs import _MAX_DETAIL_BYTES, failure_detail_excerpt
+from yleum_api.services.project_cell_proofs import _MAX_DETAIL_BYTES, failure_detail_excerpt
 
 _HEAD = "> omnia-max-miniapp@0.1.0 build /workspace\n> next build\n"
 _NOISE = "\n".join(f"  Route /api/thing-{i}   161 B   102 kB" for i in range(600))
@@ -73,7 +73,7 @@ def test_the_recorder_applies_it_to_a_failure_and_not_to_a_pass() -> None:
     """Иначе правка осталась бы красивой функцией, которой никто не пользуется."""
     import inspect
 
-    from omnia_api.services import project_cell_proofs as module
+    from yleum_api.services import project_cell_proofs as module
 
     source = inspect.getsource(module.record_proof_result)
     assert "failure_detail_excerpt(detail)" in source
@@ -82,7 +82,7 @@ def test_the_recorder_applies_it_to_a_failure_and_not_to_a_pass() -> None:
 
 def test_secrets_in_the_tail_are_still_redacted() -> None:
     """Хвост теперь сохраняется — значит чистка обязана работать и на нём."""
-    from omnia_api.services.project_cell_proofs import _bounded_redacted_text
+    from yleum_api.services.project_cell_proofs import _bounded_redacted_text
 
     leaky = _HEAD + _NOISE + "\npostgresql://user:hunter2@db:5432/app\n" + _ERROR
     stored = _bounded_redacted_text(failure_detail_excerpt(leaky), max_bytes=_MAX_DETAIL_BYTES)

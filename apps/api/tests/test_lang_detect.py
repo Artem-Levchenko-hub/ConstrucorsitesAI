@@ -1,6 +1,6 @@
-"""Tests for omnia_api.services.lang_detect — pure, no DB needed."""
+"""Tests for yleum_api.services.lang_detect — pure, no DB needed."""
 
-from omnia_api.services.lang_detect import DEFAULT_LANGUAGE, detect_language
+from yleum_api.services.lang_detect import DEFAULT_LANGUAGE, detect_language
 
 
 def test_english_detected() -> None:

@@ -6,11 +6,11 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.project_cell_activity import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.project_cell_activity import (
     ActivityKind,
     ActivityState,
     ProjectCellActivityConflict,
@@ -223,8 +223,8 @@ async def test_exact_failed_activity_replays_original_code_without_work(
 ):
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
-    from omnia_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
 
     owner = await _new_user(db_session, "replay")
     project = await _new_project(db_session, owner)
@@ -259,7 +259,7 @@ async def test_exact_failed_activity_replays_original_code_without_work(
             raise OSError("event store unavailable")
 
     if failure_boundary == "finish":
-        from omnia_api.services import project_cell_activity
+        from yleum_api.services import project_cell_activity
 
         async def failed_persistence(*args, **kwargs):
             raise OSError("activity store unavailable")
@@ -294,7 +294,7 @@ async def test_completed_activity_replays_saved_journal_without_work(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
+    from yleum_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
 
     owner = await _new_user(db_session, "completed")
     project = await _new_project(db_session, owner)
@@ -359,7 +359,7 @@ async def test_completed_activity_replays_saved_journal_without_work(
         )
 
     if decoder_failure:
-        from omnia_api.services.project_cell_errors import ProjectCellInfrastructureError
+        from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
         with pytest.raises(ProjectCellInfrastructureError, match="activity_replay_unavailable"):
             await run_replay()
@@ -389,7 +389,7 @@ async def test_activity_replay_rejects_changed_authority_before_effects(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
+    from yleum_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
 
     owner = await _new_user(db_session, "authority")
     project = await _new_project(db_session, owner)
@@ -449,8 +449,8 @@ async def test_cancellation_stays_terminal_and_replay_never_resurrects_work(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.models.project_cell import ProjectCellActivityLease
-    from omnia_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
+    from yleum_api.models.project_cell import ProjectCellActivityLease
+    from yleum_api.services.project_cell_activity import ActivityStart, run_with_activity_lease
 
     owner = await _new_user(db_session, "cancel-replay")
     project = await _new_project(db_session, owner)

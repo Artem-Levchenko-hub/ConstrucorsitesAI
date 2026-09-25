@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-import omnia_api.services.render_settle as rs
+import yleum_api.services.render_settle as rs
 
 SERVICES_DIR = Path(rs.__file__).parent
 GATE_FILES = sorted(p for p in SERVICES_DIR.glob("*_gate.py"))
@@ -365,7 +365,7 @@ def test_gate_cli_without_a_target_prints_usage(capsys):
     seen, audit_url, audit_files = _cli(True)
     assert rs.run_gate_cli(["prog"], "taste_gate", audit_url, audit_files) == 2
     assert capsys.readouterr().out == (
-        "usage: python -m omnia_api.services.taste_gate <url|index.html-dir>\n"
+        "usage: python -m yleum_api.services.taste_gate <url|index.html-dir>\n"
     )
     assert seen == []
 

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from omnia_api.services import readiness
+from yleum_api.services import readiness
 
 
 @pytest.mark.parametrize(

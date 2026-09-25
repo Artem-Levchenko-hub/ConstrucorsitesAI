@@ -20,7 +20,7 @@ from pathlib import Path
 _ROUTER = (
     Path(__file__).resolve().parents[1]
     / "src"
-    / "omnia_orchestrator"
+    / "yleum_orchestrator"
     / "routers"
     / "workspace.py"
 )

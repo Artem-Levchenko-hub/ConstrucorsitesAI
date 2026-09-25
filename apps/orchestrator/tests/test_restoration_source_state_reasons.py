@@ -13,8 +13,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict
-from omnia_orchestrator.services.code_restoration_engine import (
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+from yleum_orchestrator.services.code_restoration_engine import (
     CodeRestorationEngine,
     PreparationNeedsChanges,
 )

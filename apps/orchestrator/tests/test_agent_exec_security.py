@@ -5,13 +5,13 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.routers import runtime
-from omnia_orchestrator.routers.runtime import (
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.routers import runtime
+from yleum_orchestrator.routers.runtime import (
     _command_exposes_environment,
     _redact_exec_output,
 )
-from omnia_orchestrator.schemas.runtime import AgentSandboxExecRequest, HotReloadRequest
+from yleum_orchestrator.schemas.runtime import AgentSandboxExecRequest, HotReloadRequest
 
 
 @pytest.fixture(autouse=True)
@@ -23,7 +23,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
     monkeypatch.setenv("AGENT_SANDBOX_ENABLED", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -37,7 +37,7 @@ def test_settings_accept_legacy_runtime_env_aliases(
     monkeypatch.setenv("OMNIA_CONTAINER_RUNTIME", "runsc")
     monkeypatch.setenv("OMNIA_AGENT_SANDBOX_RUNTIME", "runsc")
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     settings = get_settings()
@@ -101,7 +101,7 @@ async def test_agent_sandbox_capabilities_attest_concrete_runtime(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     workspace = tmp_path / "workspace"
@@ -202,7 +202,7 @@ async def test_agent_sandbox_capabilities_fail_closed_on_missing_gvisor(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     workspace = tmp_path / "workspace"
@@ -246,7 +246,7 @@ async def test_agent_exec_sandbox_stages_workspace_under_runtime_root(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     project_id = "00000000-0000-0000-0000-000000000111"
@@ -355,7 +355,7 @@ async def test_agent_exec_sandbox_fails_closed_on_missing_runtime(
     tmp_path: Path,
 ) -> None:
     monkeypatch.setenv("AGENT_SANDBOX_RUNTIME", "runsc")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     project_id = "00000000-0000-0000-0000-000000000113"

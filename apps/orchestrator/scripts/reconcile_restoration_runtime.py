@@ -40,11 +40,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from omnia_orchestrator.schemas.restoration_recovery import (
+from yleum_orchestrator.schemas.restoration_recovery import (
     MUTATING_PHASES,
     RestorationRecoveryIntent,
 )
-from omnia_orchestrator.services.restoration_recovery import (
+from yleum_orchestrator.services.restoration_recovery import (
     CommandResult,
     CompletionObservation,
     JournalEntry,

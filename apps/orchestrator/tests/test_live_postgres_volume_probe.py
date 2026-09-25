@@ -11,8 +11,8 @@ from uuid import uuid4
 import docker  # type: ignore[import-untyped]
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("OMNIA_P01_LIVE_DOCKER") != "1",

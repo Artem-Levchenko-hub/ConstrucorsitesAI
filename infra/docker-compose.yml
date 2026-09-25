@@ -119,7 +119,7 @@ services:
       additional_contexts:
         templates: ../apps/orchestrator/templates
     container_name: omnia-worker
-    command: ["uv", "run", "python", "-m", "omnia_api.workers.run"]
+    command: ["uv", "run", "python", "-m", "yleum_api.workers.run"]
     depends_on:
       postgres:
         condition: service_healthy

@@ -10,18 +10,18 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.services import cell_publication as module
-from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
-from omnia_orchestrator.services.cell_publication import CellPublicationService
-from omnia_orchestrator.services.publication_trace import PublicationTrace
-from omnia_orchestrator.services.published_machine_backend import (
+from tests.test_cell_publication import request
+from tests.test_project_machine_manifest import payload
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services import cell_publication as module
+from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
+from yleum_orchestrator.services.cell_publication import CellPublicationService
+from yleum_orchestrator.services.publication_trace import PublicationTrace
+from yleum_orchestrator.services.published_machine_backend import (
     PublishedMachineBackend,
     data_contract_digest,
 )
-from tests.test_cell_publication import request
-from tests.test_project_machine_manifest import payload
 
 SOURCE_SCHEMA = "s" * 64
 GIB = 1024**3
@@ -127,10 +127,10 @@ def build(tmp_path, monkeypatch, *, active_release, production_digests, environm
         return {}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", no_files
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", no_files
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.runtime._workspace_revision",
+        "yleum_orchestrator.routers.runtime._workspace_revision",
         lambda _files: value.source_revision,
     )
     monkeypatch.setattr(PublishedMachineBackend, "schema_digest", lambda _self: SOURCE_SCHEMA)

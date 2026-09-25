@@ -14,8 +14,8 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.services.restoration_adaptation import _adaptation_work_plan
 from tests.test_restoration_adaptation import source_case  # noqa: F401  (fixture)
+from yleum_api.services.restoration_adaptation import _adaptation_work_plan
 
 
 def _diff(**overrides: Any) -> dict[str, Any]:
@@ -163,7 +163,7 @@ async def test_the_plan_reaches_the_agent_without_touching_the_sealed_bundle(
 
 
 def _plan_for(*, restoration_context: str, template: str = "max_miniapp"):
-    from omnia_api.services.generation.contracts import ProjectGenerationFacts
+    from yleum_api.services.generation.contracts import ProjectGenerationFacts
 
     return ProjectGenerationFacts(
         template=template,
@@ -180,8 +180,8 @@ def _plan_for(*, restoration_context: str, template: str = "max_miniapp"):
 
 
 async def _prompt(monkeypatch: pytest.MonkeyPatch, *, restoration_context: str):
-    from omnia_api.services.generation import agent_prompt
-    from omnia_api.services.generation.contracts import (
+    from yleum_api.services.generation import agent_prompt
+    from yleum_api.services.generation.contracts import (
         GenerationIds,
         GenerationRuntime,
         StackPrompt,
@@ -270,8 +270,8 @@ async def test_an_ordinary_edit_is_untouched(monkeypatch: pytest.MonkeyPatch) ->
 async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.services import agent_native
-    from omnia_api.services.generation import agent_finalization
+    from yleum_api.services import agent_native
+    from yleum_api.services.generation import agent_finalization
 
     tasks: list[str] = []
     workspace = {"src/app/page.tsx": "v2", "src/app/new.tsx": "added"}

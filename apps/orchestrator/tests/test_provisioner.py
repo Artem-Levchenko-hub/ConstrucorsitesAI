@@ -19,10 +19,10 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.docker_client import ContainerSpec
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.schemas.runtime import ProvisionRequest, ProvisionResponse
-from omnia_orchestrator.services import provisioner
+from yleum_orchestrator.core.docker_client import ContainerSpec
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.schemas.runtime import ProvisionRequest, ProvisionResponse
+from yleum_orchestrator.services import provisioner
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +33,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("PROJECTS_ROOT", str(tmp_path / "projects"))
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -113,7 +113,7 @@ async def test_provision_memory_is_config_driven(
 ) -> None:
     """Operators can retune the ceiling via env without a code change (R-02)."""
     monkeypatch.setenv("DEV_CONTAINER_MEMORY_MB", "8192")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -175,7 +175,7 @@ async def test_provision_injects_egress_proxy_when_configured(
     allowlisting proxy (HTTP(S)_PROXY) while internal services bypass via
     NO_PROXY — the real egress allowlist for the agent's bash."""
     monkeypatch.setenv("CONTAINER_EGRESS_PROXY", "http://omnia-egress:3128")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -192,7 +192,7 @@ async def test_provision_isolates_network_when_enabled(
     """With isolate_project_network, the container joins its OWN per-project
     bridge net instead of the shared runtime net (no lateral reach)."""
     monkeypatch.setenv("ISOLATE_PROJECT_NETWORK", "true")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 

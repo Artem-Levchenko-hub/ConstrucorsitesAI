@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnia_api.services.design_dna import MARKER, design_dna_css, inject_into_globals
+from yleum_api.services.design_dna import MARKER, design_dna_css, inject_into_globals
 
 _SAMPLE = '@import "tailwindcss";\n:root{--background: oklch(1 0 0);}\n.x{color:red}\n'
 _A = "11111111-aaaa-4aaa-8aaa-111111111111"

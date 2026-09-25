@@ -10,16 +10,16 @@ import pytest_asyncio
 from sqlalchemy import insert, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.db import get_session
-from omnia_api.models.base import Base
-from omnia_api.models.billing import DEFAULT_BILLING_PLANS, BillingPlan
+from yleum_api.core.config import get_settings
+from yleum_api.core.db import get_session
+from yleum_api.models.base import Base
+from yleum_api.models.billing import DEFAULT_BILLING_PLANS, BillingPlan
 
 
 @pytest.fixture(autouse=True)
 def isolated_rate_limit_buckets() -> Iterator[None]:
     """Prevent one API test's in-memory limits from throttling later tests."""
-    from omnia_api.core import ratelimit
+    from yleum_api.core import ratelimit
 
     ratelimit._storage.reset()
     yield
@@ -29,7 +29,7 @@ def isolated_rate_limit_buckets() -> Iterator[None]:
 @pytest.fixture(autouse=True)
 def isolated_project_repo_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep repository-object tests isolated from every real MinIO endpoint."""
-    from omnia_api.services import repo as repo_service
+    from yleum_api.services import repo as repo_service
 
     objects: dict[str, bytes] = {}
 
@@ -58,8 +58,8 @@ def isolated_project_repo_storage(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep API unit tests isolated from real Redis queues and pub/sub."""
-    from omnia_api.routers import messages, projects, rollback
-    from omnia_api.services.generation import (
+    from yleum_api.routers import messages, projects, rollback
+    from yleum_api.services.generation import (
         agent_pipeline,
         agent_publication,
         lifecycle,
@@ -157,7 +157,7 @@ async def db_session(test_engine) -> AsyncIterator[AsyncSession]:
 
 @pytest_asyncio.fixture
 async def client(db_session: AsyncSession) -> AsyncIterator[httpx.AsyncClient]:
-    from omnia_api.main import app
+    from yleum_api.main import app
 
     async def _override_session() -> AsyncIterator[AsyncSession]:
         yield db_session

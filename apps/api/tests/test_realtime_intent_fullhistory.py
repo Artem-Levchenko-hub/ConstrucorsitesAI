@@ -9,7 +9,7 @@ messages), so the original messenger intent still forces the realtime stack.
 
 from __future__ import annotations
 
-from omnia_api.services.discovery import _infer_realtime_from_text
+from yleum_api.services.discovery import _infer_realtime_from_text
 
 
 def test_trigger_phrase_alone_misses_realtime() -> None:

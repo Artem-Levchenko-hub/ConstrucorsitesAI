@@ -1,13 +1,13 @@
 """Omnia Design Pro: bounded brief → author/auditor contract."""
 
-from omnia_api.services.design_plugin import (
+from yleum_api.services.design_plugin import (
     KNOWLEDGE_SOURCE,
     PLUGIN_ID,
     PLUGIN_VERSION,
     build_design_contract,
     seed_design_memory,
 )
-from omnia_api.services.design_presets import PRESETS
+from yleum_api.services.design_presets import PRESETS
 
 
 def _contract(brief: str, **kwargs: str):

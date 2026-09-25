@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.services import agent_builder as ab
+from yleum_api.services import agent_builder as ab
 
 # apps/api/tests/ -> repo root -> orchestrator realtime template
 _TEMPLATE = (

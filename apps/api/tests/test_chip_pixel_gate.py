@@ -7,7 +7,7 @@ fires), plus the headline contract: a fixed render + a *swapped spec* flips the
 verdict. The floor only goes up.
 """
 
-from omnia_api.services.chip_pixel_gate import (
+from yleum_api.services.chip_pixel_gate import (
     PALETTE_BG,
     PRIMARY_FAMILY,
     SECTION_ANCHOR,
@@ -473,14 +473,14 @@ def test_from_dict_coerces_sections_list_and_str_to_tuple():
 
 
 def test_spec_directive_empty_is_blank():
-    from omnia_api.services.chip_pixel_gate import spec_prompt_directive
+    from yleum_api.services.chip_pixel_gate import spec_prompt_directive
 
     assert spec_prompt_directive(None) == ""
     assert spec_prompt_directive(FidelitySpec()) == ""
 
 
 def test_spec_directive_carries_every_axis():
-    from omnia_api.services.chip_pixel_gate import _FAMILY_HEX, spec_prompt_directive
+    from yleum_api.services.chip_pixel_gate import _FAMILY_HEX, spec_prompt_directive
 
     spec = FidelitySpec(
         dark_mode=True,
@@ -502,7 +502,7 @@ def test_spec_directive_carries_every_axis():
 
 
 def test_spec_directive_light_mode_picks_light_line():
-    from omnia_api.services.chip_pixel_gate import spec_prompt_directive
+    from yleum_api.services.chip_pixel_gate import spec_prompt_directive
 
     out = spec_prompt_directive(FidelitySpec(dark_mode=False, primary_family="blue"))
     assert "СВЕТЛАЯ" in out
@@ -514,7 +514,7 @@ def test_spec_directive_hex_is_gate_consistent_for_every_family():
     # on the family the gate reads back. Convert each swatch → hue → family and
     # assert it round-trips. A future palette-band edit that breaks this fires
     # here, not silently in production as a chip→gate mismatch loop.
-    from omnia_api.services.chip_pixel_gate import _FAMILY_HEX, family_of_hue, rgb_to_hsl
+    from yleum_api.services.chip_pixel_gate import _FAMILY_HEX, family_of_hue, rgb_to_hsl
 
     for family, hexv in _FAMILY_HEX.items():
         r, g, b = int(hexv[1:3], 16), int(hexv[3:5], 16), int(hexv[5:7], 16)

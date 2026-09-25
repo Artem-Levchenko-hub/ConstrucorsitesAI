@@ -16,25 +16,25 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.restoration import Restoration
-from omnia_api.services import restorations as service
-from omnia_api.services.restoration_reconciliation import (
+from tests.test_restorations import FakeRuntime, restoration_fixture
+from yleum_api.core.errors import ApiError
+from yleum_api.models.restoration import Restoration
+from yleum_api.services import restorations as service
+from yleum_api.services.restoration_reconciliation import (
     oldest_pending_age_seconds,
     reconcile_due_restorations,
 )
-from omnia_api.services.restorations import (
+from yleum_api.services.restorations import (
     CONTROLLER_WAIT_STATES,
     reconcile_delay_seconds,
 )
-from tests.test_restorations import FakeRuntime, restoration_fixture
 
 
 @pytest.fixture(autouse=True)
 def ready_source_resources(monkeypatch):
     from types import SimpleNamespace
 
-    from omnia_api.services import project_cell_runtime
+    from yleum_api.services import project_cell_runtime
 
     async def resources(workspace_id):
         return SimpleNamespace(state="resources_ready")
@@ -105,8 +105,8 @@ async def test_async_cancel_runtime_negotiates_the_persisted_binding_contract(
 async def test_lost_apply_replay_requires_exact_durable_ready_receipt():
     from types import SimpleNamespace
 
-    from omnia_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
     from tests.test_restorations import source_binding
+    from yleum_api.schemas.restoration import RuntimeRestoration, RuntimeSourceBindingV2
 
     candidate_id = uuid4()
     binding = RuntimeSourceBindingV2.model_validate(source_binding())
@@ -182,7 +182,7 @@ async def _prepared_then_cancelled(db_session, runtime):
 
 
 async def _prepared_then_lost_apply(db_session, runtime):
-    from omnia_api.schemas.restoration import RestoreApplyRequest
+    from yleum_api.schemas.restoration import RestoreApplyRequest
 
     owner, project, _, current, _, workspace, request = await restoration_fixture(db_session)
     operation = await service.create_restoration(
@@ -698,7 +698,7 @@ async def test_reconcile_failure_keeps_the_operation_scheduled(db_session, test_
     original = service.advance_restoration
     service.advance_restoration = explode  # type: ignore[assignment]
     try:
-        from omnia_api.services import restoration_reconciliation as module
+        from yleum_api.services import restoration_reconciliation as module
 
         module.advance_restoration = explode  # type: ignore[assignment]
         assert await reconcile_due_restorations(

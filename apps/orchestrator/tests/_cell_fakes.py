@@ -5,7 +5,7 @@ import json
 from dataclasses import replace
 from uuid import UUID
 
-from omnia_orchestrator.services.docker_cell_resources import (
+from yleum_orchestrator.services.docker_cell_resources import (
     CellInventorySnapshot,
     DockerCommandResult,
     DockerContainerRecord,

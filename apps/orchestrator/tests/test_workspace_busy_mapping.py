@@ -16,11 +16,11 @@ import httpx
 import pytest
 from fastapi import APIRouter, FastAPI
 
-from omnia_orchestrator.core.cell_resources import (
+from yleum_orchestrator.core.cell_resources import (
     WorkspaceLockTimeout,
     WorkspaceLockUnavailable,
 )
-from omnia_orchestrator.core.errors import (
+from yleum_orchestrator.core.errors import (
     OrchestratorError,
     orchestrator_error_handler,
     unhandled_error_handler,
@@ -42,7 +42,7 @@ async def _unavailable() -> dict[str, str]:
 
 @asynccontextmanager
 async def _client() -> AsyncIterator[httpx.AsyncClient]:
-    # Exactly the wiring of omnia_orchestrator.main.create_app, in registration order.
+    # Exactly the wiring of yleum_orchestrator.main.create_app, in registration order.
     app = FastAPI()
     app.add_exception_handler(OrchestratorError, orchestrator_error_handler)
     app.add_exception_handler(WorkspaceLockTimeout, workspace_busy_handler)
@@ -88,15 +88,15 @@ async def test_a_lock_that_could_not_be_established_is_still_an_internal_error()
 
 
 def test_the_application_registers_the_handler(monkeypatch: pytest.MonkeyPatch) -> None:
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
-    # `omnia_orchestrator.main` builds its app at import time, so the settings this
+    # `yleum_orchestrator.main` builds its app at import time, so the settings this
     # process needs must exist before the module is imported.
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@127.0.0.1:5432/test")
     monkeypatch.setenv("INTERNAL_TOKEN", "test-internal-token-not-a-real-secret")
     get_settings.cache_clear()  # type: ignore[attr-defined]
     try:
-        from omnia_orchestrator.main import create_app
+        from yleum_orchestrator.main import create_app
 
         app = create_app()
     finally:
@@ -115,7 +115,7 @@ def test_the_application_registers_the_handler(monkeypatch: pytest.MonkeyPatch) 
 def test_the_routes_that_take_the_lock_are_still_registered(route: str) -> None:
     # These are the unguarded lock holders the class handler now covers; if one is
     # renamed, this test says so instead of silently protecting nothing.
-    from omnia_orchestrator.routers import workspace
+    from yleum_orchestrator.routers import workspace
 
     paths = {getattr(item, "path", None) for item in workspace.router.routes}
 

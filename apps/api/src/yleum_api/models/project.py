@@ -1,0 +1,141 @@
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from sqlalchemy import Boolean, CheckConstraint, DateTime, ForeignKey, Index, Text, func
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from yleum_api.models.base import Base
+
+if TYPE_CHECKING:
+    from yleum_api.models.message import Message
+    from yleum_api.models.snapshot import Snapshot
+
+
+class Project(Base):
+    __tablename__ = "projects"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    template: Mapped[str] = mapped_column(Text, nullable=False)
+    # Server-owned provider assignment. Never inferred from a later account rollout.
+    project_cell_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False,
+    )
+    language: Mapped[str] = mapped_column(Text, nullable=False, server_default="ru", default="ru")
+    # Import provenance (migration 0019). "native" = created/generated inside
+    # Yleum; "imported" = seeded from an external GitHub repo via tarball clone.
+    # The is_imported property gates pipeline bypasses (B3+B4).
+    source: Mapped[str] = mapped_column(
+        Text, nullable=False, server_default="native", default="native"
+    )
+    external_repo_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    external_repo_ref: Mapped[str | None] = mapped_column(Text, nullable=True)
+    design_preset_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Lineage for the V4.1b "Remix this" fork: the project this one was
+    # deep-copied from. NULL for organically-created projects. Self-FK with
+    # ON DELETE SET NULL so deleting a source leaves its forks intact.
+    forked_from: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Reified discovery answers (chip taps + free text) marshalled into a
+    # FidelitySpec dict — the design the user steered the onboarding popup
+    # toward. NULL = onboarding gave no assertable signal. Downstream gates read
+    # this to check the live render against what was actually picked (V2.5).
+    discovery_spec: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
+    # Pre-computed onboarding question batch (owner rule 13 #1 — NORTH STAR pillar
+    # 2). One upfront LLM pass plans all 3–4 product-tailored questions right after
+    # the first prompt; they live here (list of {message, choices, allow_custom,
+    # multi_select}) and are served one per turn with NO further gateway call —
+    # zero wait between questions. NULL = batch path not used (or a zero-question
+    # immediate build), so discovery falls back to per-question conversation.
+    discovery_plan: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    image_gen_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="true", default=True
+    )
+    # Canonical entitlement state for the orchestrator keep-alive marker.
+    # Postgres ownership lets billing enforce slot limits and revoke the promise
+    # deterministically when a paid subscription ends.
+    keep_alive_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    # V4.9 — the beauty floor's verdict on this project's SHARED surface. TRUE
+    # once a composition gate scored a render of it as floor-green (taste +
+    # hierarchy, plus first-paint when the stranger-cold path measures it). A
+    # zero-signup fork inherits this from its source (perform_fork), so the
+    # viral pool is transitively gated — a fork is re-shareable only if the app
+    # it copied cleared the floor. Default FALSE: unscored ≠ vouched for.
+    viral_eligible: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False
+    )
+    # Owner opt-in for paid AI operations from public MAX app visitors.
+    runtime_ai_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false", default=False,
+    )
+    current_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("snapshots.id", ondelete="SET NULL", use_alter=True),
+        nullable=True,
+    )
+    # BYO-VPS: куда деплоить этот проект. NULL = наш хостинг (текущее поведение,
+    # обратная совместимость). Задан → оркестратор запускает prod-образ на VPS
+    # пользователя по SSH. ON DELETE SET NULL: удалили цель — проект просто
+    # вернётся на наш хостинг, не сломается.
+    deploy_target_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("deploy_targets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # Previous destination waits here until the first successful deployment to
+    # the newly selected target. This makes cleanup transactional: selection
+    # itself never destroys the only working copy.
+    previous_deploy_target_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("deploy_targets.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+    @property
+    def is_imported(self) -> bool:
+        """True when this project was seeded from an external GitHub repo."""
+        return self.source == "imported"
+
+    snapshots: Mapped[list["Snapshot"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+        foreign_keys="Snapshot.project_id",
+    )
+    messages: Mapped[list["Message"]] = relationship(
+        back_populates="project",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint("char_length(name) BETWEEN 1 AND 100", name="ck_projects_name_length"),
+        # Keep in sync with migration 0017 + the `Template` literal in
+        # schemas/project.py. Was stale at the 4 static V1 values; the DB has
+        # allowed the container stacks since 0010 and the `code` template (any-
+        # language, file-only, no container) since 0017.
+        CheckConstraint(
+            "template IN ('blank', 'landing', 'portfolio', 'blog', "
+            "'fullstack', 'nextjs_entities', 'spa', 'tgbot', 'api', 'code', "
+            "'realtime', 'max_miniapp')",
+            name="ck_projects_template_allowed",
+        ),
+        Index("ix_projects_owner_id_created_at", "owner_id", "created_at"),
+    )

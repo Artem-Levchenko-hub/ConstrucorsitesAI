@@ -6,12 +6,12 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.config import get_settings
-from omnia_api.services import release_proof
-from omnia_api.services.functional_gate import Check, FunctionalVerdict
-from omnia_api.services.max_finalization import ProofBundle
-from omnia_api.services.max_runtime_probe import MaxRuntimeProbe
-from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+from yleum_api.core.config import get_settings
+from yleum_api.services import release_proof
+from yleum_api.services.functional_gate import Check, FunctionalVerdict
+from yleum_api.services.max_finalization import ProofBundle
+from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
+from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
 
 async def test_release_proof_combines_build_runtime_and_transport_checks(
@@ -44,7 +44,7 @@ async def test_release_proof_combines_build_runtime_and_transport_checks(
     monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", runtime)
     monkeypatch.setattr(release_proof.orchestrator_client, "get_status", status)
     monkeypatch.setattr(
-        "omnia_api.services.security_gate.run_security_gate",
+        "yleum_api.services.security_gate.run_security_gate",
         security,
     )
 
@@ -82,7 +82,7 @@ async def test_release_proof_blocks_max_when_protected_data_probe_fails(
     monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", runtime)
     monkeypatch.setattr(release_proof.orchestrator_client, "get_status", status)
     monkeypatch.setattr(
-        "omnia_api.services.max_runtime_probe.probe_max_runtime",
+        "yleum_api.services.max_runtime_probe.probe_max_runtime",
         max_probe,
     )
 
@@ -143,7 +143,7 @@ async def test_release_proof_uses_only_selected_project_cell_runtime(monkeypatch
     monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", forbidden)
     monkeypatch.setattr(release_proof.orchestrator_client, "get_status", forbidden)
     monkeypatch.setattr(
-        "omnia_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
+        "yleum_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
     )
 
     verdict = await release_proof.run_release_proof(
@@ -212,7 +212,7 @@ async def test_release_proof_uses_fallback_probe_route_when_home_page_is_missing
     monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", forbidden)
     monkeypatch.setattr(release_proof.orchestrator_client, "get_status", forbidden)
     monkeypatch.setattr(
-        "omnia_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
+        "yleum_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
     )
 
     verdict = await release_proof.run_release_proof(
@@ -312,7 +312,7 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
         require_embedded_framing,
         framing_policy,
     ):
-        from omnia_api.services.security_gate import OWNER_PREVIEW_FRAMING_POLICY
+        from yleum_api.services.security_gate import OWNER_PREVIEW_FRAMING_POLICY
 
         assert base_url == preview.preview_url
         assert bootstrap_url == preview.bootstrap_url
@@ -325,10 +325,10 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
     settings = get_settings().model_copy(update={"use_security_gate": False})
     monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
     monkeypatch.setattr(
-        "omnia_api.services.max_runtime_probe.probe_max_cell_runtime",
+        "yleum_api.services.max_runtime_probe.probe_max_cell_runtime",
         runtime_probe,
     )
-    monkeypatch.setattr("omnia_api.services.security_gate.run_security_gate", security)
+    monkeypatch.setattr("yleum_api.services.security_gate.run_security_gate", security)
 
     verdict = await release_proof.run_release_proof(
         project_id,
@@ -347,7 +347,7 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
 
 
 def test_legacy_release_receipt_cannot_mint_current_permit() -> None:
-    from omnia_api.services.promotion_permit import PromotionPermitError, issue_promotion_permit
+    from yleum_api.services.promotion_permit import PromotionPermitError, issue_promotion_permit
 
     identity = SimpleNamespace(
         id=uuid4(),
@@ -392,8 +392,8 @@ def test_legacy_release_receipt_cannot_mint_current_permit() -> None:
 async def test_current_release_receipt_is_accepted_by_actual_prepare_candidate(
     monkeypatch,
 ) -> None:
-    from omnia_api.services import project_cell_candidates
-    from omnia_api.services.promotion_permit import release_receipt_ref
+    from yleum_api.services import project_cell_candidates
+    from yleum_api.services.promotion_permit import release_receipt_ref
 
     workspace_id = uuid4()
     run_id = uuid4()

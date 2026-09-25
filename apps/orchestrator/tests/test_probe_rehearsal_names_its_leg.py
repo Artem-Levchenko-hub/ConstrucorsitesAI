@@ -33,14 +33,14 @@ from uuid import uuid5
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
-from omnia_orchestrator.services.restoration_adaptation_health import ProbeRehearsalFailure
-from omnia_orchestrator.services.restoration_adaptation_workspace import (
+from tests.test_restoration_adaptation_workspace import _proof_request, _request
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
+from yleum_orchestrator.services.restoration_adaptation_health import ProbeRehearsalFailure
+from yleum_orchestrator.services.restoration_adaptation_workspace import (
     DockerAdaptationWorkspaceEngine,
 )
-from omnia_orchestrator.services.versioning.contracts import InventoryReport
-from tests.test_restoration_adaptation_workspace import _proof_request, _request
+from yleum_orchestrator.services.versioning.contracts import InventoryReport
 
 # Нога репетиции → код причины. Порядок тот же, в котором они выполняются.
 _LEGS = {
@@ -58,8 +58,8 @@ _KNOWN = set(RestorationAdaptationProof.model_fields["reason_code"].annotation._
 def _prove_fixture(monkeypatch: pytest.MonkeyPatch, rehearser: object):
     """Собрать движок доказательства так, чтобы падала ровно репетиция."""
 
-    from omnia_orchestrator.routers.runtime import _workspace_revision
-    from omnia_orchestrator.services import restoration_adaptation_workspace as module
+    from yleum_orchestrator.routers.runtime import _workspace_revision
+    from yleum_orchestrator.services import restoration_adaptation_workspace as module
 
     request = _request()
     source_files = {"src/app/page.tsx": "export default function Page(){return 'source'}"}
@@ -134,10 +134,10 @@ def _prove_fixture(monkeypatch: pytest.MonkeyPatch, rehearser: object):
     monkeypatch.setattr(engine, "_manager", lambda _id: source_manager)
     monkeypatch.setattr(engine, "_database_digests", lambda *_args: ("d" * 64, "e" * 64))
     monkeypatch.setattr(
-        "omnia_orchestrator.services.cell_publication_capacity.production_manager",
+        "yleum_orchestrator.services.cell_publication_capacity.production_manager",
         lambda _manager, _settings: candidate_manager,
     )
-    monkeypatch.setattr("omnia_orchestrator.core.config.get_settings", lambda: object())
+    monkeypatch.setattr("yleum_orchestrator.core.config.get_settings", lambda: object())
 
     async def read_files(manager, volume):
         if manager is source_manager and volume == "source-code":
@@ -145,7 +145,7 @@ def _prove_fixture(monkeypatch: pytest.MonkeyPatch, rehearser: object):
         return candidate_files
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", read_files
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", read_files
     )
     monkeypatch.setattr(
         module,
@@ -165,7 +165,7 @@ def _prove_fixture(monkeypatch: pytest.MonkeyPatch, rehearser: object):
     # Манифест проверки годен — значит репетиция действительно запускается и
     # причиной может быть только её собственный провал.
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
+        "yleum_orchestrator.services.restoration_adaptation_probe.validate_probe_contract",
         lambda *_args: SimpleNamespace(contract_digest="f" * 64, witnesses=()),
     )
     return engine, request, proof
@@ -255,7 +255,7 @@ def test_the_platform_accepts_every_code_the_orchestrator_can_send() -> None:
         Path(__file__).resolve().parents[2]
         / "api"
         / "src"
-        / "omnia_api"
+        / "yleum_api"
         / "services"
         / "orchestrator_client.py"
     ).read_text(encoding="utf-8")
@@ -271,7 +271,7 @@ def test_every_leg_the_prober_runs_is_labelled() -> None:
     Без этой проверки можно добавить седьмую ногу и молча вернуться к немоте:
     её падение снова стало бы безымянным.
     """
-    from omnia_orchestrator.services import restoration_adaptation_health as health
+    from yleum_orchestrator.services import restoration_adaptation_health as health
 
     source = Path(health.__file__).read_text(encoding="utf-8")
     body = source.split("async def rehearse_candidate", 1)[1].split("async def verify_", 1)[0]

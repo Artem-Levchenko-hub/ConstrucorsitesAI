@@ -11,10 +11,10 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
-from omnia_orchestrator.services.code_restorations import CodeRestorationService
 from tests.test_code_restoration_engine import Lock, plain_prepare_request
 from tests.test_code_restorations import Engine, cancel_request, request, service, status
+from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+from yleum_orchestrator.services.code_restorations import CodeRestorationService
 
 _READY_REPORT = {
     "revision": 1, "mode": "exact", "changes": [], "retained_data": [],
@@ -85,12 +85,12 @@ def test_engines_without_checkpoints_keep_the_bare_signature(tmp_path):
 async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_path, monkeypatch):
     """Real engine, faked machine: cancel lands after `pnpm install`; the candidate
     is cleaned up and neither the build nor the start ever run."""
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services import project_machine
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
-    from omnia_orchestrator.services.versioning.contracts import InventoryReport
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services import project_machine
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.versioning.contracts import InventoryReport
 
     manifest = MachineManifest.model_validate(payload())
     contract = DataContract.model_validate({"version": 1, "tables": [{
@@ -204,7 +204,7 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
         return {"src/page.tsx": "current"}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
     )
     monkeypatch.setattr(module, "catalog_contract", lambda backend: (contract, []))
     monkeypatch.setattr(module, "describe_live_catalog", lambda backend: (contract, [], []))
@@ -267,9 +267,9 @@ async def test_engine_prepare_returns_cancelled_after_install_without_build(tmp_
 async def test_cancel_before_any_stage_returns_without_touching_the_machine(
     tmp_path, monkeypatch, flag
 ):
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services import code_restoration_engine as module
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import code_restoration_engine as module
 
     class MachineTouched(Exception):
         pass

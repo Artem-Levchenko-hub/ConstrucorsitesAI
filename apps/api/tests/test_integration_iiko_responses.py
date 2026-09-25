@@ -6,9 +6,9 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from omnia_api.core.crypto import encrypt_strong
-from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from tests.test_integration_runtime_contracts import connect, headers, upstream
+from yleum_api.core.crypto import encrypt_strong
+from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 
 
 @pytest.mark.parametrize(

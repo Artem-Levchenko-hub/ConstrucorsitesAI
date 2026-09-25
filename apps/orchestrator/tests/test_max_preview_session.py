@@ -9,9 +9,9 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.routers import runtime
-from omnia_orchestrator.services import provisioner
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.routers import runtime
+from yleum_orchestrator.services import provisioner
 
 PROJECT_ID = UUID("00000000-0000-0000-0000-000000000001")
 
@@ -21,7 +21,7 @@ def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
     monkeypatch.setenv("SECRETS_ROOT", str(tmp_path / "secrets"))
     monkeypatch.setenv("DATABASE_URL", "postgresql://omnia_root:rootpw@localhost:5433/omnia_users")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 

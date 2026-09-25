@@ -25,9 +25,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.core.config import Settings
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.services.generation_deadline import generation_deadline
+from yleum_api.core.config import Settings
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.services.generation_deadline import generation_deadline
 
 
 @pytest.fixture(autouse=True)
@@ -38,7 +38,7 @@ def _settings_from_declared_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     развилка «обычная правка против адаптации», а не чтение окружения.
     """
     monkeypatch.setattr(
-        "omnia_api.services.generation_deadline.get_settings",
+        "yleum_api.services.generation_deadline.get_settings",
         lambda: SimpleNamespace(
             max_generation_deadline_seconds=_default("max_generation_deadline_seconds"),
             restoration_adaptation_edit_seconds=_default(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from omnia_api.services.secret_safety import (
+from yleum_api.services.secret_safety import (
     contains_provider_secret,
     is_secret_file,
     max_model_write_rejection,

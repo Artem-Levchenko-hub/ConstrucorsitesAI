@@ -4,7 +4,7 @@ USE_REAL_BACKEND_DEFAULT. Owner directive «ентитиз не нужны, ну
 
 from __future__ import annotations
 
-from omnia_api.services import discovery
+from yleum_api.services import discovery
 
 
 class _Settings:

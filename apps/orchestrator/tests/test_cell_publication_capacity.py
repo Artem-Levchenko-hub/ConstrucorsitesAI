@@ -4,15 +4,15 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
-from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
-from omnia_orchestrator.services.project_machine import write_controller_json
 from tests.test_docker_cell_resources import _make_manager
+from yleum_orchestrator.core.cell_resources import CellResourceError, LifecycleMutation
+from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
+from yleum_orchestrator.services.project_machine import write_controller_json
 
 
 def test_public_budget_is_separate_and_does_not_resize_editor(tmp_path):
-    from omnia_orchestrator.services.cell_publication_capacity import production_manager
+    from yleum_orchestrator.services.cell_publication_capacity import production_manager
 
     manager, _, _, _ = _make_manager(tmp_path)
     manager.profile = replace(manager.profile, profile_version="docker-owner-cell-resources-v2")

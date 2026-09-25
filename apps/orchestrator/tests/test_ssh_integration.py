@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncssh
 import pytest
 
-from omnia_orchestrator.core import ssh
+from yleum_orchestrator.core import ssh
 
 
 class _Server(asyncssh.SSHServer):

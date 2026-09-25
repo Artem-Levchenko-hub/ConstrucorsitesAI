@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from omnia_api.services import discovery
-from omnia_api.services.discovery import (
+from yleum_api.services import discovery
+from yleum_api.services.discovery import (
     _PLAN_MAX_QUESTIONS,
     ASK,
     BUILD,
@@ -218,7 +218,7 @@ async def test_ask_floor_does_not_override_model_choices(
 def test_infer_multi_select_fires_on_section_questions() -> None:
     """Inherently multi-answer questions (which sections / features / pages) read
     as multi-select; single-answer ones (tone, yes/no) do not."""
-    from omnia_api.services.discovery import _infer_multi_select
+    from yleum_api.services.discovery import _infer_multi_select
 
     assert _infer_multi_select("Какие разделы нужны на сайте?")
     assert _infer_multi_select("Какие возможности должны быть?")
@@ -1226,7 +1226,7 @@ def test_infer_result_type_none_for_vague() -> None:
 def test_result_type_to_stack_mapping(
     rt: str, expected: str | None, real_backend: bool, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.core.config import get_settings
+    from yleum_api.core.config import get_settings
 
     monkeypatch.setenv("USE_REAL_BACKEND_DEFAULT", str(real_backend).lower())
     get_settings.cache_clear()

@@ -10,8 +10,8 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import SecretStr
 
-from omnia_api.services import orchestrator_client, orchestrator_hosts, readiness
-from omnia_api.services.orchestrator_hosts import (
+from yleum_api.services import orchestrator_client, orchestrator_hosts, readiness
+from yleum_api.services.orchestrator_hosts import (
     OrchestratorHostError,
     OrchestratorRegistry,
     forget_bindings,
@@ -20,7 +20,7 @@ from omnia_api.services.orchestrator_hosts import (
     registry,
     remember_workspace_host,
 )
-from omnia_api.services.orchestrator_placement import pick_host
+from yleum_api.services.orchestrator_placement import pick_host
 
 TWO_HOSTS = json.dumps(
     [
@@ -61,7 +61,7 @@ def _configure(monkeypatch: pytest.MonkeyPatch, hosts: str, default: str = "core
         gate_preview_resolver_rules="MAP *.dev.yleum.ru 172.19.0.1",
         orchestrator_internal_token=SecretStr("t"),
     )
-    from omnia_api.core import config
+    from yleum_api.core import config
 
     for module in (config, orchestrator_client, readiness):
         monkeypatch.setattr(module, "get_settings", lambda settings=settings: settings)
@@ -287,7 +287,7 @@ def test_preview_session_accepts_any_registered_host_suffix(
 def test_gate_browsers_resolve_every_hosts_preview_wildcard(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.services.auth_session import preview_resolver_args
+    from yleum_api.services.auth_session import preview_resolver_args
 
     _configure(monkeypatch, TWO_HOSTS)
     assert preview_resolver_args() == [

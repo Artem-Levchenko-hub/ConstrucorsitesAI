@@ -66,7 +66,7 @@ importers:
 
 
 def test_schema_only_drizzle_materializer_uses_direct_exact_argv():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -81,7 +81,7 @@ def test_schema_only_drizzle_materializer_uses_direct_exact_argv():
 
 
 def test_legacy_materializer_remains_supported_without_drizzle_metadata():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -93,7 +93,7 @@ def test_legacy_materializer_remains_supported_without_drizzle_metadata():
 
 
 def test_schema_only_materializer_fails_closed_without_exact_recipe():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -114,7 +114,7 @@ def test_schema_only_materializer_fails_closed_without_exact_recipe():
 
 
 def test_schema_only_materializer_requires_versions_in_root_importer():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -124,7 +124,7 @@ def test_schema_only_materializer_requires_versions_in_root_importer():
 
 
 def test_schema_only_materializer_ignores_duplicate_versions_in_nested_importer():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -144,10 +144,10 @@ def test_schema_only_materializer_ignores_duplicate_versions_in_nested_importer(
 
 
 def test_structural_proof_ignores_unmeasured_json_metadata_and_default():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         structural_materialization_matches,
     )
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     expected = DataContract.model_validate(
         {
@@ -190,10 +190,10 @@ def test_structural_proof_ignores_unmeasured_json_metadata_and_default():
 
 
 def test_structural_proof_rejects_mismatched_declared_default_and_identity():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         structural_materialization_matches,
     )
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     expected = DataContract.model_validate(
         {
@@ -223,10 +223,10 @@ def test_structural_proof_rejects_mismatched_declared_default_and_identity():
 
 
 def test_structural_proof_matches_columns_by_name_not_physical_order():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         structural_materialization_matches,
     )
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     expected = DataContract.model_validate(
         {
@@ -251,10 +251,10 @@ def test_structural_proof_matches_columns_by_name_not_physical_order():
 
 
 def test_structural_proof_ignores_typescript_only_text_enum_hint():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         structural_materialization_matches,
     )
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     expected = DataContract.model_validate(
         {
@@ -282,10 +282,10 @@ def test_structural_proof_ignores_typescript_only_text_enum_hint():
 
 
 def test_structural_proof_rejects_changed_postgresql_enum_labels():
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         structural_materialization_matches,
     )
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
 
     expected = DataContract.model_validate(
         {
@@ -315,8 +315,8 @@ def test_structural_proof_rejects_changed_postgresql_enum_labels():
 def _prepare_request(files: dict[str, str]):
     import base64
 
-    from omnia_orchestrator.schemas.code_restoration import CodeRestorationPrepare
     from tests.test_code_restoration_engine import plain_prepare_request
+    from yleum_orchestrator.schemas.code_restoration import CodeRestorationPrepare
 
     payload = plain_prepare_request().model_dump(mode="json")
     payload.update(
@@ -339,13 +339,13 @@ async def _prepare_empty(
     *,
     materialized_schema: str = "exact",
 ):
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.services import code_restoration_engine as module
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
-    from omnia_orchestrator.services.restoration_data_contract import DataContract
-    from omnia_orchestrator.services.restoration_empty import EmptyDatabaseWitness
     from tests.test_code_restoration_engine import Lock
     from tests.test_project_machine_manifest import payload
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.restoration_empty import EmptyDatabaseWitness
 
     request = _prepare_request(files)
     manifest = MachineManifest.model_validate(payload())
@@ -454,7 +454,7 @@ async def _prepare_empty(
         return {"src/page.tsx": "current"}
 
     monkeypatch.setattr(
-        "omnia_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
+        "yleum_orchestrator.routers.workspace._read_agent_workspace_files", workspace_files
     )
     live = {
         "serving_route_digest": "1" * 64,
@@ -716,7 +716,7 @@ def test_unchanged_config_hash_binds_candidate() -> None:
     """
     import hashlib
 
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         _MIGRATION_RUNNERS,
         empty_database_materializer,
     )
@@ -739,7 +739,7 @@ def test_a_rewritten_historical_runner_is_never_executed() -> None:
     старше запрета на правку служебных файлов. Запускать `node` по произвольному
     содержимому из снимка нельзя: это исполнение чужого кода, а не восстановление.
     """
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -754,7 +754,7 @@ def test_a_rewritten_historical_runner_is_never_executed() -> None:
 def test_a_rewritten_runner_does_not_fall_through_to_the_schema_recipe() -> None:
     # Непринятый исполнитель не должен молча уступать место другому рецепту:
     # иначе подменённый файл просто игнорируется, а восстановление идёт дальше.
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -767,7 +767,7 @@ def test_allowlisted_config_restores_empty_target_without_ai() -> None:
     """LIVE-14/16: разрешённая конфигурация принимается по нормализованному хешу."""
     import hashlib
 
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_database_materializer,
     )
 
@@ -788,7 +788,7 @@ def test_missing_historical_materializer_is_actionable_without_candidate() -> No
     файл, пропала ли настройка или дело в версиях библиотек, — а это три разных
     разговора с поддержкой.
     """
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_materializer_blocker,
     )
 
@@ -808,7 +808,7 @@ def test_missing_historical_materializer_is_actionable_without_candidate() -> No
 
 
 def test_a_changed_service_runner_says_so_plainly() -> None:
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_materializer_blocker,
     )
 
@@ -821,7 +821,7 @@ def test_a_changed_service_runner_says_so_plainly() -> None:
 
 
 def test_a_supported_version_has_no_blocker() -> None:
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         empty_materializer_blocker,
     )
 

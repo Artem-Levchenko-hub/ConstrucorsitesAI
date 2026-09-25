@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnia_orchestrator.services import deploy_state
+from yleum_orchestrator.services import deploy_state
 
 
 def test_state_survives_reload(tmp_path, monkeypatch) -> None:

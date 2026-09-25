@@ -9,12 +9,12 @@ from uuid import UUID
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.usage import Usage
-from omnia_api.models.user import User
-from omnia_api.routers.max_studio import get_max_usage
+from yleum_api.core.errors import ApiError
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.usage import Usage
+from yleum_api.models.user import User
+from yleum_api.routers.max_studio import get_max_usage
 
 PROJECT_ID, USER_ID, RUN_ID, OLD_RUN_ID = (UUID(int=value) for value in range(1, 5))
 EXPECTED = json.loads(

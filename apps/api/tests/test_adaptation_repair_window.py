@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from omnia_api.core.config import Settings
+from yleum_api.core.config import Settings
 
 # Столько секунд починки потребовалось прогону, прежде чем его остановили.
 _LIVE_REPAIR_NEEDED = 900

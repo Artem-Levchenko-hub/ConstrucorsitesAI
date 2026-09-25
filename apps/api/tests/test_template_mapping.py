@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.schemas.project import (
+from yleum_api.schemas.project import (
     Template,
     is_fullstack,
     orchestrator_template,

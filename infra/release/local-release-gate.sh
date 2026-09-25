@@ -175,8 +175,8 @@ run_step orchestrator_sync orchestrator.log "Orchestrator locked dependency sync
   'cd apps/orchestrator && uv sync --frozen'
 run_step orchestrator_ruff orchestrator.log "Release-critical orchestrator lint" bash -c \
   'cd apps/orchestrator && uv run ruff check \
-    src/omnia_orchestrator/core/release.py \
-    src/omnia_orchestrator/routers/health.py \
+    src/yleum_orchestrator/core/release.py \
+    src/yleum_orchestrator/routers/health.py \
     tests/test_health.py'
 run_step orchestrator_mypy orchestrator.log "Orchestrator typecheck" bash -c \
   'cd apps/orchestrator && uv run mypy src'
@@ -274,7 +274,7 @@ local_container_smoke() (
     -e JWT_SECRET=release-gate-container-jwt-secret-at-least-32-bytes \
     -e "OMNIA_RELEASE_SHA=${EXPECTED_RELEASE_SHA}" \
     "${api_image}" \
-    /app/.venv/bin/uvicorn omnia_api.main:app --host 0.0.0.0 --port 8000 \
+    /app/.venv/bin/uvicorn yleum_api.main:app --host 0.0.0.0 --port 8000 \
     >/dev/null
 
   ready=false

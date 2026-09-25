@@ -15,16 +15,16 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
 
-from omnia_api.core import config, db
-from omnia_api.models.generation_event import GenerationEvent
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellWorkspace
-from omnia_api.models.restoration import Restoration
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services import (
+from yleum_api.core import config, db
+from yleum_api.models.generation_event import GenerationEvent
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellWorkspace
+from yleum_api.models.restoration import Restoration
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services import (
     agent_builder,
     agent_native,
     llm_client,
@@ -32,7 +32,7 @@ from omnia_api.services import (
     project_cell_executor,
     repo,
 )
-from omnia_api.services.generation import (
+from yleum_api.services.generation import (
     acceptance,
     agent_generation,
     agent_pipeline,
@@ -48,9 +48,9 @@ from omnia_api.services.generation import (
     progress,
     supervisor,
 )
-from omnia_api.services.generation import lifecycle as messages
-from omnia_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
-from omnia_api.workers import generation
+from yleum_api.services.generation import lifecycle as messages
+from yleum_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
+from yleum_api.workers import generation
 
 
 def set_generation_settings(monkeypatch, settings):
@@ -380,10 +380,10 @@ async def test_real_process_prompt_hands_uncertain_activation_to_late_reconciler
 ):
     from datetime import UTC, datetime
 
-    from omnia_api.services.generation.agent_finalization import (
+    from yleum_api.services.generation.agent_finalization import (
         AdaptationActivationPending,
     )
-    from omnia_api.services.generation_runs import terminalize_generation_run_locked
+    from yleum_api.services.generation_runs import terminalize_generation_run_locked
 
     flow = await flow_factory("max_miniapp")
     factory = async_sessionmaker(flow.engine, expire_on_commit=False)
@@ -873,7 +873,7 @@ async def test_actual_worker_cancels_real_agent_build_without_replay(flow_factor
 
 
 async def test_real_agent_build_plan_survives_load_session_close(flow_factory, monkeypatch):
-    from omnia_api.services import build_plan
+    from yleum_api.services import build_plan
 
     captured = []
     planner_calls = []

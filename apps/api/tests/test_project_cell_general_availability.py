@@ -6,10 +6,10 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.config import Settings, get_settings
-from omnia_api.models.project import Project
-from omnia_api.models.user import User
-from omnia_api.services import project_cell_access as access
+from yleum_api.core.config import Settings, get_settings
+from yleum_api.models.project import Project
+from yleum_api.models.user import User
+from yleum_api.services import project_cell_access as access
 
 
 @pytest.fixture(autouse=True)
@@ -83,7 +83,7 @@ def test_existing_canary_selection_remains_available():
 
 
 async def test_admitted_project_gets_pending_cell_without_remote_or_legacy_start(monkeypatch):
-    from omnia_api.services import project_cell_runtime as runtime
+    from yleum_api.services import project_cell_runtime as runtime
 
     owner = user()
     project = Project(id=uuid4(), owner_id=owner.id, name="new", slug="new", template="max_miniapp")
@@ -95,7 +95,7 @@ async def test_admitted_project_gets_pending_cell_without_remote_or_legacy_start
 
 
 async def test_ga_does_not_change_existing_legacy_runtime(monkeypatch):
-    from omnia_api.services import project_cell_runtime as runtime
+    from yleum_api.services import project_cell_runtime as runtime
 
     owner = user()
     project = Project(id=uuid4(), owner_id=owner.id, name="old", slug="old", template="max_miniapp")
@@ -114,7 +114,7 @@ async def test_ga_does_not_change_existing_legacy_runtime(monkeypatch):
 
 
 def test_provider_marker_cannot_be_set_through_public_project_payloads():
-    from omnia_api.schemas.project import ProjectCreate, ProjectUpdate
+    from yleum_api.schemas.project import ProjectCreate, ProjectUpdate
 
     assert "project_cell_enabled" not in ProjectCreate.model_fields
     assert "project_cell_enabled" not in ProjectUpdate.model_fields
@@ -122,8 +122,8 @@ def test_provider_marker_cannot_be_set_through_public_project_payloads():
 
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_normal_create_persists_server_decision_without_provisioning(monkeypatch, enabled):
-    from omnia_api.routers import projects
-    from omnia_api.schemas.project import ProjectCreate
+    from yleum_api.routers import projects
+    from yleum_api.schemas.project import ProjectCreate
 
     monkeypatch.setattr(
         access,
@@ -159,7 +159,7 @@ async def test_normal_create_persists_server_decision_without_provisioning(monke
 
 @pytest.mark.parametrize("admitted", [False, True])
 async def test_deploy_selection_does_not_reclassify_legacy_when_ga_enabled(monkeypatch, admitted):
-    from omnia_api.services import deploy_attestation
+    from yleum_api.services import deploy_attestation
 
     owner = user()
     project = Project(
@@ -194,7 +194,7 @@ async def test_deploy_selection_does_not_reclassify_legacy_when_ga_enabled(monke
 async def test_assigned_project_cannot_generate_for_ineligible_account(
     monkeypatch, changes, reason
 ):
-    from omnia_api.services import project_cell_control as control
+    from yleum_api.services import project_cell_control as control
 
     remote = AsyncMock()
     monkeypatch.setattr(control, "get_project_cell_capabilities", remote)
@@ -207,8 +207,8 @@ async def test_assigned_project_cannot_generate_for_ineligible_account(
 
 
 async def test_assigned_project_still_enforces_existing_cross_owner_gate():
-    from omnia_api.core.errors import ApiError
-    from omnia_api.routers.runtime import _project_owned_by
+    from yleum_api.core.errors import ApiError
+    from yleum_api.routers.runtime import _project_owned_by
 
     owner, stranger = user(), user()
     project = Project(

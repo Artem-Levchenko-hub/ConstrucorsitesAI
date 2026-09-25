@@ -22,8 +22,8 @@ from typing import Any
 
 import pytest
 
-from omnia_orchestrator.core.shell import CmdResult
-from omnia_orchestrator.services import remote_deploy
+from yleum_orchestrator.core.shell import CmdResult
+from yleum_orchestrator.services import remote_deploy
 
 GOLDEN = Path(__file__).parent / "fixtures" / "remote_deploy_transcript.json"
 PROJECT = "11111111-2222-3333-4444-555555555555"

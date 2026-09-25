@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from omnia_api.schemas.restoration import RestoreReport, RuntimeRestoration
+from yleum_api.schemas.restoration import RestoreReport, RuntimeRestoration
 
 V1 = {
     "revision": 1, "mode": "adapted", "database_state": "unknown", "changes": [],
@@ -101,7 +101,7 @@ def test_ready_state_still_requires_an_unblocked_report():
 
 
 def test_oversized_report_is_trimmed_for_the_agent_not_refused():
-    from omnia_api.services.restoration_adaptation import _compatibility_report
+    from yleum_api.services.restoration_adaptation import _compatibility_report
 
     objects = [
         {"object": f"public.table_{index:03d}_with_a_long_descriptive_name", "kind": "table",

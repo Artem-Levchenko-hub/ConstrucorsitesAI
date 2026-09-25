@@ -19,7 +19,7 @@ cd ../apps/api
 uv sync
 cp .env.example .env
 uv run alembic upgrade head
-uv run uvicorn omnia_api.main:app --reload --port 8000
+uv run uvicorn yleum_api.main:app --reload --port 8000
 ```
 
 Воркер preview-рендера в отдельном терминале:
@@ -47,7 +47,7 @@ uv run rq worker omnia-previews
 ## Команды
 
 ```bash
-uv run uvicorn omnia_api.main:app --reload --port 8000
+uv run uvicorn yleum_api.main:app --reload --port 8000
 uv run rq worker omnia-previews
 uv run alembic revision --autogenerate -m "msg"
 uv run alembic upgrade head

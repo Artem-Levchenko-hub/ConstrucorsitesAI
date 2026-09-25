@@ -4,11 +4,11 @@ import base64
 
 import pytest
 
-from omnia_orchestrator.core.config import get_settings
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.routers import build_exe as build_exe_router
-from omnia_orchestrator.schemas.build_exe import BuildExeRequest, BuildExeResult
-from omnia_orchestrator.services.exe_builder import run_exe_build
+from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.routers import build_exe as build_exe_router
+from yleum_orchestrator.schemas.build_exe import BuildExeRequest, BuildExeResult
+from yleum_orchestrator.services.exe_builder import run_exe_build
 
 
 def test_run_exe_build_collects_artifacts(monkeypatch, tmp_path) -> None:
@@ -21,7 +21,7 @@ def test_run_exe_build_collects_artifacts(monkeypatch, tmp_path) -> None:
         return 0
 
     monkeypatch.setattr(
-        "omnia_orchestrator.services.exe_builder._run_container",
+        "yleum_orchestrator.services.exe_builder._run_container",
         fake_run_container,
     )
     req = BuildExeRequest(
@@ -44,7 +44,7 @@ def test_run_exe_build_failure_returns_log(monkeypatch, tmp_path) -> None:
         return 3
 
     monkeypatch.setattr(
-        "omnia_orchestrator.services.exe_builder._run_container",
+        "yleum_orchestrator.services.exe_builder._run_container",
         fake_fail,
     )
     req = BuildExeRequest(

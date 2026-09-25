@@ -7,7 +7,7 @@ keep the gate from flooding the heal loop with noise.
 
 from __future__ import annotations
 
-from omnia_api.services import sast_gate as sg
+from yleum_api.services import sast_gate as sg
 
 
 def test_clean_files_are_safe():

@@ -5,7 +5,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from omnia_api.services import project_export
+from yleum_api.services import project_export
 
 # Frozen API export omissions at 0dacd38f, independent of the current reader.
 # Orchestrator seeds include these internal skills; downloaded projects do not.

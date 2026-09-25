@@ -5,7 +5,7 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.routers import runtime
+from yleum_orchestrator.routers import runtime
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +15,7 @@ def _env(monkeypatch: pytest.MonkeyPatch):
         "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
     )
     monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
-    from omnia_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
     yield
@@ -25,8 +25,8 @@ def _env(monkeypatch: pytest.MonkeyPatch):
 async def test_destroy_removes_isolated_project_network(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    from omnia_orchestrator.core.config import get_settings
-    from omnia_orchestrator.services import cell_publication
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.services import cell_publication
 
     # Use the real publication tombstone path, isolated from host/CI runtime
     # directories. This legacy project has no public Cell record.

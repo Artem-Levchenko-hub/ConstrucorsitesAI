@@ -9,41 +9,41 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core import workspace_provider as workspace_provider_contract
-from omnia_orchestrator.core.cell_resources import (
+from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
+from yleum_orchestrator.core import workspace_provider as workspace_provider_contract
+from yleum_orchestrator.core.cell_resources import (
     CellTerminalOperationFailed,
     LifecycleMutation,
 )
-from omnia_orchestrator.core.config import Settings, get_settings
-from omnia_orchestrator.core.workspace_provider import (
+from yleum_orchestrator.core.config import Settings, get_settings
+from yleum_orchestrator.core.workspace_provider import (
     ControlAction,
     WorkspaceHandle,
     WorkspaceProviderUnavailable,
     WorkspaceResourceStatus,
     WorkspaceSpec,
 )
-from omnia_orchestrator.routers import workspace as workspace_router
-from omnia_orchestrator.schemas import workspace as workspace_schema
-from omnia_orchestrator.services import (
+from yleum_orchestrator.routers import workspace as workspace_router
+from yleum_orchestrator.schemas import workspace as workspace_schema
+from yleum_orchestrator.services import (
     disabled_workspace_provider,
     docker_owner_canary_provider,
     workspace_provider_factory,
 )
-from omnia_orchestrator.services.cell_checkpoint import (
+from yleum_orchestrator.services.cell_checkpoint import (
     CellCheckpointManager,
     CheckpointManifest,
 )
-from omnia_orchestrator.services.disabled_workspace_provider import DisabledWorkspaceProvider
-from omnia_orchestrator.services.docker_cell_resources import DockerVolumeRecord
-from omnia_orchestrator.services.docker_owner_canary_provider import (
+from yleum_orchestrator.services.disabled_workspace_provider import DisabledWorkspaceProvider
+from yleum_orchestrator.services.docker_cell_resources import DockerVolumeRecord
+from yleum_orchestrator.services.docker_owner_canary_provider import (
     DockerOwnerCanaryProvider,
 )
-from omnia_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
-from omnia_orchestrator.services.workspace_provider_factory import (
+from yleum_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
+from yleum_orchestrator.services.workspace_provider_factory import (
     build_workspace_provider,
     settings_for_workspace,
 )
-from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
 
 _FORBIDDEN_FOUNDATION_IMPORT_FRAGMENTS = (
     "docker_client",
@@ -145,7 +145,7 @@ def _foundation_boundary_violations(tree: ast.AST) -> list[str]:
 def _workspace_registration_count(tree: ast.AST) -> int:
     workspace_aliases: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "omnia_orchestrator.routers":
+        if isinstance(node, ast.ImportFrom) and node.module == "yleum_orchestrator.routers":
             for alias in node.names:
                 if alias.name == "workspace":
                     workspace_aliases.add(alias.asname or alias.name)
@@ -730,8 +730,8 @@ def test_foundation_ast_guard_detects_function_local_lifecycle_imports_and_calls
     mutated_provider = ast.parse(
         """
 async def ensure(workspace_id):
-    from omnia_orchestrator.core.docker_client import container_status
-    from omnia_orchestrator.core.shell import exec_cmd
+    from yleum_orchestrator.core.docker_client import container_status
+    from yleum_orchestrator.core.shell import exec_cmd
     return await run_sandbox_command(workspace_id)
 """
     )
@@ -768,7 +768,7 @@ def test_main_registers_workspace_router_without_importing_provider_implementati
     monkeypatch.setenv("INTERNAL_TOKEN", "test-internal-token-not-a-real-secret")
     get_settings.cache_clear()
     try:
-        main_path = Path(__file__).resolve().parents[1] / "src" / "omnia_orchestrator" / "main.py"
+        main_path = Path(__file__).resolve().parents[1] / "src" / "yleum_orchestrator" / "main.py"
         tree = ast.parse(main_path.read_text(encoding="utf-8"))
 
         assert _workspace_registration_count(tree) == 1

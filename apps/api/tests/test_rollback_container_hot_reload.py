@@ -10,11 +10,11 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.routers import rollback as rollback_mod
-from omnia_api.schemas.snapshot import RollbackRequest
-from omnia_api.services import snapshot_restore as restore_mod
+from yleum_api.core.errors import ApiError
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.routers import rollback as rollback_mod
+from yleum_api.schemas.snapshot import RollbackRequest
+from yleum_api.services import snapshot_restore as restore_mod
 
 _OWNER = uuid.uuid4()
 _PROJECT_ID = uuid.uuid4()

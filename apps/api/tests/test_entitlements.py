@@ -14,9 +14,9 @@ from typing import cast
 
 import pytest
 
-from omnia_api.core.config import Settings
-from omnia_api.core.errors import ApiError
-from omnia_api.models.billing import (
+from yleum_api.core.config import Settings
+from yleum_api.core.errors import ApiError
+from yleum_api.models.billing import (
     DEFAULT_BILLING_PLANS,
     ENTITLEMENT_FLAG_KEYS,
     ENTITLEMENT_LIMIT_KEYS,
@@ -24,8 +24,8 @@ from omnia_api.models.billing import (
     FREE_PLAN_V1_ID,
     BillingPlan,
 )
-from omnia_api.services import billing_usage, entitlements
-from omnia_api.services.entitlements import (
+from yleum_api.services import billing_usage, entitlements
+from yleum_api.services.entitlements import (
     EntitlementUsage,
     entitlement_flag,
     entitlement_limit,
@@ -89,8 +89,8 @@ def test_enforcement_is_on_by_default() -> None:
 
 def test_guarded_endpoints_reference_the_entitlement_service() -> None:
     # Defence against a refactor that silently drops a guard.
-    from omnia_api.routers import app_integrations, projects, runtime
-    from omnia_api.services import cell_publication
+    from yleum_api.routers import app_integrations, projects, runtime
+    from yleum_api.services import cell_publication
 
     assert "assert_can_create_project" in inspect.getsource(projects.create_project)
     assert "assert_can_publish" in inspect.getsource(cell_publication.submit_publication)
@@ -168,7 +168,7 @@ def test_gateway_ledger_rows_are_bucketed_by_run_then_stage() -> None:
 
 
 def test_runtime_ai_requests_are_stamped_for_the_ledger() -> None:
-    from omnia_api.routers import integration_runtime
+    from yleum_api.routers import integration_runtime
 
     source = inspect.getsource(integration_runtime._request_gateway_ai)
     assert f'"stage": "{billing_usage.RUNTIME_AI_STAGE}"' in source
@@ -194,7 +194,7 @@ def test_refusal_codes_distinguish_limits_from_missing_features(
     assert missing_feature.value.code == "subscription_entitlement_required"
 
     monkeypatch.setenv("ENFORCE_PLAN_ENTITLEMENTS", "false")
-    from omnia_api.core.config import get_settings
+    from yleum_api.core.config import get_settings
 
     get_settings.cache_clear()
     try:

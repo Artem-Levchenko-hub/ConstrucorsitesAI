@@ -12,10 +12,10 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from omnia_api.services import repo
-from omnia_api.services.template_materialization import materialize_template
+from yleum_api.services import repo
+from yleum_api.services.template_materialization import materialize_template
 
-TEMPLATES = Path(__file__).parents[1] / "src/omnia_api/templates"
+TEMPLATES = Path(__file__).parents[1] / "src/yleum_api/templates"
 GOLDEN = json.loads(
     (Path(__file__).parent / "fixtures/static_templates_810f0fbb.json").read_text()
 )["templates"]
@@ -93,8 +93,8 @@ def test_populated_destination_is_rejected_without_partial_writes(
 
 
 async def test_kit_http_contract_uses_frozen_bytes() -> None:
-    from omnia_api.core.errors import ApiError, api_error_handler
-    from omnia_api.routers.public import kit_router
+    from yleum_api.core.errors import ApiError, api_error_handler
+    from yleum_api.routers.public import kit_router
 
     app = FastAPI()
     app.include_router(kit_router)
@@ -122,11 +122,11 @@ async def test_kit_http_contract_uses_frozen_bytes() -> None:
 
 async def test_committed_custom_kit_survives_http_export_and_rollback() -> None:
     """Real Git and HTTP ZIP; only identity/metadata and object storage are fixtures."""
-    from omnia_api.core.db import get_session
-    from omnia_api.core.deps import get_current_user
-    from omnia_api.models.project import Project
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.routers.projects import router
+    from yleum_api.core.db import get_session
+    from yleum_api.core.deps import get_current_user
+    from yleum_api.models.project import Project
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.routers.projects import router
 
     project_id, owner_id, snapshot_id = uuid4(), uuid4(), uuid4()
     initial = repo.init_repo(project_id, TEMPLATES / "blank", "blank")

@@ -2,10 +2,10 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import select
 
-from omnia_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
-from omnia_api.models.project import Project
-from omnia_api.services.integration_generation import generation_context
 from tests.test_app_integrations_api import _register_and_create
+from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
+from yleum_api.models.project import Project
+from yleum_api.services.integration_generation import generation_context
 
 
 async def test_platform_ai_requires_explicit_owner_enable_without_credentials(

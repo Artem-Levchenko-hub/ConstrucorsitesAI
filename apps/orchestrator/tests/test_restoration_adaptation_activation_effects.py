@@ -13,26 +13,26 @@ from uuid import UUID, uuid5
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from yleum_orchestrator.core.cell_resources import (
     CellIdentityConflict,
     CellResourceError,
     LifecycleMutation,
 )
-from omnia_orchestrator.schemas.restoration_adaptation_activation import (
+from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     ActivationBusinessProbe,
     ActivationPreparedTarget,
     RestorationAdaptationActivationRequest,
 )
-from omnia_orchestrator.services.restoration_adaptation_activation import (
+from yleum_orchestrator.services.restoration_adaptation_activation import (
     RestorationAdaptationActivationEngine,
 )
-from omnia_orchestrator.services.restoration_adaptation_activation_effects import (
+from yleum_orchestrator.services.restoration_adaptation_activation_effects import (
     DockerRestorationAdaptationActivationEffects,
     live_database_volume_identity_digest,
 )
-from omnia_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
-from omnia_orchestrator.services.restoration_adaptation_source import source_manifest_digest
-from omnia_orchestrator.services.restoration_binding import canonical_digest
+from yleum_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
+from yleum_orchestrator.services.restoration_adaptation_source import source_manifest_digest
+from yleum_orchestrator.services.restoration_binding import canonical_digest
 
 PROBE_MANIFEST = json.dumps(
     {
@@ -704,11 +704,11 @@ def activation_engine(
 @pytest.fixture(autouse=True)
 def provider_observations(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_activation_effects.catalog_contract",
+        "yleum_orchestrator.services.restoration_adaptation_activation_effects.catalog_contract",
         lambda _backend: (DATA_CONTRACT, []),
     )
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_activation_effects.observe_live_source",
+        "yleum_orchestrator.services.restoration_adaptation_activation_effects.observe_live_source",
         lambda *_args, **_kwargs: {"database_identity_digest": "d" * 64},
     )
 
@@ -927,7 +927,7 @@ async def test_recover_after_source_stop_verifies_target_with_source_app_down(
 async def test_standard_next_target_is_runnable_before_source_is_stopped(
     tmp_path: Path,
 ) -> None:
-    from omnia_orchestrator.services.code_restoration_engine import (
+    from yleum_orchestrator.services.code_restoration_engine import (
         validate_supported_runtime,
     )
 
@@ -1140,7 +1140,7 @@ async def test_ephemeral_postgres_identity_change_does_not_change_volume_binding
         }
 
     monkeypatch.setattr(
-        "omnia_orchestrator.services.restoration_adaptation_activation_effects.observe_live_source",
+        "yleum_orchestrator.services.restoration_adaptation_activation_effects.observe_live_source",
         observed,
     )
     service = activation_engine(tmp_path, value, setup.effects)

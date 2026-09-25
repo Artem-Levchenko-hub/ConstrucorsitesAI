@@ -6,7 +6,7 @@ from uuid import UUID
 import httpx
 import pytest
 
-from omnia_api.services import max_runtime_probe
+from yleum_api.services import max_runtime_probe
 
 PROJECT_ID = UUID("00000000-0000-0000-0000-000000000001")
 SLUG = "fitness-demo"
@@ -21,7 +21,7 @@ BOOTSTRAP = (
 async def test_portable_runtime_requires_negative_auth_and_trusted_identity(
     monkeypatch, unauthenticated_status
 ):
-    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
     observed = []
 
@@ -68,7 +68,7 @@ async def test_portable_proof_can_fall_back_when_home_page_is_missing(
     support_status,
     epoch,
 ):
-    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
     visited = []
 
@@ -113,7 +113,7 @@ async def test_portable_proof_can_fall_back_when_home_page_is_missing(
 async def test_portable_proof_keeps_root_strict_without_an_explicit_fallback(
     monkeypatch,
 ):
-    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
     visited = []
 
@@ -307,7 +307,7 @@ async def test_probe_max_runtime_requires_the_orchestrator_runtime_origin(
 async def test_cell_runtime_uses_cell_cookie_and_route_without_legacy(
     monkeypatch, route_status, location,
 ):
-    from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
     def forbidden(*args, **kwargs):
         pytest.fail("cell runtime must not resolve legacy preview")

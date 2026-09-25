@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 import pytest
 
-from omnia_api.services import agent_builder as ab
-from omnia_api.services import orchestrator_client
+from yleum_api.services import agent_builder as ab
+from yleum_api.services import orchestrator_client
 
 NOT_FOUND = "search text not found exactly; read the file and copy it byte-for-byte"
 NOT_UNIQUE = "search text is not unique; add surrounding lines"
@@ -209,9 +209,9 @@ async def test_disposable_db_cell_rejected_fence_does_not_change_local_file(
     db_session,
     test_engine,
 ):
-    from omnia_api.services import project_cell_executor
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
     from tests.test_project_cell_executor import _prepare_executor
+    from yleum_api.services import project_cell_executor
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
     harness = await _prepare_executor(
         monkeypatch, db_session, test_engine, snapshot_files={"src/a.txt": "old"}

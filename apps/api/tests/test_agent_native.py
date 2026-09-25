@@ -19,10 +19,10 @@ from uuid import UUID
 import httpx
 import pytest
 
-from omnia_api.services import agent_native
-from omnia_api.services.agent_builder import AgentResult
-from omnia_api.services.agent_native import NativeMessagesAttemptAuth, _module_not_found_hint
-from omnia_api.services.generation import runtime
+from yleum_api.services import agent_native
+from yleum_api.services.agent_builder import AgentResult
+from yleum_api.services.agent_native import NativeMessagesAttemptAuth, _module_not_found_hint
+from yleum_api.services.generation import runtime
 
 _RUNNER_SRC = Path(__file__).resolve().parents[2] / "agent-runner" / "src"
 _GATEWAY_SRC = Path(__file__).resolve().parents[2] / "llm-gateway" / "src"
@@ -54,7 +54,7 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
         "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
     )
     monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
-    from omnia_api.core.config import get_settings
+    from yleum_api.core.config import get_settings
 
     get_settings.cache_clear()  # type: ignore[attr-defined]
 
@@ -72,7 +72,7 @@ def test_portable_tools_describe_real_install_and_database_capabilities() -> Non
 
 
 def test_native_agent_uses_sonnet_while_autoheal_keeps_gemini() -> None:
-    from omnia_api.services import autoheal
+    from yleum_api.services import autoheal
 
     assert agent_native._MODEL == "claude-sonnet-5"
     assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
@@ -197,7 +197,7 @@ def test_max_native_toolset_can_opt_into_project_shell() -> None:
 def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> None:
     """The verified core is a seed, never a replacement for the Google agent."""
     generation = (
-        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services" / "generation"
+        Path(__file__).resolve().parents[1] / "src" / "yleum_api" / "services" / "generation"
     )
     source = "\n".join(
         (generation / name).read_text(encoding="utf-8")
@@ -253,7 +253,7 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
 
 def test_first_max_native_build_has_bounded_automatic_continuation_default() -> None:
     config_source = (
-        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "core" / "config.py"
+        Path(__file__).resolve().parents[1] / "src" / "yleum_api" / "core" / "config.py"
     ).read_text(encoding="utf-8")
 
     assert "agent_max_segments: int = Field(default=4, ge=1, le=8)" in config_source
@@ -261,7 +261,7 @@ def test_first_max_native_build_has_bounded_automatic_continuation_default() -> 
 
 def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None:
     generation = (
-        Path(__file__).resolve().parents[1] / "src" / "omnia_api" / "services" / "generation"
+        Path(__file__).resolve().parents[1] / "src" / "yleum_api" / "services" / "generation"
     )
     source = "\n".join(
         (generation / name).read_text(encoding="utf-8")
@@ -296,7 +296,7 @@ def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None
 def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.core.errors import ApiError
+    from yleum_api.core.errors import ApiError
 
     calls: list[dict[str, Any]] = []
 
@@ -349,7 +349,7 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
 def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.core.errors import ApiError
+    from yleum_api.core.errors import ApiError
 
     async def _hot_reload(project_id, slug, files, *, empty_files=()):
         assert empty_files == ()
@@ -381,7 +381,7 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
 
 
 def _load_messages_helpers(*function_names: str) -> dict[str, Any]:
-    from omnia_api.services.generation import agent_messages, file_transforms
+    from yleum_api.services.generation import agent_messages, file_transforms
 
     owners = {"_merge_seeded_agent_files": file_transforms}
     return {name: getattr(owners.get(name, agent_messages), name) for name in function_names}
@@ -403,7 +403,7 @@ def test_failed_max_resume_recovers_the_original_brief() -> None:
 
 
 def test_rolled_back_max_generation_is_never_reported_as_done() -> None:
-    from omnia_api.services.agent_builder import AgentResult
+    from yleum_api.services.agent_builder import AgentResult
 
     _agent_result_message = _load_messages_helpers("_agent_result_message")["_agent_result_message"]
 
@@ -928,7 +928,7 @@ async def test_exploration_hands_complete_source_to_coordinator_without_new_segm
     expected_stop: str,
 ) -> None:
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", str(coordinator).lower())
-    from omnia_api.core.config import get_settings
+    from yleum_api.core.config import get_settings
 
     get_settings.cache_clear()
     calls = 0
@@ -1596,7 +1596,7 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
 @pytest.mark.asyncio
 async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
-    from omnia_api.core.config import get_settings
+    from yleum_api.core.config import get_settings
 
     get_settings.cache_clear()
     calls = 0
@@ -1635,7 +1635,7 @@ async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monke
 @pytest.mark.asyncio
 async def test_portable_provider_failure_preserves_cause_without_proof_work(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
-    from omnia_api.core.config import get_settings
+    from yleum_api.core.config import get_settings
 
     get_settings.cache_clear()
 
@@ -2048,7 +2048,7 @@ async def test_native_build_defaults_to_legacy_messages_endpoint_without_headers
 
 def test_native_agent_keeps_design_guidance_without_visual_judge() -> None:
     """Design and root-cause guidance do not require a screenshot judge."""
-    from omnia_api.services import agent_builder as B
+    from yleum_api.services import agent_builder as B
 
     names = [t["name"] for t in agent_native._TOOLS]
     assert "see" not in names
@@ -2065,7 +2065,7 @@ def test_native_agent_can_generate_media() -> None:
     native tool AND routed by the executor, and the preamble must teach WHEN/HOW to
     use video (scroll-driven hero / 3D fly-through). A dropped tool or missing route
     means the agent can never build the cinematic-video sites the owner asked for."""
-    from omnia_api.services import agent_builder as B
+    from yleum_api.services import agent_builder as B
 
     names = [t["name"] for t in agent_native._TOOLS]
     assert "generate_media" in names, "native agent must offer the generate_media tool"
@@ -2107,7 +2107,7 @@ def test_generate_media_returns_url_in_model_visible_field() -> None:
     the review-2026-07-17 critical: url-only → model gets "ok" → no <img>/<video>."""
     import asyncio
 
-    from omnia_api.services import agent_media
+    from yleum_api.services import agent_media
 
     async def _fake_gen(project_id: str, prompt: str) -> str:
         return "http://minio.local/omnia-images/p/deadbeef.png"
@@ -2133,7 +2133,7 @@ def test_generate_media_returns_url_in_model_visible_field() -> None:
 async def test_classified_protected_environment_failure_stops_before_another_tool_or_model(
     monkeypatch,
 ):
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
     calls = []
 
@@ -2164,7 +2164,7 @@ async def test_mandatory_max_migration_failure_is_terminal_to_native_generation(
     monkeypatch,
     upstream_code,
 ):
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
     calls = []
 
@@ -2197,7 +2197,7 @@ async def test_mandatory_max_migration_failure_is_terminal_to_native_generation(
 async def test_terminal_infrastructure_during_local_proof_cannot_start_another_segment(
     monkeypatch, fatal_at
 ):
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
     calls = []
 
@@ -2232,7 +2232,7 @@ async def test_terminal_infrastructure_during_local_proof_cannot_start_another_s
 
 @pytest.mark.asyncio
 async def test_activity_envelope_conflict_is_terminal_to_native_loop(monkeypatch):
-    from omnia_api.services.project_cell_activity import ProjectCellActivityConflict
+    from yleum_api.services.project_cell_activity import ProjectCellActivityConflict
 
     calls = []
 

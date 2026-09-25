@@ -16,11 +16,11 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.routers import projects, rollback
-from omnia_api.schemas.project import ProjectCreate
-from omnia_api.schemas.snapshot import RollbackRequest
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.routers import projects, rollback
+from yleum_api.schemas.project import ProjectCreate
+from yleum_api.schemas.snapshot import RollbackRequest
 
 PROJECT = UUID("00000000-0000-0000-0000-000000000001")
 OWNER = UUID("00000000-0000-0000-0000-000000000002")
@@ -93,7 +93,7 @@ class Session:
 
 @pytest.fixture
 def events(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
-    from omnia_api.core import minio
+    from yleum_api.core import minio
 
     settings = SimpleNamespace(
         minio_public_url="https://objects.example.test/", minio_bucket_previews="previews"

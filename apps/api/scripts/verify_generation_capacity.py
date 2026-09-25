@@ -24,29 +24,29 @@ from uuid import UUID, uuid4
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.core.config import get_settings
-from omnia_api.core.db import dispose_engine, get_engine
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.agent_builder import Action
-from omnia_api.services.generation.supervisor import _wait_for_capacity_dispatch_lease_loss
-from omnia_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
-from omnia_api.services.project_cell_access import decide_project_cell_access
-from omnia_api.services.project_cell_capacity import (
+from yleum_api.core.config import get_settings
+from yleum_api.core.db import dispose_engine, get_engine
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.agent_builder import Action
+from yleum_api.services.generation.supervisor import _wait_for_capacity_dispatch_lease_loss
+from yleum_api.services.orchestrator_client import HttpProjectCellOrchestratorClient
+from yleum_api.services.project_cell_access import decide_project_cell_access
+from yleum_api.services.project_cell_capacity import (
     capacity_admission_event,
     claim_idle_hibernation_victim,
     clear_capacity_admission_event,
     hibernate_one_idle_workspace,
     release_one_stale_generation_lease,
 )
-from omnia_api.services.project_cell_executor import (
+from yleum_api.services.project_cell_executor import (
     ProjectCellExecutorHandle,
     maybe_create_project_cell_executor,
 )
-from omnia_api.services.project_cell_lifecycle import execute_cell_operation
-from omnia_api.services.project_cells import reserve_cell_operation
+from yleum_api.services.project_cell_lifecycle import execute_cell_operation
+from yleum_api.services.project_cells import reserve_cell_operation
 
 _EVIDENCE_KEY = "generation_capacity_acceptance"
 _LABEL_PREFIX = "capacity-acceptance"

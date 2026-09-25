@@ -15,12 +15,12 @@ import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.core.deps import get_current_user
-from omnia_api.main import app
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services.generation import acceptance
+from yleum_api.core.deps import get_current_user
+from yleum_api.main import app
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services.generation import acceptance
 
 pytestmark = pytest.mark.asyncio
 

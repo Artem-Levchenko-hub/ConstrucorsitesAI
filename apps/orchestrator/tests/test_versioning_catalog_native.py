@@ -7,17 +7,17 @@ import json
 
 import pytest
 
-from omnia_orchestrator.services.restoration_catalog import (
+from tests._versioning_pg import pg  # noqa: F401
+from yleum_orchestrator.services.restoration_catalog import (
     CATALOG_SQL,
     describe_catalog,
     ordinary_default,
 )
-from omnia_orchestrator.services.restoration_data_contract import (
+from yleum_orchestrator.services.restoration_data_contract import (
     DataContract,
     assess_contract,
     normalize_check,
 )
-from tests._versioning_pg import pg  # noqa: F401
 
 
 def live(pg):  # noqa: F811
@@ -187,7 +187,7 @@ def test_oversized_default_or_check_is_an_unsupported_object_not_a_crash(pg):  #
 
 
 def test_shadowing_now_function_is_not_an_ordinary_default(pg):  # noqa: F811
-    from omnia_orchestrator.services.restoration_catalog import CATALOG_SCRIPT
+    from yleum_orchestrator.services.restoration_catalog import CATALOG_SCRIPT
 
     pg.run(
         "CREATE FUNCTION public.now() RETURNS timestamptz LANGUAGE sql AS "
@@ -204,7 +204,7 @@ def test_shadowing_now_function_is_not_an_ordinary_default(pg):  # noqa: F811
 
 
 def test_checks_declared_in_sql_migrations_are_read_in_order():
-    from omnia_orchestrator.services.restoration_catalog import migration_checks
+    from yleum_orchestrator.services.restoration_catalog import migration_checks
 
     files = {
         "migrations/0001_create_crm_clients.sql": """-- clients
@@ -243,7 +243,7 @@ ALTER TABLE crm_clients DROP CONSTRAINT IF EXISTS crm_clients_note_check;
 
 
 def test_migration_checks_match_the_live_catalog(pg):  # noqa: F811
-    from omnia_orchestrator.services.restoration_catalog import migration_checks
+    from yleum_orchestrator.services.restoration_catalog import migration_checks
 
     migration = """CREATE TABLE crm_client_visits (
   id serial PRIMARY KEY,

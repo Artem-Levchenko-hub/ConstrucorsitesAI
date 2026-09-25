@@ -1,0 +1,99 @@
+"""Error envelope — mirrors apps/api/src/yleum_api/core/errors.py shape.
+
+Same response format so apps/api can transparently proxy orchestrator
+errors back to the web client without translation.
+"""
+
+from __future__ import annotations
+
+from typing import Any, Literal
+
+from fastapi import Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+ErrorCode = Literal[
+    "validation_failed",
+    "unauthorized",
+    "not_found",
+    "conflict",
+    "container_failure",
+    "migration_apply_failed",
+    "migration_reconciliation_required",
+    "capacity_wait",
+    # A dev container that is stopped/paused and could not be woken in-line —
+    # distinct from container_failure so apps/api can tell "the world is gone"
+    # (abort the build honestly) from a transient exec problem (retryable).
+    "container_not_running",
+    "docker_unavailable",
+    # Another operation holds this workspace right now — expected contention,
+    # not a failure: the caller may retry after the advertised delay.
+    "workspace_busy",
+    "postgres_unavailable",
+    "port_exhausted",
+    "invalid_identifier",
+    "invalid_path",
+    "image_not_found",
+    "build_timeout",
+    "unsupported_stack",
+    "internal_error",
+]
+
+
+class ErrorBody(BaseModel):
+    code: ErrorCode
+    message: str
+    details: dict[str, Any] | None = None
+
+
+class OrchestratorError(Exception):
+    def __init__(
+        self,
+        code: ErrorCode,
+        message: str,
+        status_code: int = status.HTTP_400_BAD_REQUEST,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.details = details
+        super().__init__(message)
+
+
+async def orchestrator_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, OrchestratorError)
+    body = ErrorBody(code=exc.code, message=exc.message, details=exc.details)
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": body.model_dump(exclude_none=True)},
+    )
+
+
+async def workspace_busy_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Answer lock contention with a retryable 503 instead of a 500 traceback.
+
+    Registered for the exception class itself, so a route that did not think to
+    catch it still answers honestly. Starlette looks a class handler up before the
+    catch-all, so nothing is re-raised and no traceback is logged for a wait that
+    is part of normal operation.
+    """
+    retry_after = 2
+    body = ErrorBody(
+        code="workspace_busy",
+        message="Проект сейчас занят другой операцией. Повторите запрос через несколько секунд.",
+        details={"retryable": True, "retry_after_seconds": retry_after},
+    )
+    return JSONResponse(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        content={"error": body.model_dump(exclude_none=True)},
+        headers={"Retry-After": str(retry_after)},
+    )
+
+
+async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    body = ErrorBody(code="internal_error", message="orchestrator internal error")
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={"error": body.model_dump(exclude_none=True)},
+    )

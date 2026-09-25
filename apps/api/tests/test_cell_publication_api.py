@@ -5,14 +5,14 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_api.core.crypto import encrypt_strong
-from omnia_api.core.deps import get_current_user
-from omnia_api.main import app
-from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.models.max_project_config import MaxProjectConfig
-from omnia_api.models.user import User
-from omnia_api.services import orchestrator_client, project_cell_runtime
 from tests.test_cell_publication_evidence import evidence
+from yleum_api.core.crypto import encrypt_strong
+from yleum_api.core.deps import get_current_user
+from yleum_api.main import app
+from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.user import User
+from yleum_api.services import orchestrator_client, project_cell_runtime
 
 
 async def seed(session):

@@ -14,7 +14,7 @@ import uuid
 import httpx
 from sqlalchemy import select
 
-from omnia_api.models.user import User
+from yleum_api.models.user import User
 
 
 async def _source(db_session, email: str) -> tuple[str | None, uuid.UUID | None]:

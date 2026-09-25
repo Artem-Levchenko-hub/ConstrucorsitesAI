@@ -11,10 +11,10 @@ from uuid import UUID, uuid4
 
 import pytest
 
-import omnia_orchestrator.services.cell_state as cell_state_module
-from omnia_orchestrator.core.cell_resources import CellResourceNames, LifecycleMutation
-from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-from omnia_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
+import yleum_orchestrator.services.cell_state as cell_state_module
+from yleum_orchestrator.core.cell_resources import CellResourceNames, LifecycleMutation
+from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
 
 
 def _spec(workspace_id: UUID) -> WorkspaceSpec:

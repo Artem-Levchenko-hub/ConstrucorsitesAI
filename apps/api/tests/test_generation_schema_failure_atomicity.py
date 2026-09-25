@@ -19,7 +19,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from omnia_api.services.agent_builder import Action
+from yleum_api.services.agent_builder import Action
 
 from .test_project_cell_executor import _prepare_executor
 

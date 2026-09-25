@@ -4,7 +4,7 @@ answer keeps substages, heartbeat, progress, metrics and reason codes."""
 
 from __future__ import annotations
 
-from omnia_api.routers.runtime import _to_deploy_status
+from yleum_api.routers.runtime import _to_deploy_status
 
 
 def test_old_controller_payload_reads_as_format_1():

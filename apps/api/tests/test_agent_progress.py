@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncio
 
-from omnia_api.services import agent_builder as ab
+from yleum_api.services import agent_builder as ab
 
 
 def test_progress_note_lists_already_written_files():

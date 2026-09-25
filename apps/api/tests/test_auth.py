@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import httpx
 
-from omnia_api.services.readiness import ReadinessReport
+from yleum_api.services.readiness import ReadinessReport
 
 
 async def test_register_creates_user_and_sets_session_cookie(client: httpx.AsyncClient) -> None:
@@ -123,7 +123,7 @@ async def test_logout_clears_cookie_and_subsequent_me_returns_401(
 
 async def test_health_endpoint_is_public(client: httpx.AsyncClient, monkeypatch) -> None:
     monkeypatch.setattr(
-        "omnia_api.main.get_settings",
+        "yleum_api.main.get_settings",
         lambda: SimpleNamespace(omnia_release_sha="a7c4fc22"),
         raising=False,
     )
@@ -145,9 +145,9 @@ async def test_readiness_endpoint_reports_component_state(
             },
         )
 
-    monkeypatch.setattr("omnia_api.services.readiness.probe_readiness", healthy)
+    monkeypatch.setattr("yleum_api.services.readiness.probe_readiness", healthy)
     monkeypatch.setattr(
-        "omnia_api.main.get_settings",
+        "yleum_api.main.get_settings",
         lambda: SimpleNamespace(omnia_release_sha="a7c4fc22"),
     )
     response = await client.get("/api/health")
@@ -177,9 +177,9 @@ async def test_readiness_endpoint_fails_when_worker_heartbeat_is_missing(
             },
         )
 
-    monkeypatch.setattr("omnia_api.services.readiness.probe_readiness", degraded)
+    monkeypatch.setattr("yleum_api.services.readiness.probe_readiness", degraded)
     monkeypatch.setattr(
-        "omnia_api.main.get_settings",
+        "yleum_api.main.get_settings",
         lambda: SimpleNamespace(omnia_release_sha="a7c4fc22"),
     )
     response = await client.get("/api/health")

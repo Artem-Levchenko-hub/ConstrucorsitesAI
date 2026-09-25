@@ -13,12 +13,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.main import app
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.routers import projects as projects_router
-from omnia_api.services import repo as repo_svc
+from yleum_api.main import app
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.routers import projects as projects_router
+from yleum_api.services import repo as repo_svc
 
 pytestmark = pytest.mark.asyncio
 

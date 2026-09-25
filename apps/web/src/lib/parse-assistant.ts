@@ -2,7 +2,7 @@
  * Парсер контента ассистента: разбивает его на куски прозы и файловые блоки
  * `<file path="...">...</file>`, чтобы UI мог рендерить их по-разному.
  *
- * Зеркалит регексп с бэка (apps/api/src/omnia_api/services/file_extractor.py).
+ * Зеркалит регексп с бэка (apps/api/src/yleum_api/services/file_extractor.py).
  * Если бэк-парсер обновляется — обновить тут.
  */
 
@@ -24,7 +24,7 @@ export type AssistantPart =
   // dumps the whole SEARCH/REPLACE block into the chat.
   | { kind: "edit"; path: string; body: string; closed: boolean }
   // App build/runtime failure (`<app-error category=… title=… file=… fixable=…>`
-  // detail `</app-error>`). Mirrors apps/api/src/omnia_api/services/app_errors.py.
+  // detail `</app-error>`). Mirrors apps/api/src/yleum_api/services/app_errors.py.
   // Rendered as a red error card with an optional "Починить" action.
   | {
       kind: "app-error";
@@ -36,7 +36,7 @@ export type AssistantPart =
       closed: boolean;
     }
   // Hot-fork recap (`<remix name=… dna=…>` with one starter-edit per body line).
-  // Mirrors apps/api/src/omnia_api/services/fork_recap.py — the warm seed message
+  // Mirrors apps/api/src/yleum_api/services/fork_recap.py — the warm seed message
   // a remixer lands on. Rendered as a RemixRecapCard, not raw text.
   | {
       kind: "remix";

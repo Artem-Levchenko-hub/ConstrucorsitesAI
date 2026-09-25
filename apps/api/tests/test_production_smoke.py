@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from omnia_api.ops.production_smoke import Configuration, Reply, run_smoke
+from yleum_api.ops.production_smoke import Configuration, Reply, run_smoke
 
 
 def environment():
@@ -222,7 +222,7 @@ def test_stdlib_cli_uses_local_http_and_does_not_import_api_dependencies(
         # test's copy out of the working tree.
         env["SMOKE_ARTIFACT_PATH"] = str(tmp_path / "smoke.json")
         result = subprocess.run(
-            [sys.executable, "-S", "-m", "omnia_api.ops.production_smoke"],
+            [sys.executable, "-S", "-m", "yleum_api.ops.production_smoke"],
             env=env,
             capture_output=True,
             text=True,
@@ -258,7 +258,7 @@ def test_invalid_or_missing_target_is_a_named_configuration_failure(name, value)
 
 
 def test_transport_retry_and_body_limits_keep_private_details_out_of_failures():
-    from omnia_api.ops.production_smoke import MAX_BODY_BYTES
+    from yleum_api.ops.production_smoke import MAX_BODY_BYTES
 
     data = responses()
     data["/web-health"] = OSError("https://private.invalid/?token=secret")
@@ -292,7 +292,7 @@ def test_total_deadline_stops_additional_requests():
 
 
 def test_stdlib_transport_deadline_bounds_even_a_blocked_body(monkeypatch):
-    from omnia_api.ops import production_smoke
+    from yleum_api.ops import production_smoke
 
     entered, release = threading.Event(), threading.Event()
 

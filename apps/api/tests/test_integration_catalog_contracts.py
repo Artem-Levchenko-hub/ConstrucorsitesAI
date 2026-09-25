@@ -1,10 +1,10 @@
 import pytest
 
-from omnia_api.core.errors import ApiError
+from yleum_api.core.errors import ApiError
 
 
 def test_product_price_is_converted_without_inventing_stock():
-    from omnia_api.services.integration_catalog import moysklad_items
+    from yleum_api.services.integration_catalog import moysklad_items
 
     items = moysklad_items(
         {"rows": [{"id": "product-1", "name": "Tea", "salePrices": [{"value": 12550}]}]}
@@ -23,7 +23,7 @@ def test_product_price_is_converted_without_inventing_stock():
     ],
 )
 def test_invalid_catalog_is_not_reported_as_success(payload):
-    from omnia_api.services.integration_catalog import moysklad_items
+    from yleum_api.services.integration_catalog import moysklad_items
 
     with pytest.raises(ApiError) as error:
         moysklad_items(payload)
@@ -31,7 +31,7 @@ def test_invalid_catalog_is_not_reported_as_success(payload):
 
 
 def test_iiko_deleted_items_removed_and_stop_list_not_invented():
-    from omnia_api.services.integration_catalog import iiko_items
+    from yleum_api.services.integration_catalog import iiko_items
 
     items = iiko_items(
         {

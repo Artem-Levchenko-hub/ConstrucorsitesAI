@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_api.services.generation.agent_messages import (
+from yleum_api.services.generation.agent_messages import (
     _agent_needs_continue_card,
     _agent_product_failure,
     _agent_result_message,
@@ -104,7 +104,7 @@ def test_pipeline_asks_the_verdict_instead_of_deciding_the_card_itself() -> None
     import ast
     from pathlib import Path
 
-    from omnia_api.services.generation import agent_pipeline
+    from yleum_api.services.generation import agent_pipeline
 
     tree = ast.parse(Path(agent_pipeline.__file__).read_text(encoding="utf-8"))
     calls = [
@@ -236,7 +236,7 @@ def test_continue_not_detected_for_edits_or_features() -> None:
 def test_app_errors_incomplete_category_renders_card() -> None:
     # The backend emits the exact <app-error> shape the web parser keys off; a
     # missing _DEFAULT_TITLE key would KeyError in publish()'s WS payload.
-    from omnia_api.services import app_errors
+    from yleum_api.services import app_errors
 
     assert app_errors._DEFAULT_TITLE["incomplete"] == "Сборка не завершена"
     block = app_errors.render_block(

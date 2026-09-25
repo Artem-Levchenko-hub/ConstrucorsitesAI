@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 from docker.errors import NotFound
 
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.services.machine_business_config import (
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.services.machine_business_config import (
     apply_core_config,
     apply_public_core_overlay,
 )

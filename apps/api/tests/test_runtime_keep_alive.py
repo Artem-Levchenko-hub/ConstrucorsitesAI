@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from uuid import uuid4
 
-from omnia_api.routers.runtime import _to_runtime_status
-from omnia_api.services import orchestrator_client
+from yleum_api.routers.runtime import _to_runtime_status
+from yleum_api.services import orchestrator_client
 
 
 def test_runtime_status_exposes_keep_alive() -> None:

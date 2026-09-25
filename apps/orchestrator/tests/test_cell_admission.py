@@ -5,13 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from yleum_orchestrator.core.cell_resources import (
     AdmissionDecision,
     CellResourceProfile,
     HostCapacitySnapshot,
 )
-from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
-from omnia_orchestrator.services.cell_reservations import ReservedCapacity
+from yleum_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
+from yleum_orchestrator.services.cell_reservations import ReservedCapacity
 
 
 def _profile() -> CellResourceProfile:

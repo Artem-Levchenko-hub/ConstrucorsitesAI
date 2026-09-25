@@ -484,7 +484,7 @@ export type ApiErrorCode =
   // V2 — surfaced from apps/api/services/orchestrator_client.
   | "orchestrator_unavailable"
   | "orchestrator_rejected"
-  // GitHub export — apps/api/src/omnia_api/routers/github.py.
+  // GitHub export — apps/api/src/yleum_api/routers/github.py.
   | "github_not_connected"
   | "github_state_invalid"
   | "github_state_expired"
@@ -524,7 +524,7 @@ export type ApiErrorCode =
   | "entitlement_exceeded"
   | "refund_unavailable"
   | "refund_balance_used"
-  // Вход через VK ID / Яндекс ID — apps/api/src/omnia_api/routers/auth_oauth.py.
+  // Вход через VK ID / Яндекс ID — apps/api/src/yleum_api/routers/auth_oauth.py.
   | "oauth_provider_unavailable"
   | "oauth_state_invalid"
   | "oauth_exchange_failed"
@@ -699,7 +699,7 @@ export type MaxUsage = {
   }[];
 };
 
-// === GitHub OAuth + Push (apps/api/src/omnia_api/schemas/github.py) ===
+// === GitHub OAuth + Push (apps/api/src/yleum_api/schemas/github.py) ===
 
 export type GithubStatus = {
   connected: boolean;
@@ -805,7 +805,7 @@ export type ApiErrorBody = {
 
 /**
  * Multipass pipeline stage names. Mirrors the constants emitted by
- * `apps/api/src/omnia_api/services/multipass_generator.py` — keep in sync.
+ * `apps/api/src/yleum_api/services/multipass_generator.py` — keep in sync.
  */
 export type MultipassStage =
   | "skeleton"

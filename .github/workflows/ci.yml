@@ -264,8 +264,8 @@ jobs:
         working-directory: apps/orchestrator
         run: >-
           uv run ruff check
-          src/omnia_orchestrator/core/release.py
-          src/omnia_orchestrator/routers/health.py
+          src/yleum_orchestrator/core/release.py
+          src/yleum_orchestrator/routers/health.py
           tests/test_health.py
           && uv run mypy src
       - name: Run orchestrator tests

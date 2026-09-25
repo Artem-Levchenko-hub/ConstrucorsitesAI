@@ -1,4 +1,4 @@
-from omnia_api.core.release import normalize_release_sha
+from yleum_api.core.release import normalize_release_sha
 
 
 def test_normalize_release_sha_accepts_lower_hex() -> None:

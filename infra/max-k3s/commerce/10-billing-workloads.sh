@@ -14,7 +14,7 @@
 #   ./10-billing-workloads.sh all           # core-access → host → image → secret → apply → verify (handover — отдельно, осознанно)
 #
 # --dry-run (или DRY_RUN=1): печатает команды вместо выполнения; туннели и ssh не трогаются.
-# Почему воркер отдельный процесс, а не поток RQ-воркера: apps/api/src/omnia_api/workers/billing.py и
+# Почему воркер отдельный процесс, а не поток RQ-воркера: apps/api/src/yleum_api/workers/billing.py и
 # docs/plans/2026-09-23-phase3-commerce.md, раздел «Commerce-кластер».
 set -euo pipefail
 . "$(dirname "$0")/../lib.sh"

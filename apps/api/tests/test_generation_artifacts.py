@@ -12,22 +12,22 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from omnia_api.core.config import get_settings
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.snapshot import Snapshot
-from omnia_api.models.user import User
-from omnia_api.services import repo
-from omnia_api.services.generation import agent_publication
-from omnia_api.services.generation.contracts import (
+from yleum_api.core.config import get_settings
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.user import User
+from yleum_api.services import repo
+from yleum_api.services.generation import agent_publication
+from yleum_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
 )
-from omnia_api.services.generation.progress import GenerationProgress
-from omnia_api.services.generation.publication import consume_free_generation
+from yleum_api.services.generation.progress import GenerationProgress
+from yleum_api.services.generation.publication import consume_free_generation
 
 
 def records():
@@ -432,7 +432,7 @@ async def test_agent_proof_exact_tree_deletes_absent_and_preserves_empty(monkeyp
 
 
 async def test_max_publication_requires_green_promotion_permit_before_git(monkeypatch):
-    from omnia_api.services.promotion_permit import PromotionPermitError
+    from yleum_api.services.promotion_permit import PromotionPermitError
 
     rows, trace = records(), []
     session = OfflineSession(rows, trace)
@@ -459,8 +459,8 @@ async def test_max_publication_requires_green_promotion_permit_before_git(monkey
 async def test_tampered_promotion_permit_fails_before_git(monkeypatch):
     from types import SimpleNamespace
 
-    from omnia_api.services.max_finalization import ProofBundle
-    from omnia_api.services.promotion_permit import (
+    from yleum_api.services.max_finalization import ProofBundle
+    from yleum_api.services.promotion_permit import (
         PromotionPermitError,
         issue_promotion_permit,
         release_receipt_digest,
@@ -477,7 +477,7 @@ async def test_tampered_promotion_permit_fails_before_git(monkeypatch):
         proof_key="1" * 64,
         workspace_revision="2" * 64,
     )
-    from omnia_api.services.promotion_permit import canonical_files_digest
+    from yleum_api.services.promotion_permit import canonical_files_digest
 
     build = SimpleNamespace(
         proof_id=identity.id,
@@ -559,7 +559,7 @@ async def test_tampered_promotion_permit_fails_before_git(monkeypatch):
         fencing_epoch=permit.fencing_epoch,
         workspace_revision="9" * 64,
     )
-    from omnia_api.services.promotion_permit import require_promotion_permit
+    from yleum_api.services.promotion_permit import require_promotion_permit
 
     with pytest.raises(PromotionPermitError) as stale:
         require_promotion_permit(permit, current_identity=stale_identity)
@@ -571,8 +571,8 @@ async def test_max_publication_rejects_foreign_run_changed_tree_and_stale_fence_
 ) -> None:
     from types import SimpleNamespace
 
-    from omnia_api.services.max_finalization import ProofBundle
-    from omnia_api.services.promotion_permit import (
+    from yleum_api.services.max_finalization import ProofBundle
+    from yleum_api.services.promotion_permit import (
         PromotionPermitError,
         canonical_files_digest,
         issue_promotion_permit,
@@ -678,8 +678,8 @@ async def test_max_publication_rejects_foreign_run_changed_tree_and_stale_fence_
 def test_promotion_permit_rejects_missing_behavior_receipt() -> None:
     from types import SimpleNamespace
 
-    from omnia_api.services.max_finalization import ProofBundle
-    from omnia_api.services.promotion_permit import PromotionPermitError, issue_promotion_permit
+    from yleum_api.services.max_finalization import ProofBundle
+    from yleum_api.services.promotion_permit import PromotionPermitError, issue_promotion_permit
 
     identity = SimpleNamespace(
         id=uuid4(),

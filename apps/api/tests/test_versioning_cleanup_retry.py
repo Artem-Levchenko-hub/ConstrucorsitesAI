@@ -9,9 +9,9 @@ from dataclasses import dataclass, field
 import httpx
 import pytest
 
-from omnia_api.ops import production_canary as canary_module
 from tests.production_canary_fakes import PROJECT_ID, FakeProduction
 from tests.test_production_canary import _test_config
+from yleum_api.ops import production_canary as canary_module
 
 
 @dataclass

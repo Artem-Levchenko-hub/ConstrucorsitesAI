@@ -133,27 +133,27 @@ def http(url: str, cookie: str, method="GET", payload=None):
 
 
 async def run(args):
-    from omnia_orchestrator.core.cell_resources import LifecycleMutation
-    from omnia_orchestrator.core.config import Settings, get_settings
-    from omnia_orchestrator.core.project_machine import MachineManifest
-    from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-    from omnia_orchestrator.routers.workspace import _read_agent_workspace_files
-    from omnia_orchestrator.schemas.code_restoration import (
+    from yleum_orchestrator.core.cell_resources import LifecycleMutation
+    from yleum_orchestrator.core.config import Settings, get_settings
+    from yleum_orchestrator.core.project_machine import MachineManifest
+    from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+    from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
+    from yleum_orchestrator.schemas.code_restoration import (
         CodeRestorationApply,
         CodeRestorationPrepare,
     )
-    from omnia_orchestrator.services.cell_publication_capacity import production_manager
-    from omnia_orchestrator.services.cell_reservations import CellCapacityReservationStore
-    from omnia_orchestrator.services.cell_state import CellStateStore
-    from omnia_orchestrator.services.code_restoration_engine import CodeRestorationEngine
-    from omnia_orchestrator.services.docker_machine_backend import _archive_file
-    from omnia_orchestrator.services.project_machine import (
+    from yleum_orchestrator.services.cell_publication_capacity import production_manager
+    from yleum_orchestrator.services.cell_reservations import CellCapacityReservationStore
+    from yleum_orchestrator.services.cell_state import CellStateStore
+    from yleum_orchestrator.services.code_restoration_engine import CodeRestorationEngine
+    from yleum_orchestrator.services.docker_machine_backend import _archive_file
+    from yleum_orchestrator.services.project_machine import (
         machine_budget,
         machine_effect,
         write_controller_json,
     )
-    from omnia_orchestrator.services.restoration_database import admin_sql
-    from omnia_orchestrator.services.workspace_provider_factory import build_workspace_provider
+    from yleum_orchestrator.services.restoration_database import admin_sql
+    from yleum_orchestrator.services.workspace_provider_factory import build_workspace_provider
 
     require(os.name == "posix", "Linux and the documented local Docker are required")
     parent = await asyncio.to_thread(Path(args.qa_parent).resolve, strict=True)
@@ -215,8 +215,8 @@ async def run(args):
             for item in manager.state_store.all_states()
             if item.project_id == project and item.owner_id == owner
         }
-        from omnia_orchestrator.services import nginx_writer
-        from omnia_orchestrator.services.cell_publication import publication_root
+        from yleum_orchestrator.services import nginx_writer
+        from yleum_orchestrator.services.cell_publication import publication_root
 
         # A prior public runtime would be a third bundle during preparation.
         # Preserve its journal/resources for explicit operator recovery instead
@@ -435,10 +435,10 @@ async def run(args):
                 nonlocal publication, public_host
                 from smoke_cell_publication import business_config
 
-                from omnia_orchestrator.routers.runtime import _workspace_revision
-                from omnia_orchestrator.schemas.cell_publication import CellDeployRequest
-                from omnia_orchestrator.services import nginx_writer
-                from omnia_orchestrator.services.cell_publication import CellPublicationService
+                from yleum_orchestrator.routers.runtime import _workspace_revision
+                from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
+                from yleum_orchestrator.services import nginx_writer
+                from yleum_orchestrator.services.cell_publication import CellPublicationService
 
                 current = manager.state_store.load(workspace)
                 _, source_backend = adapter.parts(current)
@@ -489,7 +489,7 @@ async def run(args):
                 current_source = await _read_agent_workspace_files(
                     manager, backend.workspace_volume
                 )
-                from omnia_orchestrator.routers.runtime import _workspace_revision
+                from yleum_orchestrator.routers.runtime import _workspace_revision
 
                 proof = backend._metadata().get("restoration_proof", {})
                 require(
@@ -715,7 +715,7 @@ async def run(args):
                     else:
                         resource.remove()
             if public_host:
-                from omnia_orchestrator.services import nginx_writer
+                from yleum_orchestrator.services import nginx_writer
 
                 await nginx_writer.unpublish(public_host)
             record("fresh-canary-resources-cleaned")

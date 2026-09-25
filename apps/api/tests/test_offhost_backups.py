@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi import HTTPException
 
-from omnia_api.routers import backups
+from yleum_api.routers import backups
 
 
 def _write_export(root: Path, timestamp: str, payload: bytes = b"encrypted-cms") -> Path:

@@ -11,7 +11,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from tests._cell_fakes import FakeDockerBackend, SimulatedProcessCrash
+from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
     CellFenceRejected,
     CellIdentityConflict,
@@ -23,18 +24,17 @@ from omnia_orchestrator.core.cell_resources import (
     LifecycleMutation,
     identity_labels,
 )
-from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
-from omnia_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
-from omnia_orchestrator.services.cell_lock import WorkspaceOperationLock
-from omnia_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
-from omnia_orchestrator.services.docker_cell_resources import (
+from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
+from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
+from yleum_orchestrator.services.cell_state import CellCredentialStore, CellStateStore
+from yleum_orchestrator.services.docker_cell_resources import (
     DockerCellResourceManager,
     DockerContainerRecord,
     DockerContainerSpec,
     DockerNetworkRecord,
 )
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
-from tests._cell_fakes import FakeDockerBackend, SimulatedProcessCrash
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 
 
 def _profile(state_path: Path) -> CellResourceProfile:
@@ -371,7 +371,7 @@ async def test_only_generation_release_requests_trusted_retention(tmp_path):
 async def test_disabled_portable_provider_cannot_advance_lease_or_release_capacity(
     tmp_path, operation
 ):
-    from omnia_orchestrator.services.project_machine import write_controller_json
+    from yleum_orchestrator.services.project_machine import write_controller_json
 
     manager, docker, state_store, _lock = _make_manager(tmp_path)
     spec = replace(_spec(uuid4()), generation_run_id=uuid4())

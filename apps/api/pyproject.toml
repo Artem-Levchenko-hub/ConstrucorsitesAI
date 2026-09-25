@@ -47,7 +47,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/omnia_api"]
+packages = ["src/yleum_api", "src/omnia_api"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
@@ -97,14 +97,14 @@ ignore = [
 # These modules contain exact LLM prompts, shell templates, or compact palette
 # data. Reflowing their literal text changes the payload consumed at runtime,
 # while Ruff cannot safely wrap it without changing the value.
-"src/omnia_api/sections/catalog.py" = ["E501"]
-"src/omnia_api/sections/palettes.py" = ["E501"]
-"src/omnia_api/services/agent_builder.py" = ["E501"]
-"src/omnia_api/services/design_presets.py" = ["E501"]
-"src/omnia_api/services/run_bundle.py" = ["E501"]
+"src/yleum_api/sections/catalog.py" = ["E501"]
+"src/yleum_api/sections/palettes.py" = ["E501"]
+"src/yleum_api/services/agent_builder.py" = ["E501"]
+"src/yleum_api/services/design_presets.py" = ["E501"]
+"src/yleum_api/services/run_bundle.py" = ["E501"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["omnia_api"]
+known-first-party = ["yleum_api"]
 
 [tool.mypy]
 python_version = "3.12"

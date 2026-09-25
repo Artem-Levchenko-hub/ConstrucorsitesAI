@@ -4,8 +4,8 @@ import json
 
 import pytest
 
-from omnia_orchestrator.services import restoration_catalog as catalog
-from omnia_orchestrator.services.code_restoration_engine import preparation_report
+from yleum_orchestrator.services import restoration_catalog as catalog
+from yleum_orchestrator.services.code_restoration_engine import preparation_report
 
 
 async def test_async_database_fixture_never_resets_mismatched_database(monkeypatch):

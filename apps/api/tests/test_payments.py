@@ -7,11 +7,11 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from omnia_api.models.account import Payment
-from omnia_api.models.billing import BillingPlan, Subscription
-from omnia_api.models.wallet_charge import WalletCharge
-from omnia_api.routers import payments as payments_router
-from omnia_api.services import yookassa
+from yleum_api.models.account import Payment
+from yleum_api.models.billing import BillingPlan, Subscription
+from yleum_api.models.wallet_charge import WalletCharge
+from yleum_api.routers import payments as payments_router
+from yleum_api.services import yookassa
 
 pytestmark = pytest.mark.asyncio
 

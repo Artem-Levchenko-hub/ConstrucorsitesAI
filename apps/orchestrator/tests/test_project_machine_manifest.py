@@ -9,7 +9,7 @@ from pydantic import ValidationError
 
 
 def manifest_type():
-    name = "omnia_orchestrator.core.project_machine"
+    name = "yleum_orchestrator.core.project_machine"
     assert importlib.util.find_spec(name) is not None, "portable manifest is missing"
     return importlib.import_module(name).MachineManifest
 

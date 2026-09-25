@@ -12,27 +12,27 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from omnia_orchestrator.core.cell_resources import (
+from tests._cell_fakes import FakeDockerBackend
+from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
+from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
     CellRestoreFailed,
     CellTerminalOperationFailed,
 )
-from omnia_orchestrator.core.config import get_settings
-from omnia_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
-from omnia_orchestrator.core.workspace_provider import (
+from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.errors import OrchestratorError, orchestrator_error_handler
+from yleum_orchestrator.core.workspace_provider import (
     WorkspaceHandle,
     WorkspaceResourceStatus,
     WorkspaceSpec,
     WorkspaceStatus,
 )
-from omnia_orchestrator.routers import workspace
-from omnia_orchestrator.services.docker_cell_resources import (
+from yleum_orchestrator.routers import workspace
+from yleum_orchestrator.services.docker_cell_resources import (
     CellResourceError,
     DockerCommandResult,
 )
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
-from tests._cell_fakes import FakeDockerBackend
-from tests.test_cell_checkpoint import _make_fixture as _make_checkpoint_fixture
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 
 
 def test_generated_next_declarations_do_not_invalidate_source_proof() -> None:

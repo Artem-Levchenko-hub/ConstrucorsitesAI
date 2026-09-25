@@ -8,7 +8,7 @@ stack-aware remediation rule. The risky decisions are all in these pure pieces.
 
 from __future__ import annotations
 
-from omnia_api.services.isolation_gate import (
+from yleum_api.services.isolation_gate import (
     api_routes_from_grep,
     body_contains_id,
     body_leaks_data,
@@ -114,7 +114,7 @@ def test_body_contains_id() -> None:
 
 
 def test_summarize_passes_only_when_all_ok() -> None:
-    from omnia_api.services.functional_gate import Check, summarize
+    from yleum_api.services.functional_gate import Check, summarize
 
     assert summarize([Check("anon DENIED /api/tasks", True, "HTTP 401")]).passed is True
     leak = summarize(
@@ -131,7 +131,7 @@ def test_summarize_passes_only_when_all_ok() -> None:
 
 
 def test_verify_isolation_action_registered() -> None:
-    from omnia_api.services.agent_builder import _KNOWN_ACTIONS, _VERIFY_ACTIONS, parse_action
+    from yleum_api.services.agent_builder import _KNOWN_ACTIONS, _VERIFY_ACTIONS, parse_action
 
     assert "verify_isolation" in _KNOWN_ACTIONS
     assert "verify_isolation" in _VERIFY_ACTIONS  # idempotent re-check, not a cycle
@@ -149,7 +149,7 @@ def test_verify_isolation_action_registered() -> None:
 
 
 def test_drizzle_fix_instruction_uses_isolation_rule() -> None:
-    from omnia_api.services.agent_gate_feedback import GateOutcome, build_fix_instruction
+    from yleum_api.services.agent_gate_feedback import GateOutcome, build_fix_instruction
 
     red = [GateOutcome("isolation", False, ["anon DENIED /api/tasks: HTTP 200 — LEAKS ROWS"])]
     drizzle = build_fix_instruction(red, attempt=0, max_attempts=2, stack="nextjs-postgres-drizzle")

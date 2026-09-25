@@ -6,7 +6,7 @@ from uuid import UUID
 
 import pytest
 
-from omnia_api.services import repo
+from yleum_api.services import repo
 
 PROJECT_ID = UUID("00000000-0000-0000-0000-000000000123")
 

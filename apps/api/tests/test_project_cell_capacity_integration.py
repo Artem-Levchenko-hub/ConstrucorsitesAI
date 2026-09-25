@@ -7,13 +7,13 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
-from omnia_api.models.user import User
-from omnia_api.services.generation import supervisor
-from omnia_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.user import User
+from yleum_api.services.generation import supervisor
+from yleum_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
 
 pytestmark = pytest.mark.asyncio
 

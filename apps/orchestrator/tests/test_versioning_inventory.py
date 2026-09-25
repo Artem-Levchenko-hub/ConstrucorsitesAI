@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 
-from omnia_orchestrator.services.restoration_catalog import CATALOG_SQL, describe_catalog
-from omnia_orchestrator.services.versioning.inventory import (
+from tests._versioning_pg import pg  # noqa: F401
+from yleum_orchestrator.services.restoration_catalog import CATALOG_SQL, describe_catalog
+from yleum_orchestrator.services.versioning.inventory import (
     LIST_RELATIONS_SQL,
     aggregate,
     observe_inventory,
 )
-from tests._versioning_pg import pg  # noqa: F401
 
 CUSTOMERS = """
 CREATE TABLE clients (id serial PRIMARY KEY, name text NOT NULL, phone text,
@@ -125,7 +125,7 @@ def test_unreadable_catalog_is_unavailable_never_empty():
 
 
 def test_unknown_parts_never_turn_into_empty():
-    from omnia_orchestrator.services.versioning.contracts import InventoryObject
+    from yleum_orchestrator.services.versioning.contracts import InventoryObject
 
     empty = InventoryObject(object="public.a", kind="table", classification="business",
                             presence="empty", row_count=0, count_kind="exact")
@@ -136,7 +136,7 @@ def test_unknown_parts_never_turn_into_empty():
 
 
 def test_fallback_is_bounded_and_materialized_views_are_not_scanned(pg):  # noqa: F811
-    from omnia_orchestrator.services.versioning import inventory as module
+    from yleum_orchestrator.services.versioning import inventory as module
 
     pg.run(
         "CREATE TABLE a (id int); INSERT INTO a VALUES (1); CREATE TABLE b (id int); "

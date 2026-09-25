@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omnia_api.schemas.project import (
+from yleum_api.schemas.project import (
     _ORCHESTRATOR_TEMPLATE_BY_API,
     Template,
 )

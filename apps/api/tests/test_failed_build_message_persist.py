@@ -25,11 +25,11 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from omnia_api.models.message import Message
-from omnia_api.models.project import Project
-from omnia_api.models.user import User
-from omnia_api.services.generation.agent_messages import _failed_build_body
-from omnia_api.services.generation.publication import _finalize_message
+from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.user import User
+from yleum_api.services.generation.agent_messages import _failed_build_body
+from yleum_api.services.generation.publication import _finalize_message
 
 pytestmark = pytest.mark.asyncio
 

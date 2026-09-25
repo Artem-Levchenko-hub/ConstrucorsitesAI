@@ -8,20 +8,20 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import (
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellOperation,
     ProjectCellWorkspace,
 )
-from omnia_api.models.user import User
-from omnia_api.services.orchestrator_client import (
+from yleum_api.models.user import User
+from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
     ProjectCellResourceResponse,
 )
-from omnia_api.services.project_cell_capacity import (
+from yleum_api.services.project_cell_capacity import (
     _hibernate_victim_still_idle,
     claim_capacity_turn,
     claim_idle_hibernation_victim,
@@ -30,8 +30,8 @@ from omnia_api.services.project_cell_capacity import (
     release_one_stale_generation_lease,
     wait_for_capacity,
 )
-from omnia_api.services.project_cell_lifecycle import execute_cell_operation
-from omnia_api.services.project_cells import (
+from yleum_api.services.project_cell_lifecycle import execute_cell_operation
+from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
     complete_cell_operation,
     fail_cell_operation,
@@ -426,7 +426,7 @@ async def test_queue_deadline_interrupts_slow_provider_but_preserves_unknown_eff
     monkeypatch: pytest.MonkeyPatch,
     initial_attempt: bool,
 ) -> None:
-    from omnia_api.services import project_cell_capacity
+    from yleum_api.services import project_cell_capacity
 
     monkeypatch.setattr(
         project_cell_capacity,
@@ -807,11 +807,11 @@ async def test_capacity_wait_reconciles_ensure_after_orchestrator_restart(
         return None
 
     monkeypatch.setattr(
-        "omnia_api.services.project_cell_capacity.hibernate_one_idle_workspace",
+        "yleum_api.services.project_cell_capacity.hibernate_one_idle_workspace",
         no_idle_workspace,
     )
     monkeypatch.setattr(
-        "omnia_api.services.project_cell_capacity.asyncio.sleep",
+        "yleum_api.services.project_cell_capacity.asyncio.sleep",
         no_delay,
     )
 
@@ -947,7 +947,7 @@ async def test_wake_capacity_wait_is_recognised_like_ensure(monkeypatch) -> None
     """
     from uuid import uuid4
 
-    from omnia_api.services import orchestrator_client as oc
+    from yleum_api.services import orchestrator_client as oc
 
     request = oc.ControlProjectCellResourcesRequest(
         workspace_id=uuid4(),
@@ -984,7 +984,7 @@ async def test_wake_rejects_a_mismatched_capacity_answer(monkeypatch) -> None:
     """Ответ про чужую операцию не принимается за свой."""
     from uuid import uuid4
 
-    from omnia_api.services import orchestrator_client as oc
+    from yleum_api.services import orchestrator_client as oc
 
     request = oc.ControlProjectCellResourcesRequest(
         workspace_id=uuid4(),

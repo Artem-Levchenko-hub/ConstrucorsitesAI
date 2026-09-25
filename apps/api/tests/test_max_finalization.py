@@ -12,26 +12,26 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
-from omnia_api.core.config import get_settings
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.models.project import Project
-from omnia_api.models.project_cell import (
+from yleum_api.core.config import get_settings
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
+from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellCandidate,
     ProjectCellProofResult,
     ProjectCellWorkspace,
 )
-from omnia_api.models.restoration import Restoration
-from omnia_api.models.user import User
-from omnia_api.services.max_finalization import (
+from yleum_api.models.restoration import Restoration
+from yleum_api.models.user import User
+from yleum_api.services.max_finalization import (
     AdaptationActivationRecoveryRequired,
     MaxFinalizationCoordinator,
     MaxFinalizationStatus,
     ProofBundle,
     _adaptation_proof_capability_gap,
 )
-from omnia_api.services.max_runtime_probe import MaxRuntimeProbe
-from omnia_api.services.orchestrator_client import (
+from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
+from yleum_api.services.orchestrator_client import (
     ProjectCellAgentExecResponse,
     ProjectCellAgentOperationStatus,
     ProjectCellPreviewSession,
@@ -39,14 +39,14 @@ from omnia_api.services.orchestrator_client import (
     RestorationAdaptationProof,
     RestorationAdaptationWorkspace,
 )
-from omnia_api.services.project_cell_executor import (
+from yleum_api.services.project_cell_executor import (
     ProjectCellCommandObservation,
     ProjectCellCommandRole,
     ProjectCellExecutorHandle,
     ProjectCellPreviewSyncResult,
 )
-from omnia_api.services.project_cell_proofs import ProofDimension, ProofIdentity, ProofOutcome
-from omnia_api.services.promotion_permit import (
+from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity, ProofOutcome
+from yleum_api.services.promotion_permit import (
     canonical_files_digest,
     workspace_revision_digest,
 )
@@ -116,7 +116,7 @@ def _install_exact_release_probe(monkeypatch: pytest.MonkeyPatch) -> Callable[[]
         require_embedded_framing,
         framing_policy,
     ):
-        from omnia_api.services.security_gate import surface_verdict_from_headers
+        from yleum_api.services.security_gate import surface_verdict_from_headers
 
         assert bootstrap_url.endswith("&signature=" + "a" * 64)
         assert require_embedded_framing is True
@@ -135,11 +135,11 @@ def _install_exact_release_probe(monkeypatch: pytest.MonkeyPatch) -> Callable[[]
         )
 
     monkeypatch.setattr(
-        "omnia_api.services.max_runtime_probe.probe_max_cell_runtime",
+        "yleum_api.services.max_runtime_probe.probe_max_cell_runtime",
         probe,
     )
     monkeypatch.setattr(
-        "omnia_api.services.security_gate.run_security_gate",
+        "yleum_api.services.security_gate.run_security_gate",
         security,
     )
     return _RUNTIME_ARTIFACT_DIGESTS.clear
@@ -163,7 +163,7 @@ _CURRENT_ADAPTATION_DIFF = {
 
 
 def test_adaptation_capabilities_are_controller_attested_and_fail_closed() -> None:
-    from omnia_api.services.restoration_adaptation import _preservation_contract
+    from yleum_api.services.restoration_adaptation import _preservation_contract
 
     bundle = {
         "version": 2,
@@ -459,8 +459,8 @@ async def test_generation_deadline_terminalizes_bound_adaptation(
     db_session: AsyncSession,
     test_engine: AsyncEngine,
 ) -> None:
-    from omnia_api.models.restoration import Restoration
-    from omnia_api.services.max_finalization import watch_generation_deadline
+    from yleum_api.models.restoration import Restoration
+    from yleum_api.services.max_finalization import watch_generation_deadline
 
     harness = await _new_harness(db_session, test_engine)
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
@@ -543,7 +543,7 @@ async def test_resume_rebuilds_legacy_full_build_and_dependent_proofs(
     test_engine: AsyncEngine,
     monkeypatch,
 ) -> None:
-    from omnia_api.services import release_proof
+    from yleum_api.services import release_proof
 
     release_calls = 0
     real_release_proof = release_proof.run_release_proof
@@ -660,7 +660,7 @@ async def test_red_release_proof_creates_zero_candidates(
     test_engine: AsyncEngine,
     monkeypatch,
 ) -> None:
-    from omnia_api.services.functional_gate import Check, FunctionalVerdict
+    from yleum_api.services.functional_gate import Check, FunctionalVerdict
 
     harness = await _new_harness(db_session, test_engine)
 
@@ -671,7 +671,7 @@ async def test_red_release_proof_creates_zero_candidates(
             summary="release behavior is red",
         )
 
-    monkeypatch.setattr("omnia_api.services.release_proof.run_release_proof", red_release)
+    monkeypatch.setattr("yleum_api.services.release_proof.run_release_proof", red_release)
     outcome = await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
 
     assert outcome.status is MaxFinalizationStatus.FAILED
@@ -685,7 +685,7 @@ async def test_stale_identity_blocks_candidate_prepare(
 ) -> None:
     import pytest
 
-    from omnia_api.services.promotion_permit import PromotionPermitError
+    from yleum_api.services.promotion_permit import PromotionPermitError
 
     harness = await _new_harness(db_session, test_engine)
     original = await harness.coordinator.executor.current_identity()
@@ -720,8 +720,8 @@ async def test_changed_full_envelope_does_not_reuse_failed_bootstrap_command(
 
     import pytest
 
-    from omnia_api.services.generation_metrics import GenerationPhase
-    from omnia_api.services.project_cell_proofs import ProofDimension
+    from yleum_api.services.generation_metrics import GenerationPhase
+    from yleum_api.services.project_cell_proofs import ProofDimension
 
     harness = await _new_harness(db_session, test_engine)
     coordinator = harness.coordinator
@@ -765,7 +765,7 @@ async def test_persisted_fatal_bootstrap_blocks_source_repair_after_restart(
 
     import pytest
 
-    from omnia_api.services.orchestrator_client import OrchestratorBadRequest
+    from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
     harness = await _new_harness(db_session, test_engine)
     calls = []
@@ -849,8 +849,8 @@ async def _adaptation_run(db_session: AsyncSession, harness: _Harness) -> UUID:
     """Mark the run as a restoration adaptation of a draft that served visits."""
     import asyncio
 
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.services import repo
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.services import repo
 
     coordinator = harness.coordinator
     before = {
@@ -892,7 +892,7 @@ async def _adaptation_run(db_session: AsyncSession, harness: _Harness) -> UUID:
         request_payload={},
     )
     db_session.add(operation)
-    from omnia_api.services.restoration_adaptation import _preservation_contract
+    from yleum_api.services.restoration_adaptation import _preservation_contract
 
     run.agent_state = {
         "restoration_adaptation": {
@@ -978,7 +978,7 @@ async def test_adaptation_keeping_every_route_proceeds_to_the_build(
     }
     harness.files.clear()
     harness.files.update(candidate)
-    from omnia_api.services import restorations
+    from yleum_api.services import restorations
 
     async def activate(*_args, **_kwargs) -> bool:
         return True
@@ -997,7 +997,7 @@ async def test_adaptation_completion_callback_is_idempotent_after_activation_ter
     db_session: AsyncSession,
     test_engine: AsyncEngine,
 ) -> None:
-    from omnia_api.services.generation_metrics import GenerationPhase
+    from yleum_api.services.generation_metrics import GenerationPhase
 
     harness = await _new_harness(db_session, test_engine)
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
@@ -1030,7 +1030,7 @@ async def test_adaptation_cancel_callback_is_idempotent_after_terminal_receipt(
     db_session: AsyncSession,
     test_engine: AsyncEngine,
 ) -> None:
-    from omnia_api.services.generation_metrics import GenerationPhase
+    from yleum_api.services.generation_metrics import GenerationPhase
 
     harness = await _new_harness(db_session, test_engine)
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
@@ -1062,9 +1062,9 @@ async def test_adaptation_without_trusted_copy_and_proof_capability_fails_before
     db_session: AsyncSession,
     test_engine: AsyncEngine,
 ) -> None:
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.services import repo
-    from omnia_api.services.restoration_adaptation import _preservation_contract
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.services import repo
+    from yleum_api.services.restoration_adaptation import _preservation_contract
 
     harness = await _new_harness(db_session, test_engine)
     sha = await asyncio.to_thread(
@@ -1176,7 +1176,7 @@ async def test_db_only_repair_uses_next_trusted_proof_attempt(
             "restoration_adaptation_database_copy_v1": True,
         },
     )
-    from omnia_api.services import restorations
+    from yleum_api.services import restorations
 
     async def activate(*_args, **_kwargs) -> bool:
         return True
@@ -1252,8 +1252,8 @@ async def test_proof_request_is_replayed_without_releasing_candidate(
     terminal_status: str | None,
     proof_state: str,
 ) -> None:
-    from omnia_api.services import restorations
-    from omnia_api.services.generation_runs import (
+    from yleum_api.services import restorations
+    from yleum_api.services.generation_runs import (
         retry_terminal_adaptation_notifications,
         terminalize_generation_run_locked,
     )

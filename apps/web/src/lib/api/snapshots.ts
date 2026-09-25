@@ -20,7 +20,7 @@ export async function rollback(
 
 /**
  * Возвращает снапшот + dict путь→содержимое всех файлов в коммите.
- * Бэк читает из MinIO, см. apps/api/src/omnia_api/routers/snapshots.py:55.
+ * Бэк читает из MinIO, см. apps/api/src/yleum_api/routers/snapshots.py:55.
  */
 export async function getSnapshotWithFiles(
   projectId: string,

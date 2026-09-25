@@ -13,7 +13,7 @@ import asyncio
 
 import pytest
 
-from omnia_api.services import agent_builder as ab
+from yleum_api.services import agent_builder as ab
 
 # ── parse_action ────────────────────────────────────────────────────────────
 
@@ -460,7 +460,7 @@ def test_agent_tracks_package_manager_generated_lockfile() -> None:
 def test_container_write_surfaces_resolved_lockfile(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     async def hot_reload(*args, **kwargs):
         return {"state": "hot_reloaded", "pnpm_lockfile": "lockfileVersion: '9.0'\n"}
@@ -489,7 +489,7 @@ def test_container_write_propagates_mandatory_max_migration_failure(
     monkeypatch: pytest.MonkeyPatch,
     upstream_code: str,
 ) -> None:
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     async def hot_reload(*args, **kwargs):
         raise orchestrator_client.OrchestratorBadRequest(
@@ -526,7 +526,7 @@ def test_parse_rejects_removed_see_action():
 
 def test_container_runtime_check_receives_requested_route(monkeypatch):
     """Removing visual review does not remove real route verification."""
-    from omnia_api.services import orchestrator_client
+    from yleum_api.services import orchestrator_client
 
     captured = {}
 

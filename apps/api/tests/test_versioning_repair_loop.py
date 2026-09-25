@@ -13,10 +13,6 @@ from dataclasses import replace
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession
 
-from omnia_api.models.generation_run import GenerationRun
-from omnia_api.services.max_finalization import MaxFinalizationStatus
-from omnia_api.services.project_cell_executor import ProjectCellCommandRole
-from omnia_api.services.restoration_adaptation import _preservation_contract
 from tests.test_max_finalization import (
     _CLIENTS_ROUTE,
     _VISITS_ROUTE,
@@ -25,6 +21,10 @@ from tests.test_max_finalization import (
     _install_exact_release_probe,
     _new_harness,
 )
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.services.max_finalization import MaxFinalizationStatus
+from yleum_api.services.project_cell_executor import ProjectCellCommandRole
+from yleum_api.services.restoration_adaptation import _preservation_contract
 
 PROMPT = "Верни экраны выбранной исторической версии"
 
@@ -181,10 +181,10 @@ async def test_foreign_baseline_is_never_compared(
 ):  # FV031
     import asyncio
 
-    from omnia_api.models.project import Project
-    from omnia_api.models.snapshot import Snapshot
-    from omnia_api.models.user import User
-    from omnia_api.services import repo
+    from yleum_api.models.project import Project
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.models.user import User
+    from yleum_api.services import repo
 
     harness = await _new_harness(db_session, test_engine)
     stranger = User(email=f"stranger-{uuid.uuid4().hex}@example.com", password_hash="x")

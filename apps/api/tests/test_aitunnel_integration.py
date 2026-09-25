@@ -6,9 +6,9 @@ from uuid import UUID
 import httpx
 import pytest
 
-from omnia_api.core.errors import ApiError
-from omnia_api.routers import integration_runtime
-from omnia_api.services import integration_providers
+from yleum_api.core.errors import ApiError
+from yleum_api.routers import integration_runtime
+from yleum_api.services import integration_providers
 
 
 class _FakeClient:

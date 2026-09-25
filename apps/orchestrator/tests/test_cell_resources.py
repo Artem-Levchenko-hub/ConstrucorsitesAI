@@ -5,14 +5,14 @@ from uuid import UUID
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import (
+from yleum_orchestrator.core.cell_resources import (
     CellResourceNames,
     CellResourceProfile,
     LifecycleMutation,
     identity_labels,
 )
-from omnia_orchestrator.core.config import Settings
-from omnia_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.core.config import Settings
+from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
 
 
 def _settings(**overrides: object) -> SimpleNamespace:

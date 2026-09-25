@@ -13,10 +13,10 @@ from typing import Any, cast
 import docker  # type: ignore[import-untyped]
 import pytest
 
-import omnia_orchestrator.services.docker_py_cell_backend as docker_py_cell_backend
-from omnia_orchestrator.core.cell_resources import CellResourceError
-from omnia_orchestrator.services.docker_cell_resources import DockerContainerSpec
-from omnia_orchestrator.services.docker_py_cell_backend import (
+import yleum_orchestrator.services.docker_py_cell_backend as docker_py_cell_backend
+from yleum_orchestrator.core.cell_resources import CellResourceError
+from yleum_orchestrator.services.docker_cell_resources import DockerContainerSpec
+from yleum_orchestrator.services.docker_py_cell_backend import (
     _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES,
     DockerPyCellBackend,
 )

@@ -5,10 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.cell_resources import CellIdentityConflict, LifecycleMutation
-from omnia_orchestrator.core.workspace_provider import ControlAction
-from omnia_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 from tests.test_cell_checkpoint import _make_fixture, _spec
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict, LifecycleMutation
+from yleum_orchestrator.core.workspace_provider import ControlAction
+from yleum_orchestrator.services.docker_owner_canary_provider import DockerOwnerCanaryProvider
 
 
 async def paused_cell(tmp_path, *, portable=False):
@@ -259,8 +259,8 @@ async def test_absent_cell_destroy_proves_absence_without_creating_state(tmp_pat
 
 
 async def test_destroy_tombstone_blocks_restart_and_agent_volume_mutations(tmp_path):
-    from omnia_orchestrator.core.errors import OrchestratorError
-    from omnia_orchestrator.routers.workspace import _workspace_volume_identity
+    from yleum_orchestrator.core.errors import OrchestratorError
+    from yleum_orchestrator.routers.workspace import _workspace_volume_identity
 
     provider, manager, _, _, spec = await paused_cell(tmp_path)
     mutation = LifecycleMutation(uuid4(), 3, "c" * 64)
@@ -279,7 +279,7 @@ async def test_destroy_tombstone_blocks_restart_and_agent_volume_mutations(tmp_p
 
 
 async def test_absent_cell_destroy_refuses_existing_unlabelled_named_volume(tmp_path):
-    from omnia_orchestrator.core.cell_resources import CellResourceNames
+    from yleum_orchestrator.core.cell_resources import CellResourceNames
 
     manager, checkpoints, docker = _make_fixture(tmp_path)
     provider = DockerOwnerCanaryProvider(resource_manager=manager, checkpoint_manager=checkpoints)

@@ -3,7 +3,7 @@
 External design / UX knowledge bundles vendored into the API repo so prod
 LLM-gateway nodes ship with deterministic, version-pinned content.
 
-Loaders live at `apps/api/src/omnia_api/services/skill_library.py`.
+Loaders live at `apps/api/src/yleum_api/services/skill_library.py`.
 
 ## `ui-ux-pro-max/`
 

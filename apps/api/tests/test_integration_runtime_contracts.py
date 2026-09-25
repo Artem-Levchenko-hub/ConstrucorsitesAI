@@ -6,12 +6,12 @@ import httpx
 import pytest
 from sqlalchemy import select
 
-from omnia_api.core.crypto import encrypt_strong
-from omnia_api.models.app_integration import AccountIntegration
-from omnia_api.models.max_integration import MaxIntegration
-from omnia_api.routers import integration_runtime
-from omnia_api.services import integration_providers
 from tests.test_app_integrations_api import _max_init_data, _register_and_create
+from yleum_api.core.crypto import encrypt_strong
+from yleum_api.models.app_integration import AccountIntegration
+from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.routers import integration_runtime
+from yleum_api.services import integration_providers
 
 
 async def connect(client, db_session, monkeypatch, provider="yookassa"):
@@ -267,8 +267,8 @@ async def test_crm_concurrent_submission_and_cancelled_dispatch_never_replay(
 
     from sqlalchemy.ext.asyncio import async_sessionmaker
 
-    from omnia_api.core.errors import ApiError
-    from omnia_api.services.integration_operations import execute_once
+    from yleum_api.core.errors import ApiError
+    from yleum_api.services.integration_operations import execute_once
 
     project = await connect(client, db_session, monkeypatch, "bitrix24")
     connection_id = await db_session.scalar(select(AccountIntegration.id))
@@ -328,7 +328,7 @@ async def test_catalog_only_advertises_implemented_connected_operations(
 async def test_generation_context_uses_only_ready_bound_methods_without_credentials(
     client, db_session, monkeypatch
 ):
-    from omnia_api.services.integration_generation import generation_context
+    from yleum_api.services.integration_generation import generation_context
 
     project = await connect(client, db_session, monkeypatch)
     context = await generation_context(db_session, UUID(project))

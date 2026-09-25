@@ -3,7 +3,7 @@ from uuid import uuid4
 
 from pydantic import SecretStr
 
-from omnia_api.core import security
+from yleum_api.core import security
 
 
 def _settings() -> SimpleNamespace:

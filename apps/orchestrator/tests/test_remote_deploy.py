@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_orchestrator.core.shell import CmdResult
-from omnia_orchestrator.services import builder, remote_deploy
+from yleum_orchestrator.core.shell import CmdResult
+from yleum_orchestrator.services import builder, remote_deploy
 
 
 class FakeSession:

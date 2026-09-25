@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.routers.payments import webhook_object_id
-from omnia_api.services import yookassa
-from omnia_api.services.yookassa import (
+from yleum_api.routers.payments import webhook_object_id
+from yleum_api.services import yookassa
+from yleum_api.services.yookassa import (
     YOOKASSA_NOTIFICATION_NETWORKS,
     notification_source_allowed,
 )

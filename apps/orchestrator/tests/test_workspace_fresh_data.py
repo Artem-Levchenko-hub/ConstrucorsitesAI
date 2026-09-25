@@ -5,12 +5,12 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_orchestrator.core.errors import OrchestratorError
-from omnia_orchestrator.core.project_machine import MachineManifest
-from omnia_orchestrator.routers import workspace
-from omnia_orchestrator.schemas.workspace import WorkspaceAgentBootstrapRequest
 from tests.test_project_machine_manifest import payload
 from tests.test_restoration_machine_policy import backend
+from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.routers import workspace
+from yleum_orchestrator.schemas.workspace import WorkspaceAgentBootstrapRequest
 
 
 @pytest.mark.parametrize("portable,has_runtime", [(True, True), (False, True), (True, False)])

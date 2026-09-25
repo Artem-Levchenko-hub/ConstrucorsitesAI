@@ -27,7 +27,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.engine import make_url
 
-from omnia_api.core.config import get_settings
+from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]

@@ -16,8 +16,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from omnia_api.services.build_plan import BuildPlan, Capability
-from omnia_api.services.coverage_gate import (
+from yleum_api.services.build_plan import BuildPlan, Capability
+from yleum_api.services.coverage_gate import (
     CoverageCheck,
     CoverageVerdict,
     _route_known,
@@ -26,7 +26,7 @@ from omnia_api.services.coverage_gate import (
     run_coverage_gate,
     status_matches,
 )
-from omnia_api.services.orchestrator_client import ProjectCellPreviewSession
+from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
 
 def test_status_matches_class_and_exact():
@@ -81,7 +81,7 @@ async def test_no_dev_url_skipped(monkeypatch):
         return {}
 
     monkeypatch.setattr(
-        "omnia_api.services.orchestrator_client.get_status", _status
+        "yleum_api.services.orchestrator_client.get_status", _status
     )
     plan = BuildPlan(capabilities=(Capability(id="c", path="/api/x", must_have=True),))
     v = await run_coverage_gate(str(uuid.uuid4()), plan)
@@ -127,7 +127,7 @@ async def test_cell_coverage_uses_signed_session_without_legacy_runtime(
     def forbidden(*_args, **_kwargs):
         raise AssertionError("cell coverage must not use legacy runtime or login")
 
-    from omnia_api.services import functional_gate, orchestrator_client
+    from yleum_api.services import functional_gate, orchestrator_client
 
     monkeypatch.setattr("playwright.async_api.async_playwright", fake_playwright)
     monkeypatch.setattr(orchestrator_client, "get_status", forbidden)

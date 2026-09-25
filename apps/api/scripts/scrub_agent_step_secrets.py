@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 
-from omnia_api.services.agent_progress import scrub_persisted_agent_steps
+from yleum_api.services.agent_progress import scrub_persisted_agent_steps
 
 
 async def main() -> None:

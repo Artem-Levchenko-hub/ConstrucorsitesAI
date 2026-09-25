@@ -19,7 +19,7 @@ if [ -f "$PID_FILE" ]; then
     fi
 fi
 # Belt and braces: kill any uvicorn on :8003 that belongs to us
-pkill -f "uvicorn omnia_orchestrator" 2>/dev/null || true
+pkill -f "uvicorn yleum_orchestrator" 2>/dev/null || true
 
 # 2. Destroy dev containers + the template image
 for c in $(docker ps -aq --filter "label=omnia.kind=dev" 2>/dev/null); do

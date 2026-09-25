@@ -5,7 +5,7 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from omnia_api.schemas.restoration import RuntimeRestoration
+from yleum_api.schemas.restoration import RuntimeRestoration
 
 
 def runtime_payload(state: str, phase: str) -> dict[str, object]:

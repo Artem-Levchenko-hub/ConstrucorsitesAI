@@ -1,0 +1,642 @@
+"""Bare-repo storage поверх MinIO + pygit2.
+
+Каждому проекту соответствует один tar.gz в bucket `projects` под ключом
+`repos/{project_id}.tar.gz`.
+При операции tarball распаковывается во временную папку, pygit2 работает как с обычным репо,
+обратно упаковывается и заливается. Простая реализация — оптимизация (хранить только .git/objects)
+оставлена на потом, когда будет реальная нагрузка.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import tarfile
+import tempfile
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
+from typing import Any, cast
+from uuid import UUID
+
+import pygit2
+from minio.error import S3Error
+
+from yleum_api.core.config import get_settings
+from yleum_api.core.minio import get_minio_client
+from yleum_api.services.template_materialization import materialize_template
+
+# Project complexity quota, not an LLM-response shape limit. Native agents write
+# incrementally, so a real application may contain thousands of source files;
+# dependency/build trees remain outside this text repository.
+MAX_FILES = 5_000
+MAX_FILE_BYTES = 2 * 1024 * 1024
+MAX_REPO_BYTES = 64 * 1024 * 1024
+SIGNATURE = ("Yleum AI", "ai@omnia.ai")
+_ADAPTATION_EXCLUDED_PARTS = frozenset(
+    {
+        ".git",
+        ".next",
+        ".pnpm-store",
+        ".turbo",
+        ".cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+        "coverage",
+        "dist",
+        "build",
+        "vendor",
+    }
+)
+_ADAPTATION_SECRET_NAMES = frozenset(
+    {".env", "secrets.json", "secrets.yaml", "secrets.yml"}
+)
+_ADAPTATION_MAX_SOURCE_FILES = 4096
+_ADAPTATION_MAX_SOURCE_FILE_BYTES = 16 * 1024 * 1024
+
+
+def _repo_key(project_id: UUID) -> str:
+    return f"repos/{project_id}.tar.gz"
+
+
+def _bucket() -> str:
+    return get_settings().minio_bucket_projects
+
+
+def _signature() -> pygit2.Signature:
+    return pygit2.Signature(*SIGNATURE)
+
+
+def _validate_repo_path(path: str) -> None:
+    pure = PurePosixPath(path)
+    if (
+        not path
+        or "\\" in path
+        or pure.is_absolute()
+        or pure.as_posix() != path
+        or any(part in {"", ".", "..", ".git"} for part in pure.parts)
+    ):
+        raise ValueError(f"invalid repository path: {path!r}")
+
+
+def _validate_file_batch(files: dict[str, str]) -> None:
+    if len(files) > MAX_FILES:
+        raise ValueError(f"too many files: {len(files)} > {MAX_FILES}")
+    for path, content in files.items():
+        _validate_repo_path(path)
+        if len(content.encode("utf-8")) > MAX_FILE_BYTES:
+            raise ValueError(f"file {path} exceeds {MAX_FILE_BYTES} bytes")
+
+
+def _validate_tree_budget(repo: pygit2.Repository, tree_oid: pygit2.Oid) -> None:
+    """Enforce project-wide quotas after applying an incremental commit."""
+    root = repo.get(tree_oid)
+    if not isinstance(root, pygit2.Tree):
+        raise ValueError("repository index did not produce a tree")
+    stack = [root]
+    file_count = 0
+    total_bytes = 0
+    while stack:
+        tree = stack.pop()
+        for entry in tree:
+            item = repo.get(entry.id)
+            if isinstance(item, pygit2.Tree):
+                stack.append(item)
+            elif isinstance(item, pygit2.Blob):
+                file_count += 1
+                total_bytes += item.size
+                if file_count > MAX_FILES:
+                    raise ValueError(f"too many files in commit: {file_count} > {MAX_FILES}")
+                if total_bytes > MAX_REPO_BYTES:
+                    raise ValueError(
+                        f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}"
+                    )
+
+
+def _try_download(project_id: UUID, dest: Path) -> bool:
+    client = get_minio_client()
+    tar_path = dest.parent / f"{dest.name}.tar.gz"
+    try:
+        client.fget_object(_bucket(), _repo_key(project_id), str(tar_path))
+    except S3Error as e:
+        if e.code in {"NoSuchKey", "NoSuchBucket"}:
+            return False
+        raise
+    with tarfile.open(tar_path, "r:gz") as tar:
+        tar.extractall(dest)
+    tar_path.unlink(missing_ok=True)
+    return True
+
+
+def _upload(project_id: UUID, src: Path) -> None:
+    client = get_minio_client()
+    tar_path = src.parent / f"{src.name}.tar.gz"
+    with tarfile.open(tar_path, "w:gz") as tar:
+        tar.add(src, arcname=".")
+    client.fput_object(_bucket(), _repo_key(project_id), str(tar_path))
+    tar_path.unlink(missing_ok=True)
+
+
+@contextmanager
+def _open_workdir(project_id: UUID, must_exist: bool) -> Iterator[Path]:
+    with tempfile.TemporaryDirectory(prefix=f"omnia-{project_id}-") as tmp:
+        workdir = Path(tmp) / "repo"
+        workdir.mkdir()
+        existed = _try_download(project_id, workdir)
+        if must_exist and not existed:
+            raise RuntimeError(f"repo for project {project_id} not found in MinIO")
+        yield workdir
+
+
+def init_repo(project_id: UUID, template_dir: Path, template_name: str) -> str:
+    with tempfile.TemporaryDirectory(prefix=f"omnia-init-{project_id}-") as tmp:
+        workdir = Path(tmp) / "repo"
+        workdir.mkdir()
+        materialize_template(template_dir, workdir)
+        repo = pygit2.init_repository(str(workdir), bare=False)
+        sig = _signature()
+        index = repo.index
+        for path in sorted(workdir.rglob("*")):
+            if path.is_dir():
+                continue
+            if ".git" in path.parts:
+                continue
+            rel = path.relative_to(workdir).as_posix()
+            blob_oid = repo.create_blob(path.read_bytes())
+            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB))
+        index.write()
+        tree_oid = index.write_tree()
+        commit_oid = repo.create_commit("HEAD", sig, sig, f"Initial: {template_name}", tree_oid, [])
+        _upload(project_id, workdir)
+        return str(commit_oid)
+
+
+def init_from_files(project_id: UUID, files: dict[str, str], message: str) -> str:
+    """Seed a fresh project repo from a files dict (used by GitHub import).
+
+    Same MinIO tarball storage + pygit2 flow as init_repo, but instead of
+    copying a template directory we write each file directly as a blob.
+    This lets the caller supply any arbitrary set of text files (e.g. from a
+    GitHub tarball) without touching the filesystem first.
+
+    Returns the hex SHA of the initial commit.
+    """
+    _validate_file_batch(files)
+    with tempfile.TemporaryDirectory(prefix=f"omnia-import-{project_id}-") as tmp:
+        workdir = Path(tmp) / "repo"
+        workdir.mkdir()
+        repo = pygit2.init_repository(str(workdir), bare=False)
+        sig = _signature()
+        index = repo.index
+        for rel, content in sorted(files.items()):
+            blob_oid = repo.create_blob(content.encode("utf-8"))
+            index.add(pygit2.IndexEntry(rel, blob_oid, pygit2.enums.FileMode.BLOB))
+        index.write()
+        tree_oid = index.write_tree()
+        _validate_tree_budget(repo, tree_oid)
+        commit_oid = repo.create_commit("HEAD", sig, sig, message, tree_oid, [])
+        _upload(project_id, workdir)
+        return str(commit_oid)
+
+
+def delete_repo(project_id: UUID) -> None:
+    """Remove the project's bare-repo tarball from MinIO. Idempotent: a missing
+    object (already deleted, or never created) is a no-op."""
+    client = get_minio_client()
+    try:
+        client.remove_object(_bucket(), _repo_key(project_id))
+    except S3Error as e:
+        if e.code in {"NoSuchKey", "NoSuchBucket"}:
+            return
+        raise
+
+
+def commit_files(
+    project_id: UUID,
+    files: dict[str, str],
+    message: str,
+    parent_sha: str | None = None,
+    *,
+    exact_tree: bool = False,
+) -> str:
+    """Commit a patch, or the complete verified source tree including empty files."""
+    _validate_file_batch(files)
+
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        repo = pygit2.Repository(str(workdir))
+        index = repo.index
+        if exact_tree:
+            # The live workspace baseline can differ from both Git's parent
+            # and persisted index. Build precisely the supplied tree.
+            index.clear()
+        for path, content in files.items():
+            full = workdir / path
+            if content == "" and not exact_tree:
+                if full.exists():
+                    full.unlink()
+                try:
+                    index.remove(path)
+                except (KeyError, OSError):
+                    # Not in the index (pygit2 raises KeyError or, depending on
+                    # build, OSError "index does not contain <path> at stage 0").
+                    # Nothing to delete — a no-op, never fatal to the commit.
+                    pass
+                continue
+            if not exact_tree:
+                full.parent.mkdir(parents=True, exist_ok=True)
+                full.write_text(content, encoding="utf-8")
+            blob_oid = repo.create_blob(content.encode("utf-8"))
+            index.add(pygit2.IndexEntry(path, blob_oid, pygit2.enums.FileMode.BLOB))
+        index.write()
+        tree_oid = index.write_tree()
+        _validate_tree_budget(repo, tree_oid)
+        sig = _signature()
+        if parent_sha:
+            parents = [pygit2.Oid(hex=parent_sha)]
+        elif not repo.is_empty:
+            head_target = repo.head.target
+            parents = [
+                head_target if isinstance(head_target, pygit2.Oid) else pygit2.Oid(hex=head_target)
+            ]
+        else:
+            parents = []
+        # ref=None creates a detached commit object without moving HEAD. The
+        # app tracks state by commit_sha (oid), never via HEAD — so this is
+        # safe, AND it avoids pygit2's "current tip is not the first parent"
+        # error when two generations on the same project commit concurrently
+        # off the same parent (e.g. user fires a second prompt before the first
+        # finishes; freeform's render+vision widens that window).
+        commit_oid = repo.create_commit(None, sig, sig, message, tree_oid, parents)
+        _upload(project_id, workdir)
+        return str(commit_oid)
+
+
+def read_files(project_id: UUID, commit_sha: str) -> dict[str, str]:
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        repo = pygit2.Repository(str(workdir))
+        commit = repo.get(commit_sha)
+        if not isinstance(commit, pygit2.Commit):
+            raise ValueError(f"commit {commit_sha} not found")
+        out: dict[str, str] = {}
+        _walk(repo, commit.tree, "", out)
+        if len(out) > MAX_FILES:
+            raise ValueError(f"too many files in commit: {len(out)} > {MAX_FILES}")
+        total_bytes = sum(len(content.encode("utf-8")) for content in out.values())
+        if total_bytes > MAX_REPO_BYTES:
+            raise ValueError(f"repository text exceeds {MAX_REPO_BYTES} bytes: {total_bytes}")
+        return out
+
+
+def read_file(project_id: UUID, commit_sha: str, path: str) -> bytes | None:
+    """Возвращает bytes указанного файла из коммита, либо None если нет."""
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        repo = pygit2.Repository(str(workdir))
+        commit = repo.get(commit_sha)
+        if not isinstance(commit, pygit2.Commit):
+            return None
+        try:
+            entry = commit.tree[path]
+        except KeyError:
+            return None
+        blob = repo[entry.id]
+        if not isinstance(blob, pygit2.Blob):
+            return None
+        return bytes(blob.data)
+
+
+def checkout(project_id: UUID, target_commit_sha: str) -> str:
+    """Rollback: создаёт новый коммит, чьё дерево взято из target_commit_sha;
+    родитель — текущий HEAD. Старая история не теряется."""
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        repo = pygit2.Repository(str(workdir))
+        target = repo.get(target_commit_sha)
+        if not isinstance(target, pygit2.Commit):
+            raise ValueError(f"commit {target_commit_sha} not found")
+        sig = _signature()
+        parents = [repo.head.target] if not repo.is_empty else []
+        commit_oid = repo.create_commit(
+            "HEAD",
+            sig,
+            sig,
+            f"Rollback to {target_commit_sha[:8]}",
+            target.tree.id,
+            parents,
+        )
+        # Synchronize working tree с новым HEAD, чтобы в архив попала актуальная версия.
+        created = repo.get(commit_oid)
+        if not isinstance(created, pygit2.Commit):
+            raise RuntimeError(f"created commit {commit_oid} cannot be loaded")
+        checkout_tree = cast(Callable[..., Any], repo.checkout_tree)
+        checkout_tree(created.tree, strategy=pygit2.enums.CheckoutStrategy.FORCE)
+        _upload(project_id, workdir)
+        return str(commit_oid)
+
+
+def _walk(repo: pygit2.Repository, tree: pygit2.Tree, prefix: str, out: dict[str, str]) -> None:
+    for entry in tree:
+        if entry.name is None:
+            continue
+        path = f"{prefix}{entry.name}" if prefix else entry.name
+        if entry.type_str == "tree":
+            child = repo[entry.id]
+            if isinstance(child, pygit2.Tree):
+                _walk(repo, child, f"{path}/", out)
+            continue
+        if entry.type_str != "blob":
+            continue
+        blob = repo[entry.id]
+        if not isinstance(blob, pygit2.Blob):
+            continue
+        try:
+            out[path] = blob.data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+
+
+def prepare_restore_commit(
+    project_id: UUID,
+    target_sha: str,
+    expected_head: str,
+    operation_id: UUID,
+    *,
+    overrides: dict[str, str] | None = None,
+    deletes: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Pin an operation-owned commit without advancing HEAD; caller serializes writes.
+
+    Export all regular blobs, including empty/binary files. Refuse links rather
+    than silently changing their semantics at the runtime boundary. Platform-owned
+    source can be overlaid on the historical product tree so an exact rollback
+    never revives an obsolete authentication or integration boundary.
+    """
+    import base64
+    import hashlib
+
+    platform_overrides = overrides or {}
+    _validate_file_batch(platform_overrides)
+    normalized_deletes = tuple(dict.fromkeys(deletes))
+    for path in normalized_deletes:
+        _validate_repo_path(path)
+    if set(platform_overrides).intersection(normalized_deletes):
+        raise ValueError("restoration override cannot also delete the same path")
+
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        target, base = git.get(target_sha), git.get(expected_head)
+        if not isinstance(target, pygit2.Commit) or not isinstance(base, pygit2.Commit):
+            raise ValueError("restoration source commit missing")
+        tree_id = target.tree_id
+        if platform_overrides or normalized_deletes:
+            index = pygit2.Index()
+            index.read_tree(target.tree)
+            for path in normalized_deletes:
+                try:
+                    index.remove(path)
+                except (KeyError, OSError):
+                    pass
+            for path, content in platform_overrides.items():
+                mode = pygit2.enums.FileMode.BLOB
+                try:
+                    existing = target.tree[path]
+                except KeyError:
+                    existing = None
+                if existing is not None:
+                    if existing.filemode not in {0o100644, 0o100755}:
+                        raise ValueError("restoration platform override requires a regular file")
+                    mode = existing.filemode
+                index.add(pygit2.IndexEntry(path, git.create_blob(content.encode("utf-8")), mode))
+            tree_id = index.write_tree(git)
+        reference = f"refs/omnia/restorations/{operation_id.hex}"
+        message = f"Restore {target_sha}\nOperation: {operation_id}\n"
+        try:
+            planned = git[git.references[reference].target]
+        except KeyError:
+            signature = pygit2.Signature(*SIGNATURE, base.commit_time, 0)
+            oid = git.create_commit(None, signature, signature, message, tree_id, [base.id])
+            planned = git[oid]
+        if (
+            not isinstance(planned, pygit2.Commit)
+            or planned.message != message
+            or planned.tree_id != tree_id
+            or planned.parent_ids != [base.id]
+        ):
+            raise ValueError("restoration operation identity changed")
+        _validate_tree_budget(git, planned.tree_id)
+        files: list[dict[str, Any]] = []
+        pending = [(planned.tree, "")]
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                _validate_repo_path(path)
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                elif isinstance(item, pygit2.Blob) and entry.filemode in {0o100644, 0o100755}:
+                    if item.size > MAX_FILE_BYTES:
+                        raise ValueError("restoration file exceeds size budget")
+                    files.append(
+                        {
+                            "path": path,
+                            "mode": entry.filemode,
+                            "content_base64": base64.b64encode(item.data).decode("ascii"),
+                        }
+                    )
+                else:
+                    raise ValueError("restoration requires regular files; links are unsupported")
+        if reference not in git.references:
+            git.references.create(reference, planned.id, force=False)
+        _validate_tree_budget(git, base.tree_id)
+        current_files: list[dict[str, Any]] = []
+        pending = [(base.tree, "")]
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                _validate_repo_path(path)
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                elif isinstance(item, pygit2.Blob) and entry.filemode in {0o100644, 0o100755}:
+                    if item.size > MAX_FILE_BYTES:
+                        raise ValueError("current restoration source exceeds size budget")
+                    current_files.append(
+                        {
+                            "path": path,
+                            "mode": entry.filemode,
+                            "sha256": hashlib.sha256(item.data).hexdigest(),
+                        }
+                    )
+                else:
+                    raise ValueError("current restoration source requires regular files")
+        _upload(project_id, workdir)
+        return {
+            "commit_sha": str(planned.id),
+            "files": sorted(files, key=lambda row: row["path"]),
+            "current_files": sorted(current_files, key=lambda row: row["path"]),
+        }
+
+
+def prepare_restoration_adaptation_commit(
+    project_id: UUID,
+    files: dict[str, str],
+    expected_head: str,
+    operation_id: UUID,
+) -> str:
+    """Pin the exact proof-ready adaptation tree without moving canonical HEAD.
+
+    ``files`` is a complete tree, so paths omitted from it stay deleted.  The
+    deterministic signature and operation-owned ref make a retry after an
+    uncertain object-store upload reproduce and validate the same commit.
+    """
+
+    _validate_file_batch(files)
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        base = git.get(expected_head)
+        if not isinstance(base, pygit2.Commit):
+            raise ValueError("restoration adaptation base commit missing")
+
+        index = pygit2.Index()
+        base_modes: dict[str, int] = {}
+        pending = [(base.tree, "")]
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                    continue
+                if not isinstance(item, pygit2.Blob) or entry.filemode not in {
+                    0o100644,
+                    0o100755,
+                }:
+                    raise ValueError("restoration adaptation requires regular files")
+                base_modes[path] = entry.filemode
+                try:
+                    item.data.decode("utf-8")
+                except UnicodeDecodeError:
+                    # Agent workspace snapshots carry editable UTF-8 files only. Binary
+                    # source assets are byte-preserved from the fenced base Git tree.
+                    index.add(pygit2.IndexEntry(path, entry.id, entry.filemode))
+        for path, content in sorted(files.items()):
+            blob_id = git.create_blob(content.encode("utf-8"))
+            mode = base_modes.get(path, pygit2.enums.FileMode.BLOB)
+            index.add(pygit2.IndexEntry(path, blob_id, mode))
+        tree_id = index.write_tree(git)
+        _validate_tree_budget(git, tree_id)
+
+        reference = f"refs/omnia/restoration-adaptations/{operation_id.hex}"
+        message = f"Adapt restoration\nOperation: {operation_id}\n"
+        try:
+            planned = git[git.references[reference].target]
+        except KeyError:
+            signature = pygit2.Signature(*SIGNATURE, base.commit_time, 0)
+            oid = git.create_commit(None, signature, signature, message, tree_id, [base.id])
+            planned = git[oid]
+        if (
+            not isinstance(planned, pygit2.Commit)
+            or planned.message != message
+            or planned.tree_id != tree_id
+            or planned.parent_ids != [base.id]
+        ):
+            raise ValueError("restoration adaptation operation identity changed")
+        if reference not in git.references:
+            git.references.create(reference, planned.id, force=False)
+        _upload(project_id, workdir)
+        return str(planned.id)
+
+
+def restoration_adaptation_source_manifest_digest(
+    project_id: UUID,
+    commit_sha: str,
+) -> str:
+    """Mirror the controller byte manifest for the exact planned Git snapshot."""
+
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        commit = git.get(commit_sha)
+        if not isinstance(commit, pygit2.Commit):
+            raise ValueError("restoration adaptation commit missing")
+        manifest: list[dict[str, object]] = []
+        pending = [(commit.tree, "")]
+        total = 0
+        while pending:
+            tree, prefix = pending.pop()
+            for entry in tree:
+                path = prefix + entry.name
+                item = git[entry.id]
+                if isinstance(item, pygit2.Tree):
+                    pending.append((item, path + "/"))
+                    continue
+                if not isinstance(item, pygit2.Blob) or entry.filemode not in {
+                    0o100644,
+                    0o100755,
+                }:
+                    raise ValueError("restoration adaptation requires regular files")
+                parts = PurePosixPath(path).parts
+                if (
+                    any(part in _ADAPTATION_EXCLUDED_PARTS for part in parts)
+                    or any(
+                        part.casefold() in _ADAPTATION_SECRET_NAMES for part in parts
+                    )
+                    or any(part.casefold().startswith(".env.") for part in parts)
+                    or path.endswith(".tsbuildinfo")
+                ):
+                    continue
+                payload = bytes(item.data)
+                if len(payload) > _ADAPTATION_MAX_SOURCE_FILE_BYTES:
+                    raise ValueError("restoration adaptation source file exceeds budget")
+                total += len(payload)
+                if (
+                    len(manifest) >= _ADAPTATION_MAX_SOURCE_FILES
+                    or total > MAX_REPO_BYTES
+                ):
+                    raise ValueError("restoration adaptation source exceeds budget")
+                manifest.append(
+                    {
+                        "path": path,
+                        "size": len(payload),
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                    }
+                )
+        if not manifest:
+            raise ValueError("restoration adaptation source is empty")
+        manifest.sort(key=lambda row: cast(str, row["path"]))
+        return hashlib.sha256(
+            json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+
+
+def activate_restore_commit(
+    project_id: UUID,
+    planned_sha: str,
+    expected_head: str,
+    operation_id: UUID,
+) -> str:
+    """Pin activation evidence; SQL caller owns the canonical snapshot compare-and-set."""
+    with _open_workdir(project_id, must_exist=True) as workdir:
+        git = pygit2.Repository(str(workdir))
+        reference = f"refs/omnia/restorations/{operation_id.hex}"
+        try:
+            planned = git[git.references[reference].target]
+        except KeyError as exc:
+            raise ValueError("restoration planned commit missing") from exc
+        if (
+            not isinstance(planned, pygit2.Commit)
+            or str(planned.id) != planned_sha
+            or [str(parent) for parent in planned.parent_ids] != [expected_head]
+        ):
+            raise ValueError("restoration operation identity changed")
+        activated_ref = f"refs/omnia/restoration-activations/{operation_id.hex}"
+        if activated_ref in git.references:
+            if git.references[activated_ref].target != planned.id:
+                raise ValueError("restoration activation identity changed")
+            return planned_sha
+        # Canonical HEAD lives in Project.current_snapshot_id, not Git HEAD.
+        # The caller must compare-and-set that row while holding its write lock.
+        git.references.create(activated_ref, planned.id, force=False)
+        _upload(project_id, workdir)
+        return planned_sha
