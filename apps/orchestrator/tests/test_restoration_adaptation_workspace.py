@@ -97,6 +97,7 @@ class _Engine:
         return AdaptationProofMaterialization(
             state=self.proof_state,
             reason_code=self.proof_reason,
+            reason_detail=None,
             source_workspace_revision=request.source_workspace_revision,
             candidate_workspace_revision=proof.candidate_workspace_revision,
             candidate_proof_key=proof.candidate_proof_key,

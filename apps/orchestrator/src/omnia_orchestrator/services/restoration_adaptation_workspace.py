@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -65,6 +66,17 @@ _PROOF_CAPABILITIES: dict[str, object] = {
     **_CAPABILITIES,
     "restoration_adaptation_proof_v1": True,
 }
+# Имя нарушенного правила — это фраза разработчика, а не данные: только строчные
+# латинские слова. Всё, что не такое, до отчёта не доезжает: лучше промолчать,
+# чем вынести наружу кусок чужой базы.
+_RULE_NAME = re.compile(r"^[a-z][a-z0-9 ]{0,119}$")
+
+
+def _rule_name(exc: BaseException) -> str | None:
+    text = str(exc).strip()
+    return text if _RULE_NAME.fullmatch(text) else None
+
+
 _CANDIDATE_RECEIPT_STATES = {
     "preparing",
     "ready",
@@ -181,6 +193,8 @@ class AdaptationWorkspaceMaterialization:
 class AdaptationProofMaterialization:
     state: Literal["proof_ready", "migration_required", "source_changed"]
     reason_code: str | None
+    # Нарушенное правило, когда код причины сам по себе слишком общий.
+    reason_detail: str | None
     source_workspace_revision: str
     candidate_workspace_revision: str
     candidate_proof_key: str
@@ -1048,6 +1062,7 @@ class RestorationAdaptationWorkspaceService:
         raw = {
             "state": value.state,
             "reason_code": value.reason_code,
+            "reason_detail": value.reason_detail,
             "source_workspace_id": str(prepared.workspace_id),
             "candidate_workspace_id": str(request.candidate_workspace_id),
             "operation_id": str(prepared.operation_id),
@@ -1576,12 +1591,16 @@ class DockerAdaptationWorkspaceEngine:
             # «проверка не прошла» — разработчик, «копия изменилась под нами» —
             # повтор операции. Один код на всё лишал оператора этой развилки.
             rehearsal_reason = "probe_rehearsal_failed"
+            rehearsal_detail: str | None = None
             try:
                 business_probe = validate_probe_contract(candidate_files, candidate_contract)
                 probe_contract_digest = business_probe.contract_digest
-            except CellIdentityConflict:
+            except CellIdentityConflict as exc:
                 # Проверка даже не запускалась: манифест приложения не прошёл разбор.
+                # Годность решают четырнадцать правил; без имени нарушенного
+                # починка правит манифест вслепую.
                 rehearsal_reason = "probe_manifest_invalid"
+                rehearsal_detail = _rule_name(exc)
                 probe_contract_digest = canonical_digest(
                     {
                         "version": 1,
@@ -1687,6 +1706,8 @@ class DockerAdaptationWorkspaceEngine:
         return AdaptationProofMaterialization(
             state=state,
             reason_code=reason,
+            # Правило доезжает только вместе со своей причиной.
+            reason_detail=rehearsal_detail if reason == "probe_manifest_invalid" else None,
             source_workspace_revision=latest_revision,
             candidate_workspace_revision=candidate_revision,
             candidate_proof_key=proof.candidate_proof_key,

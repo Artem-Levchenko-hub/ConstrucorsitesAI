@@ -110,6 +110,14 @@ class RestorationAdaptationProof(BaseModel):
         "source_code_changed",
         "source_database_changed",
     ] | None = None
+    # Какое именно правило нарушено, когда причина сама по себе слишком общая.
+    # Годность манифеста проверки решается четырнадцатью правилами, и без имени
+    # правила починка идёт вслепую. Поле нарочно узкое — только строчные
+    # латинские слова: фразы правил именно такие, а значениям из чужой базы в
+    # такое поле не пролезть.
+    reason_detail: str | None = Field(
+        default=None, max_length=120, pattern=r"^[a-z][a-z0-9 ]*$"
+    )
     source_workspace_id: UUID
     candidate_workspace_id: UUID
     operation_id: UUID

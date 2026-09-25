@@ -1378,7 +1378,7 @@ class MaxFinalizationCoordinator:
                 MaxFinalizationStatus.NEEDS_EDIT,
                 self._checkpoint(identity, GenerationPhase.EDIT),
                 bundle,
-                f"migration_required:{preservation.reason_code or 'candidate_database_changed'}",
+                _migration_required_reason(preservation),
             )
         if preservation.state == "source_changed":
             outcome = await self._outcome(
@@ -2267,6 +2267,18 @@ def proof_bundle_verdict(
 
 
 _ACTIVE_RUN_STATUSES = frozenset({"pending", "queued_for_capacity", "running", "cancel_requested"})
+
+
+def _migration_required_reason(preservation: RestorationAdaptationProof) -> str:
+    """Причина для владельца и задание агенту на починку — с нарушенным правилом.
+
+    Код причины сам по себе бывает слишком общим: годность манифеста проверки
+    решают четырнадцать правил, и без имени нарушенного агент правит вслепую.
+    Правило приходит уже проверенным по форме — строчные латинские слова.
+    """
+    reason = preservation.reason_code or "candidate_database_changed"
+    detail = getattr(preservation, "reason_detail", None)
+    return f"migration_required:{reason}" + (f" ({detail})" if detail else "")
 
 
 async def generation_deadline_wait(

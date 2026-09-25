@@ -32,6 +32,9 @@ from omnia_api.schemas.restoration import (
 log = structlog.get_logger(__name__)
 
 _REQUEST_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
+# Имя нарушенного правила приходит от оркестратора: фраза разработчика,
+# только строчные латинские слова. Всё остальное — повод отвергнуть ответ.
+_PROBE_RULE_NAME = re.compile(r"^[a-z][a-z0-9 ]{0,119}$")
 _CHECKPOINT_REF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
 _PROJECT_CELL_CONTROL_KINDS = frozenset(
     {"wake", "pause", "stop", "destroy", "restore", "reconcile", "release"}
@@ -491,6 +494,8 @@ class RestorationAdaptationWorkspace:
 class RestorationAdaptationProof:
     state: str
     reason_code: str | None
+    # Нарушенное правило, когда код причины слишком общий (манифест проверки).
+    reason_detail: str | None
     source_workspace_id: UUID
     candidate_workspace_id: UUID
     operation_id: UUID
@@ -605,11 +610,17 @@ class RestorationAdaptationProof:
             if state == "proof_ready"
             else base_capabilities
         )
+        detail = payload.get("reason_detail")
         if (
-            set(payload) != expected
+            set(payload) - {"reason_detail"} != expected
             or state not in {"proof_ready", "migration_required", "source_changed"}
             or (state == "proof_ready") != (reason is None)
             or (reason is not None and reason not in valid_reasons)
+            # Деталь — фраза разработчика, а не данные: в такое узкое поле
+            # значению из чужой базы не пролезть. Форму проверяем здесь,
+            # потому что приём идёт раньше, чем оркестратор начнёт слать.
+            or (detail is not None and not _PROBE_RULE_NAME.fullmatch(str(detail)))
+            or (detail is not None and reason is None)
             or type(payload.get("candidate_fencing_epoch")) is not int
             or cast(int, payload["candidate_fencing_epoch"]) < 1
             or type(payload.get("proof_attempt")) is not int
@@ -642,6 +653,7 @@ class RestorationAdaptationProof:
             return cls(
                 state=state,
                 reason_code=reason,
+                reason_detail=cast("str | None", detail),
                 source_workspace_id=UUID(cast(str, payload["source_workspace_id"])),
                 candidate_workspace_id=UUID(cast(str, payload["candidate_workspace_id"])),
                 operation_id=UUID(cast(str, payload["operation_id"])),
