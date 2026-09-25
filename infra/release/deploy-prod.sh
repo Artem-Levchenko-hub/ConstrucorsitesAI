@@ -48,12 +48,11 @@ say "core: ff-merge + идентичность релиза в compose .env"
 ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -E '^(API_IMAGE|WEB_IMAGE|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
 
 if [ -n "$LEGAL" ]; then
-  say "core: версия документов для воркера биллинга"
-  ssh max-core 'sudo bash -s' <<EOF
-f=/etc/max-studio/billing-worker.env
-if grep -q '^LEGAL_DOCUMENT_VERSION=' "\$f"; then sed -i -E 's/^LEGAL_DOCUMENT_VERSION=.*/LEGAL_DOCUMENT_VERSION=$LEGAL/' "\$f"; else printf '\nLEGAL_DOCUMENT_VERSION=$LEGAL\n' >> "\$f"; fi
-grep -n '^LEGAL_DOCUMENT_VERSION=' "\$f"
-EOF
+  # Единственный источник — .env платформы: compose отдаёт его api, worker'ам и сборке web,
+  # а шаг core-access воркера биллинга копирует его в /etc/max-studio/billing-worker.env
+  # (тот файл он пересоздаёт целиком, поэтому править его напрямую бесполезно).
+  say "core: версия документов в .env платформы"
+  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$LEGAL' | /opt/omnia/infra/release/update-env-value.sh .env LEGAL_DOCUMENT_VERSION - >/dev/null && grep -n '^LEGAL_DOCUMENT_VERSION=' .env"
 fi
 
 say "core: проверка отрендеренного compose (секреты входа только у api, окно починки, теги образов)"
