@@ -125,9 +125,14 @@ def test_a_slow_agent_turn_cannot_eat_the_repair_window() -> None:
 
 def test_a_quick_agent_turn_does_not_shorten_what_the_run_had() -> None:
     run = _run()
-    note_repair_stage_started(run, _T0 + timedelta(seconds=300))
+    repair_started = _T0 + timedelta(seconds=300)
+    note_repair_stage_started(run, repair_started)
 
-    assert generation_deadline(run).at == _T0 + _EDIT
+    # Правило, а не совпадение чисел: срок — больший из обычного окна правки и
+    # окна починки от её начала. Прежде эти числа случайно совпадали при
+    # коротком окне починки, и тест закреплял совпадение, а не правило.
+    assert generation_deadline(run).at == max(_T0 + _EDIT, repair_started + _REPAIR)
+    assert generation_deadline(run).at >= _T0 + _EDIT
 
 
 def test_the_repair_window_opens_once() -> None:

@@ -47,7 +47,9 @@ def test_max_finalization_defaults_are_dark_and_deadlines_are_exact(
     assert settings.use_generation_event_replay is False
     assert settings.use_cell_resource_profile_v2 is False
     assert settings.max_generation_deadline_seconds == 1500
-    assert settings.restoration_adaptation_repair_seconds == 900
+    # 1800, а не 900: живой прогон 25.09 умер ровно на границе прежнего окна
+    # починки, делая осмысленную работу (ac72d4cb).
+    assert settings.restoration_adaptation_repair_seconds == 1800
     assert settings.restoration_adaptation_activation_seconds == 2400
     assert settings.project_cell_heartbeat_seconds == 15
     assert settings.project_cell_watchdog_grace_seconds == 20
