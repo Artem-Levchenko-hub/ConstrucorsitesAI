@@ -120,8 +120,19 @@ export function MaxOnboarding({ email }: { email: string }) {
               Подтвердите рабочий email
             </h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-fg-secondary">
-              Мы отправили ссылку на <span className="text-fg-primary">{email}</span>.
-              После перехода вернитесь сюда — статус обновится автоматически.
+              {/* Пока отправка писем не настроена, обещать отправленную ссылку
+                  нельзя: письма не уходит, и человек будет ждать его напрасно. */}
+              {data?.email_delivery_configured ? (
+                <>
+                  Мы отправили ссылку на <span className="text-fg-primary">{email}</span>.
+                  После перехода вернитесь сюда — статус обновится автоматически.
+                </>
+              ) : (
+                <>
+                  Адрес <span className="text-fg-primary">{email}</span> сохранён.
+                  Письмо со ссылкой придёт, как только подключится отправка почты.
+                </>
+              )}
             </p>
             {!data?.email_delivery_configured && (
               <div className="mt-5 flex gap-3 rounded-[10px] border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
