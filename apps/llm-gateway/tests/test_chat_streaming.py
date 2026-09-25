@@ -11,7 +11,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from omnia_gateway.main import create_app
+from yleum_gateway.main import create_app
 
 _MODEL = "gemini-3.1-pro-preview-customtools"
 
@@ -53,7 +53,7 @@ def _parse_sse(body: str) -> list[dict | str]:
 
 def test_chat_streaming_yields_sse_chunks(client: TestClient) -> None:
     with patch(
-        "omnia_gateway.services.streaming.llmgw.astream",
+        "yleum_gateway.services.streaming.llmgw.astream",
         _fake_astream,
     ):
         body = {

@@ -8,9 +8,9 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from omnia_gateway.core.errors import WalletEmptyError
-from omnia_gateway.main import create_app
-from omnia_gateway.routers import chat
+from yleum_gateway.core.errors import WalletEmptyError
+from yleum_gateway.main import create_app
+from yleum_gateway.routers import chat
 
 
 @pytest.fixture

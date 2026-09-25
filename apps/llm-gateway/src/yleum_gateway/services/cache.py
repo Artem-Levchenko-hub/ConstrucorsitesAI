@@ -14,8 +14,8 @@ from typing import Any, cast
 
 import structlog
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.redis import get_redis
+from yleum_gateway.core.config import get_settings
+from yleum_gateway.core.redis import get_redis
 
 log = structlog.get_logger(__name__)
 

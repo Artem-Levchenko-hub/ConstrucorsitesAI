@@ -34,9 +34,9 @@ def _load_cross_package_runner_auth() -> tuple[Any, Any, Any, Any, Any, Any]:
         if extra_src_str not in sys.path:
             sys.path.append(extra_src_str)
 
-    runner_pkg = importlib.import_module("omnia_agent_runner")
-    gateway_config = importlib.import_module("omnia_gateway.core.config")
-    gateway_runner_auth = importlib.import_module("omnia_gateway.core.runner_auth")
+    runner_pkg = importlib.import_module("yleum_agent_runner")
+    gateway_config = importlib.import_module("yleum_gateway.core.config")
+    gateway_runner_auth = importlib.import_module("yleum_gateway.core.runner_auth")
     return (
         runner_pkg.HS256JWTSigner,
         runner_pkg.ProjectCellJWTMessagesAuth,

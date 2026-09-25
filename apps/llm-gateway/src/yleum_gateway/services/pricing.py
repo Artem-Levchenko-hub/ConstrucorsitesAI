@@ -13,7 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal
 
-from omnia_gateway.core.errors import ModelNotFoundError
+from yleum_gateway.core.errors import ModelNotFoundError
 
 
 @dataclass(frozen=True, slots=True)

@@ -10,7 +10,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from omnia_gateway.main import create_app
+from yleum_gateway.main import create_app
 
 
 @pytest.fixture
@@ -60,7 +60,7 @@ def test_chat_completion_non_streaming_happy_path(client: TestClient) -> None:
         "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
     }
     with patch(
-        "omnia_gateway.routers.chat.router_module.acompletion",
+        "yleum_gateway.routers.chat.router_module.acompletion",
         new=AsyncMock(return_value=fake_response),
     ):
         body = {
@@ -128,11 +128,11 @@ def test_chat_cache_hit_returns_cached_without_calling_llm(client: TestClient) -
     llm_mock = AsyncMock(return_value={})
     with (
         patch(
-            "omnia_gateway.routers.chat.cache.get",
+            "yleum_gateway.routers.chat.cache.get",
             new=AsyncMock(return_value=cached_response),
         ),
         patch(
-            "omnia_gateway.routers.chat.router_module.acompletion",
+            "yleum_gateway.routers.chat.router_module.acompletion",
             new=llm_mock,
         ),
     ):
@@ -170,7 +170,7 @@ def test_chat_safety_filter_redacts_injection(client: TestClient) -> None:
         }
 
     with patch(
-        "omnia_gateway.routers.chat.router_module.acompletion",
+        "yleum_gateway.routers.chat.router_module.acompletion",
         new=AsyncMock(side_effect=fake_acompletion),
     ):
         body = {

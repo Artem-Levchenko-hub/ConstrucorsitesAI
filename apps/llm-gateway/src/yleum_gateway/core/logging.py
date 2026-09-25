@@ -7,7 +7,7 @@ import sys
 
 import structlog
 
-from omnia_gateway.core.config import get_settings
+from yleum_gateway.core.config import get_settings
 
 
 def configure_logging() -> None:

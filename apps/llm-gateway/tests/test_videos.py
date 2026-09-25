@@ -1,4 +1,4 @@
-from omnia_gateway.routers.videos import VideoGenerationRequest, _create_upstream_payload
+from yleum_gateway.routers.videos import VideoGenerationRequest, _create_upstream_payload
 
 
 def test_upstream_video_payload_is_silent_by_default() -> None:

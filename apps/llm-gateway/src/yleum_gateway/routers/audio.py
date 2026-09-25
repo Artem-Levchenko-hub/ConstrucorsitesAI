@@ -26,14 +26,14 @@ import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Request
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.errors import (
+from yleum_gateway.core.config import get_settings
+from yleum_gateway.core.errors import (
     GatewayError,
     ModelUnavailableError,
     UpstreamProviderError,
 )
-from omnia_gateway.core.http import get_http
-from omnia_gateway.services import billing, file_logger
+from yleum_gateway.core.http import get_http
+from yleum_gateway.services import billing, file_logger
 
 router = APIRouter(prefix="/v1", tags=["audio"])
 log = structlog.get_logger(__name__)

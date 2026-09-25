@@ -15,7 +15,7 @@ cd apps/llm-gateway
 uv sync
 cp .env.example .env
 # Внести API-ключи провайдеров
-uv run uvicorn omnia_gateway.main:app --reload --port 8001
+uv run uvicorn yleum_gateway.main:app --reload --port 8001
 ```
 
 ## Env
@@ -37,7 +37,7 @@ uv run uvicorn omnia_gateway.main:app --reload --port 8001
 ## Команды
 
 ```bash
-uv run uvicorn omnia_gateway.main:app --reload --port 8001
+uv run uvicorn yleum_gateway.main:app --reload --port 8001
 uv run pytest -q
 uv run ruff check . && uv run ruff format .
 uv run mypy src/

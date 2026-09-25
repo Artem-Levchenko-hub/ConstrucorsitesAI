@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import asyncpg
 
-from omnia_gateway.core.config import get_settings
+from yleum_gateway.core.config import get_settings
 
 _pool: asyncpg.Pool | None = None
 

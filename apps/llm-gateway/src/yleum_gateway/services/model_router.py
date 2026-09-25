@@ -13,10 +13,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.errors import ModelNotFoundError
-from omnia_gateway.providers import llmgw
-from omnia_gateway.services.pricing import PRICE_TABLE
+from yleum_gateway.core.config import get_settings
+from yleum_gateway.core.errors import ModelNotFoundError
+from yleum_gateway.providers import llmgw
+from yleum_gateway.services.pricing import PRICE_TABLE
 
 
 def is_supported(model_id: str) -> bool:

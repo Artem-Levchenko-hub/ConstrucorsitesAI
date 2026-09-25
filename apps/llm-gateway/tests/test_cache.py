@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from omnia_gateway.services import cache
+from yleum_gateway.services import cache
 
 
 def test_make_cache_key_excludes_user_and_assistant() -> None:
@@ -62,7 +62,7 @@ async def test_set_writes_with_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     fake_redis = AsyncMock()
     monkeypatch.setattr(cache, "get_redis", lambda: fake_redis)
     monkeypatch.setenv("CACHE_TTL_SECONDS", "120")
-    from omnia_gateway.core.config import reset_settings_cache
+    from yleum_gateway.core.config import reset_settings_cache
 
     reset_settings_cache()
 

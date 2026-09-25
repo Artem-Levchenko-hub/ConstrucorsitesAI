@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import httpx
 
-from omnia_gateway.core.config import get_settings
+from yleum_gateway.core.config import get_settings
 
 _client: httpx.AsyncClient | None = None
 

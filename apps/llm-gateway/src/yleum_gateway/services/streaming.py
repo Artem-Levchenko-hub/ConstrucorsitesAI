@@ -21,12 +21,12 @@ from uuid import UUID, uuid4
 import structlog
 from fastapi import Request
 
-from omnia_gateway.core.errors import GatewayError
-from omnia_gateway.providers import llmgw
-from omnia_gateway.services import billing, file_logger
-from omnia_gateway.services import model_router as router_module
-from omnia_gateway.services.pricing import calculate_cost_rub
-from omnia_gateway.services.token_counter import count_message_tokens, count_text_tokens
+from yleum_gateway.core.errors import GatewayError
+from yleum_gateway.providers import llmgw
+from yleum_gateway.services import billing, file_logger
+from yleum_gateway.services import model_router as router_module
+from yleum_gateway.services.pricing import calculate_cost_rub
+from yleum_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
 log = structlog.get_logger(__name__)
 

@@ -5,8 +5,8 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from omnia_gateway.core.errors import WalletEmptyError
-from omnia_gateway.services import billing
+from yleum_gateway.core.errors import WalletEmptyError
+from yleum_gateway.services import billing
 
 pytestmark = pytest.mark.asyncio
 

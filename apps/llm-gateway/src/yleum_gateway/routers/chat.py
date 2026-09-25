@@ -18,11 +18,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from omnia_gateway.core.errors import GatewayError, WalletEmptyError
-from omnia_gateway.services import billing, cache, file_logger, safety, streaming
-from omnia_gateway.services import model_router as router_module
-from omnia_gateway.services.pricing import calculate_cost_rub
-from omnia_gateway.services.token_counter import count_message_tokens
+from yleum_gateway.core.errors import GatewayError, WalletEmptyError
+from yleum_gateway.services import billing, cache, file_logger, safety, streaming
+from yleum_gateway.services import model_router as router_module
+from yleum_gateway.services.pricing import calculate_cost_rub
+from yleum_gateway.services.token_counter import count_message_tokens
 
 router = APIRouter(prefix="/v1", tags=["chat"])
 log = structlog.get_logger(__name__)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import redis.asyncio as redis_async
 
-from omnia_gateway.core.config import get_settings
+from yleum_gateway.core.config import get_settings
 
 _client: redis_async.Redis | None = None
 

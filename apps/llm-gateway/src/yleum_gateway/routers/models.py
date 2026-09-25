@@ -5,8 +5,8 @@ from __future__ import annotations
 from fastapi import APIRouter
 from pydantic import SecretStr
 
-from omnia_gateway.core.config import Settings, get_settings
-from omnia_gateway.services.pricing import list_models
+from yleum_gateway.core.config import Settings, get_settings
+from yleum_gateway.services.pricing import list_models
 
 router = APIRouter(prefix="/v1", tags=["models"])
 

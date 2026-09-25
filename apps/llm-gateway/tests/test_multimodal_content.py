@@ -1,7 +1,7 @@
 """Multimodal (vision) message content support (Phase 11, Sprint 1.1)."""
 
-from omnia_gateway.routers.chat import ChatCompletionRequest
-from omnia_gateway.services import safety, token_counter
+from yleum_gateway.routers.chat import ChatCompletionRequest
+from yleum_gateway.services import safety, token_counter
 
 
 def _multimodal_messages():
@@ -32,7 +32,7 @@ def test_safety_passes_list_content_through_untouched():
 
 
 def test_safety_still_filters_string_injection(monkeypatch):
-    from omnia_gateway.services import safety as s
+    from yleum_gateway.services import safety as s
 
     monkeypatch.setattr(
         s, "get_settings", lambda: type("S", (), {"safety_filter_enabled": True})()

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_gateway.core.config import reset_settings_cache
-from omnia_gateway.services.safety import REPLACEMENT, sanitize, sanitize_messages
+from yleum_gateway.core.config import reset_settings_cache
+from yleum_gateway.services.safety import REPLACEMENT, sanitize, sanitize_messages
 
 
 @pytest.mark.parametrize(

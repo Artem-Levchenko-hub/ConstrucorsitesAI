@@ -14,7 +14,7 @@ import re
 
 import structlog
 
-from omnia_gateway.core.config import get_settings
+from yleum_gateway.core.config import get_settings
 
 log = structlog.get_logger(__name__)
 

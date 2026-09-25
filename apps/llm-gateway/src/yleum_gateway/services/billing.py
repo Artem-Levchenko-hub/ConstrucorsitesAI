@@ -15,9 +15,9 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.db import get_pool
-from omnia_gateway.core.errors import WalletEmptyError
+from yleum_gateway.core.config import get_settings
+from yleum_gateway.core.db import get_pool
+from yleum_gateway.core.errors import WalletEmptyError
 
 log = structlog.get_logger(__name__)
 

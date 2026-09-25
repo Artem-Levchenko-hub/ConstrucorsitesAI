@@ -13,8 +13,8 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 from uuid import UUID
 
-from omnia_gateway.core.config import Settings, get_settings
-from omnia_gateway.core.redis import get_redis
+from yleum_gateway.core.config import Settings, get_settings
+from yleum_gateway.core.redis import get_redis
 
 _FIXED_ALGORITHM = "HS256"
 _RUNNER_JTI_KEY_PREFIX = "omnia:project-cell:runner-jti:"

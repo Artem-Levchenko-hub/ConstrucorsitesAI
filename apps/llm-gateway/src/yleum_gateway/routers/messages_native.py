@@ -24,8 +24,8 @@ import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
 
-from omnia_gateway.core.errors import WalletEmptyError
-from omnia_gateway.core.runner_auth import (
+from yleum_gateway.core.errors import WalletEmptyError
+from yleum_gateway.core.runner_auth import (
     RunnerAuthConfigError,
     RunnerAuthError,
     RunnerClaims,
@@ -35,10 +35,10 @@ from omnia_gateway.core.runner_auth import (
     validate_runner_metadata,
     verify_runner_bearer_header,
 )
-from omnia_gateway.providers import llmgw
-from omnia_gateway.services import billing, file_logger
-from omnia_gateway.services.model_router import native_messages_route
-from omnia_gateway.services.pricing import calculate_cost_rub
+from yleum_gateway.providers import llmgw
+from yleum_gateway.services import billing, file_logger
+from yleum_gateway.services.model_router import native_messages_route
+from yleum_gateway.services.pricing import calculate_cost_rub
 
 log = structlog.get_logger(__name__)
 router = APIRouter()

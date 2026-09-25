@@ -16,11 +16,11 @@ from uuid import UUID
 
 import pytest
 
-from omnia_agent_runner import (
+from yleum_agent_runner import (
     HS256JWTSigner,
     ProjectCellJWTMessagesAuth,
 )
-from omnia_agent_runner.runner import (
+from yleum_agent_runner.runner import (
     RunnerEvent,
     RunnerIdentity,
     StaticBearerMessagesAuth,
@@ -395,7 +395,7 @@ async def test_runner_prefers_per_attempt_auth_factory_over_static_bearer_header
 
 
 def test_runner_sources_never_load_generated_code_or_shells_out() -> None:
-    source_root = Path(__file__).resolve().parents[1] / "src" / "omnia_agent_runner"
+    source_root = Path(__file__).resolve().parents[1] / "src" / "yleum_agent_runner"
     combined = "\n".join(
         path.read_text(encoding="utf-8") for path in source_root.glob("*.py")
     )
@@ -420,7 +420,7 @@ def test_runner_image_is_non_root() -> None:
 
     assert "USER runner" in dockerfile
     assert "useradd --create-home --uid 10001 runner" in dockerfile
-    assert 'CMD ["python", "-m", "omnia_agent_runner"]' in dockerfile
+    assert 'CMD ["python", "-m", "yleum_agent_runner"]' in dockerfile
 
 
 def test_runner_module_boots_as_resident_fail_closed_service() -> None:
@@ -433,7 +433,7 @@ def test_runner_module_boots_as_resident_fail_closed_service() -> None:
         "PYTHONPATH": str(project_root / "src"),
     }
     proc = subprocess.Popen(
-        [sys.executable, "-m", "omnia_agent_runner"],
+        [sys.executable, "-m", "yleum_agent_runner"],
         cwd=project_root,
         env=env,
         stdout=subprocess.PIPE,

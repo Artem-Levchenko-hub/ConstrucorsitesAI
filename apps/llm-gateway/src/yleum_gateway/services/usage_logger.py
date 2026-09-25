@@ -11,7 +11,7 @@ from uuid import UUID, uuid4
 
 import structlog
 
-from omnia_gateway.core.db import get_pool
+from yleum_gateway.core.db import get_pool
 
 log = structlog.get_logger(__name__)
 

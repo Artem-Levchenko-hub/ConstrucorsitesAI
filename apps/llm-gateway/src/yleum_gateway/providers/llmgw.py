@@ -30,8 +30,8 @@ from uuid import uuid4
 
 import httpx
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from yleum_gateway.core.config import get_settings
+from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
 
 # Transient transport faults worth one retry (a TLS handshake to a reseller edge
 # can intermittently stall inside a long-lived process).

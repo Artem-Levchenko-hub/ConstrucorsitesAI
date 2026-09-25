@@ -14,7 +14,7 @@ from uuid import uuid4
 
 import pytest
 
-from omnia_gateway.core.config import reset_settings_cache
+from yleum_gateway.core.config import reset_settings_cache
 
 
 @pytest.fixture(autouse=True)
@@ -40,29 +40,29 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 @pytest.fixture
 def neutralize_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub everything the FastAPI lifespan would set up."""
-    monkeypatch.setattr("omnia_gateway.main.init_pool", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.main.close_pool", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.main.init_redis", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.main.close_redis", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.main.init_http", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.main.close_http", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.main.configure_logging", lambda: None)
+    monkeypatch.setattr("yleum_gateway.main.init_pool", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.main.close_pool", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.main.init_redis", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.main.close_redis", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.main.init_http", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.main.close_http", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.main.configure_logging", lambda: None)
 
 
 @pytest.fixture
 def neutralize_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub cache / billing / file logging so chat router doesn't hit real I/O."""
-    monkeypatch.setattr("omnia_gateway.routers.chat.cache.get", AsyncMock(return_value=None))
-    monkeypatch.setattr("omnia_gateway.routers.chat.cache.set", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.routers.chat.cache.get", AsyncMock(return_value=None))
+    monkeypatch.setattr("yleum_gateway.routers.chat.cache.set", AsyncMock(return_value=None))
     monkeypatch.setattr(
-        "omnia_gateway.routers.chat.billing.precheck_balance",
+        "yleum_gateway.routers.chat.billing.precheck_balance",
         AsyncMock(return_value=None),
     )
     monkeypatch.setattr(
-        "omnia_gateway.routers.chat.billing.charge",
+        "yleum_gateway.routers.chat.billing.charge",
         AsyncMock(return_value=uuid4()),
     )
     monkeypatch.setattr(
-        "omnia_gateway.routers.chat.file_logger.log_request",
+        "yleum_gateway.routers.chat.file_logger.log_request",
         lambda payload: None,
     )

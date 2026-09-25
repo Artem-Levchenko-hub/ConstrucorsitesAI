@@ -6,8 +6,8 @@ from decimal import Decimal
 
 import pytest
 
-from omnia_gateway.core.errors import ModelNotFoundError
-from omnia_gateway.services.pricing import (
+from yleum_gateway.core.errors import ModelNotFoundError
+from yleum_gateway.services.pricing import (
     PRICE_TABLE,
     calculate_cost_rub,
     list_models,

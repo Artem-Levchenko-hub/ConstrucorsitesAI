@@ -35,15 +35,15 @@ import structlog
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from omnia_gateway.core.config import get_settings
-from omnia_gateway.core.errors import (
+from yleum_gateway.core.config import get_settings
+from yleum_gateway.core.errors import (
     GatewayError,
     ModelNotFoundError,
     ModelUnavailableError,
     UpstreamProviderError,
     WalletEmptyError,
 )
-from omnia_gateway.services import billing, file_logger
+from yleum_gateway.services import billing, file_logger
 
 router = APIRouter(prefix="/v1", tags=["videos"])
 log = structlog.get_logger(__name__)

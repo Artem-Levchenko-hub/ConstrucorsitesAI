@@ -14,17 +14,17 @@ from contextlib import asynccontextmanager, suppress
 import structlog
 from fastapi import FastAPI
 
-from omnia_gateway.core.db import close_pool, init_pool
-from omnia_gateway.core.http import close_http, init_http
-from omnia_gateway.core.logging import configure_logging
-from omnia_gateway.core.redis import close_redis, init_redis
-from omnia_gateway.routers import audio, chat, health, images, messages_native, models, videos
+from yleum_gateway.core.db import close_pool, init_pool
+from yleum_gateway.core.http import close_http, init_http
+from yleum_gateway.core.logging import configure_logging
+from yleum_gateway.core.redis import close_redis, init_redis
+from yleum_gateway.routers import audio, chat, health, images, messages_native, models, videos
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging()
-    log = structlog.get_logger("omnia_gateway.main")
+    log = structlog.get_logger("yleum_gateway.main")
 
     try:
         await init_pool()

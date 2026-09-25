@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_gateway.core.errors import UpstreamProviderError, ValidationFailedError
-from omnia_gateway.providers import llmgw
+from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from yleum_gateway.providers import llmgw
 
 _MODEL = "gemini-3.1-pro-preview-customtools"
 

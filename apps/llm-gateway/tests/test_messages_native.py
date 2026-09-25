@@ -18,10 +18,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from omnia_gateway.core import runner_auth
-from omnia_gateway.core.errors import WalletEmptyError
-from omnia_gateway.main import create_app
-from omnia_gateway.routers import messages_native
+from yleum_gateway.core import runner_auth
+from yleum_gateway.core.errors import WalletEmptyError
+from yleum_gateway.main import create_app
+from yleum_gateway.routers import messages_native
 
 _RUNNER_SECRET = "runner-secret"
 _RUNNER_ISSUER = "omnia-agent-runner"

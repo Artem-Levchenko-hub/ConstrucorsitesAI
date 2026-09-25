@@ -14,4 +14,4 @@ RUN pip install --no-cache-dir .
 
 USER runner
 
-CMD ["python", "-m", "omnia_agent_runner"]
+CMD ["python", "-m", "yleum_agent_runner"]

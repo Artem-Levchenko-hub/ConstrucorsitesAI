@@ -50,7 +50,7 @@ EXPOSE 8001
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
     CMD curl -fs http://localhost:8001/health || exit 1
 
-CMD ["uvicorn", "omnia_gateway.main:app", \
+CMD ["uvicorn", "yleum_gateway.main:app", \
      "--host", "0.0.0.0", "--port", "8001", \
      "--proxy-headers", "--forwarded-allow-ips", "*", \
      "--loop", "asyncio"]
