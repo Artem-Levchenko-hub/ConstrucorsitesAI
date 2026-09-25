@@ -37,7 +37,7 @@ apps/llm-gateway/
 ├── .env.example
 ├── README.md
 ├── src/
-│   └── omnia_gateway/
+│   └── yleum_gateway/
 │       ├── __init__.py
 │       ├── main.py                       (FastAPI app)
 │       ├── core/
@@ -200,7 +200,7 @@ cd apps/llm-gateway
 uv sync
 cp .env.example .env
 
-uv run uvicorn omnia_gateway.main:app --reload --port 8001
+uv run uvicorn yleum_gateway.main:app --reload --port 8001
 
 uv run pytest -q
 uv run ruff check . && uv run ruff format --check .

@@ -34,7 +34,7 @@ Run orchestrator commands from `apps/orchestrator` with `.venv/Scripts/python.ex
 - `apps/orchestrator/src/yleum_orchestrator/services/machine_services.py`: desired-service graph and process supervision protocol.
 - `apps/orchestrator/src/yleum_orchestrator/services/machine_egress.py`: destination policy and fence readiness contract.
 - `apps/orchestrator/src/yleum_orchestrator/routers/project_machine.py`: internal fenced machine operations.
-- `apps/agent-runner/src/omnia_agent_runner/session.py`: durable session/operation/event adapters.
+- `apps/agent-runner/src/yleum_agent_runner/session.py`: durable session/operation/event adapters.
 - `apps/api/src/yleum_api/services/project_machine_sessions.py`: API lease/dispatch/recovery boundary.
 - `apps/api/src/yleum_api/services/project_machine_release.py`: functional candidate verification and data cutover coordinator.
 - Existing workspace/capacity/candidate/runtime/MAX code: narrow compatibility adapters only.
@@ -212,14 +212,14 @@ return await legacy_executor(action)
 ### Task 5: Durable resident runner and session recovery
 
 **Files:**
-- Create: `apps/agent-runner/src/omnia_agent_runner/session.py`
+- Create: `apps/agent-runner/src/yleum_agent_runner/session.py`
 - Create: `apps/agent-runner/tests/test_session.py`
 - Create: `apps/api/src/yleum_api/services/project_machine_sessions.py`
 - Create: `apps/api/tests/test_project_machine_sessions.py`
 - Create: `apps/api/migrations/versions/0056_project_machine_sessions.py`
 - Modify: `apps/api/src/yleum_api/models/project_cell.py`
-- Modify: `apps/agent-runner/src/omnia_agent_runner/service.py`
-- Modify: `apps/agent-runner/src/omnia_agent_runner/runner.py`
+- Modify: `apps/agent-runner/src/yleum_agent_runner/service.py`
+- Modify: `apps/agent-runner/src/yleum_agent_runner/runner.py`
 - Modify: `apps/api/src/yleum_api/services/generation_runs.py`
 - Modify: `apps/api/src/yleum_api/main.py`
 - Modify: `apps/api/src/yleum_api/routers/messages.py`

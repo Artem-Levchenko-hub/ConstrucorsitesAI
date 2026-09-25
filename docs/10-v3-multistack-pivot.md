@@ -286,8 +286,8 @@ Chat-2 расширяет `wallet_charges.type` enum.
 | Каталог стеков (templates) | `apps/orchestrator/templates/<stack_id>/` | Chat-3 |
 | Freeze ui-ux-pro-max | `apps/api/src/yleum_api/seed/ui_kit_freeze.py` (новый) | Chat-2 (структура) + я (заполнение данными) |
 | Onboarding state machine | `apps/api/src/yleum_api/services/onboarding.py` (новый) | Chat-2 |
-| Stack recommender | `apps/llm-gateway/src/omnia_gateway/routers/stack.py` (новый) | Chat-3 |
-| Ideological-Q генератор | `apps/llm-gateway/src/omnia_gateway/routers/onboarding.py` (новый) | Chat-3 |
+| Stack recommender | `apps/llm-gateway/src/yleum_gateway/routers/stack.py` (новый) | Chat-3 |
+| Ideological-Q генератор | `apps/llm-gateway/src/yleum_gateway/routers/onboarding.py` (новый) | Chat-3 |
 | UI онбординга | `apps/web/src/app/(app)/projects/new/` (новый каталог) | Chat-1 |
 
 ## Связь с предыдущими спеками

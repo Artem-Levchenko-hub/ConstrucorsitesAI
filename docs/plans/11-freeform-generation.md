@@ -55,7 +55,7 @@
 
 | # | Задача | Файлы | Зона |
 |---|---|---|---|
-| 1.1 | Vision в gateway: `ChatMessage.content: str → str \| list[dict]`; guard'ы `isinstance(content, str)` в `safety.sanitize_messages` и `token_counter` (иначе TypeError на list-контенте при биллинге) | `apps/llm-gateway/src/omnia_gateway/routers/chat.py`, `services/safety.py`, `services/token_counter.py` | C |
+| 1.1 | Vision в gateway: `ChatMessage.content: str → str \| list[dict]`; guard'ы `isinstance(content, str)` в `safety.sanitize_messages` и `token_counter` (иначе TypeError на list-контенте при биллинге) | `apps/llm-gateway/src/yleum_gateway/routers/chat.py`, `services/safety.py`, `services/token_counter.py` | C |
 | 1.2 | Render-harness: вынести логику `_render_async` в `capture(files, widths=[375,768,1440]) → {width: (png_bytes, scroll_width, has_overflow)}`. Скриншот в bytes (без `path=`), `page.evaluate("() => document.documentElement.scrollWidth")` для overflow. Сохранить обратную совместимость `render_preview` (RQ-обёртка для PNG-превью). | `apps/api/src/yleum_api/workers/preview.py` | B |
 | 1.3 | Дизайн-токены: палитра и пары шрифтов выбираются **с разбросом** (seed по `project_id` → стабильно внутри проекта, разные проекты ≠ одинаковы), курированный пул из ~15–20 пар шрифтов. Экспорт токенов (CSS-переменные) для инъекции в промпт. | `apps/api/src/yleum_api/sections/palettes.py`, новый `services/design_tokens.py` | B |
 | — | Тесты | `tests/test_design_tokens.py`, smoke render-harness | B |

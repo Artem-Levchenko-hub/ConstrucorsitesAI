@@ -31,7 +31,7 @@ V3 добавляет — ничего нового на уровне завис
 
 ## Что добавить — LLM Gateway
 
-### Новые endpoints (`apps/llm-gateway/src/omnia_gateway/routers/`)
+### Новые endpoints (`apps/llm-gateway/src/yleum_gateway/routers/`)
 
 | Файл | Endpoint |
 |---|---|
@@ -40,13 +40,13 @@ V3 добавляет — ничего нового на уровне завис
 
 Под капотом — **Haiku-4.5** через существующий `services/litellm_router.py`. Один вызов = 1 LLM запрос. Цены — в `docs/10` (≈₽0.05 за вопрос, ≈₽0.10 за recommend).
 
-### Promtps (`apps/llm-gateway/src/omnia_gateway/prompts/`)
+### Promtps (`apps/llm-gateway/src/yleum_gateway/prompts/`)
 
 Создать (или расширить):
 - `onboarding_q.md` — template для генератора идеологического вопроса (см. docs/10 «Q generation prompt»).
 - `stack_recommend.md` — system prompt с закрытым списком `stack_id` + критериями выбора (см. docs/10 LLM-критерии).
 
-### Сервисы (`apps/llm-gateway/src/omnia_gateway/services/`)
+### Сервисы (`apps/llm-gateway/src/yleum_gateway/services/`)
 
 | Файл | Что |
 |---|---|
@@ -187,7 +187,7 @@ templates/
 # LLM Gateway
 cd apps/llm-gateway
 uv sync
-uv run uvicorn omnia_gateway.main:app --reload --port 8001
+uv run uvicorn yleum_gateway.main:app --reload --port 8001
 uv run pytest -q
 
 # Orchestrator

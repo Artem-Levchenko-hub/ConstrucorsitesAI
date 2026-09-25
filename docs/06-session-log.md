@@ -242,7 +242,7 @@ Workaround (предложено владельцу, ждём ответ):
   drop + role drop. 1.3G дискового пространства освобождено.
 - **SSH key auth** для деплоя: одноразовый password-вход через paramiko
   (запушено только в memory, файл с паролем удалён сразу после
-  установки `~/.ssh/omnia_gateway_deploy_ed25519`).
+  установки `~/.ssh/yleum_gateway_deploy_ed25519`).
 - **DNS confusion**: `consconstructor.lead-generator.ru` в задаче не
   резолвился — деплой на `constructor.lead-generator.ru` (corrected
   typo).

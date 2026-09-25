@@ -47,9 +47,9 @@ Local PostgreSQL testing note: an unanchored WSL distro shut down after shell ex
 
 ### Resident agent
 
-- `apps/agent-runner/src/omnia_agent_runner/runner.py` contains `TrustedRunner`.
+- `apps/agent-runner/src/yleum_agent_runner/runner.py` contains `TrustedRunner`.
 - `service.py` exposes `/runs`, `/healthz`, `/readyz`; `messages_auth.py` provides runner JWT authentication.
-- Gateway `apps/llm-gateway/src/omnia_gateway/routers/messages_native.py` supports `/v1/project-cell/messages`.
+- Gateway `apps/llm-gateway/src/yleum_gateway/routers/messages_native.py` supports `/v1/project-cell/messages`.
 - No live API/orchestrator dispatch into that resident service was found. `messages.py` still runs the loop API-side with `project_cell_executor.py` as an action adapter.
 
 ### Persistent processes, draft runtime and browser

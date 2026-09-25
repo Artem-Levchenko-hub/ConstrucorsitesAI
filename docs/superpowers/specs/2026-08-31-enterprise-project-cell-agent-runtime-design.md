@@ -551,8 +551,8 @@ project.agent_execution_backend overrides the default for canaries
 
 ### Gateway
 
-- `apps/llm-gateway/src/omnia_gateway/routers/messages_native.py`: true streaming tool-use and upstream cancellation;
-- `apps/llm-gateway/src/omnia_gateway/providers/llmgw.py`: remains the provider transport;
+- `apps/llm-gateway/src/yleum_gateway/routers/messages_native.py`: true streaming tool-use and upstream cancellation;
+- `apps/llm-gateway/src/yleum_gateway/providers/llmgw.py`: remains the provider transport;
 - structured trace metadata and safe cancellation propagation.
 
 ### Infrastructure
