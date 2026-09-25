@@ -576,45 +576,17 @@ class DockerMachineBackend:
         self._wait_proxy_ready(proxy, proxy_ip)
         policy = GuardPolicy(workspace_id=str(self.workspace_id), proxy_ip=proxy_ip)
         self._volume(self.stem + "-logs")
-        guard = self._lookup(self.client.containers, self.stem + "-guard", "namespace-guard")
-        if guard is None:
-            guard = self.client.containers.create(
-                self.guard_image,
-                [
-                    "python3",
-                    "/opt/omnia/project_machine_namespace_guard.py",
-                    json.dumps(asdict(policy), sort_keys=True),
-                ],
-                name=self.stem + "-guard",
-                labels={**self.labels("namespace-guard"), "omnia.policy_digest": policy.digest()},
-                detach=True,
-                network=self.internal_network,
-                user="0:0",
-                cap_drop=["ALL"],
-                cap_add=["NET_ADMIN"],
-                privileged=False,
-                read_only=True,
-                security_opt=["no-new-privileges:true"],
-                pids_limit=32,
-                mem_limit=32 * 1024**2,
-                memswap_limit=32 * 1024**2,
-                nano_cpus=50_000_000,
-                volumes={self.stem + "-logs": {"bind": "/run/omnia-logs", "mode": "ro"}},
-            )
-            guard.start()
-        deadline = time.monotonic() + machine_remaining_seconds(30)
-        while time.monotonic() < deadline:
-            guard.reload()
-            if guard.status != "running":
-                raise CellResourceError("namespace guard failed before machine attachment")
-            if f"POLICY_READY={policy.digest()}".encode() in guard.logs(tail=5):
-                break
-            time.sleep(max(0, min(0.1, deadline - time.monotonic())))
-        else:
-            machine_remaining_seconds(30)
-            raise CellResourceError("namespace guard readiness is unverified")
-        if guard.labels.get("omnia.policy_digest") != policy.digest():
-            raise CellIdentityConflict("namespace guard policy changed")
+        guard = self._ensure_namespace_guard(policy)
+        if reuse_existing:
+            existing.reload()
+            network_mode = (existing.attrs.get("HostConfig") or {}).get("NetworkMode")
+            if network_mode != "container:" + guard.id:
+                # The guard was replaced (its policy went stale — see
+                # _ensure_namespace_guard): a product container still joined to the
+                # old namespace would never regain networking. Recreate it on the new
+                # guard; every volume, and therefore every record, stays in place.
+                self.remove(expected_epoch=physical_epoch)
+                reuse_existing = False
         for name in self.volume_mapping(manifest):
             if name != self.workspace_volume:
                 self._volume(name)
@@ -639,6 +611,67 @@ class DockerMachineBackend:
             **self.container_options(manifest, guard.id, epoch),
         )
         machine.start()
+
+    def _ensure_namespace_guard(self, policy: GuardPolicy) -> Any:
+        """The running guard whose policy matches ``policy`` — started or recreated as needed.
+
+        Two ways a machine could never wake again after a host reboot (commerce,
+        25.09.2026): the guard has no restart policy on purpose, so it was merely
+        *exited* — but only a *missing* guard was ever created and started, and an
+        exited one made readiness fail at once; and the guard bakes the proxy
+        address into its argv and readiness digest, so a proxy recreated with
+        another internal address left the old guard verifying a policy that could
+        never match. The guard holds no state: a stale one is replaced, an exited
+        one is started.
+        """
+        digest = policy.digest()
+        guard = self._lookup(self.client.containers, self.stem + "-guard", "namespace-guard")
+        if guard is not None:
+            guard.reload()
+            if guard.labels.get("omnia.policy_digest") != digest:
+                guard.remove(force=True)
+                guard = None
+            elif guard.status != "running":
+                guard.start()
+        if guard is None:
+            guard = self.client.containers.create(
+                self.guard_image,
+                [
+                    "python3",
+                    "/opt/omnia/project_machine_namespace_guard.py",
+                    json.dumps(asdict(policy), sort_keys=True),
+                ],
+                name=self.stem + "-guard",
+                labels={**self.labels("namespace-guard"), "omnia.policy_digest": digest},
+                detach=True,
+                network=self.internal_network,
+                user="0:0",
+                cap_drop=["ALL"],
+                cap_add=["NET_ADMIN"],
+                privileged=False,
+                read_only=True,
+                security_opt=["no-new-privileges:true"],
+                pids_limit=32,
+                mem_limit=32 * 1024**2,
+                memswap_limit=32 * 1024**2,
+                nano_cpus=50_000_000,
+                volumes={self.stem + "-logs": {"bind": "/run/omnia-logs", "mode": "ro"}},
+            )
+            guard.start()
+        deadline = time.monotonic() + machine_remaining_seconds(30)
+        while time.monotonic() < deadline:
+            guard.reload()
+            if guard.status != "running":
+                raise CellResourceError("namespace guard failed before machine attachment")
+            if f"POLICY_READY={digest}".encode() in guard.logs(tail=5):
+                break
+            time.sleep(max(0, min(0.1, deadline - time.monotonic())))
+        else:
+            machine_remaining_seconds(30)
+            raise CellResourceError("namespace guard readiness is unverified")
+        if guard.labels.get("omnia.policy_digest") != digest:
+            raise CellIdentityConflict("namespace guard policy changed")
+        return guard
 
     def _project_postgres_options(self, namespace_id: str, epoch: int) -> dict[str, Any]:
         return {

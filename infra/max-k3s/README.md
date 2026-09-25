@@ -51,6 +51,11 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   `BACKUP_OFFHOST_DEST=commerce:/var/backups/omnia-platform-peer/core` в кроне core (шифрованный
   `.cms` + `OFFHOST_SHA256` на каждую копию, на commerce хранится 30 дней). Крон не догоняет пропуск:
   если core лежал в 03:15, копию снять руками той же командой с той же переменной.
+  С 25.09.2026 тот же шифрованный бандл кладётся и в приватный бакет MinIO `backups`
+  (`<ts>/omnia-backup-<ts>.cms` + `<ts>/OFFHOST_SHA256`, вердикт restore-test — `RESTORE_TEST.json`;
+  ротация `RETENTION_DAYS`), и `/api/backups/offhost` отдаёт его оттуда: api-контейнеру каталог
+  `/opt/omnia-runtime/backups` больше не нужен (bind-mount оставлен как запасной путь на переход).
+  Из архива тома MinIO бакет `backups` исключён, иначе каждая ночная копия тащила бы прежние бандлы.
 - **Сторож доступности** (`remote/80-uptime-watchdog.sh`, таймер `max-watchdog.timer` на runtime и
   commerce, каждые 5 минут): три провала подряд `https://yleum.ru/api/health` или `https://yleum.ru/`
   → одно сообщение, восстановление → ещё одно. Куда слать — `/etc/max-studio/watchdog.env`
