@@ -13,7 +13,7 @@
 #                         время живого прогона адаптации), OMNIA_RELEASE_SHA и expected api-переменные не меняются
 #     --legal-version V   версия юридических документов: явно пишется в env воркера биллинга
 #     --gateway           менялся apps/llm-gateway: пересобрать образ omnia-gateway:prod и поднять один контейнер
-#                         шлюза (omnia-prod-gw) с --no-deps, проверить его health на :8101
+#                         шлюза (yleum-prod-gw) с --no-deps, проверить его health на :8101
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -116,7 +116,7 @@ say "core: api worker generation-worker (api раньше оркестратор
 ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --no-build api worker generation-worker 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -5; for i in \$(seq 1 40); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8200/api/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"api health 200 с попытки \$i\"; break; }; sleep 3; done; docker compose logs --since 3m api 2>&1 | grep -i -E 'running upgrade|RuntimeError|Traceback' | tail -3; docker tag omnia-api:$SHA omnia-api:prod"
 
 say "оркестраторы: core, затем commerce (одна ревизия)"
-ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && sudo systemctl restart omnia-orchestrator; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --delete --exclude .venv --exclude .env --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && sudo systemctl restart omnia-orchestrator; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
+ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --delete --exclude .venv --exclude .env --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
 
 fi
 
@@ -127,7 +127,7 @@ fi
 
 if [ $GW = 1 ]; then
   say "core: шлюз моделей (gateway) — сборка и перезапуск одного контейнера"
-  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose build gateway 2>&1 | grep -E 'Built|ERROR|error' | tail -2; docker compose up -d --no-build --no-deps gateway 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect omnia-prod-gw --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
+  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose build gateway 2>&1 | grep -E 'Built|ERROR|error' | tail -2; docker compose up -d --no-build --no-deps gateway 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
 fi
 
 say "публичный health"

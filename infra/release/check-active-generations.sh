@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Refuses a release while any generation is still running. Reads the platform DB
-# where it lives: inside omnia-prod-postgres, or (after the Phase 2 move) on the
+# where it lives: inside yleum-prod-postgres, or (after the Phase 2 move) on the
 # host PostgreSQL of core over PLATFORM_DSN — the same switch as infra/backup.
 set -euo pipefail
 
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 PLATFORM_CREDS="${PLATFORM_CREDS:-/etc/max-studio/platform-postgres.env}"
-PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
+PLATFORM_CTR="${PLATFORM_CTR:-yleum-prod-postgres}"
 PLATFORM_DSN="${PLATFORM_DSN:-}"
 query='select status,count(*) from generation_runs
      where finished_at is null

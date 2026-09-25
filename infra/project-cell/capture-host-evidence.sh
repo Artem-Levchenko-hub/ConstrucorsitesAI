@@ -65,7 +65,7 @@ fi
 
 python3 - "${evidence}/systemd-state.json" <<'PY'
 import json, subprocess, sys
-units = ["docker.service", "nginx.service", "omnia-orchestrator.service", "k3s.service"]
+units = ["docker.service", "nginx.service", "yleum-orchestrator.service", "k3s.service"]
 state = {}
 for unit in units:
     active = subprocess.run(["systemctl", "is-active", unit], text=True, capture_output=True)
@@ -252,8 +252,8 @@ roots = [
   "/etc/sysctl.conf", "/etc/sysctl.d", "/etc/modules", "/etc/modules-load.d",
   "/etc/network/interfaces", "/etc/network/interfaces.d",
   "/etc/systemd/system/docker.service.d", "/etc/systemd/system/nginx.service.d",
-  "/etc/systemd/system/omnia-orchestrator.service",
-  "/etc/systemd/system/omnia-orchestrator.service.d",
+  "/etc/systemd/system/yleum-orchestrator.service",
+  "/etc/systemd/system/yleum-orchestrator.service.d",
   "/etc/cni", "/opt/cni", "/var/lib/cni",
   "/etc/rancher/k3s/config.yaml", "/var/lib/rancher/k3s",
   "/var/lib/rancher/k3s/agent/etc/kubelet.conf.d/10-project-cell-reserves.conf",
@@ -296,8 +296,8 @@ for path in \
   /etc/network/interfaces.d \
   /etc/systemd/system/docker.service.d \
   /etc/systemd/system/nginx.service.d \
-  /etc/systemd/system/omnia-orchestrator.service \
-  /etc/systemd/system/omnia-orchestrator.service.d \
+  /etc/systemd/system/yleum-orchestrator.service \
+  /etc/systemd/system/yleum-orchestrator.service.d \
   /etc/cni \
   /opt/cni \
   /var/lib/cni; do

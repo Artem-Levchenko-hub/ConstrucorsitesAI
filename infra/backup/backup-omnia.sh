@@ -3,7 +3,7 @@
 #
 # Captures everything a disk failure would erase:
 #   1. Platform DB      — db `omnia` (users, projects, wallets, snapshots meta): in the
-#                         omnia-prod-postgres container, or on the host PostgreSQL of
+#                         yleum-prod-postgres container, or on the host PostgreSQL of
 #                         core after the Phase 2 move (PLATFORM_DB_MODE below)
 #   2. Per-project DBs  — omnia-postgres-users / db `omnia_users` (ALL generated-app schemas, one dump)
 #   3. Project sources  — /opt/omnia-runtime/projects (generated source + snapshots)
@@ -28,18 +28,20 @@ RETENTION_DAYS="${RETENTION_DAYS:-14}"
 OFFHOST_DEST="${BACKUP_OFFHOST_DEST:-}" # optional second encrypted copy via rsync/scp
 PUBLIC_CERT="${BACKUP_PUBLIC_CERT:-/opt/omnia/infra/backup/offhost-backup-cert.pem}"
 MINIO_VOLUME="${MINIO_VOLUME:-full_minio-data}"
-MINIO_CONTAINER="${MINIO_CONTAINER:-omnia-prod-minio}"   # mc inside it uploads the bundle (step 7b)
+# Transition 25.09–: containers are being renamed omnia-prod-* → yleum-prod-*; pick whichever exists.
+pick_ctr() { local n; for n in "$@"; do docker inspect "$n" >/dev/null 2>&1 && { echo "$n"; return; }; done; echo "$1"; }
+MINIO_CONTAINER="${MINIO_CONTAINER:-$(pick_ctr yleum-prod-minio omnia-prod-minio)}"   # mc inside it uploads the bundle (step 7b)
 MINIO_BACKUP_BUCKET="${MINIO_BACKUP_BUCKET:-backups}"
 # The archive helper only needs `tar`. Releases run SHA-tagged images, so the
 # floating `omnia-api:prod` tag may be absent (that silently broke three nightly
 # backups in September 2026): prefer the image of the running API container.
-API_CTR="${API_CTR:-omnia-prod-api}"
+API_CTR="${API_CTR:-$(pick_ctr yleum-prod-api omnia-prod-api)}"
 if [ -z "${MINIO_BACKUP_IMAGE:-}" ]; then
   MINIO_BACKUP_IMAGE="$(docker inspect "$API_CTR" --format '{{.Config.Image}}' 2>/dev/null || true)"
   MINIO_BACKUP_IMAGE="${MINIO_BACKUP_IMAGE:-omnia-api:prod}"
 fi
 RUNTIME_ENV="${RUNTIME_ENV:-/opt/omnia-runtime/.env}"
-# This is the EnvironmentFile loaded by omnia-orchestrator.service. Backing up
+# This is the EnvironmentFile loaded by yleum-orchestrator.service. Backing up
 # a legacy mirror would produce a bundle that cannot faithfully boot the daemon.
 ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 # The MAX apps' own data lives in per-cell volumes, not in the databases above.
@@ -54,11 +56,11 @@ CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
 [ -x "$CELLS_PYTHON" ] || CELLS_PYTHON="$(command -v python3 || true)"
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
-PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
+PLATFORM_CTR="${PLATFORM_CTR:-$(pick_ctr yleum-prod-postgres omnia-prod-postgres)}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
 # Where the platform DB lives (Phase 2 of the core infrastructure):
-#   container — inside omnia-prod-postgres, dumped through `docker exec` (the
+#   container — inside yleum-prod-postgres, dumped through `docker exec` (the
 #               layout before infra/max-k3s/migrate/50-platform-db-to-host.sh);
 #   host      — on the host PostgreSQL of core, dumped by the host `pg_dump`
 #               over PLATFORM_DSN (read from /etc/max-studio/platform-postgres.env

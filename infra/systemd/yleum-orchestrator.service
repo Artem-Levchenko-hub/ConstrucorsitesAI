@@ -15,7 +15,7 @@ Type=simple
 User=i48ptgvnis
 Group=i48ptgvnis
 WorkingDirectory=/opt/omnia/apps/orchestrator
-# Optional: .env may not exist (env can come from /etc/default/omnia-orchestrator
+# Optional: .env may not exist (env can come from /etc/default/yleum-orchestrator
 # or the unit's Environment= directive). Leading dash makes it non-fatal.
 EnvironmentFile=-/opt/omnia/apps/orchestrator/.env
 # Pre-sync the venv when the operator pulls new code (`uv sync` from
@@ -56,7 +56,7 @@ PrivateTmp=true
 ReadWritePaths=/opt/omnia-runtime
 # nginx config + reload requires sudo passthrough — see `core/shell.py` and
 # `services/nginx_writer.py:_reload`. Sudoers config (NOPASSWD for `nginx`,
-# `systemctl reload nginx`, `acme.sh`) lives in /etc/sudoers.d/omnia-orchestrator.
+# `systemctl reload nginx`, `acme.sh`) lives in /etc/sudoers.d/yleum-orchestrator.
 
 [Install]
 WantedBy=multi-user.target

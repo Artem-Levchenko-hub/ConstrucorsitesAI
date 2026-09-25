@@ -62,7 +62,7 @@ make_bundle() {
   chmod 700 "${bundle}" "${bundle}/evidence" "${bundle}/restore"
   printf 'base-files 13.8\ncontainerd.io 2.2.1\n' >"${bundle}/evidence/package-versions.txt"
   printf 'docker=29.2.1\ncontainerd=2.2.1\nk3s=absent\nkata=absent\n' >"${bundle}/evidence/runtime-versions.txt"
-  printf '{"docker.service":{"active":"active","enabled":"enabled"},"k3s.service":{"active":"inactive","enabled":"disabled"},"nginx.service":{"active":"active","enabled":"enabled"},"omnia-orchestrator.service":{"active":"active","enabled":"enabled"}}\n' >"${bundle}/evidence/systemd-state.json"
+  printf '{"docker.service":{"active":"active","enabled":"enabled"},"k3s.service":{"active":"inactive","enabled":"disabled"},"nginx.service":{"active":"active","enabled":"enabled"},"yleum-orchestrator.service":{"active":"active","enabled":"enabled"}}\n' >"${bundle}/evidence/systemd-state.json"
   printf 'kernel.pid_max = 4194304\nvm.swappiness = 60\n' >"${bundle}/evidence/sysctls.txt"
   printf 'kvm\nkvm_intel\n' >"${bundle}/evidence/modules.txt"
   printf '*filter\n:INPUT ACCEPT [0:0]\nCOMMIT\n' >"${bundle}/evidence/firewall-v4.rules"

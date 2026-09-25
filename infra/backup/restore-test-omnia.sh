@@ -10,11 +10,12 @@ CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.
 CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
 [ -x "$CELLS_PYTHON" ] || CELLS_PYTHON="$(command -v python3 || true)"
 ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
-PLATFORM_CTR="${PLATFORM_CTR:-omnia-prod-postgres}"
+pick_ctr() { local n; for n in "$@"; do docker inspect "$n" >/dev/null 2>&1 && { echo "$n"; return; }; done; echo "$1"; }
+PLATFORM_CTR="${PLATFORM_CTR:-$(pick_ctr yleum-prod-postgres omnia-prod-postgres)}"
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
 # Same switch as backup-omnia.sh: `container` restores the scratch DB inside
-# omnia-prod-postgres; `host` (platform DB on the host PostgreSQL of core) creates
+# yleum-prod-postgres; `host` (platform DB on the host PostgreSQL of core) creates
 # the scratch DB on the host as the `postgres` superuser and reads the live DB
 # over PLATFORM_DSN. `auto` follows PLATFORM_DATABASE_URL in the compose .env.
 PLATFORM_DB_MODE="${PLATFORM_DB_MODE:-auto}"
@@ -101,8 +102,8 @@ cleanup(){
     && mv -f "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" "${BACKUP_ROOT}/RESTORE_TEST.json" || true
   # The verdict is also published next to the bundles in MinIO: /api/backups/offhost
   # reads it from there first (the host directory is only a fallback).
-  if [ -f "${BACKUP_ROOT}/RESTORE_TEST.json" ] && docker inspect "${MINIO_CONTAINER:-omnia-prod-minio}" >/dev/null 2>&1; then
-    docker exec -i "${MINIO_CONTAINER:-omnia-prod-minio}" sh -c 'mc alias set l http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 && mc pipe "l/${1}/RESTORE_TEST.json"' sh "${MINIO_BACKUP_BUCKET:-backups}" \
+  if [ -f "${BACKUP_ROOT}/RESTORE_TEST.json" ] && docker inspect "${MINIO_CONTAINER:-$(pick_ctr yleum-prod-minio omnia-prod-minio)}" >/dev/null 2>&1; then
+    docker exec -i "${MINIO_CONTAINER:-$(pick_ctr yleum-prod-minio omnia-prod-minio)}" sh -c 'mc alias set l http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 && mc pipe "l/${1}/RESTORE_TEST.json"' sh "${MINIO_BACKUP_BUCKET:-backups}" \
       < "${BACKUP_ROOT}/RESTORE_TEST.json" >/dev/null 2>&1 || echo "[restore-test] MinIO verdict upload failed (host file kept)"
   fi
 }

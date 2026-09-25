@@ -237,7 +237,7 @@ NS/A/CNAME не важен). **Эти записи не удалять** — п�
    Ingress'ов, wildcard — запасной по умолчанию).
 5. `orchestrator-env on` — `OMNIA_WILDCARD_CERT_ROOT=/etc/max-studio/edge/wildcard` в `.env`
    оркестратора на core и commerce; **перезапуск оркестратора — вручную**, когда нет активных
-   генераций (`sudo systemctl restart omnia-orchestrator`). После него новые превью получают https-блок
+   генераций (`sudo systemctl restart yleum-orchestrator`). После него новые превью получают https-блок
    с wildcard сразу (`nginx_writer._wildcard_cert_dir`, acme не вызывается), старые переезжают на
    wildcard при следующем `ensure_tls` (открытие превью / reconcile).
 6. `k8s-mode wildcard` — `K8S_TLS_MODE=wildcard` в `.env` оркестратора на core (драйвер сначала
