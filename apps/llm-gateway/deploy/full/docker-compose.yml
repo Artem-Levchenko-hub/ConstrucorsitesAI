@@ -684,7 +684,9 @@ services:
     environment:
       # Server-side fetches from Next.js → api stay inside the docker network,
       # avoiding the public nginx hop and DNS resolution.
-      OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}
+      # Web has its own release identity: a web-only wave rebuilds web without touching api,
+      # so /web-health must report the web revision, not the api's OMNIA_RELEASE_SHA.
+      OMNIA_RELEASE_SHA: ${WEB_RELEASE_SHA:-${OMNIA_RELEASE_SHA:-unknown}}
       INTERNAL_API_URL: http://api:8000
       # Public origin of this deployment, read per request for the absolute URLs
       # in page metadata, sitemap.xml and robots.txt (apps/web/src/lib/public-origin.ts).

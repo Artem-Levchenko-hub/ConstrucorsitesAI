@@ -50,7 +50,7 @@ ssh max-core "set -o noclobber; echo \"$(whoami)@$(hostname -s) $(date -u +%FT%T
 trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 
 say "core: ff-merge + идентичность релиза в compose .env"
-ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -E '^(API_IMAGE|WEB_IMAGE|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
+ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
 
 if [ -n "$LEGAL" ]; then
   # Единственный источник — .env платформы: compose отдаёт его api, worker'ам и сборке web,
@@ -71,6 +71,7 @@ assert not gw.get(\"VK_ID_CLIENT_SECRET\") and not wk.get(\"VK_ID_CLIENT_SECRET\
 assert api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"1800\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
 if $API: assert d[\"api\"][\"image\"].endswith(\"$SHA\"), d[\"api\"][\"image\"]
 if $WEB: assert d[\"web\"][\"image\"].endswith(\"$SHA\"), d[\"web\"][\"image\"]
+if $WEB: assert d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\") == \"$SHA\", d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\")
 legal = \"$LEGAL\"
 if legal:
     assert api.get(\"LEGAL_DOCUMENT_VERSION\") == legal, api.get(\"LEGAL_DOCUMENT_VERSION\")
