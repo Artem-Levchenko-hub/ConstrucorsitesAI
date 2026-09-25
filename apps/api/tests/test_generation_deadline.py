@@ -43,7 +43,7 @@ from tests.test_max_finalization import (
 
 _T0 = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
 _EDIT = timedelta(seconds=1500)
-_REPAIR = timedelta(seconds=900)
+_REPAIR = timedelta(seconds=1800)
 _ACTIVATION = timedelta(seconds=2400)
 
 

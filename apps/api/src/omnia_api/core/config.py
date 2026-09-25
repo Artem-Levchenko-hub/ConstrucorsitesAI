@@ -1110,7 +1110,12 @@ class Settings(BaseSettings):
     # A restoration adaptation gets this much for checks and repairs once the agent's own
     # turn is over, even when the turn used the whole limit above. The sealed proof and
     # activation hand-off is outside both. Env: RESTORATION_ADAPTATION_REPAIR_SECONDS.
-    restoration_adaptation_repair_seconds: int = Field(default=900, ge=60, le=3600)
+    # 900 секунд не хватало настоящей адаптации: живой прогон 25.09 отработал
+    # 1393 секунды агентом и ровно 900 секунд починки, после чего был остановлен
+    # по сроку — делая при этом осмысленную работу (читал схему и миграцию,
+    # переписывал маршруты, ставил проверочную точку). Починка у адаптации
+    # объёмнее обычной: она сводит целые экраны с текущей базой.
+    restoration_adaptation_repair_seconds: int = Field(default=1800, ge=60, le=3600)
     # A durable proof/activation intent is finished by the reconciler and must not be cut
     # by the editing deadline — but it cannot hold the Project Cell forever either. This is
     # the ceiling for the whole sealed hand-off, generous enough for the controller's own
