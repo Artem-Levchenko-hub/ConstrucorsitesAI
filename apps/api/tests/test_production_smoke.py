@@ -458,3 +458,40 @@ def test_certificates_are_skipped_for_plain_http_targets():
     )
     assert failures == []
     assert [host for host, _ in certs.calls] == ["canary.invalid"]
+
+
+def _aligned_environment():
+    env = environment()
+    env["PRODUCTION_EXPECTED_ORCHESTRATOR_RELEASE_SHA"] = env["PRODUCTION_EXPECTED_API_RELEASE_SHA"]
+    return env
+
+
+def _aligned_responses(orchestrator_release):
+    data = responses()
+    data["/api/health"]["dependencies"]["orchestrator_release_sha"] = orchestrator_release
+    return data
+
+
+def test_equal_expectations_require_api_and_orchestrator_to_run_one_revision():
+    # Expectations equal, live revisions equal: no drift.
+    good = _aligned_responses("b" * 40)
+    config = Configuration.from_env(_aligned_environment())
+    assert run_smoke(config, HTTPDouble(good), sleep=lambda _: None) == []
+    # Expectations equal, an orchestrator restarted from another checkout: named drift.
+    drifted = _aligned_responses("e" * 40)
+    failures = run_smoke(config, HTTPDouble(drifted), sleep=lambda _: None)
+    assert f"orchestrator.release_mismatch expected={'b' * 40} actual={'e' * 40}" in failures
+    assert f"release.api_orchestrator_mismatch api={'b' * 40} orchestrator={'e' * 40}" in failures
+
+
+def test_declared_divergence_between_api_and_orchestrator_is_not_drift():
+    # Distinct expectations are a deployer's declared state (a maintenance window), not drift.
+    config = Configuration.from_env(environment())
+    assert run_smoke(config, HTTPDouble(responses()), sleep=lambda _: None) == []
+
+
+def test_api_orchestrator_mismatch_never_echoes_an_invalid_body():
+    data = _aligned_responses("<html>not a revision</html>")
+    config = Configuration.from_env(_aligned_environment())
+    failures = run_smoke(config, HTTPDouble(data), sleep=lambda _: None)
+    assert f"release.api_orchestrator_mismatch api={'b' * 40} orchestrator=invalid" in failures
