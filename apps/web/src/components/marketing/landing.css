@@ -1,8 +1,8 @@
 /* Витрина Yleum.
-   Типографическая шкала и ритм секций сняты замерами с base44.com: заголовки
-   крупные, с плотным межбуквенным расстоянием и интерлиньяжем меньше кегля;
-   фон меняется трижды, как смена главы; акцент копится и выстреливает один раз
-   полноэкранным финалом, поэтому кнопки в теле страницы нейтральные. */
+   Шкала заголовков и ритм секций сняты замерами с base44.com: крупные заголовки
+   с плотным межбуквенным расстоянием, текста мало, показа много; фон меняется
+   трижды, как смена главы; акцент копится и выстреливает один раз полноэкранным
+   финалом, поэтому кнопки в теле страницы нейтральные. */
 
 .yl {
   --yl-bg: #f9f8f6;
@@ -26,7 +26,7 @@
 .yl h1,
 .yl h2,
 .yl h3,
-.yl .yl-display {
+.yl .yl-brand {
   font-family: var(--font-onest), var(--font-inter), system-ui, sans-serif;
   font-weight: 600;
 }
@@ -47,6 +47,15 @@
 .yl-wrap { max-width: var(--yl-wrap); margin-inline: auto; padding-inline: 40px; }
 .yl section[id] { scroll-margin-top: 92px; }
 
+.yl-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 19px;
+  letter-spacing: -0.03em;
+}
+.yl-brand-mark { width: 24px; height: 24px; }
+
 /* ── шапка ───────────────────────────────────────────────────────────────── */
 .yl-header {
   position: sticky;
@@ -54,7 +63,6 @@
   z-index: 40;
   background: color-mix(in srgb, var(--yl-bg) 88%, transparent);
   backdrop-filter: blur(10px);
-  border-bottom: 1px solid transparent;
 }
 .yl-header__inner {
   display: flex;
@@ -80,7 +88,6 @@
   padding-inline: 20px;
   border-radius: 9px;
   background: var(--yl-dark);
-  color: #fff;
   font-size: 15px;
   font-weight: 600;
   letter-spacing: -0.012em;
@@ -91,7 +98,14 @@
 .yl-cta:hover { background: #343131; }
 .yl-cta--lg { min-height: 54px; padding-inline: 26px; font-size: 16px; }
 .yl .yl-cta--light { background: #fff; color: var(--yl-ink); }
-.yl-cta--light:hover { background: #f0efee; }
+.yl .yl-cta--light:hover { background: #f0efee; }
+.yl .yl-cta--outline {
+  justify-content: center;
+  border: 1px solid var(--yl-line);
+  background: #fff;
+  color: var(--yl-ink);
+}
+.yl .yl-cta--outline:hover { background: #f4f2ef; }
 
 .yl-quiet {
   display: inline-flex;
@@ -103,67 +117,25 @@
 }
 .yl-quiet:hover { color: var(--yl-ink); }
 
-/* ── общие элементы секции ───────────────────────────────────────────────── */
-.yl-eyebrow {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  color: var(--color-brand-blue, #0062ee);
-}
-.yl-eyebrow span {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--color-brand-blue, #0062ee);
-}
-
+/* ── типографика ─────────────────────────────────────────────────────────── */
 .yl h1 {
-  margin-top: 26px;
-  font-size: clamp(44px, 6.4vw, 94px);
-  line-height: 0.98;
-  letter-spacing: -0.04em;
+  font-size: clamp(46px, 7vw, 100px);
+  line-height: 0.95;
+  letter-spacing: -0.042em;
 }
 .yl h2 {
-  font-size: clamp(32px, 3.9vw, 57px);
-  line-height: 1.04;
-  letter-spacing: -0.04em;
+  font-size: clamp(34px, 4.4vw, 64px);
+  line-height: 1.01;
+  letter-spacing: -0.042em;
 }
-.yl h3 {
-  font-size: clamp(21px, 1.9vw, 27px);
-  line-height: 1.12;
-  letter-spacing: -0.025em;
-}
+.yl h3 { font-size: clamp(18px, 1.7vw, 23px); line-height: 1.15; letter-spacing: -0.028em; }
 .yl-lead {
-  max-width: 555px;
   font-size: clamp(17px, 1.5vw, 21px);
-  line-height: 1.42;
+  line-height: 1.4;
   letter-spacing: -0.01em;
   color: var(--yl-ink-2);
 }
 .yl-note { font-size: 13px; line-height: 1.6; color: var(--yl-ink-3); }
-
-.yl-section { padding-block: clamp(64px, 8vw, 128px); }
-.yl-section--tint { background: var(--yl-bg-2); }
-.yl-section--white { background: #fff; }
-.yl-head { max-width: 832px; }
-.yl-head h2 { margin-top: 20px; }
-.yl-head .yl-lead { margin-top: 26px; }
-
-/* ── 1. первый экран ─────────────────────────────────────────────────────── */
-.yl-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 52px;
-  align-items: center;
-  padding-block: clamp(40px, 5vw, 80px) clamp(40px, 5vw, 72px);
-}
-.yl-hero .yl-lead { margin-top: 28px; }
-.yl-actions { display: flex; align-items: center; gap: 24px; flex-wrap: wrap; margin-top: 34px; }
-.yl-hero .yl-note { margin-top: 16px; }
 .yl-grad-text {
   background: var(--gradient-brand, linear-gradient(135deg, #25c6fb, #0062ee 38%, #2441f7 62%, #804ffa 84%, #c472fa));
   background-clip: text;
@@ -172,86 +144,87 @@
   font-style: normal;
 }
 
-/* ── полоса выгод ────────────────────────────────────────────────────────── */
-.yl-strip {
+.yl-section { padding-block: clamp(72px, 9vw, 150px); }
+.yl-section--tint { background: var(--yl-bg-2); }
+.yl-section--white { background: #fff; }
+.yl-head { max-width: 900px; }
+.yl-head--center { margin-inline: auto; text-align: center; }
+.yl-head--center .yl-lead { margin-inline: auto; max-width: 620px; }
+.yl-head .yl-lead { margin-top: 22px; }
+
+/* ── 1. первый экран ─────────────────────────────────────────────────────── */
+.yl-hero { padding-block: clamp(44px, 6vw, 96px) clamp(56px, 7vw, 110px); }
+.yl-hero-copy { display: grid; justify-items: center; gap: 22px; text-align: center; margin-bottom: clamp(40px, 5vw, 72px); }
+.yl-hero-copy .yl-lead { max-width: 520px; }
+.yl-actions { display: flex; align-items: center; gap: 20px; flex-wrap: wrap; justify-content: center; }
+
+/* ── 2. что вы запустите ─────────────────────────────────────────────────── */
+.yl-usecases {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 16px;
-  padding-block: 26px;
-  border-block: 1px solid var(--yl-line);
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+  margin-top: clamp(48px, 6vw, 88px);
 }
-.yl-strip span { display: flex; align-items: center; gap: 9px; font-size: 14px; color: var(--yl-ink-2); }
-.yl-strip svg { width: 16px; flex-shrink: 0; color: #1d7a45; }
+.yl-usecases h3 { font-size: clamp(22px, 2.2vw, 30px); }
+.yl-usecases p { margin-top: 10px; font-size: 16px; line-height: 1.5; color: var(--yl-ink-2); }
 
-/* ── 2. весь стек внутри ─────────────────────────────────────────────────── */
-.yl-stack-list { margin-top: clamp(40px, 5vw, 72px); border-top: 1px solid var(--yl-line); }
-.yl-stack-list li {
-  display: grid;
-  grid-template-columns: 56px minmax(0, 1fr) minmax(0, 1.05fr);
-  gap: 24px;
-  align-items: baseline;
-  padding-block: clamp(20px, 2.4vw, 34px);
-  border-bottom: 1px solid var(--yl-line);
-}
-.yl-stack-list b {
-  font-family: var(--font-jetbrains), ui-monospace, monospace;
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--yl-ink-3);
-}
-.yl-stack-list h3 { letter-spacing: -0.03em; }
-.yl-stack-list p { font-size: 16px; line-height: 1.55; color: var(--yl-ink-2); }
+/* ── 3. весь стек внутри ─────────────────────────────────────────────────── */
+.yl-stack { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: clamp(40px, 5vw, 88px); align-items: center; }
+.yl-stack .yl-lead { margin-top: 24px; max-width: 480px; }
+.yl-shop-peek { width: 236px; margin-top: 40px; transform: rotate(-2deg); }
+.yl-stack-list { display: grid; gap: 4px; }
+.yl-stack-list li { display: flex; gap: 16px; padding-block: clamp(16px, 1.8vw, 24px); border-top: 1px solid var(--yl-line); }
+.yl-stack-list li:last-child { border-bottom: 1px solid var(--yl-line); }
+.yl-stack-list svg { flex-shrink: 0; margin-top: 3px; color: #1d7a45; }
+.yl-stack-list p { margin-top: 5px; font-size: 15px; line-height: 1.5; color: var(--yl-ink-2); }
 
-/* ── 4. редактор ─────────────────────────────────────────────────────────── */
-.yl-editor { display: grid; grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr); gap: clamp(32px, 4vw, 64px); align-items: center; }
-.yl-editor-proof { display: grid; gap: 14px; padding: 22px; border: 1px solid var(--yl-line); border-radius: 16px; background: var(--yl-card); }
-.yl-editor-top { display: flex; justify-content: space-between; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--yl-ink-3); }
-.yl-editor-top span:first-child { display: flex; align-items: center; gap: 7px; }
-.yl-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--color-brand-blue, #0062ee); }
-.yl-editor-msg { display: flex; gap: 11px; padding: 15px; border-radius: 11px; background: var(--yl-bg-2); font-size: 14px; line-height: 1.55; }
-.yl-editor-msg svg { flex-shrink: 0; margin-top: 2px; color: var(--yl-ink-3); }
-.yl-editor-reply { display: flex; gap: 11px; padding: 15px; border-radius: 11px; border: 1px solid var(--yl-line); font-size: 14px; line-height: 1.55; }
-.yl-editor-reply svg { flex-shrink: 0; margin-top: 2px; color: #1d7a45; }
-.yl-editor-reply small { display: block; margin-top: 5px; font-size: 11px; color: var(--yl-ink-3); }
-.yl-editor-proof ul { display: grid; gap: 4px; margin-top: 4px; }
-.yl-editor-proof li { display: flex; gap: 13px; padding-block: 13px; border-top: 1px solid var(--yl-line); }
-.yl-editor-proof li svg { flex-shrink: 0; margin-top: 3px; color: var(--yl-ink-3); }
-.yl-editor-proof li h3 { font-size: 15px; letter-spacing: -0.015em; }
-.yl-editor-proof li p { margin-top: 3px; font-size: 13px; line-height: 1.5; color: var(--yl-ink-2); }
+/* ── 4. как меняется ─────────────────────────────────────────────────────── */
+.yl-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; margin-top: clamp(44px, 5vw, 76px); }
+.yl-steps article { padding: 30px 28px 34px; border-radius: 18px; background: var(--yl-card); border: 1px solid var(--yl-line); }
+.yl-steps b { font-family: var(--font-jetbrains), ui-monospace, monospace; font-size: 12px; font-weight: 500; color: var(--yl-ink-3); }
+.yl-steps h3 { margin-top: 16px; }
+.yl-steps p { margin-top: 10px; font-size: 15px; line-height: 1.55; color: var(--yl-ink-2); }
 
-/* ── 5. после запуска / 7. что уже работает ──────────────────────────────── */
-.yl-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: clamp(36px, 4vw, 60px); }
-.yl-card { padding: 28px 26px 30px; border: 1px solid var(--yl-line); border-radius: 16px; background: var(--yl-card); }
-.yl-card svg { color: var(--color-brand-blue, #0062ee); }
-.yl-card h3 { margin-top: 20px; font-size: 20px; letter-spacing: -0.025em; }
-.yl-card p { margin-top: 10px; font-size: 15px; line-height: 1.55; color: var(--yl-ink-2); }
+/* ── 5. после запуска ────────────────────────────────────────────────────── */
+.yl-after { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(40px, 5vw, 80px); align-items: center; }
+.yl-after-copy ul { display: grid; gap: 4px; margin-top: 36px; }
+.yl-after-copy li { display: grid; gap: 6px; padding-block: 20px; border-top: 1px solid var(--yl-line); }
+.yl-after-copy li:last-child { border-bottom: 1px solid var(--yl-line); }
+.yl-after-copy strong { font-family: var(--font-onest), sans-serif; font-size: 19px; font-weight: 600; letter-spacing: -0.025em; }
+.yl-after-copy span { font-size: 15px; line-height: 1.5; color: var(--yl-ink-2); }
+.yl-after-screens { display: flex; gap: 20px; align-items: flex-start; }
+.yl-after-screens > * { flex: 1; }
+.yl-after-screens > *:first-child { transform: translateY(18px) rotate(-1.6deg); }
+.yl-after-screens > *:last-child { transform: rotate(1.6deg); }
 
-.yl-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: clamp(36px, 4vw, 60px); }
-.yl-fact { padding: 30px 26px; border-radius: 16px; background: var(--yl-card); border: 1px solid var(--yl-line); }
+/* ── 6. факты ────────────────────────────────────────────────────────────── */
+.yl-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: clamp(44px, 5vw, 76px); }
+.yl-fact { padding: 34px 28px; border-radius: 18px; background: var(--yl-card); border: 1px solid var(--yl-line); }
 .yl-fact strong {
   display: block;
   font-family: var(--font-onest), var(--font-inter), sans-serif;
-  font-size: clamp(30px, 3.2vw, 44px);
+  font-size: clamp(26px, 2.6vw, 36px);
   font-weight: 600;
   line-height: 1;
   letter-spacing: -0.04em;
 }
-.yl-fact span { display: block; margin-top: 14px; font-size: 15px; line-height: 1.5; color: var(--yl-ink-2); }
+.yl-fact span { display: block; margin-top: 16px; font-size: 15px; line-height: 1.5; color: var(--yl-ink-2); }
 
-/* ── 8. тарифы ───────────────────────────────────────────────────────────── */
-.yl-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: clamp(36px, 4vw, 60px); }
-.yl-plan { display: flex; flex-direction: column; padding: 32px 30px; border: 1px solid var(--yl-line); border-radius: 18px; background: var(--yl-card); }
+/* ── 7. тарифы ───────────────────────────────────────────────────────────── */
+.yl-plans { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-top: clamp(44px, 5vw, 76px); }
+.yl-plan { display: flex; flex-direction: column; padding: 34px 32px; border: 1px solid var(--yl-line); border-radius: 20px; background: var(--yl-card); }
 .yl-plan-top { display: flex; justify-content: space-between; align-items: center; font-size: 11px; font-weight: 650; letter-spacing: 0.12em; text-transform: uppercase; color: var(--yl-ink-3); }
-.yl-price { margin-top: 24px; font-family: var(--font-onest), sans-serif; font-size: clamp(36px, 3.6vw, 52px); font-weight: 600; letter-spacing: -0.04em; line-height: 1; }
+.yl-price { margin-top: 26px; font-family: var(--font-onest), sans-serif; font-size: clamp(36px, 3.6vw, 52px); font-weight: 600; letter-spacing: -0.04em; line-height: 1; }
 .yl-price span { margin-left: 10px; font-family: var(--font-inter), sans-serif; font-size: 14px; font-weight: 400; letter-spacing: 0; color: var(--yl-ink-3); }
-.yl-plan ul { display: grid; gap: 11px; margin-block: 26px; }
+.yl-plan ul { display: grid; gap: 11px; margin-block: 28px; }
 .yl-plan li { display: flex; gap: 10px; font-size: 15px; line-height: 1.5; color: var(--yl-ink-2); }
 .yl-plan li svg { flex-shrink: 0; margin-top: 3px; width: 16px; color: #1d7a45; }
 .yl-plan .yl-cta { margin-top: auto; justify-content: center; }
 .yl-plan .yl-note { margin-top: 16px; }
 
-/* ── 9. вопросы ──────────────────────────────────────────────────────────── */
-.yl-faq-layout { display: grid; grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr); gap: clamp(32px, 4vw, 64px); align-items: start; }
+/* ── 8. вопросы ──────────────────────────────────────────────────────────── */
+.yl-faq-layout { display: grid; grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr); gap: clamp(32px, 4vw, 64px); align-items: start; }
+.yl-faq-layout .yl-quiet { margin-top: 26px; }
 .yl-faq { border-top: 1px solid var(--yl-line); }
 .yl-faq details { border-bottom: 1px solid var(--yl-line); }
 .yl-faq summary {
@@ -270,56 +243,54 @@
 .yl-faq summary span { flex-shrink: 0; font-size: 22px; font-weight: 400; color: var(--yl-ink-3); }
 .yl-faq details[open] summary span { transform: rotate(45deg); }
 .yl-faq p { max-width: 720px; padding-bottom: 24px; font-size: 15px; line-height: 1.65; color: var(--yl-ink-2); }
-.yl-faq-layout .yl-quiet { margin-top: 26px; }
 
-/* ── 10. финальный экран ─────────────────────────────────────────────────── */
+/* ── 9. финальный экран ──────────────────────────────────────────────────── */
 .yl-sendoff {
-  padding-block: clamp(72px, 9vw, 150px);
+  padding-block: clamp(80px, 10vw, 170px);
   background: var(--gradient-brand, linear-gradient(135deg, #25c6fb, #0062ee 38%, #2441f7 62%, #804ffa 84%, #c472fa));
   color: #fff;
   text-align: center;
 }
-.yl-sendoff h2 { font-size: clamp(38px, 6.2vw, 92px); line-height: 0.96; letter-spacing: -0.04em; }
-.yl-sendoff p { margin-top: 26px; font-size: clamp(16px, 1.5vw, 20px); line-height: 1.45; color: rgb(255 255 255 / 0.88); }
-.yl-sendoff .yl-cta { margin-top: 36px; }
-.yl-sendoff small { display: block; margin-top: 18px; font-size: 13px; color: rgb(255 255 255 / 0.8); }
+.yl-sendoff h2 { font-size: clamp(40px, 6.8vw, 100px); line-height: 0.94; letter-spacing: -0.042em; }
+.yl-sendoff .yl-cta { margin-top: 40px; }
+.yl-sendoff small { display: block; margin-top: 18px; font-size: 13px; color: rgb(255 255 255 / 0.82); }
 
 /* ── подвал ──────────────────────────────────────────────────────────────── */
-.yl-footer { padding-block: 60px 40px; background: var(--yl-bg); border-top: 1px solid var(--yl-line); }
+.yl-footer { padding-block: 64px 40px; background: var(--yl-bg); border-top: 1px solid var(--yl-line); }
 .yl-footer-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) repeat(3, minmax(0, 1fr)); gap: 32px; }
 .yl-footer-brand p { max-width: 290px; margin-top: 16px; font-size: 14px; line-height: 1.6; color: var(--yl-ink-2); }
 .yl-footer h3 { font-family: var(--font-inter), sans-serif; font-size: 12px; font-weight: 650; letter-spacing: 0.1em; text-transform: uppercase; color: var(--yl-ink-3); }
 .yl-footer nav { display: grid; gap: 11px; margin-top: 18px; font-size: 14px; color: var(--yl-ink-2); }
 .yl-footer nav a:hover { color: var(--yl-ink); }
-.yl-footer-bottom { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-top: 48px; padding-top: 24px; border-top: 1px solid var(--yl-line); font-size: 13px; color: var(--yl-ink-3); }
+.yl-footer-bottom { display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap; margin-top: 52px; padding-top: 24px; border-top: 1px solid var(--yl-line); font-size: 13px; color: var(--yl-ink-3); }
 
 /* ── планшет и телефон ───────────────────────────────────────────────────── */
 @media (max-width: 1000px) {
-  .yl-hero,
-  .yl-editor,
+  .yl-stack,
+  .yl-after,
   .yl-faq-layout { grid-template-columns: minmax(0, 1fr); }
-  .yl-cards,
+  .yl-usecases,
+  .yl-steps,
   .yl-facts { grid-template-columns: repeat(2, 1fr); }
   .yl-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .yl-header nav { display: none; }
-  .yl-stack-list li { grid-template-columns: 40px minmax(0, 1fr); }
-  .yl-stack-list li p { grid-column: 2; }
+  .yl-shop-peek { display: none; }
 }
 
 @media (max-width: 720px) {
   .yl-wrap,
   .yl-header__inner { padding-inline: 16px; }
-  .yl h1 { font-size: clamp(38px, 12vw, 52px); letter-spacing: -0.035em; }
-  .yl h2 { font-size: clamp(28px, 8.4vw, 38px); letter-spacing: -0.035em; }
-  .yl-sendoff h2 { font-size: clamp(32px, 10.5vw, 46px); }
-  .yl-strip { grid-template-columns: repeat(2, 1fr); }
-  .yl-cards,
+  .yl h1 { font-size: clamp(38px, 12.5vw, 54px); letter-spacing: -0.035em; }
+  .yl h2 { font-size: clamp(30px, 9vw, 40px); letter-spacing: -0.035em; }
+  .yl-sendoff h2 { font-size: clamp(34px, 11vw, 48px); }
+  .yl-usecases,
+  .yl-steps,
   .yl-facts,
   .yl-plans,
   .yl-footer-grid { grid-template-columns: minmax(0, 1fr); }
+  .yl-after-screens > * { transform: none; }
   .yl-header__actions { gap: 12px; }
   .yl-header .yl-cta { padding-inline: 14px; font-size: 14px; }
-  .yl-actions { gap: 16px; }
   .yl-actions .yl-cta { width: 100%; justify-content: center; }
 }
 
@@ -327,4 +298,6 @@
   .yl *,
   .yl *::before,
   .yl *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; }
+  .yl-shop-peek,
+  .yl-after-screens > * { transform: none; }
 }

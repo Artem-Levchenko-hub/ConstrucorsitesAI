@@ -29,8 +29,11 @@ describe("Yleum landing conversion", () => {
     const tab = Array.from(host.querySelectorAll('button')).find(el => el.textContent === "Услуги");
     expect(tab).toBeDefined();
     await act(async () => tab?.click());
-    expect(tab?.getAttribute("aria-pressed")).toBe("true");
-    expect(host.querySelector('[data-testid="landing-example"]')?.textContent).toContain("Выберите время");
+    // Выбор сценария пересоздаёт витрину (у неё новый key), поэтому кнопку
+    // ищем заново: прежняя ссылка указывает на уже удалённый узел.
+    const pressed = Array.from(host.querySelectorAll("button")).find(el => el.textContent === "Услуги");
+    expect(pressed?.getAttribute("aria-pressed")).toBe("true");
+    expect(host.querySelector('[data-testid="landing-example"]')?.textContent).toContain("Записаться на");
     expect(events).toContainEqual({ event: "max_scenario_select", page: "landing", placement: "services" });
   });
   it("keeps every section navigation target on the page", () => {
