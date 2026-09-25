@@ -577,7 +577,7 @@ class DockerMachineBackend:
         policy = GuardPolicy(workspace_id=str(self.workspace_id), proxy_ip=proxy_ip)
         self._volume(self.stem + "-logs")
         guard = self._ensure_namespace_guard(policy)
-        if reuse_existing:
+        if reuse_existing and existing is not None:
             existing.reload()
             network_mode = (existing.attrs.get("HostConfig") or {}).get("NetworkMode")
             if network_mode != "container:" + guard.id:

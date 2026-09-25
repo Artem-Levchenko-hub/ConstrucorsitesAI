@@ -45,7 +45,10 @@ ARG NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=2026-07-30
 ENV NEXT_PUBLIC_USE_MOCKS=$NEXT_PUBLIC_USE_MOCKS \
     NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION=$NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION \
     NEXT_TELEMETRY_DISABLED=1
-RUN pnpm build
+# next/font downloads Google fonts at build time; a transient network hiccup fails the
+# whole image build after everything else passed (CI image-build, 25.09.2026). One retry
+# separates a flake from a real break; self-hosting the four fonts is the durable follow-up.
+RUN pnpm build || (echo "next build failed once (next/font download?) — retrying" && sleep 20 && pnpm build)
 
 
 FROM node:20-alpine AS runner
