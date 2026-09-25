@@ -69,12 +69,12 @@ done
 echo "== оркестратор: venv, systemd (пользователь $ADMIN_USER)"
 chown -R "$ADMIN_USER:$ADMIN_USER" /opt/omnia
 sudo -u "$ADMIN_USER" bash -c "cd $ORCH && $HOME_ADMIN/.local/bin/uv sync --frozen -q" 2>&1 | tail -2
-sed -e "s/^User=.*/User=$ADMIN_USER/" -e "s/^Group=.*/Group=$ADMIN_USER/" /opt/omnia/infra/systemd/omnia-orchestrator.service > /etc/systemd/system/omnia-orchestrator.service
-install -d /etc/systemd/system/omnia-orchestrator.service.d
-printf '[Service]\nNoNewPrivileges=false\n' > /etc/systemd/system/omnia-orchestrator.service.d/override.conf
+sed -e "s/^User=.*/User=$ADMIN_USER/" -e "s/^Group=.*/Group=$ADMIN_USER/" /opt/omnia/infra/systemd/yleum-orchestrator.service > /etc/systemd/system/yleum-orchestrator.service
+install -d /etc/systemd/system/yleum-orchestrator.service.d
+printf '[Service]\nNoNewPrivileges=false\n' > /etc/systemd/system/yleum-orchestrator.service.d/override.conf
 systemctl daemon-reload
-systemctl enable --now omnia-orchestrator >/dev/null 2>&1
-systemctl restart omnia-orchestrator
+systemctl enable --now yleum-orchestrator >/dev/null 2>&1
+systemctl restart yleum-orchestrator
 for i in $(seq 1 20); do curl -sf http://127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done
 curl -s http://127.0.0.1:8003/health; echo
 nginx -t 2>&1 | tail -1

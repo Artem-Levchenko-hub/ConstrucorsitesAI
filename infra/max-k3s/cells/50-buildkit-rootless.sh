@@ -260,5 +260,5 @@ if [ -f "$ORCH_ENV" ]; then
   grep -E '^(BUILD_BACKEND|BUILDKIT_SOCKET|BUILDCTL_BINARY)=' "$ORCH_ENV" | sed 's/^/  /'
 fi
 echo "BUILDKIT_ROOTLESS_DONE $(hostname) socket=$SOCK sandbox=$s caps=$c apparmor=$AA_MODE image=$BUILDKIT_IMAGE"
-echo "  включить сборки через него: BUILD_BACKEND=buildkit в $ORCH_ENV + systemctl restart omnia-orchestrator (когда нет активных деплоев)"
+echo "  включить сборки через него: BUILD_BACKEND=buildkit в $ORCH_ENV + systemctl restart yleum-orchestrator (когда нет активных деплоев)"
 echo "  откат: BUILD_BACKEND=docker + restart; контейнер можно оставить или docker rm -f $NAME"

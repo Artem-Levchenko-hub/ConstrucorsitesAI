@@ -20,12 +20,11 @@ from __future__ import annotations
 
 import pytest
 
+from tests.test_probe_manifest_names_its_rule import _proof_kwargs
+from tests.test_restoration_adaptation_probe import _files
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 from yleum_orchestrator.schemas.restoration_adaptation import RestorationAdaptationProof
 from yleum_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
-
-from tests.test_probe_manifest_names_its_rule import _proof_kwargs
-from tests.test_restoration_adaptation_probe import _files
 
 
 def _table(**changes: object) -> dict[str, object]:

@@ -104,12 +104,12 @@ echo "   web: $(curl -s -o /dev/null -w '%{http_code}' -m 10 http://127.0.0.1:31
 echo "== 5. оркестратор (host systemd, пользователь $ADMIN_USER)"
 sudo -u "$ADMIN_USER" bash -c "cd $ORCH && $HOME_ADMIN/.local/bin/uv sync --frozen -q" 2>&1 | tail -2
 [ -d /opt/omnia-runtime/acme-home ] && [ -f /opt/omnia-runtime/acme-home/account.conf ] || sudo -u "$ADMIN_USER" cp -a "$HOME_ADMIN/.acme.sh/." /opt/omnia-runtime/acme-home/
-sed -e "s/^User=.*/User=$ADMIN_USER/" -e "s/^Group=.*/Group=$ADMIN_USER/" /opt/omnia/infra/systemd/omnia-orchestrator.service > /etc/systemd/system/omnia-orchestrator.service
-install -d /etc/systemd/system/omnia-orchestrator.service.d
-printf '[Service]\nNoNewPrivileges=false\n' > /etc/systemd/system/omnia-orchestrator.service.d/override.conf
+sed -e "s/^User=.*/User=$ADMIN_USER/" -e "s/^Group=.*/Group=$ADMIN_USER/" /opt/omnia/infra/systemd/yleum-orchestrator.service > /etc/systemd/system/yleum-orchestrator.service
+install -d /etc/systemd/system/yleum-orchestrator.service.d
+printf '[Service]\nNoNewPrivileges=false\n' > /etc/systemd/system/yleum-orchestrator.service.d/override.conf
 systemctl daemon-reload
-systemctl enable --now omnia-orchestrator >/dev/null 2>&1
-systemctl restart omnia-orchestrator
+systemctl enable --now yleum-orchestrator >/dev/null 2>&1
+systemctl restart yleum-orchestrator
 for i in $(seq 1 20); do curl -fsS -m 3 http://127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 3; done
 echo "   orchestrator: $(curl -fsS -m 5 http://127.0.0.1:8003/health || echo DOWN)"
 

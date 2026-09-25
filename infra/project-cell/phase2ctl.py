@@ -307,7 +307,7 @@ def verify_bundle(bundle_value: str | Path) -> dict[str, Any]:
 
     systemd_state = load_json(evidence / "systemd-state.json")
     required_units = {
-        "docker.service", "nginx.service", "omnia-orchestrator.service", "k3s.service"
+        "docker.service", "nginx.service", "yleum-orchestrator.service", "k3s.service"
     }
     active_states = {"active", "inactive", "failed", "activating", "deactivating", "reloading"}
     enabled_states = {

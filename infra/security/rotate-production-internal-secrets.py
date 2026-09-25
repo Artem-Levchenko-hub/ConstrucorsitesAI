@@ -25,19 +25,19 @@ from pathlib import Path
 
 RUNTIME_ROOT = Path("/opt/omnia-runtime")
 RUNTIME_ENV = RUNTIME_ROOT / ".env"
-# Must match EnvironmentFile in infra/systemd/omnia-orchestrator.service.
+# Must match EnvironmentFile in infra/systemd/yleum-orchestrator.service.
 # Rotating a detached mirror leaves the running daemon on the old internal
 # token and makes every new provision/deploy request fail with HTTP 401.
 ORCHESTRATOR_ENV = Path("/opt/omnia/apps/orchestrator/.env")
 FULLSTACK_ROOT = Path("/opt/omnia/apps/llm-gateway/deploy/full")
 FULLSTACK_ENV = FULLSTACK_ROOT / ".env"
 # Phase 2 (core): the platform DB may live on the host PostgreSQL instead of the
-# omnia-prod-postgres container. Then the compose .env carries
+# yleum-prod-postgres container. Then the compose .env carries
 # PLATFORM_DATABASE_URL, the role is altered on the host and the backup
 # credentials file below must follow the password (infra/backup reads it).
 PLATFORM_CREDS = Path("/etc/max-studio/platform-postgres.env")
 PROJECT_POSTGRES_COMPOSE = RUNTIME_ROOT / "postgres-compose.yml"
-API_CONTAINER = "omnia-prod-api"
+API_CONTAINER = "yleum-prod-api"
 ROTATE_SCRIPT = "/app/scripts/rotate_encryption_keys.py"
 
 
@@ -230,7 +230,7 @@ def recreate_services(*, host_db: bool = False) -> None:
         ],
         cwd=RUNTIME_ROOT,
     )
-    run(["sudo", "systemctl", "restart", "omnia-orchestrator.service"])
+    run(["sudo", "systemctl", "restart", "yleum-orchestrator.service"])
     # In host-db mode the compose `postgres` service sits in an inactive profile
     # (docker-compose.hostdb.yml) and must not be named, or compose refuses.
     services = ["minio", "minio-init", "gateway", "api", "worker", "web"]
@@ -404,7 +404,7 @@ def main() -> None:
             if host_db:
                 alter_host_platform_role(platform_role, new["POSTGRES_PASSWORD"])
             else:
-                alter_role("omnia-prod-postgres", platform_role, new["POSTGRES_PASSWORD"])
+                alter_role("yleum-prod-postgres", platform_role, new["POSTGRES_PASSWORD"])
             platform_role_rotated = True
             alter_role(
                 "omnia-postgres-users",
@@ -484,7 +484,7 @@ def main() -> None:
                         write_root_file(PLATFORM_CREDS, platform_creds_before)
                 else:
                     alter_role(
-                        "omnia-prod-postgres",
+                        "yleum-prod-postgres",
                         platform_role,
                         old["POSTGRES_PASSWORD"],
                     )
