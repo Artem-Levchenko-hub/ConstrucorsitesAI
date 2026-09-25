@@ -60,6 +60,7 @@
    ```bash
    ssh max-core 'cd /opt/omnia && git fetch origin && git merge --ff-only origin/main && cd apps/llm-gateway/deploy/full && docker compose up -d --build <изменённые сервисы>'
    ```
+   **Одной командой (с 25.09.2026):** `infra/release/deploy-prod.sh <полный sha> [--no-web] [--legal-version V]` — делает всё описанное ниже в правильном порядке (api → оба оркестратора → web → expected-переменные → воркер биллинга → smoke) под замком `/opt/omnia/.deploy.lock` от двойной выкатки. Запускать только после зелёного CI этой ревизии; сценарий сам проверяет, что sha лежит в origin/main.
    Сервисы: `api generation-worker worker` (бэкенд), `web` (фронт), `gateway` (LLM-шлюз). Оркестратор — хост-сервис из исходников, и с 23.09.2026 **их ДВА** (ячейки живут на core и на commerce, см. `ORCHESTRATOR_HOSTS`): обновлять оба, одной ревизией, **после** пересборки API:
    ```bash
    ssh max-core 'cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen && sudo systemctl restart omnia-orchestrator'

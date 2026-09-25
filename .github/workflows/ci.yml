@@ -8,9 +8,12 @@ on:
 permissions:
   contents: read
 
+# Every push to main gets its own run: three sessions pushing to one branch used to cancel
+# each other's runs, and no run finished for hours. Pull requests keep the classic
+# per-branch group with cancellation.
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   gateway-tests:
@@ -160,9 +163,71 @@ jobs:
             "$GITHUB_WORKSPACE/apps/api/scripts/verify_template_package.py" \
             "$GITHUB_WORKSPACE/apps/api/tests/fixtures/static_templates_810f0fbb.json" \
             --package-root "$RUNNER_TEMP/omnia-task5-installed"
-      - name: Run complete API regression suite on disposable services
+
+  # The complete API suite, split into three shards by file so it runs in parallel with the
+  # gate instead of after it (16 of the gate's 24 minutes were this one step). Each shard
+  # gets its own disposable PostgreSQL/Redis; membership is `NR % 3` over the sorted file list.
+  api-suite:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      DATABASE_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_dev
+      DATABASE_TEST_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_test
+      JWT_SECRET: ci-only-api-jwt-secret-at-least-32-bytes
+      REDIS_URL: redis://127.0.0.1:6379/0
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: omnia
+          POSTGRES_PASSWORD: omnia
+          POSTGRES_DB: omnia_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U omnia -d omnia_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: astral-sh/setup-uv@v5
+      - name: Activate the pinned pnpm release
+        run: corepack enable && corepack prepare pnpm@9.15.0 --activate
+      - name: Verify pnpm release
+        run: test "$(pnpm --version)" = "9.15.0"
+      - name: Install the locked API environment
         working-directory: apps/api
-        run: uv run --frozen pytest -o addopts='' -q --durations=10
+        run: uv sync --frozen
+      - name: Run API suite shard ${{ matrix.shard }} of 3 on disposable services
+        working-directory: apps/api
+        run: |
+          mapfile -t files < <(find tests -maxdepth 1 -name 'test_*.py' | sort | awk -v k=$(( ${{ matrix.shard }} - 1 )) 'NR % 3 == k')
+          echo "files in shard: ${#files[@]}"
+          # A test that hangs longer than four minutes dumps every thread's stack into the log.
+          uv run --frozen pytest -o addopts='' -o faulthandler_timeout=240 -q --durations=10 "${files[@]}"
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest
@@ -205,7 +270,10 @@ jobs:
           && uv run mypy src
       - name: Run orchestrator tests
         working-directory: apps/orchestrator
-        run: uv run pytest -q
+        # A test that hangs longer than four minutes dumps every thread's stack into the
+        # log (pytest's built-in faulthandler), so a stuck run names the test instead of
+        # silently eating the job timeout. The slowest tests are listed for sizing.
+        run: uv run pytest -q -o faulthandler_timeout=240 --durations=15
       - name: Run isolated P01 PostgreSQL volume probe
         working-directory: apps/orchestrator
         env:

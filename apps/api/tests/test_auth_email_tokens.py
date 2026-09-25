@@ -17,6 +17,7 @@ import pytest_asyncio
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from omnia_api.core.config import get_settings
 from omnia_api.core.db import get_session
 from omnia_api.models.account import AuthSession, AuthToken
 from omnia_api.models.user import User
@@ -37,7 +38,7 @@ REGISTRATION = {
     "terms_accepted": True,
     "privacy_accepted": True,
     "personal_data_accepted": True,
-    "document_version": "2026-07-30",
+    "document_version": get_settings().legal_document_version,
 }
 INVALID = {"code": "token_invalid", "message": "Ссылка недействительна или истекла"}
 UNAVAILABLE = {
@@ -87,7 +88,7 @@ async def test_registration_letter_verifies_the_email_exactly_once(client, outbo
     await _register(client)
     (letter,) = outbox.letters
     assert letter["recipient"] == EMAIL
-    assert letter["subject"] == "Подтвердите email для MAX Studio"
+    assert letter["subject"] == "Подтвердите email для Yleum"
     assert "/max/verify-email?token=" in letter["text"]
 
     first = await client.post("/api/auth/email/verify", json={"token": outbox.token()})
@@ -157,7 +158,7 @@ async def test_reset_letter_changes_the_password_once_and_signs_everyone_out(
     forgot = await client.post("/api/auth/password/forgot", json={"email": EMAIL})
     assert (forgot.status_code, forgot.json()) == (202, {"accepted": True})
     letter = outbox.letters[-1]
-    assert letter["subject"] == "Сброс пароля MAX Studio"
+    assert letter["subject"] == "Сброс пароля Yleum"
     assert "/reset-password?token=" in letter["text"] and "30 минут" in letter["text"]
     version = (await db_session.execute(select(User.session_version))).scalar_one()
 
