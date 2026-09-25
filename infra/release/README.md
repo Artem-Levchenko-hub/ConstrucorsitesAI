@@ -1,3 +1,17 @@
+# Выкатка на прод
+
+## Ежедневная выкатка одной командой (с 25.09.2026)
+
+~~~bash
+infra/release/deploy-prod.sh <полный sha из origin/main> [--no-web] [--legal-version 2026-09-25]
+~~~
+
+Порядок внутри: идентичность релиза в `.env` → проверка отрендеренного compose (секреты входа только у api, окно починки, теги образов) → сборка api и web на core под `nohup` с опросом → `api worker generation-worker` (health 200) → оркестратор core → rsync → оркестратор commerce → web → `PRODUCTION_EXPECTED_*` → воркер биллинга в K3s commerce на тот же образ api → production smoke. Замок `/opt/omnia/.deploy.lock` на core не даёт двум сессиям выкатывать одновременно; если сценарий умер, замок показывает кто/когда/что и удаляется руками.
+
+Правила: выкатывать только ревизию с зелёным CI (прогон именно этого sha; отменённый прогон — не вердикт); api всегда раньше оркестраторов (двусторонние поля контракта принимаются платформой раньше, чем оркестратор начинает их слать); `--no-web` только если `apps/web` не менялся; `--legal-version` когда поднята версия юридических документов (пишется в env воркера биллинга и сверяется в поде).
+
+---
+
 # Production release: reporting removal and project memory
 
 This is the canonical production path for the release that removes both Omnia
