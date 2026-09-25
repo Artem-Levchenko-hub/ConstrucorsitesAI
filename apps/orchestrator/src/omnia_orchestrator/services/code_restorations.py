@@ -540,10 +540,15 @@ class CodeRestorationService:
             # случай: откат отказывал безусловно, а в журнале оставалось одно
             # имя класса исключения — по нему причину было не найти.
             reason = _capacity_reason(exc)
+            # The exception's own text is the only place the concrete check
+            # names itself (25.09.2026: three CellIdentityConflict refusals in a
+            # row logged `reason=None` and nothing else — the cause was unfindable).
             _log.warning(
                 "operation_requires_attention",
                 error_type=type(exc).__name__,
                 reason=reason,
+                message=str(exc)[:300],
+                operation_id=str(getattr(operation, "id", "")),
             )
             if await self._commit_drive_failure(workspace, operation, reason=reason):
                 self._schedule_cancel(workspace, operation)
