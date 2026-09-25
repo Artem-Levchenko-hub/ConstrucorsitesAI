@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from "next";
-import { Geist, Inter, JetBrains_Mono, Onest, Outfit } from "next/font/google";
+import { Inter, JetBrains_Mono, Onest } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
 import "./globals.css";
@@ -13,25 +13,13 @@ const inter = Inter({
   display: "swap",
 });
 
-const geist = Geist({
-  subsets: ["latin"],
-  variable: "--font-geist",
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-});
-
 // Заголовочный шрифт лендинга: плотная геометрика с полноценной кириллицей.
-// Geist кириллицу не покрывает, поэтому на витрине он не используется.
+// Здесь только те семейства, которые действительно читает CSS. Каждое лишнее —
+// это ещё один поход в Google во время сборки, а значит ещё один способ уронить
+// выкатку в день, когда Google недоступен.
 const onest = Onest({
   subsets: ["latin", "cyrillic"],
   variable: "--font-onest",
-  weight: ["500", "600", "700"],
-  display: "swap",
-});
-
-const outfit = Outfit({
-  subsets: ["latin"],
-  variable: "--font-outfit",
   weight: ["500", "600", "700"],
   display: "swap",
 });
@@ -174,7 +162,7 @@ export default async function RootLayout({
   return (
     <html
       lang={locale}
-      className={`${inter.variable} ${geist.variable} ${outfit.variable} ${onest.variable} ${jetbrainsMono.variable}`}
+      className={`${inter.variable} ${onest.variable} ${jetbrainsMono.variable}`}
     >
       <head>
         <script
