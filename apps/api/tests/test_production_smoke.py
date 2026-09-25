@@ -178,7 +178,7 @@ def test_missing_expected_release_never_accepts_unknown():
     ],
 )
 def test_stdlib_cli_uses_local_http_and_does_not_import_api_dependencies(
-    max_status, webhook_status, expected
+    max_status, webhook_status, expected, tmp_path
 ):
     data = responses()
     requests = []
@@ -218,6 +218,9 @@ def test_stdlib_cli_uses_local_http_and_does_not_import_api_dependencies(
         env["PLATFORM_URL"] = f"http://127.0.0.1:{server.server_port}"
         env["MAX_CANARY_URL"] = env["PLATFORM_URL"] + "/canary"
         env["PYTHONPATH"] = str(Path(__file__).parents[1] / "src")
+        # The CLI records every run in smoke.json next to the caller; keep the
+        # test's copy out of the working tree.
+        env["SMOKE_ARTIFACT_PATH"] = str(tmp_path / "smoke.json")
         result = subprocess.run(
             [sys.executable, "-S", "-m", "omnia_api.ops.production_smoke"],
             env=env,
