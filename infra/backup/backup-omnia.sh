@@ -74,6 +74,10 @@ USERS_DB="${USERS_DB:-omnia_users}"
 # future restore host in another timezone.
 cells_archive=""
 ts="$(date -u +%Y%m%d-%H%M%S)"
+# Момент старта в ISO — для сверки «проекты ↔ репозитории MinIO»: проект, созданный
+# уже во время снятия копии, в архив попасть не обязан (25.09.2026 из-за этого
+# ночной сценарий отбраковал исправную копию).
+started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 dir="${BACKUP_ROOT}/${ts}"
 bundle_tmp="${BACKUP_ROOT}/.omnia-backup-${ts}.tgz"
 mkdir -p "$dir"
@@ -217,7 +221,9 @@ log "verifying that the bundle actually holds the platform..."
 # (apps/api/tests/test_backup_bundle_verification.py). Она различает «данных
 # нет» (код 3) и «архив нечитаем» (код 4): оператору это говорит
 # противоположное — снять копию заново или не восстанавливаться из этой.
-live_projects="$(platform_psql -Atc 'SELECT count(*) FROM projects' 2>/dev/null || echo unknown)"
+# Считаем только проекты, существовавшие на момент старта копии: репозиторий проекта,
+# созданного минутой позже, ещё не лежал в MinIO, когда снимался том, и это не потеря данных.
+live_projects="$(platform_psql -Atc "SELECT count(*) FROM projects WHERE created_at <= '${started_at}'" 2>/dev/null || echo unknown)"
 verify_out=""
 if ! verify_out="$(PLATFORM_DUMP="${dir}/platform-${PLATFORM_DB}.sql.gz" \
     MINIO_ARCHIVE="${dir}/minio-data.tgz" \

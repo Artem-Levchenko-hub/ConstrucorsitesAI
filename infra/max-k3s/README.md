@@ -44,7 +44,18 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
 - **Бэкапы** (`40-postgres.sh` + `remote/50-backup-sync.sh`): каждую ночь 03:15 MSK
   (`max-backup.timer`) — `pg_dump` всех баз, state K3s, конфиги → `/var/backups/max-studio/<дата>`,
   14 дней. После этого копия уезжает по WireGuard на соседа (core→commerce, runtime→core,
-  commerce→core) в `/var/backups/max-studio-peer/<кто>` — приёмник ограничен `rrsync -wo`, без шелла.
+  commerce→core) в `/var/backups/max-studio-peer/<кто>` — приёмник ограничен `rrsync -wo`, без шелла
+  (каталоги только для root: без `sudo` `ls` покажет пустоту). Это база платформы и состояние K3s;
+  **«большой» бандл платформы** (MinIO, исходники проектов, базы ячеек, конфиги —
+  `infra/backup/backup-omnia.sh`, крон 03:15 на core) с 25.09.2026 тоже уходит на commerce:
+  `BACKUP_OFFHOST_DEST=commerce:/var/backups/omnia-platform-peer/core` в кроне core (шифрованный
+  `.cms` + `OFFHOST_SHA256` на каждую копию, на commerce хранится 30 дней). Крон не догоняет пропуск:
+  если core лежал в 03:15, копию снять руками той же командой с той же переменной.
+- **Сторож доступности** (`remote/80-uptime-watchdog.sh`, таймер `max-watchdog.timer` на runtime и
+  commerce, каждые 5 минут): три провала подряд `https://yleum.ru/api/health` или `https://yleum.ru/`
+  → одно сообщение, восстановление → ещё одно. Куда слать — `/etc/max-studio/watchdog.env`
+  (`TG_BOT_TOKEN`, `TG_CHAT_ID`); пока их нет, только журнал `journalctl -t max-watchdog`. Появился после
+  24.09.2026: core лежал 20 часов, а плановая дымовая проверка GitHub (cron `*/5`) за это время не запускалась.
 - **cert-manager v1.21.2** во всех трёх кластерах, ClusterIssuer `letsencrypt-prod` /
   `letsencrypt-staging` (HTTP-01 через Traefik) — `k8s/apply.sh cert-manager`.
 - **Private registry** на runtime — `https://registry.yleum.ru` (`k8s/apply.sh registry`): basic-auth
@@ -297,4 +308,6 @@ vhost каждого превью. Проверять превью — по жи
    `infra/max-app-chart` в runtime. Отдельная работа с переносом данных.
 3. Метрики кластеров runtime/commerce в общий Prometheus (агент с remote_write по WireGuard),
    Loki для логов, `postgres_exporter`, алерты в Telegram.
-4. Второе off-host место для бэкапов вне Serverum (сейчас копии только между этими же VPS).
+4. Второе off-host место для бэкапов **вне Serverum** (с 25.09 обе ночные копии core — база/K3s и
+   бандл платформы — лежат ещё и на commerce, но это тот же провайдер; авария 24.09 показала, что
+   гипервизор Serverum может уронить машину без единой записи в её журнале).
