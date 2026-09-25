@@ -52,7 +52,7 @@ for i in $(seq 1 20); do pg_isready -q -h 127.0.0.1 && break; sleep 2; done
 pg_isready -q -h 127.0.0.1 || { echo "POSTGRES_FAILED $NAME: сервер не поднялся"; tail -5 /var/log/postgresql/postgresql-$PGVER-main.log; exit 1; }
 
 ENV=/etc/max-studio/postgres.env
-install -d -m 700 /etc/max-studio
+install -d -m 711 /etc/max-studio
 if [ -f "$ENV" ] && grep -q "^PG_PASSWORD=" "$ENV"; then
   PW=$(sed -n 's/^PG_PASSWORD=//p' "$ENV")
 else

@@ -111,7 +111,7 @@ ufw --force enable >/dev/null
 ufw status | head -3
 
 echo "== [$NAME] каталог секретов платформы"
-install -d -m 700 /etc/max-studio
+install -d -m 711 /etc/max-studio
 
 if [ -f /var/run/reboot-required ]; then
   echo "== [$NAME] REBOOT_REQUIRED (обновилось ядро) — перезагружаюсь"

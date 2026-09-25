@@ -116,7 +116,7 @@ case "$STEP" in
 
   prepare)
     log "роль и база на хосте: $T_ROLE / $T_DB"
-    install -d -m 700 /etc/max-studio
+    install -d -m 711 /etc/max-studio
     if [ -f "$CREDS" ] && grep -q '^PLATFORM_PG_PASSWORD=' "$CREDS"; then
       PW=$(envval PLATFORM_PG_PASSWORD "$CREDS")
     else
