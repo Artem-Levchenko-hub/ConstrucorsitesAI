@@ -89,44 +89,67 @@ Compose берёт из имени каталога. Переименуем ка
 Всё делается одним заходом, чтобы платформа пересоздавалась один раз, а не четыре.
 
 ```bash
-# 0. core: занять замок
-ssh max-core 'set -o noclobber; echo "rename-4-4 $(date -u +%FT%TZ)" > /opt/omnia/.deploy.lock'
+# 0. core: занять замок и снять снимок состояния
+ssh max-core 'set -o noclobber; echo "rename-4-4 $(date -u +%FT%TZ)" > /opt/omnia/.deploy.lock
+              sudo mkdir -p /root/pre-4-4
+              docker ps -a --format "{{.Names}} {{.Image}} {{.State}}" | sudo tee /root/pre-4-4/containers.txt >/dev/null
+              docker ps -a --filter label=omnia.managed --format "{{.Names}}" | sort | sudo tee /root/pre-4-4/cells.txt >/dev/null
+              docker volume ls --format "{{.Name}}" | sudo tee /root/pre-4-4/volumes.txt >/dev/null
+              sudo cp /etc/systemd/system/omnia-orchestrator.service /root/pre-4-4/
+              sudo cp -r /etc/systemd/system/omnia-orchestrator.service.d /root/pre-4-4/ 2>/dev/null || true
+              cd /opt/omnia/apps/llm-gateway/deploy/full && sudo cp docker-compose.yml /root/pre-4-4/
+              git -C /opt/omnia rev-parse HEAD | sudo tee /root/pre-4-4/OLD_SHA >/dev/null'
 
-# 1. core: сохранить точки отката
-ssh max-core 'sudo cp /etc/systemd/system/omnia-orchestrator.service /root/omnia-orchestrator.service.pre-4-5
-              cd /opt/omnia/apps/llm-gateway/deploy/full && cp docker-compose.yml /root/docker-compose.yml.pre-4-4
-              docker ps -a --format "{{.Names}} {{.Image}}" > /root/containers.pre-4-4.txt'
+# 1. core: подтянуть ревизию и собрать окружение ДО остановки службы
+#    Порядок важен: если рестартовать оркестратор раньше merge, он поднимется со
+#    старыми умолчаниями адресов платформы ровно в момент, когда контейнеры меняют
+#    имена. Поэтому сначала код, потом остановка.
+ssh max-core 'cd /opt/omnia && git fetch -q origin && git merge --ff-only <sha>
+              cd apps/orchestrator && ~/.local/bin/uv sync --frozen'
 
-# 2. core: остановить оркестратор (его каталог сейчас переедет)
+# 2. core: остановить оркестратор
 ssh max-core 'sudo systemctl stop omnia-orchestrator'
 
-# 3. core: перенести чекаут и поставить симлинк обратно
-ssh max-core 'sudo mv /opt/omnia /opt/yleum && sudo ln -s /opt/yleum /opt/omnia && ls -ld /opt/omnia /opt/yleum'
+# 3. core: перенести чекаут, симлинк обратно, ВТОРОЕ имя для каталога состояния
+ssh max-core 'sudo mv /opt/omnia /opt/yleum && sudo ln -s /opt/yleum /opt/omnia
+              sudo ln -s /opt/omnia-runtime /opt/yleum-runtime
+              ls -ld /opt/omnia /opt/yleum /opt/yleum-runtime'
 
-# 4. core: новое имя для каталога состояния — симлинком, без переноса
-ssh max-core 'sudo ln -s /opt/omnia-runtime /opt/yleum-runtime && ls -ld /opt/yleum-runtime'
+# 4. core: пересобрать venv из НОВОГО пути
+#    Внутри окружения 24 скрипта содержат путь жёстко, включая шебанг
+#    `#!/opt/omnia/apps/orchestrator/.venv/bin/python`. Без пересборки они работают
+#    только через симлинк, то есть симлинк становится несущей конструкцией и его
+#    нельзя будет убрать никогда — мина для того, кто однажды приберётся.
+ssh max-core 'rm -rf /opt/yleum/apps/orchestrator/.venv
+              cd /opt/yleum/apps/orchestrator && ~/.local/bin/uv sync --frozen
+              head -1 .venv/bin/uvicorn                      # ждём /opt/yleum/...
+              grep -rl "/opt/omnia" .venv/bin | wc -l        # ждём 0'
 
-# 5. core: юнит под новым именем
+# 5. core: юнит под новым именем, ВМЕСТЕ с drop-in
+#    В drop-in лежит NoNewPrivileges=false — без него служба не стартует.
 ssh max-core 'sudo cp /etc/systemd/system/omnia-orchestrator.service /etc/systemd/system/yleum-orchestrator.service
               sudo sed -i "s#/opt/omnia/#/opt/yleum/#g" /etc/systemd/system/yleum-orchestrator.service
+              sudo cp -r /etc/systemd/system/omnia-orchestrator.service.d /etc/systemd/system/yleum-orchestrator.service.d
               sudo systemctl disable --now omnia-orchestrator
-              sudo rm /etc/systemd/system/omnia-orchestrator.service
+              sudo rm -rf /etc/systemd/system/omnia-orchestrator.service /etc/systemd/system/omnia-orchestrator.service.d
               sudo systemctl daemon-reload
               sudo systemctl enable --now yleum-orchestrator
               sudo systemctl is-active yleum-orchestrator && curl -s 127.0.0.1:8003/health'
 
-# 6. core: подтянуть ревизию с новыми именами контейнеров и пересоздать стек
-ssh max-core 'cd /opt/yleum && git fetch -q origin && git merge --ff-only <sha>
-              cd apps/llm-gateway/deploy/full && docker compose up -d
+# 6. core: пересоздать стек платформы под новыми именами
+ssh max-core 'cd /opt/yleum/apps/llm-gateway/deploy/full && docker compose up -d
               docker ps --format "{{.Names}}" | grep yleum-prod | sort'
 
-# 7. commerce: то же для путей и юнита (стека платформы там нет)
+# 7. commerce: то же для путей, venv и юнита (стека платформы там нет)
 ssh max-core 'ssh commerce "sudo mv /opt/omnia /opt/yleum && sudo ln -s /opt/yleum /opt/omnia
                             sudo ln -s /opt/omnia-runtime /opt/yleum-runtime
+                            rm -rf /opt/yleum/apps/orchestrator/.venv
+                            cd /opt/yleum/apps/orchestrator && ~/.local/bin/uv sync --frozen
                             sudo cp /etc/systemd/system/omnia-orchestrator.service /etc/systemd/system/yleum-orchestrator.service
                             sudo sed -i \"s#/opt/omnia/#/opt/yleum/#g\" /etc/systemd/system/yleum-orchestrator.service
+                            sudo cp -r /etc/systemd/system/omnia-orchestrator.service.d /etc/systemd/system/yleum-orchestrator.service.d 2>/dev/null || true
                             sudo systemctl disable --now omnia-orchestrator
-                            sudo rm /etc/systemd/system/omnia-orchestrator.service
+                            sudo rm -rf /etc/systemd/system/omnia-orchestrator.service /etc/systemd/system/omnia-orchestrator.service.d
                             sudo systemctl daemon-reload && sudo systemctl enable --now yleum-orchestrator
                             curl -s 127.0.0.1:8003/health"'
 ```
@@ -160,12 +183,22 @@ ssh max-core 'ssh commerce "sudo mv /opt/omnia /opt/yleum && sudo ln -s /opt/yle
 Откат делается в обратном порядке и целиком, а не по частям:
 
 ```bash
-ssh max-core 'cd /opt/yleum/apps/llm-gateway/deploy/full && cp /root/docker-compose.yml.pre-4-4 docker-compose.yml && docker compose up -d
-              sudo systemctl disable --now yleum-orchestrator && sudo rm /etc/systemd/system/yleum-orchestrator.service
-              sudo cp /root/omnia-orchestrator.service.pre-4-5 /etc/systemd/system/omnia-orchestrator.service
+ssh max-core 'cd /opt/yleum/apps/llm-gateway/deploy/full && cp /root/pre-4-4/docker-compose.yml docker-compose.yml && docker compose up -d
+              sudo systemctl disable --now yleum-orchestrator
+              sudo rm -rf /etc/systemd/system/yleum-orchestrator.service /etc/systemd/system/yleum-orchestrator.service.d
+              sudo cp /root/pre-4-4/omnia-orchestrator.service /etc/systemd/system/
+              sudo cp -r /root/pre-4-4/omnia-orchestrator.service.d /etc/systemd/system/ 2>/dev/null || true
               sudo rm /opt/omnia && sudo mv /opt/yleum /opt/omnia && sudo rm -f /opt/yleum-runtime
-              sudo systemctl daemon-reload && sudo systemctl enable --now omnia-orchestrator'
+              rm -rf /opt/omnia/apps/orchestrator/.venv
+              cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen
+              sudo systemctl daemon-reload && sudo systemctl enable --now omnia-orchestrator
+              curl -s 127.0.0.1:8003/health'
 ```
+
+Обратите внимание на две строки, без которых откат неполон: **drop-in возвращается вместе
+с юнитом** (в нём `NoNewPrivileges=false`, без него служба не стартует), и **окружение
+пересобирается из вернувшегося пути** — иначе внутри него останутся ссылки на `/opt/yleum`,
+которого больше нет.
 
 Точка невозврата отсутствует: данные не переносятся ни на одном шаге. Единственное, что
 нельзя откатить обратной командой, — это удалённые старые контейнеры, но они пересоздаются
