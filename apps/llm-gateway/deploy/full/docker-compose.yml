@@ -299,12 +299,12 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-Yleum <no-reply@lead-generator.ru>}
+      SMTP_FROM: ${SMTP_FROM:-Yleum <noreply@yleum.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       LEGAL_OPERATOR_NAME: ${LEGAL_OPERATOR_NAME:-}
       LEGAL_OPERATOR_INN: ${LEGAL_OPERATOR_INN:-}
       LEGAL_OPERATOR_ADDRESS: ${LEGAL_OPERATOR_ADDRESS:-}
-      LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:-support@lead-generator.ru}
+      LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:-support@yleum.ru}
       LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-30/minute}
@@ -543,7 +543,7 @@ services:
       SMTP_PORT: ${SMTP_PORT:-587}
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
-      SMTP_FROM: ${SMTP_FROM:-Yleum <no-reply@lead-generator.ru>}
+      SMTP_FROM: ${SMTP_FROM:-Yleum <noreply@yleum.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
       LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
       YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
