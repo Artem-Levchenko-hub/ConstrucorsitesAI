@@ -21,7 +21,6 @@ export default async function RegisterPage({
   return (
     <AuthCard
       title={t("register.title")}
-      subtitle={t("register.subtitle")}
       footer={
         <>
           {t("register.hasAccount")}{" "}

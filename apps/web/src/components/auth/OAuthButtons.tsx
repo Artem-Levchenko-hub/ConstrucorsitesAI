@@ -94,8 +94,10 @@ export function OAuthButtons({
           {error}
         </p>
       )}
-      <p className="text-center text-[11px] leading-5 text-fg-tertiary">
-        От провайдера мы получаем только email — имя, телефон и фото не запрашиваем.
+      {/* Обещание о данных оставлено: это факт, который человек иначе не проверит.
+          Но сказано одной строкой, а не абзацем. */}
+      <p className="text-center text-[11px] leading-4 text-fg-tertiary">
+        От провайдера берём только email
       </p>
     </div>
   );

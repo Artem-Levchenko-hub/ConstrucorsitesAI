@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { Check, MailCheck, ShieldCheck } from "lucide-react";
 import { redirect } from "next/navigation";
 
 import { OAuthButtons } from "@/components/auth/OAuthButtons";
@@ -31,33 +30,11 @@ export default async function MaxRegisterPage() {
       </header>
 
       <div className="max-auth-layout">
-        <section className="max-auth-context">
-          <p className="max-public-kicker">Бесплатный тариф Free</p>
-          <h1>
-            Ваша идея начинается здесь.
-          </h1>
-          <p>
-            Создайте аккаунт без оплаты и привязки карты. Подтвердите email,
-            опишите идею — и переходите в своё рабочее пространство Yleum.
-          </p>
-          <ul>
-            {[
-              [MailCheck, "Подтвердите email и сразу создавайте проект"],
-              [ShieldCheck, "Карта для регистрации не нужна"],
-              [Check, "Подключение MAX — когда будете готовы к запуску"],
-            ].map(([Icon, text]) => {
-              const ItemIcon = Icon as typeof MailCheck;
-              return <li key={String(text)}><ItemIcon className="size-4" />{String(text)}</li>;
-            })}
-          </ul>
-        </section>
-
         <section className="max-auth-card">
-          <h2>Начать на Free</h2>
-          <p>
-            Регистрация бесплатна. Генерация расходует баланс, а публикация
-            зависит от тарифа. Условия доступны в аккаунте до оплаты.
-          </p>
+          <h1>Начать на Free</h1>
+          {/* Оставлена одна фраза с фактом: бесплатна регистрация, а не генерация.
+              Остальное человек и так понимает или прочтёт на витрине. */}
+          <p>Без карты. Генерация расходует баланс, публикация зависит от тарифа.</p>
           <MaxRegisterForm />
           <div className="mt-6">
             <OAuthButtons providers={providers} next="/max" />

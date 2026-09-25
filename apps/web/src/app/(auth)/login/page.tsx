@@ -25,11 +25,6 @@ export default async function LoginPage({
   return (
     <AuthCard
       title={maxFlow ? "Вход в Yleum" : t("login.title")}
-      subtitle={
-        maxFlow
-          ? "Продолжите настройку и запуск вашего MAX-приложения."
-          : t("login.subtitle")
-      }
       footer={
         <>
           {t("login.noAccount")}{" "}
