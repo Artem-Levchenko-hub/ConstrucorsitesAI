@@ -6,8 +6,11 @@
 #   → PRODUCTION_EXPECTED_* → воркер биллинга в K3s commerce на тот же образ api → smoke.
 #
 # Использование (после ЗЕЛЁНОГО CI этой ревизии — красное не выкатываем):
-#   infra/release/deploy-prod.sh <полный sha> [--no-web] [--legal-version 2026-09-25]
+#   infra/release/deploy-prod.sh <полный sha> [--no-web | --web-only] [--legal-version 2026-09-25]
 #     --no-web            web не менялся: образ web не собирается и контейнер не трогается
+#     --web-only          менялся только web: собирается и перезапускается один контейнер web;
+#                         api/воркеры/оркестраторы/воркер биллинга не пересоздаются (безопасно во
+#                         время живого прогона адаптации), OMNIA_RELEASE_SHA и expected api-переменные не меняются
 #     --legal-version V   версия юридических документов: явно пишется в env воркера биллинга
 #                         (compose и api берут её из docker-compose.yml / config.py)
 #
@@ -19,10 +22,12 @@ set -euo pipefail
 
 SHA="${1:?полный sha ревизии main}"; shift || true
 WEB=1
+API=1
 LEGAL=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
+    --web-only) API=0 ;;
     --legal-version) LEGAL="${2:?}"; shift ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
@@ -35,7 +40,7 @@ LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
 say() { echo "== $* ($(date -u +%H:%M:%SZ))"; }
 
-say "выкатка $SHA web=$WEB legal=${LEGAL:-по умолчанию образа}"
+say "выкатка $SHA api=$API web=$WEB legal=${LEGAL:-по умолчанию образа}"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
 
@@ -45,7 +50,7 @@ ssh max-core "set -o noclobber; echo \"$(whoami)@$(hostname -s) $(date -u +%FT%T
 trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 
 say "core: ff-merge + идентичность релиза в compose .env"
-ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -E '^(API_IMAGE|WEB_IMAGE|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
+ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -E '^(API_IMAGE|WEB_IMAGE|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
 
 if [ -n "$LEGAL" ]; then
   # Единственный источник — .env платформы: compose отдаёт его api, worker'ам и сборке web,
@@ -64,7 +69,7 @@ assert api.get(\"OAUTH_LOGIN_REDIRECT_BASE_URL\") == \"https://yleum.ru\", \"red
 assert not gw.get(\"YANDEX_ID_CLIENT_SECRET\") and not wk.get(\"YANDEX_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
 assert not gw.get(\"VK_ID_CLIENT_SECRET\") and not wk.get(\"VK_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
 assert api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"1800\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
-assert d[\"api\"][\"image\"].endswith(\"$SHA\"), d[\"api\"][\"image\"]
+if $API: assert d[\"api\"][\"image\"].endswith(\"$SHA\"), d[\"api\"][\"image\"]
 if $WEB: assert d[\"web\"][\"image\"].endswith(\"$SHA\"), d[\"web\"][\"image\"]
 legal = \"$LEGAL\"
 if legal:
@@ -73,10 +78,10 @@ if legal:
 print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECRET\")), \"| repair window\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\"), \"| legal\", api.get(\"LEGAL_DOCUMENT_VERSION\"))
 '"
 
-TARGETS="api"; [ $WEB = 1 ] && TARGETS="api web"
+TARGETS=""; [ $API = 1 ] && TARGETS="api"; [ $WEB = 1 ] && TARGETS="$TARGETS web"; TARGETS="${TARGETS# }"
 say "core: сборка $TARGETS под nohup, опрос до готовности"
 ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && rm -f $LOG && (nohup docker compose build $TARGETS >$LOG 2>&1 </dev/null &) && echo сборка запущена"
-IMAGES="omnia-api:$SHA"; [ $WEB = 1 ] && IMAGES="omnia-api:$SHA omnia-web:$SHA"
+IMAGES=""; [ $API = 1 ] && IMAGES="omnia-api:$SHA"; [ $WEB = 1 ] && IMAGES="$IMAGES omnia-web:$SHA"; IMAGES="${IMAGES# }"
 state=""
 for i in $(seq 1 60); do
   sleep 30
@@ -90,6 +95,7 @@ done
 [ "$state" = built ] || { echo "сборка не уложилась в 30 минут"; exit 1; }
 ssh max-core "grep -E 'ERROR|error:' $LOG | tail -3 || true"
 
+if [ $API = 1 ]; then
 say "core: образ api читаем для uid 10001 (воркер биллинга в K3s)?"
 ssh max-core "docker run --rm --user 10001:10001 --entrypoint sh omnia-api:$SHA -c 'n=\$(find /app/src /app/migrations /orchestrator/templates -type f ! -perm -o=r 2>/dev/null | wc -l); echo \"нечитаемых файлов: \$n\"; [ \"\$n\" = 0 ]'"
 
@@ -98,6 +104,8 @@ ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d
 
 say "оркестраторы: core, затем commerce (одна ревизия)"
 ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && sudo systemctl restart omnia-orchestrator; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --delete --exclude .venv --exclude .env --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && sudo systemctl restart omnia-orchestrator; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
+
+fi
 
 if [ $WEB = 1 ]; then
   say "core: web"
@@ -109,12 +117,15 @@ ssh max-core "curl -s https://yleum.ru/api/health | python3 -c 'import json,sys;
 
 say "github: ожидаемые ревизии (пять + общая)"
 cd "$REPO"
-VARS="API WORKER GENERATION_WORKER ORCHESTRATOR"; [ $WEB = 1 ] && VARS="$VARS WEB"
+VARS=""; [ $API = 1 ] && VARS="API WORKER GENERATION_WORKER ORCHESTRATOR"; [ $WEB = 1 ] && VARS="$VARS WEB"
 for v in $VARS; do gh variable set "PRODUCTION_EXPECTED_${v}_RELEASE_SHA" --body "$SHA"; done
-gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --body "$SHA"
-gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --env production --body "$SHA"
+if [ $API = 1 ]; then
+  gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --body "$SHA"
+  gh variable set PRODUCTION_EXPECTED_RELEASE_SHA --env production --body "$SHA"
+fi
 echo "переменные выставлены"
 
+if [ $API = 1 ]; then
 say "воркер биллинга (K3s commerce) → тот же образ api"
 cd "$REPO/infra/max-k3s"
 ./commerce/10-billing-workloads.sh image 2>&1 | grep -E 'IMAGE_PUSHED|error' | tail -1
@@ -128,6 +139,8 @@ if [ -n "$LEGAL" ]; then
   export KUBECONFIG="$HOME/.kube/max-studio.yaml"
   echo "secret LEGAL_DOCUMENT_VERSION = $(kubectl --context max-commerce -n billing get secret billing-worker-env -o jsonpath='{.data.LEGAL_DOCUMENT_VERSION}' | base64 -d)"
   kubectl --context max-commerce -n billing exec deploy/billing-worker -- sh -c 'P=/app/.venv/bin/python; [ -x "$P" ] || P=python; "$P" -c "from omnia_api.core.config import get_settings; print(\"воркер: legal_document_version =\", get_settings().legal_document_version)"'
+fi
+
 fi
 
 say "smoke"
