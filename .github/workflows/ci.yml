@@ -231,7 +231,12 @@ jobs:
         run: git diff --exit-code -- apps/web/package.json apps/web/pnpm-lock.yaml apps/web/pnpm-workspace.yaml
       - name: Typecheck, test, and build web
         working-directory: apps/web
-        run: pnpm typecheck && pnpm test && pnpm build
+        # `next build` downloads Google fonts (next/font); a transient network hiccup on the
+        # runner fails the whole job with «TypeError: Cannot read properties of null» after
+        # every test passed (25.09.2026). One retry separates a flake from a real break.
+        run: |
+          pnpm typecheck && pnpm test
+          pnpm build || { echo "::warning::next build failed once (next/font download?) — retrying"; sleep 20; pnpm build; }
 
   py-syntax:
     runs-on: ubuntu-latest

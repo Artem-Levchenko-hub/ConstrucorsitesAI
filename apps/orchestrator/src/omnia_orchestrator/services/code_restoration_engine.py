@@ -1134,14 +1134,22 @@ class CodeRestorationEngine:
 
         require_workspace_not_deleted(manager.profile.state_path, request.workspace_id)
         state = manager.state_store.load(request.workspace_id)
-        if (
-            state is None
-            or state.project_id != request.project_id
-            or state.owner_id != request.owner_id
-            or state.fencing_epoch != epoch
-            or state.active_generation_run_id is not None
-        ):
-            raise CellIdentityConflict("restoration source identity, fence or activity changed")
+        # Four different situations used to share one message; an operator reading
+        # «identity, fence or activity changed» had to guess which (25.09.2026).
+        if state is None:
+            raise CellIdentityConflict("restoration source workspace state is missing")
+        if state.project_id != request.project_id or state.owner_id != request.owner_id:
+            raise CellIdentityConflict("restoration source identity changed")
+        if state.fencing_epoch != epoch:
+            raise CellIdentityConflict(
+                f"restoration source fence changed: expected epoch {epoch}, "
+                f"workspace is at {state.fencing_epoch}"
+            )
+        if state.active_generation_run_id is not None:
+            raise CellIdentityConflict(
+                "restoration source is held by an active generation "
+                f"{state.active_generation_run_id}"
+            )
         if manager.machine_runtime is None or not manager.machine_runtime.exists(
             state.workspace_id
         ):
