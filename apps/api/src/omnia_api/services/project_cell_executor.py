@@ -445,8 +445,18 @@ _DRAFT_RUNTIME_ABSENT = "draft runtime is not running"
 
 
 def draft_runtime_absent(exc: OrchestratorBadRequest) -> bool:
-    """Отказ означает «среды нет», а не «не удалось её починить»."""
-    return exc.status_code in (409, 503) and exc.message == _DRAFT_RUNTIME_ABSENT
+    """Отказ означает «среды нет», а не «не удалось её починить».
+
+    Фраза доходит в двух видах: как есть и с приставкой транспорта
+    «Orchestrator rejected request: ». Сравнение целиком пропускало второй вид —
+    и пропускало ровно там, где это важнее всего: на проде 25.09 предупреждение
+    «среда может показывать небезопасный черновик» снова появилось при
+    остановленной среде, потому что до платформы фраза дошла с приставкой.
+    """
+    message = exc.message.strip()
+    return exc.status_code in (409, 503) and (
+        message == _DRAFT_RUNTIME_ABSENT or message.endswith(": " + _DRAFT_RUNTIME_ABSENT)
+    )
 
 
 @dataclass(frozen=True, slots=True)

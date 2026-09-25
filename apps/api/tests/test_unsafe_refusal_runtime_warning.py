@@ -126,6 +126,18 @@ def test_the_absent_runtime_is_recognised_by_the_upstream_refusal() -> None:
     assert draft_runtime_absent(
         OrchestratorBadRequest("draft runtime is not running", status_code=409)
     )
+    # Ровно тот вид, в котором фраза дошла до платформы на проде 25.09:
+    # транспорт добавляет свою приставку, и сравнение целиком её пропускало.
+    assert draft_runtime_absent(
+        OrchestratorBadRequest(
+            "Orchestrator rejected request: draft runtime is not running", status_code=409
+        )
+    )
+    assert not draft_runtime_absent(
+        OrchestratorBadRequest(
+            "Orchestrator rejected request: workspace state not found", status_code=409
+        )
+    )
     assert draft_runtime_absent(
         OrchestratorBadRequest("draft runtime is not running", status_code=503)
     )
