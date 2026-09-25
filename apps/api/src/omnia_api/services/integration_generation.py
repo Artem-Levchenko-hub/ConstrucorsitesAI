@@ -10,33 +10,33 @@ from omnia_api.models.project import Project
 
 _METHODS = {
     "yookassa": (
-        "createOmniaPayment({amount, description, return_url, idempotency_key}); "
-        "getOmniaPayment(paymentId). Only payment creation and status; no "
+        "createYleumPayment({amount, description, return_url, idempotency_key}); "
+        "getYleumPayment(paymentId). Only payment creation and status; no "
         "refunds/subscriptions."
     ),
     "bitrix24": (
-        "createOmniaLead({name, phone?, email?, comment?, source?, "
+        "createYleumLead({name, phone?, email?, comment?, source?, "
         "idempotency_key}). Creates a lead, not a deal or task."
     ),
     "amocrm": (
-        "createOmniaLead({name, phone?, email?, idempotency_key}). Creates a "
+        "createYleumLead({name, phone?, email?, idempotency_key}). Creates a "
         "lead/contact, not an arbitrary CRM operation."
     ),
     "moysklad": (
-        "getOmniaCatalog(). Reads catalog/prices; do not claim stock "
+        "getYleumCatalog(). Reads catalog/prices; do not claim stock "
         "synchronization or order creation."
     ),
     "iiko": (
-        "getOmniaCatalog(). Reads menu only; do not claim restaurant order "
+        "getYleumCatalog(). Reads menu only; do not claim restaurant order "
         "submission or live stop-list support."
     ),
     "llmgw": (
-        "requestOmniaAI({message, instructions?, context?}). Uses built-in LLMGW "
+        "requestYleumAI({message, instructions?, context?}). Uses built-in LLMGW "
         "through the platform gateway; charged to the owner's balance. Never request "
         "an API key or choose billing identity/model in the app."
     ),
     "yandex_metrica": (
-        "getOmniaIntegrations() returns analytics_counter_id. Counter access does"
+        "getYleumIntegrations() returns analytics_counter_id. Counter access does"
         " not prove events are installed."
     ),
 }

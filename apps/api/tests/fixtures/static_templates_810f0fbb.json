@@ -7,7 +7,7 @@
         "mode": "100644"
       },
       "assets/omnia-kit.css": {
-        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "sha256": "33df231b7cf5c628a9abb8930f371febd91ccc3ea92048a86a6de8c587da834f",
         "mode": "100644"
       },
       "assets/omnia-kit.js": {
@@ -15,7 +15,7 @@
         "mode": "100644"
       },
       "index.html": {
-        "sha256": "4b9325a98226dc656d6ae90a5c96c519d15d7d7c073e715c7492fd70e8bb1b01",
+        "sha256": "b2c8563ba3830db47be87931a79cbc0956ec681290add0d715eff9cf65ae84fd",
         "mode": "100644"
       }
     },
@@ -25,7 +25,7 @@
         "mode": "100644"
       },
       "assets/omnia-kit.css": {
-        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "sha256": "33df231b7cf5c628a9abb8930f371febd91ccc3ea92048a86a6de8c587da834f",
         "mode": "100644"
       },
       "assets/omnia-kit.js": {
@@ -33,7 +33,7 @@
         "mode": "100644"
       },
       "index.html": {
-        "sha256": "649c0be8e5cd6cfa9602a722a7f3712a66658454db5ce8f33c318400b0ae3a9a",
+        "sha256": "a02fc4290229de060c6cc053e0616c6ee7227c325cbd9af153c06646577af704",
         "mode": "100644"
       }
     },
@@ -43,7 +43,7 @@
         "mode": "100644"
       },
       "assets/omnia-kit.css": {
-        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "sha256": "33df231b7cf5c628a9abb8930f371febd91ccc3ea92048a86a6de8c587da834f",
         "mode": "100644"
       },
       "assets/omnia-kit.js": {
@@ -51,7 +51,7 @@
         "mode": "100644"
       },
       "index.html": {
-        "sha256": "416ed1b89ad4be4e697510b5a5678c003cb4b227800640521746dc035ebe443a",
+        "sha256": "07b6f4ed814af6964160e77e2cdb7a8709e79ec3cfcb34d328edc9ab602d3f7f",
         "mode": "100644"
       }
     },
@@ -61,7 +61,7 @@
         "mode": "100644"
       },
       "assets/omnia-kit.css": {
-        "sha256": "ebc2c7973efb53c760a8baea66c79739a105c7de139f4a55b47edbaef0155109",
+        "sha256": "33df231b7cf5c628a9abb8930f371febd91ccc3ea92048a86a6de8c587da834f",
         "mode": "100644"
       },
       "assets/omnia-kit.js": {
@@ -79,7 +79,7 @@
         "mode": "100644"
       },
       "src/app/page.tsx": {
-        "sha256": "bda5ec2a5fdb15374d30ea79c4eedfa779a40c048072a6f2c55dd9250f7754d5",
+        "sha256": "f43d75baa598bd486f7a8dfc53cfed2fd3854060df9cdb71758be681617a9f4b",
         "mode": "100644"
       },
       "src/lib/db/schema.ts": {

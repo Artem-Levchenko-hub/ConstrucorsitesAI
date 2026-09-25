@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 
-import { MaxPublicLanding } from "@/components/marketing/MaxPublicLanding";
+import { YleumLanding } from "@/components/marketing/YleumLanding";
 
 export const metadata: Metadata = {
   title: "Yleum — создайте приложение для бизнеса без кода",
@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage() {
-  return <MaxPublicLanding />;
+  return <YleumLanding />;
 }

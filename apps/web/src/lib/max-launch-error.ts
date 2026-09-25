@@ -10,7 +10,7 @@ export function getMaxLaunchErrorDescription(error: unknown): string {
   }
   if (/prod build failed|docker build/i.test(raw)) {
     return (
-      "Production-сборка не завершилась. Omnia уже повторила её автоматически. " +
+      "Production-сборка не завершилась. Yleum уже повторил её автоматически. " +
       "Повторите публикацию; если сбой повторится, откройте детали проекта."
     );
   }

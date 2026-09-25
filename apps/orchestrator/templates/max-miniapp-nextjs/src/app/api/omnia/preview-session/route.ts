@@ -6,7 +6,7 @@ import { createMaxSession, MAX_SESSION_COOKIE, type MaxSessionUser } from "@/lib
 
 const BOOTSTRAP_TTL_SECONDS = 120;
 const PREVIEW_SESSION_MAX_AGE_SECONDS = 15 * 60;
-// MAX Studio replaces this sentinel with the canonical project UUID when it
+// Yleum replaces this sentinel with the canonical project UUID when it
 // syncs an existing app. The env fallback keeps the starter template usable
 // before that first managed-kit sync.
 const MANAGED_PROJECT_ID: string = "__OMNIA_PROJECT_ID__";

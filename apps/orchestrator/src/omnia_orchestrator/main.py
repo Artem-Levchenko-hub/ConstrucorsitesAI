@@ -1,4 +1,4 @@
-"""Omnia.AI V2 — Orchestrator FastAPI app (:8003).
+"""Yleum V2 — Orchestrator FastAPI app (:8003).
 
 Single entry point. apps/api talks to us over internal HTTP with a shared
 secret in `X-Internal-Token`. Web clients never reach this surface.
@@ -124,7 +124,7 @@ def create_app() -> FastAPI:
     # before routers are registered. No-op when SENTRY_DSN is unset.
     init_sentry()
     app = FastAPI(
-        title="Omnia.AI Orchestrator",
+        title="Yleum Orchestrator",
         version="0.0.1",
         lifespan=lifespan,
         # Internal API — no auto-generated public docs/openapi in prod.

@@ -216,7 +216,7 @@ async def fetch_provider_docs(provider_key: str, query: str) -> ProviderDocsResu
         return ProviderDocsResult(
             status="warning",
             summary=f"Официальная документация {provider.name} не вернула читаемый текст.",
-            next_actions=("Используйте существующий Omnia runtime bridge без догадок об API.",),
+            next_actions=("Используйте существующий Yleum runtime bridge без догадок об API.",),
             artifacts=tuple(urls),
         )
 
@@ -231,7 +231,7 @@ async def fetch_provider_docs(provider_key: str, query: str) -> ProviderDocsResu
         summary=f"Прочитаны официальные страницы {provider.name}: {len(pages)}.",
         content=content[:_MAX_RESULT_CHARS],
         next_actions=(
-            "Используйте только управляемый runtime bridge Omnia; не записывайте ключ в код.",
+            "Используйте только управляемый runtime bridge Yleum; не записывайте ключ в код.",
         ),
         artifacts=tuple(artifacts),
     )

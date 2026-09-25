@@ -1,4 +1,4 @@
-# Omnia.AI starter — Next.js 15 + Postgres + Drizzle
+# Yleum starter — Next.js 15 + Postgres + Drizzle
 
 Шаблон, который orchestrator копирует в `/opt/omnia-runtime/projects/<id>/` при создании нового full-stack проекта.
 

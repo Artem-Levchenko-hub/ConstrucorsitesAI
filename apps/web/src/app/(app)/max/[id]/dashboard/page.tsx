@@ -4,7 +4,7 @@ import { MaxPostLaunchDashboard } from "@/components/max/MaxPostLaunchDashboard"
 import { loadMaxProject } from "@/lib/max-project-server";
 
 export const metadata: Metadata = {
-  title: "Управление приложением — MAX Studio",
+  title: "Управление приложением — Yleum",
   robots: { index: false, follow: false },
 };
 

@@ -89,7 +89,7 @@ const implementationFeatures: Record<string, string> = {
   amocrm: "Добавь форму заявки с созданием лида в amoCRM и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
   moysklad: "Добавь каталог товаров и цены из МойСклад. Реальные складские остатки пока недоступны; не показывай товары как имеющиеся в наличии на основании каталога.",
   yandex_metrica: "Подключи счётчик Яндекс Метрики к приложению через управляемую интеграцию.",
-  llmgw: "Добавь ИИ-помощника с отправкой сообщений через встроенный LLMGW и отображением ответа. Используй requestOmniaAI; расходы оплачиваются с баланса владельца приложения. Пользователю не нужны API-ключи или отдельное подключение ИИ.",
+  llmgw: "Добавь ИИ-помощника с отправкой сообщений через встроенный LLMGW и отображением ответа. Используй requestYleumAI; расходы оплачиваются с баланса владельца приложения. Пользователю не нужны API-ключи или отдельное подключение ИИ.",
 };
 const readyForImplementation = (
   provider: IntegrationProvider | undefined,
@@ -344,7 +344,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
         {selected.oauth_available && (
           <div className="rounded-[10px] border border-[#0381fa]/30 bg-accent/[.06] p-4">
             <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
-            <p className="mt-1 text-xs leading-5 text-fg-secondary">Откроется официальный кабинет. Пароли и API-ключи вводить в Omnia не потребуется.</p>
+            <p className="mt-1 text-xs leading-5 text-fg-secondary">Откроется официальный кабинет. Пароли и API-ключи вводить в Yleum не потребуется.</p>
             <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
           </div>
         )}

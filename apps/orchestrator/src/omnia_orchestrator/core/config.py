@@ -186,7 +186,7 @@ class Settings(BaseSettings):
     # service to the product Postgres.
     deploy_state_path: str = Field(default="/opt/omnia-runtime/state/deploy-runs.json")
     # Comma-separated addresses which must never be accepted as BYO targets.
-    # Production sets this to the Omnia host address as an extra SSRF guard.
+    # Production sets this to the Yleum host address as an extra SSRF guard.
     byo_blocked_ips: str = Field(default="")
 
     # Local Docker registry for prod images.

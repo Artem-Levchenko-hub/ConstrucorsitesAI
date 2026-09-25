@@ -41,15 +41,15 @@
       },
       "README.md": {
         "mode": "100644",
-        "git_blob": "eb96c2b90acc50486a935c0c1df928f30d675a74",
+        "git_blob": "2de689295b0223a5f01d82d122394cc48a07b683",
         "bytes": 939,
-        "sha256": "485ebb603e6ab73352bfb15b6b6a21fd701664ebce936a6491e2e3de84301f42"
+        "sha256": "f22f1ecc4c103fb00e10e40a05c60fce0b1b53836075317c8b10ce5099ccba12"
       },
       "SYSTEM_PROMPT.md": {
         "mode": "100644",
-        "git_blob": "c2b262562d37eeb88f23cf71e314d37da235d37d",
-        "bytes": 4629,
-        "sha256": "42c4999cba58c8d3d71c7b7e62c09d7518046b8c0e630e412d4bcbbdde0fffdc"
+        "git_blob": "b04ae7cb9f1f0384c6012bc6085b62ac2035e563",
+        "bytes": 4624,
+        "sha256": "d4a2c55a921fa5c2e75c3b3e15aec53d2867f26279f62342744330d47837d898"
       },
       "docker-entrypoint.sh": {
         "mode": "100755",
@@ -119,9 +119,9 @@
       },
       "public/omnia-remix-cta.js": {
         "mode": "100644",
-        "git_blob": "196d447defb3d463750032169daf30304789a1a8",
-        "bytes": 16395,
-        "sha256": "a9a7924811022e93c6dae9b59d3c9e9e30045ab8cdf6a86cc89d112bcef0d308"
+        "git_blob": "ac5ac08aac027a7e2c19ab72d1d380bf9834172b",
+        "bytes": 16377,
+        "sha256": "9ac99171352b0b36d50b941600b845282e7523260a10689fb0737e1958f07421"
       },
       "scripts/apply-migrations.mjs": {
         "mode": "100644",
@@ -191,9 +191,9 @@
       },
       "src/app/api/omnia/preview-session/route.ts": {
         "mode": "100644",
-        "git_blob": "9338acbcba4356fa3df97e5cc53f892f853610c5",
-        "bytes": 3154,
-        "sha256": "2e416286f90617e8d88b63d10bc081bb83c8f6e4298b61d6dce3f459d347d24a"
+        "git_blob": "96b6feca7d3d93b68933478d2a01c13652b17c1b",
+        "bytes": 3149,
+        "sha256": "84f99e1a6b3760a2f95ca0868608a0c2e0a6b23cf796e7639a6c39ef225acc9b"
       },
       "src/app/globals.css": {
         "mode": "100644",
@@ -227,15 +227,15 @@
       },
       "src/components/MaxAppProvider.tsx": {
         "mode": "100644",
-        "git_blob": "3770c68de2283a07944d384b2cb9a50a3244f8d2",
+        "git_blob": "e5153dcc0fb273347c16eaaeff4ab933f672c146",
         "bytes": 8027,
-        "sha256": "0af109dc6bc525c060d19ed1b2a96db5636caba05d9b661066f18db05fc28ee5"
+        "sha256": "447b9ac09f342408b80e2d8ed911c2732db8c71a1e7f8cb7b6e9350337070072"
       },
-      "src/components/OmniaCompliance.tsx": {
+      "src/components/YleumCompliance.tsx": {
         "mode": "100644",
-        "git_blob": "2725113fa0934484ab362e25aa00e6d6ed37d24d",
+        "git_blob": "469e84e900fd939ac2bdae0ddfad04fd9ea9f8e6",
         "bytes": 1568,
-        "sha256": "474f54c071621b713e245d929c921b48939f1e1ef24e06d5b161926bf1e1400a"
+        "sha256": "1663ed0ad3873d762518f9c7644e5ec7b7fff3007c9df73979b761c6e6193e20"
       },
       "src/lib/db/index.ts": {
         "mode": "100644",
@@ -275,21 +275,21 @@
       },
       "src/lib/omnia/client.ts": {
         "mode": "100644",
-        "git_blob": "95c31a621ed183aa06caece6432eff43e4a15176",
-        "bytes": 5728,
-        "sha256": "5c140ce124a974f12f05781bf02fe22f7e915c4d8d9fc4afbd687aaafc116f87"
+        "git_blob": "ca6fb4d9773f958378781d34393def61c4076949",
+        "bytes": 6358,
+        "sha256": "a73696749cc0e27c9b07514337fa2b61ef2ff9b1959e2aae0b9f3799e810d768"
       },
       "src/lib/omnia/integration-client.ts": {
         "mode": "100644",
-        "git_blob": "e0489778fc3098460a9a208350e81154872a9980",
-        "bytes": 7898,
-        "sha256": "f016947cee5eb2787f734c58928b6a320b7402743eb21caae2cff322c8503250"
+        "git_blob": "b08184cc840f8317393c359726ce81d2454c4ac8",
+        "bytes": 8706,
+        "sha256": "d7b1fb1be37b95523dfcf9a7188950ab2273bbd3059e607306d5cc6b117222cc"
       },
       "src/lib/omnia/max-config.ts": {
         "mode": "100644",
-        "git_blob": "fff4bcb8412683b966c6efa76a6f5a34ce9e5c26",
-        "bytes": 1601,
-        "sha256": "cf13d942c554c80914d2c62b12308c943d210bb7dd2c6a205dcab8e9d0c64933"
+        "git_blob": "7ea7ea1920a9bea09e2895d249b2784a7a11055e",
+        "bytes": 1983,
+        "sha256": "65d11ff3853661ad3a02a41ac4350c780f51cd236f05fd399a4f6cfbff43b1b9"
       },
       "tests/starter.test.mjs": {
         "mode": "100644",
@@ -331,9 +331,9 @@
       },
       "README.md": {
         "mode": "100644",
-        "git_blob": "ac6f5ca582f3383c6f9f9db5d110a736273fbdef",
-        "bytes": 2628,
-        "sha256": "05b3350b42358a8697590e9c229b766a2636940fd38bee589b46124dff8c757b"
+        "git_blob": "534c3b5667199be66e00c129093b350804027638",
+        "bytes": 2932,
+        "sha256": "d8c521ae8b06ad3d47eea5e321ad5278441b44c2288657ad120f974e9ceb65e0"
       },
       "SYSTEM_PROMPT.md": {
         "mode": "100644",
@@ -409,9 +409,9 @@
       },
       "public/omnia-remix-cta.js": {
         "mode": "100644",
-        "git_blob": "196d447defb3d463750032169daf30304789a1a8",
-        "bytes": 16395,
-        "sha256": "a9a7924811022e93c6dae9b59d3c9e9e30045ab8cdf6a86cc89d112bcef0d308"
+        "git_blob": "ac5ac08aac027a7e2c19ab72d1d380bf9834172b",
+        "bytes": 16377,
+        "sha256": "9ac99171352b0b36d50b941600b845282e7523260a10689fb0737e1958f07421"
       },
       "scripts/init-db.mjs": {
         "mode": "100644",
@@ -487,15 +487,15 @@
       },
       "src/app/globals.css": {
         "mode": "100644",
-        "git_blob": "22c9429e5d6915e767ecd152c56411d3621fde13",
+        "git_blob": "10b9fb8fcb8ed603efa3c9e073c4a27e4928b74d",
         "bytes": 23047,
-        "sha256": "52ab02b516f3775b12c014df9dedd737d4de646d6de1e428506a8cd80af8734b"
+        "sha256": "ad9a76b77d7c8ace2637bf4ed14c5a0024b7f0fe1a5581d439a0fc44e92d7f43"
       },
       "src/app/layout.tsx": {
         "mode": "100644",
-        "git_blob": "7d669a552398ffa65f979f7cf2ac63e56b402f99",
-        "bytes": 5104,
-        "sha256": "db18eff1d7a8c333901f5ab53405c28a00e4f2a391cfdc3941e64f89d6a998c3"
+        "git_blob": "3fad098430604e3ef094b58acfb03c61149d2ec8",
+        "bytes": 5098,
+        "sha256": "7e095e070b040a7edeca3c6339925ae23034e310f499990dd3ab0a21ddd1dd79"
       },
       "src/app/loading.tsx": {
         "mode": "100644",
@@ -505,27 +505,27 @@
       },
       "src/app/omnia-brief.ts": {
         "mode": "100644",
-        "git_blob": "17533391d44928eb0a2dd6fefd507d20fd476329",
+        "git_blob": "7f74e1cbeb54fc0101b5502d5c2e0487930ca9a2",
         "bytes": 684,
-        "sha256": "9256acbf93804c170b902eafc679cb0cbd5d3e74fb559726589afd2a690e82a6"
+        "sha256": "3a3daceee94999ff658fb29b184beca7570ed123b3aec38b044a540f85bb341a"
       },
       "src/app/omnia-share.ts": {
         "mode": "100644",
-        "git_blob": "0d94c512f7374d3837c362ecd90c4ea3479253ca",
+        "git_blob": "f9c11d7c3e2964a4985e1514e907b901d4b7cd82",
         "bytes": 537,
-        "sha256": "6eeb7c2ef856331f1622fbd5f2a0ce8e8a4cf35a5c5085d3b3b0b86d49c2eed0"
+        "sha256": "d0f08e2f866c81d382208cadc9fc48857500ede96c6a504e15aec278d686242d"
       },
       "src/app/opengraph-image.tsx": {
         "mode": "100644",
-        "git_blob": "d4edb0627defd3655bbeb8b56de3066ce996b194",
-        "bytes": 4257,
-        "sha256": "c74be43d4e55cc18672299a280439ec67dc9954673fa803b4036153aa98d2126"
+        "git_blob": "7616f01bc3a8d557829c4b4481a6024359a74be6",
+        "bytes": 4254,
+        "sha256": "600f5d0823b414f3cfc2bbaa9537c699be223743512f219fb2b34e50be9433fc"
       },
       "src/app/page.tsx": {
         "mode": "100644",
-        "git_blob": "b1e4c2b09b012ec808fdc412257e49c50fd6823c",
+        "git_blob": "77530c867607fa202f2c3aba99f5aba96ef2de42",
         "bytes": 5533,
-        "sha256": "54bb684e18a6126366b4d2a99d4059ed169b69221bf3c9aee2a4ca03ad699466"
+        "sha256": "6b01debfc77cbfdf4e8420aee2b6a45a84ce2b93842cc91bb01f7788181be608"
       },
       "src/app/signin/page.tsx": {
         "mode": "100644",
@@ -565,9 +565,9 @@
       },
       "src/components/omnia/auth-shell.tsx": {
         "mode": "100644",
-        "git_blob": "1fe2fdf2fff183a875b1e7d54f250b0766209c7f",
-        "bytes": 9622,
-        "sha256": "ae237f5c2b0b976e1542af90092cfdb3960b3d7d533edeae3ec8672d59854d77"
+        "git_blob": "3b4fec6f1facb069dd76adcaa05b48697a38afff",
+        "bytes": 9619,
+        "sha256": "758b98f86754b1d7e386ae84877ab461a0286f09ac317558d628ca78325daf4a"
       },
       "src/components/omnia/board-view.tsx": {
         "mode": "100644",
@@ -667,9 +667,9 @@
       },
       "src/components/omnia/index.ts": {
         "mode": "100644",
-        "git_blob": "8ba12b2e209262f62b0ae8a1cc4b77234fb6ff47",
+        "git_blob": "99ab1a391c74ed5869e6e571a7e993eb3f84cb55",
         "bytes": 3450,
-        "sha256": "524773257f510f57ce152f63e77913f600e0b61117fa0e79b27832ec745fdcb7"
+        "sha256": "98a58dba2effb05bf3664e344e281255271a0d83bd201f8c61bf57134ba2af3e"
       },
       "src/components/omnia/master-detail-view.tsx": {
         "mode": "100644",
@@ -999,15 +999,15 @@
       },
       "README.md": {
         "mode": "100644",
-        "git_blob": "ac6f5ca582f3383c6f9f9db5d110a736273fbdef",
-        "bytes": 2628,
-        "sha256": "05b3350b42358a8697590e9c229b766a2636940fd38bee589b46124dff8c757b"
+        "git_blob": "f77584924e777585db09da96c1e69fa5cc5e69a0",
+        "bytes": 2940,
+        "sha256": "0dae262ef4369827d7feb2944ed43444ce562ddec5b371889b8224c2231ca53d"
       },
       "SYSTEM_PROMPT.md": {
         "mode": "100644",
-        "git_blob": "8eb53ee11ca12bbe05ff8cfac7248807766709c5",
-        "bytes": 18753,
-        "sha256": "be095524eba852527b3ac8beae7bfb645bd3ce7ad6896c9aecea376d8458e956"
+        "git_blob": "913cf5b9ebc66396f248088537516d0d1f1fa7e4",
+        "bytes": 18750,
+        "sha256": "cf6c0d5bc8b64eca54e63d1598d3e23855702bd55701740479cadbbe0767913b"
       },
       "docker-entrypoint.sh": {
         "mode": "100644",
@@ -1053,9 +1053,9 @@
       },
       "public/omnia-remix-cta.js": {
         "mode": "100644",
-        "git_blob": "196d447defb3d463750032169daf30304789a1a8",
-        "bytes": 16395,
-        "sha256": "a9a7924811022e93c6dae9b59d3c9e9e30045ab8cdf6a86cc89d112bcef0d308"
+        "git_blob": "ac5ac08aac027a7e2c19ab72d1d380bf9834172b",
+        "bytes": 16377,
+        "sha256": "9ac99171352b0b36d50b941600b845282e7523260a10689fb0737e1958f07421"
       },
       "scripts/apply-migrations.mjs": {
         "mode": "100644",
@@ -1089,33 +1089,33 @@
       },
       "src/app/globals.css": {
         "mode": "100644",
-        "git_blob": "c088a6d88e68d53b9d367fd2ce9423a0d444656a",
+        "git_blob": "25ad131498d2a2084a0537f7d2706dc8d822668d",
         "bytes": 17382,
-        "sha256": "3f3d61e41bd6d3c91265124d20ddf8ff38d8edfedc21418ce182a8a3aae8e946"
+        "sha256": "d21d69a4a3c1c7dc3ac757f8c15887045de57bf12589c7bc707fad8f7860029e"
       },
       "src/app/layout.tsx": {
         "mode": "100644",
-        "git_blob": "9366d626c53e60da20d939364c48647b61bbe26f",
-        "bytes": 3079,
-        "sha256": "8c5629e2a62dc494dc0d8b284eb4056efdfb21f5a9911810bd8c6b34fa5dce79"
+        "git_blob": "d17c1c7b830f158d02de4da87ed88bcfa6563395",
+        "bytes": 3076,
+        "sha256": "e08d6348a79f88a0d19a3860eea3b23757aa7b5431e48d7147ceaef355571668"
       },
       "src/app/omnia-brief.ts": {
         "mode": "100644",
-        "git_blob": "17533391d44928eb0a2dd6fefd507d20fd476329",
+        "git_blob": "7f74e1cbeb54fc0101b5502d5c2e0487930ca9a2",
         "bytes": 684,
-        "sha256": "9256acbf93804c170b902eafc679cb0cbd5d3e74fb559726589afd2a690e82a6"
+        "sha256": "3a3daceee94999ff658fb29b184beca7570ed123b3aec38b044a540f85bb341a"
       },
       "src/app/omnia-share.ts": {
         "mode": "100644",
-        "git_blob": "0a5ab0dc33da413a0becf494a7a20a947f059de4",
+        "git_blob": "271c7d6f3b780c64fca67e6a77f07997d6578378",
         "bytes": 770,
-        "sha256": "1a321a5c62fa435cd9715f9948c9e2a06d872801ea35d91bccfb422b14fa0c63"
+        "sha256": "f25f3584a5d4fa3fb0ea949c75f67af94f96a820d5463ad8cb3bf79c761b80ca"
       },
       "src/app/page.tsx": {
         "mode": "100644",
-        "git_blob": "401d910d50c4b51248231048aed30fd1100b15c4",
-        "bytes": 8015,
-        "sha256": "7753617ba7977f1de0565bde6f3236edd77fe10ac8250798a6af009a1194a577"
+        "git_blob": "c94bcb2867d64c2d67349dc0df0f9b4e0c8743a4",
+        "bytes": 8012,
+        "sha256": "1ed94426b6c2d7fd82e9e00a9c4795834c418b67d0b441bcfd33b6787fde8b01"
       },
       "src/app/signin/page.tsx": {
         "mode": "100644",
@@ -1149,9 +1149,9 @@
       },
       "src/components/auth-shell.tsx": {
         "mode": "100644",
-        "git_blob": "879e6b54888cb4f405c223b7d50f5729f65255ee",
-        "bytes": 8181,
-        "sha256": "8de38b8d568904e1a6a8132c3a5fce0498f0b0f845d423066cf61b3c4699049b"
+        "git_blob": "c2c2fa2aaaf99bc191746ae10a2702c0c99279fa",
+        "bytes": 8178,
+        "sha256": "4fe23b4525112567388b44c7371af7a83ae584afe241a6b753879d6d8b5be7b4"
       },
       "src/components/omnia/app-shell.tsx": {
         "mode": "100644",
@@ -1371,9 +1371,9 @@
       },
       "src/lib/brand.ts": {
         "mode": "100644",
-        "git_blob": "400a7a9cc6440331ab5c3eb3203f142be6a275b1",
+        "git_blob": "a20ac59174e2ecce5d3cccad3daf5e33b5674da7",
         "bytes": 3657,
-        "sha256": "63f150b77a6b9e5304fcccab7e1f976da9c5e4cf6a08c561fd0b8b17bd4a2d97"
+        "sha256": "30f2ef4e2751bdda831378bfd1da8e471e2d91d37c3aeee744dd9f447c79d83c"
       },
       "src/lib/db/index.ts": {
         "mode": "100644",
@@ -1383,9 +1383,9 @@
       },
       "src/lib/db/schema.ts": {
         "mode": "100644",
-        "git_blob": "768e167b8323032b13eb001b76942b1a398ae5fc",
+        "git_blob": "ddba4cb1f4786c89c31c786d58b70667d83642c1",
         "bytes": 4659,
-        "sha256": "a406373962a5deaa4cc539cc8e51679af2666ffe2e469dcfe934bc41f5451580"
+        "sha256": "803e78491e12953b8790cc649aef54acb8a96f0adbbbabd6e368bb9fdbc17ee3"
       },
       "src/lib/session.ts": {
         "mode": "100644",
@@ -1451,9 +1451,9 @@
       },
       "README.md": {
         "mode": "100644",
-        "git_blob": "0a4e0e9ffc87244ff414096901e844696b190e91",
-        "bytes": 5225,
-        "sha256": "d91734525f8d4b7dbb43b3957797cf8084bc3944ee4add36d6d357b2774b612c"
+        "git_blob": "c0c9ec741a79f27fbfdbca30614743c5878c057d",
+        "bytes": 5508,
+        "sha256": "a07ee14447df85ecad0629eb74fc00bd88e620fd612cdf12772550ee11f3cda0"
       },
       "SYSTEM_PROMPT.md": {
         "mode": "100644",
@@ -1511,9 +1511,9 @@
       },
       "public/omnia-remix-cta.js": {
         "mode": "100644",
-        "git_blob": "196d447defb3d463750032169daf30304789a1a8",
-        "bytes": 16395,
-        "sha256": "a9a7924811022e93c6dae9b59d3c9e9e30045ab8cdf6a86cc89d112bcef0d308"
+        "git_blob": "ac5ac08aac027a7e2c19ab72d1d380bf9834172b",
+        "bytes": 16377,
+        "sha256": "9ac99171352b0b36d50b941600b845282e7523260a10689fb0737e1958f07421"
       },
       "scripts/init-db.mjs": {
         "mode": "100644",
@@ -1529,9 +1529,9 @@
       },
       "src/app/(app)/layout.tsx": {
         "mode": "100644",
-        "git_blob": "9e7408f4e7ce6978475e3e90fd5862c6836e74cf",
+        "git_blob": "14f5f1a8c1caa1e29d65b844ebfdf3b29b6587f7",
         "bytes": 1426,
-        "sha256": "eeee2dbd8b0bb150ea23ea9015520c9c74399e52567b3154ebc9d55028337e0c"
+        "sha256": "cc4ede2070f0db9252691d5af214d9ba367247ae72ed6b445c291cfbeb6de5ff"
       },
       "src/app/api/auth/[...nextauth]/route.ts": {
         "mode": "100644",
@@ -1583,9 +1583,9 @@
       },
       "src/app/layout.tsx": {
         "mode": "100644",
-        "git_blob": "694dacb0fbba567ef976b3349b38df65286dd6db",
+        "git_blob": "470121635fcc5abaaf3cda4e5185c4eb35d292ee",
         "bytes": 2422,
-        "sha256": "b5fbf4dfd7594760cb397fc486d5286eb3b9354e337cec849ed2758f4fa86f97"
+        "sha256": "d9b76ca5dd372cd43aed8e94645efd476d3dac0353a715ace795fe68e9538b2e"
       },
       "src/app/page.tsx": {
         "mode": "100644",

@@ -5,7 +5,7 @@ Conventions AI must follow:
 - IDs are `UUID` from `uuid_pkg.uuid4` default.
 - Timestamps `created_at` / `updated_at` set to `func.now()`.
 - Foreign keys: `ondelete="CASCADE"` unless owner explicitly disagrees.
-- Money columns: `Numeric(12, 4)` (matches Omnia wallet precision).
+- Money columns: `Numeric(12, 4)` (matches Yleum wallet precision).
 
 `User` is the auth-primitive — same role as the Next template's
 `users` table. Don't rename or drop.

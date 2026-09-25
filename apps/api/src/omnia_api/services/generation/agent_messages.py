@@ -213,7 +213,7 @@ def _agent_result_message(res: Any, *, is_edit: bool) -> str:
     model called ``done``). On every NON-done exit (ran out of steps / stalled /
     looping / gateway error) ``summary`` is an internal English diagnostic — e.g.
     "hit step budget without calling done" / "stuck repeating ..." — which must
-    stay in the logs, NOT the chat (the bug: it was surfaced verbatim as Omnia's
+    stay in the logs, NOT the chat (the bug: it was surfaced verbatim as Yleum's
     reply). Partial files still commit, so on a non-finish we show a friendly RU
     message that keeps the user moving («Починить» / повтори), keyed to why the
     agent stopped."""

@@ -2,7 +2,7 @@
 
 AI uses `from api.db import get_session` in route handlers via FastAPI's
 `Depends(get_session)`. The engine is process-global; sessions are
-per-request. Same pattern the production Omnia api uses.
+per-request. Same pattern the production Yleum api uses.
 
 Schema initialisation: on app startup, `init_db()` runs
 `CREATE TABLE IF NOT EXISTS` for every model in `api.models`. This is

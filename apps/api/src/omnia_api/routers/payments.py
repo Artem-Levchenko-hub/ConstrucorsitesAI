@@ -37,9 +37,9 @@ from omnia_api.services.subscription_lifecycle import provider_status as _provid
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
 PACKAGES: dict[str, tuple[Decimal, Decimal, str]] = {
-    "start": (Decimal("490.00"), Decimal("500.00"), "Стартовый пакет MAX Studio"),
-    "business": (Decimal("1490.00"), Decimal("1600.00"), "Бизнес-пакет MAX Studio"),
-    "pro": (Decimal("3990.00"), Decimal("4500.00"), "Профессиональный пакет MAX Studio"),
+    "start": (Decimal("490.00"), Decimal("500.00"), "Стартовый пакет Yleum"),
+    "business": (Decimal("1490.00"), Decimal("1600.00"), "Бизнес-пакет Yleum"),
+    "pro": (Decimal("3990.00"), Decimal("4500.00"), "Профессиональный пакет Yleum"),
 }
 
 
@@ -348,7 +348,7 @@ async def create_subscription_checkout(
         session=session,
         payment=payment,
         current_user=current_user,
-        title=f"Подписка Omnia {plan.name}, 1 месяц",
+        title=f"Подписка Yleum {plan.name}, 1 месяц",
         return_path=f"/billing/plan?payment={payment.id}",
         save_payment_method=payload.auto_renew,
     )
@@ -456,7 +456,7 @@ async def refund_payment(
             amount=f"{payment.amount_rub:.2f}",
             idempotency_key=f"refund-{payment.id}",
             customer_email=str(payer_email) if payer_email else None,
-            description=f"Возврат платежа MAX Studio ({payment.package_code})",
+            description=f"Возврат платежа Yleum ({payment.package_code})",
         )
     except yookassa.YooKassaUnavailable as exc:
         raise ApiError(

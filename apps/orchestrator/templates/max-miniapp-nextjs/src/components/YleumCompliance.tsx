@@ -2,9 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
-import { getOmniaAppConfig } from "@/lib/omnia/integration-client";
+import { getYleumAppConfig } from "@/lib/omnia/integration-client";
 
-export function OmniaCompliance() {
+export function YleumCompliance() {
   const [ageRating, setAgeRating] = useState(app.legal.age_rating);
   useEffect(() => {
     let active = true;
@@ -12,7 +12,7 @@ export function OmniaCompliance() {
     const refresh = async () => {
       const current = ++request;
       try {
-        const config = await getOmniaAppConfig();
+        const config = await getYleumAppConfig();
         if (active && current === request) setAgeRating(config.legal.age_rating);
       } catch { /* Keep the last known marking while offline. */ }
     };

@@ -1,6 +1,6 @@
 /**
  * Default page for a freshly provisioned project — a working Task list wired to
- * the entity engine via the SDK, built with the Omnia app kit. It proves the
+ * the entity engine via the SDK, built with the Yleum app kit. It proves the
  * backend end-to-end (auth → entities.Task CRUD) and that the component kit
  * renders, the moment the container boots, before any AI write.
  *
@@ -70,7 +70,7 @@ export default function Home() {
       <header className="space-y-2">
         <Badge variant="secondary" className="gap-1.5">
           <ListTodo className="size-3.5" />
-          Omnia · entity engine
+          Yleum · entity engine
         </Badge>
         <h1 className="text-3xl font-semibold tracking-tight">Мои задачи</h1>
         <p className="text-sm text-muted-foreground">

@@ -32,12 +32,12 @@ const display = Unbounded({
 /* Per-project <head>. Title / description / share-card come from the generated
  * `omnia-share.ts` (services/share_meta.py) so every shared /p/<slug> link
  * unfurls as a branded card — the project's real name + niche over a brand-accent
- * og:image — instead of a generic «Omnia project». `metadataBase` (the public
+ * og:image — instead of a generic «Yleum project». `metadataBase` (the public
  * origin) makes the auto-wired opengraph-image URL absolute for crawlers. */
 export function generateMetadata(): Metadata {
   const description = share.tagline
-    ? `${share.title} — ${share.tagline}. Создано на Omnia.AI`
-    : `${share.title}. Создано на Omnia.AI`;
+    ? `${share.title} — ${share.tagline}. Создано на Yleum`
+    : `${share.title}. Создано на Yleum`;
   const origin = process.env.AUTH_URL;
   return {
     metadataBase: origin ? new URL(origin) : undefined,
@@ -78,11 +78,11 @@ export default function RootLayout({
         />
         {children}
         <Toaster />
-        {/* Omnia select-mode inspector — synced copy of apps/api static/omnia-inspector.js
+        {/* Yleum select-mode inspector — synced copy of apps/api static/omnia-inspector.js
             (a drift test keeps them identical). Dormant until the workspace enables it
             over postMessage, so it costs nothing in normal preview/prod use. */}
         <Script src="/omnia-inspector.js" strategy="afterInteractive" />
-        {/* Omnia viral "Remix this" CTA — shown only to a top-level public
+        {/* Yleum viral "Remix this" CTA — shown only to a top-level public
             viewer (hidden inside the owner-workspace iframe); forks the app into
             a stranger's own editable copy with zero signup. Drift-synced. */}
         <Script src="/omnia-remix-cta.js" strategy="afterInteractive" />
@@ -103,7 +103,7 @@ export default function RootLayout({
             }}
           />
         ) : null}
-        {/* Omnia brief-narration — turns the art-director brief (forwarded by
+        {/* Yleum brief-narration — turns the art-director brief (forwarded by
             the workspace over postMessage, or baked onto window.__omniaBrief)
             into a short "AI is designing" reveal so every generated surface is
             born vocal, not silent. Inert without a brief. Drift-synced. */}

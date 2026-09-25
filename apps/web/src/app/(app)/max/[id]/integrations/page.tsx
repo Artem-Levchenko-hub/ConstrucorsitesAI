@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { loadMaxProject } from "@/lib/max-project-server";
 
 export const metadata: Metadata = {
-  title: "Интеграции — MAX Studio",
+  title: "Интеграции — Yleum",
   robots: { index: false, follow: false },
 };
 

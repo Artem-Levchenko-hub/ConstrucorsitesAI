@@ -122,7 +122,7 @@ async def run_agent_generation(
 
     _agent_emit = progress.emit_agent_event
 
-    # Omnia Design Pro: one pure pre-build classification. Its compact
+    # Yleum Design Pro: one pure pre-build classification. Its compact
     # contract reaches the coding agent and its persisted design memory;
     # it never creates an extra generation/acceptance phase.
     _design_contract = None

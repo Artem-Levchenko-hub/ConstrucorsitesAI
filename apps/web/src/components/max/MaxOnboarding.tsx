@@ -74,7 +74,7 @@ export function MaxOnboarding({ email }: { email: string }) {
         <div className="mt-3 flex flex-col justify-between gap-5 sm:flex-row sm:items-end">
           <div>
             <h1 className="text-3xl font-semibold tracking-[-0.03em] sm:text-4xl">
-              Подготовим доступ к MAX Studio
+              Подготовим доступ к Yleum
             </h1>
             <p className="mt-3 text-sm text-fg-secondary">
               Нужен только подтверждённый email. Остальное настроите уже внутри
@@ -87,7 +87,7 @@ export function MaxOnboarding({ email }: { email: string }) {
         <div className="mt-8 grid gap-3 sm:grid-cols-2">
           {[
             [MailCheck, "Email", data?.email_verified],
-            [ArrowRight, "MAX Studio", data?.email_verified],
+            [ArrowRight, "Yleum", data?.email_verified],
           ].map(([Icon, label, complete], index) => {
             const ItemIcon = Icon as typeof MailCheck;
             return (
@@ -154,7 +154,7 @@ export function MaxOnboarding({ email }: { email: string }) {
             </div>
             <h2 className="mt-5 text-2xl font-semibold">Email подтверждён</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-fg-secondary">
-              Открываем MAX Studio. Реквизиты бизнеса не нужны вообще, а секрет
+              Открываем Yleum. Реквизиты бизнеса не нужны вообще, а секрет
               бота — только перед публикацией: проект, первая генерация и превью
               доступны сразу.
             </p>
@@ -165,7 +165,7 @@ export function MaxOnboarding({ email }: { email: string }) {
                 className="h-12 rounded-lg bg-accent px-6 text-fg-on-accent hover:bg-accent-hover"
               >
                 <ArrowRight className="mr-2 size-4" />
-                Открыть MAX Studio
+                Открыть Yleum
               </Button>
               <Button
                 type="button"

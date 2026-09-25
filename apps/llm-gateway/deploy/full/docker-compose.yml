@@ -305,7 +305,7 @@ services:
       LEGAL_OPERATOR_INN: ${LEGAL_OPERATOR_INN:-}
       LEGAL_OPERATOR_ADDRESS: ${LEGAL_OPERATOR_ADDRESS:-}
       LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:-support@lead-generator.ru}
-      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
+      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-30/minute}
       AUTH_IP_RATE_LIMIT: ${AUTH_IP_RATE_LIMIT:-120/hour}
@@ -545,7 +545,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-MAX Studio <no-reply@lead-generator.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
-      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
+      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
       YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
       YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
       YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-1}
@@ -675,7 +675,7 @@ services:
         # the same image runs under any domain. Do not add URL build args here —
         # infra/release/test-compose-policy.sh rejects them.
         NEXT_PUBLIC_USE_MOCKS: "false"
-        NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
+        NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
     image: ${WEB_IMAGE:-omnia-web:prod}
     container_name: omnia-prod-web
     depends_on:
@@ -692,7 +692,7 @@ services:
       NEXTAUTH_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
       NODE_ENV: production
-      NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-07-30}
+      NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
     restart: unless-stopped

@@ -42,9 +42,9 @@ import {
 } from "@/components/max/guide/GuideVisuals";
 
 export const metadata: Metadata = {
-  title: "Полное руководство MAX Studio — Omnia",
+  title: "Полное руководство Yleum",
   description:
-    "Пошаговые сценарии MAX Studio: аккаунт, проект, сборка, публикация по URL, запуск в MAX и сопровождение.",
+    "Пошаговые сценарии Yleum: аккаунт, проект, сборка, публикация по URL, запуск в MAX и сопровождение.",
 };
 
 const chapters = [
@@ -207,7 +207,7 @@ export default function MaxGuidePage() {
     <main data-max-studio className="max-docs min-h-screen">
       <header className="sticky top-0 z-50 border-b border-[#2b2d32] bg-[#191b20]/95 backdrop-blur">
         <div className="mx-auto flex h-16 max-w-[1440px] items-center justify-between gap-4 px-4 sm:px-7">
-          <div className="flex min-w-0 items-center gap-3"><BrandMark href="/" /><span className="hidden h-5 w-px bg-[#2b2d32] sm:block" /><span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство MAX Studio</span></div>
+          <div className="flex min-w-0 items-center gap-3"><BrandMark href="/" /><span className="hidden h-5 w-px bg-[#2b2d32] sm:block" /><span className="hidden truncate text-xs font-medium text-[#9fa1b1] sm:block">Руководство Yleum</span></div>
           <div className="flex items-center gap-2">
             <Link href="/max/product" className="hidden min-h-10 items-center rounded-md px-3 text-xs text-[#9fa1b1] hover:bg-[#121519] sm:inline-flex"><ArrowLeft className="mr-2 size-3.5" />О продукте</Link>
             <Link href="/login?next=/max" className="omnia-button omnia-button-secondary min-h-10 px-4 text-xs">Войти</Link>
@@ -219,7 +219,7 @@ export default function MaxGuidePage() {
       <section data-graphite-shell className="bg-[#121519] px-4 py-16 sm:px-7 sm:py-24 lg:py-28">
         <div className="mx-auto grid max-w-[1320px] gap-12 lg:grid-cols-[1fr_340px] lg:items-end">
           <div>
-            <p className="omnia-kicker text-[#0381fa]">Omnia / MAX Studio / Docs</p>
+            <p className="omnia-kicker text-[#0381fa]">Yleum / Документация</p>
             <h1 className="mt-6 max-w-[980px] text-[46px] font-semibold leading-[.96] tracking-[-.055em] sm:text-[68px] lg:text-[84px]">От идеи до запуска в MAX — без пропущенных шагов</h1>
             <p className="mt-7 max-w-[760px] text-base leading-7 text-white/55 sm:text-lg">Полное руководство: как создать первую версию, проверить её, получить production URL, добавить его в MAX Partner и принять приложение двумя реальными пользователями.</p>
             <div className="mt-8 flex flex-wrap gap-3">
@@ -253,7 +253,7 @@ export default function MaxGuidePage() {
         </aside>
 
         <div className="min-w-0">
-          <GuideSection id="start" number="00" eyebrow="Перед началом" title="Что подготовить до первого клика" lead="MAX Studio выполняет сборку, backend, безопасное превью и публикацию. Для первого результата достаточно рабочей почты; MAX Partner и платёжный кабинет понадобятся только перед соответствующим запуском.">
+          <GuideSection id="start" number="00" eyebrow="Перед началом" title="Что подготовить до первого клика" lead="Yleum выполняет сборку, backend, безопасное превью и публикацию. Для первого результата достаточно рабочей почты; MAX Partner и платёжный кабинет понадобятся только перед соответствующим запуском.">
             <GoldenPathVisual />
             <div className="mt-8 grid gap-4 md:grid-cols-2">
               {[
@@ -269,10 +269,10 @@ export default function MaxGuidePage() {
             <Note tone="success" title="До production секрет не нужен">Первую генерацию и превью можно пройти без бота. Перед production секрет подключается один раз: он нужен серверу для проверки пользователя MAX, а не для самой вставки URL.</Note>
           </GuideSection>
 
-          <GuideSection id="account" number="01" eyebrow="Вход в Studio" title="Регистрация и подтверждение email" lead="Для первой генерации достаточно аккаунта Omnia. Верификация бизнеса проходит позже в MAX Partner и не дублируется в Studio.">
+          <GuideSection id="account" number="01" eyebrow="Вход в Yleum" title="Регистрация и подтверждение email" lead="Для первой генерации достаточно аккаунта Yleum. Верификация бизнеса проходит позже в MAX Partner и не дублируется в Yleum.">
             <StepList steps={[
               { title: "Откройте регистрацию", text: <>Перейдите на <Route>/max/register</Route>. Укажите рабочий email, придумайте пароль не короче 10 символов, примите условия и нажмите <strong>«Создать аккаунт»</strong>.</>, result: "Аккаунт создан, на экране показан адрес для подтверждения." },
-              { title: "Подтвердите email", text: <>Откройте письмо «Подтвердите email для MAX Studio» и нажмите ссылку. Ссылка одноразовая и имеет срок действия. Если письмо не пришло, проверьте «Спам» и нажмите <strong>«Отправить ещё раз»</strong> только один раз.</>, result: "Открыт доступ к созданию проекта." },
+              { title: "Подтвердите email", text: <>Откройте письмо «Подтвердите email для Yleum» и нажмите ссылку. Ссылка одноразовая и имеет срок действия. Если письмо не пришло, проверьте «Спам» и нажмите <strong>«Отправить ещё раз»</strong> только один раз.</>, result: "Открыт доступ к созданию проекта." },
               { title: "Войдите в рабочее пространство", text: <>После подтверждения откройте <Route>/max</Route>. Если вас вернуло на вход, авторизуйтесь тем же email и паролем.</>, result: "Открыта страница «Мои приложения»." },
             ]} />
             <div className="mt-6 grid gap-4 md:grid-cols-2"><Note title="Письмо не пришло">Проверьте правильность адреса, папки «Спам» и «Промоакции». Повторная отправка ограничена, поэтому не нажимайте кнопку много раз подряд.</Note><Note tone="success" title="Без повторной анкеты">ИНН, ОГРН/ОГРНИП и тип бизнеса для допуска в MAX заполняются и проверяются на стороне MAX Partner.</Note></div>
@@ -314,9 +314,9 @@ export default function MaxGuidePage() {
               { title: "Откройте данные приложения", text: <>В верхней части редактора нажмите <strong>«Данные»</strong>. Настройки откроются в окне поверх редактора — переходить на отдельную страницу не нужно.</>, result: "Открыто окно «Данные приложения»." },
               { title: "Заполните продукт", text: <>Проверьте название, главное действие, описание, аудиторию, тип приложения, стиль и функции. Эти поля объясняют пользователю, что он может сделать.</>, result: "У приложения нет временных текстов и заглушек." },
               { title: "Добавьте каталог или услуги", text: <>В блоке «Каталог и контент» нажмите <strong>«Добавить»</strong>. Для каждого элемента задайте название, описание, цену, подпись кнопки и активность.</>, result: "Все позиции имеют понятную цену и действие." },
-              { title: "Проверьте документы приложения", text: <>Перед публикацией укажите название владельца и email поддержки — они попадут на страницы политики и поддержки самого приложения — или вставьте ссылку на собственную политику. ИНН, ОГРН, ФИО и телефон Studio не запрашивает: право выпускать бота проверяет MAX.</>, result: "Посетитель приложения видит, кто его владелец и куда писать." },
+              { title: "Проверьте документы приложения", text: <>Перед публикацией укажите название владельца и email поддержки — они попадут на страницы политики и поддержки самого приложения — или вставьте ссылку на собственную политику. ИНН, ОГРН, ФИО и телефон Yleum не запрашивает: право выпускать бота проверяет MAX.</>, result: "Посетитель приложения видит, кто его владелец и куда писать." },
               { title: "Отметьте юридические признаки", text: <>Укажите наличие продаж, пользовательского контента и маркетинговых уведомлений. Примите условия только после проверки сгенерированных документов.</>, result: "Readiness отмечает юридические данные как готовые." },
-              { title: "Сохраните", text: <>Нажмите <strong>«Сохранить»</strong>. Studio создаст новую управляемую версию без вызова модели.</>, result: "Появилось уведомление «Настройки применены без генерации»." },
+              { title: "Сохраните", text: <>Нажмите <strong>«Сохранить»</strong>. Yleum создаст новую управляемую версию без вызова модели.</>, result: "Появилось уведомление «Настройки применены без генерации»." },
             ]} />
             <Note tone="warning" title="Не отмечайте URL заранее">Флажок «URL добавлен в MAX» подтверждает реальное действие во внешнем кабинете. Ставьте его только после сохранения production URL в MAX Partner и проверки кнопки «Открыть».</Note>
           </GuideSection>
@@ -333,19 +333,19 @@ export default function MaxGuidePage() {
             ]} />
           </GuideSection>
 
-          <GuideSection id="max-bot" number="06" eyebrow="Внешний кабинет MAX" title="Профиль MAX и безопасный запуск Mini App" lead="Профиль бизнеса и бот проверяет MAX Partner. Studio не спрашивает ИНН, ОГРН или ФИО вообще — аккаунт здесь это email и пароль. До production секрет не нужен; перед запуском он один раз подключается для проверки signed initData, а после публикации URL вставляется в MAX Partner.">
+          <GuideSection id="max-bot" number="06" eyebrow="Внешний кабинет MAX" title="Профиль MAX и безопасный запуск Mini App" lead="Профиль бизнеса и бот проверяет MAX Partner. Yleum не спрашивает ИНН, ОГРН или ФИО вообще — аккаунт здесь это email и пароль. До production секрет не нужен; перед запуском он один раз подключается для проверки signed initData, а после публикации URL вставляется в MAX Partner.">
             <div className="grid gap-5 lg:grid-cols-2">
               <Checklist title="В MAX для партнёров" items={["Профиль организации/ИП/самозанятого верифицирован.", "Создан чат-бот с понятным именем, описанием и аватаром.", "Бот прошёл модерацию и имеет статус «создан».", "Открыты расширенные настройки Mini App."]} />
-              <Checklist title="В Omnia" items={["Проект создан и проверен в preview.", "Секрет бота проверен и хранится зашифрованно.", "Production-версия опубликована по HTTPS.", "URL скопирован в настройки бота MAX."]} />
+              <Checklist title="В Yleum" items={["Проект создан и проверен в preview.", "Секрет бота проверен и хранится зашифрованно.", "Production-версия опубликована по HTTPS.", "URL скопирован в настройки бота MAX."]} />
             </div>
             <StepList steps={[
               { title: "Создайте бота", text: <>Откройте <a className="font-medium text-[#6a95fa] underline" href="https://business.max.ru/" target="_blank" rel="noreferrer">MAX для партнёров</a>, выберите профиль, затем <strong>«Чат-боты» → «Создать»</strong>. Заполните карточку и отправьте на модерацию.</>, result: "Статус бота — «на модерации»." },
               { title: "Дождитесь статуса «создан»", text: <>Пока бот модерируется, URL Mini App и токен могут быть недоступны. При статусе «требует исправлений» откройте причину, исправьте карточку и отправьте повторно.</>, result: "Бот находится поиском в настоящем клиенте MAX." },
               { title: "Подключите безопасный вход", text: <>До публикации откройте настройки MAX, вставьте секрет промодерированного бота и сохраните его через защищённую форму. ИНН и ОГРН нигде не заполняются.</>, result: "Сервер может проверить подпись initData и разделить данные пользователей." },
-              { title: "Опубликуйте приложение", text: <>Доведите сборку до production. Omnia получит постоянный HTTPS-адрес и автоматически подготовит webhook.</>, result: "URL готов для поля Mini App в MAX Partner." },
+              { title: "Опубликуйте приложение", text: <>Доведите сборку до production. Yleum получит постоянный HTTPS-адрес и автоматически подготовит webhook.</>, result: "URL готов для поля Mini App в MAX Partner." },
             ]} />
             <Note title="Срок модерации и первоисточник">MAX указывает ориентир до 48 рабочих часов. Актуальные статусы, требования к карточке и доступность токена сверяйте в <a className="font-medium text-[#6a95fa] underline" href="https://dev.max.ru/docs/chatbots/bots-create/create" target="_blank" rel="noreferrer">официальной инструкции по созданию и модерации бота</a>.</Note>
-            <Note tone="warning" title="Почему секрет нельзя убрать">Для самой вставки production URL он не нужен. Но приложения Omnia используют подписанный initData, чтобы узнавать пользователя MAX и изолировать его данные, поэтому перед production секрет обязателен и хранится как пароль.</Note>
+            <Note tone="warning" title="Почему секрет нельзя убрать">Для самой вставки production URL он не нужен. Но приложения Yleum используют подписанный initData, чтобы узнавать пользователя MAX и изолировать его данные, поэтому перед production секрет обязателен и хранится как пароль.</Note>
           </GuideSection>
 
           <GuideSection id="publish" number="07" eyebrow="Production" title="Публикация на постоянный HTTPS-адрес" lead="Публикация собирает неизменяемую версию, разворачивает контейнер, проверяет health endpoint и только затем переключает production. Неудачная версия не должна заменять работающую.">
@@ -366,16 +366,16 @@ export default function MaxGuidePage() {
             ]} />
           </GuideSection>
 
-          <GuideSection id="partner" number="08" eyebrow="Ручной внешний шаг" title="Как вставить production URL в MAX Partner" lead="MAX пока требует сохранить ссылку мини-приложения в кабинете владельца бота. Studio копирует точный URL и ведёт к нужному кабинету; вводить адрес вручную по памяти не нужно.">
+          <GuideSection id="partner" number="08" eyebrow="Ручной внешний шаг" title="Как вставить production URL в MAX Partner" lead="MAX пока требует сохранить ссылку мини-приложения в кабинете владельца бота. Yleum копирует точный URL и ведёт к нужному кабинету; вводить адрес вручную по памяти не нужно.">
             <PartnerVisual />
-            <NumberedLegend items={["Скопируйте production URL из Studio — токен для этого не нужен.", "Вставьте URL в поле «Ссылка на мини-приложение» и выберите кнопку «Открыть».", "Нажмите «Сохранить» и только потом подтвердите URL в мастере Studio."]} />
+            <NumberedLegend items={["Скопируйте production URL из Yleum — токен для этого не нужен.", "Вставьте URL в поле «Ссылка на мини-приложение» и выберите кнопку «Открыть».", "Нажмите «Сохранить» и только потом подтвердите URL в мастере Yleum."]} />
             <StepList steps={[
-              { title: "Скопируйте URL в Studio", text: <>После успешной публикации нажмите ссылку production или <strong>«Открыть кабинет MAX»</strong>. Studio предварительно копирует адрес в буфер.</>, result: "В буфере адрес вида https://… без /preview и временного параметра." },
+              { title: "Скопируйте URL в Yleum", text: <>После успешной публикации нажмите ссылку production или <strong>«Открыть кабинет MAX»</strong>. Yleum предварительно копирует адрес в буфер.</>, result: "В буфере адрес вида https://… без /preview и временного параметра." },
               { title: "Откройте настройки бота", text: <>В MAX Partner выберите правильную организацию и бота: <strong>«Чат-боты» → «Перейти» → «Расширенные настройки» → «Настроить»</strong>.</> },
               { title: "Вставьте ссылку", text: <>В поле мини-приложения вставьте URL. Не добавляйте <code>/api/max/webhook</code>, параметры preview или ссылку на редактор.</>, result: "Поле содержит корень production Mini App." },
               { title: "Выберите кнопку", text: <>Выберите подпись <strong>«Открыть»</strong>. Это самая понятная точка входа для универсального бизнес-приложения.</> },
               { title: "Сохраните и проверьте кнопку", text: <>Нажмите <strong>«Сохранить»</strong> и убедитесь, что в настоящем чате бота появилась кнопка запуска Mini App.</>, result: "В настоящем чате бота появилась кнопка запуска." },
-              { title: "Подтвердите в Studio", text: <>Вернитесь в настройки приложения и включите <strong>«URL добавлен в MAX»</strong>.</>, result: "Readiness равен 100%, приложение готово к приёмке." },
+              { title: "Подтвердите в Yleum", text: <>Вернитесь в настройки приложения и включите <strong>«URL добавлен в MAX»</strong>.</>, result: "Readiness равен 100%, приложение готово к приёмке." },
             ]} />
             <Note title="Официальная схема MAX">Путь к полю ссылки, варианты кнопки и формат внутреннего запуска описаны в <a className="font-medium text-[#6a95fa] underline" href="https://dev.max.ru/docs/webapps/introduction" target="_blank" rel="noreferrer">официальной справке по мини-приложениям</a>.</Note>
             <Note tone="warning" title="Как отличить production URL">Безопасное превью открывается только внутри защищённой preview-сессии и не подходит для MAX. Production URL постоянный, начинается с HTTPS, открывается отдельно и отображается после deploy со статусом done.</Note>
@@ -412,7 +412,7 @@ export default function MaxGuidePage() {
               <Checklist title="Регулярная проверка" items={["Контейнер — running.", "Health-check — отвечает.", "Production URL открывается из MAX.", "Ключевые API-действия проходят.", "Последняя успешная версия известна."]} />
               <Checklist title="Безопасный релиз изменения" items={["Одна ограниченная задача агенту.", "Проверка в безопасном превью.", "Тест существующих сценариев, не только новой функции.", "Новая публикация и зелёный health.", "Повторный запуск в настоящем MAX.", "Запись версии и результата проверки."]} />
             </div>
-            <Note tone="warning" title="Не исправляйте production напрямую">Ручное редактирование контейнера, базы или файлов на сервере создаёт версию, которой нет в истории Studio. Любая постоянная правка должна начинаться в проекте и завершаться новой публикацией.</Note>
+            <Note tone="warning" title="Не исправляйте production напрямую">Ручное редактирование контейнера, базы или файлов на сервере создаёт версию, которой нет в истории Yleum. Любая постоянная правка должна начинаться в проекте и завершаться новой публикацией.</Note>
           </GuideSection>
 
           <GuideSection id="billing" number="11" eyebrow="Тариф и баланс" title="Подписка, зачисление кредита и автопродление" lead="Подписка определяет лимиты проектов и ежемесячный кредит на генерации. Платёж проходит у провайдера, а ledger фиксирует каждое зачисление отдельной неизменяемой операцией.">
@@ -420,7 +420,7 @@ export default function MaxGuidePage() {
               { title: "Откройте тарифы", text: <>В аккаунте выберите <strong>«Биллинг» → «Тариф»</strong> или откройте <Route>/billing/plan</Route>.</> },
               { title: "Выберите план", text: <>Сравните число проектов, включённый кредит и функции. Для первого production-пути используйте минимальный план, который разрешает публикацию нужного проекта.</> },
               { title: "Подтвердите условия", text: <>Перед оплатой проверьте цену, период, автопродление, оферту и email для чека. Автопродление включается только с явным согласием.</> },
-              { title: "Завершите оплату у ЮKassa", text: <>Studio перенаправит на защищённую форму. Не обновляйте страницу оплаты многократно. После подтверждения вернитесь в Studio.</>, result: "Платёж имеет статус succeeded." },
+              { title: "Завершите оплату у ЮKassa", text: <>Yleum перенаправит на защищённую форму. Не обновляйте страницу оплаты многократно. После подтверждения вернитесь в Yleum.</>, result: "Платёж имеет статус succeeded." },
               { title: "Проверьте ledger", text: <>В <strong>«Биллинг» → «Транзакции»</strong> должна появиться одна операция <code>subscription_credit</code>. Повторное открытие callback или webhook не должно создавать вторую.</>, result: "Баланс увеличен ровно на кредит тарифа." },
               { title: "Управляйте продлением", text: <>Отключение автопродления не отнимает уже оплаченный период. Включить его обратно можно до конца периода, если сохранённый способ оплаты активен.</> },
             ]} />
@@ -440,9 +440,9 @@ export default function MaxGuidePage() {
             <div className="grid gap-4 md:grid-cols-2">
               {[
                 [MailCheck, "Не приходит email", "Проверьте адрес и спам → повторите один раз → если канал недоступен, не создавайте второй аккаунт."],
-                [UserRoundCheck, "MAX не подтвердил профиль", "Откройте MAX Partner → прочитайте точную причину → исправьте данные там. В Omnia повторная анкета не нужна."],
+                [UserRoundCheck, "MAX не подтвердил профиль", "Откройте MAX Partner → прочитайте точную причину → исправьте данные там. В Yleum повторная анкета не нужна."],
                 [Sparkles, "Генерация долго идёт", "Обновите страницу → проверьте, восстановился ли серверный статус → не отправляйте тот же запрос повторно."],
-                [LockKeyhole, "Безопасное превью не открылось", "Нажмите «Повторить» → обновите Studio → не открывайте внутренний preview URL отдельно без сессии."],
+                [LockKeyhole, "Безопасное превью не открылось", "Нажмите «Повторить» → обновите Yleum → не открывайте внутренний preview URL отдельно без сессии."],
                 [KeyRound, "Секрет MAX отклонён", "Проверьте, что выбран правильный промодерированный бот → скопируйте секрет заново → подключите его только через защищённую форму."],
                 [Rocket, "Deploy failed", "Откройте детали фазы → исправьте первую ошибку сборки/health → опубликуйте новую версию."],
                 [Webhook, "Webhook не активен", "Это не блокирует Mini App. Исправляйте webhook только если сценарию нужны сообщения или серверные события бота."],
@@ -462,10 +462,10 @@ export default function MaxGuidePage() {
           <GuideSection id="checklists" number="13" eyebrow="Контроль качества" title="Два финальных списка перед отметкой «MVP готов»" lead="Первый список проверяет, что техническая и внешняя части готовы. Второй фиксирует чистый golden path без ручного редактирования базы, подмены статусов и повторных зачислений.">
             <div className="grid gap-5 lg:grid-cols-2">
               <Checklist title="Перед реальной приёмкой" items={["SMTP доставляет подтверждение и восстановление пароля.", "ЮKassa использует настоящий shopId и утверждённую схему чеков, если в приложении есть платежи.", "Оператор, регистрационные данные, адрес и поддержка доступны пользователю приложения.", "MAX-профиль верифицирован, бот промодерирован.", "Секрет бота проверен и хранится только в защищённой интеграции.", "Сборка работает в безопасном превью.", "Production deploy имеет статус done и зелёный health.", "Production URL сохранён в MAX Partner.", "Кнопка «Открыть» видна в реальном клиенте MAX.", "Назначены два разных MAX-пользователя."]} />
-              <Checklist title="Чистый golden path" items={["Новый пользователь зарегистрировался через UI.", "Email подтверждён по настоящему письму.", "Проект создан и собран через Studio без бизнес-анкеты.", "Безопасное превью открыто через подписанную сессию.", "При платном тарифе реальный платёж завершён у провайдера и в ledger ровно одно зачисление.", "Бизнес-профиль и бот проверены в MAX Partner.", "Безопасный вход подключён одним секретом.", "Публикация выполнена штатным deploy.", "URL добавлен в правильного MAX-бота.", "Два пользователя прошли сценарий и не увидели чужие данные.", "Автопродление управляется из кабинета.", "Во время пути не выполнялись ручные SQL/SSH-правки."]} />
+              <Checklist title="Чистый golden path" items={["Новый пользователь зарегистрировался через UI.", "Email подтверждён по настоящему письму.", "Проект создан и собран через Yleum без бизнес-анкеты.", "Безопасное превью открыто через подписанную сессию.", "При платном тарифе реальный платёж завершён у провайдера и в ledger ровно одно зачисление.", "Бизнес-профиль и бот проверены в MAX Partner.", "Безопасный вход подключён одним секретом.", "Публикация выполнена штатным deploy.", "URL добавлен в правильного MAX-бота.", "Два пользователя прошли сценарий и не увидели чужие данные.", "Автопродление управляется из кабинета.", "Во время пути не выполнялись ручные SQL/SSH-правки."]} />
             </div>
             <div className="mt-8 rounded-[14px] bg-[#121519] p-7 text-white sm:p-9">
-              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-[#0381fa]">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Studio и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в MAX Studio <ArrowRight className="size-4" /></Link></div>
+              <div className="grid gap-7 lg:grid-cols-[1fr_auto] lg:items-center"><div><p className="omnia-kicker text-[#0381fa]">Следующий шаг</p><h3 className="mt-3 text-[30px] font-semibold tracking-[-.04em]">Откройте Yleum и пройдите путь по главам 01–09</h3><p className="mt-3 max-w-[650px] text-sm leading-6 text-white/48">Если проект уже создан, начинайте с главы, которую показывает мастер готовности. Он всегда ведёт к первой незавершённой причине.</p></div><Link href="/login?next=/max" className="omnia-button omnia-button-primary min-h-12 px-6">Перейти в Yleum <ArrowRight className="size-4" /></Link></div>
             </div>
           </GuideSection>
         </div>
@@ -473,7 +473,7 @@ export default function MaxGuidePage() {
 
       <footer className="border-t border-[#2b2d32] bg-[#191b20] px-4 py-10 sm:px-7">
         <div className="mx-auto flex max-w-[1320px] flex-col gap-7 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-3"><BrandMark /><span className="h-5 w-px bg-[#2b2d32]" /><span className="text-xs text-[#9fa1b1]">Руководство MAX Studio</span></div>
+          <div className="flex items-center gap-3"><BrandMark /><span className="h-5 w-px bg-[#2b2d32]" /><span className="text-xs text-[#9fa1b1]">Руководство Yleum</span></div>
           <div className="flex flex-wrap gap-5 text-xs text-[#9fa1b1]"><Link href="/max/product">О продукте</Link><Link href="/mvp">Статус продукта</Link><Link href="/legal/offer">Оферта</Link><Link href="/security">Безопасность</Link><a href="https://dev.max.ru/" target="_blank" rel="noreferrer">Документация MAX <ExternalLink className="ml-1 inline size-3" /></a></div>
         </div>
       </footer>

@@ -236,7 +236,7 @@
   }
 }
 
-/* ── Omnia animation utilities (CSS-only, reduced-motion safe) ────────────────
+/* ── Yleum animation utilities (CSS-only, reduced-motion safe) ────────────────
  * Lightweight parity with the static generator's kit. Entrance animations are
  * self-resolving (animation-fill-mode: both) so they never leave content stuck
  * hidden, even without JS. For scroll-triggered reveal, add a tiny "use client"

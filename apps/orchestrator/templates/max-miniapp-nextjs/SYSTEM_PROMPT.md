@@ -9,7 +9,7 @@
 - Never trust `initDataUnsafe` for authorization. Server data access starts
   after `/api/max/session` validates `initData`.
 - Keep bot credentials and webhook secrets server-only.
-- Persist user-owned state through the managed Omnia routes/client. Generated
+- Persist user-owned state through the managed Yleum routes/client. Generated
   product code must not import the raw DB, Drizzle or `pg`: source checks cannot
   prove row isolation, even when `requireMaxUser()` appears in the same file.
 - Preserve webhook secret verification, request-size limits and event
@@ -22,9 +22,9 @@
 - Do not add Telegram WebApp, VK Bridge, Auth.js or password login.
 - Treat `src/lib/omnia/max-config.ts`, `/legal/privacy`, `/legal/terms`,
   `/support`, `/api/omnia/*`, the MAX session and webhook files as
-  Omnia-managed infrastructure. Import the config; do not duplicate or delete it.
+  Yleum-managed infrastructure. Import the config; do not duplicate or delete it.
 - Render `omniaMaxConfig.content` as the editable business catalog. The owner
-  changes it in MAX Studio without another model call.
+  changes it in Yleum without another model call.
 - Every primary CTA must perform a real persisted operation through
   `/api/omnia/actions`; never ship decorative buttons or fake success states.
   Product code calls `createMaxAction(actionType, payload)` and reads the scoped
@@ -35,11 +35,11 @@
   `getMaxActions()` and show an honest empty/onboarding state when no records
   exist. Static immutable reference catalogs are allowed only when clearly
   separated from the user's activity.
-- When the brief asks for AI, import `requestOmniaAI` from
+- When the brief asks for AI, import `requestYleumAI` from
   `@/lib/omnia/integration-client`. It invokes the managed Google model through a
   signed MAX server route and charges the owner's personal/team billing account.
   The exact typed call is
-  `const { answer } = await requestOmniaAI({ message, instructions, context })`.
+  `const { answer } = await requestYleumAI({ message, instructions, context })`.
   The request field is `message` and the returned text field is `answer`.
   Never embed a user/provider key, simulate inference with a timer/random/static
   text, or expose model credentials to the browser.
@@ -51,7 +51,7 @@
 - If the project sandbox shell is available, `bash` runs only inside the isolated
   project container without network. Use it for offline generators/tests/data
   transforms and never treat it as host or control-plane access. Add dependencies
-  in `package.json`; Omnia syncs them with lifecycle scripts disabled.
+  in `package.json`; Yleum syncs them with lifecycle scripts disabled.
 - Persist explicit consent through `/api/omnia/consents` before marketing
   notifications, contacts, payments or other optional personal-data use.
 - The MAX session exposes only `user.id` (`max_user_id`). Never read, display or

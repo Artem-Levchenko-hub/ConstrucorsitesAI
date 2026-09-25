@@ -1,6 +1,6 @@
 """Agentic container-app builder — Phase 0 of the "like Claude Code" engine.
 
-Today Omnia is a one-shot text generator: the model emits one blob, server
+Today Yleum is a one-shot text generator: the model emits one blob, server
 regex parses it into files, no feedback loop. This module is the opposite — a
 real **agent loop**:
 
@@ -11,7 +11,7 @@ replies with reasoning followed by exactly ONE action in a strict
 ``<omnia:action name="...">{json}</omnia:action>`` block. The server parses it,
 executes it against the live dev container, and feeds the real observation back
 as the next user turn. This works with ANY gateway model (DeepSeek/Kimi/…) and
-reuses Omnia's existing strength at parsing structured model output — no
+reuses Yleum's existing strength at parsing structured model output — no
 dependency on the provider supporting OpenAI tool-calls.
 
 Design rules that keep it safe to ship:
@@ -1368,7 +1368,7 @@ def make_container_executor(
     from omnia_api.services import orchestrator_client
 
     # Per-BUILD video budget (this executor is created once per build). Video is
-    # ~₽60/clip on Omnia's own balance — far pricier than a ₽1.50 image and with
+    # ~₽60/clip on Yleum's own balance — far pricier than a ₽1.50 image and with
     # no wallet gate on the service-account path — so cap distinct clips per build
     # (review 2026-07-17). Mutable box so the closure can bump it.
     _video_used = [0]

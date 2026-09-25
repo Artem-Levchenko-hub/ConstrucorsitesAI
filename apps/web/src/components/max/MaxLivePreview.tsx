@@ -584,7 +584,7 @@ export function MaxLivePreview({
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-fg-tertiary">
                         {showPreviewError
-                          ? "Omnia не смогла создать защищённую сессию. Данные приложения не раскрыты."
+                          ? "Yleum не смог создать защищённую сессию. Данные приложения не раскрыты."
                           : "Обычно подготовка занимает от 15 до 60 секунд."}
                       </p>
                       {!showPreviewError && (

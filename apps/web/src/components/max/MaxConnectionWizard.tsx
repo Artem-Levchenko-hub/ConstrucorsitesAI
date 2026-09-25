@@ -151,7 +151,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         </>}
         {step === 2 && <>
           <h2 id="max-connect-step-title">Подключите бота</h2>
-          <p className="max-connect-lead">Скопируйте токен вашего бота в кабинете MAX и вставьте сюда. Так Omnia сможет безопасно узнавать пользователей приложения.</p>
+          <p className="max-connect-lead">Скопируйте токен вашего бота в кабинете MAX и вставьте сюда. Так Yleum сможет безопасно узнавать пользователей приложения.</p>
           {data.status === "error" && <p role="alert" className="max-connect-error">{data.last_error || "Подключение требует проверки. Обновите токен или проверьте бота."}</p>}
           {tokenField}
           {cabinetLink}
@@ -163,7 +163,7 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
         {step === 3 && <>
           <h2 id="max-connect-step-title">Опубликуйте приложение</h2>
           <p className="max-connect-lead">Бот подключён. Теперь получите постоянный HTTPS-адрес приложения.</p>
-          <p>На шаге публикации Omnia покажет, что ещё нужно заполнить, и подготовит приложение к запуску. После публикации вернитесь сюда, чтобы добавить адрес в MAX.</p>
+          <p>На шаге публикации Yleum покажет, что ещё нужно заполнить, и подготовит приложение к запуску. После публикации вернитесь сюда, чтобы добавить адрес в MAX.</p>
           <div className="max-connect-primary"><Button disabled={busy} onClick={() => onNavigate("publish")}><Rocket aria-hidden="true" />Перейти к публикации</Button></div>
         </>}
         {step === 4 && productionUrl && <>
@@ -182,14 +182,14 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
           {confirmedUrl === productionUrl && config.data.config.max_url_attached ? <p role="status" className="max-connect-success">Подтверждение сохранено</p>
             : config.data.config.max_url_attached && <p className="max-connect-hint">Ранее вы уже подтверждали вставку адреса. Если он изменился, обновите его в MAX и подтвердите ещё раз.</p>}
           <div className="max-connect-primary"><Button disabled={busy || !acknowledged} onClick={() => { if (connected && acknowledged && productionUrl) confirmUrl.mutate(productionUrl); }}>{confirmUrl.isPending && <Loader2 className="animate-spin" aria-hidden="true" />}Сохранить подтверждение</Button></div>
-          <details className="max-connect-technical"><summary>Что подтверждает этот шаг</summary><p>Вы подтверждаете вставку адреса вручную. MAX не передаёт эту настройку Omnia. Сетевой запрос к адресу не проверяет работу приложения или его настройки в MAX.</p></details>
+          <details className="max-connect-technical"><summary>Что подтверждает этот шаг</summary><p>Вы подтверждаете вставку адреса вручную. MAX не передаёт эту настройку Yleum. Сетевой запрос к адресу не проверяет работу приложения или его настройки в MAX.</p></details>
         </>}
       </section>
       {data.connected && <details className="max-connect-advanced">
         <summary>Дополнительные настройки подключения</summary>
         <div className="max-connect-advanced-body">
           <p>{data.bot_name || data.bot_username || "Ваш бот MAX"}</p>
-          <p className="max-connect-hint">Omnia обновляет серверную связь при публикации. Эти действия нужны для повторной проверки и смены токена.</p>
+          <p className="max-connect-hint">Yleum обновляет серверную связь при публикации. Эти действия нужны для повторной проверки и смены токена.</p>
           <div className="max-connect-actions"><Button variant="outline" disabled={busy} onClick={() => { resetMaintenance(); verify.mutate(); }}>Проверить подключение</Button><Button variant="outline" disabled={busy || !activationReady} onClick={() => { resetMaintenance(); activate.mutate(); }}>Обновить связь</Button></div>
           {!activationReady && <p className="max-connect-hint">Для обновления связи сначала нужен опубликованный HTTPS-адрес и действующее подключение.</p>}
           {(verify.isError || activate.isError || disconnect.isError) && <p role="alert" className="max-connect-error">Не удалось выполнить действие. Повторите попытку.</p>}

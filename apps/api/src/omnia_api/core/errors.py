@@ -74,7 +74,7 @@ ErrorCode = Literal[
     "payment_integration_required",
     "ai_integration_required",
     "crm_integration_required",
-    # MAX Studio account, legal and payment lifecycle.
+    # Yleum account, legal and payment lifecycle.
     "max_registration_required",
     "email_verification_required",
     "legal_acceptance_required",

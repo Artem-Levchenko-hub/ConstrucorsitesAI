@@ -31,7 +31,7 @@ function cssForDom() {
     .replaceAll("var(--color-accent)", "#0062ee");
 }
 
-describe("MAX Studio account dropdown", () => {
+describe("Yleum account dropdown", () => {
   let container: HTMLDivElement;
   let root: Root;
 

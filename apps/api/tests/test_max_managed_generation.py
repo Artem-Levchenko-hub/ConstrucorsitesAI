@@ -10,7 +10,7 @@ from tests.test_project_cell_executor import _prepare_executor
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
-FOOTER_PATH = "src/components/OmniaCompliance.tsx"
+FOOTER_PATH = "src/components/YleumCompliance.tsx"
 CONFIG_PATH = "src/lib/omnia/max-config.ts"
 
 

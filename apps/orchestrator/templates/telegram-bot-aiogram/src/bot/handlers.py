@@ -29,7 +29,7 @@ async def on_start(message: Message) -> None:
         return
     name = message.from_user.full_name or "друг"
     await message.answer(
-        f"Привет, <b>{name}</b>! Я — стартовый бот на Omnia.AI.\n\n"
+        f"Привет, <b>{name}</b>! Я — стартовый бот на Yleum.\n\n"
         "AI добавит сюда команды по твоему промпту. Пока умею только "
         "/start и /help."
     )
@@ -39,6 +39,6 @@ async def on_start(message: Message) -> None:
 async def on_help(message: Message) -> None:
     await message.answer(
         "Это шаблон <code>telegram-bot-aiogram</code>. Опиши в чате "
-        "Omnia, что бот должен уметь — AI допишет хендлеры в "
+        "Yleum, что бот должен уметь — AI допишет хендлеры в "
         "<code>src/bot/handlers.py</code> и подключит БД при необходимости."
     )

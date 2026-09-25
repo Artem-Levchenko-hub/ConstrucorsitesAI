@@ -96,7 +96,7 @@ function panelGradient(_accent: string): string {
 }
 
 function Showcase({ mode, accent }: { mode: "signin" | "signup"; accent: string }) {
-  const brand = share.title && share.title !== "Omnia project" ? share.title : "Omnia";
+  const brand = share.title && share.title !== "Yleum project" ? share.title : "Yleum";
   const headline =
     mode === "signup"
       ? "Создайте аккаунт за секунды"
@@ -153,7 +153,7 @@ function Showcase({ mode, accent }: { mode: "signin" | "signup"; accent: string 
         </ul>
       </div>
 
-      <p className="relative text-xs text-white/55">Создано на Omnia.AI</p>
+      <p className="relative text-xs text-white/55">Создано на Yleum</p>
     </div>
   );
 }
@@ -161,7 +161,7 @@ function Showcase({ mode, accent }: { mode: "signin" | "signup"; accent: string 
 /** Compact branded band shown above the form on mobile (the full Showcase is
  *  desktop-only). Keeps the brand present without eating the small viewport. */
 function MobileBrand({ accent }: { accent: string }) {
-  const brand = share.title && share.title !== "Omnia project" ? share.title : "Omnia";
+  const brand = share.title && share.title !== "Yleum project" ? share.title : "Yleum";
   return (
     <div
       className="mb-8 flex items-center gap-2.5 rounded-2xl px-4 py-3 text-white lg:hidden"

@@ -69,8 +69,8 @@ export function brandTokens(accent: string): React.CSSProperties {
   } as React.CSSProperties;
 }
 
-/** The project name, falling back to "Omnia" before a real build overwrites
+/** The project name, falling back to "Yleum" before a real build overwrites
  *  `omnia-share.ts` with the project's title. */
 export function brandName(): string {
-  return share.title && share.title !== "Omnia project" ? share.title : "Omnia";
+  return share.title && share.title !== "Yleum project" ? share.title : "Yleum";
 }

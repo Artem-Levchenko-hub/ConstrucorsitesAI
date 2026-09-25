@@ -95,7 +95,7 @@ def test_remix_cta_wired_into_both_layouts() -> None:
 
 def test_watermark_seed_contract() -> None:
     """The viral watermark badge (#VIRAL-WATERMARK, pillar 4) rides the same
-    container surface as the remix pill — a "Сделано на Omnia.AI" credit that, on
+    container surface as the remix pill — a "Сделано на Yleum" credit that, on
     click, replays the design-birth reveal and offers a "make your own" CTA. It
     must keep the same top-level + origin gates (no broken link on dev hosts),
     its brand copy, and its wiring to the narration replay hook."""
@@ -105,7 +105,7 @@ def test_watermark_seed_contract() -> None:
     assert "function mountWatermark()" in src
     assert "mountWatermark();" in src
     # Visible brand seed copy + the "make your own" CTA.
-    assert "Сделано на " in src and "Omnia.AI" in src
+    assert "Сделано на " in src and "Yleum" in src
     assert "Создать свой сайт" in src
     # Same gates as the pill: top-level visitor + derivable control-plane origin
     # (the "make your own" link is the landing on that origin).

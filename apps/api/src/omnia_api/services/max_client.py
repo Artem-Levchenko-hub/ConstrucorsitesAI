@@ -42,7 +42,7 @@ def _headers(token: str) -> dict[str, str]:
     return {
         "Authorization": token,
         "Accept": "application/json",
-        "User-Agent": "OmniaAI-MAX-MiniApp/1.0",
+        "User-Agent": "YleumAI-MAX-MiniApp/1.0",
     }
 
 

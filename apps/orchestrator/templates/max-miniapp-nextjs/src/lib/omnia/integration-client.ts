@@ -1,22 +1,22 @@
 "use client";
 
 import { getMaxWebApp } from "@/lib/max/bridge";
-import type { OmniaMaxConfig } from "@/lib/omnia/max-config";
+import type { YleumMaxConfig } from "@/lib/omnia/max-config";
 
 /** Owner-maintained app data; independent of MAX login or connected providers. */
-export async function getOmniaAppConfig(): Promise<OmniaMaxConfig> {
+export async function getYleumAppConfig(): Promise<YleumMaxConfig> {
   const response = await fetch("/api/omnia/config", {
     credentials: "include",
     cache: "no-store",
   });
   if (!response.ok) throw new Error("Данные приложения временно недоступны");
-  return response.json() as Promise<OmniaMaxConfig>;
+  return response.json() as Promise<YleumMaxConfig>;
 }
 
-export class OmniaIntegrationError extends Error {
+export class YleumIntegrationError extends Error {
   constructor(message: string, public readonly code: string | null, public readonly status: number) {
     super(message);
-    this.name = "OmniaIntegrationError";
+    this.name = "YleumIntegrationError";
   }
 }
 
@@ -33,7 +33,7 @@ async function invoke<T>(
   });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new OmniaIntegrationError(
+    throw new YleumIntegrationError(
       typeof body?.error?.message === "string" ? body.error.message : "Интеграция временно недоступна",
       typeof body?.error?.code === "string" ? body.error.code : null,
       response.status,
@@ -77,7 +77,7 @@ async function invokeWrite<T>(path: "leads" | "payments", input: Record<string, 
   }).catch(error => {
     // Only an explicit, confirmed rejection makes a new deliberate submission
     // safe. Network failures and unknown outcomes must retain their identity.
-    if (error instanceof OmniaIntegrationError && error.status === 422 && error.code === "integration_request_rejected") {
+    if (error instanceof YleumIntegrationError && error.status === 422 && error.code === "integration_request_rejected") {
       window.sessionStorage.removeItem(storageKey);
     }
     throw error;
@@ -86,17 +86,17 @@ async function invokeWrite<T>(path: "leads" | "payments", input: Record<string, 
   return pending;
 }
 
-export type OmniaIntegrationStatus = {
+export type YleumIntegrationStatus = {
   providers: string[];
   capabilities: string[];
   analytics_counter_id: string | null;
 };
 
-export function getOmniaIntegrations(): Promise<OmniaIntegrationStatus> {
+export function getYleumIntegrations(): Promise<YleumIntegrationStatus> {
   return invoke("status");
 }
 
-export function createOmniaPayment(input: {
+export function createYleumPayment(input: {
   amount: number;
   description: string;
   return_url: string;
@@ -107,7 +107,7 @@ export function createOmniaPayment(input: {
   return invokeWrite("payments", input);
 }
 
-export function getOmniaPayment(paymentId: string): Promise<{
+export function getYleumPayment(paymentId: string): Promise<{
   id: string;
   status: string;
   confirmation_url: string | null;
@@ -115,7 +115,7 @@ export function getOmniaPayment(paymentId: string): Promise<{
   return invoke("payment-status", { payment_id: paymentId });
 }
 
-export function createOmniaLead(input: {
+export function createYleumLead(input: {
   idempotency_key?: string;
   name: string;
   phone?: string;
@@ -126,7 +126,7 @@ export function createOmniaLead(input: {
   return invokeWrite("leads", input);
 }
 
-export function getOmniaCatalog(): Promise<{
+export function getYleumCatalog(): Promise<{
   provider: string;
   items: Array<{
     id: string;
@@ -179,15 +179,15 @@ export async function getMaxActions(options: {
 
 export const getActionHistory = getMaxActions;
 
-type OmniaAIInput = {
+type YleumAIInput = {
   message?: string;
   prompt?: string;
   instructions?: string;
   context?: Record<string, unknown>;
 };
 
-export async function requestOmniaAI(
-  input: OmniaAIInput,
+export async function requestYleumAI(
+  input: YleumAIInput,
 ): Promise<{ answer: string; text: string; model: string }> {
   const message = input.message || input.prompt;
   if (!message?.trim()) throw new Error("Введите сообщение для ИИ-тренера");
@@ -199,11 +199,11 @@ export async function requestOmniaAI(
   return { ...result, text: result.answer };
 }
 
-export async function trackOmniaGoal(
+export async function trackYleumGoal(
   goal: string,
   parameters: Record<string, unknown> = {},
 ): Promise<void> {
-  const status = await getOmniaIntegrations();
+  const status = await getYleumIntegrations();
   const counterId = status.analytics_counter_id;
   if (!counterId || typeof window === "undefined") return;
   const target = window as typeof window & { ym?: (...args: unknown[]) => void };
@@ -225,3 +225,16 @@ export async function trackOmniaGoal(
   }
   target.ym(Number(counterId), "reachGoal", goal, parameters);
 }
+
+/* Старые имена оставлены навсегда как синонимы: приложения, опубликованные до
+   переименования, содержат вызовы с ними, и перегенерировать их мы не будем. */
+export const getOmniaAppConfig = getYleumAppConfig;
+export const OmniaIntegrationError = YleumIntegrationError;
+export type OmniaIntegrationStatus = YleumIntegrationStatus;
+export const getOmniaIntegrations = getYleumIntegrations;
+export const createOmniaPayment = createYleumPayment;
+export const getOmniaPayment = getYleumPayment;
+export const createOmniaLead = createYleumLead;
+export const getOmniaCatalog = getYleumCatalog;
+export const requestOmniaAI = requestYleumAI;
+export const trackOmniaGoal = trackYleumGoal;

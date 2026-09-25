@@ -155,7 +155,7 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
   </section>;
 
   if (section === "owner") return <section className="max-setup-section">
-    <Intro title="Документы приложения">Studio не запрашивает реквизиты: бизнес за ботом проверяет сам MAX. Здесь только то, что увидят пользователи в документах и поддержке приложения — всё необязательно.</Intro>
+    <Intro title="Документы приложения">Yleum не запрашивает реквизиты: бизнес за ботом проверяет сам MAX. Здесь только то, что увидят пользователи в документах и поддержке приложения — всё необязательно.</Intro>
     <p className="max-setup-notice">Сохранение этих полей не запускает ИИ и не расходует баланс.</p>
     <Group title="Владелец в документах" description="Как назвать владельца в политике и условиях приложения. Если оставить пустым, документы назовут само приложение.">
       <div className="max-setup-field max-setup-wide">

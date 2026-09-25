@@ -7,7 +7,7 @@ from omnia_api.models.user import User
 
 
 def require_max_studio_access(user: User) -> None:
-    """MAX Studio needs a registered account with a verified email, nothing else.
+    """Yleum needs a registered account with a verified email, nothing else.
 
     The business behind a bot is verified by MAX itself, so the platform never
     asks for (or stores) the owner's legal identity.
@@ -15,7 +15,7 @@ def require_max_studio_access(user: User) -> None:
     if user.is_anon or user.email is None:
         raise ApiError(
             "max_registration_required",
-            "Для MAX Studio нужна регистрация",
+            "Для Yleum нужна регистрация",
             status.HTTP_403_FORBIDDEN,
         )
     if user.email_verified_at is None:

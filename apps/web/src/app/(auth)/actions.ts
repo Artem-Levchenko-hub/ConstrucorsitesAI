@@ -12,7 +12,7 @@ type FormState = { error: string | null };
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const COOKIE_NAME = "omnia_session";
-/** Where a sign-in without an explicit destination lands: the MAX Studio cabinet,
+/** Where a sign-in without an explicit destination lands: the Yleum cabinet,
  * which itself routes an unverified account to onboarding. */
 const DEFAULT_LANDING = "/max";
 
@@ -219,7 +219,7 @@ export async function maxRegisterAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-07-30",
+      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-09-25",
   });
   if (error) return { error };
   redirect("/max/onboarding");
@@ -228,7 +228,7 @@ export async function maxRegisterAction(
 /**
  * Вход через VK ID / Яндекс ID для нового человека: callback api выдал
  * одноразовый билет, аккаунт создаётся только здесь — после тех же трёх
- * согласий, что и при обычной регистрации MAX Studio. Cookie-сессия
+ * согласий, что и при обычной регистрации Yleum. Cookie-сессия
  * переносится в браузер так же, как при входе по паролю.
  */
 export async function oauthCompleteAction(
@@ -254,7 +254,7 @@ export async function oauthCompleteAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-07-30",
+      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-09-25",
   });
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);

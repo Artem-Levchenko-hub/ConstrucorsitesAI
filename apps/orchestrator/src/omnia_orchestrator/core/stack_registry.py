@@ -1,4 +1,4 @@
-"""Single declarative registry of the runtime stacks Omnia can provision.
+"""Single declarative registry of the runtime stacks Yleum can provision.
 
 Phase 7.1 design — see ``docs/plans/phase7-multistack-provision.md`` §2. Today the
 knowledge "what does stack X need" is smeared across the provisioning pipeline: the

@@ -59,7 +59,7 @@ router = APIRouter(prefix="/api/projects", tags=["runtime"])
 # writable layer (no bind mount). The browser-container family comes from
 # schemas.project. A recreated container (destroy+reprovision, host
 # reboot losing the layer, manual cleanup) comes up running the *baked template*
-# — the "Новый проект на Omnia.AI" starter — instead of the user's app, unless
+# — the "Новый проект на Yleum" starter — instead of the user's app, unless
 # we re-push the latest snapshot. start_runtime does exactly that. `spa` (Vite +
 # React, Phase 7.2) holds its AI files in the writable layer too.
 
@@ -209,7 +209,7 @@ async def start_runtime(
 
     # E3 — "always works, never the silent starter". provision is idempotent and
     # leaves an *existing* container's files untouched, but a recreated one boots
-    # from the baked template (the "Новый проект на Omnia.AI" starter). If this
+    # from the baked template (the "Новый проект на Yleum" starter). If this
     # project has a generated snapshot, re-push its files so the user always sees
     # their app, not the starter. Fail-soft: a resync hiccup must not turn a
     # successful start into an error — git/MinIO stay canonical and the user can

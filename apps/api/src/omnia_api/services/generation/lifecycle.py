@@ -42,7 +42,7 @@ from omnia_api.services.project_memory import render_project_memory_context
 _KIT_FILES = frozenset({"assets/omnia-kit.css", "assets/omnia-kit.js", "assets/anime.min.js"})
 
 _SITE_BUILDER_PROJECT = (
-    "Этот проект создан в конструкторе сайтов. Он вынесен из MAX Studio, "
+    "Этот проект создан в конструкторе сайтов. Он вынесен из Yleum, "
     "поэтому собрать или изменить его здесь нельзя."
 )
 _BUILDER_DISABLED = (
@@ -190,7 +190,7 @@ async def _process_prompt(
             current_files = await asyncio.to_thread(repo_svc.read_files, project_id, current_sha)
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
 
-        # Kit files are Omnia-managed infra — keep them out of the model's context
+        # Kit files are Yleum-managed infra — keep them out of the model's context
         # (saves tokens and stops the model rewriting them from what it "saw").
         current_files = {p: c for p, c in current_files.items() if p not in _KIT_FILES}
 

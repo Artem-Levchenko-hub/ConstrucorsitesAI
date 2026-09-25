@@ -131,7 +131,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
-    app = FastAPI(title="Omnia.AI Backend", version="0.0.1", lifespan=lifespan)
+    app = FastAPI(title="Yleum Backend", version="0.0.1", lifespan=lifespan)
 
     app.add_middleware(
         CORSMiddleware,

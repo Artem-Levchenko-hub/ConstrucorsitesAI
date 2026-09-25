@@ -2,7 +2,7 @@ from pydantic import BaseModel
 
 
 class MaxAccessPublic(BaseModel):
-    """What a MAX Studio account needs before building: a verified email, nothing else."""
+    """What a Yleum account needs before building: a verified email, nothing else."""
 
     authenticated: bool = True
     email_verified: bool

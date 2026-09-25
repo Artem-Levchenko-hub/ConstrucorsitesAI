@@ -38,7 +38,7 @@ export function VerifyMaxEmail({ token }: { token: string }) {
         {state === "loading"
           ? "Это займёт несколько секунд."
           : state === "success"
-            ? "Теперь можно открыть MAX Studio и создать первый проект."
+            ? "Теперь можно открыть Yleum и создать первый проект."
             : "Возможно, ссылка устарела или уже была использована."}
       </p>
       {state !== "loading" && (

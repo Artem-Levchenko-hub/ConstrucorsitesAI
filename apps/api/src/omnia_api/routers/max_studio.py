@@ -1,4 +1,4 @@
-"""Model-free MAX Studio configuration, managed kit and launch readiness."""
+"""Model-free Yleum configuration, managed kit and launch readiness."""
 
 from __future__ import annotations
 

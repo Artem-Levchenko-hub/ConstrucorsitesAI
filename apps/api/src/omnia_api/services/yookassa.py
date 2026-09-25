@@ -188,6 +188,6 @@ async def create_refund(
     }
     if customer_email:
         body["receipt"] = _receipt(
-            customer_email, description or "Возврат платежа MAX Studio", amount
+            customer_email, description or "Возврат платежа Yleum", amount
         )
     return await _request("POST", "/refunds", idempotency_key=idempotency_key, json=body)

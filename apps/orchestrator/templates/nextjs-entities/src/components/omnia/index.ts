@@ -1,5 +1,5 @@
 /**
- * Omnia app kit — data-aware components built on the shadcn/ui primitives in
+ * Yleum app kit — data-aware components built on the shadcn/ui primitives in
  * `@/components/ui`. Import these for the app shell, dashboards and CRUD screens;
  * drop down to `@/components/ui/*` (or raw Tailwind) for anything bespoke.
  *

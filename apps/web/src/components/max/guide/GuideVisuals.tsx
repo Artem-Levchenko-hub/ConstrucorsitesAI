@@ -198,9 +198,9 @@ function Sidebar({ active }: { active: string }) {
     <div className="hidden h-full w-[19%] shrink-0 border-r border-[#2b2d32] bg-[#191b20] p-[2.2%] sm:block">
       <div className="flex items-center gap-2 text-[11px] font-semibold">
         <span className="grid size-6 place-items-center rounded-md bg-[#121519] text-white">✣</span>
-        Omnia
+        Yleum
       </div>
-      <p className="mt-[22%] font-mono text-[7px] uppercase tracking-[.18em] text-[#828491]">MAX Studio</p>
+      <p className="mt-[22%] font-mono text-[7px] uppercase tracking-[.18em] text-[#828491]">Yleum</p>
       <div className="mt-[8%] space-y-1">
         {items.map(([item, Icon]) => (
           <div
@@ -223,7 +223,7 @@ export function ProjectCreationVisual() {
         <Sidebar active="Проекты" />
         <div className="min-w-0 flex-1">
           <div className="flex h-[13%] items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-[4%]">
-            <span className="font-mono text-[8px] uppercase tracking-[.18em] text-[#828491]">MAX Studio</span>
+            <span className="font-mono text-[8px] uppercase tracking-[.18em] text-[#828491]">Yleum</span>
             <button data-guide-target="project-new" className="flex items-center gap-1.5 rounded-md bg-[#0381fa] px-3 py-2 text-[8px] font-semibold text-[#121519]">
               <span className="text-xs leading-none">+</span> Создать приложение
             </button>
@@ -416,7 +416,7 @@ export function PartnerVisual() {
         <div className="min-w-0 flex-1 p-[5%]">
           <div className="flex items-center justify-between"><div><p className="text-[8px] text-[#9fa1b1]">Чат-боты / Кофе рядом</p><h3 className="mt-1 text-[18px] font-semibold">Расширенные настройки</h3></div><span className="rounded-full bg-[#248a4b]/10 px-2.5 py-1 text-[7px] font-semibold text-success-fg">Бот создан</span></div>
           <div className="mt-[5%] rounded-xl border border-[#2b2d32] bg-[#191b20] p-[5%] shadow-[0_8px_30px_rgba(0,0,0,.22)]">
-            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Подключение мини-приложения</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Для обычного запуска нужен только production URL из Omnia. Токен не требуется.</p></div><span className="rounded-full bg-[#0381fa]/10 px-2.5 py-1 text-[7px] font-semibold text-[#6a95fa]">Шаг 6 из 6</span></div>
+            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Подключение мини-приложения</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Для обычного запуска нужен только production URL из Yleum. Токен не требуется.</p></div><span className="rounded-full bg-[#0381fa]/10 px-2.5 py-1 text-[7px] font-semibold text-[#6a95fa]">Шаг 6 из 6</span></div>
             <label className="block text-[10px] font-semibold">Ссылка на мини-приложение</label>
             <div className="mt-2 flex gap-2"><div data-guide-target="partner-url" className="min-w-0 flex-1 truncate rounded-md border-2 border-[#0381fa] bg-[#121519] px-3 py-2 font-mono text-[7px]">https://app-42.lead-generator.ru</div><button className="rounded-md border border-[#2b2d32] px-3 text-[7px]">Проверить</button></div>
             <div className="mt-[4%]"><p className="text-[9px] font-semibold">Кнопка запуска</p><div className="mt-2 flex gap-2 text-[7px]"><button className="rounded-full border-2 border-[#0381fa] bg-[#1c1e23] px-3 py-1.5 font-semibold text-[#6a95fa]">Открыть</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Старт</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Играть</button></div></div>

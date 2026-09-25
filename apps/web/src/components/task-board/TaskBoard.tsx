@@ -460,7 +460,7 @@ export function TaskBoard({
             </div>
             <div>
               <p className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-[#727784]">
-                Omnia team
+                Yleum team
               </p>
               <h1 className="mt-1 text-xl font-semibold tracking-[-0.025em] sm:text-2xl">
                 Доска задач

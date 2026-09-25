@@ -49,7 +49,7 @@ function readiness(doneIds: string[]): MaxReadiness {
   };
 }
 
-describe("MAX Studio project card", () => {
+describe("Yleum project card", () => {
   let client: QueryClient;
   let container: HTMLDivElement;
   let root: Root;

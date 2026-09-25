@@ -12,7 +12,7 @@ import {
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
 import type { MaxSessionUser } from "@/lib/max/session";
-import { OmniaCompliance } from "@/components/OmniaCompliance";
+import { YleumCompliance } from "@/components/YleumCompliance";
 
 const MaxUI = dynamic(
   () => import("@maxhub/max-ui").then((module) => module.MaxUI),
@@ -245,7 +245,7 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         ) : (
           <>
             {children}
-            <OmniaCompliance />
+            <YleumCompliance />
           </>
         )}
       </MaxContext.Provider>

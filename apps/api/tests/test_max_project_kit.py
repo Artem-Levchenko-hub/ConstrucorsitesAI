@@ -96,6 +96,8 @@ def test_kit_v22_retires_encrypted_crud_and_stores_only_the_max_user_id() -> Non
         "src/lib/secure-data/runtime.ts",
         "src/lib/omnia/data-client.ts",
         "drizzle/0003_secure_records.sql",
+        # переименован в YleumCompliance.tsx 25.09.2026
+        "src/components/OmniaCompliance.tsx",
     }
     for files in (managed, starter):
         assert not MAX_RETIRED_MANAGED_FILES & set(files)
@@ -124,7 +126,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/app/layout.tsx",
         "src/app/api/omnia/health/route.ts",
         "src/components/MaxAppProvider.tsx",
-        "src/components/OmniaCompliance.tsx",
+        "src/components/YleumCompliance.tsx",
         "src/lib/db/index.ts",
         "src/lib/max/bot-api.ts",
         "src/lib/max/bridge.ts",
@@ -149,8 +151,8 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     config = files["src/lib/omnia/max-config.ts"]
     assert '"app_name": "Кофе \\"Рядом\\""' in config
     assert '"price": "290 ₽"' in config
-    assert "export type OmniaMaxConfig" in config
-    assert "omniaMaxConfig: OmniaMaxConfig" in config
+    assert "export type YleumMaxConfig" in config
+    assert "omniaMaxConfig: YleumMaxConfig" in config
     assert "max_url_attached" not in config
     assert str(project_id) in files["src/app/api/omnia/integrations/[...path]/route.ts"]
     preview_route = files["src/app/api/omnia/preview-session/route.ts"]
@@ -181,9 +183,9 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
     assert "installAuthenticatedFetch(webApp.initData)" in provider
     assert "requestUrl.origin !== window.location.origin" in provider
     assert '!requestUrl.pathname.startsWith("/api/")' in provider
-    assert 'from "@/components/OmniaCompliance"' in provider
-    assert "src/components/OmniaCompliance.tsx" in files
-    assert 'from "@/lib/omnia/max-config"' in files["src/components/OmniaCompliance.tsx"]
+    assert 'from "@/components/YleumCompliance"' in provider
+    assert "src/components/YleumCompliance.tsx" in files
+    assert 'from "@/lib/omnia/max-config"' in files["src/components/YleumCompliance.tsx"]
     validator = files["src/lib/max/validate-init-data.ts"]
     assert 'typeof value.id === "string"' in validator
     assert "timingSafeEqual" in validator
@@ -342,7 +344,7 @@ def test_managed_kit_exposes_secretless_google_ai_runtime_primitive() -> None:
     proxy = files["src/app/api/omnia/integrations/[...path]/route.ts"]
     actions_route = files["src/app/api/omnia/actions/route.ts"]
 
-    assert "requestOmniaAI" in client
+    assert "requestYleumAI" in client
     assert "input.message || input.prompt" in client
     assert "text: result.answer" in client
     assert "createMaxAction" in client

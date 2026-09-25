@@ -20,7 +20,7 @@ import {
 
 export const metadata: Metadata = {
   title: "Путь до рабочего MVP",
-  description: "Публичный чек-лист готовности Omnia: от регистрации до запуска приложения внутри MAX.",
+  description: "Публичный чек-лист готовности Yleum: от регистрации до запуска приложения внутри MAX.",
   alternates: { canonical: "/mvp" },
 };
 
@@ -195,7 +195,7 @@ export default function MvpChecklistPage() {
             href="/max/register"
             className="mt-6 inline-flex min-h-11 items-center gap-2 rounded-[8px] bg-[#0381fa] px-5 text-sm font-semibold text-[#121519] hover:bg-[#6a95fa]"
           >
-            Открыть MAX Studio
+            Открыть Yleum
             <ExternalLink className="size-4" />
           </Link>
         </section>

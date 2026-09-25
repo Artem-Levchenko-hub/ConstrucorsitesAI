@@ -10,7 +10,7 @@ DEFAULT_LANGUAGE = "ru"
 
 # ``langdetect`` is unreliable on short, closely-related Cyrillic phrases:
 # e.g. ``"лендос аптеки сделай"`` is classified as Bulgarian with >99%
-# confidence, despite being ordinary Russian. Omnia is RU-first and an explicit
+# confidence, despite being ordinary Russian. Yleum is RU-first and an explicit
 # ``users.default_language`` bypasses this detector, so ambiguous short Cyrillic
 # input should fail toward Russian instead of persisting a wrong project language
 # and ordering every downstream model to answer in it.

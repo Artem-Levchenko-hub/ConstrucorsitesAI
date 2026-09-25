@@ -1,7 +1,7 @@
 [project]
 name = "omnia-api"
 version = "0.0.1"
-description = "Omnia-generated FastAPI service (async + Postgres)"
+description = "Yleum-generated FastAPI service (async + Postgres)"
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115,<0.116",

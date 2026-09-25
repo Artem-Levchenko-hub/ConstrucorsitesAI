@@ -173,7 +173,7 @@
   }
 }
 
-/* ── Omnia animation utilities (CSS-only, reduced-motion safe) ────────────────
+/* ── Yleum animation utilities (CSS-only, reduced-motion safe) ────────────────
  * Entrance animations self-resolve (animation-fill-mode: both) so they never
  * leave content stuck hidden, even without JS. Per-app MOTION-DNA: the entrance
  * family obeys `--omnia-ease` / `--omnia-dur`, pinned per build by brandTokens()

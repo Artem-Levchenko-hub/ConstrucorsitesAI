@@ -4,9 +4,9 @@ import Link from "next/link";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
 export const metadata: Metadata = {
-  title: "Публичная оферта — Omnia",
+  title: "Публичная оферта — Yleum",
   description:
-    "Условия заказа, оплаты и получения цифровых услуг сервиса Omnia.",
+    "Условия заказа, оплаты и получения цифровых услуг сервиса Yleum.",
 };
 
 export default function OfferPage() {
@@ -23,7 +23,7 @@ export default function OfferPage() {
 
       <LegalSection title="2. Предмет договора">
         <p>
-          Исполнитель предоставляет доступ к онлайн-сервису Omnia для создания,
+          Исполнитель предоставляет доступ к онлайн-сервису Yleum для создания,
           изменения, предпросмотра и публикации сайтов и приложений. Конкретный
           объём операции, её стоимость и доступный результат показываются
           заказчику в интерфейсе до запуска.
@@ -46,7 +46,7 @@ export default function OfferPage() {
             «Тарифы»
           </Link>
           . Оплата производится в рублях через ЮKassa. Банковские реквизиты карты
-          обрабатывает платёжный сервис; Omnia их не получает и не хранит.
+          обрабатывает платёжный сервис; Yleum их не получает и не хранит.
         </p>
       </LegalSection>
 

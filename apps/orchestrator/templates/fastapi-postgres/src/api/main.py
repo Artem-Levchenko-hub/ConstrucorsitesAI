@@ -103,7 +103,7 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 
 app = FastAPI(
-    title="Omnia API",
+    title="Yleum API",
     description="Starter FastAPI service. Replace this description per project.",
     version="0.0.1",
     lifespan=lifespan,

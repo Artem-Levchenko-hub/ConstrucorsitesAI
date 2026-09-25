@@ -6,11 +6,11 @@ function AppHeader({ name, section }: { name: string; section: string }) {
 }
 
 export function LandingUseCases() {
-  return <section id="examples" className="ml-wrap ml-section" data-marketing-section="examples">
-    <div className="ml-section-head">
-      <p className="ml-eyebrow">ПРИМЕРЫ ПРИЛОЖЕНИЙ</p>
+  return <section id="examples" className="yl-section" data-marketing-section="examples"><div className="yl-wrap">
+    <div className="yl-head">
+      <p className="yl-eyebrow"><span/>Примеры приложений</p>
       <h2>Какое приложение<br/>можно создать?</h2>
-      <p>Вот три примера того, что ваши клиенты смогут делать прямо внутри MAX.</p>
+      <p className="yl-lead">Вот три примера того, что ваши клиенты смогут делать прямо внутри MAX.</p>
     </div>
     <div className="ml-scenarios-grid">
       <article className="ml-scenario">
@@ -68,5 +68,5 @@ export function LandingUseCases() {
       </article>
     </div>
     <p className="ml-examples-caption">Примеры экранов, не действующие приложения. Содержание и функции вы задаёте для своего бизнеса.</p>
-  </section>;
+  </div></section>;
 }

@@ -1,5 +1,5 @@
-/*! omnia-kit.css — built-in design + animation kit for Omnia.AI generated sites.
- *  Managed by Omnia. Do NOT edit per-project: the generator never rewrites it.
+/*! omnia-kit.css — built-in design + animation kit for Yleum generated sites.
+ *  Managed by Yleum. Do NOT edit per-project: the generator never rewrites it.
  *  Rules: transform/opacity/filter only (compositor-friendly); animations are
  *  gated by `prefers-reduced-motion: no-preference` AND `html.omnia-anim` (added
  *  by the kit JS) so reduced-motion users and the no-JS case always see final

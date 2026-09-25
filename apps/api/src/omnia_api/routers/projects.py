@@ -102,7 +102,7 @@ async def create_project(
     if current_user is None:
         raise ApiError(
             "max_registration_required",
-            "Для MAX Studio нужна регистрация",
+            "Для Yleum нужна регистрация",
             status.HTTP_403_FORBIDDEN,
         )
     require_max_studio_access(current_user)

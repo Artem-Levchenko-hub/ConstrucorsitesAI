@@ -38,7 +38,7 @@ async def main() -> None:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     if not token:
         logger.error(
-            "missing TELEGRAM_BOT_TOKEN — set it in the Omnia secrets panel"
+            "missing TELEGRAM_BOT_TOKEN — set it in the Yleum secrets panel"
         )
         # Bot can't do anything without a token, but the health server can.
         # We keep the container alive so the orchestrator sees a green box;

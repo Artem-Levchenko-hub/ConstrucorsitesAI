@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     smtp_port: int = Field(default=587)
     smtp_user: str | None = Field(default=None)
     smtp_password: SecretStr | None = Field(default=None)
-    smtp_from: str = Field(default="MAX Studio <no-reply@lead-generator.ru>")
+    smtp_from: str = Field(default="Yleum <no-reply@lead-generator.ru>")
     smtp_starttls: bool = Field(default=True)
 
     # Legal identity shown in policies. Paid checkout stays unavailable until
@@ -148,7 +148,7 @@ class Settings(BaseSettings):
     legal_operator_inn: str | None = Field(default=None)
     legal_operator_address: str | None = Field(default=None)
     legal_support_email: str = Field(default="support@lead-generator.ru")
-    legal_document_version: str = Field(default="2026-07-30")
+    legal_document_version: str = Field(default="2026-09-25")
     admin_emails: str = Field(default="")
 
     yookassa_shop_id: str | None = Field(default=None)
@@ -337,7 +337,7 @@ class Settings(BaseSettings):
     image_optimize: bool = Field(default=True)
     minio_bucket_videos: str = Field(default="omnia-videos")
     # Hard cap on distinct video generations per build. Video is ~₽60/clip on
-    # Omnia's own balance (no per-user wallet gate on the agent path), so unlike
+    # Yleum's own balance (no per-user wallet gate on the agent path), so unlike
     # cheap images this MUST be bounded or a "video on every section" prompt could
     # burn thousands per build (review 2026-07-17). Env: VIDEO_GEN_MAX_UNIQUE.
     video_gen_max_unique: int = Field(default=3)

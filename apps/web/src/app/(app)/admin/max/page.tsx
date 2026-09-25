@@ -6,7 +6,7 @@ import { AdminControlCenter } from "@/components/account/AdminControlCenter";
 import { getMaxAdminAccessServer, getSession } from "@/lib/auth-mock";
 
 export const metadata: Metadata = {
-  title: "Админ-центр — Omnia",
+  title: "Админ-центр — Yleum",
   robots: { index: false, follow: false },
 };
 

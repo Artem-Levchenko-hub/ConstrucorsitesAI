@@ -2,7 +2,7 @@
  * Default landing for a freshly provisioned fullstack project.
  *
  * AI replaces this file when the user sends their first prompt. Until then it is
- * the FIRST frame the iframe renders in the Omnia workspace (and the fallback a
+ * the FIRST frame the iframe renders in the Yleum workspace (and the fallback a
  * stranger sees on a shared `/p/<slug>` before generation), so it has to read
  * like a real product — not a bare shadcn paragraph on a grey field.
  *
@@ -108,7 +108,7 @@ export default function Home() {
         </span>
 
         <h1 className="fade-up delay-1 mt-7 text-balance text-5xl font-semibold leading-[1.05] tracking-tight sm:text-6xl">
-          {name === "Omnia" ? (
+          {name === "Yleum" ? (
             <>
               Новый проект,
               <br className="hidden sm:block" />{" "}
@@ -172,7 +172,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="mx-auto flex w-full max-w-6xl items-center justify-between border-t border-white/5 px-6 py-6 text-xs text-zinc-500">
-        <span>Создано на Omnia.AI</span>
+        <span>Создано на Yleum</span>
         <code className="font-mono text-zinc-600">nextjs-postgres-drizzle</code>
       </footer>
     </main>

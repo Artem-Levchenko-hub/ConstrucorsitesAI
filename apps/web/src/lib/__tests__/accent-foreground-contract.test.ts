@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 
-import { MaxPublicLanding } from "@/components/marketing/MaxPublicLanding";
+import { YleumLanding } from "@/components/marketing/YleumLanding";
 
 function source(path: string): string {
   return readFileSync(resolve(process.cwd(), path), "utf8");
@@ -14,7 +14,7 @@ const chatMessage = source("src/components/workspace/ChatMessage.tsx");
 const button = source("src/components/ui/button.tsx");
 
 describe("semantic foreground contracts", () => {
-  it("keeps Studio user messages and journey markers readable on blue", () => {
+  it("keeps Yleum user messages and journey markers readable on blue", () => {
     expect(chatMessage).toContain('studio && isUser && "bg-accent-subtle text-accent"');
     expect(chatMessage).toContain("text-inherit");
     expect(chatMessage).not.toContain("text-white/80 underline-offset-2");
@@ -27,11 +27,15 @@ describe("semantic foreground contracts", () => {
   });
 
   it("keeps the landing-page application example readable in the light palette", () => {
-    const landing = renderToStaticMarkup(MaxPublicLanding());
+    const landing = renderToStaticMarkup(YleumLanding());
 
+    // data-max-studio включает светлый набор токенов для встроенных демо-блоков,
+    // которые витрина переиспользует из кабинета.
     expect(landing).toContain("data-max-studio");
     expect(landing).toContain("Пример интерфейса");
-    expect(landing).toContain("max-public-button--primary");
+    // Кнопка призыва в теле страницы нейтральная: фирменный цвет приберегается
+    // для финального экрана, поэтому здесь проверяется класс витрины, а не кабинета.
+    expect(landing).toContain("yl-cta");
     expect(landing).not.toContain("data-graphite-shell");
   });
 });

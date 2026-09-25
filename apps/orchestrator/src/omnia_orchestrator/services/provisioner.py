@@ -94,7 +94,7 @@ _MAX_PLATFORM_CORE_FILES = (
     "scripts/apply-migrations.mjs",
     "src/app/layout.tsx",
     "src/components/MaxAppProvider.tsx",
-    "src/components/OmniaCompliance.tsx",
+    "src/components/YleumCompliance.tsx",
     "src/lib/db/index.ts",
 )
 

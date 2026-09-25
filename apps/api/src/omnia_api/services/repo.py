@@ -32,7 +32,7 @@ from omnia_api.services.template_materialization import materialize_template
 MAX_FILES = 5_000
 MAX_FILE_BYTES = 2 * 1024 * 1024
 MAX_REPO_BYTES = 64 * 1024 * 1024
-SIGNATURE = ("Omnia AI", "ai@omnia.ai")
+SIGNATURE = ("Yleum AI", "ai@omnia.ai")
 _ADAPTATION_EXCLUDED_PARTS = frozenset(
     {
         ".git",

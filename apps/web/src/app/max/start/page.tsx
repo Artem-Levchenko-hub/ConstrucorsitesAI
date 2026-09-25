@@ -15,7 +15,7 @@ import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 
 export const metadata: Metadata = {
-  title: "Быстрый старт — MAX Studio",
+  title: "Быстрый старт — Yleum",
   description: "Шесть последовательных этапов от идеи до рабочего приложения в MAX.",
   alternates: { canonical: "/max/start" },
 };
@@ -48,7 +48,7 @@ const steps = [
   {
     number: "04",
     title: "Подключите безопасный вход MAX",
-    text: "Создайте и промодерируйте бота в MAX Partner, затем один раз добавьте его секрет через защищённую форму Omnia.",
+    text: "Создайте и промодерируйте бота в MAX Partner, затем один раз добавьте его секрет через защищённую форму Yleum.",
     result: "Сервер может проверять подпись MAX и разделять данные пользователей.",
     href: "/max/guide#max-bot",
     icon: Bot,
@@ -64,7 +64,7 @@ const steps = [
   {
     number: "06",
     title: "Проверьте запуск в MAX",
-    text: "Вставьте production URL в MAX Partner и откройте приложение в реальном клиенте. Webhook Omnia подготовит автоматически.",
+    text: "Вставьте production URL в MAX Partner и откройте приложение в реальном клиенте. Webhook Yleum подготовит автоматически.",
     result: "Кнопка запуска открывает приложение внутри MAX.",
     href: "/max/guide#acceptance",
     icon: ShieldCheck,
@@ -82,7 +82,7 @@ export default function MaxQuickStartPage() {
               Полное руководство
             </Link>
             <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-[#0381fa] px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
-              Открыть Studio
+              Открыть Yleum
             </Link>
           </div>
         </div>
@@ -95,7 +95,7 @@ export default function MaxQuickStartPage() {
             От идеи до запуска за шесть этапов
           </h1>
           <p className="mt-5 max-w-[700px] text-sm leading-7 text-white/55 sm:text-base">
-            На каждом этапе MAX Studio показывает одно следующее действие. Галочка
+            На каждом этапе Yleum показывает одно следующее действие. Галочка
             появляется после серверной проверки, а не после перехода по странице.
           </p>
         </div>

@@ -1,4 +1,4 @@
-# Omnia.AI starter — `nextjs-realtime` (channels + SSE + Postgres)
+# Yleum starter — `nextjs-realtime` (channels + SSE + Postgres)
 
 Шаблон, который orchestrator копирует в `/opt/omnia-runtime/projects/<id>/` при
 создании нового real-time проекта (мессенджер, живая доска, лента уведомлений).

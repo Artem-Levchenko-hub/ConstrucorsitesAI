@@ -240,7 +240,7 @@ export function PassProgressBar({
       <BriefReveal brief={streamBrief} reduced={reduced} />
       <div className="mb-2 flex min-w-0 items-center gap-2 font-mono text-[11px] text-fg-tertiary">
         <Sparkles aria-hidden className="h-3 w-3 shrink-0 text-accent" />
-        <span className="shrink-0">Omnia собирает</span>
+        <span className="shrink-0">Yleum собирает</span>
         <span aria-hidden className="shrink-0">·</span>
         <span className="shrink-0 tabular-nums">
           {totalDone}/{stages.length}

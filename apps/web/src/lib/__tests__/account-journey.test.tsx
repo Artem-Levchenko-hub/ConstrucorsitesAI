@@ -140,7 +140,7 @@ it("includes current legal consent only after explicit renewal opt-in", async ()
     await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro");
     await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
     await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1));
-    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-07-30" });
+    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-09-25" });
   } finally { await app.close(); }
 });
 it("filters real ledger statuses without treating pending payments as credited", async () => {

@@ -391,7 +391,7 @@ async def downgrade_to_free(
     )
     await _notify(
         subscription.user_id,
-        subject="Подписка Omnia переведена на Free",
+        subject="Подписка Yleum переведена на Free",
         text=(
             "Льготный период завершился. Платный тариф отключён, списаний больше не будет. "
             "Проекты и данные сохранены в режиме Free."
@@ -419,7 +419,7 @@ async def _mark_past_due(
     if first_failure:
         await _notify(
             subscription.user_id,
-            subject="Не удалось продлить подписку Omnia",
+            subject="Не удалось продлить подписку Yleum",
             text=(
                 f"Мы повторим оплату до {subscription.grace_period_ends_at:%d.%m.%Y}. "
                 "До конца льготного периода платные возможности остаются активны."
@@ -519,7 +519,7 @@ async def _renew_subscription(
     try:
         provider = await yookassa.create_recurring_payment(
             amount=f"{payment.amount_rub:.2f}",
-            description=f"Продление Omnia {plan.name}, 1 месяц",
+            description=f"Продление Yleum {plan.name}, 1 месяц",
             customer_email=str(user.email),
             payment_method_id=method.provider_payment_method_id,
             idempotency_key=payment.idempotency_key,

@@ -4,7 +4,7 @@
  * Conventions enforced by the AI:
  * - Every table has `id` (uuid, pk), `created_at`, `updated_at`.
  * - Foreign keys CASCADE on delete.
- * - Money columns: `numeric(12, 4)` — 4 decimals matches Omnia core wallet.
+ * - Money columns: `numeric(12, 4)` — 4 decimals matches Yleum core wallet.
  * - Timestamps: `timestamptz` (timezone-aware).
  *
  * The orchestrator runs `drizzle-kit generate` after every AI write, so a new

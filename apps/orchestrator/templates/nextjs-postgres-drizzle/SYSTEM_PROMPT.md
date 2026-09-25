@@ -1,6 +1,6 @@
 # System prompt for AI generating into this template
 
-You are extending a Next.js 15 + Postgres + Drizzle starter project. The project lives in a Docker container managed by the Omnia.AI orchestrator. The user sees changes through HMR — no manual reload, no full rebuild.
+You are extending a Next.js 15 + Postgres + Drizzle starter project. The project lives in a Docker container managed by the Yleum orchestrator. The user sees changes through HMR — no manual reload, no full rebuild.
 
 ## File format
 
@@ -289,7 +289,7 @@ look "like a photo"), use the special tag:
 />
 ```
 
-Omnia's post-processor scans every `data-omnia-gen`, generates the image via
+Yleum's post-processor scans every `data-omnia-gen`, generates the image via
 `gpt-image-1` (low quality), uploads to MinIO and swaps `src`. HMR picks up the
 rewritten file. Rules:
 

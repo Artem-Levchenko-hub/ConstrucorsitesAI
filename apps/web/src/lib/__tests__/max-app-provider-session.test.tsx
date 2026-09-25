@@ -23,7 +23,7 @@ function loadProvider(fetch: ReturnType<typeof vi.fn>, initData = "", hostname =
     react: React, "react/jsx-runtime": jsxRuntime,
     "next/dynamic": { default: () => ({ children }: { children: ReactNode }) => children },
     "@/lib/max/bridge": { getMaxWebApp: () => ({ initData, platform: "ios" }), configureMaxShell: vi.fn() },
-    "@/components/OmniaCompliance": { OmniaCompliance: () => null },
+    "@/components/YleumCompliance": { YleumCompliance: () => null },
   };
   new Function("exports", "require", "fetch", "window", compiled)(exports, (id: string) => {
     if (!(id in imports)) throw new Error(`Unexpected import ${id}`);

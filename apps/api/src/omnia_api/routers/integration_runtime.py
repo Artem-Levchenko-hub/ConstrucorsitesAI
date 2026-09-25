@@ -256,7 +256,7 @@ async def _request_gateway_ai(
     system_prompt: str,
     user_message: str,
 ) -> RuntimeAIPublic:
-    """Request billed inference through Omnia's internal LLM gateway."""
+    """Request billed inference through Yleum's internal LLM gateway."""
     settings = get_settings()
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(35.0, connect=5.0)) as client:

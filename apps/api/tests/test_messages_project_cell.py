@@ -1025,7 +1025,7 @@ async def test_run_max_shell_action_rolls_back_rejected_cell_diff(
     assert result == {
         "ok": False,
         "error": (
-            "MAX Studio owns /api/max and /api/omnia. "
+            "Yleum owns /api/max and /api/omnia. "
             "Shell changes there are blocked; use the "
             "managed integration client instead."
         ),

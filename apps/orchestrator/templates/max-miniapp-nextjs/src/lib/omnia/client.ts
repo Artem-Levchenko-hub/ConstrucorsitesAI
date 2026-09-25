@@ -64,7 +64,7 @@ export async function getMaxActions(options: {
 }
 
 // Compatibility alias for model-generated product code. Both names use the
-// same authenticated, tenant-filtered MAX Studio endpoint.
+// same authenticated, tenant-filtered Yleum endpoint.
 export const getActionHistory = getMaxActions;
 
 async function integration<T>(
@@ -84,7 +84,7 @@ async function integration<T>(
   return body as T;
 }
 
-export function getOmniaIntegrations(): Promise<{
+export function getYleumIntegrations(): Promise<{
   providers: string[];
   capabilities: string[];
   analytics_counter_id: string | null;
@@ -92,7 +92,7 @@ export function getOmniaIntegrations(): Promise<{
   return integration("status");
 }
 
-export function createOmniaPayment(input: {
+export function createYleumPayment(input: {
   amount: number;
   description: string;
   return_url: string;
@@ -106,7 +106,7 @@ export function createOmniaPayment(input: {
   });
 }
 
-export function getOmniaPayment(paymentId: string): Promise<{
+export function getYleumPayment(paymentId: string): Promise<{
   id: string;
   status: string;
   confirmation_url: string | null;
@@ -114,7 +114,7 @@ export function getOmniaPayment(paymentId: string): Promise<{
   return integration("payment-status", { payment_id: paymentId });
 }
 
-export function createOmniaLead(input: {
+export function createYleumLead(input: {
   name: string;
   phone?: string;
   email?: string;
@@ -124,7 +124,7 @@ export function createOmniaLead(input: {
   return integration("leads", input);
 }
 
-export function getOmniaCatalog(): Promise<{
+export function getYleumCatalog(): Promise<{
   provider: string;
   items: Array<{
     id: string;
@@ -139,15 +139,15 @@ export function getOmniaCatalog(): Promise<{
   return integration("catalog");
 }
 
-type OmniaAIInput = {
+type YleumAIInput = {
   message?: string;
   prompt?: string;
   instructions?: string;
   context?: Record<string, unknown>;
 };
 
-export async function requestOmniaAI(
-  input: OmniaAIInput,
+export async function requestYleumAI(
+  input: YleumAIInput,
 ): Promise<{ answer: string; text: string; model: string }> {
   const message = input.message || input.prompt;
   if (!message?.trim()) throw new Error("Введите сообщение для ИИ-тренера");
@@ -159,11 +159,11 @@ export async function requestOmniaAI(
   return { ...result, text: result.answer };
 }
 
-export async function trackOmniaGoal(
+export async function trackYleumGoal(
   goal: string,
   parameters: Record<string, unknown> = {},
 ): Promise<void> {
-  const status = await getOmniaIntegrations();
+  const status = await getYleumIntegrations();
   const counterId = status.analytics_counter_id;
   if (!counterId || typeof window === "undefined") return;
   const target = window as typeof window & { ym?: (...args: unknown[]) => void };
@@ -185,3 +185,13 @@ export async function trackOmniaGoal(
   }
   target.ym(Number(counterId), "reachGoal", goal, parameters);
 }
+
+/* Старые имена оставлены навсегда как синонимы: приложения, опубликованные до
+   переименования, содержат вызовы с ними, и перегенерировать их мы не будем. */
+export const getOmniaIntegrations = getYleumIntegrations;
+export const createOmniaPayment = createYleumPayment;
+export const getOmniaPayment = getYleumPayment;
+export const createOmniaLead = createYleumLead;
+export const getOmniaCatalog = getYleumCatalog;
+export const requestOmniaAI = requestYleumAI;
+export const trackOmniaGoal = trackYleumGoal;

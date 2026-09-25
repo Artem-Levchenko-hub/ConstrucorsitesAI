@@ -20,7 +20,7 @@ async def test_platform_ai_requires_explicit_owner_enable_without_credentials(
     assert providers["llmgw"]["available"] is True
     assert providers["llmgw"]["enabled"] is False
     assert providers["llmgw"]["fields"] == []
-    assert "requestOmniaAI" not in await generation_context(db_session, UUID(project_id))
+    assert "requestYleumAI" not in await generation_context(db_session, UUID(project_id))
     for enabled in (True, True, False):
         response = await client.put(url + "/platform-ai", json={"enabled": enabled})
         assert response.status_code == 200
@@ -29,7 +29,7 @@ async def test_platform_ai_requires_explicit_owner_enable_without_credentials(
         assert next(p for p in catalog["providers"] if p["key"] == "llmgw")["enabled"] is enabled
         assert catalog["connections"] == []
         context = await generation_context(db_session, UUID(project_id))
-        assert ("requestOmniaAI" in context) is enabled
+        assert ("requestYleumAI" in context) is enabled
         assert "aitunnel" not in context.lower()
     assert await db_session.scalar(select(AccountIntegration.id)) is None
     assert await db_session.scalar(select(ProjectIntegrationBinding.id)) is None
@@ -77,7 +77,7 @@ async def test_legacy_aitunnel_is_preserved_but_never_reactivated_or_advertised(
     catalog = await client.get(f"/api/projects/{project_id}/app-integrations")
     assert catalog.status_code == 200
     assert catalog.json()["connections"] == []
-    assert "requestOmniaAI" not in await generation_context(db_session, project.id)
+    assert "requestYleumAI" not in await generation_context(db_session, project.id)
     for suffix in ("bind", "verify"):
         response = await client.post(
             f"/api/projects/{project_id}/app-integrations/aitunnel/{suffix}"

@@ -191,7 +191,7 @@ export function ChatPanel({
               typeof value === "string"
                 ? redactChatSecrets(value).replaceAll(
                     secret,
-                    "[ключ сохранён в Omnia]",
+                    "[ключ сохранён в Yleum]",
                   )
                 : value,
             ]),

@@ -68,6 +68,6 @@ describe("MAX chat credential intake", () => {
 
     expect(safe).not.toContain(secret);
     expect(safe).not.toContain(labelled);
-    expect(safe).toContain("ключ сохранён в Omnia");
+    expect(safe).toContain("ключ сохранён в Yleum");
   });
 });

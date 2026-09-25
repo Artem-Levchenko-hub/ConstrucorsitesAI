@@ -128,7 +128,7 @@ _NON_PRODUCT_PATHS = {
     "src/app/globals.css",
     "src/lib/omnia/max-config.ts",
     "src/components/MaxAppProvider.tsx",
-    "src/components/OmniaCompliance.tsx",
+    "src/components/YleumCompliance.tsx",
     "src/lib/omnia/integration-client.ts",
 }
 _MANAGED_DB_PATHS = {
@@ -145,7 +145,7 @@ _MANAGED_DB_PATHS = {
 
 
 def _is_managed_max_backend_path(path: str) -> bool:
-    """Return whether MAX Studio, rather than generated product code, owns a path."""
+    """Return whether Yleum, rather than generated product code, owns a path."""
 
     return (
         path in _MANAGED_DB_PATHS
@@ -379,9 +379,9 @@ def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
         "product APIs may authenticate with requireMaxUser(), but must not import the raw "
         "project DB/Drizzle/pg client. Persist user state only through the managed "
         "integration client, which enforces MAX identity outside generated product code.",
-        "- If the brief asks for AI, call requestOmniaAI from "
+        "- If the brief asks for AI, call requestYleumAI from "
         "@/lib/omnia/integration-client. It reaches the managed Google model server-side; "
-        "the exact shape is `const { answer } = await requestOmniaAI({ message, "
+        "the exact shape is `const { answer } = await requestYleumAI({ message, "
         "instructions, context })`. setTimeout/random/static text is not AI.",
         "- After implementation: run a clean build, runtime_check the finished home screen "
         "through the signed MAX preview and fix real runtime failures. "
@@ -539,13 +539,15 @@ def max_source_completion_gap(
         )
 
     if _AI_PROMPT_RE.search(prompt):
-        if "requestomniaai" not in corpus:
+        # Принимаем оба имени: приложения, собранные до переименования, вызывают
+        # requestOmniaAI — он остался синонимом и работает.
+        if "requestyleumai" not in corpus and "requestomniaai" not in corpus:
             return (
-                "The brief requests real AI, but the product does not call requestOmniaAI. "
+                "The brief requests real AI, but the product does not call requestYleumAI. "
                 "Use the managed server-side Google AI primitive; do not simulate analysis."
             )
         if re.search(r"settimeout\s*\([^)]*(?:analy|анализ|coach|тренер)", corpus, re.DOTALL):
-            return "A timer is still simulating AI work. Replace it with requestOmniaAI."
+            return "A timer is still simulating AI work. Replace it with requestYleumAI."
 
     if _PERSISTENCE_PROMPT_RE.search(prompt):
         managed_read = bool(re.search(r"\bgetmaxactions\s*\(", corpus))

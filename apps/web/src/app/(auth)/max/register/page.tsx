@@ -23,7 +23,7 @@ export default async function MaxRegisterPage() {
         <div className="flex items-center gap-3">
           <BrandMark />
           <span className="h-5 w-px bg-border-default" />
-          <span className="text-sm text-fg-secondary">MAX Studio</span>
+          <span className="text-sm text-fg-secondary">Yleum</span>
         </div>
         <Link href="/login?next=/max" className="max-public-link">
           Уже есть аккаунт
@@ -38,7 +38,7 @@ export default async function MaxRegisterPage() {
           </h1>
           <p>
             Создайте аккаунт без оплаты и привязки карты. Подтвердите email,
-            опишите идею — и переходите в своё рабочее пространство MAX Studio.
+            опишите идею — и переходите в своё рабочее пространство Yleum.
           </p>
           <ul>
             {[

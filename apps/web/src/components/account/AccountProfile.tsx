@@ -29,7 +29,7 @@ export function AccountProfile({ email }: { email: string }) {
         <span className="account-avatar" aria-hidden>{email.slice(0, 1).toUpperCase()}</span>
         <h2>Ваш аккаунт</h2>
         <p>{email}</p>
-        <span className="account-status pending">MAX Studio</span>
+        <span className="account-status pending">Yleum</span>
       </div>
       <div className="account-panel">
         <h2>Личные данные</h2>

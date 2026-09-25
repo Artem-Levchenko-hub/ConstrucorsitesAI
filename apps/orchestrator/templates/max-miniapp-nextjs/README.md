@@ -1,6 +1,6 @@
 # MAX Mini App
 
-Production-ready Omnia template for a Mini App inside MAX messenger.
+Production-ready Yleum template for a Mini App inside MAX messenger.
 
 The scaffold includes the official MAX Bridge and MAX UI, server-side launch
 data validation, a signed HttpOnly session, owner-scoped user records, a
@@ -10,7 +10,7 @@ For local browser development the home screen uses a clearly labelled preview
 profile. Real user data is accepted only after the server validates MAX
 `initData`.
 
-Omnia-managed production foundation:
+Yleum-managed production foundation:
 
 - structured business profile and no-code catalog in `src/lib/omnia/max-config.ts`;
 - privacy, terms and support pages with owner details;

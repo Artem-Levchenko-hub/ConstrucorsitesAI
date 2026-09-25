@@ -190,7 +190,7 @@
       "nextjs-entities",
       "nextjs-postgres-drizzle"
     ],
-    "sha256": "9256acbf93804c170b902eafc679cb0cbd5d3e74fb559726589afd2a690e82a6",
+    "sha256": "3a3daceee94999ff658fb29b184beca7570ed123b3aec38b044a540f85bb341a",
     "mode": "100644"
   },
   "src/lib/db/index.ts": {

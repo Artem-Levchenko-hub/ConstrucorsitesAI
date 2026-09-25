@@ -5,7 +5,7 @@ import { MaxStudio } from "@/components/max/MaxStudio";
 import { getMaxAccessServer, getSession } from "@/lib/auth-mock";
 
 export const metadata: Metadata = {
-  title: "MAX Studio — конструктор мини-приложений",
+  title: "Yleum — конструктор мини-приложений",
   description:
     "Создайте мини-приложение для мессенджера MAX: мобильный интерфейс, живое превью, production URL и запуск в одном сценарии.",
   robots: { index: false, follow: false },

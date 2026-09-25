@@ -61,7 +61,7 @@ export function MaxStudio({ email }: { email: string }) {
       const hasCredential = containsChatSecret(rawPrompt);
       const scrub = (value: string) =>
         redactChatSecrets(value).replaceAll(
-          "[ключ сохранён в Omnia]",
+          "[ключ сохранён в Yleum]",
           "[секрет удалён из описания]",
         );
       const safeName = hasCredential ? scrub(name).trim() : name.trim();
@@ -220,7 +220,7 @@ export function MaxStudio({ email }: { email: string }) {
             <section className="max-projects-empty">
               <FolderKanban className="mx-auto size-7 text-accent" />
               <h2>Первого проекта ещё нет</h2>
-              <p>Опишите задачу — MAX Studio поможет создать приложение и подготовить его к запуску.</p>
+              <p>Опишите задачу — Yleum поможет создать приложение и подготовить его к запуску.</p>
               <Button variant="outline" onClick={() => setDialogOpen(true)}>Описать идею</Button>
             </section>
           ) : (

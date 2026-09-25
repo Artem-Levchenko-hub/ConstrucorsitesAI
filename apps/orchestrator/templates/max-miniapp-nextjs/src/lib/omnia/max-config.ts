@@ -1,5 +1,5 @@
-/* Managed by MAX Studio. This fallback is replaced by the saved business profile. */
-export type OmniaMaxContentItem = {
+/* Managed by Yleum. This fallback is replaced by the saved business profile. */
+export type YleumMaxContentItem = {
   id: string;
   title: string;
   description: string;
@@ -8,7 +8,7 @@ export type OmniaMaxContentItem = {
   active: boolean;
 };
 
-export type OmniaMaxConfig = {
+export type YleumMaxConfig = {
   app_name: string;
   app_type: "loyalty" | "catalog" | "booking" | "event" | "education" | "custom";
   summary: string;
@@ -17,7 +17,7 @@ export type OmniaMaxConfig = {
   features: string[];
   style: "brand" | "clean" | "bright";
   brand_colors: string;
-  content: OmniaMaxContentItem[];
+  content: YleumMaxContentItem[];
   operator: { legal_name: string };
   support: { email: string | null; response_time: string };
   legal: {
@@ -31,7 +31,7 @@ export type OmniaMaxConfig = {
   };
 };
 
-export const omniaMaxConfig: OmniaMaxConfig = {
+export const omniaMaxConfig: YleumMaxConfig = {
   app_name: "MAX Mini App",
   app_type: "custom",
   summary: "Готовое мини-приложение для пользователей MAX",
@@ -56,3 +56,8 @@ export const omniaMaxConfig: OmniaMaxConfig = {
     policy_url: "",
   },
 };
+
+/* Старые имена оставлены навсегда как синонимы: приложения, опубликованные до
+   переименования, содержат вызовы с ними, и перегенерировать их мы не будем. */
+export type OmniaMaxConfig = YleumMaxConfig;
+export type OmniaMaxContentItem = YleumMaxContentItem;

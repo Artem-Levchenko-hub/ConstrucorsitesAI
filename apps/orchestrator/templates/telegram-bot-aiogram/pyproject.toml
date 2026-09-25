@@ -1,7 +1,7 @@
 [project]
 name = "omnia-tgbot"
 version = "0.0.1"
-description = "Omnia-generated Telegram bot (aiogram 3 + Postgres)"
+description = "Yleum-generated Telegram bot (aiogram 3 + Postgres)"
 requires-python = ">=3.12"
 dependencies = [
     "aiogram>=3.13,<4.0",

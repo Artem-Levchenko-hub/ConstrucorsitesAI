@@ -1,4 +1,4 @@
-"""Curated colour palettes for Omnia.AI sites (Phase L10).
+"""Curated colour palettes for Yleum sites (Phase L10).
 
 Designed under principles distilled from Josef Albers' *Interaction of
 Color* (Yale, 50th anniversary edition):

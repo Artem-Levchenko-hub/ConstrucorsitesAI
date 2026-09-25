@@ -342,7 +342,7 @@ async def _execute_max_agent_action(
         return {
             "ok": False,
             "error": (
-                f"{action.path} is managed by MAX Studio. "
+                f"{action.path} is managed by Yleum. "
                 "Edit src/app/page.tsx, src/app/globals.css or a "
                 "new feature-specific component instead."
             ),
@@ -371,7 +371,7 @@ async def _execute_max_agent_action(
             return {
                 "ok": False,
                 "error": (
-                    "MAX Studio owns /api/max and /api/omnia. "
+                    "Yleum owns /api/max and /api/omnia. "
                     "Call the managed integration client instead of "
                     "creating a parallel route."
                 ),
@@ -647,12 +647,12 @@ async def _run_max_shell_action(
         for path, content in shell_files.items():
             if path in active_max_locked_files:
                 return await _reject(
-                    f"{path} is managed by MAX Studio. "
+                    f"{path} is managed by Yleum. "
                     "Shell changes must stay in product-owned files only."
                 )
             if path.startswith("src/app/api/max/") or path.startswith("src/app/api/omnia/"):
                 return await _reject(
-                    "MAX Studio owns /api/max and /api/omnia. "
+                    "Yleum owns /api/max and /api/omnia. "
                     "Shell changes there are blocked; use the "
                     "managed integration client instead."
                 )
@@ -698,7 +698,7 @@ async def _run_max_shell_action(
             return {
                 "ok": False,
                 "error": (
-                    f"{path} is managed by MAX Studio. "
+                    f"{path} is managed by Yleum. "
                     "Shell changes must stay in product-owned files only."
                 ),
             }
@@ -706,7 +706,7 @@ async def _run_max_shell_action(
             return {
                 "ok": False,
                 "error": (
-                    "MAX Studio owns /api/max and /api/omnia. "
+                    "Yleum owns /api/max and /api/omnia. "
                     "Shell changes there are blocked; use the "
                     "managed integration client instead."
                 ),

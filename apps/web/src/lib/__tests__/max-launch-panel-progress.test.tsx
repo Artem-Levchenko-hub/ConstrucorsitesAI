@@ -13,7 +13,7 @@ vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<ob
 vi.mock("@/lib/max-launch-runner", async (original) => ({ ...await original<object>(), launchMaxProject: api.launch }));
 
 const project = { id: "project-progress", name: "Прогресс", template: "max_miniapp" } as Project;
-const base: DeployStatus = { phase: "building", run_id: "run-1", started_at: "2026-09-18T15:15:03Z", finished_at: null, prod_url: null, image_tag: null, error: null, detail: null, target_label: "Omnia", target_id: null, can_cancel: false, logs: [] };
+const base: DeployStatus = { phase: "building", run_id: "run-1", started_at: "2026-09-18T15:15:03Z", finished_at: null, prod_url: null, image_tag: null, error: null, detail: null, target_label: "Yleum", target_id: null, can_cancel: false, logs: [] };
 function readiness(): MaxReadiness {
   return { ready_to_launch: true, progress: 67, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: !["publish", "max_url"].includes(id), blocking: true, action: null })) };
 }

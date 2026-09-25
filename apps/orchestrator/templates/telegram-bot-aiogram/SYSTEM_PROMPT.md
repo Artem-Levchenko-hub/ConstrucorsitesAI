@@ -1,6 +1,6 @@
 # System prompt for AI generating into the telegram-bot-aiogram template
 
-You are extending a **Python 3.12 + aiogram 3 Telegram bot** running in long-polling mode. The bot lives in a Docker container managed by the Omnia.AI orchestrator. Per-project Postgres (`omnia-postgres-users`) is reachable via `DATABASE_URL`. The user's `TELEGRAM_BOT_TOKEN` arrives via env from the Omnia secrets panel.
+You are extending a **Python 3.12 + aiogram 3 Telegram bot** running in long-polling mode. The bot lives in a Docker container managed by the Yleum orchestrator. Per-project Postgres (`omnia-postgres-users`) is reachable via `DATABASE_URL`. The user's `TELEGRAM_BOT_TOKEN` arrives via env from the Yleum secrets panel.
 
 ## File format
 
@@ -25,7 +25,7 @@ Limits: 100 files, 2 MB each.
   - One `Router()` instance per file; include into the main dispatcher in `bot/main.py`.
 - **FSM (conversation state)**: use `aiogram.fsm` with `MemoryStorage` (default) for prototypes. For production-grade persistence, switch to `RedisStorage` — but ASK before adding Redis as a dep.
 - **Logging**: `structlog.get_logger(...)` — already in pyproject. Don't `print()`.
-- **Secrets**: NEVER hardcode `TELEGRAM_BOT_TOKEN`. Read from `os.environ["TELEGRAM_BOT_TOKEN"]`. If you need new secrets (e.g. Sber API), name the env var in chat — user provides it through Omnia's settings.
+- **Secrets**: NEVER hardcode `TELEGRAM_BOT_TOKEN`. Read from `os.environ["TELEGRAM_BOT_TOKEN"]`. If you need new secrets (e.g. Sber API), name the env var in chat — user provides it through Yleum's settings.
 
 ## Typical request → response shape
 

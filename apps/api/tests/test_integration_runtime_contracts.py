@@ -332,14 +332,14 @@ async def test_generation_context_uses_only_ready_bound_methods_without_credenti
 
     project = await connect(client, db_session, monkeypatch)
     context = await generation_context(db_session, UUID(project))
-    assert "createOmniaPayment" in context
-    assert "getOmniaPayment" in context
+    assert "createYleumPayment" in context
+    assert "getYleumPayment" in context
     assert "test-only-secret" not in context
-    assert "createOmniaLead" not in context
+    assert "createYleumLead" not in context
     assert (
         await client.delete(f"/api/projects/{project}/app-integrations/yookassa")
     ).status_code == 204
-    assert "createOmniaPayment" not in await generation_context(db_session, UUID(project))
+    assert "createYleumPayment" not in await generation_context(db_session, UUID(project))
 
 
 async def test_payment_retry_after_reconnection_does_not_duplicate_lost_response(

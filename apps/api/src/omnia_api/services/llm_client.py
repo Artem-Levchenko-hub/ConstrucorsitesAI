@@ -242,7 +242,7 @@ async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str
         f"Готово. Сгенерировал сайт по запросу: «{user_text}»\n\n",
         '<file path="index.html">',
         '\n<!DOCTYPE html><html lang="ru"><head>',
-        '<meta charset="utf-8"><title>Omnia mock</title>',
+        '<meta charset="utf-8"><title>Yleum mock</title>',
         '\n<script src="https://cdn.tailwindcss.com"></script>',
         '\n</head><body class="bg-slate-50 p-12 font-sans">',
         '\n  <h1 class="text-4xl font-bold mb-4">Сайт по запросу</h1>',

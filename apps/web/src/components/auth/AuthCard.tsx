@@ -27,7 +27,7 @@ export function AuthCard({
       </header>
       <section className="max-auth-layout">
         <div className="max-auth-context">
-          <p className="max-public-kicker">MAX Studio</p>
+          <p className="max-public-kicker">Yleum</p>
           <h1>Продолжите с того места, где остановились</h1>
           <p>Создавайте и проверяйте приложение в одном рабочем пространстве. Доступы к MAX и внешним сервисам понадобятся только перед соответствующим запуском.</p>
           <ul>

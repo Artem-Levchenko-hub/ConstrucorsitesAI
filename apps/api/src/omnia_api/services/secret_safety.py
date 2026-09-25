@@ -1,6 +1,6 @@
 """Deterministic guardrails for credentials submitted to the app builder.
 
-Credentials belong in Omnia's encrypted Integration Hub, never in a generated
+Credentials belong in Yleum's encrypted Integration Hub, never in a generated
 project repository.  Prompt instructions alone are not a sufficient boundary:
 the writer itself must reject secret files and secret-shaped literals before a
 container or git object ever sees them.
@@ -146,7 +146,7 @@ def max_model_write_rejection(path: str, candidate: str) -> str | None:
 
     if is_secret_file(path):
         return (
-            "Credential files are managed by Omnia and cannot be written by the "
+            "Credential files are managed by Yleum and cannot be written by the "
             "generation agent. Use the Studio Integration Hub; never create .env files."
         )
     if contains_provider_secret(candidate):

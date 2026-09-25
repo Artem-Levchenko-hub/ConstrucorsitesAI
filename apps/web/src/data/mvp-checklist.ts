@@ -22,7 +22,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
   {
     id: "access",
     number: "01",
-    title: "Вход и доступ к MAX Studio",
+    title: "Вход и доступ к Yleum",
     description: "Пользователь начинает с подтверждённого email, а шаги MAX и реквизиты подключаются только там, где они реально нужны.",
     items: [
       {
@@ -62,7 +62,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
     items: [
       {
         id: "guided-brief",
-        title: "Пошаговый бриф MAX Studio",
+        title: "Пошаговый бриф Yleum",
         detail: "Продукт, сценарий, стиль, оператор и поддержка собираются в одном управляемом пути.",
         status: "done",
         completedAt: "30 июля 2026",
@@ -189,7 +189,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "partner-url",
         title: "Привязка URL в MAX Partner",
-        detail: "Production URL добавляется к кнопке запуска и подтверждается в мастере Omnia.",
+        detail: "Production URL добавляется к кнопке запуска и подтверждается в мастере Yleum.",
         status: "external",
       },
     ],
@@ -231,7 +231,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "golden-path",
         title: "Финальный путь нового пользователя",
-        detail: "Внутренний production-прогон доказал регистрацию, атомарную активацию Pro и ledger, real generation, safe preview, exact-commit deploy и отмену продления. Следующий внешний этап: реальное письмо, платёж ЮKassa и запуск двух пользователей через промодерированный MAX-бот без повторной бизнес-анкеты в Omnia.",
+        detail: "Внутренний production-прогон доказал регистрацию, атомарную активацию Pro и ledger, real generation, safe preview, exact-commit deploy и отмену продления. Следующий внешний этап: реальное письмо, платёж ЮKassa и запуск двух пользователей через промодерированный MAX-бот без повторной бизнес-анкеты в Yleum.",
         status: "in_progress",
       },
     ],

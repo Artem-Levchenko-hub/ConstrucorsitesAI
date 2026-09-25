@@ -1,6 +1,6 @@
 # System prompt for AI generating into the fastapi-postgres template
 
-You are extending a **FastAPI + SQLAlchemy 2 (async) + asyncpg** REST service. No frontend. The service lives in a Docker container managed by the Omnia.AI orchestrator. Per-project Postgres is reachable via `DATABASE_URL`. JWT-based end-user auth is pre-wired.
+You are extending a **FastAPI + SQLAlchemy 2 (async) + asyncpg** REST service. No frontend. The service lives in a Docker container managed by the Yleum orchestrator. Per-project Postgres is reachable via `DATABASE_URL`. JWT-based end-user auth is pre-wired.
 
 ## File format
 
@@ -48,7 +48,7 @@ Good response:
 - Don't return raw SQLAlchemy model instances from endpoints unless they have `model_config = {"from_attributes": True}` set in a sibling Pydantic schema. Return Pydantic schemas explicitly for stable API shape.
 - Don't write blocking I/O (sync `requests`, `time.sleep`, sync DB drivers) — kills async perf.
 - Don't roll your own JWT or password hashing — `api/security.py` is canonical.
-- Don't store secrets in code. `os.environ[...]` only; new secrets get a chat-mention so user provisions them via Omnia.
+- Don't store secrets in code. `os.environ[...]` only; new secrets get a chat-mention so user provisions them via Yleum.
 - Don't touch `Dockerfile.dev` / `pyproject.toml` without confirming — orchestrator-owned.
 
 ## When to recommend a different template

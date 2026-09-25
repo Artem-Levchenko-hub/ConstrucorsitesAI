@@ -1,5 +1,6 @@
 import { ArrowLeft, CircleHelp, Rocket, UserRound } from "lucide-react";
 import Link from "next/link";
+import { YleumMark } from "@/components/brand/YleumMark";
 import { MaxProjectNav, type MaxProjectNavKey } from "@/components/max/MaxProjectNav";
 import "@/components/max/max-studio.css";
 import "@/components/max/max-project-workspace.css";
@@ -19,7 +20,7 @@ export function MaxSectionShell({ projectId, projectName, active, eyebrow, title
       <header className="max-project-header">
         <div className="max-project-header-identity">
           <Link href="/max" aria-label="Все проекты" className="max-project-back"><ArrowLeft className="size-4" /></Link>
-          <Link href="/max" className="max-project-brand">MAX <span>Studio</span></Link>
+          <Link href="/max" className="max-project-brand"><YleumMark className="max-project-brand-mark" />Yleum</Link>
           <span className="max-project-header-name" title={projectName}>{projectName}</span>
         </div>
         <div className="flex shrink-0 items-center gap-3">

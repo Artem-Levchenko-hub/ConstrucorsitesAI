@@ -155,7 +155,7 @@ def test_portable_completion_requires_manifest_tests_and_runtime():
 def _complete_files() -> dict[str, str]:
     return {
         "src/app/page.tsx": (
-            "import { requestOmniaAI, createMaxAction, getMaxActions } "
+            "import { requestYleumAI, createMaxAction, getMaxActions } "
             'from "@/lib/omnia/integration-client";\n'
             "async function load(){ return (await getMaxActions()).actions; }\n"
             'async function save(){ return createMaxAction("health_saved", {}); }\n'
@@ -187,7 +187,7 @@ def test_contract_extracts_explicit_brief_and_forbids_fake_ai() -> None:
     assert "сон и восстановление" in labels
     assert "питание" in labels
     assert "уведомления" in labels
-    assert "requestOmniaAI" in contract
+    assert "requestYleumAI" in contract
     assert "fake timers" in contract
     assert "loading, empty, error/retry" in contract
     assert "Never fabricate the current user's history" in contract
@@ -242,7 +242,7 @@ def test_safe_css_import_order_is_byte_stable() -> None:
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
-        "requestOmniaAI, ",
+        "requestYleumAI, ",
         "",
     )
 
@@ -253,7 +253,7 @@ def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     )
 
     assert gap is not None
-    assert "requestOmniaAI" in gap
+    assert "requestYleumAI" in gap
 
 
 def test_completion_requires_only_max_compatible_runtime_proof() -> None:
@@ -413,9 +413,9 @@ def test_unsafe_backend_paths_ignore_managed_route_script_variants(path: str) ->
 def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
-        "import { requestOmniaAI, createMaxAction, getMaxActions } "
+        "import { requestYleumAI, createMaxAction, getMaxActions } "
         'from "@/lib/omnia/integration-client";\n',
-        'import { requestOmniaAI } from "@/lib/omnia/integration-client";\n',
+        'import { requestYleumAI } from "@/lib/omnia/integration-client";\n',
     )
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
         "async function load(){ return (await getMaxActions()).actions; }\n"
@@ -437,16 +437,16 @@ def test_managed_scaffold_does_not_fake_product_persistence_usage() -> None:
 def test_managed_scaffold_does_not_fake_product_ai_usage() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
-        "requestOmniaAI, ",
+        "requestYleumAI, ",
         "",
     )
     files["src/lib/omnia/integration-client.ts"] = (
-        "export async function requestOmniaAI(){ return {answer: 'managed'}; }"
+        "export async function requestYleumAI(){ return {answer: 'managed'}; }"
     )
 
     gap = max_source_completion_gap(COMPLEX_BRIEF, files)
 
-    assert "requestOmniaAI" in str(gap)
+    assert "requestYleumAI" in str(gap)
 
 
 def test_completion_rejects_demo_or_hardcoded_personal_state() -> None:

@@ -341,7 +341,7 @@ async def complete_registration(
     if not (payload.terms_accepted and payload.privacy_accepted and payload.personal_data_accepted):
         raise ApiError(
             "legal_acceptance_required",
-            "Для MAX Studio нужно принять условия, политику и согласие на обработку данных",
+            "Для Yleum нужно принять условия, политику и согласие на обработку данных",
             status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
     if payload.document_version != settings.legal_document_version:

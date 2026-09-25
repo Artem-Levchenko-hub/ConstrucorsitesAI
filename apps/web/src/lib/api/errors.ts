@@ -1,7 +1,7 @@
 import { ApiError } from "./client";
 
 /**
- * Human-readable text for a failed request, in the words a MAX Studio owner
+ * Human-readable text for a failed request, in the words a Yleum owner
  * understands.
  *
  * The server already answers in Russian, so for most codes the message is

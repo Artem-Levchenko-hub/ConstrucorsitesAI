@@ -5,7 +5,7 @@ from omnia_api.services.project_cell_executor import ProjectCellExecutorHandle
 
 INTEGRATION_SDK_PATH = "src/lib/omnia/integration-client.ts"
 MANAGED_BROWSER_PATHS = (
-    INTEGRATION_SDK_PATH, "src/components/MaxAppProvider.tsx", "src/components/OmniaCompliance.tsx",
+    INTEGRATION_SDK_PATH, "src/components/MaxAppProvider.tsx", "src/components/YleumCompliance.tsx",
 )
 
 

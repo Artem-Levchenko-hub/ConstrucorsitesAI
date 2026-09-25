@@ -109,7 +109,7 @@ export function ChatMessage({
       <div className="flex-1 min-w-0 space-y-1.5">
         <div className="flex items-center gap-2 text-xs">
           <span className="font-semibold text-fg-primary tracking-tight">
-            {isUser ? "Вы" : "Omnia"}
+            {isUser ? "Вы" : "Yleum"}
           </span>
           <span className="text-fg-tertiary">
             {formatRelativeTime(message.created_at)}

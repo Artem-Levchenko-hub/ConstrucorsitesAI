@@ -35,7 +35,7 @@ _IGNORE_DIRS = frozenset(
 # Skip a single absurdly large file (a stray binary) so one blob can't bloat the zip.
 _MAX_FILE_BYTES = 512_000
 
-_README = """# Экспорт проекта Omnia
+_README = """# Экспорт проекта Yleum
 
 Это НАСТОЯЩИЙ код твоего приложения — фиксированный скелет (бэкенд, движок, кит,
 конфиги) + сгенерированные тобой файлы поверх. Запуск:

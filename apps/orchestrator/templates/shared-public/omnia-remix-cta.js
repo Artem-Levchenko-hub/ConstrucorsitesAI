@@ -125,7 +125,7 @@
     a.setAttribute("target", "_top");
     a.setAttribute(
       "aria-label",
-      "Сделать свою версию этого приложения на Omnia.AI"
+      "Сделать свою версию этого приложения на Yleum"
     );
 
     var spark = document.createElement("span");
@@ -147,7 +147,7 @@
     mountWatermark();
   }
 
-  // Viral seed badge (#VIRAL-WATERMARK, pillar 4). A subtle "Сделано на Omnia.AI"
+  // Viral seed badge (#VIRAL-WATERMARK, pillar 4). A subtle "Сделано на Yleum"
   // credit pinned bottom-LEFT (opposite the loud remix pill). Click opens a small
   // branded popover that (a) replays the "design being born" reveal on demand via
   // window.__omniaReplayBrief (omnia-brief-narration.js) and (b) offers a fresh
@@ -227,7 +227,7 @@
     badge.id = "omnia-wm-badge";
     badge.setAttribute("aria-haspopup", "dialog");
     badge.setAttribute("aria-expanded", "false");
-    badge.setAttribute("aria-label", "Сделано на Omnia.AI — создать свой сайт");
+    badge.setAttribute("aria-label", "Сделано на Yleum — создать свой сайт");
     var spark = document.createElement("span");
     spark.id = "omnia-wm-spark";
     spark.setAttribute("aria-hidden", "true");
@@ -237,7 +237,7 @@
     made.textContent = "Сделано на ";
     var name = document.createElement("span");
     name.id = "omnia-wm-name";
-    name.textContent = "Omnia.AI";
+    name.textContent = "Yleum";
     badge.appendChild(spark);
     badge.appendChild(made);
     badge.appendChild(name);
@@ -245,13 +245,13 @@
     var pop = document.createElement("div");
     pop.id = "omnia-wm-pop";
     pop.setAttribute("role", "dialog");
-    pop.setAttribute("aria-label", "Создано на Omnia.AI");
+    pop.setAttribute("aria-label", "Создано на Yleum");
     var h4 = document.createElement("h4");
     var h4spark = document.createElement("span");
     h4spark.setAttribute("aria-hidden", "true");
     h4spark.textContent = "✦";
     var h4name = document.createElement("b");
-    h4name.textContent = "Omnia.AI";
+    h4name.textContent = "Yleum";
     h4.appendChild(h4spark);
     h4.appendChild(h4name);
     var p = document.createElement("p");

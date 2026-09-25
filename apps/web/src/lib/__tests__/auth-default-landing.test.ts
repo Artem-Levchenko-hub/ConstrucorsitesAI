@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
- * After signing in without an explicit destination the user lands in MAX Studio.
+ * After signing in without an explicit destination the user lands in Yleum.
  * (`/max` itself sends an anonymous session to registration and an unverified
  * account to onboarding.) An explicit same-origin `next` still wins; anything
  * unsafe falls back to the default.
@@ -38,7 +38,7 @@ afterEach(() => {
 });
 
 describe.each(["loginAction", "registerAction"] as const)("%s landing", (name) => {
-  it("defaults to MAX Studio", async () => {
+  it("defaults to Yleum", async () => {
     const actions = await import("@/app/(auth)/actions");
     await expect(actions[name]({ error: null }, form(credentials))).rejects.toThrow("redirect:/max");
   });

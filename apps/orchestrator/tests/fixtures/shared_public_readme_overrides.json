@@ -1,14 +1,14 @@
 {
   "nextjs-entities/README.md": {
-    "sha256": "4d49b868c2beb644860fb4d7f581fae140fc31ef7dd423d80456dd60f8651b11",
+    "sha256": "d8c521ae8b06ad3d47eea5e321ad5278441b44c2288657ad120f974e9ceb65e0",
     "mode": "100644"
   },
   "nextjs-postgres-drizzle/README.md": {
-    "sha256": "e7f5d127f20c54d3c414f4980e84b518d88217ea55de184c425a2af8bd9a2812",
+    "sha256": "0dae262ef4369827d7feb2944ed43444ce562ddec5b371889b8224c2231ca53d",
     "mode": "100644"
   },
   "nextjs-realtime/README.md": {
-    "sha256": "b046a254c7813ba0a638cab8a54f65024b8de3ee014f8d4b58a36993acd61291",
+    "sha256": "a07ee14447df85ecad0629eb74fc00bd88e620fd612cdf12772550ee11f3cda0",
     "mode": "100644"
   }
 }

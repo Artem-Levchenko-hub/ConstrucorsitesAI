@@ -233,7 +233,7 @@ class BillingPlan(Base):
 
 
 class BillingPaymentMethod(Base):
-    """Provider token for a payment method; raw card data never enters Omnia."""
+    """Provider token for a payment method; raw card data never enters Yleum."""
 
     __tablename__ = "billing_payment_methods"
 

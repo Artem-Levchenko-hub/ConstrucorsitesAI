@@ -14,7 +14,7 @@ export default function Home() {
         Готово к работе
       </p>
       <h1 className="text-4xl font-semibold tracking-tight">
-        Новый full-stack проект на Omnia.AI
+        Новый full-stack проект на Yleum
       </h1>
       <p className="text-lg text-zinc-400">
         Стек: Next.js 15 + Postgres + Drizzle ORM. Напишите промпт — AI

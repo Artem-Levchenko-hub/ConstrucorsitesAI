@@ -32,7 +32,7 @@ class OAuthPendingPublic(BaseModel):
 
 
 class OAuthCompleteRequest(BaseModel):
-    """Те же согласия, что и у обычной регистрации MAX Studio."""
+    """Те же согласия, что и у обычной регистрации Yleum."""
 
     ticket: str = Field(min_length=32, max_length=512)
     terms_accepted: bool = False

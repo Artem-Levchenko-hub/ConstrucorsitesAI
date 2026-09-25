@@ -7,8 +7,8 @@ acceptance phase, or own completion; the proven single-pass agent loop remains
 the only loop.
 
 The shape follows searchable design-intelligence skills: classify first, inject
-only matched guidance. It reuses Omnia's vendored, version-pinned UI/UX Pro Max
-tables through the narrow ``skill_library`` loader plus Omnia's own presets and
+only matched guidance. It reuses Yleum's vendored, version-pinned UI/UX Pro Max
+tables through the narrow ``skill_library`` loader plus Yleum's own presets and
 Design DNA. Upstream scripts are never executed and generation adds no network.
 """
 

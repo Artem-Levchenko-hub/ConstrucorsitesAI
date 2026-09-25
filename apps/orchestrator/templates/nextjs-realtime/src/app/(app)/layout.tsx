@@ -22,7 +22,7 @@ export default async function AppLayout({
           <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground text-sm font-bold shadow-sm">
             O
           </span>
-          <span>Omnia Realtime</span>
+          <span>Yleum Realtime</span>
         </Link>
         <div className="flex items-center gap-3 text-sm text-muted-foreground">
           <span className="hidden items-center gap-2 sm:flex">

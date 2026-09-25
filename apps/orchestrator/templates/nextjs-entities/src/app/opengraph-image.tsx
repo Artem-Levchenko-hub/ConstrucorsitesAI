@@ -6,7 +6,7 @@ import { share } from "./omnia-share";
  * pasted into Telegram / Slack / Discord — the first frame of the viral loop
  * (North Star pillar 4). It is the public twin of <StorefrontHero>: the project
  * title set large on a brand-accent glow, the niche as a quiet kicker, and an
- * Omnia wordmark. Every colour comes from the per-project `share.accent`, so the
+ * Yleum wordmark. Every colour comes from the per-project `share.accent`, so the
  * same route renders a different brand per niche with zero per-app code. */
 
 export const runtime = "nodejs";
@@ -71,7 +71,7 @@ export default async function Image() {
               display: "flex",
             }}
           />
-          <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -0.5 }}>Omnia</div>
+          <div style={{ fontSize: 30, fontWeight: 800, letterSpacing: -0.5 }}>Yleum</div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 26 }}>
@@ -105,7 +105,7 @@ export default async function Image() {
 
         <div style={{ display: "flex", alignItems: "center", gap: 14, fontSize: 26, color: "#a1a1aa" }}>
           <div style={{ width: 44, height: 3, borderRadius: 2, background: accent, display: "flex" }} />
-          Создано на Omnia.AI
+          Создано на Yleum
         </div>
       </div>
     ),

@@ -304,7 +304,7 @@ _MAX_TOOL_DESCRIPTIONS: dict[str, str] = {
         "Run a shell command INSIDE the isolated MAX project sandbox only. Use it "
         "for offline generators, tests, migrations and data transforms in the "
         "project container; it has no network and is never host/root access. To add "
-        "dependencies, edit package.json; Omnia syncs them with lifecycle scripts disabled."
+        "dependencies, edit package.json; Yleum syncs them with lifecycle scripts disabled."
     ),
     "generate_media": (
         "Generate a product-relevant visual asset only when the brief requires real "

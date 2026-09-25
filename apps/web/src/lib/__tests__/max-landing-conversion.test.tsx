@@ -1,9 +1,9 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MaxPublicLanding } from "@/components/marketing/MaxPublicLanding";
+import { YleumLanding } from "@/components/marketing/YleumLanding";
 
-describe("MAX landing conversion", () => {
+describe("Yleum landing conversion", () => {
   let host: HTMLDivElement;
   let root: Root;
   const events: unknown[] = [];
@@ -14,7 +14,7 @@ describe("MAX landing conversion", () => {
     host = document.createElement("div"); document.body.append(host);
     root = createRoot(host);
     window.addEventListener("omnia:marketing", capture);
-    await act(async () => root.render(<MaxPublicLanding />));
+    await act(async () => root.render(<YleumLanding />));
   });
   afterEach(() => { act(() => root.unmount()); host.remove(); window.removeEventListener("omnia:marketing", capture); });
   it("sends the signup placement without user data and keeps a real registration link", () => {

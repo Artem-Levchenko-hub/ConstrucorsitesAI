@@ -123,7 +123,7 @@ async def _send_verification(user: User, raw_token: str) -> None:
     link = f"{settings.web_base_url.rstrip('/')}/max/verify-email?token={raw_token}"
     await send_transactional_email(
         recipient=str(user.email),
-        subject="Подтвердите email для MAX Studio",
+        subject="Подтвердите email для Yleum",
         text=(
             "Подтвердите email, чтобы продолжить создание MAX Mini App:\n\n"
             f"{link}\n\nСсылка действует 24 часа. Если это были не вы, ничего не делайте."
@@ -150,7 +150,7 @@ async def register(
         ):
             raise ApiError(
                 "legal_acceptance_required",
-                "Для MAX Studio нужно принять условия, политику и согласие на обработку данных",
+                "Для Yleum нужно принять условия, политику и согласие на обработку данных",
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
         if payload.document_version != settings.legal_document_version:
@@ -304,7 +304,7 @@ async def forgot_password(
     await _deliver(
         send_transactional_email(
             recipient=str(user.email),
-            subject="Сброс пароля MAX Studio",
+            subject="Сброс пароля Yleum",
             text=(
                 f"Чтобы задать новый пароль, откройте ссылку:\n\n{link}\n\nОна действует 30 минут."
             ),

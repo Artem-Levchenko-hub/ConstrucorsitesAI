@@ -1,4 +1,4 @@
-"""Structured MAX Studio contract. Saving this data never invokes an LLM."""
+"""Structured Yleum contract. Saving this data never invokes an LLM."""
 
 from datetime import datetime
 from typing import Literal

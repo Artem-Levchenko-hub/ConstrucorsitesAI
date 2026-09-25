@@ -31,7 +31,7 @@ class Project(Base):
     )
     language: Mapped[str] = mapped_column(Text, nullable=False, server_default="ru", default="ru")
     # Import provenance (migration 0019). "native" = created/generated inside
-    # Omnia; "imported" = seeded from an external GitHub repo via tarball clone.
+    # Yleum; "imported" = seeded from an external GitHub repo via tarball clone.
     # The is_imported property gates pipeline bypasses (B3+B4).
     source: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="native", default="native"

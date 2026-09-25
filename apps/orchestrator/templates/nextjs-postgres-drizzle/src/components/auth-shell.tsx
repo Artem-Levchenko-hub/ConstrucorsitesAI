@@ -104,7 +104,7 @@ function Showcase({ mode, accent }: { mode: "signin" | "signup"; accent: string 
         </ul>
       </div>
 
-      <p className="relative text-xs text-white/55">Создано на Omnia.AI</p>
+      <p className="relative text-xs text-white/55">Создано на Yleum</p>
     </div>
   );
 }

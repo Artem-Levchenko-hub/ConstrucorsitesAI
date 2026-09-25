@@ -12,7 +12,7 @@ export function AccountBilling({ journey: j }: { journey: PaymentJourney }) {
     <section className="account-wallet">
       <p>Доступно на балансе</p>
       <h2>{wallet.data ? money(wallet.data.balance_rub) : wallet.isError ? "Недоступно" : "Загрузка…"}</h2>
-      <p>Средства на использование MAX Studio</p>
+      <p>Средства на использование Yleum</p>
       <QueryError error={wallet.error} retry={() => void wallet.refetch()} />
       <div className="account-wallet-footer">
         <p>Начисления появятся после подтверждения оплаты.</p>

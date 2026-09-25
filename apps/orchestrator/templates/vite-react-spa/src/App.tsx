@@ -23,7 +23,7 @@ function Home() {
         Готово к работе
       </p>
       <h1 className="text-4xl font-semibold tracking-tight">
-        Новый проект на Omnia.AI
+        Новый проект на Yleum
       </h1>
       <p className="text-lg text-zinc-400">
         Это стартовый шаблон Vite + React. Напишите промпт слева — AI добавит

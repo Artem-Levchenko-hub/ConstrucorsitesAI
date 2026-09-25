@@ -10,7 +10,7 @@ describe("MAX launch error", () => {
 
     const message = getMaxLaunchErrorDescription(raw);
 
-    expect(message).toContain("Omnia уже повторила её автоматически");
+    expect(message).toContain("Yleum уже повторил её автоматически");
     expect(message).not.toContain("Step 14/26");
     expect(message).not.toContain("dependencies:");
   });

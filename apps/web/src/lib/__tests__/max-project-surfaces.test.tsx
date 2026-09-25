@@ -11,7 +11,7 @@ vi.mock("@/lib/api/max-studio", async (original) => ({ ...await original<object>
 vi.mock("@/lib/api/runtime", async (original) => ({ ...await original<object>(), getLastDeploy: api.deploy, getDeployHistory: api.history, getRuntime: api.runtime }));
 vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<object>(), getMaxIntegration: api.integration }));
 const project = { id: "project-surfaces", name: "Проверка", template: "max_miniapp" } as Project;
-const release: DeployStatus = { phase: "done", run_id: "old-release", started_at: null, finished_at: "2026-09-01T10:00:00Z", prod_url: "https://app.example.com", image_tag: "app:v1", error: null, detail: null, target_label: "Omnia", target_id: null, can_cancel: false, logs: [] };
+const release: DeployStatus = { phase: "done", run_id: "old-release", started_at: null, finished_at: "2026-09-01T10:00:00Z", prod_url: "https://app.example.com", image_tag: "app:v1", error: null, detail: null, target_label: "Yleum", target_id: null, can_cancel: false, logs: [] };
 function readiness(published = false): MaxReadiness {
   return { ready_to_launch: published, progress: published ? 100 : 67, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: published || !["publish", "max_url"].includes(id), blocking: true, action: null })) };
 }

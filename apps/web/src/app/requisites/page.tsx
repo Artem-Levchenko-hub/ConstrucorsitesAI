@@ -5,9 +5,9 @@ import Link from "next/link";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
 export const metadata: Metadata = {
-  title: "Реквизиты исполнителя — Omnia",
+  title: "Реквизиты исполнителя — Yleum",
   description:
-    "Реквизиты самозанятого исполнителя сервиса Omnia MAX Studio.",
+    "Реквизиты самозанятого исполнителя сервиса Yleum.",
 };
 
 export default function RequisitesPage() {
@@ -39,7 +39,7 @@ export default function RequisitesPage() {
 
       <LegalSection title="Услуги">
         <p>
-          Доступ к онлайн-сервису Omnia MAX Studio, создание MAX-приложений,
+          Доступ к онлайн-сервису Yleum, создание MAX-приложений,
           генерация программного кода, публикация и сопутствующие цифровые
           услуги. Актуальные условия, состав и сумма показываются из действующей
           конфигурации в личном кабинете до оплаты. Общий порядок описан на странице{" "}

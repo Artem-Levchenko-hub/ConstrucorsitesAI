@@ -74,7 +74,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
           <div className="max-editor-brand"><BrandMark href="/max" /></div>
           <button className="max-editor-project-trigger" data-testid="max-navigation-open" aria-label="Проекты и аккаунт"
             onClick={event => open("navigation", event.currentTarget)}>
-            <span><strong>{project.name}</strong><small>MAX Studio</small></span><ChevronDown className="size-4 shrink-0" />
+            <span><strong>{project.name}</strong><small>Yleum</small></span><ChevronDown className="size-4 shrink-0" />
           </button>
         </div>
         <div className="max-editor-header-actions">

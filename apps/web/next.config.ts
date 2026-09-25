@@ -14,7 +14,7 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // The site-builder editor moved out of this app (see
   // docs/plans/2026-09-19-max-only-separation.md). Old bookmarks, `?next=/projects`
-  // login links and the API's remix redirect land in the MAX Studio cabinet
+  // login links and the API's remix redirect land in the Yleum cabinet
   // instead of a 404.
   async redirects() {
     return [
