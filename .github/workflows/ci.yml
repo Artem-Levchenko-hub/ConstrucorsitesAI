@@ -269,7 +269,10 @@ jobs:
           && uv run mypy src
       - name: Run orchestrator tests
         working-directory: apps/orchestrator
-        run: uv run pytest -q
+        # A test that hangs longer than four minutes dumps every thread's stack into the
+        # log (pytest's built-in faulthandler), so a stuck run names the test instead of
+        # silently eating the job timeout. The slowest tests are listed for sizing.
+        run: uv run pytest -q -o faulthandler_timeout=240 --durations=15
       - name: Run isolated P01 PostgreSQL volume probe
         working-directory: apps/orchestrator
         env:
