@@ -110,6 +110,8 @@ services:
         mc mb --ignore-existing "m/$$MINIO_BUCKET_TASK_BOARD"
         mc mb --ignore-existing "m/omnia-images"
         mc mb --ignore-existing "m/omnia-videos"
+        mc mb --ignore-existing "m/backups"
+        mc anonymous set none "m/backups"
         mc anonymous set download "m/$$MINIO_BUCKET_PREVIEWS"
         mc anonymous set download "m/$$MINIO_BUCKET_PHOTOS"
         mc anonymous set download "m/omnia-images"

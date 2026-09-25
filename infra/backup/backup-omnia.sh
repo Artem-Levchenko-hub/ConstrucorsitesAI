@@ -28,6 +28,8 @@ RETENTION_DAYS="${RETENTION_DAYS:-14}"
 OFFHOST_DEST="${BACKUP_OFFHOST_DEST:-}" # optional second encrypted copy via rsync/scp
 PUBLIC_CERT="${BACKUP_PUBLIC_CERT:-/opt/omnia/infra/backup/offhost-backup-cert.pem}"
 MINIO_VOLUME="${MINIO_VOLUME:-full_minio-data}"
+MINIO_CONTAINER="${MINIO_CONTAINER:-omnia-prod-minio}"   # mc inside it uploads the bundle (step 7b)
+MINIO_BACKUP_BUCKET="${MINIO_BACKUP_BUCKET:-backups}"
 # The archive helper only needs `tar`. Releases run SHA-tagged images, so the
 # floating `omnia-api:prod` tag may be absent (that silently broke three nightly
 # backups in September 2026): prefer the image of the running API container.
@@ -163,8 +165,10 @@ docker run --rm \
   -v "${MINIO_VOLUME}:/source:ro" \
   -v "${dir}:/backup" \
   "$MINIO_BACKUP_IMAGE" \
-  tar -czf /backup/minio-data.tgz -C /source . \
+  tar -czf /backup/minio-data.tgz -C /source --exclude=./backups . \
   || fail "MinIO archive failed"
+# (./backups holds the previous encrypted bundles uploaded by step 7b; archiving
+#  them again would make every nightly bundle carry all earlier ones.)
 
 # 5b. Project Cell databases and the orchestrator state journal. A single busy or
 #     halted cell must not cost the whole nightly backup, so a partial result
@@ -277,6 +281,37 @@ rm -f "$bundle_tmp"
 openssl cms -cmsout -inform DER -in "$encrypted" -print >/dev/null \
   || fail "encrypted CMS envelope validation failed"
 log "backup complete: ${dir}"
+
+# 7b. The encrypted bundle also goes into the private MinIO bucket `backups`
+#     (<ts>/omnia-backup-<ts>.cms + <ts>/OFFHOST_SHA256): /api/backups/offhost serves
+#     it from there, so the api container no longer needs the host directory
+#     (Phase 0: platform without bind mounts). `mc pipe` streams from stdin — the
+#     bundle never has to be copied into the container. Retention mirrors the local one.
+if docker inspect "$MINIO_CONTAINER" >/dev/null 2>&1; then
+  log "uploading encrypted bundle to MinIO bucket ${MINIO_BACKUP_BUCKET}..."
+  minio_mc() { docker exec -i "$MINIO_CONTAINER" sh -c 'mc alias set l http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 && exec mc "$@"' mc "$@"; }
+  minio_mc mb --ignore-existing "l/${MINIO_BACKUP_BUCKET}" >/dev/null \
+    || fail "MinIO bucket ${MINIO_BACKUP_BUCKET} unavailable"
+  minio_mc pipe "l/${MINIO_BACKUP_BUCKET}/${ts}/$(basename "$encrypted")" < "$encrypted" \
+    || fail "MinIO upload of the encrypted bundle failed"
+  minio_mc pipe "l/${MINIO_BACKUP_BUCKET}/${ts}/OFFHOST_SHA256" < "${dir}/OFFHOST_SHA256" \
+    || fail "MinIO upload of the checksum failed"
+  uploaded_size="$(minio_mc stat --json "l/${MINIO_BACKUP_BUCKET}/${ts}/$(basename "$encrypted")" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("size", 0))' 2>/dev/null || echo 0)"
+  [ "$uploaded_size" = "$(stat -c%s "$encrypted")" ] || fail "MinIO upload size mismatch (${uploaded_size} vs $(stat -c%s "$encrypted"))"
+  log "MinIO upload OK (${uploaded_size} bytes)"
+  cutoff="$(date -u -d "-${RETENTION_DAYS} days" +%Y%m%d-%H%M%S)"
+  for prefix in $(minio_mc ls "l/${MINIO_BACKUP_BUCKET}/" 2>/dev/null | awk '{print $NF}' | tr -d /); do
+    case "$prefix" in
+      20[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9])
+        if [[ "$prefix" < "$cutoff" ]]; then
+          minio_mc rm --recursive --force "l/${MINIO_BACKUP_BUCKET}/${prefix}/" >/dev/null 2>&1 \
+            && log "pruned MinIO bundle ${prefix}" || true
+        fi ;;
+    esac
+  done
+else
+  log "MinIO container ${MINIO_CONTAINER} not found — bundle kept on the host only"
+fi
 
 # 8. Optional second off-host destination. Only encrypted material is copied;
 #    raw dumps never leave the server through this path.

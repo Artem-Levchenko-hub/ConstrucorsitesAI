@@ -177,3 +177,153 @@ async def test_restore_verdict_never_follows_a_symlink(
     status = await backups.offhost_backup_status()
 
     assert (status.restore_test_ok, status.restore_tested_at) == (None, None)
+
+
+# ── MinIO-first (25.09.2026): bundles live in the private bucket, host is a fallback ──
+
+from minio.error import S3Error  # noqa: E402
+
+
+class _FakeResponse:
+    def __init__(self, data: bytes) -> None:
+        self._data, self.closed, self.released = data, False, False
+
+    def read(self, amount: int) -> bytes:
+        return self._data[:amount]
+
+    def stream(self, amount: int):
+        for start in range(0, len(self._data), amount):
+            yield self._data[start : start + amount]
+
+    def close(self) -> None:
+        self.closed = True
+
+    def release_conn(self) -> None:
+        self.released = True
+
+
+class _FakeMinio:
+    def __init__(self, objects: dict[str, tuple[bytes, datetime]] | None = None, *, error=None):
+        self.objects, self.error, self.responses = objects or {}, error, []
+
+    def list_objects(self, bucket: str, recursive: bool = False):
+        if self.error is not None:
+            raise self.error
+        assert bucket == "backups" and recursive
+        for key, (data, modified) in self.objects.items():
+            yield SimpleNamespace(object_name=key, last_modified=modified, size=len(data))
+
+    def get_object(self, bucket: str, key: str) -> _FakeResponse:
+        if key not in self.objects:
+            raise S3Error("NoSuchKey", "missing", key, "req", "host", None)
+        response = _FakeResponse(self.objects[key][0])
+        self.responses.append(response)
+        return response
+
+
+def _bundle(ts: str, payload: bytes, modified: datetime) -> dict[str, tuple[bytes, datetime]]:
+    digest = hashlib.sha256(payload).hexdigest()
+    return {
+        f"{ts}/omnia-backup-{ts}.cms": (payload, modified),
+        f"{ts}/OFFHOST_SHA256": (f"{digest}  omnia-backup-{ts}.cms\n".encode(), modified),
+    }
+
+
+def _minio_settings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fake: _FakeMinio) -> None:
+    monkeypatch.setattr(
+        backups,
+        "get_settings",
+        lambda: SimpleNamespace(backup_export_root=str(tmp_path), minio_bucket_backups="backups"),
+    )
+    monkeypatch.setattr(backups, "get_minio_client", lambda: fake)
+
+
+@pytest.mark.asyncio
+async def test_status_prefers_the_newest_bundle_in_minio(tmp_path: Path, monkeypatch):
+    _write_export(tmp_path, "20260731-031500", b"host copy")  # stale disk fallback
+    older = datetime(2026, 9, 24, 0, 15, tzinfo=UTC)
+    newer = datetime(2026, 9, 25, 0, 15, tzinfo=UTC)
+    fake = _FakeMinio({
+        **_bundle("20260924-001500", b"older", older),
+        **_bundle("20260925-001500", b"newest-bundle", newer),
+    })
+    _minio_settings(monkeypatch, tmp_path, fake)
+
+    status = await backups.offhost_backup_status()
+
+    assert status.created_at == newer
+    assert status.size_bytes == len(b"newest-bundle")
+    assert status.sha256 == hashlib.sha256(b"newest-bundle").hexdigest()
+    assert all(response.closed and response.released for response in fake.responses)
+
+
+@pytest.mark.asyncio
+async def test_download_streams_the_minio_object_with_integrity_headers(
+    tmp_path: Path, monkeypatch
+):
+    payload = b"x" * (3 * 1024 * 1024 + 17)
+    fake = _FakeMinio(_bundle("20260925-001500", payload, datetime(2026, 9, 25, 0, 15, tzinfo=UTC)))
+    _minio_settings(monkeypatch, tmp_path, fake)
+
+    response = await backups.download_latest_offhost_backup()
+
+    assert not isinstance(response, backups.FileResponse)
+    body = b""
+    async for chunk in response.body_iterator:
+        body += chunk
+    assert body == payload
+    assert response.headers["content-length"] == str(len(payload))
+    assert response.headers["x-backup-sha256"] == hashlib.sha256(payload).hexdigest()
+    assert response.headers["content-disposition"] == (
+        'attachment; filename="omnia-backup-20260925-001500.cms"'
+    )
+    assert response.headers["cache-control"] == "no-store"
+    assert response.media_type == "application/pkcs7-mime"
+
+
+@pytest.mark.asyncio
+async def test_minio_checksum_mismatch_fails_closed(tmp_path: Path, monkeypatch):
+    objects = _bundle("20260925-001500", b"bundle", datetime(2026, 9, 25, tzinfo=UTC))
+    objects["20260925-001500/OFFHOST_SHA256"] = (
+        ("0" * 64 + "  omnia-backup-20260925-001500.cms\n").encode(),
+        datetime(2026, 9, 25, tzinfo=UTC),
+    )
+    _minio_settings(monkeypatch, tmp_path, _FakeMinio(objects))
+
+    with pytest.raises(HTTPException) as refused:
+        await backups.offhost_backup_status()
+    assert refused.value.status_code == 503
+    assert "integrity" in refused.value.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fake", [_FakeMinio(), _FakeMinio(error=ConnectionError("minio down"))])
+async def test_an_empty_or_unreachable_bucket_falls_back_to_the_host_copy(
+    tmp_path: Path, monkeypatch, fake
+):
+    latest = _write_export(tmp_path, "20260731-031500", b"host copy")
+    _minio_settings(monkeypatch, tmp_path, fake)
+
+    status = await backups.offhost_backup_status()
+    response = await backups.download_latest_offhost_backup()
+
+    assert status.sha256 == hashlib.sha256(b"host copy").hexdigest()
+    assert isinstance(response, backups.FileResponse) and Path(response.path) == latest
+
+
+@pytest.mark.asyncio
+async def test_restore_verdict_is_read_from_the_bucket_next_to_the_bundle(
+    tmp_path: Path, monkeypatch
+):
+    when = datetime(2026, 9, 25, 0, 15, tzinfo=UTC)
+    objects = _bundle("20260925-001500", b"bundle", when)
+    objects["RESTORE_TEST.json"] = (b'{"ok": true, "tested_at": "2026-09-21T04:40:00Z"}', when)
+    (tmp_path / "RESTORE_TEST.json").write_text(
+        '{"ok": false, "tested_at": "2026-09-01T00:00:00Z"}'
+    )
+    _minio_settings(monkeypatch, tmp_path, _FakeMinio(objects))
+
+    status = await backups.offhost_backup_status()
+
+    assert status.restore_test_ok is True
+    assert status.restore_tested_at == datetime(2026, 9, 21, 4, 40, tzinfo=UTC)

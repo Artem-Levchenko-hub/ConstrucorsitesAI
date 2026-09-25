@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # streamed through the API with Content-Disposition: attachment, so active
     # formats such as HTML/SVG never execute under the application's origin.
     minio_bucket_task_board: str = Field(default="task-board")
+    # Encrypted disaster-recovery bundles (backup-omnia.sh uploads, /api/backups/offhost
+    # serves). Private bucket; the host directory stays a fallback during the transition.
+    minio_bucket_backups: str = Field(default="backups")
     minio_public_url: str = Field(default="http://localhost:9000")
     # Read-only directory containing encrypted backup exports. Production mounts
     # the host backup root here; the public API never exposes raw dumps.

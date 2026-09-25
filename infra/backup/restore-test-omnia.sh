@@ -99,6 +99,12 @@ cleanup(){
     "$verdict" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(basename "$latest")" \
     > "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" 2>/dev/null \
     && mv -f "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" "${BACKUP_ROOT}/RESTORE_TEST.json" || true
+  # The verdict is also published next to the bundles in MinIO: /api/backups/offhost
+  # reads it from there first (the host directory is only a fallback).
+  if [ -f "${BACKUP_ROOT}/RESTORE_TEST.json" ] && docker inspect "${MINIO_CONTAINER:-omnia-prod-minio}" >/dev/null 2>&1; then
+    docker exec -i "${MINIO_CONTAINER:-omnia-prod-minio}" sh -c 'mc alias set l http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 && mc pipe "l/${1}/RESTORE_TEST.json"' sh "${MINIO_BACKUP_BUCKET:-backups}" \
+      < "${BACKUP_ROOT}/RESTORE_TEST.json" >/dev/null 2>&1 || echo "[restore-test] MinIO verdict upload failed (host file kept)"
+  fi
 }
 trap cleanup EXIT
 
