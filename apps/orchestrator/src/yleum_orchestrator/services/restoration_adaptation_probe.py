@@ -219,25 +219,31 @@ def _requested_entities(
 
 def _validate_witness(witness: ActivationBusinessWitness, table: DataTable) -> None:
     columns = {column.name: column for column in table.columns}
-    if (
-        table.name in _MANAGED_TABLES
-        or table.read_only
-        or table.owner_reference is not None
-        or table.owner_column is None
-        or table.owner_column != witness.owner_column
-        or table.primary_key != [witness.id_column]
-        or "uuid" not in columns[witness.id_column].type.casefold()
-        or witness.value_column not in columns
-        or len(
-            {
-                witness.id_column,
-                witness.owner_column,
-                witness.value_column,
-            }
+    # Девять разных бед раньше приходили одним именем, и агент тратил на
+    # угадывание целый круг починки с пересборкой (прогон c32cdde8, 25.09).
+    # Таблица тут известна целиком, поэтому каждую беду называем своим именем и,
+    # где это помогает, сразу говорим верное значение.
+    if table.name in _MANAGED_TABLES or table.read_only:
+        raise CellIdentityConflict("adaptation business witness table is not writable")
+    if table.owner_reference is not None or table.owner_column is None:
+        raise CellIdentityConflict("adaptation business witness table has no direct owner column")
+    if table.owner_column != witness.owner_column:
+        raise CellIdentityConflict(
+            "adaptation business witness owner column must be " + table.owner_column
         )
-        != 3
-    ):
-        raise CellIdentityConflict("adaptation business witness does not match its table")
+    if table.primary_key != [witness.id_column]:
+        key = " ".join(table.primary_key) or "none"
+        raise CellIdentityConflict(
+            "adaptation business witness id column must be the primary key " + key
+        )
+    if "uuid" not in columns[witness.id_column].type.casefold():
+        raise CellIdentityConflict("adaptation business witness id column is not a uuid")
+    if witness.value_column not in columns:
+        raise CellIdentityConflict(
+            "adaptation business witness value column does not exist " + witness.value_column
+        )
+    if len({witness.id_column, witness.owner_column, witness.value_column}) != 3:
+        raise CellIdentityConflict("adaptation business witness columns are not distinct")
     if not any(token in columns[witness.value_column].type.casefold() for token in _TEXT_TYPES):
         raise CellIdentityConflict("adaptation business witness value is not text")
     reserved = {

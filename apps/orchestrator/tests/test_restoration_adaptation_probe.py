@@ -98,7 +98,7 @@ def test_validate_probe_contract_rejects_witness_not_matching_data_contract() ->
         "value_column": "probe_value",
         "create_values": {},
     }
-    with pytest.raises(CellIdentityConflict, match="does not match"):
+    with pytest.raises(CellIdentityConflict, match="owner column must be"):
         validate_probe_contract(_files(witnesses=[witness]), _contract())
 
 
