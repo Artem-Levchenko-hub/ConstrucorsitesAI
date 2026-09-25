@@ -117,12 +117,12 @@ def _integration_env(template: str | None = None) -> dict[str, str]:
         return {}
 
     out: dict[str, str] = {
-        "MINIO_ENDPOINT": rebrand_env("MINIO_ENDPOINT", "omnia-prod-minio:9000"),
+        "MINIO_ENDPOINT": rebrand_env("MINIO_ENDPOINT", "yleum-prod-minio:9000"),
         "MINIO_ACCESS_KEY": rebrand_env("MINIO_ACCESS_KEY", "omnia"),
         "MINIO_BUCKET": rebrand_env("MINIO_UPLOAD_BUCKET", "omnia-user-uploads"),
         "MINIO_SECURE": rebrand_env("MINIO_SECURE", "false"),
         "MINIO_PUBLIC_URL": rebrand_env("MINIO_PUBLIC_URL", ""),
-        "LLM_GATEWAY_URL": rebrand_env("LLM_GATEWAY_URL", "http://omnia-prod-gw:8001"),
+        "LLM_GATEWAY_URL": rebrand_env("LLM_GATEWAY_URL", "http://yleum-prod-gw:8001"),
     }
     secret = rebrand_env("MINIO_SECRET_KEY")
     if secret:

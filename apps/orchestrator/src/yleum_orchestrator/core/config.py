@@ -147,7 +147,13 @@ class Settings(BaseSettings):
     container_egress_no_proxy: str = Field(
         default=(
             "localhost,127.0.0.1,host.docker.internal,"
-            "omnia-postgres-users,omnia-prod-gw,omnia-prod-minio"
+            # Оба имени контейнеров платформы: новые — после переименования,
+            # старые — пока стек не пересоздан и пока живы контейнеры, созданные
+            # до него. Лишнее имя в списке ничего не открывает: это те же наши
+            # сервисы, просто под прежним адресом.
+            "omnia-postgres-users,"
+            "yleum-prod-gw,yleum-prod-minio,"
+            "omnia-prod-gw,omnia-prod-minio"
         )
     )
     # `isolate_project_network` — when True each dev container joins its OWN

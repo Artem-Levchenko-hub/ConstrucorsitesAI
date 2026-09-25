@@ -18,7 +18,7 @@ services:
     # docker-compose.hostdb.yml + PLATFORM_DATABASE_URL, и этот сервис уходит
     # в неактивный профиль. См. infra/max-k3s/migrate/50-platform-db-to-host.sh.
     image: postgres:16-alpine
-    container_name: omnia-prod-postgres
+    container_name: yleum-prod-postgres
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-omnia}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-omnia}
@@ -35,11 +35,11 @@ services:
       retries: 20
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
   redis:
     image: redis:7-alpine
-    container_name: omnia-prod-redis
+    container_name: yleum-prod-redis
     volumes:
       - redis-data:/data
     # The orchestrator is a host systemd service, not a Compose container.
@@ -54,11 +54,11 @@ services:
       retries: 20
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
   minio:
     image: minio/minio:latest
-    container_name: omnia-prod-minio
+    container_name: yleum-prod-minio
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-omnia}
@@ -77,11 +77,11 @@ services:
       retries: 20
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
   minio-init:
     image: minio/mc:latest
-    container_name: omnia-prod-minio-init
+    container_name: yleum-prod-minio-init
     depends_on:
       minio:
         condition: service_healthy
@@ -120,14 +120,14 @@ services:
         echo "MinIO buckets ready"
     restart: "no"
     networks:
-      - omnia-prod
+      - yleum-prod
 
   gateway:
     build:
       context: ../..
       dockerfile: Dockerfile
     image: omnia-gateway:prod
-    container_name: omnia-prod-gw
+    container_name: yleum-prod-gw
     depends_on:
       postgres:
         condition: service_healthy
@@ -175,7 +175,7 @@ services:
       - "127.0.0.1:${GATEWAY_HOST_PORT:-8101}:8001"
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
   api:
     build:
@@ -188,7 +188,7 @@ services:
       additional_contexts:
         templates: ../../../orchestrator/templates
     image: ${API_IMAGE:-omnia-api:prod}
-    container_name: omnia-prod-api
+    container_name: yleum-prod-api
     volumes:
       # Only CMS-encrypted exports are served by /api/backups/offhost. The
       # application validates the timestamp, fixed filename and SHA-256 before
@@ -451,11 +451,11 @@ services:
       start_period: 15s
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
   generation-worker:
     image: ${API_IMAGE:-omnia-api:prod}
-    container_name: omnia-prod-generation-worker
+    container_name: yleum-prod-generation-worker
     command: ["/app/.venv/bin/python", "-m", "yleum_api.workers.generation"]
     volumes:
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
@@ -472,13 +472,13 @@ services:
         condition: service_healthy
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
   worker:
     # Reuses the omnia-api:prod image built by the `api` service — no separate
     # build step (both Compose race on the same tag otherwise).
     image: ${API_IMAGE:-omnia-api:prod}
-    container_name: omnia-prod-worker
+    container_name: yleum-prod-worker
     # Stack templates come baked in the image (see api.build.additional_contexts).
     # Same uv-run bypass as api — direct python from the venv.
     command: ["/app/.venv/bin/python", "-m", "yleum_api.workers.run"]
@@ -659,7 +659,7 @@ services:
       USE_RUNTIME_GATES: ${USE_RUNTIME_GATES:-false}
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
       # Join the user-container runtime network so the preview job can reach a
       # running dev container by name (omnia-dev-<slug>:3000) to screenshot it.
       - omnia-runtime
@@ -677,7 +677,7 @@ services:
         NEXT_PUBLIC_USE_MOCKS: "false"
         NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-09-25}
     image: ${WEB_IMAGE:-omnia-web:prod}
-    container_name: omnia-prod-web
+    container_name: yleum-prod-web
     depends_on:
       api:
         condition: service_started
@@ -699,7 +699,7 @@ services:
       - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
     restart: unless-stopped
     networks:
-      - omnia-prod
+      - yleum-prod
 
 volumes:
   postgres-data:
@@ -707,7 +707,7 @@ volumes:
   minio-data:
 
 networks:
-  omnia-prod:
+  yleum-prod:
     driver: bridge
   # External: created by the orchestrator runtime stack. User dev/prod
   # containers live here; the worker joins it to screenshot live previews.
