@@ -80,9 +80,10 @@
 api generation-worker` (пересоздание контейнеров; миграция `0071_oauth_login` уже применена при
 первом старте api после 23.09). Локально: `apps/api/.env` (см. `apps/api/.env.example`). После
 выката проверить `curl https://yleum.ru/api/auth/oauth/providers` — в ответе провайдер с заданными
-реквизитами; `GET /api/auth/oauth/yandex/start` должен отвечать 302 на `https://oauth.yandex.ru/authorize`
-с `redirect_uri=https://yleum.ru/api/auth/oauth/yandex/callback`, `scope=login:email` и `state`, без
-секрета в URL.
+реквизитами; `GET /api/auth/oauth/yandex/start` отвечает 200 с JSON `{"authorization_url": …}` (браузер
+уводит на неё web, `OAuthButtons.tsx`), где адрес — `https://oauth.yandex.ru/authorize` с
+`redirect_uri=https://yleum.ru/api/auth/oauth/yandex/callback`, `scope=login:email` и `state`, без
+секрета. Проверено на проде 25.09.2026 (598d741a): провайдер `yandex` в списке, адрес старта такой.
 
 ### Политика привязки существующего аккаунта (принято 25.09.2026)
 
