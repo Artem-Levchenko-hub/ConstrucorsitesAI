@@ -224,9 +224,9 @@ jobs:
       - name: Run API suite shard ${{ matrix.shard }} of 3 on disposable services
         working-directory: apps/api
         run: |
-          files=$(ls tests/test_*.py | sort | awk -v k=$(( ${{ matrix.shard }} - 1 )) 'NR % 3 == k')
-          echo "$files" | wc -l | xargs echo 'files in shard:'
-          uv run --frozen pytest -o addopts='' -q --durations=10 $files
+          mapfile -t files < <(find tests -maxdepth 1 -name 'test_*.py' | sort | awk -v k=$(( ${{ matrix.shard }} - 1 )) 'NR % 3 == k')
+          echo "files in shard: ${#files[@]}"
+          uv run --frozen pytest -o addopts='' -q --durations=10 "${files[@]}"
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest
