@@ -46,7 +46,7 @@ _EDIT = timedelta(seconds=1500)
 # Первый ход адаптации живёт по своему сроку: в окно обычной правки он не
 # помещался — живой прогон 25.09 (dab6c832) работал до самой отсечки.
 _ADAPT_EDIT = timedelta(seconds=2700)
-_REPAIR = timedelta(seconds=1800)
+_REPAIR = timedelta(seconds=3600)
 _ACTIVATION = timedelta(seconds=2400)
 
 

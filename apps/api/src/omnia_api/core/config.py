@@ -1129,7 +1129,11 @@ class Settings(BaseSettings):
     # по сроку — делая при этом осмысленную работу (читал схему и миграцию,
     # переписывал маршруты, ставил проверочную точку). Починка у адаптации
     # объёмнее обычной: она сводит целые экраны с текущей базой.
-    restoration_adaptation_repair_seconds: int = Field(default=1800, ge=60, le=3600)
+    # 1800 тоже не хватило: прогоны 4a154055 и dd63f534 (25.09) открыли починку и
+    # умерли по сроку, НИ РАЗУ не замкнув один круг — прочитать правило, поправить
+    # манифест, пересобрать приложение и прогнать доказательство на копии. Круг
+    # включает полную сборку, поэтому он дорогой по времени сам по себе.
+    restoration_adaptation_repair_seconds: int = Field(default=3600, ge=60, le=3600)
     # A durable proof/activation intent is finished by the reconciler and must not be cut
     # by the editing deadline — but it cannot hold the Project Cell forever either. This is
     # the ceiling for the whole sealed hand-off, generous enough for the controller's own

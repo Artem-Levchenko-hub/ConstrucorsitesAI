@@ -118,7 +118,7 @@ def test_the_adaptation_limit_is_never_shorter_than_the_ordinary_one() -> None:
 
 def test_the_repair_window_is_left_alone() -> None:
     # Починка — отдельная беда с отдельным замером; её потолок здесь не трогаем.
-    assert _default("restoration_adaptation_repair_seconds") == 1800
+    assert _default("restoration_adaptation_repair_seconds") == 3600
 
 
 def test_the_production_compose_repeats_every_deadline_the_code_declares() -> None:

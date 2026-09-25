@@ -51,9 +51,9 @@ def test_max_finalization_defaults_are_dark_and_deadlines_are_exact(
     # 2700: первый ход адаптации не помещался в срок обычной правки — живой
     # прогон dab6c832 работал до самой отсечки и был остановлен на ходу.
     assert settings.restoration_adaptation_edit_seconds == 2700
-    # 1800, а не 900: живой прогон 25.09 умер ровно на границе прежнего окна
-    # починки, делая осмысленную работу (ac72d4cb).
-    assert settings.restoration_adaptation_repair_seconds == 1800
+    # 3600: сначала 900 не хватило, потом и 1800 — два живых прогона подряд
+    # открыли починку и не успели замкнуть даже один круг с пересборкой.
+    assert settings.restoration_adaptation_repair_seconds == 3600
     assert settings.restoration_adaptation_activation_seconds == 2400
     assert settings.project_cell_heartbeat_seconds == 15
     assert settings.project_cell_watchdog_grace_seconds == 20
