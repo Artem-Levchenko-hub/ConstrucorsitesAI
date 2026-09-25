@@ -185,6 +185,32 @@
 .yl-steps h3 { margin-top: 16px; }
 .yl-steps p { margin-top: 10px; font-size: 15px; line-height: 1.55; color: var(--yl-ink-2); }
 
+/* правка показана на самом приложении: было → просьба → стало */
+.yl-diff {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) minmax(0, 1fr);
+  gap: clamp(20px, 3vw, 44px);
+  align-items: center;
+  margin-top: clamp(44px, 5vw, 76px);
+}
+.yl-diff figure { display: grid; gap: 14px; justify-items: center; }
+.yl-diff figcaption {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--yl-ink-3);
+}
+.yl-diff figure:last-of-type .ys-screen { box-shadow: 0 22px 50px rgb(0 98 238 / 0.14); }
+.yl-diff-ask { display: grid; justify-items: center; gap: 14px; text-align: center; }
+.yl-diff-text {
+  max-width: 300px;
+  font-size: clamp(15px, 1.4vw, 18px);
+  line-height: 1.45;
+  letter-spacing: -0.015em;
+}
+.yl-diff-ask svg { color: var(--color-brand-blue, #0062ee); }
+
 /* ── 5. после запуска ────────────────────────────────────────────────────── */
 .yl-after { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(40px, 5vw, 80px); align-items: center; }
 .yl-after-copy ul { display: grid; gap: 4px; margin-top: 36px; }
@@ -272,6 +298,8 @@
   .yl-usecases,
   .yl-steps,
   .yl-facts { grid-template-columns: repeat(2, 1fr); }
+  .yl-diff { grid-template-columns: minmax(0, 1fr); justify-items: center; }
+  .yl-diff-ask svg { transform: rotate(90deg); }
   .yl-footer-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .yl-header nav { display: none; }
   .yl-shop-peek { display: none; }

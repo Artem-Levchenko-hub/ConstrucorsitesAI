@@ -13,10 +13,18 @@ import {
   Clock,
   MapPin,
   MoreHorizontal,
+  Search,
   Users,
 } from "lucide-react";
 
-export type ScreenKind = "cafe" | "salon" | "club" | "shop" | "status" | "loyalty";
+export type ScreenKind =
+  | "cafe"
+  | "cafe-after"
+  | "salon"
+  | "club"
+  | "shop"
+  | "status"
+  | "loyalty";
 
 export function ScreenChrome({
   name,
@@ -66,6 +74,33 @@ export function CafeScreen() {
         </div>
       ))}
       <div className="ys-action">Заказать · 240 ₽</div>
+    </ScreenChrome>
+  );
+}
+
+/** Тот же экран после одной просьбы в чате: поиск по меню и заметная кнопка заказа. */
+export function CafeAfterScreen() {
+  return (
+    <ScreenChrome name="Смена" section="Кофейня">
+      <p className="ys-kicker">Меню на сегодня</p>
+      <div className="ys-hero-card ys-hero-card--cafe">
+        <span>Сварим к вашему приходу</span>
+      </div>
+      <div className="ys-search"><Search size={12} />Поиск по меню</div>
+      {[
+        ["Капучино", "250 мл · на обычном молоке", "240 ₽"],
+        ["Флэт уайт", "Больше кофе, меньше молока", "260 ₽"],
+        ["Раф ванильный", "300 мл", "320 ₽"],
+      ].map(([title, note, price]) => (
+        <div className="ys-row" key={title}>
+          <div>
+            <strong>{title}</strong>
+            <small>{note}</small>
+          </div>
+          <b>{price}</b>
+        </div>
+      ))}
+      <div className="ys-action is-on ys-action--big">Заказать · 240 ₽</div>
     </ScreenChrome>
   );
 }
@@ -179,6 +214,7 @@ export function LoyaltyScreen() {
 
 const registry: Record<ScreenKind, () => React.JSX.Element> = {
   cafe: CafeScreen,
+  "cafe-after": CafeAfterScreen,
   salon: SalonScreen,
   club: ClubScreen,
   shop: ShopScreen,

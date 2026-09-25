@@ -129,6 +129,19 @@
 }
 button.ys-action { cursor: pointer; }
 
+.ys-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid #e4e1dd;
+  border-radius: 9px;
+  background: #f7f6f4;
+  font-size: 11px;
+  color: #9a9aa3;
+}
+.ys-action--big { min-height: 42px; font-size: 12px; }
+
 .ys-hero-card {
   display: grid;
   gap: 5px;

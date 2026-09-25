@@ -148,17 +148,31 @@ export function YleumLanding() {
         </div>
       </section>
 
-      {/* 4 — редактор */}
+      {/* 4 — редактор: правка показана на самом приложении */}
       <section id="process" className="yl-section" data-marketing-section="editor">
         <div className="yl-wrap yl-head yl-head--center">
           <h2>Меняется как разговор.<br /><em className="yl-grad-text">Не как настройки.</em></h2>
-          <p className="yl-lead">Сформулируйте задачу — посмотрите результат — уточните.</p>
+        </div>
+        <div className="yl-wrap yl-diff">
+          <figure>
+            <figcaption>Было</figcaption>
+            <AppScreen kind="cafe" />
+          </figure>
+          <div className="yl-diff-ask">
+            <p className="ys-stage-label">Вы пишете</p>
+            <p className="yl-diff-text">Добавь поиск по меню и сделай кнопку заказа заметнее.</p>
+            <ArrowRight size={20} />
+          </div>
+          <figure>
+            <figcaption>Стало</figcaption>
+            <AppScreen kind="cafe-after" />
+          </figure>
         </div>
         <div className="yl-wrap yl-steps">
           {[
-            ["Опишите", "«Добавь поиск по меню и сделай кнопку заказа заметнее»"],
-            ["Проверьте", "Откройте приложение и пройдите путь своего клиента"],
-            ["Опубликуйте", "Получите адрес и добавьте его в кабинет бота MAX"],
+            ["Опишите", "Обычным сообщением, без настроек и полей"],
+            ["Проверьте", "Пройдите путь своего клиента до публикации"],
+            ["Опубликуйте", "Адрес готов для кабинета бота MAX"],
           ].map(([title, text], i) => (
             <article key={title}>
               <b>{String(i + 1).padStart(2, "0")}</b>
