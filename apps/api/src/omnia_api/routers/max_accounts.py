@@ -8,6 +8,7 @@ from omnia_api.core.deps import CurrentUserDep
 from omnia_api.core.errors import ApiError
 from omnia_api.models.user import User
 from omnia_api.schemas.max_account import MaxAccessPublic
+from omnia_api.services.transactional_email import email_delivery_configured
 
 router = APIRouter(prefix="/api/max/account", tags=["max-account"])
 
@@ -28,7 +29,7 @@ async def get_access(current_user: CurrentUserDep) -> MaxAccessPublic:
         reason = None
     return MaxAccessPublic(
         email_verified=current_user.email_verified_at is not None,
-        email_delivery_configured=bool(settings.smtp_host),
+        email_delivery_configured=email_delivery_configured(),
         can_create_project=reason is None,
         reason=reason,
         legal_document_version=settings.legal_document_version,

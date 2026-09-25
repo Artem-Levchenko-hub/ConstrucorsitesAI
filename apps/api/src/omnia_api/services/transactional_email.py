@@ -15,10 +15,21 @@ class EmailDeliveryFailed(RuntimeError):
     pass
 
 
+def email_delivery_configured() -> bool:
+    """Письмо уйдёт, только если есть и адрес сервера, и учётные данные.
+
+    Половинчатая настройка опаснее пустой: интерфейс по одному лишь хосту решал,
+    что канал работает, и обещал человеку письмо, которое релей отвергает.
+    """
+    settings = get_settings()
+    return bool(settings.smtp_host and settings.smtp_user and settings.smtp_password)
+
+
 async def send_transactional_email(*, recipient: str, subject: str, text: str) -> None:
     settings = get_settings()
     smtp_host = settings.smtp_host
-    if not smtp_host:
+    # Проверка на сам хост оставлена отдельно: она же сужает тип для smtplib.
+    if not smtp_host or not email_delivery_configured():
         raise EmailDeliveryNotConfigured("SMTP delivery is not configured")
 
     message = EmailMessage()
