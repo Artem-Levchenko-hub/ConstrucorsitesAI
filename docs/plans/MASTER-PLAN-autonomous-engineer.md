@@ -23,7 +23,7 @@
 который пользователь владеет и может унести.
 
 **Что уже есть (проверено по коду).** Агентный ReAct-цикл — не план, а работающий движок:
-`apps/api/src/omnia_api/services/agent_builder.py` (796 строк). 11 инструментов
+`apps/api/src/yleum_api/services/agent_builder.py` (796 строк). 11 инструментов
 (`list_dir/read_file/grep/write_file/edit_file/build/bash/read_logs/runtime_check/see/done` —
 `agent_builder.py:31-44`), цикл-брейкеры (`agent_builder.py:340-430`), эскалация модели
 (`agent_builder.py:241-258`), оконный контекст ради стоимости (`agent_builder.py:153`,

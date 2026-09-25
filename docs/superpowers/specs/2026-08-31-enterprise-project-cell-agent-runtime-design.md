@@ -516,14 +516,14 @@ project.agent_execution_backend overrides the default for canaries
 
 ### API
 
-- `apps/api/src/omnia_api/routers/messages.py`: keep public orchestration; remove ownership of the worker loop for cell sessions.
-- `apps/api/src/omnia_api/services/agent_native.py`: protocol source to extract into the runner package.
-- `apps/api/src/omnia_api/services/agent_builder.py`: reusable tool contracts and validation adapters.
-- `apps/api/src/omnia_api/services/generation_runs.py`: replace restart-to-failed behavior with lease recovery.
-- `apps/api/src/omnia_api/models/generation_run.py`: compatibility model plus new workspace/session/checkpoint/event/operation/candidate models.
-- `apps/api/src/omnia_api/routers/ws.py` and `services/ws_hub.py`: durable event replay by sequence.
-- `apps/api/src/omnia_api/services/repo.py`: idempotent candidate finalizer and snapshot promotion.
-- `apps/api/src/omnia_api/services/context7_client.py`: existing documentation capability adapter.
+- `apps/api/src/yleum_api/routers/messages.py`: keep public orchestration; remove ownership of the worker loop for cell sessions.
+- `apps/api/src/yleum_api/services/agent_native.py`: protocol source to extract into the runner package.
+- `apps/api/src/yleum_api/services/agent_builder.py`: reusable tool contracts and validation adapters.
+- `apps/api/src/yleum_api/services/generation_runs.py`: replace restart-to-failed behavior with lease recovery.
+- `apps/api/src/yleum_api/models/generation_run.py`: compatibility model plus new workspace/session/checkpoint/event/operation/candidate models.
+- `apps/api/src/yleum_api/routers/ws.py` and `services/ws_hub.py`: durable event replay by sequence.
+- `apps/api/src/yleum_api/services/repo.py`: idempotent candidate finalizer and snapshot promotion.
+- `apps/api/src/yleum_api/services/context7_client.py`: existing documentation capability adapter.
 
 ### New runner
 

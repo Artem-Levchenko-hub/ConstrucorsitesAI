@@ -29,12 +29,12 @@
 ### Task 1: Authenticated owner-canary access policy
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/core/config.py:1022-1043`
-- Create: `apps/api/src/omnia_api/services/project_cell_access.py`
+- Modify: `apps/api/src/yleum_api/core/config.py:1022-1043`
+- Create: `apps/api/src/yleum_api/services/project_cell_access.py`
 - Create: `apps/api/tests/test_project_cell_access.py`
 
 **Interfaces:**
-- Consumes: `omnia_api.models.user.User`, `omnia_api.core.config.Settings`
+- Consumes: `yleum_api.models.user.User`, `yleum_api.core.config.Settings`
 - Produces: `ProjectCellAccessDecision(enabled: bool, provider: Literal["legacy", "docker_owner_canary"], reason: str)` and `decide_project_cell_access(user: User, settings: Settings | None = None) -> ProjectCellAccessDecision`
 
 - [ ] **Step 1: Write the failing access-policy tests**
@@ -43,9 +43,9 @@
 from datetime import UTC, datetime
 from uuid import uuid4
 
-from omnia_api.core.config import Settings
-from omnia_api.models.user import User
-from omnia_api.services.project_cell_access import decide_project_cell_access
+from yleum_api.core.config import Settings
+from yleum_api.models.user import User
+from yleum_api.services.project_cell_access import decide_project_cell_access
 
 
 def _user(*, email: str | None, verified: bool, anon: bool = False) -> User:
@@ -118,8 +118,8 @@ Create the service with an immutable return type:
 from dataclasses import dataclass
 from typing import Literal
 
-from omnia_api.core.config import Settings, get_settings
-from omnia_api.models.user import User
+from yleum_api.core.config import Settings, get_settings
+from yleum_api.models.user import User
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,8 +149,8 @@ def decide_project_cell_access(
 
 ```bash
 uv run pytest tests/test_project_cell_access.py -q
-uv run ruff check src/omnia_api/core/config.py src/omnia_api/services/project_cell_access.py tests/test_project_cell_access.py
-uv run mypy src/omnia_api/services/project_cell_access.py
+uv run ruff check src/yleum_api/core/config.py src/yleum_api/services/project_cell_access.py tests/test_project_cell_access.py
+uv run mypy src/yleum_api/services/project_cell_access.py
 ```
 
 Expected: all commands pass; no runtime code imports this helper yet.
@@ -160,8 +160,8 @@ Expected: all commands pass; no runtime code imports this helper yet.
 ### Task 2: Durable workspace and operation records
 
 **Files:**
-- Create: `apps/api/src/omnia_api/models/project_cell.py`
-- Modify: `apps/api/src/omnia_api/models/__init__.py`
+- Create: `apps/api/src/yleum_api/models/project_cell.py`
+- Modify: `apps/api/src/yleum_api/models/__init__.py`
 - Create: `apps/api/migrations/versions/0052_project_cell_control_foundation.py`
 - Create: `apps/api/tests/test_project_cell_models.py`
 - Modify: `apps/api/tests/test_migrations_single_head.py`
@@ -313,7 +313,7 @@ Expected: tests pass and the upgrade/downgrade/upgrade cycle succeeds against th
 ### Task 3: Idempotent workspace and operation reservation service
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/project_cells.py`
+- Create: `apps/api/src/yleum_api/services/project_cells.py`
 - Create: `apps/api/tests/test_project_cells.py`
 
 **Interfaces:**
@@ -411,8 +411,8 @@ success. Use named domain exceptions rather than `HTTPException` in the service.
 
 ```bash
 uv run pytest tests/test_project_cells.py tests/test_generation_runs.py -q
-uv run ruff check src/omnia_api/services/project_cells.py tests/test_project_cells.py
-uv run mypy src/omnia_api/services/project_cells.py
+uv run ruff check src/yleum_api/services/project_cells.py tests/test_project_cells.py
+uv run mypy src/yleum_api/services/project_cells.py
 ```
 
 Expected: all tests pass and existing generation single-flight behavior is unchanged.
@@ -422,14 +422,14 @@ Expected: all tests pass and existing generation single-flight behavior is uncha
 ### Task 4: Replaceable orchestrator provider with a dark capability endpoint
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/config.py:16-216`
-- Create: `apps/orchestrator/src/omnia_orchestrator/core/workspace_provider.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/disabled_workspace_provider.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/docker_owner_canary_provider.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/workspace_provider_factory.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/main.py:65-69`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/config.py:16-216`
+- Create: `apps/orchestrator/src/yleum_orchestrator/core/workspace_provider.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/disabled_workspace_provider.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/docker_owner_canary_provider.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/workspace_provider_factory.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/main.py:65-69`
 - Modify: `apps/orchestrator/.env.example`
 - Create: `apps/orchestrator/tests/test_workspace_provider.py`
 - Create: `apps/orchestrator/tests/test_workspace_router.py`
@@ -559,8 +559,8 @@ Expected: all tests pass; existing runtime routes remain unchanged.
 ### Task 5: API readiness client and control coordinator
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/orchestrator_client.py`
-- Create: `apps/api/src/omnia_api/services/project_cell_control.py`
+- Modify: `apps/api/src/yleum_api/services/orchestrator_client.py`
+- Create: `apps/api/src/yleum_api/services/project_cell_control.py`
 - Modify: `apps/api/tests/test_orchestrator_client.py`
 - Create: `apps/api/tests/test_project_cell_control.py`
 
@@ -633,8 +633,8 @@ operation, or modify a generation run in this subproject.
 
 ```bash
 uv run pytest tests/test_orchestrator_client.py tests/test_project_cell_control.py -q
-uv run ruff check src/omnia_api/services/orchestrator_client.py src/omnia_api/services/project_cell_control.py tests/test_project_cell_control.py
-uv run mypy src/omnia_api/services/project_cell_control.py
+uv run ruff check src/yleum_api/services/orchestrator_client.py src/yleum_api/services/project_cell_control.py tests/test_project_cell_control.py
+uv run mypy src/yleum_api/services/project_cell_control.py
 ```
 
 Expected: all tests pass; no public route imports the coordinator.
@@ -645,8 +645,8 @@ Expected: all tests pass; no public route imports the coordinator.
 
 **Files:**
 - Modify: `otchet/data.json`
-- Verify only: `apps/api/src/omnia_api/routers/messages.py`
-- Verify only: `apps/orchestrator/src/omnia_orchestrator/routers/runtime.py`
+- Verify only: `apps/api/src/yleum_api/routers/messages.py`
+- Verify only: `apps/orchestrator/src/yleum_orchestrator/routers/runtime.py`
 - Verify only: `apps/llm-gateway/deploy/full/docker-compose.yml`
 
 **Interfaces:**
@@ -659,7 +659,7 @@ Add to `test_project_cell_control.py`:
 
 ```python
 def test_control_foundation_is_not_imported_by_public_prompt_router():
-    source = Path("src/omnia_api/routers/messages.py").read_text(encoding="utf-8")
+    source = Path("src/yleum_api/routers/messages.py").read_text(encoding="utf-8")
     assert "project_cell_control" not in source
     assert "get_project_cell_capabilities" not in source
 ```

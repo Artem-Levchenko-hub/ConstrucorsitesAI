@@ -8,7 +8,7 @@
 
 ## Владельцы операций
 
-Новый пакет находится в `apps/api/src/omnia_api/services/generation/`.
+Новый пакет находится в `apps/api/src/yleum_api/services/generation/`.
 
 | Граница | Ответственность |
 | --- | --- |

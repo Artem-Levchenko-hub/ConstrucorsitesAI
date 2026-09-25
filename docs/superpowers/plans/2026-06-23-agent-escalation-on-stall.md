@@ -10,9 +10,9 @@
 
 **Context for the implementer (read first):**
 - This is the LIVE prod path: `USE_AGENTIC_BUILDER=true` is already set in prod, agent role currently resolves to `deepseek-v4-pro` (cheap) — that cheap model degenerating into loops is the verified root cause of the recent `fix(agent): ...loop...` commits. This plan fixes it at the source (model) instead of adding a 4th band-aid guard.
-- The loop and its three guards live in `apps/api/src/omnia_api/services/agent_builder.py` `run_agent_build` (starts line 157). Threshold constants: `_NO_WRITE_NUDGE_AT=5` (L365), `_NO_WRITE_ABORT_AT=14` (L366), `_REPEAT_NUDGE_AT=2` (L371), `_REPEAT_ABORT_AT=4` (L372).
+- The loop and its three guards live in `apps/api/src/yleum_api/services/agent_builder.py` `run_agent_build` (starts line 157). Threshold constants: `_NO_WRITE_NUDGE_AT=5` (L365), `_NO_WRITE_ABORT_AT=14` (L366), `_REPEAT_NUDGE_AT=2` (L371), `_REPEAT_ABORT_AT=4` (L372).
 - `model` is currently used on the gateway call inside the per-step retry block (≈L205). `complete` is injectable (defaults to `llm_client.complete_chat`) — tests inject a fake.
-- The only call site is `apps/api/src/omnia_api/routers/messages.py` ≈L2364-2374 (`_agent_model = model_for_role("agent", override=force_model)` then `run_agent_build(... model=_agent_model ...)`).
+- The only call site is `apps/api/src/yleum_api/routers/messages.py` ≈L2364-2374 (`_agent_model = model_for_role("agent", override=force_model)` then `run_agent_build(... model=_agent_model ...)`).
 - Run tests from `apps/api` with `uv run pytest`.
 
 **Out of scope (separate plan):** gateway rate-governance + GigaChat sibling deployment (apps/llm-gateway) — that is the independent Slice 2 subsystem and gets its own plan. Also note: `AGENT_BUILDER_MAX_STEPS=120` in prod is an ENV tuning, not a code change — flag for the owner separately (120 cheap-model steps is a lot of thrash budget; with escalation the model gets smart on stall, which makes a high budget less harmful, but consider lowering to ~40-60).
@@ -22,7 +22,7 @@
 ### Task 1: Add the `agent_escalation` role to the model map
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/core/config.py` (the `ROLE_MODEL_MAP` dict, around L990 where `"agent"` is defined)
+- Modify: `apps/api/src/yleum_api/core/config.py` (the `ROLE_MODEL_MAP` dict, around L990 where `"agent"` is defined)
 
 - [ ] **Step 1: Add the role entry**
 
@@ -41,13 +41,13 @@ In `ROLE_MODEL_MAP`, directly under the existing `"agent"` line, add:
 
 - [ ] **Step 2: Verify the role resolves**
 
-Run: `cd apps/api && uv run python -c "from omnia_api.core.config import model_for_role; print(model_for_role('agent_escalation'))"`
+Run: `cd apps/api && uv run python -c "from yleum_api.core.config import model_for_role; print(model_for_role('agent_escalation'))"`
 Expected: `deepseek-v4-pro-thinking`
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/core/config.py
+git add apps/api/src/yleum_api/core/config.py
 git commit -m "feat(agent): add agent_escalation role (deepseek-v4-pro-thinking) for on-stall upgrade"
 ```
 
@@ -56,7 +56,7 @@ git commit -m "feat(agent): add agent_escalation role (deepseek-v4-pro-thinking)
 ### Task 2: Escalate the loop model on first nudge
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/agent_builder.py` (`run_agent_build`, L157+)
+- Modify: `apps/api/src/yleum_api/services/agent_builder.py` (`run_agent_build`, L157+)
 - Test: `apps/api/tests/test_agent_escalation.py` (create)
 
 - [ ] **Step 1: Write the failing tests**
@@ -69,7 +69,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnia_api.services import agent_builder
+from yleum_api.services import agent_builder
 
 
 def _read_reply() -> str:
@@ -236,7 +236,7 @@ Expected: all PASS (existing 25 + new 3)
 - [ ] **Step 9: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/services/agent_builder.py apps/api/tests/test_agent_escalation.py
+git add apps/api/src/yleum_api/services/agent_builder.py apps/api/tests/test_agent_escalation.py
 git commit -m "feat(agent): escalate to stronger model on first stall-nudge (kills cheap-model loop degeneration)"
 ```
 
@@ -245,7 +245,7 @@ git commit -m "feat(agent): escalate to stronger model on first stall-nudge (kil
 ### Task 3: Wire the escalation model at the call site
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/routers/messages.py` (≈L2364-2374, the single `run_agent_build` call)
+- Modify: `apps/api/src/yleum_api/routers/messages.py` (≈L2364-2374, the single `run_agent_build` call)
 
 - [ ] **Step 1: Resolve and pass the escalation model**
 
@@ -272,13 +272,13 @@ Where `_agent_model` is resolved (≈L2366), add the escalation model right afte
 
 - [ ] **Step 2: Typecheck / import-check the module**
 
-Run: `cd apps/api && uv run python -c "import omnia_api.routers.messages"`
+Run: `cd apps/api && uv run python -c "import yleum_api.routers.messages"`
 Expected: no error (imports cleanly; `model_for_role` is already imported in this module).
 
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/routers/messages.py
+git add apps/api/src/yleum_api/routers/messages.py
 git commit -m "feat(agent): pass agent_escalation model into the build loop"
 ```
 
@@ -293,7 +293,7 @@ Expected: all green (no regressions).
 
 - [ ] **Step 2: Lint the changed files (if the project lints)**
 
-Run: `cd apps/api && uv run ruff check src/omnia_api/services/agent_builder.py src/omnia_api/core/config.py src/omnia_api/routers/messages.py`
+Run: `cd apps/api && uv run ruff check src/yleum_api/services/agent_builder.py src/yleum_api/core/config.py src/yleum_api/routers/messages.py`
 Expected: no errors (fix any reported).
 
 ---

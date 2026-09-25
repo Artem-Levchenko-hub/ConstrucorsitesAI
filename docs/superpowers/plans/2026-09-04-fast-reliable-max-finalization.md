@@ -33,39 +33,39 @@
 ### API persistence and domain services
 
 - Create `apps/api/migrations/versions/0056_project_cell_finalization.py`: create proof identity/result, activity lease, and generation event tables without rewriting historical generation data.
-- Modify `apps/api/src/omnia_api/models/project_cell.py`: define `ProjectCellProof`, `ProjectCellProofResult`, and `ProjectCellActivityLease`.
-- Create `apps/api/src/omnia_api/models/generation_event.py`: define the append-only per-run sequence model.
-- Modify `apps/api/src/omnia_api/models/__init__.py`: export the four new models.
-- Create `apps/api/src/omnia_api/services/project_cell_proofs.py`: canonical digest construction, dimension keys, immutable result lookup/recording, and invalidation semantics.
-- Create `apps/api/src/omnia_api/services/project_cell_activity.py`: durable lease start/heartbeat/finish/reconcile APIs.
-- Create `apps/api/src/omnia_api/services/generation_events.py`: allocate monotonically increasing sequence numbers, persist redacted events, replay through a high-water mark, then fan out.
-- Create `apps/api/src/omnia_api/services/max_finalization.py`: the only MAX finalization state machine and acceptance owner.
-- Create `apps/api/src/omnia_api/services/generation_metrics.py`: phase timing/build-count projection into `GenerationRun.agent_state` and structured terminal logs.
+- Modify `apps/api/src/yleum_api/models/project_cell.py`: define `ProjectCellProof`, `ProjectCellProofResult`, and `ProjectCellActivityLease`.
+- Create `apps/api/src/yleum_api/models/generation_event.py`: define the append-only per-run sequence model.
+- Modify `apps/api/src/yleum_api/models/__init__.py`: export the four new models.
+- Create `apps/api/src/yleum_api/services/project_cell_proofs.py`: canonical digest construction, dimension keys, immutable result lookup/recording, and invalidation semantics.
+- Create `apps/api/src/yleum_api/services/project_cell_activity.py`: durable lease start/heartbeat/finish/reconcile APIs.
+- Create `apps/api/src/yleum_api/services/generation_events.py`: allocate monotonically increasing sequence numbers, persist redacted events, replay through a high-water mark, then fan out.
+- Create `apps/api/src/yleum_api/services/max_finalization.py`: the only MAX finalization state machine and acceptance owner.
+- Create `apps/api/src/yleum_api/services/generation_metrics.py`: phase timing/build-count projection into `GenerationRun.agent_state` and structured terminal logs.
 
 ### API integration
 
-- Modify `apps/api/src/omnia_api/services/project_cell_executor.py`: expose current identity, distinct command roles, observed mutation deltas, stable operation IDs, and runtime proof without hidden apply/build work.
-- Modify `apps/api/src/omnia_api/services/orchestrator_client.py`: transport command-role, digest, journal-status, and heartbeat fields.
-- Modify `apps/api/src/omnia_api/services/agent_native.py`: preserve proof checkpoints across segments and remove unconditional cap/provider-stop builds.
-- Modify `apps/api/src/omnia_api/services/release_proof.py`: consume the coordinator's green build/runtime result instead of invoking build/runtime again.
-- Modify `apps/api/src/omnia_api/services/max_runtime_probe.py`: return one reusable, content-addressed runtime verification result for the exact preview identity.
-- Modify `apps/api/src/omnia_api/services/project_cell_capacity.py`: exclude all live activity and machine operations from hibernation and recheck after acquiring the lifecycle fence.
-- Modify `apps/api/src/omnia_api/routers/messages.py`: construct one coordinator, route agent checks through it, remove direct duplicate proof calls, and make snapshot/candidate promotion/terminalization idempotent.
-- Modify `apps/api/src/omnia_api/routers/ws.py`: accept `after_seq`, replay a captured DB high-water mark, connect live fanout, and fill the race gap.
-- Modify `apps/api/src/omnia_api/core/redis.py`: keep Redis as fanout only for durable generation progress; leave legacy non-generation publishers compatible.
-- Modify `apps/api/src/omnia_api/core/config.py` and `apps/api/.env.example`: add independently reversible rollout/watchdog settings.
+- Modify `apps/api/src/yleum_api/services/project_cell_executor.py`: expose current identity, distinct command roles, observed mutation deltas, stable operation IDs, and runtime proof without hidden apply/build work.
+- Modify `apps/api/src/yleum_api/services/orchestrator_client.py`: transport command-role, digest, journal-status, and heartbeat fields.
+- Modify `apps/api/src/yleum_api/services/agent_native.py`: preserve proof checkpoints across segments and remove unconditional cap/provider-stop builds.
+- Modify `apps/api/src/yleum_api/services/release_proof.py`: consume the coordinator's green build/runtime result instead of invoking build/runtime again.
+- Modify `apps/api/src/yleum_api/services/max_runtime_probe.py`: return one reusable, content-addressed runtime verification result for the exact preview identity.
+- Modify `apps/api/src/yleum_api/services/project_cell_capacity.py`: exclude all live activity and machine operations from hibernation and recheck after acquiring the lifecycle fence.
+- Modify `apps/api/src/yleum_api/routers/messages.py`: construct one coordinator, route agent checks through it, remove direct duplicate proof calls, and make snapshot/candidate promotion/terminalization idempotent.
+- Modify `apps/api/src/yleum_api/routers/ws.py`: accept `after_seq`, replay a captured DB high-water mark, connect live fanout, and fill the race gap.
+- Modify `apps/api/src/yleum_api/core/redis.py`: keep Redis as fanout only for durable generation progress; leave legacy non-generation publishers compatible.
+- Modify `apps/api/src/yleum_api/core/config.py` and `apps/api/.env.example`: add independently reversible rollout/watchdog settings.
 
 ### Portable orchestrator
 
-- Modify `apps/orchestrator/src/omnia_orchestrator/core/project_machine.py`: add `fast_check` and `full_build` task roles while retaining legacy roles for stored manifests.
-- Modify `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`: add strict command roles, digest snapshots, operation status, phase, deadline, heartbeat, and log-byte progress.
-- Modify `apps/orchestrator/src/omnia_orchestrator/services/machine_defaults.py`: declare install, fast-check, build, and final-test tasks separately and seed two-worker Next configuration.
-- Modify `apps/orchestrator/src/omnia_orchestrator/services/machine_adapter.py`: execute only the requested role, persist command progress, expose identity capabilities, and start the exact built artifact without replaying bootstrap.
-- Modify `apps/orchestrator/src/omnia_orchestrator/services/project_machine.py`: make the detached operation journal reattachable and terminally idempotent.
-- Modify `apps/orchestrator/src/omnia_orchestrator/services/docker_machine_backend.py`: compute the controller-owned environment digest, expose 2 CPU/2 GiB limits, retain sandbox controls, and bound logs/processes.
-- Modify `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`: return before/after digest snapshots and expose operation-status reconciliation under the workspace lock.
-- Modify `apps/orchestrator/src/omnia_orchestrator/core/cell_resources.py`: represent the active machine, managed services, and helpers as separately summed quotas.
-- Modify `apps/orchestrator/src/omnia_orchestrator/core/config.py` and `apps/orchestrator/.env.example`: configure resource profile v2 and command heartbeat/grace values.
+- Modify `apps/orchestrator/src/yleum_orchestrator/core/project_machine.py`: add `fast_check` and `full_build` task roles while retaining legacy roles for stored manifests.
+- Modify `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`: add strict command roles, digest snapshots, operation status, phase, deadline, heartbeat, and log-byte progress.
+- Modify `apps/orchestrator/src/yleum_orchestrator/services/machine_defaults.py`: declare install, fast-check, build, and final-test tasks separately and seed two-worker Next configuration.
+- Modify `apps/orchestrator/src/yleum_orchestrator/services/machine_adapter.py`: execute only the requested role, persist command progress, expose identity capabilities, and start the exact built artifact without replaying bootstrap.
+- Modify `apps/orchestrator/src/yleum_orchestrator/services/project_machine.py`: make the detached operation journal reattachable and terminally idempotent.
+- Modify `apps/orchestrator/src/yleum_orchestrator/services/docker_machine_backend.py`: compute the controller-owned environment digest, expose 2 CPU/2 GiB limits, retain sandbox controls, and bound logs/processes.
+- Modify `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`: return before/after digest snapshots and expose operation-status reconciliation under the workspace lock.
+- Modify `apps/orchestrator/src/yleum_orchestrator/core/cell_resources.py`: represent the active machine, managed services, and helpers as separately summed quotas.
+- Modify `apps/orchestrator/src/yleum_orchestrator/core/config.py` and `apps/orchestrator/.env.example`: configure resource profile v2 and command heartbeat/grace values.
 
 ### Web reconnect projection
 
@@ -85,8 +85,8 @@
 ### Task 1: Add rollout observability and durable finalization records
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/generation_metrics.py`
-- Modify: `apps/api/src/omnia_api/core/config.py`
+- Create: `apps/api/src/yleum_api/services/generation_metrics.py`
+- Modify: `apps/api/src/yleum_api/core/config.py`
 - Modify: `apps/api/.env.example`
 - Create: `apps/api/tests/test_generation_metrics.py`
 - Create: `apps/api/tests/test_config.py`
@@ -154,7 +154,7 @@ Store only integer timestamps, elapsed milliseconds, counters, the current phase
 
 - [ ] **Step 4: Run tests, lint, and type checking**
 
-Run: `cd apps/api && uv run pytest tests/test_generation_metrics.py tests/test_config.py -q && uv run ruff check src/omnia_api/services/generation_metrics.py src/omnia_api/core/config.py tests/test_generation_metrics.py tests/test_config.py && uv run mypy src/omnia_api/services/generation_metrics.py src/omnia_api/core/config.py`
+Run: `cd apps/api && uv run pytest tests/test_generation_metrics.py tests/test_config.py -q && uv run ruff check src/yleum_api/services/generation_metrics.py src/yleum_api/core/config.py tests/test_generation_metrics.py tests/test_config.py && uv run mypy src/yleum_api/services/generation_metrics.py src/yleum_api/core/config.py`
 
 Expected: PASS; malformed counter names and deadline values outside Pydantic bounds are rejected.
 
@@ -166,12 +166,12 @@ Do not commit yet; the schema and its metrics projection form one reviewable per
 
 **Files:**
 - Create: `apps/api/migrations/versions/0056_project_cell_finalization.py`
-- Modify: `apps/api/src/omnia_api/models/project_cell.py`
-- Create: `apps/api/src/omnia_api/models/generation_event.py`
-- Modify: `apps/api/src/omnia_api/models/__init__.py`
-- Create: `apps/api/src/omnia_api/services/project_cell_proofs.py`
-- Create: `apps/api/src/omnia_api/services/project_cell_activity.py`
-- Create: `apps/api/src/omnia_api/services/generation_events.py`
+- Modify: `apps/api/src/yleum_api/models/project_cell.py`
+- Create: `apps/api/src/yleum_api/models/generation_event.py`
+- Modify: `apps/api/src/yleum_api/models/__init__.py`
+- Create: `apps/api/src/yleum_api/services/project_cell_proofs.py`
+- Create: `apps/api/src/yleum_api/services/project_cell_activity.py`
+- Create: `apps/api/src/yleum_api/services/generation_events.py`
 - Modify: `apps/api/tests/test_migrations_single_head.py`
 - Modify: `apps/api/tests/test_project_cell_migration_roundtrip.py`
 - Create: `apps/api/tests/test_project_cell_proofs.py`
@@ -336,27 +336,27 @@ Fanout is a separate post-commit call `publish_generation_event(event)` so Redis
 
 - [ ] **Step 6: Run persistence, migration, lint, and type tests**
 
-Run: `cd apps/api && uv run pytest tests/test_migrations_single_head.py tests/test_project_cell_migration_roundtrip.py tests/test_project_cell_proofs.py tests/test_project_cell_activity.py tests/test_generation_events.py -q && uv run ruff check migrations/versions/0056_project_cell_finalization.py src/omnia_api/models src/omnia_api/services/project_cell_proofs.py src/omnia_api/services/project_cell_activity.py src/omnia_api/services/generation_events.py tests/test_project_cell_proofs.py tests/test_project_cell_activity.py tests/test_generation_events.py && uv run mypy src/omnia_api/models/project_cell.py src/omnia_api/models/generation_event.py src/omnia_api/services/project_cell_proofs.py src/omnia_api/services/project_cell_activity.py src/omnia_api/services/generation_events.py`
+Run: `cd apps/api && uv run pytest tests/test_migrations_single_head.py tests/test_project_cell_migration_roundtrip.py tests/test_project_cell_proofs.py tests/test_project_cell_activity.py tests/test_generation_events.py -q && uv run ruff check migrations/versions/0056_project_cell_finalization.py src/yleum_api/models src/yleum_api/services/project_cell_proofs.py src/yleum_api/services/project_cell_activity.py src/yleum_api/services/generation_events.py tests/test_project_cell_proofs.py tests/test_project_cell_activity.py tests/test_generation_events.py && uv run mypy src/yleum_api/models/project_cell.py src/yleum_api/models/generation_event.py src/yleum_api/services/project_cell_proofs.py src/yleum_api/services/project_cell_activity.py src/yleum_api/services/generation_events.py`
 
 Expected: PASS, including concurrent sequence allocation and duplicate terminal proof rejection.
 
 - [ ] **Step 7: Checkpoint the observability and persistence contract for review**
 
-Run: `git diff --check -- apps/api/migrations apps/api/src/omnia_api apps/api/tests apps/api/.env.example`
+Run: `git diff --check -- apps/api/migrations apps/api/src/yleum_api apps/api/tests apps/api/.env.example`
 
 Expected: no whitespace errors. Record the exact passing commands and changed files; leave the change uncommitted for the final `luna_delivery` handoff.
 
 ### Task 2: Split portable commands and classify execution by digest
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/project_machine.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/machine_defaults.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/machine_adapter.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_machine_backend.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/project_machine.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`
-- Modify: `apps/api/src/omnia_api/services/orchestrator_client.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/project_machine.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/machine_defaults.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/machine_adapter.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_machine_backend.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/project_machine.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`
+- Modify: `apps/api/src/yleum_api/services/orchestrator_client.py`
 - Test: `apps/orchestrator/tests/test_project_machine_manifest.py`
 - Test: `apps/orchestrator/tests/test_machine_defaults.py`
 - Test: `apps/orchestrator/tests/test_machine_adapter.py`
@@ -479,9 +479,9 @@ Persist journal fields before Docker start, refresh `heartbeat_at`, `phase`, and
 
 - [ ] **Step 6: Run all contract tests, lint, and type checks**
 
-Run: `cd apps/orchestrator && uv run pytest tests/test_project_machine_manifest.py tests/test_machine_defaults.py tests/test_machine_adapter.py tests/test_project_machine.py tests/test_docker_machine_backend.py -q && uv run ruff check src tests/test_project_machine_manifest.py tests/test_machine_defaults.py tests/test_machine_adapter.py tests/test_project_machine.py tests/test_docker_machine_backend.py && uv run mypy src/omnia_orchestrator`
+Run: `cd apps/orchestrator && uv run pytest tests/test_project_machine_manifest.py tests/test_machine_defaults.py tests/test_machine_adapter.py tests/test_project_machine.py tests/test_docker_machine_backend.py -q && uv run ruff check src tests/test_project_machine_manifest.py tests/test_machine_defaults.py tests/test_machine_adapter.py tests/test_project_machine.py tests/test_docker_machine_backend.py && uv run mypy src/yleum_orchestrator`
 
-Run: `cd apps/api && uv run pytest tests/test_orchestrator_client.py -q && uv run ruff check src/omnia_api/services/orchestrator_client.py tests/test_orchestrator_client.py && uv run mypy src/omnia_api/services/orchestrator_client.py`
+Run: `cd apps/api && uv run pytest tests/test_orchestrator_client.py -q && uv run ruff check src/yleum_api/services/orchestrator_client.py tests/test_orchestrator_client.py && uv run mypy src/yleum_api/services/orchestrator_client.py`
 
 Expected: PASS; the full-build trace contains no install task and clean commands report no mutation.
 
@@ -492,8 +492,8 @@ Do not commit yet; the API executor must consume this transport in the same revi
 #### API executor red/green cycle
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/project_cell_executor.py`
-- Modify: `apps/api/src/omnia_api/services/max_runtime_probe.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_executor.py`
+- Modify: `apps/api/src/yleum_api/services/max_runtime_probe.py`
 - Test: `apps/api/tests/test_project_cell_executor.py`
 - Test: `apps/api/tests/test_max_runtime_probe.py`
 
@@ -586,22 +586,22 @@ Build/test/probe/read/log actions with equal identities do not invalidate anythi
 
 - [ ] **Step 5: Run focused and routing regressions**
 
-Run: `cd apps/api && uv run pytest tests/test_project_cell_executor.py tests/test_max_runtime_probe.py tests/test_messages_project_cell.py -q && uv run ruff check src/omnia_api/services/project_cell_executor.py src/omnia_api/services/max_runtime_probe.py tests/test_project_cell_executor.py tests/test_max_runtime_probe.py && uv run mypy src/omnia_api/services/project_cell_executor.py src/omnia_api/services/max_runtime_probe.py`
+Run: `cd apps/api && uv run pytest tests/test_project_cell_executor.py tests/test_max_runtime_probe.py tests/test_messages_project_cell.py -q && uv run ruff check src/yleum_api/services/project_cell_executor.py src/yleum_api/services/max_runtime_probe.py tests/test_project_cell_executor.py tests/test_max_runtime_probe.py && uv run mypy src/yleum_api/services/project_cell_executor.py src/yleum_api/services/max_runtime_probe.py`
 
 Expected: PASS; the selected Project Cell never falls back to legacy execution and clean commands retain their proof identity.
 
 - [ ] **Step 6: Checkpoint role separation and identity-aware execution for review**
 
-Run: `git diff --check -- apps/orchestrator apps/api/src/omnia_api/services/orchestrator_client.py apps/api/src/omnia_api/services/project_cell_executor.py apps/api/src/omnia_api/services/max_runtime_probe.py apps/api/tests`
+Run: `git diff --check -- apps/orchestrator apps/api/src/yleum_api/services/orchestrator_client.py apps/api/src/yleum_api/services/project_cell_executor.py apps/api/src/yleum_api/services/max_runtime_probe.py apps/api/tests`
 
 Expected: no whitespace errors. Record the exact passing commands and changed files; leave the change uncommitted for the final `luna_delivery` handoff.
 
 ### Task 3: Implement and integrate the single finalization coordinator
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/max_finalization.py`
-- Modify: `apps/api/src/omnia_api/services/release_proof.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_candidates.py`
+- Create: `apps/api/src/yleum_api/services/max_finalization.py`
+- Modify: `apps/api/src/yleum_api/services/release_proof.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_candidates.py`
 - Create: `apps/api/tests/test_max_finalization.py`
 - Test: `apps/api/tests/test_release_proof.py`
 - Test: `apps/api/tests/test_project_cells.py`
@@ -724,7 +724,7 @@ The flagged MAX Project Cell path must never call `project_cell_handle.execute(A
 
 - [ ] **Step 6: Run coordinator, release, candidate, lint, and type tests**
 
-Run: `cd apps/api && uv run pytest tests/test_max_finalization.py tests/test_release_proof.py tests/test_project_cells.py tests/test_max_generation_contract.py -q && uv run ruff check src/omnia_api/services/max_finalization.py src/omnia_api/services/release_proof.py src/omnia_api/services/project_cell_candidates.py tests/test_max_finalization.py tests/test_release_proof.py tests/test_project_cells.py && uv run mypy src/omnia_api/services/max_finalization.py src/omnia_api/services/release_proof.py src/omnia_api/services/project_cell_candidates.py`
+Run: `cd apps/api && uv run pytest tests/test_max_finalization.py tests/test_release_proof.py tests/test_project_cells.py tests/test_max_generation_contract.py -q && uv run ruff check src/yleum_api/services/max_finalization.py src/yleum_api/services/release_proof.py src/yleum_api/services/project_cell_candidates.py tests/test_max_finalization.py tests/test_release_proof.py tests/test_project_cells.py && uv run mypy src/yleum_api/services/max_finalization.py src/yleum_api/services/release_proof.py src/yleum_api/services/project_cell_candidates.py`
 
 Expected: PASS; command traces show one full build, one runtime probe, and no command during release evidence consumption.
 
@@ -735,8 +735,8 @@ Do not commit yet; the coordinator is not independently useful until all MAX cal
 #### MAX call-site integration red/green cycle
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/agent_native.py`
-- Modify: `apps/api/src/omnia_api/routers/messages.py`
+- Modify: `apps/api/src/yleum_api/services/agent_native.py`
+- Modify: `apps/api/src/yleum_api/routers/messages.py`
 - Test: `apps/api/tests/test_agent_native.py`
 - Test: `apps/api/tests/test_messages_project_cell.py`
 - Test: `apps/api/tests/test_generation_runs.py`
@@ -841,27 +841,27 @@ Expected: PASS. The authored fixture has zero provider calls and exactly one boo
 
 - [ ] **Step 6: Run static checks on the high-risk orchestration files**
 
-Run: `cd apps/api && uv run ruff check src/omnia_api/services/agent_native.py src/omnia_api/services/max_finalization.py src/omnia_api/routers/messages.py tests/test_agent_native.py tests/test_messages_project_cell.py tests/test_max_finalization_integration.py && uv run mypy src/omnia_api/services/agent_native.py src/omnia_api/services/max_finalization.py src/omnia_api/routers/messages.py`
+Run: `cd apps/api && uv run ruff check src/yleum_api/services/agent_native.py src/yleum_api/services/max_finalization.py src/yleum_api/routers/messages.py tests/test_agent_native.py tests/test_messages_project_cell.py tests/test_max_finalization_integration.py && uv run mypy src/yleum_api/services/agent_native.py src/yleum_api/services/max_finalization.py src/yleum_api/routers/messages.py`
 
 Expected: PASS without unused compatibility branches or untyped checkpoint fields.
 
 - [ ] **Step 7: Checkpoint the end-to-end single-pass coordinator flow for review**
 
-Run: `git diff --check -- apps/api/src/omnia_api apps/api/tests`
+Run: `git diff --check -- apps/api/src/yleum_api apps/api/tests`
 
 Expected: no whitespace errors. Record the exact passing commands and changed files; leave the change uncommitted for the final `luna_delivery` handoff.
 
 ### Task 4: Add durable heartbeat, restart reattachment, hibernation veto, and terminal watchdog
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/project_cell_activity.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_executor.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_capacity.py`
-- Modify: `apps/api/src/omnia_api/services/max_finalization.py`
-- Modify: `apps/api/src/omnia_api/routers/messages.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/project_machine.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/machine_adapter.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_activity.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_executor.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_capacity.py`
+- Modify: `apps/api/src/yleum_api/services/max_finalization.py`
+- Modify: `apps/api/src/yleum_api/routers/messages.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/project_machine.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/machine_adapter.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`
 - Test: `apps/api/tests/test_project_cell_activity.py`
 - Test: `apps/api/tests/test_project_cell_capacity.py`
 - Test: `apps/api/tests/test_project_cell_capacity_integration.py`
@@ -987,11 +987,11 @@ Expected: no whitespace errors. Record the exact passing commands and changed fi
 ### Task 5: Introduce the truthful 2 CPU/2 GiB active profile and safe project caches
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/config.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/cell_resources.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/machine_adapter.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_machine_backend.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/machine_defaults.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/config.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/cell_resources.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/machine_adapter.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_machine_backend.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/machine_defaults.py`
 - Modify: `apps/orchestrator/.env.example`
 - Test: `apps/orchestrator/tests/test_cell_resources.py`
 - Test: `apps/orchestrator/tests/test_cell_reservations.py`
@@ -1057,7 +1057,7 @@ Remove `experimental: { cpus: 1 }` from the seed and set supported two-worker en
 
 - [ ] **Step 5: Run resource, security-boundary, lint, and type tests**
 
-Run: `cd apps/orchestrator && uv run pytest tests/test_cell_resources.py tests/test_cell_reservations.py tests/test_docker_cell_resources.py tests/test_docker_machine_backend.py tests/test_machine_defaults.py -q && uv run ruff check src/omnia_orchestrator/core/config.py src/omnia_orchestrator/core/cell_resources.py src/omnia_orchestrator/services/machine_adapter.py src/omnia_orchestrator/services/docker_machine_backend.py src/omnia_orchestrator/services/machine_defaults.py tests/test_cell_resources.py tests/test_cell_reservations.py tests/test_docker_machine_backend.py tests/test_machine_defaults.py && uv run mypy src/omnia_orchestrator/core/config.py src/omnia_orchestrator/core/cell_resources.py src/omnia_orchestrator/services/machine_adapter.py src/omnia_orchestrator/services/docker_machine_backend.py`
+Run: `cd apps/orchestrator && uv run pytest tests/test_cell_resources.py tests/test_cell_reservations.py tests/test_docker_cell_resources.py tests/test_docker_machine_backend.py tests/test_machine_defaults.py -q && uv run ruff check src/yleum_orchestrator/core/config.py src/yleum_orchestrator/core/cell_resources.py src/yleum_orchestrator/services/machine_adapter.py src/yleum_orchestrator/services/docker_machine_backend.py src/yleum_orchestrator/services/machine_defaults.py tests/test_cell_resources.py tests/test_cell_reservations.py tests/test_docker_machine_backend.py tests/test_machine_defaults.py && uv run mypy src/yleum_orchestrator/core/config.py src/yleum_orchestrator/core/cell_resources.py src/yleum_orchestrator/services/machine_adapter.py src/yleum_orchestrator/services/docker_machine_backend.py`
 
 Expected: PASS with exact 2 CPU/2 GiB limits and unchanged host/network/credential denial assertions.
 
@@ -1070,10 +1070,10 @@ Expected: no whitespace errors. Record the exact passing commands and changed fi
 ### Task 6: Make progress replayable, verify the full contract, and deliver safely
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/generation_events.py`
-- Modify: `apps/api/src/omnia_api/core/redis.py`
-- Modify: `apps/api/src/omnia_api/routers/messages.py`
-- Modify: `apps/api/src/omnia_api/routers/ws.py`
+- Modify: `apps/api/src/yleum_api/services/generation_events.py`
+- Modify: `apps/api/src/yleum_api/core/redis.py`
+- Modify: `apps/api/src/yleum_api/routers/messages.py`
+- Modify: `apps/api/src/yleum_api/routers/ws.py`
 - Modify: `apps/web/src/lib/api/types.ts`
 - Modify: `apps/web/src/lib/agent-steps.ts`
 - Modify: `apps/web/src/hooks/usePromptStream.ts`
@@ -1202,7 +1202,7 @@ Store `lastGenerationSeq[runId]`; request replay after reconnect or any gap. Hea
 
 - [ ] **Step 7: Run replay, web, lint, and type checks**
 
-Run: `cd apps/api && uv run pytest tests/test_generation_events.py tests/test_ws_generation_replay.py tests/test_agent_progress.py -q && uv run ruff check src/omnia_api/services/generation_events.py src/omnia_api/core/redis.py src/omnia_api/routers/ws.py src/omnia_api/routers/messages.py tests/test_generation_events.py tests/test_ws_generation_replay.py`
+Run: `cd apps/api && uv run pytest tests/test_generation_events.py tests/test_ws_generation_replay.py tests/test_agent_progress.py -q && uv run ruff check src/yleum_api/services/generation_events.py src/yleum_api/core/redis.py src/yleum_api/routers/ws.py src/yleum_api/routers/messages.py tests/test_generation_events.py tests/test_ws_generation_replay.py`
 
 Run: `cd apps/web && pnpm test src/lib/__tests__/agent-steps.test.ts src/lib/__tests__/generation-event-replay.test.ts && pnpm typecheck && pnpm lint`
 
@@ -1256,9 +1256,9 @@ Expected: PASS. Record any unrelated pre-existing baseline failure verbatim and 
 
 - [ ] **Step 3: Run repository-wide static and unit verification**
 
-Run: `cd apps/api && uv run ruff check src tests migrations && uv run mypy src/omnia_api && uv run pytest -q`
+Run: `cd apps/api && uv run ruff check src tests migrations && uv run mypy src/yleum_api && uv run pytest -q`
 
-Run: `cd apps/orchestrator && uv run ruff check src tests && uv run mypy src/omnia_orchestrator && uv run pytest -q`
+Run: `cd apps/orchestrator && uv run ruff check src tests && uv run mypy src/yleum_orchestrator && uv run pytest -q`
 
 Run: `cd apps/web && npm test && npm run typecheck && npm run lint && npm run build`
 

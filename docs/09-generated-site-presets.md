@@ -5,7 +5,7 @@
 > `05-design-references.md`.
 >
 > Оперативные данные пресетов (HEX, шрифты, классы) живут в коде:
-> `apps/api/src/omnia_api/services/design_presets.py`. Этот документ —
+> `apps/api/src/yleum_api/services/design_presets.py`. Этот документ —
 > человекочитаемое зеркало. Держите синхронно.
 
 ## Зачем
@@ -166,11 +166,11 @@ footnote-style eyebrows «¹ Issue 12 · Spring 2026», табличная types
 
 | Изменение | Файл |
 |---|---|
-| Новый пресет / правка существующего | `apps/api/src/omnia_api/services/design_presets.py` |
-| Логика классификатора | `apps/api/src/omnia_api/services/preset_classifier.py` |
-| Новый kit-класс | `apps/api/src/omnia_api/templates/*/assets/omnia-kit.{css,js}` (×4, держать идентичными) |
-| Инжект пресета в prompt | `apps/api/src/omnia_api/services/prompt_builder.py:build_system_prompt` |
-| API-схема | `apps/api/src/omnia_api/schemas/project.py` |
+| Новый пресет / правка существующего | `apps/api/src/yleum_api/services/design_presets.py` |
+| Логика классификатора | `apps/api/src/yleum_api/services/preset_classifier.py` |
+| Новый kit-класс | `apps/api/src/yleum_api/templates/*/assets/omnia-kit.{css,js}` (×4, держать идентичными) |
+| Инжект пресета в prompt | `apps/api/src/yleum_api/services/prompt_builder.py:build_system_prompt` |
+| API-схема | `apps/api/src/yleum_api/schemas/project.py` |
 | Frontend badge | `apps/web/src/components/workspace/TopBar.tsx`, `apps/web/src/lib/api/types.ts` |
 | Документация | этот файл + `04-generation-rules.md` + `05-design-references.md` |
 
@@ -178,7 +178,7 @@ footnote-style eyebrows «¹ Issue 12 · Spring 2026», табличная types
 
 ```bash
 cd apps/api && PYTHONPATH=src .venv/Scripts/python -c "
-from omnia_api.services.preset_classifier import classify_preset_sync
+from yleum_api.services.preset_classifier import classify_preset_sync
 print(classify_preset_sync('SaaS для страховки велосипедов', 'landing', None))
 # expected: saas-product
 "

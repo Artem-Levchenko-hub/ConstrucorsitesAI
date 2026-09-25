@@ -362,7 +362,7 @@ partial unique index: одновременно может ожидаться т�
 | `is_active` | bool | NOT NULL DEFAULT true |
 | `created_at` | timestamptz | NOT NULL DEFAULT now() |
 
-**Seed:** `apps/api/src/omnia_api/seed/stack_templates.py` (Chat-2). Минимум P0 на launch — 3 записи.
+**Seed:** `apps/api/src/yleum_api/seed/stack_templates.py` (Chat-2). Минимум P0 на launch — 3 записи.
 
 ### `ui_kit_freeze`
 | Поле | Тип | Constraints |
@@ -379,7 +379,7 @@ partial unique index: одновременно может ожидаться т�
 
 **Индексы:** `(category)`, `(source)`, GIN `(applicable_stacks)`, GIN `(applicable_presets)`.
 
-**Seed:** `apps/api/src/omnia_api/seed/ui_kit_freeze.py` (Chat-2 пишет файл, **я** запускаю руками с экспортом из плагина ui-ux-pro-max).
+**Seed:** `apps/api/src/yleum_api/seed/ui_kit_freeze.py` (Chat-2 пишет файл, **я** запускаю руками с экспортом из плагина ui-ux-pro-max).
 
 ### `linked_repos`
 | Поле | Тип | Constraints |
@@ -461,7 +461,7 @@ COMMENT ON COLUMN usage.purpose IS
 |---|---|---|
 | `0008` | V3: projects(+5 cols) + stack_templates + ui_kit_freeze + linked_repos + onboarding_sessions + onboarding_messages + wallet_charges.type расширение + usage.purpose | Chat-2 (single atomic migration) |
 
-После 0008 Chat-2 запускает seed-скрипты вручную в dev: `python -m omnia_api.seed.stack_templates` + `python -m omnia_api.seed.ui_kit_freeze` (последний я добиваю реальными данными отдельно).
+После 0008 Chat-2 запускает seed-скрипты вручную в dev: `python -m yleum_api.seed.stack_templates` + `python -m yleum_api.seed.ui_kit_freeze` (последний я добиваю реальными данными отдельно).
 
 ## Что хранится НЕ в Postgres
 

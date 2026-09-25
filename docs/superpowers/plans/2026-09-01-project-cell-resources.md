@@ -37,15 +37,15 @@
 
 ## File Map
 
-- `apps/orchestrator/src/omnia_orchestrator/core/cell_resources.py` — immutable profile, deterministic names/labels, lifecycle envelopes, manifests, and validation.
-- `apps/orchestrator/src/omnia_orchestrator/core/config.py`, `apps/orchestrator/.env.example` — dark resource settings and protected-headroom configuration.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_admission.py` — host-capacity snapshot and one-bundle admission decision.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_lock.py` — per-workspace asyncio + cancellation-safe nonblocking process lock with one owner token per acquisition.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_state.py` — write-ahead lifecycle state machine plus permission-protected PostgreSQL credential store.
-- `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py` — isolated Docker SDK adapter and desired-state bundle reconciliation.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_checkpoint.py` — private staged checkpoint, verified restore, and pre-restore rollback checkpoint.
-- `apps/orchestrator/src/omnia_orchestrator/core/workspace_provider.py`, `apps/orchestrator/src/omnia_orchestrator/services/docker_owner_canary_provider.py`, `apps/orchestrator/src/omnia_orchestrator/services/workspace_provider_factory.py` — provider integration without legacy fallback.
-- `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`, `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py` — authenticated internal lifecycle contract.
+- `apps/orchestrator/src/yleum_orchestrator/core/cell_resources.py` — immutable profile, deterministic names/labels, lifecycle envelopes, manifests, and validation.
+- `apps/orchestrator/src/yleum_orchestrator/core/config.py`, `apps/orchestrator/.env.example` — dark resource settings and protected-headroom configuration.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_admission.py` — host-capacity snapshot and one-bundle admission decision.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_lock.py` — per-workspace asyncio + cancellation-safe nonblocking process lock with one owner token per acquisition.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_state.py` — write-ahead lifecycle state machine plus permission-protected PostgreSQL credential store.
+- `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py` — isolated Docker SDK adapter and desired-state bundle reconciliation.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_checkpoint.py` — private staged checkpoint, verified restore, and pre-restore rollback checkpoint.
+- `apps/orchestrator/src/yleum_orchestrator/core/workspace_provider.py`, `apps/orchestrator/src/yleum_orchestrator/services/docker_owner_canary_provider.py`, `apps/orchestrator/src/yleum_orchestrator/services/workspace_provider_factory.py` — provider integration without legacy fallback.
+- `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`, `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py` — authenticated internal lifecycle contract.
 - `apps/orchestrator/tests/test_cell_resources.py`, `test_cell_admission.py`, `test_cell_lock.py`, `test_cell_state.py`, `test_docker_cell_resources.py`, `test_cell_checkpoint.py`, `test_workspace_provider.py`, `test_workspace_router.py`, `test_project_cell_docker_integration.py` — unit, cross-process lock, crash-state, contract, security, and opt-in real-Docker lifecycle proof.
 - `apps/orchestrator/scripts/orchestrator_release.py`, `apps/orchestrator/scripts/project_cell_rollout.py`, `apps/orchestrator/deploy/omnia-orchestrator-current.conf`, `apps/orchestrator/tests/test_orchestrator_release.py`, `apps/orchestrator/tests/test_project_cell_rollout.py` — immutable SHA releases, first adoption, durable crash-recoverable cross-service rollout/rollback, and retention.
 - `otchet/data.json` — live hypothesis/evidence update; V4 remains incomplete.
@@ -56,8 +56,8 @@
 
 **Files:**
 - Read: `docs/superpowers/plans/2026-09-01-project-cell-fencing-hardening.md`
-- Read: `apps/api/src/omnia_api/services/project_cell_lifecycle.py`
-- Read: `apps/api/src/omnia_api/services/orchestrator_client.py`
+- Read: `apps/api/src/yleum_api/services/project_cell_lifecycle.py`
+- Read: `apps/api/src/yleum_api/services/orchestrator_client.py`
 - No API file is modified by this resource plan.
 
 **Interfaces:**
@@ -67,8 +67,8 @@
 - [ ] **Step 1: Prove the prerequisite revision is delivered and healthy**
 
 ```bash
-git log -1 --format=%H -- apps/api/src/omnia_api/services/project_cell_lifecycle.py
-git merge-base --is-ancestor "$(git log -1 --format=%H -- apps/api/src/omnia_api/services/project_cell_lifecycle.py)" origin/main
+git log -1 --format=%H -- apps/api/src/yleum_api/services/project_cell_lifecycle.py
+git merge-base --is-ancestor "$(git log -1 --format=%H -- apps/api/src/yleum_api/services/project_cell_lifecycle.py)" origin/main
 cd apps/api
 uv run pytest tests/test_project_cell_lifecycle.py tests/test_orchestrator_client.py tests/test_project_cells.py -q
 ```
@@ -90,9 +90,9 @@ Expected before resource implementation: no output. Repeat at the final review; 
 ### Task 2: Immutable resource contract, deterministic identity, and admission
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/core/cell_resources.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/cell_admission.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/config.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/core/cell_resources.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/cell_admission.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/config.py`
 - Modify: `apps/orchestrator/.env.example`
 - Create: `apps/orchestrator/tests/test_cell_resources.py`
 - Create: `apps/orchestrator/tests/test_cell_admission.py`
@@ -200,8 +200,8 @@ The capacity reader first queries `DockerClient.info()` on the selected daemon a
 
 ```bash
 uv run pytest tests/test_cell_resources.py tests/test_cell_admission.py -q
-uv run ruff check src/omnia_orchestrator/core/cell_resources.py src/omnia_orchestrator/services/cell_admission.py src/omnia_orchestrator/core/config.py tests/test_cell_resources.py tests/test_cell_admission.py
-uv run mypy src/omnia_orchestrator/core/cell_resources.py src/omnia_orchestrator/services/cell_admission.py
+uv run ruff check src/yleum_orchestrator/core/cell_resources.py src/yleum_orchestrator/services/cell_admission.py src/yleum_orchestrator/core/config.py tests/test_cell_resources.py tests/test_cell_admission.py
+uv run mypy src/yleum_orchestrator/core/cell_resources.py src/yleum_orchestrator/services/cell_admission.py
 ```
 
 Expected: all pass; default settings cannot mutate; existing running bundles are observable without consuming another admission slot, while a stopped bundle must pass headroom again before wake.
@@ -213,9 +213,9 @@ Expected: all pass; default settings cannot mutate; existing running bundles are
 ### Task 3: Labeled Docker bundle manager and durable control state
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/cell_state.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/cell_lock.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/cell_state.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/cell_lock.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py`
 - Create: `apps/orchestrator/tests/test_cell_lock.py`
 - Create: `apps/orchestrator/tests/test_cell_state.py`
 - Create: `apps/orchestrator/tests/test_docker_cell_resources.py`
@@ -419,8 +419,8 @@ Reconcile explicitly handles: volumes/networks created without sidecars; a final
 
 ```bash
 uv run pytest tests/test_cell_lock.py tests/test_cell_state.py tests/test_docker_cell_resources.py -q
-uv run ruff check src/omnia_orchestrator/services/cell_lock.py src/omnia_orchestrator/services/cell_state.py src/omnia_orchestrator/services/docker_cell_resources.py tests/test_cell_lock.py tests/test_cell_state.py tests/test_docker_cell_resources.py
-uv run mypy src/omnia_orchestrator/services/cell_lock.py src/omnia_orchestrator/services/cell_state.py src/omnia_orchestrator/services/docker_cell_resources.py
+uv run ruff check src/yleum_orchestrator/services/cell_lock.py src/yleum_orchestrator/services/cell_state.py src/yleum_orchestrator/services/docker_cell_resources.py tests/test_cell_lock.py tests/test_cell_state.py tests/test_docker_cell_resources.py
+uv run mypy src/yleum_orchestrator/services/cell_lock.py src/yleum_orchestrator/services/cell_state.py src/yleum_orchestrator/services/docker_cell_resources.py
 ```
 
 Expected: all pass; same-process managers and two truly spawned contenders against one lock file allow only one equal/stale-fence request to reach the side effect; fcntl uses `LOCK_EX|LOCK_NB`, msvcrt uses `LK_NBLCK`, and both backends perform one short attempt per worker call. A waiter cancelled behind a separately spawned holder leaves no late owner, journal entry, or Docker call, and a fresh contender acquires immediately after holder release. Cancellation after journal begin still releases the sole owner token while preserving the indeterminate journal. Empty-volume bootstrap, restart, init-helper failure, crashes at every phase, partial ensure/destroy, leaked helper, partial network removal, exact completed replay, and higher-fence reconcile are covered. Destroy never removes retained volumes, and an unsupported live lock backend fails closed.
@@ -432,9 +432,9 @@ Expected: all pass; same-process managers and two truly spawned contenders again
 ### Task 4: Private resource-level checkpoint and verified restore
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/cell_checkpoint.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/cell_checkpoint.py`
 - Create: `apps/orchestrator/tests/test_cell_checkpoint.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py`
 - Modify: `apps/orchestrator/tests/test_docker_cell_resources.py`
 
 **Interfaces:**
@@ -495,9 +495,9 @@ This task does not create runner checkpoints, accepted revisions, candidates, or
 
 ```bash
 uv run pytest tests/test_cell_checkpoint.py tests/test_docker_cell_resources.py -q
-uv run ruff check src/omnia_orchestrator/services/cell_checkpoint.py src/omnia_orchestrator/services/docker_cell_resources.py tests/test_cell_checkpoint.py
-uv run mypy src/omnia_orchestrator/services/cell_checkpoint.py src/omnia_orchestrator/services/docker_cell_resources.py
-rg -n "MINIO|S3|public.*bucket|hostPath|bind" src/omnia_orchestrator/services/cell_checkpoint.py
+uv run ruff check src/yleum_orchestrator/services/cell_checkpoint.py src/yleum_orchestrator/services/docker_cell_resources.py tests/test_cell_checkpoint.py
+uv run mypy src/yleum_orchestrator/services/cell_checkpoint.py src/yleum_orchestrator/services/docker_cell_resources.py
+rg -n "MINIO|S3|public.*bucket|hostPath|bind" src/yleum_orchestrator/services/cell_checkpoint.py
 ```
 
 Expected: tests and static checks pass; the final search has no matches. Corrupt hash, wrong workspace, stale fence, competing PostgreSQL owner, and failure at each verify/dump/apply/check/cleanup phase either restore the verified pre-restore checkpoint or leave `degraded`; success always leaves the bundle paused.
@@ -509,11 +509,11 @@ Expected: tests and static checks pass; the final search has no matches. Corrupt
 ### Task 5: Provider integration, authenticated lifecycle, and reconciliation
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/workspace_provider.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_owner_canary_provider.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/workspace_provider_factory.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/workspace_provider.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_owner_canary_provider.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/workspace_provider_factory.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`
 - Modify: `apps/orchestrator/tests/test_workspace_provider.py`
 - Modify: `apps/orchestrator/tests/test_workspace_router.py`
 
@@ -576,8 +576,8 @@ The existing capability route remains byte-compatible: `ready=False`, `state="un
 
 ```bash
 uv run pytest tests/test_workspace_provider.py tests/test_workspace_router.py -q
-uv run ruff check src/omnia_orchestrator/core/workspace_provider.py src/omnia_orchestrator/services/docker_owner_canary_provider.py src/omnia_orchestrator/services/workspace_provider_factory.py src/omnia_orchestrator/schemas/workspace.py src/omnia_orchestrator/routers/workspace.py tests/test_workspace_provider.py tests/test_workspace_router.py
-uv run mypy src/omnia_orchestrator/core/workspace_provider.py src/omnia_orchestrator/services/docker_owner_canary_provider.py src/omnia_orchestrator/routers/workspace.py
+uv run ruff check src/yleum_orchestrator/core/workspace_provider.py src/yleum_orchestrator/services/docker_owner_canary_provider.py src/yleum_orchestrator/services/workspace_provider_factory.py src/yleum_orchestrator/schemas/workspace.py src/yleum_orchestrator/routers/workspace.py tests/test_workspace_provider.py tests/test_workspace_router.py
+uv run mypy src/yleum_orchestrator/core/workspace_provider.py src/yleum_orchestrator/services/docker_owner_canary_provider.py src/yleum_orchestrator/routers/workspace.py
 ```
 
 Expected: all pass; missing/wrong token produces zero manager calls; default factory produces zero Docker client construction; no mutator can be called without `LifecycleMutation`; capability remains exactly unsupported while resource routes expose internal state.
@@ -645,8 +645,8 @@ Expected: all orchestrator checks pass and the API path command has no output. A
 - [ ] **Step 4: Perform the security invariant scan**
 
 ```bash
-rg -n "privileged.?=.?(True|true)|network_mode.?=.?(host|\"host\")|pid_mode|ipc_mode|/var/run/docker.sock|/run/containerd|ports.?=" src/omnia_orchestrator/services/cell_*.py src/omnia_orchestrator/services/docker_cell_resources.py
-rg -n "initial_env|provisioner|MINIO|S3|PROJECT_CELL_CANARY_EMAILS" src/omnia_orchestrator/services/docker_owner_canary_provider.py src/omnia_orchestrator/services/docker_cell_resources.py src/omnia_orchestrator/services/cell_checkpoint.py
+rg -n "privileged.?=.?(True|true)|network_mode.?=.?(host|\"host\")|pid_mode|ipc_mode|/var/run/docker.sock|/run/containerd|ports.?=" src/yleum_orchestrator/services/cell_*.py src/yleum_orchestrator/services/docker_cell_resources.py
+rg -n "initial_env|provisioner|MINIO|S3|PROJECT_CELL_CANARY_EMAILS" src/yleum_orchestrator/services/docker_owner_canary_provider.py src/yleum_orchestrator/services/docker_cell_resources.py src/yleum_orchestrator/services/cell_checkpoint.py
 ```
 
 Expected: the first command finds only explicit safe `privileged=False`/empty-port assertions if present; the second has no matches.
@@ -699,7 +699,7 @@ EnvironmentFile=
 EnvironmentFile=/opt/omnia-runtime/.env.orchestrator
 EnvironmentFile=/opt/omnia-runtime/releases/orchestrator/current/.release.env
 ExecStart=
-ExecStart=/opt/omnia-runtime/releases/orchestrator/current/apps/orchestrator/.venv/bin/uvicorn omnia_orchestrator.main:app --host 127.0.0.1 --port 8003
+ExecStart=/opt/omnia-runtime/releases/orchestrator/current/apps/orchestrator/.venv/bin/uvicorn yleum_orchestrator.main:app --host 127.0.0.1 --port 8003
 ```
 
 `activate` creates `current.next` as a relative symlink to the immutable SHA directory, fsyncs its parent, atomically `os.replace`s it over `current`, then runs fixed-argv `systemctl daemon-reload` and `systemctl restart omnia-orchestrator`. It calls local `/health` and requires exact `OMNIA_RELEASE_SHA`; failure atomically restores the prior symlink and restarts/health-checks the prior SHA. Code and release flags switch together through the one `current` symlink; stable secret env remains outside releases.

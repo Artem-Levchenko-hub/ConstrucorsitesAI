@@ -205,7 +205,7 @@ apps/api тут — тонкий прокси на orchestrator. Слой авт
 
 ### V2 Internal API (apps/api ↔ orchestrator на :8003)
 
-Не доступно публично. Auth: header `X-Internal-Token` (shared secret). Полный контракт — `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`. Краткий список:
+Не доступно публично. Auth: header `X-Internal-Token` (shared secret). Полный контракт — `apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py`. Краткий список:
 
 | Метод | Path | Назначение |
 |---|---|---|

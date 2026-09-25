@@ -5,14 +5,14 @@
 > один промпт обязан давать законченный продукт enterprise-уровня.
 >
 > **Операционный источник правил** — система-промпт в
-> [`apps/api/src/omnia_api/services/prompt_builder.py`](../apps/api/src/omnia_api/services/prompt_builder.py).
+> [`apps/api/src/yleum_api/services/prompt_builder.py`](../apps/api/src/yleum_api/services/prompt_builder.py).
 > Этот документ — человекочитаемая версия с обоснованием. Меняешь правила —
 > синхронизируй оба.
 
 ## MAX: сохранение данных при изменении приложения
 
 Общие английские инструкции находятся в
-[`max_data_evolution.py`](../apps/api/src/omnia_api/services/max_data_evolution.py).
+[`max_data_evolution.py`](../apps/api/src/yleum_api/services/max_data_evolution.py).
 Они добавляются к генерации, правкам, продолжению и автопочинке MAX; в Project Cell
 — после выбора среды, чтобы замена stack guide их не потеряла. Язык приложения
 и ответа остаётся выбранным пользователем. Арт-директор, который пишет только

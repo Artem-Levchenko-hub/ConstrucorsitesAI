@@ -172,7 +172,7 @@ P12 исключён **из всей текущей программы**, не �
 
 **Тип:** R/O instrumentation; без нового процесса управления. **Зависимости:** Task 0.
 
-**Files:** текущий `apps/api/src/omnia_api/services/generation_metrics.py`; только нужные call sites в `routers/messages.py`, `workers/generation.py`, orchestrator services и UI. Не менять все сервисы в одном измерительном патче.
+**Files:** текущий `apps/api/src/yleum_api/services/generation_metrics.py`; только нужные call sites в `routers/messages.py`, `workers/generation.py`, orchestrator services и UI. Не менять все сервисы в одном измерительном патче.
 
 - [ ] Для первого пакета выбрать один успешный и один аварийный сценарий из раздела 9; сохранить точные наблюдаемые результаты.
 - [ ] Измерить конкретную изменяемую границу существующим monotonic timer и счётчиками IO; errors/cancelled тоже закрывают span.
@@ -187,7 +187,7 @@ P12 исключён **из всей текущей программы**, не �
 
 **Тип:** O. **Зависимости:** Task 0–1 и реальный Linux Docker. **Техническая спецификация:** P01 старого плана.
 
-**Files:** `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py`, `docker_py_cell_backend.py`, текущий backend protocol/fake; `tests/test_docker_cell_resources.py`, `tests/test_docker_py_cell_backend.py`; добавленный `tests/test_live_postgres_volume_probe.py`.
+**Files:** `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py`, `docker_py_cell_backend.py`, текущий backend protocol/fake; `tests/test_docker_cell_resources.py`, `tests/test_docker_py_cell_backend.py`; добавленный `tests/test_live_postgres_volume_probe.py`.
 
 - [ ] Подтвердить, что оптимизируемый foundation ensure/wake путь действительно вызывается в измеряемом сценарии; не приписывать его каждому portable Machine edit.
 - [ ] Написать regression реального manager, где `read_volume_files` бросает `AssertionError("whole-volume read forbidden")`; старый код должен упасть именно там.
@@ -204,7 +204,7 @@ P12 исключён **из всей текущей программы**, не �
 
 **Тип:** O. **Зависимости:** Task 0–1 и disposable PostgreSQL. **Техническая спецификация:** только aggregate часть P02.
 
-**Files:** `apps/api/src/omnia_api/routers/max_studio.py`, текущая модель Usage и response schema; предлагаемый `apps/api/tests/test_max_usage_aggregation.py`. Billing/ledger writers не менять.
+**Files:** `apps/api/src/yleum_api/routers/max_studio.py`, текущая модель Usage и response schema; предлагаемый `apps/api/tests/test_max_usage_aggregation.py`. Billing/ledger writers не менять.
 
 - [ ] Снять golden JSON текущего endpoint: пустой проект; два run; NULL run_id; неизвестный stage; дробные суммы; cached usage и retries; чужой project.
 - [ ] Сохранить фильтры project/run, нормализацию stage→other, template с нулём, precision/rounding и порядок публичных элементов.
@@ -232,7 +232,7 @@ P12 исключён **из всей текущей программы**, не �
 
 **Тип:** R; прямое уменьшение поддерживаемого кода. **Зависимости:** Task 0 и golden materialization, не Task 2–4.
 
-**Files:** `apps/api/src/omnia_api/templates/{blank,landing,portfolio,blog}/assets/omnia-kit.css` и `omnia-kit.js`; `apps/api/src/omnia_api/services/repo.py`; все установленные читатели template tree; `apps/api/Dockerfile`; `tests/test_select_mode.py`, относящиеся kit tests; предлагаемые `services/template_materialization.py`, `templates/shared-assets/` и `tests/test_template_materialization.py`.
+**Files:** `apps/api/src/yleum_api/templates/{blank,landing,portfolio,blog}/assets/omnia-kit.css` и `omnia-kit.js`; `apps/api/src/yleum_api/services/repo.py`; все установленные читатели template tree; `apps/api/Dockerfile`; `tests/test_select_mode.py`, относящиеся kit tests; предлагаемые `services/template_materialization.py`, `templates/shared-assets/` и `tests/test_template_materialization.py`.
 
 - [ ] До удаления копий найти init, restore/export, managed injection и packaging consumers. Golden inventory фиксирует каждый path→SHA256 на BASE, включая dotfiles.
 - [ ] Оставить один поддерживаемый источник каждого реально byte-identical ресурса внутри API package; materialization создаёт те же самостоятельные файлы по прежним путям.
@@ -264,7 +264,7 @@ def file_digests(root: Path) -> dict[str, str]:
 
 **Тип:** редакторская оптимизация с сохранением продуктовых требований; модельный результат проверяется отдельно. **Зависимости:** Task 0 и language baseline. **Спецификация:** P13.1–P13.4.
 
-**Files:** реально используемые `apps/orchestrator/templates/*/SYSTEM_PROMPT.md` и skills; `apps/api/src/omnia_api/services/prompt_builder.py`, `lean_prompt.py`, инструктивные wrappers `routers/messages.py`, `_language_directive`, `_reply_language_line` в своих текущих модулях.
+**Files:** реально используемые `apps/orchestrator/templates/*/SYSTEM_PROMPT.md` и skills; `apps/api/src/yleum_api/services/prompt_builder.py`, `lean_prompt.py`, инструктивные wrappers `routers/messages.py`, `_language_directive`, `_reply_language_line` в своих текущих модулях.
 
 - [ ] Инвентаризировать все template registry IDs и загрузчики, а не только восемь найденных SYSTEM_PROMPT. Разделить инструкции, примеры UI, пользовательские строки, команды/ключи/идентификаторы.
 - [ ] Зафиксировать assembled payload native/text/one-shot, default RU, explicit RU, existing non-RU и mixed-language requests.
@@ -292,7 +292,7 @@ def file_digests(root: Path) -> dict[str, str]:
 
 **Тип:** R, повышенный риск данных. **Зависимости:** Task 0–1, DB integration baseline.
 
-**Files:** обычные agentic/one-shot участки `apps/api/src/omnia_api/routers/messages.py`; предлагаемый `services/generation_artifacts.py`; текущие version/snapshot services не менять по смыслу.
+**Files:** обычные agentic/one-shot участки `apps/api/src/yleum_api/routers/messages.py`; предлагаемый `services/generation_artifacts.py`; текущие version/snapshot services не менять по смыслу.
 
 - [ ] Зафиксировать два текущих пути отдельно: Git commit, Snapshot parent/model/prompt, project current/head, run/message linkage, exact_tree, quotas/counters, errors и порядок commits.
 - [ ] Выделить только совпадающую публикацию обычного результата. Передавать явные project/run/message/parent IDs, base commit, файлы и нужные metadata; зависимость `commit_files` оставить явной для действующих test seams.
@@ -306,7 +306,7 @@ def file_digests(root: Path) -> dict[str, str]:
 
 **Тип:** R. **Зависимости:** Task 8 либо другой уже принятый узкий extraction, чтобы не переносить тысячи строк как монолит.
 
-**Files:** `apps/api/src/omnia_api/routers/messages.py`, `workers/generation.py`; предлагаемый `services/generation_execution.py`; существующие generation services.
+**Files:** `apps/api/src/yleum_api/routers/messages.py`, `workers/generation.py`; предлагаемый `services/generation_execution.py`; существующие generation services.
 
 - [ ] Построить карту входов, локального mutable state и side effects только переносимой операции. HTTP parsing/response оставить router; ownership/dispatch — worker; execution — service.
 - [ ] Выбрать одну завершённую обязанность, перенести с прежними параметрами и результатом, переключить её consumers. Не переносить весь `_process_prompt` в один новый файл и не называть это завершённым упрощением.
@@ -320,7 +320,7 @@ def file_digests(root: Path) -> dict[str, str]:
 
 **Тип:** R; две отдельные поставки. **Зависимости:** характеристические тесты всех потребителей.
 
-**Files:** `apps/api/src/omnia_api/services/agent_builder.py`, `project_cell_executor.py`; `schemas/project.py`, текущие preview/runtime/rollback template lists; orchestrator stack registry. Предлагаемый helper для общей command/path/exact-edit validation размещать в существующем services subsystem, без межсервисного пакета.
+**Files:** `apps/api/src/yleum_api/services/agent_builder.py`, `project_cell_executor.py`; `schemas/project.py`, текущие preview/runtime/rollback template lists; orchestrator stack registry. Предлагаемый helper для общей command/path/exact-edit validation размещать в существующем services subsystem, без межсервисного пакета.
 
 - [ ] Сначала объединить только одинаковую валидацию payload/path/exact edit; сохранить формат observations, permission failures и точные old/new text semantics.
 - [ ] Исполнение install/build/DB/preview оставить backend-specific. Не подменять перечень capabilities одним `is_cell`.

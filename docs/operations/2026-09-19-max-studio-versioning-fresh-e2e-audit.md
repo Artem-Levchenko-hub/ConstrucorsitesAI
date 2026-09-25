@@ -156,7 +156,7 @@ MAX_FINALIZATION_FAILED: portable boundary rejection check failed (HTTP 502; exp
 
 ### P1 R1. Агентная адаптация может менять live DB до успешной финализации
 
-`apps/api/src/omnia_api/services/agent_native.py:317-325` разрешает portable bash с выделенной PostgreSQL. `apps/api/src/omnia_api/services/generation/runtime.py:283-297` отправляет действия в Project Cell. При ошибке финализации `apps/api/src/omnia_api/services/generation/agent_finalization.py:95-113` восстанавливает source-файлы, но из этого не следует откат SQL/DML.
+`apps/api/src/yleum_api/services/agent_native.py:317-325` разрешает portable bash с выделенной PostgreSQL. `apps/api/src/yleum_api/services/generation/runtime.py:283-297` отправляет действия в Project Cell. При ошибке финализации `apps/api/src/yleum_api/services/generation/agent_finalization.py:95-113` восстанавливает source-файлы, но из этого не следует откат SQL/DML.
 
 Сценарий: миграция выполнилась, затем provider/build/probe упал. Старый код вернулся, а схема/данные остались новыми.
 
@@ -164,19 +164,19 @@ MAX_FINALIZATION_FAILED: portable boundary rejection check failed (HTTP 502; exp
 
 ### P1 R2. Допуск проверяет маршруты, но не поведение
 
-`apps/api/src/omnia_api/services/versioning_capabilities.py:279-305` сравнивает method/path manifest. Аналогичная логика применяется в restoration engine. Она не отличает рабочий `GET` от `GET`, который возвращает `[]`, чужие строки или неверные значения.
+`apps/api/src/yleum_api/services/versioning_capabilities.py:279-305` сравнивает method/path manifest. Аналогичная логика применяется в restoration engine. Она не отличает рабочий `GET` от `GET`, который возвращает `[]`, чужие строки или неверные значения.
 
 **Исправление:** независимые signed two-user probes, per-ID/value/relation assertions, UI create/edit/delete/reload, негативные мутации FV033–FV036. Baseline проверки хранится вне кандидата и не может быть изменён агентом.
 
 ### P1 R3. Опасные удаления новых связанных данных допускаются с предупреждением
 
-`blocked_deletes` отражает новые поля и опасные каскадные зависимости, но `delete_warnings()` выдаёт `severity=warning`; само наличие такого риска не блокирует `ready`. Старый `DELETE` может затронуть новые дочерние записи. Отдельно остаётся непроверенным full-object `PATCH` с неизвестными JSON-ключами. При этом известная потеря объявленных JSON keys уже блокируется в `apps/orchestrator/src/omnia_orchestrator/services/restoration_data_contract.py:375-385`; нельзя утверждать, что любая JSON-несовместимость лишь предупреждается.
+`blocked_deletes` отражает новые поля и опасные каскадные зависимости, но `delete_warnings()` выдаёт `severity=warning`; само наличие такого риска не блокирует `ready`. Старый `DELETE` может затронуть новые дочерние записи. Отдельно остаётся непроверенным full-object `PATCH` с неизвестными JSON-ключами. При этом известная потеря объявленных JSON keys уже блокируется в `apps/orchestrator/src/yleum_orchestrator/services/restoration_data_contract.py:375-385`; нельзя утверждать, что любая JSON-несовместимость лишь предупреждается.
 
 **Исправление:** блокировать конкретную недоказанную опасную операцию либо переход, которому она необходима. После появления проверенного write adapter на копии данных проверять create/update/delete, omission/null/array semantics, каскады и owner boundaries; общий запрет на проекты с JSON не требуется.
 
 ### P1 R4. Crash window и недоказанная очистка кандидата
 
-`apps/orchestrator/src/omnia_orchestrator/services/code_restoration_engine.py:347-351` возвращает существующий `prepared.json`. Результат записывается до выхода из `finally` (`:533-550`). Сбой после записи receipt способен оставить candidate resources; повторный prepare уже вернёт receipt.
+`apps/orchestrator/src/yleum_orchestrator/services/code_restoration_engine.py:347-351` возвращает существующий `prepared.json`. Результат записывается до выхода из `finally` (`:533-550`). Сбой после записи receipt способен оставить candidate resources; повторный prepare уже вернёт receipt.
 
 `_discard_code` на `:1076-1085` только логирует ошибку удаления `code.tar`; устойчивой cleanup-очереди здесь нет.
 
@@ -184,7 +184,7 @@ MAX_FINALIZATION_FAILED: portable boundary rejection check failed (HTTP 502; exp
 
 ### P1 R5. `database_backup_ref` не доказывает реальную резервную копию
 
-`apps/api/src/omnia_api/services/max_finalization.py:846-850` создаёт ссылку из digest схемы. Это правдоподобный identifier, но не свидетельство существующего immutable backup данных.
+`apps/api/src/yleum_api/services/max_finalization.py:846-850` создаёт ссылку из digest схемы. Это правдоподобный identifier, но не свидетельство существующего immutable backup данных.
 
 **Исправление:** создавать реальный artifact с checksum, source identity, cutoff/LSN, manifest и restore-smoke. Если резервная копия не требуется, поле нужно переименовать и исключить из доказательств DR.
 
@@ -206,8 +206,8 @@ MAX_FINALIZATION_FAILED: portable boundary rejection check failed (HTTP 502; exp
 
 Точная цепочка:
 
-- `apps/api/src/omnia_api/services/generation_runs.py:415-418` вызывает `assert_no_active_restoration`;
-- `apps/api/src/omnia_api/services/restorations.py:73-80` возвращает общий `code="conflict"`;
+- `apps/api/src/yleum_api/services/generation_runs.py:415-418` вызывает `assert_no_active_restoration`;
+- `apps/api/src/yleum_api/services/restorations.py:73-80` возвращает общий `code="conflict"`;
 - `apps/web/src/hooks/usePromptStream.ts:942-972` трактует любой такой conflict как duplicate generation, ставит `streamingRef=true` и показывает «Генерация уже запущена»;
 - если `getLatestGeneration()` возвращает null, состояние и сообщение не исправляются.
 
@@ -278,13 +278,13 @@ Retry снова пытался использовать `/workspace/...` вме
 
 ### P2 R6. ABA-гонка reconciliation lease
 
-`apps/api/src/omnia_api/services/restoration_reconciliation.py:63-68` ставит только `lease_until`, без owner token. Поздний worker безусловно очищает lease на `:96-108`.
+`apps/api/src/yleum_api/services/restoration_reconciliation.py:63-68` ставит только `lease_until`, без owner token. Поздний worker безусловно очищает lease на `:96-108`.
 
 **Исправление:** UUID lease token/monotonic generation; renew/release/update через CAS `WHERE operation_id AND lease_token`; тест с A timeout, B claim и поздним A.
 
 ### P2 R7. Один повреждённый journal способен сорвать общий recovery sweep
 
-В `apps/orchestrator/src/omnia_orchestrator/services/code_restorations.py:464-494` один ошибочный UUID/JSON прерывает sweep до следующих записей. Обход recovery должен обрабатывать повреждение одной записи локально. Нужны quarantine + alert с сохранением evidence; остальные операции продолжают обработку.
+В `apps/orchestrator/src/yleum_orchestrator/services/code_restorations.py:464-494` один ошибочный UUID/JSON прерывает sweep до следующих записей. Обход recovery должен обрабатывать повреждение одной записи локально. Нужны quarantine + alert с сохранением evidence; остальные операции продолжают обработку.
 
 ### P2 R8. Dump целиком удерживается в памяти и ограничен 64 MiB
 
@@ -300,7 +300,7 @@ Retry снова пытался использовать `/workspace/...` вме
 
 ### P3 R10. Длинная цепочка может потерять признак текущей версии
 
-Ancestor walk в `apps/api/src/omnia_api/routers/project_versions.py:59` ограничен глубиной 256. После 257+ технических descendants UI может не определить текущую user-version.
+Ancestor walk в `apps/api/src/yleum_api/routers/project_versions.py:59` ограничен глубиной 256. После 257+ технических descendants UI может не определить текущую user-version.
 
 **Исправление:** durable effective `ProjectVersion.id` либо cycle-aware ancestry без нормального лимита. Тесты 257+ descendants и отдельный corrupt cycle.
 
@@ -314,7 +314,7 @@ Ancestor walk в `apps/api/src/omnia_api/routers/project_versions.py:59` огр�
 
 ### P2 R12. Готовый ProofBundle может обойти обычную ветку transport-security checks
 
-`apps/api/src/omnia_api/services/release_proof.py:32-35` при готовом `ProofBundle` возвращает verdict до обычной ветки transport-security checks. Положительный runtime probe сам по себе не заменяет эти проверки.
+`apps/api/src/yleum_api/services/release_proof.py:32-35` при готовом `ProofBundle` возвращает verdict до обычной ветки transport-security checks. Положительный runtime probe сам по себе не заменяет эти проверки.
 
 **Исправление:** требуемые security checks должны входить в криптографически/структурно связанный проверяемый proof либо исполняться независимо при любом пути выдачи verdict. Добавить отрицательный тест с положительным runtime probe и проваленным transport-security check.
 
@@ -526,8 +526,8 @@ Ancestor walk в `apps/api/src/omnia_api/routers/project_versions.py:59` огр�
 
 ### Пакет A: статусы и конфликтные коды
 
-- `apps/api/src/omnia_api/services/restorations.py`
-- `apps/api/src/omnia_api/services/generation_runs.py`
+- `apps/api/src/yleum_api/services/restorations.py`
+- `apps/api/src/yleum_api/services/generation_runs.py`
 - `apps/web/src/hooks/usePromptStream.ts`
 - `apps/web/src/lib/use-max-restoration.ts`
 - `apps/web/src/components/max/MaxRestorationPanel.tsx`
@@ -535,7 +535,7 @@ Ancestor walk в `apps/api/src/omnia_api/routers/project_versions.py:59` огр�
 
 ### Пакет B: единый terminal verdict
 
-- `apps/api/src/omnia_api/services/generation/agent_messages.py`
+- `apps/api/src/yleum_api/services/generation/agent_messages.py`
 - `agent_pipeline.py`
 - `agent_finalization.py`
 - `agent_recovery.py`

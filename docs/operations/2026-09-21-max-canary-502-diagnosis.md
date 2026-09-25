@@ -29,7 +29,7 @@
 
 ## Вердикт
 
-Классификатор `apps/api/src/omnia_api/ops/restoration_canary_diagnosis.py` на этих
+Классификатор `apps/api/src/yleum_api/ops/restoration_canary_diagnosis.py` на этих
 наблюдениях даёт:
 
 ```

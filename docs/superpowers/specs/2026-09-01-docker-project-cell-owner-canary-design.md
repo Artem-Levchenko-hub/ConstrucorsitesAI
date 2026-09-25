@@ -220,14 +220,14 @@ The current public generation, preview, snapshot, stop, project deletion, and pu
 
 The first implementation changes these internal seams:
 
-- `apps/api/src/omnia_api/routers/messages.py` — canary policy, queue/lease dispatch, and runner handoff;
-- `apps/api/src/omnia_api/services/agent_native.py` — reusable runner loop without changing model-visible schemas;
-- `apps/api/src/omnia_api/services/agent_builder.py` — execution adapter selection rather than direct live-container assumptions;
-- `apps/api/src/omnia_api/services/orchestrator_client.py` — cell lifecycle and operation methods;
+- `apps/api/src/yleum_api/routers/messages.py` — canary policy, queue/lease dispatch, and runner handoff;
+- `apps/api/src/yleum_api/services/agent_native.py` — reusable runner loop without changing model-visible schemas;
+- `apps/api/src/yleum_api/services/agent_builder.py` — execution adapter selection rather than direct live-container assumptions;
+- `apps/api/src/yleum_api/services/orchestrator_client.py` — cell lifecycle and operation methods;
 - API persistence models and migrations — workspace, session, operation, checkpoint, event, and candidate state required for restart-safe ownership;
-- `apps/orchestrator/src/omnia_orchestrator/services/provisioner.py` — bundle provisioning behind `DockerOwnerCanaryProvider`;
-- `apps/orchestrator/src/omnia_orchestrator/core/docker_client.py` — versioned cell containers, volumes, networks, labels, limits, and sidecars;
-- `apps/orchestrator/src/omnia_orchestrator/routers/runtime.py` — idempotent lifecycle and label-based cell lookup;
+- `apps/orchestrator/src/yleum_orchestrator/services/provisioner.py` — bundle provisioning behind `DockerOwnerCanaryProvider`;
+- `apps/orchestrator/src/yleum_orchestrator/core/docker_client.py` — versioned cell containers, volumes, networks, labels, limits, and sidecars;
+- `apps/orchestrator/src/yleum_orchestrator/routers/runtime.py` — idempotent lifecycle and label-based cell lookup;
 - a focused resident runner entrypoint packaged from existing agent logic;
 - production compose/config — runner image, internal connectivity, disabled-by-default flags, and owner allowlist configuration.
 

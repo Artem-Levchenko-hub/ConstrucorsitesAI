@@ -60,7 +60,7 @@ canonical project HEAD; a detached Git commit alone is not activation.
 
 ## Task 1 — durable API and user operation
 
-Files: `apps/api/src/omnia_api/{models,schemas,services,routers}/restoration[s].py`,
+Files: `apps/api/src/yleum_api/{models,schemas,services,routers}/restoration[s].py`,
 `services/restoration_runtime.py`, `services/repo.py`, migration and tests.
 
 - [ ] Write failing tests for cross-owner denial, identical retry/different envelope,
@@ -73,7 +73,7 @@ Files: `apps/api/src/omnia_api/{models,schemas,services,routers}/restoration[s].
 
 ## Task 2 — isolated preparation and storage enforcement
 
-Files: new `apps/orchestrator/src/omnia_orchestrator/{schemas,services}/code_restoration*.py`,
+Files: new `apps/orchestrator/src/yleum_orchestrator/{schemas,services}/code_restoration*.py`,
 data-compatibility/runtime helpers, existing machine backend/adapter/boundary seams,
 router and tests.
 

@@ -106,7 +106,7 @@ History baseline этого synthetic client, UTC:
 
 Точный source drift: current #7/v5 `src/app/page.tsx` SHA-256 `d80652ddc0e6168a13192ef72273cc64b11d645b701d34876303df111d5e50cf`; editable/live-source file SHA-256 `7fbf2694c868bdd9655b2034dcb029c9dc04f96d51e056bc544e50ca69a2c4c4`. Editable heading — `Контрольная версия v6 — текущая перед пустым откатом`, current snapshot heading — `Контрольная версия v4 для проверки пустого отката`. Слово live-source здесь означает файл workspace, **не запущенный serving artifact**.
 
-Code-level explanation проверен в текущем checkout: `apps/api/src/omnia_api/services/generation/agent_finalization.py:176` вызывает `raise_if_terminal_cell_error(exc)` до fallback source restore на строках 189–204. Terminal error запрещает дальнейшие действия текущего unsafe handle, но отдельная durable recovery к authoritative current snapshot не доводится до конца. `apps/api/src/omnia_api/services/restorations.py:1761`–1772 для ready/idle resources возвращает False, не выполняя source reconcile. `apps/orchestrator/src/omnia_orchestrator/services/code_restoration_engine.py:1176`–1191 читает editable workspace, затем `verify_source_inventory(...request.current_files)` и возвращает `needs_changes` при несовпадении. **Read-only ожидание само по себе не вылечит stale tree.** Нельзя просто убрать terminal guard и продолжить мутировать отозванный handle.
+Code-level explanation проверен в текущем checkout: `apps/api/src/yleum_api/services/generation/agent_finalization.py:176` вызывает `raise_if_terminal_cell_error(exc)` до fallback source restore на строках 189–204. Terminal error запрещает дальнейшие действия текущего unsafe handle, но отдельная durable recovery к authoritative current snapshot не доводится до конца. `apps/api/src/yleum_api/services/restorations.py:1761`–1772 для ready/idle resources возвращает False, не выполняя source reconcile. `apps/orchestrator/src/yleum_orchestrator/services/code_restoration_engine.py:1176`–1191 читает editable workspace, затем `verify_source_inventory(...request.current_files)` и возвращает `needs_changes` при несовпадении. **Read-only ожидание само по себе не вылечит stale tree.** Нельзя просто убрать terminal guard и продолжить мутировать отозванный handle.
 
 Registry binding: active code-volume suffix `-code-4ecaa09ac717487dbe39553062a537e5`, active DB-volume suffix `-db-4ecaa09ac717487dbe39553062a537e5`, restoration `4ecaa09a-c717-487d-be39-553062a537e5`, source commit `6371b71b9b3ca83ba31119bbc5b4bfc996cc4c94`, restoration binding digest prefix `383d1bb4` (full digest ещё нужно извлечь read-only). Полное имя code volume из suffix не угадывать: получить из registry. Stored volume artifact SHA-256 `cdd59768429fedbecf0c0d313000fada0973901e960a949573917615159bd82e` и raw content-manifest SHA выше имеют разные контракты и времена; их неравенство само по себе не является corruption proof.
 
@@ -211,9 +211,9 @@ Application failure — воспроизведённое нарушение; env
 
 ### 2.1. Пути и единицы ответственности
 
-Существующие пути ниже проверены на базе плана. Пути с `Create` — намеренно новые. Не расширять большую `services/restorations.py` QA-кодом; отдельные модули runner размещать в `apps/api/src/omnia_api/ops/restoration_qa/`. Fixtures находятся в `apps/api/tests/fixtures/restoration_qa/`. Product changes допускаются только при красном test/probe, указывающем на соответствующий production module.
+Существующие пути ниже проверены на базе плана. Пути с `Create` — намеренно новые. Не расширять большую `services/restorations.py` QA-кодом; отдельные модули runner размещать в `apps/api/src/yleum_api/ops/restoration_qa/`. Fixtures находятся в `apps/api/tests/fixtures/restoration_qa/`. Product changes допускаются только при красном test/probe, указывающем на соответствующий production module.
 
-QA entrypoint: `python -m omnia_api.ops.restoration_qa.cli`. Подкоманды: `bootstrap`, `adaptive`, `witness`, `owners`, `crud`, `restart`, `receipts`, `faults`, `automatic`, `semantics`, `verify-bundle`, `cleanup`. `--manifest` обязателен для проверок уже созданного проекта; `--evidence-root` обязателен для bootstrap/automatic. Любой `--project-id` без manifest отвергается. `bootstrap` выводит в stdout только абсолютный путь созданного manifest; безопасные progress logs идут в stderr.
+QA entrypoint: `python -m yleum_api.ops.restoration_qa.cli`. Подкоманды: `bootstrap`, `adaptive`, `witness`, `owners`, `crud`, `restart`, `receipts`, `faults`, `automatic`, `semantics`, `verify-bundle`, `cleanup`. `--manifest` обязателен для проверок уже созданного проекта; `--evidence-root` обязателен для bootstrap/automatic. Любой `--project-id` без manifest отвергается. `bootstrap` выводит в stdout только абсолютный путь созданного manifest; безопасные progress logs идут в stderr.
 
 После реализации runner общие переменные устанавливаются в Linux из `apps/api` следующим образом. Изолированный режим используется для CI/faults; production-disposable выбирается отдельным явным `--mode production_disposable` только после проверки production identity и QA credentials:
 
@@ -221,7 +221,7 @@ QA entrypoint: `python -m omnia_api.ops.restoration_qa.cli`. Подкоманд�
 export RELEASE_SHA="$(git rev-parse HEAD)"
 export QA_ROOT="$(mktemp -d -t omnia-restoration-qa.XXXXXXXX)"
 chmod 700 "$QA_ROOT"
-export QA_MANIFEST="$(uv run --frozen python -m omnia_api.ops.restoration_qa.cli bootstrap \
+export QA_MANIFEST="$(uv run --frozen python -m yleum_api.ops.restoration_qa.cli bootstrap \
   --profile incompatible --release-sha "$RELEASE_SHA" --mode isolated \
   --evidence-root "$QA_ROOT")"
 test -s "$QA_MANIFEST"
@@ -437,10 +437,10 @@ Any code commit after acceptance invalidates the affected acceptance evidence.
 ### Task T01 — локализовать и исправить canary 502 доказанным минимальным изменением
 
 **Files:**
-- Read/Test: `apps/api/src/omnia_api/ops/production_smoke.py`, `apps/api/tests/test_production_smoke.py`, `.github/workflows/production-smoke.yml`.
-- Read: `apps/orchestrator/src/omnia_orchestrator/services/nginx_writer.py`, `apps/orchestrator/src/omnia_orchestrator/services/cell_publication.py`, `apps/orchestrator/templates/max-miniapp-nextjs/src/app/api/max/webhook/route.ts`.
-- Create: `apps/api/src/omnia_api/ops/restoration_canary_diagnosis.py`, `apps/api/tests/test_restoration_canary_diagnosis.py`, `docs/operations/2026-09-21-max-canary-502-diagnosis.md`.
-- Conditional Modify/Test, только по найденной ветке: `apps/orchestrator/src/omnia_orchestrator/services/nginx_writer.py` + `apps/orchestrator/tests/test_nginx_writer.py`; либо `apps/orchestrator/src/omnia_orchestrator/services/cell_publication.py` + `apps/orchestrator/tests/test_cell_publication.py`; либо webhook route + `apps/api/tests/test_max_project_kit.py`; либо `.github/workflows/production-smoke.yml` + `apps/api/tests/test_production_smoke.py`.
+- Read/Test: `apps/api/src/yleum_api/ops/production_smoke.py`, `apps/api/tests/test_production_smoke.py`, `.github/workflows/production-smoke.yml`.
+- Read: `apps/orchestrator/src/yleum_orchestrator/services/nginx_writer.py`, `apps/orchestrator/src/yleum_orchestrator/services/cell_publication.py`, `apps/orchestrator/templates/max-miniapp-nextjs/src/app/api/max/webhook/route.ts`.
+- Create: `apps/api/src/yleum_api/ops/restoration_canary_diagnosis.py`, `apps/api/tests/test_restoration_canary_diagnosis.py`, `docs/operations/2026-09-21-max-canary-502-diagnosis.md`.
+- Conditional Modify/Test, только по найденной ветке: `apps/orchestrator/src/yleum_orchestrator/services/nginx_writer.py` + `apps/orchestrator/tests/test_nginx_writer.py`; либо `apps/orchestrator/src/yleum_orchestrator/services/cell_publication.py` + `apps/orchestrator/tests/test_cell_publication.py`; либо webhook route + `apps/api/tests/test_max_project_kit.py`; либо `.github/workflows/production-smoke.yml` + `apps/api/tests/test_production_smoke.py`.
 
 **Interfaces:** Consumes existing `Configuration.from_env`, `run_smoke`, документированную serving route/controller identity; Produces `diagnose_canary(observations: list[dict[str, object]]) -> dict[str, object]` с `layer`, `reason_code`, `observed_codes`, `release_sha`, `evidence_digest`. `layer` — `external_route|nginx|runtime|auth|unknown`; не чинить, если `unknown`.
 
@@ -473,7 +473,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T02 — связать smoke с точной поставленной ревизией
 
-**Files:** Modify `.github/workflows/production-smoke.yml`, `apps/api/src/omnia_api/ops/production_smoke.py`; Test `apps/api/tests/test_production_smoke.py`; Create `apps/api/tests/test_restoration_release_gate.py`.
+**Files:** Modify `.github/workflows/production-smoke.yml`, `apps/api/src/yleum_api/ops/production_smoke.py`; Test `apps/api/tests/test_production_smoke.py`; Create `apps/api/tests/test_restoration_release_gate.py`.
 
 **Interfaces:** Consumes `ReleaseIdentity`/D и T01 external 200/401; Produces smoke artifact `smoke.json` с `runner_sha`, expected/observed пятью SHA, `started_at`, `finished_at`, failures и `status`. Новый `validate_smoke_identity(runner_sha: str, expected: ReleaseIdentity, observed: ReleaseIdentity) -> list[str]` никогда не подменяет expected наблюдаемым.
 
@@ -488,7 +488,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T17 — NEW-26: terminal success требует signed business route proof
 
-**Files:** Modify `apps/api/src/omnia_api/services/max_runtime_probe.py`, `apps/api/src/omnia_api/services/max_finalization.py`; Test `apps/api/tests/test_max_runtime_probe.py`, `apps/api/tests/test_max_finalization.py`, `apps/api/tests/test_max_finalization_integration.py`; Create `apps/api/tests/test_max_signed_business_proof.py`.
+**Files:** Modify `apps/api/src/yleum_api/services/max_runtime_probe.py`, `apps/api/src/yleum_api/services/max_finalization.py`; Test `apps/api/tests/test_max_runtime_probe.py`, `apps/api/tests/test_max_finalization.py`, `apps/api/tests/test_max_finalization_integration.py`; Create `apps/api/tests/test_max_signed_business_proof.py`.
 
 **Interfaces:** `probe_signed_business_endpoint(client: httpx.AsyncClient, path: str, expected_status: int = 200) -> dict[str, object]` возвращает только safe status/reason/shape digest. Consumes server-owned signed preview session и route contract из fixture; Produces обязательный proof item перед promotion. Generated self-test и anonymous platform health не заменяют этот пункт.
 
@@ -503,7 +503,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T18 — NEW-26/NEW-28: starter migrations и historical materializer artifacts
 
-**Files:** Modify `apps/api/src/omnia_api/services/max_project_kit.py`, `apps/api/src/omnia_api/services/max_data_evolution.py`, `apps/orchestrator/src/omnia_orchestrator/services/restoration_catalog.py`, `apps/orchestrator/src/omnia_orchestrator/services/restoration_empty.py` только в доказанном участке; Test `apps/api/tests/test_max_project_kit.py`, `apps/api/tests/test_max_data_evolution.py`, `apps/orchestrator/tests/test_restoration_catalog.py`, `apps/orchestrator/tests/test_restoration_empty_materializer.py`; Read authoritative starter files `apps/orchestrator/templates/max-miniapp-nextjs/drizzle/0000_max_core.sql`, `apps/orchestrator/templates/max-miniapp-nextjs/drizzle/0001_business_core.sql`, `apps/orchestrator/templates/max-miniapp-nextjs/scripts/apply-migrations.mjs`, `apps/orchestrator/templates/max-miniapp-nextjs/drizzle.config.ts`; Create `apps/api/tests/test_max_starter_artifact_preservation.py`.
+**Files:** Modify `apps/api/src/yleum_api/services/max_project_kit.py`, `apps/api/src/yleum_api/services/max_data_evolution.py`, `apps/orchestrator/src/yleum_orchestrator/services/restoration_catalog.py`, `apps/orchestrator/src/yleum_orchestrator/services/restoration_empty.py` только в доказанном участке; Test `apps/api/tests/test_max_project_kit.py`, `apps/api/tests/test_max_data_evolution.py`, `apps/orchestrator/tests/test_restoration_catalog.py`, `apps/orchestrator/tests/test_restoration_empty_materializer.py`; Read authoritative starter files `apps/orchestrator/templates/max-miniapp-nextjs/drizzle/0000_max_core.sql`, `apps/orchestrator/templates/max-miniapp-nextjs/drizzle/0001_business_core.sql`, `apps/orchestrator/templates/max-miniapp-nextjs/scripts/apply-migrations.mjs`, `apps/orchestrator/templates/max-miniapp-nextjs/drizzle.config.ts`; Create `apps/api/tests/test_max_starter_artifact_preservation.py`.
 
 **Interfaces:** `validate_starter_artifacts(files: Mapping[str, str], baseline: Mapping[str, str]) -> list[str]` даёт named errors `starter_migration_missing`, `migration_order_changed`, `materializer_script_missing`, `drizzle_config_missing`. Consumes immutable starter revision/hash; Produces pre-effect validation and actionable historical report. Старый target не объявляется compatible просто после подстановки современной схемы.
 
@@ -519,7 +519,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T19 — NEW-27: failed generation не скрывает незаверсионированную DB mutation
 
-**Files:** Modify `apps/api/src/omnia_api/services/max_finalization.py`, `apps/api/src/omnia_api/services/max_managed_generation.py`, `apps/api/src/omnia_api/services/max_data_evolution.py`, `apps/api/src/omnia_api/services/generation/agent_verification.py` только после reproduction; Test `apps/api/tests/test_max_finalization_integration.py`, `apps/api/tests/test_max_managed_generation.py`, `apps/api/tests/test_max_data_evolution.py`; Create `apps/api/tests/test_generation_schema_failure_atomicity.py`; Read `apps/orchestrator/src/omnia_orchestrator/services/restoration_adaptation_workspace.py`, `apps/orchestrator/tests/test_runtime_hot_reload_migrations.py`.
+**Files:** Modify `apps/api/src/yleum_api/services/max_finalization.py`, `apps/api/src/yleum_api/services/max_managed_generation.py`, `apps/api/src/yleum_api/services/max_data_evolution.py`, `apps/api/src/yleum_api/services/generation/agent_verification.py` только после reproduction; Test `apps/api/tests/test_max_finalization_integration.py`, `apps/api/tests/test_max_managed_generation.py`, `apps/api/tests/test_max_data_evolution.py`; Create `apps/api/tests/test_generation_schema_failure_atomicity.py`; Read `apps/orchestrator/src/yleum_orchestrator/services/restoration_adaptation_workspace.py`, `apps/orchestrator/tests/test_runtime_hot_reload_migrations.py`.
 
 **Interfaces:** existing generation/adaptation operation сохраняет source DB identity/schema digest до первого effect. New test seam `capture_schema_effects(run_id: UUID) -> dict[str, object]` — только test/ops witness, не новый public API; output before/after schema digest, migration journal digest, serving source commit, effects-admission state. Existing protected adaptive workspace переиспользуется там, где он уже предусмотрен; обычную generation не объявлять изолированной без доказательства.
 
@@ -535,7 +535,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T20 — RC0–RC7: восстановить current v7 на registry-bound retained DB
 
-**Files:** Create `apps/orchestrator/src/omnia_orchestrator/schemas/restoration_recovery.py`, `apps/orchestrator/src/omnia_orchestrator/services/restoration_recovery.py`, `apps/orchestrator/scripts/reconcile_restoration_runtime.py`, `apps/orchestrator/tests/test_restoration_recovery.py`; Modify only after regression `apps/api/src/omnia_api/services/project_cell_runtime.py`, `apps/api/src/omnia_api/services/restorations.py`; Test `apps/api/tests/test_project_cell_runtime_api.py`, `apps/api/tests/test_restorations.py`. Существующий plan §0.3 — initial operator runbook; raw source artifacts находятся вне Git.
+**Files:** Create `apps/orchestrator/src/yleum_orchestrator/schemas/restoration_recovery.py`, `apps/orchestrator/src/yleum_orchestrator/services/restoration_recovery.py`, `apps/orchestrator/scripts/reconcile_restoration_runtime.py`, `apps/orchestrator/tests/test_restoration_recovery.py`; Modify only after regression `apps/api/src/yleum_api/services/project_cell_runtime.py`, `apps/api/src/yleum_api/services/restorations.py`; Test `apps/api/tests/test_project_cell_runtime_api.py`, `apps/api/tests/test_restorations.py`. Существующий plan §0.3 — initial operator runbook; raw source artifacts находятся вне Git.
 
 **Interfaces:** Frozen `RestorationRecoveryIntent` связывает `project_id`, `owner_id`, `workspace_id`, `current_snapshot_id`, `current_commit_sha`, `expected_fencing_epoch`, `registry_binding_digest`, `active_code_volume`, `active_database_volume`, `expected_workspace_inventory_digest`, `target_inventory_digest`, `original_db_content_manifest_digest`, `witness_digest`. `inspect_recovery(intent) -> RecoveryReport` read-only по умолчанию; `advance_recovery(intent, phase) -> RecoveryReport` принимает только phases `clone_witness`, `source_sync`, `start_current`, `verify`, `complete` и durable monotonic journal. CLI требует private `--intent-file` и `--phase`, без wildcard project/volume flags.
 
@@ -554,7 +554,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T21 — exact restoration синхронизирует authoritative snapshot и editable workspace
 
-**Files:** Modify `apps/orchestrator/src/omnia_orchestrator/services/code_restoration_engine.py`, `apps/api/src/omnia_api/services/restorations.py`, `apps/api/src/omnia_api/services/project_cell_runtime.py`; Test `apps/orchestrator/tests/test_code_restoration_engine.py`, `apps/api/tests/test_restorations.py`, `apps/api/tests/test_generation_flow_contract.py`; Create `apps/orchestrator/tests/test_restoration_workspace_lineage.py`, `apps/api/tests/test_restoration_source_admission.py`.
+**Files:** Modify `apps/orchestrator/src/yleum_orchestrator/services/code_restoration_engine.py`, `apps/api/src/yleum_api/services/restorations.py`, `apps/api/src/yleum_api/services/project_cell_runtime.py`; Test `apps/orchestrator/tests/test_code_restoration_engine.py`, `apps/api/tests/test_restorations.py`, `apps/api/tests/test_generation_flow_contract.py`; Create `apps/orchestrator/tests/test_restoration_workspace_lineage.py`, `apps/api/tests/test_restoration_source_admission.py`.
 
 **Interfaces:** Existing restoration activation journal gains bound `source_sync` checkpoint containing expected authoritative current commit, editable workspace identity, inventory digest and state `pending|verified`; this is part of existing intent/reconciliation, not a second restoration engine. `verify_editable_source_binding(expected_files: Mapping[str, bytes], observed_files: Mapping[str, bytes]) -> str` returns verified inventory digest or raises explicit `restoration_source_recovery_required` before generation/restore admission. Modes/resource binding проверяются вместе с этим byte inventory, а не выводятся из одного commit label.
 
@@ -570,7 +570,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T22 — timeout/cancel race сохраняет первичную причину и запускает отдельный recovery
 
-**Files:** Modify `apps/api/src/omnia_api/services/generation/agent_finalization.py`, `apps/api/src/omnia_api/services/project_cell_activity.py`, `apps/api/src/omnia_api/services/project_cell_executor.py`, `apps/api/src/omnia_api/services/generation_deadline.py` only at reproduced boundary; Test `apps/api/tests/test_generation_deadline.py`, `apps/api/tests/test_project_cell_activity.py`, `apps/api/tests/test_generation_flow_contract.py`; Create `apps/api/tests/test_generation_terminal_recovery.py`. Read `apps/api/src/omnia_api/services/project_cell_errors.py`.
+**Files:** Modify `apps/api/src/yleum_api/services/generation/agent_finalization.py`, `apps/api/src/yleum_api/services/project_cell_activity.py`, `apps/api/src/yleum_api/services/project_cell_executor.py`, `apps/api/src/yleum_api/services/generation_deadline.py` only at reproduced boundary; Test `apps/api/tests/test_generation_deadline.py`, `apps/api/tests/test_project_cell_activity.py`, `apps/api/tests/test_generation_flow_contract.py`; Create `apps/api/tests/test_generation_terminal_recovery.py`. Read `apps/api/src/yleum_api/services/project_cell_errors.py`.
 
 **Interfaces:** Existing terminal lease status stays monotonic. Cleanup adapter receiving the **same bound lease** observes its terminal `timed_out` outcome and records secondary cleanup result; it does not call finish-as-cancelled as a new authoritative outcome. Independent durable source-recovery intent references current successful snapshot and original failed run/lease; old terminal executor handle remains revoked.
 
@@ -586,7 +586,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T23 — resource-ready не подменяет serving readiness и paid outcome evidence
 
-**Files:** Modify `apps/api/src/omnia_api/services/project_cell_runtime.py`, `apps/web/src/components/max/MaxLivePreview.tsx`; Test `apps/api/tests/test_project_cell_runtime_api.py`, `apps/web/src/lib/__tests__/max-live-preview-recovery.test.tsx`; Create `apps/api/tests/test_restoration_runtime_authority.py`, `apps/api/tests/test_failed_generation_charge_evidence.py`; Read `apps/api/src/omnia_api/models/wallet_charge.py`, `apps/api/src/omnia_api/services/billing.py`, `apps/api/src/omnia_api/services/generation_runs.py`. Paid ledger proof is read-only; no unsolicited refund/charge mutation.
+**Files:** Modify `apps/api/src/yleum_api/services/project_cell_runtime.py`, `apps/web/src/components/max/MaxLivePreview.tsx`; Test `apps/api/tests/test_project_cell_runtime_api.py`, `apps/web/src/lib/__tests__/max-live-preview-recovery.test.tsx`; Create `apps/api/tests/test_restoration_runtime_authority.py`, `apps/api/tests/test_failed_generation_charge_evidence.py`; Read `apps/api/src/yleum_api/models/wallet_charge.py`, `apps/api/src/yleum_api/services/billing.py`, `apps/api/src/yleum_api/services/generation_runs.py`. Paid ledger proof is read-only; no unsolicited refund/charge mutation.
 
 **Interfaces:** Existing preview/runtime status distinguishes controller `resources_ready` from current app running, retained database identity and source binding. `restoration_source_recovery_required` disables automatic preview retries/wake that would bypass T20. Scoped outcome evidence maps generation run + assistant message + QA billing account to actual usage/charge receipts, without inferring wallet settlement from UI cost totals.
 
@@ -601,7 +601,7 @@ def test_missing_runtime_observation_is_unknown():
 
 ### Task T03 — одноразовый synthetic fixture и один fresh completed adaptive run
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/__init__.py`, `contracts.py`, `fixtures.py`, `runner.py`, `cli.py`, `evidence.py` внутри того же нового package; Create `apps/api/tests/test_restoration_qa_runner.py`, `apps/api/tests/fixtures/restoration_qa/manifest.json`, `schema.sql`, `seed.sql`, `v1.json`, `v2.json` в той же fixture directory. Read existing `apps/api/src/omnia_api/services/repo.py`, `project_versions.py`, `restoration_adaptation.py`, `generation_deadline.py`, `apps/api/src/omnia_api/routers/restorations.py`, `apps/api/src/omnia_api/routers/messages.py`. Test existing `apps/api/tests/test_generation_deadline.py`, `apps/api/tests/test_adaptation_work_plan.py`, `apps/api/tests/test_restoration_adaptation.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/__init__.py`, `contracts.py`, `fixtures.py`, `runner.py`, `cli.py`, `evidence.py` внутри того же нового package; Create `apps/api/tests/test_restoration_qa_runner.py`, `apps/api/tests/fixtures/restoration_qa/manifest.json`, `schema.sql`, `seed.sql`, `v1.json`, `v2.json` в той же fixture directory. Read existing `apps/api/src/yleum_api/services/repo.py`, `project_versions.py`, `restoration_adaptation.py`, `generation_deadline.py`, `apps/api/src/yleum_api/routers/restorations.py`, `apps/api/src/yleum_api/routers/messages.py`. Test existing `apps/api/tests/test_generation_deadline.py`, `apps/api/tests/test_adaptation_work_plan.py`, `apps/api/tests/test_restoration_adaptation.py`.
 
 **Interfaces:** Implements contracts §2.1. `fixtures.py` produces deterministic source bundles/hashes and owned resource journal; `runner.py` runs ordinary prepare → explicit prompt adaptation → poll/reconcile, returning CheckResults. `bootstrap_fixture` writes only fresh QA project history and synthetic DB, using existing `repo.init_from_files`/`repo.commit_files` and Snapshot/ProjectVersion models; it never fabricates restoration completion or activation receipts.
 
@@ -628,14 +628,14 @@ async def test_adaptive_retry_keeps_one_run_and_activation(qa_runner):
 - [ ] 5: реализовать poll с monotonic deadline и durable resume marker. Для incompatibility `needs_changes` фиксируется **до** explicit adaptive prompt; automatic policy не запускает generation. Повтор после cancel использует сохранённый request/key; новый terminal failed не возобновляется под старым ID.
 - [ ] 6: `uv run --frozen pytest -q tests/test_restoration_qa_runner.py tests/test_generation_deadline.py tests/test_adaptation_work_plan.py tests/test_restoration_adaptation.py`; expected PASS, отдельные DB tests выполняются на disposable PostgreSQL.
 - [ ] 7: выполнить D, commit `test(qa): add isolated synthetic adaptive restoration runner`. Включение fresh production-disposable запуска ждёт T04–T08, T02 и T14; не расходовать реальный generation на недостроенный свидетель.
-- [ ] 8: один явный `uv run --frozen python -m omnia_api.ops.restoration_qa.cli adaptive --manifest "$QA_MANIFEST"` после подготовки всех checkpoints. Временные бюджеты читать из runtime settings; текущий baseline edit 25m, repair 15m, sealed proof/activation 40m — потолки этапов, а не обещание длительности. Записать final state, stage times, restoration/run/activation IDs, exact code/runtime identity.
+- [ ] 8: один явный `uv run --frozen python -m yleum_api.ops.restoration_qa.cli adaptive --manifest "$QA_MANIFEST"` после подготовки всех checkpoints. Временные бюджеты читать из runtime settings; текущий baseline edit 25m, repair 15m, sealed proof/activation 40m — потолки этапов, а не обещание длительности. Записать final state, stage times, restoration/run/activation IDs, exact code/runtime identity.
 - [ ] 9: отсутствие `completed` — собрать конкретный stage/tool/blocker и минимальный reproduction, не запускать бесконечные оплачиваемые retries. Прежние `ValidationError`, `workspace_lock_timeout` traceback и `operation_id=unknown` проверять по allowlisted signature, без transcript/prompt dump.
 
 **Exit/evidence:** completed protected chain + T04–T08 PASS на одном manifest; historical v8 остаётся отдельным baseline. Fail-before-activation обязан оставить current snapshot, database identity и witness неизменными. Cleanup проверяет собственные resources и сохраняет unresolved journals.
 
 ### Task T04 — независимый SQL witness, связанный с activation
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/witness.py`, `apps/api/tests/test_restoration_qa_witness.py`; Modify new `contracts.py`, `runner.py`, `evidence.py`; Read `apps/api/src/omnia_api/schemas/restoration.py`, `apps/orchestrator/src/omnia_orchestrator/services/restoration_binding.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/witness.py`, `apps/api/tests/test_restoration_qa_witness.py`; Modify new `contracts.py`, `runner.py`, `evidence.py`; Read `apps/api/src/yleum_api/schemas/restoration.py`, `apps/orchestrator/src/yleum_orchestrator/services/restoration_binding.py`.
 
 **Interfaces:** `capture_witness(manifest: QaManifest, checkpoint: str) -> Witness`; `assert_preserved(before: Witness, after: Witness, allowed_changes: dict[str, object]) -> CheckResult`. `Witness` содержит run/release/project/workspace/DB identity, fixture digest, checkpoint, schema digest, sorted row-ID set, HMAC каждого канонического значения, foreign/dependent row counters и capture timestamp. Raw значения остаются только в fixture; секрет HMAC случайный на run, private до verify и уничтожается после.
 
@@ -655,13 +655,13 @@ def test_hidden_json_change_is_detected(witness_factory):
 - [ ] 4: checkpoints `before_prepare`, `after_candidate_proof`, `after_activation`, `after_crud`, `after_restart`, `after_fault_recovery`. Сравнить source DB identity на всех preserve-current этапах; кандидат обязан иметь иную DB identity и тот же synthetic baseline.
 - [ ] 5: перед capture перепроверить manifest ownership/DB identity и allowlisted table names. Нет manifest, TTL истёк, источник не synthetic, schema изменена после proof, missing checkpoint — FAIL до data query.
 - [ ] 6: добавить DB tests `test_repeatable_read_witness_is_consistent`, `test_null_unicode_numeric_timezone_canonicalization`; параметризовать hidden null, Unicode, `0`, `-1`, decimal и nested arrays. Запуск `uv run --frozen pytest -q tests/test_restoration_qa_witness.py` на disposable PostgreSQL.
-- [ ] 7: выполнить D, commit `test(qa): bind independent SQL witnesses to restoration identity`; `uv run --frozen python -m omnia_api.ops.restoration_qa.cli witness --manifest "$QA_MANIFEST" --checkpoint before_prepare`, затем runner вызывает остальные checkpoints автоматически.
+- [ ] 7: выполнить D, commit `test(qa): bind independent SQL witnesses to restoration identity`; `uv run --frozen python -m yleum_api.ops.restoration_qa.cli witness --manifest "$QA_MANIFEST" --checkpoint before_prepare`, затем runner вызывает остальные checkpoints автоматически.
 
 **Observability/evidence:** witness digests включаются в общий bundle вместе с receipt digests, но не переписывают существующий подписанный product proof contract без отдельной нужды. Успех UI при несовпавшем witness остаётся FAIL; hashes без DB/release binding недостаточны.
 
 ### Task T05 — две независимые подписанные identity и hostile owner boundary
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/owners.py`, `apps/api/tests/test_restoration_qa_owners.py`; Modify new `runner.py`, `fixtures.py`; Read `apps/orchestrator/templates/max-miniapp-nextjs/src/lib/max/validate-init-data.ts`, `src/lib/max/session.ts`, `src/app/api/max/session/route.ts` внутри того же template; Read/Test `apps/orchestrator/src/omnia_orchestrator/services/restoration_adaptation_health.py`, `apps/orchestrator/tests/test_restoration_adaptation_health.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/owners.py`, `apps/api/tests/test_restoration_qa_owners.py`; Modify new `runner.py`, `fixtures.py`; Read `apps/orchestrator/templates/max-miniapp-nextjs/src/lib/max/validate-init-data.ts`, `src/lib/max/session.ts`, `src/app/api/max/session/route.ts` внутри того же template; Read/Test `apps/orchestrator/src/yleum_orchestrator/services/restoration_adaptation_health.py`, `apps/orchestrator/tests/test_restoration_adaptation_health.py`.
 
 **Interfaces:** `open_signed_actor(manifest: QaManifest, actor: Literal['A','B']) -> httpx.AsyncClient`; `check_owner_boundary(manifest: QaManifest) -> list[CheckResult]`. A/B clients имеют отдельные cookie jars; QA-only bot token никогда не является production bot token. Generated fixture использует настоящий `validateMaxInitData` и `/api/max/session`, без injected `x-omnia-user-id` как доказательства подписи.
 
@@ -678,14 +678,14 @@ signature = hmac.new(secret, canonical_launch.encode(), hashlib.sha256).hexdiges
 - [ ] 3: токен генерировать для нового isolated QA runtime, хранить в private env и уничтожить при cleanup. Во время production-disposable теста конфигурация принадлежит только новому QA project; не менять токен существующего приложения и не слать реальные MAX сообщения.
 - [ ] 4: A видит A1/A2, B видит B1; B GET/PATCH/DELETE A1 получает согласованный 404 либо явный 403 по fixture contract; SQL witness A1 неизменен. Anonymous → 401; cookie B + JSON `owner_id=A` не даёт полномочий; guessed UUID не раскрывает payload.
 - [ ] 5: wrong key, изменённый user.id, duplicate query key, expired/future timestamp и replay after session expiration не проходят. Разрешённое штатное повторное использование валидного launch не объявлять security bug само по себе; проверять фактический TTL template contract.
-- [ ] 6: `uv run --frozen pytest -q tests/test_restoration_qa_owners.py` плюс orchestrator `uv run --frozen pytest -q tests/test_restoration_adaptation_health.py`; запустить `uv run --frozen python -m omnia_api.ops.restoration_qa.cli owners --manifest "$QA_MANIFEST"` до/после activation.
+- [ ] 6: `uv run --frozen pytest -q tests/test_restoration_qa_owners.py` плюс orchestrator `uv run --frozen pytest -q tests/test_restoration_adaptation_health.py`; запустить `uv run --frozen python -m yleum_api.ops.restoration_qa.cli owners --manifest "$QA_MANIFEST"` до/после activation.
 - [ ] 7: выполнить D, commit `test(qa): verify signed cross-owner restoration boundaries`.
 
 **Observability/evidence:** actor labels A/B, HTTP codes, row-set/value digests, auth reason codes; без cookies, signatures, bot token или launch body. Если QA signer недоступен, статус BLOCKED_ENV; поддельный owner header не заменяет acceptance.
 
 ### Task T06 — исторический UI/API: create/read/update/reload/delete
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/crud.py`, `apps/api/tests/test_restoration_qa_crud.py`, `apps/web/src/lib/__tests__/restoration-qa-crud.test.tsx`; Modify new `fixtures.py`, `runner.py`, `v1.json`, `v2.json`. Read `apps/web/src/components/max/MaxRestorationPanel.tsx`, `apps/web/src/lib/__tests__/max-restoration.test.tsx`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/crud.py`, `apps/api/tests/test_restoration_qa_crud.py`, `apps/web/src/lib/__tests__/restoration-qa-crud.test.tsx`; Modify new `fixtures.py`, `runner.py`, `v1.json`, `v2.json`. Read `apps/web/src/components/max/MaxRestorationPanel.tsx`, `apps/web/src/lib/__tests__/max-restoration.test.tsx`.
 
 **Interfaces:** `check_crud(manifest: QaManifest) -> list[CheckResult]`; consumes T04 witness and T05 A/B sessions. Fixture API `/api/qa-tasks`, `/api/qa-tasks/{id}`; create returns 201 with server ID, update 200, own delete 204, repeated GET 404. Historical form label «Название» writes current `summary` via approved adapter.
 
@@ -695,13 +695,13 @@ signature = hmac.new(secret, canonical_launch.encode(), hashlib.sha256).hexdiges
 - [ ] 4: удалить только A3 созданную текущим run; подтвердить 204, subsequent GET 404, SQL отсутствие A3, A1/A2/B1/dependent rows без изменений. Повтор DELETE получает contract 404 и не меняет данные.
 - [ ] 5: негативные случаи: пустое summary, missing ID, unknown JSON keys, чужой ID/owner, Unicode, duplicate submit; assertions: validation 4xx без частичной записи, unknown fields не теряются в существующей строке, duplicate submit соответствует выбранному API contract, без лишних A1 mutations.
 - [ ] 6: автоматический browser/render check на fixture: видна старая форма, submit выполняет правильный DTO, reload сохраняет значение; сохранить screenshot только synthetic UI. Реальный E2E HTTP/SQL остаётся независимым от Vitest mock.
-- [ ] 7: green указанных commands, `uv run --frozen python -m omnia_api.ops.restoration_qa.cli crud --manifest "$QA_MANIFEST"`, выполнить D, commit `test(qa): prove restored historical CRUD against current schema`.
+- [ ] 7: green указанных commands, `uv run --frozen python -m yleum_api.ops.restoration_qa.cli crud --manifest "$QA_MANIFEST"`, выполнить D, commit `test(qa): prove restored historical CRUD against current schema`.
 
 **Observability/evidence:** per-step status, request method/path template без row values, SQL before/after digests. Не расширять delete на baseline A1/A2/чужие проекты. Конкретный product adapter fix допускается только после failure свежего generated candidate; не переписывать engine ради fixture.
 
 ### Task T07 — restart приложения и Project Cell после активации
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/restart.py`, `apps/api/tests/test_restoration_qa_restart.py`; Modify new `runner.py`; Test existing `apps/orchestrator/tests/test_code_restoration_engine.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation_effects.py`; Read `apps/api/src/omnia_api/routers/runtime.py`, `apps/orchestrator/scripts/smoke_code_restoration.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/restart.py`, `apps/api/tests/test_restoration_qa_restart.py`; Modify new `runner.py`; Test existing `apps/orchestrator/tests/test_code_restoration_engine.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation_effects.py`; Read `apps/api/src/yleum_api/routers/runtime.py`, `apps/orchestrator/scripts/smoke_code_restoration.py`.
 
 **Interfaces:** `check_restart(manifest: QaManifest, target: Literal['app','cell']) -> list[CheckResult]`; uses normal runtime lifecycle and manifest-owned container IDs. Product shared API/worker/orchestrator restart не является частью этого шага — он только в isolated fault stack T09.
 
@@ -710,14 +710,14 @@ signature = hmac.new(secret, canonical_launch.encode(), hashlib.sha256).hexdiges
 - [ ] 3: перезапустить только app process/container собственного synthetic проекта, дождаться bounded health. Сверить actual code commit, DB volume identity, T04 witness и A/B read/auth.
 - [ ] 4: штатный stop/suspend → start/resume Project Cell, не `docker rm` БД и не copy old volume. Повторить health, artifact identity, A1/A2/B1 SQL values, fresh A session, B denial.
 - [ ] 5: negative stale runtime pointer/foreign volume/restart while activation ambiguous → stop и reconcile, без разрушения container. `test_restart_does_not_fallback_to_old_source_after_admitted_effects` проверяет отсутствие `start_source_writers`.
-- [ ] 6: green API test + orchestrator `uv run --frozen pytest -q tests/test_code_restoration_engine.py tests/test_restoration_adaptation_activation_effects.py`; live `uv run --frozen python -m omnia_api.ops.restoration_qa.cli restart --manifest "$QA_MANIFEST" --target app`, затем та же команда с `--target cell`.
+- [ ] 6: green API test + orchestrator `uv run --frozen pytest -q tests/test_code_restoration_engine.py tests/test_restoration_adaptation_activation_effects.py`; live `uv run --frozen python -m yleum_api.ops.restoration_qa.cli restart --manifest "$QA_MANIFEST" --target app`, затем та же команда с `--target cell`.
 - [ ] 7: выполнить D, commit `test(qa): verify post-restoration restart and cold resume`.
 
 **Observability/evidence:** before/after container incarnation digests, stable DB volume identity, serving commit, health and witness; incarnation может измениться, данные/правильный artifact — нет. Не использовать успешный platform health как restart proof app.
 
 ### Task T08 — receipt/lineage и ровно один terminal settlement
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/receipts.py`, `apps/api/tests/test_restoration_activation_completion.py`, `apps/api/tests/test_restoration_qa_receipts.py`; Modify only if regression proves defect `apps/api/src/omnia_api/services/restorations.py`, `apps/api/src/omnia_api/services/generation/publication.py`; Read `apps/api/src/omnia_api/models/restoration.py`, `models/project_version.py`, `models/wallet_charge.py`, `services/project_versions.py`, `services/generation_runs.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/receipts.py`, `apps/api/tests/test_restoration_activation_completion.py`, `apps/api/tests/test_restoration_qa_receipts.py`; Modify only if regression proves defect `apps/api/src/yleum_api/services/restorations.py`, `apps/api/src/yleum_api/services/generation/publication.py`; Read `apps/api/src/yleum_api/models/restoration.py`, `models/project_version.py`, `models/wallet_charge.py`, `services/project_versions.py`, `services/generation_runs.py`.
 
 **Interfaces:** `check_receipts(manifest: QaManifest, operation_id: UUID) -> list[CheckResult]`; consumes controller status, `Restoration` SQL projection, GenerationRun, Snapshot/ProjectVersion and QA-only billing counters. Existing function under test: `_complete_restoration_adaptation_activation(session, *, run_id, command, receipt, files) -> bool`.
 
@@ -743,14 +743,14 @@ async def test_complete_activation_twice_is_idempotent(completion_fixture):
 - [ ] 4: receipt verifier checks operation/project/owner/workspace/run/source snapshot/base draft/target commit/candidate artifact/proof/activation request/receipt digests, source/target epochs; observed serving code equals planned commit. `completed` без activated receipt или applied snapshot → FAIL.
 - [ ] 5: source historical version immutable; new adapted version has `restored_from_snapshot_id=source_snapshot_id`, current snapshot points to deterministic adapted snapshot, generation run and version binding singular. Exact restoration uses its own existing lineage, not fabricated generation association.
 - [ ] 6: negative changed owner/fence/current draft/receipt digest/planned commit → 409 and zero effects/history increments; same callback → same result; nullable notification state can reconcile without repeated billing. Add `test_notification_retry_does_not_resettle`.
-- [ ] 7: `uv run --frozen pytest -q tests/test_restoration_activation_completion.py tests/test_restoration_qa_receipts.py tests/test_restorations.py`; `uv run --frozen python -m omnia_api.ops.restoration_qa.cli receipts --manifest "$QA_MANIFEST"`. Operation ID берётся из связанного runner journal; произвольный ID извне не принимается.
+- [ ] 7: `uv run --frozen pytest -q tests/test_restoration_activation_completion.py tests/test_restoration_qa_receipts.py tests/test_restorations.py`; `uv run --frozen python -m yleum_api.ops.restoration_qa.cli receipts --manifest "$QA_MANIFEST"`. Operation ID берётся из связанного runner journal; произвольный ID извне не принимается.
 - [ ] 8: выполнить D, commit `test(restorations): prove terminal activation and settlement idempotency`.
 
 **Observability/evidence:** exact binding/digest map and aggregate deltas of only QA principal; no wallet description/user messages. SQL witness and receipt independent: neither alone substitutes the other.
 
 ### Task T09 — пять отказов с forward recovery до финальных свидетелей
 
-**Files:** Create `apps/api/tests/test_restoration_fault_recovery_e2e.py`, `apps/api/src/omnia_api/ops/restoration_qa/faults.py`; Modify tests `apps/api/tests/test_max_finalization.py`, `apps/api/tests/test_generation_worker.py`, `apps/api/tests/test_restoration_background_reconciliation.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation_service.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation_effects.py`; conditional product fixes only `apps/api/src/omnia_api/services/max_finalization.py`, `services/restorations.py`, `services/restoration_reconciliation.py`, `apps/api/src/omnia_api/workers/generation.py`, orchestrator activation modules named above.
+**Files:** Create `apps/api/tests/test_restoration_fault_recovery_e2e.py`, `apps/api/src/yleum_api/ops/restoration_qa/faults.py`; Modify tests `apps/api/tests/test_max_finalization.py`, `apps/api/tests/test_generation_worker.py`, `apps/api/tests/test_restoration_background_reconciliation.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation_service.py`, `apps/orchestrator/tests/test_restoration_adaptation_activation_effects.py`; conditional product fixes only `apps/api/src/yleum_api/services/max_finalization.py`, `services/restorations.py`, `services/restoration_reconciliation.py`, `apps/api/src/yleum_api/workers/generation.py`, orchestrator activation modules named above.
 
 **Interfaces:** `run_fault_case(manifest: QaManifest, point: FaultPoint) -> list[CheckResult]`, enum exact values in matrix. Injection lives in test dependency adapters/process supervisor, not public endpoint or globally enabled production env. Production-disposable mode rejects process-kill cases against shared services.
 
@@ -783,7 +783,7 @@ assert owner_boundary.status == 'PASS'
 
 - [ ] 6: pre-admission cancel отдельный negative: cancelled + no effects + zero terminal consumption; after admission cancel → 409/recovery, не old-code rollback. Invalid receipt, foreign binding, changed fence, lost network сохраняют uncertainty и scheduled reconciliation.
 - [ ] 7: API `uv run --frozen pytest -q tests/test_restoration_fault_recovery_e2e.py tests/test_restoration_activation_completion.py tests/test_max_finalization.py tests/test_generation_worker.py tests/test_restoration_background_reconciliation.py`; orchestrator `uv run --frozen pytest -q tests/test_restoration_adaptation_activation.py tests/test_restoration_adaptation_activation_service.py tests/test_restoration_adaptation_activation_effects.py`.
-- [ ] 8: Linux `uv run --frozen python -m omnia_api.ops.restoration_qa.cli faults --manifest "$QA_MANIFEST" --all`; каждый point отдельный result/evidence digest, pass только 5/5 без `skip`. `BLOCKED_ENV` не округляется до PASS.
+- [ ] 8: Linux `uv run --frozen python -m yleum_api.ops.restoration_qa.cli faults --manifest "$QA_MANIFEST" --all`; каждый point отдельный result/evidence digest, pass только 5/5 без `skip`. `BLOCKED_ENV` не округляется до PASS.
 - [ ] 9: выполнить D, commit `test(restorations): cover five forward-recovery fault boundaries`. Если найден product bug, commit называет исправленный boundary; повторяется затронутый fault и полная пятистрочная matrix на новом SHA.
 
 **Observability/evidence:** durable before/after phase, process incarnations, timestamps, attempts, monotonic fence/receipt progression, effect counters; не удалять зависшую admission ради зелёного cleanup. Allowed production rehearsal — только synthetic disposable project и безопасный scoped response loss/duplicate normal request; destructive process cases только отдельный stack.
@@ -792,9 +792,9 @@ assert owner_boundary.status == 'PASS'
 
 ### Task T10 — один deterministic QA profile для empty и compatible
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/automatic.py`, `apps/api/tests/test_restoration_qa_automatic.py`; Modify new `cli.py`, `fixtures.py`; Test existing `apps/api/tests/test_restoration_background_reconciliation.py`, `apps/orchestrator/tests/test_restoration_empty.py`, `apps/orchestrator/tests/test_restoration_empty_materializer.py`, `apps/orchestrator/tests/test_code_restoration_engine.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/automatic.py`, `apps/api/tests/test_restoration_qa_automatic.py`; Modify new `cli.py`, `fixtures.py`; Test existing `apps/api/tests/test_restoration_background_reconciliation.py`, `apps/orchestrator/tests/test_restoration_empty.py`, `apps/orchestrator/tests/test_restoration_empty_materializer.py`, `apps/orchestrator/tests/test_code_restoration_engine.py`.
 
-**Interfaces:** `run_automatic_profile(release_sha: str) -> list[CheckResult]` creates exactly two independently owned fixtures and runs one command `uv run --frozen python -m omnia_api.ops.restoration_qa.cli automatic --release-sha "$RELEASE_SHA" --evidence-root "$QA_ROOT"`; explicit generation caller is forbidden in this profile.
+**Interfaces:** `run_automatic_profile(release_sha: str) -> list[CheckResult]` creates exactly two independently owned fixtures and runs one command `uv run --frozen python -m yleum_api.ops.restoration_qa.cli automatic --release-sha "$RELEASE_SHA" --evidence-root "$QA_ROOT"`; explicit generation caller is forbidden in this profile.
 
 - [ ] 1: tests `test_empty_and_compatible_profile_never_dispatches_ai`, `test_technical_rows_do_not_make_business_nonempty`, `test_unmeasured_inventory_is_never_empty`, `test_first_write_after_empty_restore_works`. Inject AI client that raises AssertionError on any call.
 - [ ] 2: red `uv run --frozen pytest -q tests/test_restoration_qa_automatic.py`; initial missing profile; mutation treating `not_measured` as zero must fail.
@@ -809,7 +809,7 @@ assert owner_boundary.status == 'PASS'
 
 ### Task T11 — semantic compatibility и реальные последствия маршрутов
 
-**Files:** Create `apps/api/src/omnia_api/ops/restoration_qa/semantics.py`, `apps/api/tests/test_restoration_qa_semantics.py`, `apps/orchestrator/tests/test_restoration_semantic_contract.py`, `apps/api/tests/fixtures/restoration_qa/semantic_cases.json`; Modify if supported case fails `apps/orchestrator/src/omnia_orchestrator/services/versioning/compatibility.py`, `apps/orchestrator/src/omnia_orchestrator/services/restoration_data_contract.py`, `apps/api/src/omnia_api/services/versioning_capabilities.py`; retain tests `apps/orchestrator/tests/test_versioning_capability_parity.py`, `apps/api/tests/test_versioning_capabilities_v4.py`.
+**Files:** Create `apps/api/src/yleum_api/ops/restoration_qa/semantics.py`, `apps/api/tests/test_restoration_qa_semantics.py`, `apps/orchestrator/tests/test_restoration_semantic_contract.py`, `apps/api/tests/fixtures/restoration_qa/semantic_cases.json`; Modify if supported case fails `apps/orchestrator/src/yleum_orchestrator/services/versioning/compatibility.py`, `apps/orchestrator/src/yleum_orchestrator/services/restoration_data_contract.py`, `apps/api/src/yleum_api/services/versioning_capabilities.py`; retain tests `apps/orchestrator/tests/test_versioning_capability_parity.py`, `apps/api/tests/test_versioning_capabilities_v4.py`.
 
 **Interfaces:** `check_semantics(manifest: QaManifest, case_id: str) -> CheckResult`; matrix cases classify `supported_preserve`, `explicit_decision_required`, `unsupported`. UNKNOWN semantics cannot yield automatic compatible.
 
@@ -819,7 +819,7 @@ assert owner_boundary.status == 'PASS'
 - [ ] 4: route parity mutation keeps GET/POST exports but returns wrong shape or removes owner predicate; behavioral tests fail despite capability parity PASS. Preserve current golden corpus extractor tests, no new parallel route parser.
 - [ ] 5: minimal implementation adds named conservative compatibility blockers only when required; never infer arbitrary semantic conversion from SQL types. For unsupported runtime/custom launch/service, explicit actionable `needs_changes`, unchanged source/data.
 - [ ] 6: API `uv run --frozen pytest -q tests/test_restoration_qa_semantics.py tests/test_versioning_capabilities_v4.py`; orchestrator `uv run --frozen pytest -q tests/test_restoration_semantic_contract.py tests/test_versioning_capability_parity.py tests/test_restoration_data_contract.py`.
-- [ ] 7: `uv run --frozen python -m omnia_api.ops.restoration_qa.cli semantics --manifest "$QA_MANIFEST" --all`; bundle supported cases PASS and unsupported safe-refusal PASS as separate expectations; no claim of universal SQL/business semantic proof.
+- [ ] 7: `uv run --frozen python -m yleum_api.ops.restoration_qa.cli semantics --manifest "$QA_MANIFEST" --all`; bundle supported cases PASS and unsupported safe-refusal PASS as separate expectations; no claim of universal SQL/business semantic proof.
 - [ ] 8: выполнить D, commit `test(restorations): enforce behavioral semantic compatibility boundaries`.
 
 **Observability/evidence:** reason_code/object/operation/decision, schema and value digests, denied egress count, synthetic event delta. Safe refusal is successful policy enforcement, not successful restoration.
@@ -843,7 +843,7 @@ assert owner_boundary.status == 'PASS'
 
 ### Task T13 — phase/recovery telemetry, alerts и безопасный operator retry
 
-**Files:** Create `apps/api/src/omnia_api/services/restoration_observability.py`, `apps/api/tests/test_restoration_observability.py`, `apps/api/src/omnia_api/ops/restoration_status.py`, `apps/api/tests/test_restoration_operator_retry.py`, `docs/operations/restoration-monitoring.md`; Modify `apps/api/src/omnia_api/services/restoration_reconciliation.py`, `services/restorations.py`, `services/generation_deadline.py`, `apps/web/src/components/max/MaxRestorationPanel.tsx`, `apps/web/src/lib/use-max-restoration.ts`, `apps/web/src/lib/__tests__/max-restoration.test.tsx`; Read existing `apps/api/src/omnia_api/services/generation_metrics.py`.
+**Files:** Create `apps/api/src/yleum_api/services/restoration_observability.py`, `apps/api/tests/test_restoration_observability.py`, `apps/api/src/yleum_api/ops/restoration_status.py`, `apps/api/tests/test_restoration_operator_retry.py`, `docs/operations/restoration-monitoring.md`; Modify `apps/api/src/yleum_api/services/restoration_reconciliation.py`, `services/restorations.py`, `services/generation_deadline.py`, `apps/web/src/components/max/MaxRestorationPanel.tsx`, `apps/web/src/lib/use-max-restoration.ts`, `apps/web/src/lib/__tests__/max-restoration.test.tsx`; Read existing `apps/api/src/yleum_api/services/generation_metrics.py`.
 
 **Interfaces:** `restoration_status` emits aggregate JSON view `phase_counts`, `oldest_due_seconds`, `activation_age_seconds`, `recovery_attempts`, `duplicate_callbacks`, `settlement_mismatches`, `deadline_stage_counts`; no per-user labels in aggregate metrics. `build_retry_request(failed_operation, current_snapshot_id) -> RestoreRequest` creates new idempotency key and current binding, never reopens terminal row.
 
@@ -860,7 +860,7 @@ assert owner_boundary.status == 'PASS'
 
 ### Task T14 — production checkout hygiene, release gate и durable cleanup
 
-**Files:** Create `infra/release/restoration-release-gate.py`, `apps/api/tests/test_restoration_release_manifest.py`, `docs/operations/restoration-release-runbook.md`; Modify `.github/workflows/restoration-runtime-qa.yml`, `.github/workflows/production-smoke.yml`, `.github/workflows/production-generation-canary.yml`, `apps/api/src/omnia_api/ops/restoration_qa/evidence.py`, `cli.py`; Read production full Compose and `infra/release/README.md`. Existing general release README is historical migration-specific; never copy its 0048-only downgrade/preflight example as current restoration recovery.
+**Files:** Create `infra/release/restoration-release-gate.py`, `apps/api/tests/test_restoration_release_manifest.py`, `docs/operations/restoration-release-runbook.md`; Modify `.github/workflows/restoration-runtime-qa.yml`, `.github/workflows/production-smoke.yml`, `.github/workflows/production-generation-canary.yml`, `apps/api/src/yleum_api/ops/restoration_qa/evidence.py`, `cli.py`; Read production full Compose and `infra/release/README.md`. Existing general release README is historical migration-specific; never copy its 0048-only downgrade/preflight example as current restoration recovery.
 
 **Interfaces:** `validate_release_bundle(path: Path, release_sha: str) -> list[str]`; exit 0 only all mandatory current-SHA checks PASS. `cleanup_owned` consumes resource journal persisted before allocation; returns per-resource deleted/preserved/retry/error without secrets. No broad directory cleanup.
 
@@ -909,7 +909,7 @@ it("does not override an explicit empty business database requirement", () => {
 
 ### Task T15 — непрерывный UX адаптации и неизменяемая terminal диагностика
 
-**Files:** Modify `apps/web/src/components/max/MaxRestorationPanel.tsx`, `apps/web/src/lib/use-max-adaptation.ts`, `apps/web/src/lib/use-max-restoration.ts`, `apps/web/src/lib/__tests__/max-adaptation-one-click.test.tsx`, `apps/web/src/lib/__tests__/max-adaptation.test.tsx`, `apps/web/src/lib/__tests__/prompt-stream-adaptation.test.tsx`; conditional Modify/Test `apps/api/src/omnia_api/services/generation_deadline.py`, `apps/api/tests/test_generation_deadline.py` if terminal snapshot defect reproduces.
+**Files:** Modify `apps/web/src/components/max/MaxRestorationPanel.tsx`, `apps/web/src/lib/use-max-adaptation.ts`, `apps/web/src/lib/use-max-restoration.ts`, `apps/web/src/lib/__tests__/max-adaptation-one-click.test.tsx`, `apps/web/src/lib/__tests__/max-adaptation.test.tsx`, `apps/web/src/lib/__tests__/prompt-stream-adaptation.test.tsx`; conditional Modify/Test `apps/api/src/yleum_api/services/generation_deadline.py`, `apps/api/tests/test_generation_deadline.py` if terminal snapshot defect reproduces.
 
 **Interfaces:** Preserve current `MaxAdaptationAttachment` with projectId/prompt/reference/phase and existing `onPrepareAdapt`/`onAdapt` callbacks. Do not redesign durable intent: cancel acknowledgement transitions attachment to ready, one continuation uses existing idempotency key. Terminal diagnostic snapshot separates restoration ID, nullable tool operation ID, stage and final step count.
 

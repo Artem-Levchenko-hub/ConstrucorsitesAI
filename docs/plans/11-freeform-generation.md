@@ -5,7 +5,7 @@
 
 ## Контекст и решение
 
-Текущий движок генерации статических сайтов работает в режиме **«каталог/IR»**: на сильных моделях (premium tier) LLM выдаёт только `PageIR` JSON, а финальный HTML собирает детерминированный Jinja-рендерер из **16 фиксированных трафаретов** (`apps/api/src/omnia_api/sections/`). Это даёт надёжность (валидный, адаптивный сайт без «белого экрана»), но ценой шаблонности: два сайта с одинаковым выбором секций **байт-в-байт идентичны по вёрстке**, палитра берётся всегда первая из 54, шрифты — свободный текст со скатыванием в дефолт, а аудит проверяет только дисциплину и не отличает «генерик» от «красиво».
+Текущий движок генерации статических сайтов работает в режиме **«каталог/IR»**: на сильных моделях (premium tier) LLM выдаёт только `PageIR` JSON, а финальный HTML собирает детерминированный Jinja-рендерер из **16 фиксированных трафаретов** (`apps/api/src/yleum_api/sections/`). Это даёт надёжность (валидный, адаптивный сайт без «белого экрана»), но ценой шаблонности: два сайта с одинаковым выбором секций **байт-в-байт идентичны по вёрстке**, палитра берётся всегда первая из 54, шрифты — свободный текст со скатыванием в дефолт, а аудит проверяет только дисциплину и не отличает «генерик» от «красиво».
 
 **Решение владельца:** отказаться от трафаретов как от основного пути. Сильные модели рисуют вёрстку **свободно**, опираясь на нашу методичку-промпт + дизайн-токены + kit-библиотеку. Надёжность сохраняем не фиксацией результата, а **приёмочным контролем** (рендер → скриншот → проверка → авто-починка до показа). Трафареты остаются **аварийным fallback**.
 
@@ -39,7 +39,7 @@
 | Уже есть (переиспользуем) | Доказательство |
 |---|---|
 | Freeform-путь `<file>HTML</file>` → commit | `messages.py:790` гейтит catalog только для premium+catalog; иначе `_extract_files_and_edits` (`messages.py:334-362`) → `extract_files` regex `<file path>` → `commit_files` (`messages.py:1342-1349`). Format-agnostic. |
-| Playwright-рендер | `apps/api/src/omnia_api/workers/preview.py`: `_render_async` (async, можно `await` из пайплайна), грузит локальный `index.html`, `page.screenshot()` без `path=` отдаёт **bytes**. Сейчас 1 viewport `1280×800`, нет `page.evaluate`. |
+| Playwright-рендер | `apps/api/src/yleum_api/workers/preview.py`: `_render_async` (async, можно `await` из пайплайна), грузит локальный `index.html`, `page.screenshot()` без `path=` отдаёт **bytes**. Сейчас 1 viewport `1280×800`, нет `page.evaluate`. |
 | Retry-цикл (L6) | `messages.py` audit-retry loop — расширяем до полноценной приёмки. |
 | `ui_audit` (10 проверок) + `link_validator` | детерминированная структурная база. |
 | Vision-модели в gateway | `litellm_router.py`: `claude-sonnet-4-6`, `claude-opus-4-7`, `gpt-4.1→gpt-4o`, `gpt-5`, `gemini-2.5-pro/flash` — все vision-capable, LiteLLM сам форвардит `image_url` в Anthropic/OpenAI. |
@@ -56,8 +56,8 @@
 | # | Задача | Файлы | Зона |
 |---|---|---|---|
 | 1.1 | Vision в gateway: `ChatMessage.content: str → str \| list[dict]`; guard'ы `isinstance(content, str)` в `safety.sanitize_messages` и `token_counter` (иначе TypeError на list-контенте при биллинге) | `apps/llm-gateway/src/omnia_gateway/routers/chat.py`, `services/safety.py`, `services/token_counter.py` | C |
-| 1.2 | Render-harness: вынести логику `_render_async` в `capture(files, widths=[375,768,1440]) → {width: (png_bytes, scroll_width, has_overflow)}`. Скриншот в bytes (без `path=`), `page.evaluate("() => document.documentElement.scrollWidth")` для overflow. Сохранить обратную совместимость `render_preview` (RQ-обёртка для PNG-превью). | `apps/api/src/omnia_api/workers/preview.py` | B |
-| 1.3 | Дизайн-токены: палитра и пары шрифтов выбираются **с разбросом** (seed по `project_id` → стабильно внутри проекта, разные проекты ≠ одинаковы), курированный пул из ~15–20 пар шрифтов. Экспорт токенов (CSS-переменные) для инъекции в промпт. | `apps/api/src/omnia_api/sections/palettes.py`, новый `services/design_tokens.py` | B |
+| 1.2 | Render-harness: вынести логику `_render_async` в `capture(files, widths=[375,768,1440]) → {width: (png_bytes, scroll_width, has_overflow)}`. Скриншот в bytes (без `path=`), `page.evaluate("() => document.documentElement.scrollWidth")` для overflow. Сохранить обратную совместимость `render_preview` (RQ-обёртка для PNG-превью). | `apps/api/src/yleum_api/workers/preview.py` | B |
+| 1.3 | Дизайн-токены: палитра и пары шрифтов выбираются **с разбросом** (seed по `project_id` → стабильно внутри проекта, разные проекты ≠ одинаковы), курированный пул из ~15–20 пар шрифтов. Экспорт токенов (CSS-переменные) для инъекции в промпт. | `apps/api/src/yleum_api/sections/palettes.py`, новый `services/design_tokens.py` | B |
 | — | Тесты | `tests/test_design_tokens.py`, smoke render-harness | B |
 
 ### Спринт 2 — Приёмочный движок (1.5–2 нед, ядро)
@@ -68,7 +68,7 @@
 |---|---|---|---|
 | 2.1 | `vision_audit.py`: скриншот(ы) → vision-модель (`model_for_role("audit")` = Sonnet) → `{verdict: broken\|generic\|beautiful, score: 0..10, issues: [...]}`. Рубрика: layout / typography / color / composition / originality. Best-effort, fail-soft (ошибка vision = не блокирует). | новый `services/vision_audit.py` | B |
 | 2.2 | `acceptance.py`: оркестратор приёмки — структура (`ui_audit`+`link_validator`+kit-подключён+1×h1) + адаптив (render-harness overflow) + vision → единый вердикт + **агрегированный фидбек** для починки. | новый `services/acceptance.py` | B |
-| 2.3 | Приёмочный цикл в `_process_prompt`: заменить/расширить L6-retry на «чини, пока не пройдёт» (макс `ACCEPTANCE_MAX_RETRIES`), с фидбеком из 2.2. | `apps/api/src/omnia_api/routers/messages.py` | B |
+| 2.3 | Приёмочный цикл в `_process_prompt`: заменить/расширить L6-retry на «чини, пока не пройдёт» (макс `ACCEPTANCE_MAX_RETRIES`), с фидбеком из 2.2. | `apps/api/src/yleum_api/routers/messages.py` | B |
 | — | Флаги/настройки | `core/config.py`: `USE_ACCEPTANCE_GATE`, `USE_VISION_AUDIT`, `ACCEPTANCE_MAX_RETRIES=2`, `ACCEPTANCE_MIN_SCORE=7` | B |
 | — | Тесты | `tests/test_vision_audit.py` (мок vision-ответа), `tests/test_acceptance.py` | B |
 
@@ -76,8 +76,8 @@
 
 | # | Задача | Файлы | Зона |
 |---|---|---|---|
-| 3.1 | Freeform-промпт: в свободном режиме давать `_STATIC_STACK` + методичку + дизайн-токены (из 1.3) и **не** давать catalog-инструкцию «верни только PageIR JSON». Модель пишет полный `index.html`. | `apps/api/src/omnia_api/services/prompt_builder.py` | B |
-| 3.2 | Маршрут: снять premium-гейт каталога (`messages.py:790`). Сильные модели → freeform (skip JSON-parse), каталог → аварийный fallback при провале приёмки. | `apps/api/src/omnia_api/routers/messages.py` | B |
+| 3.1 | Freeform-промпт: в свободном режиме давать `_STATIC_STACK` + методичку + дизайн-токены (из 1.3) и **не** давать catalog-инструкцию «верни только PageIR JSON». Модель пишет полный `index.html`. | `apps/api/src/yleum_api/services/prompt_builder.py` | B |
+| 3.2 | Маршрут: снять premium-гейт каталога (`messages.py:790`). Сильные модели → freeform (skip JSON-parse), каталог → аварийный fallback при провале приёмки. | `apps/api/src/yleum_api/routers/messages.py` | B |
 | 3.3 | Флаг `USE_FREEFORM_RENDER` + доля A/Б-трафика. | `core/config.py` | B |
 | — | Тесты | freeform-extraction + срабатывание fallback-на-каталог | B |
 

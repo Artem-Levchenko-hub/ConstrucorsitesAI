@@ -9,7 +9,7 @@ core и commerce. В целевой схеме commerce — это «SaaS Operat
 
 ## 1. Аудит биллинга: что есть, чего не хватало, что сделано
 
-Кодовая база биллинга: `apps/api/src/omnia_api/{routers/payments.py, routers/billing.py,
+Кодовая база биллинга: `apps/api/src/yleum_api/{routers/payments.py, routers/billing.py,
 services/yookassa.py, services/subscription_lifecycle.py, services/payment_state.py,
 services/billing_cycle.py, models/billing.py, models/account.py (Payment), workers/billing.py}`;
 кабинет — `apps/web/src/components/account/*` и страницы `/billing`, `/billing/plan`,
@@ -24,7 +24,7 @@ services/billing_cycle.py, models/billing.py, models/account.py (Payment), worke
 | Идемпотентность | `Idempotence-Key` в каждом запросе к ЮKassa; уникальные `idempotency_key`, `provider_payment_id`; частичные уникальные индексы «одна открытая первая оплата на аккаунт» и «одно открытое продление на подписку»; повтор вебхука не удваивает зачисление | — | Без изменений |
 | Чеки 54-ФЗ | В платеже и рекуррентном платеже — `receipt` (email плательщика, одна позиция «услуга», `payment_mode=full_payment`, `vat_code` из настройки) | Чек возврата: `POST /refunds` уходил без `receipt`, а при чеках через ЮKassa возврат обязан нести свой чек | **Сделано:** `create_refund(customer_email, description)` формирует чек возврата на email плательщика; роутер возврата подставляет email владельца платежа. Уточнить у владельца систему налогообложения: `YOOKASSA_VAT_CODE=1` = «без НДС» (УСН), 4 = НДС 20 %; `tax_system_code` нужен, только если в магазине несколько СНО |
 | Возвраты | `POST /api/payments/{id}/refund` (только админы из `ADMIN_EMAILS`), полный возврат, запрещён если зачисленный кредит уже потрачен, запись в ledger | Частичные возвраты; чек возврата | Чек — сделано; частичные возвраты не нужны для MVP (вернуть можно только неиспользованный пакет/тариф целиком) |
-| Продление | Фоновый цикл: списание с сохранённого способа, повтор каждые `BILLING_RENEWAL_RETRY_HOURS`=12 ч, льготный период `BILLING_GRACE_DAYS`=3 дня, затем перевод на Free и снятие keep-alive у проектов сверх лимита, письма пользователю | Цикл жил только потоком внутри RQ-воркера на core и был единственным источником heartbeat воркера | **Сделано:** цикл вынесен в `services/billing_cycle.py`, может работать как поток RQ-воркера (`BILLING_LIFECYCLE_ENABLED`, по умолчанию true) или как отдельный процесс `python -m omnia_api.workers.billing` с `GET /health` (для K3s commerce). Heartbeat RQ-воркера теперь отдельный поток, биллинг бьётся под своим ключом |
+| Продление | Фоновый цикл: списание с сохранённого способа, повтор каждые `BILLING_RENEWAL_RETRY_HOURS`=12 ч, льготный период `BILLING_GRACE_DAYS`=3 дня, затем перевод на Free и снятие keep-alive у проектов сверх лимита, письма пользователю | Цикл жил только потоком внутри RQ-воркера на core и был единственным источником heartbeat воркера | **Сделано:** цикл вынесен в `services/billing_cycle.py`, может работать как поток RQ-воркера (`BILLING_LIFECYCLE_ENABLED`, по умолчанию true) или как отдельный процесс `python -m yleum_api.workers.billing` с `GET /health` (для K3s commerce). Heartbeat RQ-воркера теперь отдельный поток, биллинг бьётся под своим ключом |
 | Потерянный вебхук | Только ручной `POST /api/payments/{id}/reconcile` (пользователь/админ) | Автоматическая сверка: заказ, по которому вебхук не дошёл, оставался `pending` навсегда, а деньги — списанными | **Сделано:** каждый тик перечитывает из ЮKassa открытые заказы старше `BILLING_PAYMENT_RECONCILE_AFTER_MINUTES`=10 мин (пополнения и первые оплаты тарифа; продления — по своему графику), заказ без provider id закрывается как failed через `BILLING_PAYMENT_ABANDON_AFTER_HOURS`=24 ч |
 | Отмена / восстановление | `PATCH /api/billing/subscription` cancel / restore (с повторным согласием), `can_restore` до конца оплаченного периода | Удаление сохранённой карты пользователем (сейчас карта «отвязывается» только отменой автопродления — списаний не будет, токен остаётся у ЮKassa); смена тарифа посреди периода без перерасчёта (покупка другого тарифа сразу закрывает текущий) | Не блокирует запуск. Следующим шагом: `DELETE /api/billing/payment-method` (status=revoked + auto_renew=false) и кнопка в кабинете; пропорциональный перерасчёт — по решению владельца |
 | Кабинет | Тариф, автопродление, пакеты пополнения, история операций, устойчивый checkout (заказ сохраняется в браузере до ответа сервера, повтор не создаёт второй платёж), статусы `past_due`/`paused`, блокировка кнопок пока ЮKassa не настроена (`/api/payments/config.enabled`) | Кнопка «удалить карту» (см. выше) | Без изменений |
@@ -105,7 +105,7 @@ services/billing_cycle.py, models/billing.py, models/account.py (Payment), worke
 
 - **Воркер:** Deployment `billing/billing-worker` — тот же образ api (`omnia-api:prod`),
   опубликованный в реестр как `registry.yleum.ru/platform/omnia-api:<sha>` и взятый по digest,
-  команда `python -m omnia_api.workers.billing`, 1 реплика / Recreate, без root, read-only fs,
+  команда `python -m yleum_api.workers.billing`, 1 реплика / Recreate, без root, read-only fs,
   `/health` на :8090 как readiness/liveness (503 — если тик не завершался 3×`poll` или ≥3 провала
   подряд), Service для проверки из кластера, NetworkPolicy (внутрь — только проба; наружу — DNS,
   платформа по WireGuard: postgres 5432 / redis 6379 / оркестраторы 8003, интернет только
@@ -151,11 +151,11 @@ BILLmanager: `/billmgr` отдаёт оболочку SPA), международ
 4 vCPU / 8 GB / 80 GB — 1 134 ₽, 8 vCPU / 12 GB / 100 GB — 1 768 ₽, 8 vCPU / 16 GB / 160 GB —
 2 189 ₽ в месяц.
 
-**Что сделано:** `apps/orchestrator/src/omnia_orchestrator/services/serverum.py` — клиент по
+**Что сделано:** `apps/orchestrator/src/yleum_orchestrator/services/serverum.py` — клиент по
 стандарту REST-панелей хостеров (bearer-токен; `GET /plans`, `POST /servers`,
 `GET/DELETE /servers/{id}`), терпимый к именам полей, с ожиданием готовности сервера и картой
 эндпоинтов, переопределяемой через `SERVERUM_ENDPOINTS_JSON` без правки кода; режим dry-run без
-сети; CLI `python -m omnia_orchestrator.serverum_cli` (plans / servers / order / status / wait-ip /
+сети; CLI `python -m yleum_orchestrator.serverum_cli` (plans / servers / order / status / wait-ip /
 delete, `--json`, коды выхода). 14 контрактных тестов на подменённом httpx.
 **Пометка «эндпоинты уточнить»** стоит в docstring модуля и в этом документе: при получении токена
 от поддержки нужно свериться по трём вещам — базовый URL и пути, имена полей заказа

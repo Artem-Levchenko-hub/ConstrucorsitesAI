@@ -17,9 +17,9 @@ Owner всего runtime/ops/external-API слоя:
 ## Жёсткие границы
 
 - **Write только в `apps/llm-gateway/`, `apps/orchestrator/`, `infra/`, `apps/landing/`.** Никаких правок в `apps/web/`, `apps/api/`.
-- **Read-only:** `docs/`, `agents/`, `apps/api/src/omnia_api/schemas/` (публичный контракт — чтобы понимать какие типы Chat-2 экспортит наружу).
+- **Read-only:** `docs/`, `agents/`, `apps/api/src/yleum_api/schemas/` (публичный контракт — чтобы понимать какие типы Chat-2 экспортит наружу).
 - **Контракт LLM Gateway** — `docs/01-api-contract.md` V3 LLM Gateway endpoints section. Меняешь — inbox в Chat-2 + правка docs/01.
-- **Контракт orchestrator** — `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`. Меняешь — inbox в Chat-2 + комментарий в schemas/.
+- **Контракт orchestrator** — `apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py`. Меняешь — inbox в Chat-2 + комментарий в schemas/.
 
 ## Стек (без изменений)
 
@@ -65,7 +65,7 @@ V3 добавляет — ничего нового на уровне завис
 
 ### Расширение `ProvisionRequest` schema
 
-`apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`:
+`apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py`:
 
 ```python
 class ProvisionRequest(BaseModel):
@@ -79,7 +79,7 @@ class ProvisionRequest(BaseModel):
 
 При наличии `stack_id` — игнорировать `template`. Backward-compatible (старые вызовы без stack_id используют template).
 
-### Generic Dockerfile builder (`apps/orchestrator/src/omnia_orchestrator/services/`)
+### Generic Dockerfile builder (`apps/orchestrator/src/yleum_orchestrator/services/`)
 
 | Файл | Что |
 |---|---|
@@ -193,7 +193,7 @@ uv run pytest -q
 # Orchestrator
 cd apps/orchestrator
 uv sync
-uv run uvicorn omnia_orchestrator.main:app --reload --port 8003
+uv run uvicorn yleum_orchestrator.main:app --reload --port 8003
 uv run pytest -q
 
 # Smoke test шаблона локально (без orchestrator)
@@ -209,7 +209,7 @@ docker compose -f docker-compose.dev.yml up
 2. Прочитать новые `inbox/*.md` (особенно от Chat-2 на тему gateway/orchestrator-контракта).
 3. Обновить свою строку.
 
-**Когда расширяешь `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`** (shared-файл, читает Chat-2):
+**Когда расширяешь `apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py`** (shared-файл, читает Chat-2):
 - Делать backward-compatible (новые поля Optional с default).
 - Inbox-нотификация в Chat-2: `~/.claude/coordination/omnia-mvp/inbox/YYYY-MM-DD-from-CHAT-3-to-CHAT-2-runtime-schema-change.md`.
 

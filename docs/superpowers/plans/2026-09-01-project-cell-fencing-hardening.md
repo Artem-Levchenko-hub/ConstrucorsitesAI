@@ -26,10 +26,10 @@
 ## File Map
 
 - `apps/api/migrations/versions/0053_project_cell_operation_fencing.py` — operation fence, `indeterminate`, and reconcile/restore kinds.
-- `apps/api/src/omnia_api/models/project_cell.py` — ORM fields and constraints.
-- `apps/api/src/omnia_api/services/project_cells.py` — canonical envelope, committed claim primitives, terminal/indeterminate transitions.
-- `apps/api/src/omnia_api/services/project_cell_lifecycle.py` — private commit-before-call executor and higher-fence reconcile path.
-- `apps/api/src/omnia_api/services/orchestrator_client.py` — exact private ensure/control/resources methods.
+- `apps/api/src/yleum_api/models/project_cell.py` — ORM fields and constraints.
+- `apps/api/src/yleum_api/services/project_cells.py` — canonical envelope, committed claim primitives, terminal/indeterminate transitions.
+- `apps/api/src/yleum_api/services/project_cell_lifecycle.py` — private commit-before-call executor and higher-fence reconcile path.
+- `apps/api/src/yleum_api/services/orchestrator_client.py` — exact private ensure/control/resources methods.
 - `apps/api/tests/test_project_cell_models.py`, `test_project_cells.py`, `test_project_cell_lifecycle.py`, `test_orchestrator_client.py`, `test_project_cell_migration_roundtrip.py`, `test_migrations_single_head.py` — persistence, ordering, crash, client, and disposable migration proof.
 - `otchet/data.json` — truthful hardening evidence; resource milestone remains open.
 
@@ -39,8 +39,8 @@
 
 **Files:**
 - Create: `apps/api/migrations/versions/0053_project_cell_operation_fencing.py`
-- Modify: `apps/api/src/omnia_api/models/project_cell.py`
-- Modify: `apps/api/src/omnia_api/services/project_cells.py`
+- Modify: `apps/api/src/yleum_api/models/project_cell.py`
+- Modify: `apps/api/src/yleum_api/services/project_cells.py`
 - Modify: `apps/api/tests/test_project_cell_models.py`
 - Modify: `apps/api/tests/test_project_cells.py`
 - Modify: `apps/api/tests/test_migrations_single_head.py`
@@ -99,8 +99,8 @@ The downgrade first aborts if restore/reconcile rows exist, converts `indetermin
 
 ```bash
 uv run pytest tests/test_project_cell_models.py tests/test_project_cells.py tests/test_migrations_single_head.py -q
-uv run ruff check src/omnia_api/models/project_cell.py src/omnia_api/services/project_cells.py tests/test_project_cell_models.py tests/test_project_cells.py migrations/versions/0053_project_cell_operation_fencing.py
-uv run mypy src/omnia_api/models/project_cell.py src/omnia_api/services/project_cells.py
+uv run ruff check src/yleum_api/models/project_cell.py src/yleum_api/services/project_cells.py tests/test_project_cell_models.py tests/test_project_cells.py migrations/versions/0053_project_cell_operation_fencing.py
+uv run mypy src/yleum_api/models/project_cell.py src/yleum_api/services/project_cells.py
 ```
 
 Expected: PASS, including same-key/different-kind, different generation run, reordered equivalent request, oversized envelope, and unsafe nested keys.
@@ -112,7 +112,7 @@ Expected: PASS, including same-key/different-kind, different generation run, reo
 ### Task 2: Private orchestrator client contract
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/orchestrator_client.py`
+- Modify: `apps/api/src/yleum_api/services/orchestrator_client.py`
 - Modify: `apps/api/tests/test_orchestrator_client.py`
 
 **Interfaces:**
@@ -173,8 +173,8 @@ async def test_every_client_body_preserves_mutation_identity(method, client_harn
 
 ```bash
 uv run pytest tests/test_orchestrator_client.py -q
-uv run ruff check src/omnia_api/services/orchestrator_client.py tests/test_orchestrator_client.py
-uv run mypy src/omnia_api/services/orchestrator_client.py
+uv run ruff check src/yleum_api/services/orchestrator_client.py tests/test_orchestrator_client.py
+uv run mypy src/yleum_api/services/orchestrator_client.py
 ```
 
 Expected RED: imports fail. Expected GREEN: PASS for all three exact bodies and typed responses; no method accepts owner email, arbitrary environment, Docker kwargs, or public URL.
@@ -186,8 +186,8 @@ Expected RED: imports fail. Expected GREEN: PASS for all three exact bodies and 
 ### Task 3: Commit-before-call lifecycle executor
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/project_cell_lifecycle.py`
-- Modify: `apps/api/src/omnia_api/services/project_cells.py`
+- Create: `apps/api/src/yleum_api/services/project_cell_lifecycle.py`
+- Modify: `apps/api/src/yleum_api/services/project_cells.py`
 - Create: `apps/api/tests/test_project_cell_lifecycle.py`
 - Modify: `apps/api/tests/test_project_cells.py`
 
@@ -257,8 +257,8 @@ No exception handler changes an indeterminate operation to pending. Calling the 
 
 ```bash
 uv run pytest tests/test_project_cell_lifecycle.py tests/test_project_cells.py -q
-uv run ruff check src/omnia_api/services/project_cell_lifecycle.py src/omnia_api/services/project_cells.py tests/test_project_cell_lifecycle.py
-uv run mypy src/omnia_api/services/project_cell_lifecycle.py src/omnia_api/services/project_cells.py
+uv run ruff check src/yleum_api/services/project_cell_lifecycle.py src/yleum_api/services/project_cells.py tests/test_project_cell_lifecycle.py
+uv run mypy src/yleum_api/services/project_cell_lifecycle.py src/yleum_api/services/project_cells.py
 ```
 
 Expected: PASS for commit failure, completion rollback, timeout, cancellation, 5xx, malformed response, duplicate delivery, concurrent claim, same key/different kind, and higher-fence reconcile.
@@ -321,9 +321,9 @@ Expected: 0052→0053→0052→0053 succeeds; exact-name guarded cleanup runs on
 
 ```bash
 uv run pytest tests/test_project_cell_models.py tests/test_project_cells.py tests/test_project_cell_lifecycle.py tests/test_project_cell_control.py tests/test_orchestrator_client.py tests/test_project_cell_migration_roundtrip.py tests/test_migrations_single_head.py -q
-uv run ruff check src/omnia_api/models/project_cell.py src/omnia_api/services/project_cells.py src/omnia_api/services/project_cell_lifecycle.py src/omnia_api/services/orchestrator_client.py tests/test_project_cell_models.py tests/test_project_cells.py tests/test_project_cell_lifecycle.py tests/test_orchestrator_client.py migrations/versions/0053_project_cell_operation_fencing.py
-uv run mypy src/omnia_api/models/project_cell.py src/omnia_api/services/project_cells.py src/omnia_api/services/project_cell_lifecycle.py src/omnia_api/services/orchestrator_client.py
-rg -n "execute_cell_operation|reconcile_indeterminate_cell_operation" src/omnia_api/routers/messages.py src/omnia_api/services/agent_native.py src/omnia_api/services/agent_builder.py
+uv run ruff check src/yleum_api/models/project_cell.py src/yleum_api/services/project_cells.py src/yleum_api/services/project_cell_lifecycle.py src/yleum_api/services/orchestrator_client.py tests/test_project_cell_models.py tests/test_project_cells.py tests/test_project_cell_lifecycle.py tests/test_orchestrator_client.py migrations/versions/0053_project_cell_operation_fencing.py
+uv run mypy src/yleum_api/models/project_cell.py src/yleum_api/services/project_cells.py src/yleum_api/services/project_cell_lifecycle.py src/yleum_api/services/orchestrator_client.py
+rg -n "execute_cell_operation|reconcile_indeterminate_cell_operation" src/yleum_api/routers/messages.py src/yleum_api/services/agent_native.py src/yleum_api/services/agent_builder.py
 ```
 
 Expected: tests/static checks pass; caller scan has no matches, proving no public prompt route is enabled.

@@ -25,7 +25,7 @@
    - отказ или сбой → `/login?oauth_error=<код>` с человеческим объяснением.
 
 Контракт эндпоинтов — `docs/01-api-contract.md` (раздел Auth), таблицы — `docs/02-data-model.md`
-(`user_identities`, `oauth_login_states`), код — `apps/api/src/omnia_api/routers/auth_oauth.py`,
+(`user_identities`, `oauth_login_states`), код — `apps/api/src/yleum_api/routers/auth_oauth.py`,
 `services/oauth_login.py`, web — `apps/web/src/components/auth/OAuthButtons.tsx`,
 `OAuthConsentForm.tsx`, `app/(auth)/oauth/complete/page.tsx`.
 

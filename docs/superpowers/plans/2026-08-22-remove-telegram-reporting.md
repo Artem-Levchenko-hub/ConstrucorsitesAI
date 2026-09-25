@@ -40,10 +40,10 @@
     ROOT = Path(__file__).resolve().parents[3]
     REMOVED_FILES = (
         "apps/api/scripts/dev_generation_telegram_acceptance.py",
-        "apps/api/src/omnia_api/models/generation_telegram_report.py",
-        "apps/api/src/omnia_api/services/generation_telegram_delivery.py",
-        "apps/api/src/omnia_api/services/generation_telegram_reports.py",
-        "apps/api/src/omnia_api/workers/generation_reports.py",
+        "apps/api/src/yleum_api/models/generation_telegram_report.py",
+        "apps/api/src/yleum_api/services/generation_telegram_delivery.py",
+        "apps/api/src/yleum_api/services/generation_telegram_reports.py",
+        "apps/api/src/yleum_api/workers/generation_reports.py",
         "infra/monitoring/telegram_generation_report.py",
     )
     SURFACES = (
@@ -214,21 +214,21 @@ Expected: PASS.
 
 **Files:**
 - Delete: apps/api/scripts/dev_generation_telegram_acceptance.py
-- Delete: apps/api/src/omnia_api/models/generation_telegram_report.py
-- Delete: apps/api/src/omnia_api/services/generation_telegram_delivery.py
-- Delete: apps/api/src/omnia_api/services/generation_telegram_reports.py
-- Delete: apps/api/src/omnia_api/workers/generation_reports.py
+- Delete: apps/api/src/yleum_api/models/generation_telegram_report.py
+- Delete: apps/api/src/yleum_api/services/generation_telegram_delivery.py
+- Delete: apps/api/src/yleum_api/services/generation_telegram_reports.py
+- Delete: apps/api/src/yleum_api/workers/generation_reports.py
 - Delete: apps/api/tests/test_dev_generation_telegram_acceptance.py
 - Delete: apps/api/tests/test_generation_report_compose.py
 - Delete: apps/api/tests/test_generation_report_worker.py
 - Delete: apps/api/tests/test_generation_telegram_delivery.py
 - Delete: apps/api/tests/test_generation_telegram_preview.py
 - Delete: apps/api/tests/test_generation_telegram_reports.py
-- Modify: apps/api/src/omnia_api/core/config.py
-- Modify: apps/api/src/omnia_api/models/__init__.py
-- Modify: apps/api/src/omnia_api/routers/messages.py
-- Modify: apps/api/src/omnia_api/services/generation_runs.py
-- Modify: apps/api/src/omnia_api/workers/preview.py
+- Modify: apps/api/src/yleum_api/core/config.py
+- Modify: apps/api/src/yleum_api/models/__init__.py
+- Modify: apps/api/src/yleum_api/routers/messages.py
+- Modify: apps/api/src/yleum_api/services/generation_runs.py
+- Modify: apps/api/src/yleum_api/workers/preview.py
 - Modify: apps/api/tests/test_generation_runs.py
 - Keep: secret_safety.py and test_secret_safety.py
 - Keep: render_settle.py and test_render_settle.py
@@ -261,15 +261,15 @@ The module-absence assertion must pass. Production-surface assertions remain red
     MYPYPATH=src uv run mypy src
     git add -- \
       apps/api/scripts/dev_generation_telegram_acceptance.py \
-      apps/api/src/omnia_api/core/config.py \
-      apps/api/src/omnia_api/models/__init__.py \
-      apps/api/src/omnia_api/models/generation_telegram_report.py \
-      apps/api/src/omnia_api/routers/messages.py \
-      apps/api/src/omnia_api/services/generation_runs.py \
-      apps/api/src/omnia_api/services/generation_telegram_delivery.py \
-      apps/api/src/omnia_api/services/generation_telegram_reports.py \
-      apps/api/src/omnia_api/workers/generation_reports.py \
-      apps/api/src/omnia_api/workers/preview.py \
+      apps/api/src/yleum_api/core/config.py \
+      apps/api/src/yleum_api/models/__init__.py \
+      apps/api/src/yleum_api/models/generation_telegram_report.py \
+      apps/api/src/yleum_api/routers/messages.py \
+      apps/api/src/yleum_api/services/generation_runs.py \
+      apps/api/src/yleum_api/services/generation_telegram_delivery.py \
+      apps/api/src/yleum_api/services/generation_telegram_reports.py \
+      apps/api/src/yleum_api/workers/generation_reports.py \
+      apps/api/src/yleum_api/workers/preview.py \
       apps/api/tests/test_dev_generation_telegram_acceptance.py \
       apps/api/tests/test_generation_report_compose.py \
       apps/api/tests/test_generation_report_worker.py \

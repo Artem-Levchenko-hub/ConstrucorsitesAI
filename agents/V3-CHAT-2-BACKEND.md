@@ -20,7 +20,7 @@ Owner всего `apps/api/` монолита. Делаешь:
 ## Жёсткие границы
 
 - **Write только в `apps/api/`.** Никаких правок в `apps/web/`, `apps/llm-gateway/`, `apps/orchestrator/`, `infra/`, `apps/landing/`.
-- **Read-only:** `docs/`, `agents/`, `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py` (internal-контракт, чтобы знать что Chat-3 ждёт).
+- **Read-only:** `docs/`, `agents/`, `apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py` (internal-контракт, чтобы знать что Chat-3 ждёт).
 - **Контракт** — `docs/01-api-contract.md` V3 секция. Меняешь — inbox-нотификация Chat-1 + Chat-3 + правка docs/01.
 
 ## Стек (без изменений vs AGENT-B)
@@ -49,7 +49,7 @@ V3 добавляет: `cryptography.fernet` (для шифрования access
 
 Downgrade — обратный порядок, аккуратно с FK.
 
-### Models (`apps/api/src/omnia_api/models/`)
+### Models (`apps/api/src/yleum_api/models/`)
 
 | Файл | Класс |
 |---|---|
@@ -61,7 +61,7 @@ Downgrade — обратный порядок, аккуратно с FK.
 | `wallet.py` (расширить) | `WalletCharge.type` enum |
 | `usage.py` (расширить) | `Usage.purpose` |
 
-### Schemas (`apps/api/src/omnia_api/schemas/`)
+### Schemas (`apps/api/src/yleum_api/schemas/`)
 
 | Файл | Pydantic-классы |
 |---|---|
@@ -72,7 +72,7 @@ Downgrade — обратный порядок, аккуратно с FK.
 | `deploy_link.py` (новый) | `DeployLinkStatusPublic`, `DeployLinkTriggerIn` |
 | `project.py` (расширить) | + 5 новых V3-полей в `ProjectPublic` |
 
-### Routers (`apps/api/src/omnia_api/routers/`)
+### Routers (`apps/api/src/yleum_api/routers/`)
 
 | Файл | Endpoints |
 |---|---|
@@ -83,7 +83,7 @@ Downgrade — обратный порядок, аккуратно с FK.
 | `deploy_link.py` (новый) | `POST /api/projects/:id/deploy-link`, `GET /api/projects/:id/deploy-link` |
 | `main.py` (правка) | Подключить новые роутеры в `app.include_router(...)` |
 
-### Services (`apps/api/src/omnia_api/services/`)
+### Services (`apps/api/src/yleum_api/services/`)
 
 | Файл | Назначение |
 |---|---|
@@ -98,7 +98,7 @@ Downgrade — обратный порядок, аккуратно с FK.
 | `orchestrator_client.py` (расширить) | `provision()` теперь передаёт `stack_id` в orchestrator (контракт Chat-3 расширяет `ProvisionRequest.stack_id`). |
 | `billing.py` (расширить) | Новые charge types: `onboarding`, `deploy_link`. |
 
-### Seed (`apps/api/src/omnia_api/seed/`, новая папка)
+### Seed (`apps/api/src/yleum_api/seed/`, новая папка)
 
 | Файл | Что делает |
 |---|---|
@@ -106,7 +106,7 @@ Downgrade — обратный порядок, аккуратно с FK.
 | `stack_templates.py` | INSERT 3 P0-шаблона (`static-html`, `nextjs-postgres-drizzle`, `astro-content`). Idempotent (ON CONFLICT). |
 | `ui_kit_freeze.py` | Scaffolded INSERT-statements для палитр/font-pairs/паттернов. **Я экспортирую реальные данные из ui-ux-pro-max после твоей готовности — заглушку оставь.** |
 
-Запуск: `python -m omnia_api.seed.stack_templates` (или alembic data-only migration).
+Запуск: `python -m yleum_api.seed.stack_templates` (или alembic data-only migration).
 
 ### Environment (`.env.example` расширить)
 
@@ -178,14 +178,14 @@ LINKED_REPO_ENCRYPTION_KEY=         # 32-byte base64 (Fernet)
 cd apps/api
 uv sync
 uv run alembic upgrade head
-uv run uvicorn omnia_api.main:app --reload --port 8000
+uv run uvicorn yleum_api.main:app --reload --port 8000
 uv run pytest -q
 uv run ruff check . && uv run ruff format --check .
 uv run mypy src/
 
 # V3 seeds
-PYTHONPATH=src uv run python -m omnia_api.seed.stack_templates
-PYTHONPATH=src uv run python -m omnia_api.seed.ui_kit_freeze   # (заглушка пока)
+PYTHONPATH=src uv run python -m yleum_api.seed.stack_templates
+PYTHONPATH=src uv run python -m yleum_api.seed.ui_kit_freeze   # (заглушка пока)
 ```
 
 ## Координация
@@ -200,7 +200,7 @@ PYTHONPATH=src uv run python -m omnia_api.seed.ui_kit_freeze   # (заглушк
 - Параллельно продолжать с mock Haiku.
 
 **Когда нужно от Chat-3 (orchestrator stack_id):**
-- W3 момент — inbox запрос на расширение `ProvisionRequest.stack_id` в `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`.
+- W3 момент — inbox запрос на расширение `ProvisionRequest.stack_id` в `apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py`.
 
 **Перед коммитом:**
 - `/safe-commit "feat(api/v3): <что>"`.

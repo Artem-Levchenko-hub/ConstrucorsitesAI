@@ -44,7 +44,7 @@
 - `secure_data_crud` вычисляется только из `cell_data_vault_address`
   (`machine_adapter.py:76`) → на этом сервере `False`, и `SECURE_DATA_GUIDE` агенту не выдаётся
   (`portable_cell_contract.py:159–160`).
-- Но MAX-kit (`apps/api/src/omnia_api/services/max_project_kit.py:20,26`) **всегда** кладёт в
+- Но MAX-kit (`apps/api/src/yleum_api/services/max_project_kit.py:20,26`) **всегда** кладёт в
   проект `src/lib/omnia/data-client.ts` с `secureCollection`, маршрут `/api/omnia/data` и
   `src/lib/secure-data/*`. Ни файл, ни инструкция не сообщают, что на этой среде путь выключен.
 - С 4eebed7c новая БД проекта сразу защищена: приложение работает как `omnia_runtime` без DDL,

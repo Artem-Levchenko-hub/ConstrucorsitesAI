@@ -292,7 +292,7 @@ ship через container-acceptance-gate (мастер-план §5).
 ### 3.3 PERF
 
 - **Инструмент:** Lighthouse CI на ТЁПЛОМ preview-контейнере (не холодном — известный артефакт
-  замера, память `omnia_orchestrator_forensics_bad_design`: капча судила недогруженную страницу).
+  замера, память `yleum_orchestrator_forensics_bad_design`: капча судила недогруженную страницу).
 - **Команда:** `lhci assert --budgetsFile=./budgets.json` с boolean pass/fail-порогами [F10]:
   LCP≤2.5s, CLS≤0.1, performanceScore≥90 → overallPassed. Пороги пере-верифицировать (caveat (d)).
 - **Стадия:** ОДИН раз ближе к `done` (дорого по heal). Vision-судья (`see`) остаётся advisory, не

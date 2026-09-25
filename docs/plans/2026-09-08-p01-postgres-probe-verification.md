@@ -23,8 +23,8 @@ P01 доставлен 8 сентября 2026. Код: 1011a0fdf7cc4f636e755093
 
 Изменённые runtime-файлы:
 
-- apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py
-- apps/orchestrator/src/omnia_orchestrator/services/docker_py_cell_backend.py
+- apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py
+- apps/orchestrator/src/yleum_orchestrator/services/docker_py_cell_backend.py
 
 Регрессии: tests/_cell_fakes.py, test_docker_cell_resources.py, test_docker_py_cell_backend.py, новый test_live_postgres_volume_probe.py; изолированный gate в .github/workflows/ci.yml. Остальное — отчёт.
 

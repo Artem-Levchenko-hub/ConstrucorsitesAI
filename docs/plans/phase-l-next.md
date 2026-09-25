@@ -32,9 +32,9 @@
 **Цель:** при низком `ui_audit` score автоматически re-prompt модель с конкретными failures.
 
 **Файлы:**
-- `apps/api/src/omnia_api/services/ui_audit.py`:
+- `apps/api/src/yleum_api/services/ui_audit.py`:
   - Добавить `format_failures_for_retry(report: AuditReport) -> str` — превращает `per_check` fail-list в человекочитаемый русский bullet-список для подачи модели.
-- `apps/api/src/omnia_api/routers/messages.py::_process_prompt`:
+- `apps/api/src/yleum_api/routers/messages.py::_process_prompt`:
   - После `_extract_files_and_edits` + `ui_audit` хука (он уже считает score и льёт в WS — найти существующее место).
   - Если `score < 70` **И** `retry_count < 1` **И** `use_section_catalog=True`:
     - Собрать retry-сообщение: «Предыдущий ответ score=N. Failures: ...». Это user message.
@@ -68,12 +68,12 @@
 - Конвертировать corpus в IR-snippets. Если хранится как HTML — нужен скрипт `scripts/build_corpus_ir.py` который парсит HTML → приблизительный PageIR. ИЛИ если уже JSON IR — просто read-load.
 
 **Файлы:**
-- `apps/api/src/omnia_api/services/rag.py` (новый, ~120 LOC):
+- `apps/api/src/yleum_api/services/rag.py` (новый, ~120 LOC):
   - `class CorpusIndex` — singleton с in-memory `np.ndarray` embeddings + список IR-snippets.
   - `def embed(text: str) -> np.ndarray` — через LLM gateway embedding endpoint (если есть Voyage/Yandex) ИЛИ через `sentence-transformers` локально (`paraphrase-multilingual-MiniLM-L12-v2`, 470MB — добавить в Dockerfile).
   - `def top1(query: str, industry_hint: str | None = None) -> str | None` — cosine similarity, возвращает JSON-строку IR-snippet или None если порог ниже 0.5.
   - Build index lazily at first call (или при startup в `main.py`).
-- `apps/api/src/omnia_api/services/prompt_builder.py::_build_catalog_system_prompt`:
+- `apps/api/src/yleum_api/services/prompt_builder.py::_build_catalog_system_prompt`:
   - После `header` (preset + ux_brief) добавить `_RAG_REFERENCE` блок если `rag.top1(user_prompt)` вернул не None.
 - `apps/api/pyproject.toml`:
   - Добавить `sentence-transformers>=3.0,<4.0` ИЛИ `voyageai>=0.2,<1.0` (что проще интегрируется).
@@ -95,7 +95,7 @@
 **Цель:** довести lean prompt до полного покрытия — vibes как enum (не описание), palette tail-anchor, RAG inject. Сократить до 3K токенов.
 
 **Файлы:**
-- `apps/api/src/omnia_api/services/prompt_builder.py`:
+- `apps/api/src/yleum_api/services/prompt_builder.py`:
   - Перенести `_CATALOG_SYSTEM_PROMPT` константу в отдельный модуль `services/lean_prompt.py` (чтобы prompt_builder.py перестал быть монолитом 2200+ строк).
   - Добавить `_VIBE_TOKENS` enum: 8 vibes как однострочные spec'ы:
     ```
@@ -104,7 +104,7 @@
     ...
     ```
   - Добавить `_PALETTE_TAIL` блок в самый конец prompt'а (антиlost-in-middle).
-- `apps/api/src/omnia_api/services/preset_classifier.py`:
+- `apps/api/src/yleum_api/services/preset_classifier.py`:
   - Если ещё нет — добавить `vibe_for_industry(industry: str) -> str` — возвращает один из 8 vibes.
 
 **Тесты:**
@@ -120,7 +120,7 @@
 **Когда подключать:** только если в golden eval (10 specs) средний score после L4-L6 остаётся <80 на Opus.
 
 **Файлы:**
-- `apps/api/src/omnia_api/services/director_polish.py` (новый, ~180 LOC):
+- `apps/api/src/yleum_api/services/director_polish.py` (новый, ~180 LOC):
   - `pass_director(prompt, base_msgs) -> PageIR` — короткий IR со structure + tokens, headlines плейсхолдерами `<HEADLINE>`.
   - `pass_polish(ir: PageIR, prompt: str) -> PageIR` — берёт director IR + user prompt → IR с реальным content.
 - `core/config.py`: `use_director_polish: bool = False`.
@@ -170,7 +170,7 @@
 ## Critical files map (для агента следующей сессии)
 
 ```
-apps/api/src/omnia_api/
+apps/api/src/yleum_api/
 ├── core/
 │   └── config.py                    — USE_SECTION_CATALOG flag (есть)
 ├── routers/

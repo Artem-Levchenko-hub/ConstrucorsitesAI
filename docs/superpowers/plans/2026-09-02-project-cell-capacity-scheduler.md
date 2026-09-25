@@ -30,23 +30,23 @@
 
 ## File Map
 
-- `apps/orchestrator/src/omnia_orchestrator/core/config.py`, `apps/orchestrator/.env.example` — remove the numerical bundle cap; add bounded retry/admission settings only.
-- `apps/orchestrator/src/omnia_orchestrator/core/cell_resources.py` — typed `CellCapacityUnavailable` and count-free resource profile.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_admission.py` — physical-dimension admission decisions with no count gate.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_lock.py` — secure named cross-process lock used by all workspace admissions.
-- `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py` — cross-workspace admission critical section and pre-effect capacity exception.
-- `apps/orchestrator/src/omnia_orchestrator/services/cell_state.py` — explicit release of the active generation lease while retaining ready compute.
-- `apps/orchestrator/src/omnia_orchestrator/core/workspace_provider.py`, `apps/orchestrator/src/omnia_orchestrator/services/docker_owner_canary_provider.py` — fenced `release` lifecycle operation.
-- `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`, `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py` — typed capacity-wait response and internal release operation.
+- `apps/orchestrator/src/yleum_orchestrator/core/config.py`, `apps/orchestrator/.env.example` — remove the numerical bundle cap; add bounded retry/admission settings only.
+- `apps/orchestrator/src/yleum_orchestrator/core/cell_resources.py` — typed `CellCapacityUnavailable` and count-free resource profile.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_admission.py` — physical-dimension admission decisions with no count gate.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_lock.py` — secure named cross-process lock used by all workspace admissions.
+- `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py` — cross-workspace admission critical section and pre-effect capacity exception.
+- `apps/orchestrator/src/yleum_orchestrator/services/cell_state.py` — explicit release of the active generation lease while retaining ready compute.
+- `apps/orchestrator/src/yleum_orchestrator/core/workspace_provider.py`, `apps/orchestrator/src/yleum_orchestrator/services/docker_owner_canary_provider.py` — fenced `release` lifecycle operation.
+- `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`, `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py` — typed capacity-wait response and internal release operation.
 - `apps/api/migrations/versions/0055_project_cell_capacity_queue.py` — generation/operation status constraints and retry metadata.
-- `apps/api/src/omnia_api/models/generation_run.py`, `apps/api/src/omnia_api/models/project_cell.py` — durable queue and retry fields.
-- `apps/api/src/omnia_api/services/orchestrator_client.py` — parse the exact capacity pre-effect envelope.
-- `apps/api/src/omnia_api/services/project_cells.py` — park/reclaim lifecycle operations, FIFO admission turn, idle victim claim, workspace release state.
-- `apps/api/src/omnia_api/services/project_cell_lifecycle.py` — persist `waiting_capacity` rather than failed/indeterminate and retry the same operation safely.
-- `apps/api/src/omnia_api/services/project_cell_capacity.py` — bounded FIFO wait loop, idle hibernation, retry wakeup, and metrics/log events.
-- `apps/api/src/omnia_api/services/project_cell_executor.py` — wait instead of failing, report queue progress, and expose fenced generation-lease release.
-- `apps/api/src/omnia_api/services/generation_runs.py`, `apps/api/src/omnia_api/routers/messages.py`, `apps/api/src/omnia_api/main.py` — validated dispatch persistence, queued status, startup resumption, cancellation, and final lease release.
-- `apps/api/src/omnia_api/schemas/message.py`, `apps/api/src/omnia_api/schemas/max_studio.py` — expose `queued_for_capacity` without breaking older clients.
+- `apps/api/src/yleum_api/models/generation_run.py`, `apps/api/src/yleum_api/models/project_cell.py` — durable queue and retry fields.
+- `apps/api/src/yleum_api/services/orchestrator_client.py` — parse the exact capacity pre-effect envelope.
+- `apps/api/src/yleum_api/services/project_cells.py` — park/reclaim lifecycle operations, FIFO admission turn, idle victim claim, workspace release state.
+- `apps/api/src/yleum_api/services/project_cell_lifecycle.py` — persist `waiting_capacity` rather than failed/indeterminate and retry the same operation safely.
+- `apps/api/src/yleum_api/services/project_cell_capacity.py` — bounded FIFO wait loop, idle hibernation, retry wakeup, and metrics/log events.
+- `apps/api/src/yleum_api/services/project_cell_executor.py` — wait instead of failing, report queue progress, and expose fenced generation-lease release.
+- `apps/api/src/yleum_api/services/generation_runs.py`, `apps/api/src/yleum_api/routers/messages.py`, `apps/api/src/yleum_api/main.py` — validated dispatch persistence, queued status, startup resumption, cancellation, and final lease release.
+- `apps/api/src/yleum_api/schemas/message.py`, `apps/api/src/yleum_api/schemas/max_studio.py` — expose `queued_for_capacity` without breaking older clients.
 - `apps/web/src/lib/api/types.ts`, `apps/web/src/lib/generation-lifecycle.ts`, `apps/web/src/components/workspace/AgentTranscript.tsx` — active queued status and explicit Russian waiting copy.
 - Focused tests listed in each task prove RED→GREEN behavior, races, recovery, and UI state.
 - `otchet/data.json` — H129 implementation evidence; V4 stays false until live production acceptance succeeds.
@@ -56,13 +56,13 @@
 ### Task 1: Remove the numerical admission gate and serialize host admission
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/config.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/config.py`
 - Modify: `apps/orchestrator/.env.example`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/cell_resources.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/cell_admission.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/cell_lock.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/workspace_provider_factory.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/cell_resources.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/cell_admission.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/cell_lock.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/workspace_provider_factory.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py`
 - Test: `apps/orchestrator/tests/test_cell_resources.py`
 - Test: `apps/orchestrator/tests/test_cell_admission.py`
 - Test: `apps/orchestrator/tests/test_cell_lock.py`
@@ -130,8 +130,8 @@ Raise only before `stateful_begin_or_replay` and `docker.begin_operation`, so th
 
 ```powershell
 uv run pytest tests/test_cell_resources.py tests/test_cell_admission.py tests/test_cell_lock.py tests/test_docker_cell_resources.py -q
-uv run ruff check src/omnia_orchestrator/core/config.py src/omnia_orchestrator/core/cell_resources.py src/omnia_orchestrator/services/cell_admission.py src/omnia_orchestrator/services/cell_lock.py src/omnia_orchestrator/services/docker_cell_resources.py tests/test_cell_resources.py tests/test_cell_admission.py tests/test_cell_lock.py tests/test_docker_cell_resources.py
-uv run mypy src/omnia_orchestrator/core/cell_resources.py src/omnia_orchestrator/services/cell_admission.py src/omnia_orchestrator/services/cell_lock.py src/omnia_orchestrator/services/docker_cell_resources.py
+uv run ruff check src/yleum_orchestrator/core/config.py src/yleum_orchestrator/core/cell_resources.py src/yleum_orchestrator/services/cell_admission.py src/yleum_orchestrator/services/cell_lock.py src/yleum_orchestrator/services/docker_cell_resources.py tests/test_cell_resources.py tests/test_cell_admission.py tests/test_cell_lock.py tests/test_docker_cell_resources.py
+uv run mypy src/yleum_orchestrator/core/cell_resources.py src/yleum_orchestrator/services/cell_admission.py src/yleum_orchestrator/services/cell_lock.py src/yleum_orchestrator/services/docker_cell_resources.py
 ```
 
 Expected: all focused tests pass; `rg "active_bundle_limit|cell_max_active_bundles|max_active_bundles" apps/orchestrator` finds no runtime reference.
@@ -141,9 +141,9 @@ Expected: all focused tests pass; `rg "active_bundle_limit|cell_max_active_bundl
 ### Task 2: Return a typed, verifiable capacity-wait response
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`
-- Modify: `apps/api/src/omnia_api/services/orchestrator_client.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_lifecycle.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`
+- Modify: `apps/api/src/yleum_api/services/orchestrator_client.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_lifecycle.py`
 - Test: `apps/orchestrator/tests/test_workspace_router.py`
 - Test: `apps/api/tests/test_orchestrator_client.py`
 - Test: `apps/api/tests/test_project_cell_lifecycle.py`
@@ -202,11 +202,11 @@ Expected: all tests pass against the isolated test database.
 
 **Files:**
 - Create: `apps/api/migrations/versions/0055_project_cell_capacity_queue.py`
-- Modify: `apps/api/src/omnia_api/models/generation_run.py`
-- Modify: `apps/api/src/omnia_api/models/project_cell.py`
-- Modify: `apps/api/src/omnia_api/models/__init__.py` only if new mapped types are introduced
-- Modify: `apps/api/src/omnia_api/services/generation_runs.py`
-- Modify: `apps/api/src/omnia_api/services/project_cells.py`
+- Modify: `apps/api/src/yleum_api/models/generation_run.py`
+- Modify: `apps/api/src/yleum_api/models/project_cell.py`
+- Modify: `apps/api/src/yleum_api/models/__init__.py` only if new mapped types are introduced
+- Modify: `apps/api/src/yleum_api/services/generation_runs.py`
+- Modify: `apps/api/src/yleum_api/services/project_cells.py`
 - Test: `apps/api/tests/test_migrations_single_head.py`
 - Test: `apps/api/tests/test_project_cell_models.py`
 - Test: `apps/api/tests/test_generation_runs.py`
@@ -257,8 +257,8 @@ The downgrade refuses to collapse live `queued_for_capacity`/`waiting_capacity` 
 
 ```powershell
 uv run pytest tests/test_migrations_single_head.py tests/test_project_cell_models.py tests/test_generation_runs.py tests/test_project_cells.py -q
-uv run ruff check migrations/versions/0055_project_cell_capacity_queue.py src/omnia_api/models/generation_run.py src/omnia_api/models/project_cell.py src/omnia_api/services/generation_runs.py src/omnia_api/services/project_cells.py tests/test_migrations_single_head.py tests/test_project_cell_models.py tests/test_generation_runs.py tests/test_project_cells.py
-uv run mypy src/omnia_api/models/generation_run.py src/omnia_api/models/project_cell.py src/omnia_api/services/generation_runs.py src/omnia_api/services/project_cells.py
+uv run ruff check migrations/versions/0055_project_cell_capacity_queue.py src/yleum_api/models/generation_run.py src/yleum_api/models/project_cell.py src/yleum_api/services/generation_runs.py src/yleum_api/services/project_cells.py tests/test_migrations_single_head.py tests/test_project_cell_models.py tests/test_generation_runs.py tests/test_project_cells.py
+uv run mypy src/yleum_api/models/generation_run.py src/yleum_api/models/project_cell.py src/yleum_api/services/generation_runs.py src/yleum_api/services/project_cells.py
 ```
 
 Expected: upgrade/downgrade/upgrade and ORM catalog parity pass on disposable PostgreSQL 16.
@@ -268,9 +268,9 @@ Expected: upgrade/downgrade/upgrade and ORM catalog parity pass on disposable Po
 ### Task 4: Add FIFO coordination and safe idle-cell hibernation
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/project_cell_capacity.py`
-- Modify: `apps/api/src/omnia_api/services/project_cells.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_lifecycle.py`
+- Create: `apps/api/src/yleum_api/services/project_cell_capacity.py`
+- Modify: `apps/api/src/yleum_api/services/project_cells.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_lifecycle.py`
 - Test: `apps/api/tests/test_project_cell_capacity.py`
 - Test: `apps/api/tests/test_project_cells.py`
 
@@ -317,8 +317,8 @@ Never hold a PostgreSQL transaction across an HTTP/Docker call. Commit the victi
 ```powershell
 cd apps/api
 uv run pytest tests/test_project_cell_capacity.py tests/test_project_cells.py tests/test_project_cell_lifecycle.py -q
-uv run ruff check src/omnia_api/services/project_cell_capacity.py src/omnia_api/services/project_cells.py src/omnia_api/services/project_cell_lifecycle.py tests/test_project_cell_capacity.py tests/test_project_cells.py tests/test_project_cell_lifecycle.py
-uv run mypy src/omnia_api/services/project_cell_capacity.py src/omnia_api/services/project_cells.py src/omnia_api/services/project_cell_lifecycle.py
+uv run ruff check src/yleum_api/services/project_cell_capacity.py src/yleum_api/services/project_cells.py src/yleum_api/services/project_cell_lifecycle.py tests/test_project_cell_capacity.py tests/test_project_cells.py tests/test_project_cell_lifecycle.py
+uv run mypy src/yleum_api/services/project_cell_capacity.py src/yleum_api/services/project_cells.py src/yleum_api/services/project_cell_lifecycle.py
 ```
 
 Expected: FIFO, cancellation, duplicate scheduler, no-idle-victim, retry deadline, and one-pause-only cases pass.
@@ -328,14 +328,14 @@ Expected: FIFO, cancellation, duplicate scheduler, no-idle-victim, retry deadlin
 ### Task 5: Release generation leases without stopping the finished preview
 
 **Files:**
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/workspace_provider.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/cell_state.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_owner_canary_provider.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/routers/workspace.py`
-- Modify: `apps/api/src/omnia_api/services/project_cells.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_executor.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/workspace_provider.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/cell_state.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_owner_canary_provider.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/routers/workspace.py`
+- Modify: `apps/api/src/yleum_api/services/project_cells.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_executor.py`
 - Test: `apps/orchestrator/tests/test_cell_state.py`
 - Test: `apps/orchestrator/tests/test_workspace_provider.py`
 - Test: `apps/orchestrator/tests/test_workspace_router.py`
@@ -386,10 +386,10 @@ Expected: release is idempotent, fenced, leaves compute ready, and makes only pr
 ### Task 6: Wait inside the original run and resume queued prompts after API restart
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/project_cell_executor.py`
-- Modify: `apps/api/src/omnia_api/services/generation_runs.py`
-- Modify: `apps/api/src/omnia_api/routers/messages.py`
-- Modify: `apps/api/src/omnia_api/main.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_executor.py`
+- Modify: `apps/api/src/yleum_api/services/generation_runs.py`
+- Modify: `apps/api/src/yleum_api/routers/messages.py`
+- Modify: `apps/api/src/yleum_api/main.py`
 - Test: `apps/api/tests/test_project_cell_executor.py`
 - Test: `apps/api/tests/test_generation_runs.py`
 - Test: `apps/api/tests/test_messages_project_cell.py`
@@ -440,8 +440,8 @@ Initialize `_project_cell_executor_handle = None` before the outer `try`. In the
 ```powershell
 cd apps/api
 uv run pytest tests/test_project_cell_executor.py tests/test_generation_runs.py tests/test_messages_project_cell.py tests/test_main_lifespan.py -q
-uv run ruff check src/omnia_api/services/project_cell_executor.py src/omnia_api/services/generation_runs.py src/omnia_api/routers/messages.py src/omnia_api/main.py tests/test_project_cell_executor.py tests/test_generation_runs.py tests/test_messages_project_cell.py tests/test_main_lifespan.py
-uv run mypy src/omnia_api/services/project_cell_executor.py src/omnia_api/services/generation_runs.py src/omnia_api/routers/messages.py src/omnia_api/main.py
+uv run ruff check src/yleum_api/services/project_cell_executor.py src/yleum_api/services/generation_runs.py src/yleum_api/routers/messages.py src/yleum_api/main.py tests/test_project_cell_executor.py tests/test_generation_runs.py tests/test_messages_project_cell.py tests/test_main_lifespan.py
+uv run mypy src/yleum_api/services/project_cell_executor.py src/yleum_api/services/generation_runs.py src/yleum_api/routers/messages.py src/yleum_api/main.py
 ```
 
 Expected: duplicate browser POST, duplicate startup scan, two API processes, queue cancellation, and restart recovery all preserve one run and one generation.
@@ -451,8 +451,8 @@ Expected: duplicate browser POST, duplicate startup scan, two API processes, que
 ### Task 7: Show capacity waiting as an active, recoverable MAX state
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/schemas/message.py`
-- Modify: `apps/api/src/omnia_api/schemas/max_studio.py`
+- Modify: `apps/api/src/yleum_api/schemas/message.py`
+- Modify: `apps/api/src/yleum_api/schemas/max_studio.py`
 - Modify: `apps/web/src/lib/api/types.ts`
 - Modify: `apps/web/src/lib/generation-lifecycle.ts`
 - Modify: `apps/web/src/components/workspace/AgentTranscript.tsx`

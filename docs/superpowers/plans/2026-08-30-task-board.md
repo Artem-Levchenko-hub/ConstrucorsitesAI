@@ -24,13 +24,13 @@
 ### Task 1: Persisted task-board API
 
 **Files:**
-- Create: `apps/api/src/omnia_api/models/task_board.py`
-- Create: `apps/api/src/omnia_api/schemas/task_board.py`
-- Create: `apps/api/src/omnia_api/routers/task_board.py`
+- Create: `apps/api/src/yleum_api/models/task_board.py`
+- Create: `apps/api/src/yleum_api/schemas/task_board.py`
+- Create: `apps/api/src/yleum_api/routers/task_board.py`
 - Create: `apps/api/migrations/versions/0049_task_board.py`
 - Create: `apps/api/tests/test_task_board_api.py`
-- Modify: `apps/api/src/omnia_api/models/__init__.py`
-- Modify: `apps/api/src/omnia_api/main.py`
+- Modify: `apps/api/src/yleum_api/models/__init__.py`
+- Modify: `apps/api/src/yleum_api/main.py`
 
 **Interfaces:**
 - Produces: `GET|POST /api/task-board/tasks` and `PATCH|DELETE /api/task-board/tasks/{task_id}`.

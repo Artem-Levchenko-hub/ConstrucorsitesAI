@@ -22,7 +22,7 @@ Task13 не закрывает всю матрицу пользовательс�
 ## Пакет 1: неиспользуемый сборщик catalog
 
 Тип R/Task13. Единственный изменённый production файл —
-`apps/api/src/omnia_api/services/prompt_builder.py`.
+`apps/api/src/yleum_api/services/prompt_builder.py`.
 Удалены `_CATALOG_SYSTEM_PROMPT`, `_build_catalog_system_prompt`,
 `_build_catalog_messages` и устаревшее описание совместимого shim.
 Действующий владелец catalog instructions — `services/lean_prompt.py`;

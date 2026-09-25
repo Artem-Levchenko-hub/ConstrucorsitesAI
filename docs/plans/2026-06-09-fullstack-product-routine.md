@@ -47,7 +47,7 @@
 ### Тест-доступ (server-side E2E, без браузера)
 - Минт токена под тест-аккаунт (owner проекта `5f75add5` = `undj00x03@gmail.com`):
   `OWNER=$(docker exec omnia-prod-postgres psql -U omnia -d omnia -tAc "select owner_id from projects where id='5f75add5-0d0a-43ac-8eb6-989506bb400c'")`
-  `TOKEN=$(docker exec omnia-prod-api /app/.venv/bin/python -c "from omnia_api.core.security import create_access_token; from uuid import UUID; print(create_access_token(UUID('$OWNER')))")`
+  `TOKEN=$(docker exec omnia-prod-api /app/.venv/bin/python -c "from yleum_api.core.security import create_access_token; from uuid import UUID; print(create_access_token(UUID('$OWNER')))")`
 - Создать проект: `POST http://localhost:8200/api/projects` body `{"name":"routine-test","template":"fullstack"}` куки `omnia_session=$TOKEN`.
 - Промпт: `POST /api/projects/<id>/prompt` `{"prompt":"<spec>"}`. Clarify включён ->
   первый ответ `mode:clarify`, второй промпт «генерируй» -> `mode:build`.

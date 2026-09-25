@@ -55,7 +55,7 @@ apps/api/
 │       ├── 0002_projects_snapshots.py
 │       └── 0003_billing.py
 ├── src/
-│   └── omnia_api/
+│   └── yleum_api/
 │       ├── __init__.py
 │       ├── main.py                       (FastAPI app, lifespan, middleware)
 │       ├── core/
@@ -134,7 +134,7 @@ apps/api/
 **Definition of Done M0:**
 - `docker compose up` поднимает Postgres + Redis + MinIO без ошибок.
 - `uv run alembic upgrade head` создаёт схему.
-- `uv run uvicorn omnia_api.main:app --reload` стартует на :8000.
+- `uv run uvicorn yleum_api.main:app --reload` стартует на :8000.
 - `pytest tests/test_auth.py` зелёный (register → login → me → logout).
 
 ### M1 — Проекты + snapshots (день 3–6)
@@ -229,7 +229,7 @@ cp .env.example .env
 uv run alembic upgrade head
 
 # dev
-uv run uvicorn omnia_api.main:app --reload --port 8000
+uv run uvicorn yleum_api.main:app --reload --port 8000
 uv run rq worker omnia-previews              # отдельный терминал
 
 # тесты

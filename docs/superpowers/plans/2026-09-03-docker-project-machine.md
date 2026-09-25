@@ -28,22 +28,22 @@ Run orchestrator commands from `apps/orchestrator` with `.venv/Scripts/python.ex
 
 ## File map
 
-- `apps/orchestrator/src/omnia_orchestrator/core/project_machine.py`: portable JSON manifest and immutable references.
-- `apps/orchestrator/src/omnia_orchestrator/services/project_machine.py`: lifecycle coordination behind a narrow Docker backend.
-- `apps/orchestrator/src/omnia_orchestrator/services/machine_environment.py`: immutable environment snapshot/export/import verification.
-- `apps/orchestrator/src/omnia_orchestrator/services/machine_services.py`: desired-service graph and process supervision protocol.
-- `apps/orchestrator/src/omnia_orchestrator/services/machine_egress.py`: destination policy and fence readiness contract.
-- `apps/orchestrator/src/omnia_orchestrator/routers/project_machine.py`: internal fenced machine operations.
+- `apps/orchestrator/src/yleum_orchestrator/core/project_machine.py`: portable JSON manifest and immutable references.
+- `apps/orchestrator/src/yleum_orchestrator/services/project_machine.py`: lifecycle coordination behind a narrow Docker backend.
+- `apps/orchestrator/src/yleum_orchestrator/services/machine_environment.py`: immutable environment snapshot/export/import verification.
+- `apps/orchestrator/src/yleum_orchestrator/services/machine_services.py`: desired-service graph and process supervision protocol.
+- `apps/orchestrator/src/yleum_orchestrator/services/machine_egress.py`: destination policy and fence readiness contract.
+- `apps/orchestrator/src/yleum_orchestrator/routers/project_machine.py`: internal fenced machine operations.
 - `apps/agent-runner/src/omnia_agent_runner/session.py`: durable session/operation/event adapters.
-- `apps/api/src/omnia_api/services/project_machine_sessions.py`: API lease/dispatch/recovery boundary.
-- `apps/api/src/omnia_api/services/project_machine_release.py`: functional candidate verification and data cutover coordinator.
+- `apps/api/src/yleum_api/services/project_machine_sessions.py`: API lease/dispatch/recovery boundary.
+- `apps/api/src/yleum_api/services/project_machine_release.py`: functional candidate verification and data cutover coordinator.
 - Existing workspace/capacity/candidate/runtime/MAX code: narrow compatibility adapters only.
 
 ### Task 0: Remove `see` from all generation (first independent delivery)
 
 User priority and parent review explicitly approve this bounded slice before any machine runtime changes.
 
-**Files:** `apps/api/src/omnia_api/services/{agent_builder,agent_native,max_generation_contract,project_cell_executor}.py`, `apps/api/src/omnia_api/routers/messages.py`, their focused tests and adjacent design-contract documentation.
+**Files:** `apps/api/src/yleum_api/services/{agent_builder,agent_native,max_generation_contract,project_cell_executor}.py`, `apps/api/src/yleum_api/routers/messages.py`, their focused tests and adjacent design-contract documentation.
 
 - [x] Write regressions for removed native/legacy tool schemas and dispatch, stale model replies, no automatic visual retry, and MAX completion without visual evidence.
 - [x] Observe RED: 9 expected failures and 1 pass; then remove tool/prompt/dispatch/completion code and observe focused GREEN: 10 passed.
@@ -54,10 +54,10 @@ User priority and parent review explicitly approve this bounded slice before any
 ### Task 1: Portable manifest and resource/service contract
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/core/project_machine.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/core/project_machine.py`
 - Create: `apps/orchestrator/tests/test_project_machine_manifest.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/core/workspace_provider.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/schemas/workspace.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/core/workspace_provider.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/schemas/workspace.py`
 
 **Interfaces:**
 - Consumes: JSON bytes at `.omnia/cell.json` and the existing `CellResourceProfile` resource budget.
@@ -94,13 +94,13 @@ def digest(self) -> str:
 ### Task 2: Persistent machine and immutable environment recovery
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/project_machine.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/machine_environment.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/project_machine.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/machine_environment.py`
 - Create: `apps/orchestrator/tests/test_machine_environment.py`
 - Create: `apps/orchestrator/tests/test_project_machine.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_py_cell_backend.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/cell_state.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/cell_checkpoint.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_py_cell_backend.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/cell_state.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/cell_checkpoint.py`
 
 **Interfaces:**
 - Consumes: `MachineManifest`, existing `LifecycleMutation`, project-owned volumes and `WorkspaceOperationLock`.
@@ -131,13 +131,13 @@ if hashlib.sha256(artifact_bytes).hexdigest() != reference.sha256:
 ### Task 3: Public egress and supervised multi-service runtime
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/machine_egress.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/machine_services.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/machine_egress.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/machine_services.py`
 - Create: `apps/orchestrator/tests/test_machine_egress.py`
 - Create: `apps/orchestrator/tests/test_machine_services.py`
 - Create: `apps/orchestrator/scripts/project_machine_namespace_guard.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/docker_cell_resources.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/workspace_provider_factory.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/docker_cell_resources.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/workspace_provider_factory.py`
 
 **Interfaces:**
 - Consumes: `MachineManifest`, controller-owned network identities, `LifecycleMutation`, real namespace-guard observation.
@@ -175,15 +175,15 @@ Known infrastructure prerequisite observed during isolated test setup: Docker re
 ### Task 4: Framework-neutral MAX identity and custom project data
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/routers/project_machine.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/routers/project_machine.py`
 - Create: `apps/orchestrator/tests/test_project_machine_router.py`
-- Create: `apps/api/src/omnia_api/services/project_machine_runtime.py`
+- Create: `apps/api/src/yleum_api/services/project_machine_runtime.py`
 - Create: `apps/api/tests/test_project_machine_runtime.py`
-- Modify: `apps/api/src/omnia_api/services/orchestrator_client.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_executor.py`
-- Modify: `apps/api/src/omnia_api/services/max_project_kit.py`
-- Modify: `apps/api/src/omnia_api/routers/messages.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/cell_draft_support.py`
+- Modify: `apps/api/src/yleum_api/services/orchestrator_client.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_executor.py`
+- Modify: `apps/api/src/yleum_api/services/max_project_kit.py`
+- Modify: `apps/api/src/yleum_api/routers/messages.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/cell_draft_support.py`
 
 **Interfaces:**
 - Consumes: selected provider capabilities, manifest routes, current signed MAX session and project identity.
@@ -214,15 +214,15 @@ return await legacy_executor(action)
 **Files:**
 - Create: `apps/agent-runner/src/omnia_agent_runner/session.py`
 - Create: `apps/agent-runner/tests/test_session.py`
-- Create: `apps/api/src/omnia_api/services/project_machine_sessions.py`
+- Create: `apps/api/src/yleum_api/services/project_machine_sessions.py`
 - Create: `apps/api/tests/test_project_machine_sessions.py`
 - Create: `apps/api/migrations/versions/0056_project_machine_sessions.py`
-- Modify: `apps/api/src/omnia_api/models/project_cell.py`
+- Modify: `apps/api/src/yleum_api/models/project_cell.py`
 - Modify: `apps/agent-runner/src/omnia_agent_runner/service.py`
 - Modify: `apps/agent-runner/src/omnia_agent_runner/runner.py`
-- Modify: `apps/api/src/omnia_api/services/generation_runs.py`
-- Modify: `apps/api/src/omnia_api/main.py`
-- Modify: `apps/api/src/omnia_api/routers/messages.py`
+- Modify: `apps/api/src/yleum_api/services/generation_runs.py`
+- Modify: `apps/api/src/yleum_api/main.py`
+- Modify: `apps/api/src/yleum_api/routers/messages.py`
 
 **Interfaces:**
 - Consumes: existing `RunnerIdentity`, `ExecutorClient`, `ControlClient`, `EventSink`, gateway auth factory, machine command operations.
@@ -255,10 +255,10 @@ return await executor.resume_or_start(operation, identity)
 
 **Files:**
 - Create: `apps/api/tests/test_project_machine_completion.py`
-- Modify: `apps/api/src/omnia_api/services/max_generation_contract.py`
-- Modify: `apps/api/src/omnia_api/services/agent_native.py`
-- Modify: `apps/api/src/omnia_api/services/release_proof.py`
-- Modify: `apps/api/src/omnia_api/services/project_machine_runtime.py`
+- Modify: `apps/api/src/yleum_api/services/max_generation_contract.py`
+- Modify: `apps/api/src/yleum_api/services/agent_native.py`
+- Modify: `apps/api/src/yleum_api/services/release_proof.py`
+- Modify: `apps/api/src/yleum_api/services/project_machine_runtime.py`
 
 **Interfaces:**
 - Consumes: immutable manifest/task results, signed MAX identity, independent fixture/brief acceptance checks.
@@ -289,15 +289,15 @@ return next((name for name in required if evidence.get(name) is not True), None)
 ### Task 7: Data-safe candidate publication and public lifecycle
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/project_machine_release.py`
+- Create: `apps/api/src/yleum_api/services/project_machine_release.py`
 - Create: `apps/api/tests/test_project_machine_release.py`
 - Create: `apps/api/migrations/versions/0057_project_machine_releases.py`
-- Modify: `apps/api/src/omnia_api/models/project_cell.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_candidates.py`
-- Modify: `apps/api/src/omnia_api/services/project_cell_runtime.py`
-- Modify: `apps/api/src/omnia_api/routers/runtime.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/nginx_writer.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/services/project_machine.py`
+- Modify: `apps/api/src/yleum_api/models/project_cell.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_candidates.py`
+- Modify: `apps/api/src/yleum_api/services/project_cell_runtime.py`
+- Modify: `apps/api/src/yleum_api/routers/runtime.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/nginx_writer.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/services/project_machine.py`
 
 **Interfaces:**
 - Consumes: candidate CAS, session epochs, immutable artifacts, verified data snapshot/restore and supervisor fences.

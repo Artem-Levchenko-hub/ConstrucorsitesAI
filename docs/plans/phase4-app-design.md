@@ -18,7 +18,7 @@ The generated-app kit (`apps/orchestrator/templates/nextjs-entities/src/componen
   (`hover-lift`, tabular-nums, trend pill), `EmptyState` (dashed box + icon), `PageHeader`.
 - **a11y/motion:** `focus-visible:ring-[3px]` on Button/Input, `aria-current` on nav,
   `prefers-reduced-motion` gate on all animations, `.stagger` entrance.
-- **Art-director brief:** `apps/api/src/omnia_api/services/prompt_builder.py` `_ENTITIES_UI`
+- **Art-director brief:** `apps/api/src/yleum_api/services/prompt_builder.py` `_ENTITIES_UI`
   (L823–948) mandates kit-from-parts, token-only colors, responsive grids, fixed globals.css.
 
 **The gap is the last 20%:** the kit is *competent and flat*. It targets "Linear/Notion/Vercel

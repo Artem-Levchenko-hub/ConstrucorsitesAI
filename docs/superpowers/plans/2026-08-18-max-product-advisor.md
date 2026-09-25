@@ -25,13 +25,13 @@
 
 ## File map
 
-- Create `apps/api/src/omnia_api/services/product_advisor.py`: pure classification, inventory, candidate selection, LLM ranking, strict validation, and fallback.
-- Create `apps/api/src/omnia_api/schemas/product_advice.py`: public response shapes.
-- Create `apps/api/src/omnia_api/routers/product_advice.py`: ownership/MAX checks, snapshot resolution, repository loading, Redis cache, and endpoint.
-- Modify `apps/api/src/omnia_api/services/design_plugin.py`: expose the existing archetype classifier through a public function.
-- Modify `apps/api/src/omnia_api/services/llm_client.py`: add a per-call `free` metadata override without changing existing callers.
-- Modify `apps/api/src/omnia_api/core/config.py`: add `product_advisor_model`.
-- Modify `apps/api/src/omnia_api/main.py`: register the new router.
+- Create `apps/api/src/yleum_api/services/product_advisor.py`: pure classification, inventory, candidate selection, LLM ranking, strict validation, and fallback.
+- Create `apps/api/src/yleum_api/schemas/product_advice.py`: public response shapes.
+- Create `apps/api/src/yleum_api/routers/product_advice.py`: ownership/MAX checks, snapshot resolution, repository loading, Redis cache, and endpoint.
+- Modify `apps/api/src/yleum_api/services/design_plugin.py`: expose the existing archetype classifier through a public function.
+- Modify `apps/api/src/yleum_api/services/llm_client.py`: add a per-call `free` metadata override without changing existing callers.
+- Modify `apps/api/src/yleum_api/core/config.py`: add `product_advisor_model`.
+- Modify `apps/api/src/yleum_api/main.py`: register the new router.
 - Create `apps/api/tests/test_product_advisor.py`: pure service tests.
 - Create `apps/api/tests/test_product_advice_api.py`: authentication, isolation, MAX-only, cache, and fail-soft endpoint tests.
 - Create `apps/web/src/lib/api/product-advice.ts`: frontend wire types and request.
@@ -44,8 +44,8 @@
 ### Task 1: Pure product analysis and deterministic fallback
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/product_advisor.py`
-- Modify: `apps/api/src/omnia_api/services/design_plugin.py`
+- Create: `apps/api/src/yleum_api/services/product_advisor.py`
+- Modify: `apps/api/src/yleum_api/services/design_plugin.py`
 - Test: `apps/api/tests/test_product_advisor.py`
 
 **Interfaces:**
@@ -86,7 +86,7 @@ def test_inventory_filters_secrets_and_detects_features() -> None:
 
 Run: `cd apps/api && uv run pytest tests/test_product_advisor.py -q`
 
-Expected: collection fails because `omnia_api.services.product_advisor` and `classify_product_archetype` do not exist.
+Expected: collection fails because `yleum_api.services.product_advisor` and `classify_product_archetype` do not exist.
 
 - [ ] **Step 3: Expose the shared archetype helper**
 
@@ -166,7 +166,7 @@ Run:
 ```bash
 cd apps/api
 uv run pytest tests/test_product_advisor.py -q
-uv run ruff check src/omnia_api/services/product_advisor.py src/omnia_api/services/design_plugin.py tests/test_product_advisor.py
+uv run ruff check src/yleum_api/services/product_advisor.py src/yleum_api/services/design_plugin.py tests/test_product_advisor.py
 ```
 
 Expected: all targeted tests pass and Ruff reports no errors.
@@ -174,7 +174,7 @@ Expected: all targeted tests pass and Ruff reports no errors.
 Commit:
 
 ```bash
-git add apps/api/src/omnia_api/services/product_advisor.py apps/api/src/omnia_api/services/design_plugin.py apps/api/tests/test_product_advisor.py
+git add apps/api/src/yleum_api/services/product_advisor.py apps/api/src/yleum_api/services/design_plugin.py apps/api/tests/test_product_advisor.py
 git commit -m "feat(max): add bounded product advice analysis"
 ```
 
@@ -183,9 +183,9 @@ git commit -m "feat(max): add bounded product advice analysis"
 ### Task 2: Bounded model ranking and response validation
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/product_advisor.py`
-- Modify: `apps/api/src/omnia_api/services/llm_client.py`
-- Modify: `apps/api/src/omnia_api/core/config.py`
+- Modify: `apps/api/src/yleum_api/services/product_advisor.py`
+- Modify: `apps/api/src/yleum_api/services/llm_client.py`
+- Modify: `apps/api/src/yleum_api/core/config.py`
 - Test: `apps/api/tests/test_product_advisor.py`
 
 **Interfaces:**
@@ -252,13 +252,13 @@ Run:
 ```bash
 cd apps/api
 uv run pytest tests/test_product_advisor.py -q
-uv run ruff check src/omnia_api/services/product_advisor.py src/omnia_api/services/llm_client.py src/omnia_api/core/config.py tests/test_product_advisor.py
+uv run ruff check src/yleum_api/services/product_advisor.py src/yleum_api/services/llm_client.py src/yleum_api/core/config.py tests/test_product_advisor.py
 ```
 
 Commit:
 
 ```bash
-git add apps/api/src/omnia_api/services/product_advisor.py apps/api/src/omnia_api/services/llm_client.py apps/api/src/omnia_api/core/config.py apps/api/tests/test_product_advisor.py
+git add apps/api/src/yleum_api/services/product_advisor.py apps/api/src/yleum_api/services/llm_client.py apps/api/src/yleum_api/core/config.py apps/api/tests/test_product_advisor.py
 git commit -m "feat(max): rank product advice with bounded model"
 ```
 
@@ -267,9 +267,9 @@ git commit -m "feat(max): rank product advice with bounded model"
 ### Task 3: Authenticated cached product-advice endpoint
 
 **Files:**
-- Create: `apps/api/src/omnia_api/schemas/product_advice.py`
-- Create: `apps/api/src/omnia_api/routers/product_advice.py`
-- Modify: `apps/api/src/omnia_api/main.py`
+- Create: `apps/api/src/yleum_api/schemas/product_advice.py`
+- Create: `apps/api/src/yleum_api/routers/product_advice.py`
+- Modify: `apps/api/src/yleum_api/main.py`
 - Test: `apps/api/tests/test_product_advice_api.py`
 
 **Interfaces:**
@@ -344,13 +344,13 @@ Run:
 ```bash
 cd apps/api
 uv run pytest tests/test_product_advice_api.py tests/test_product_advisor.py -q
-uv run ruff check src/omnia_api/routers/product_advice.py src/omnia_api/schemas/product_advice.py src/omnia_api/main.py tests/test_product_advice_api.py
+uv run ruff check src/yleum_api/routers/product_advice.py src/yleum_api/schemas/product_advice.py src/yleum_api/main.py tests/test_product_advice_api.py
 ```
 
 Commit:
 
 ```bash
-git add apps/api/src/omnia_api/routers/product_advice.py apps/api/src/omnia_api/schemas/product_advice.py apps/api/src/omnia_api/main.py apps/api/tests/test_product_advice_api.py
+git add apps/api/src/yleum_api/routers/product_advice.py apps/api/src/yleum_api/schemas/product_advice.py apps/api/src/yleum_api/main.py apps/api/tests/test_product_advice_api.py
 git commit -m "feat(max): expose cached product advice endpoint"
 ```
 
@@ -513,8 +513,8 @@ git commit -m "feat(max): surface advice after successful builds"
 ```bash
 cd apps/api
 uv run pytest tests/test_product_advisor.py tests/test_product_advice_api.py -q
-uv run ruff check src/omnia_api/services/product_advisor.py src/omnia_api/services/design_plugin.py src/omnia_api/services/llm_client.py src/omnia_api/routers/product_advice.py src/omnia_api/schemas/product_advice.py src/omnia_api/main.py tests/test_product_advisor.py tests/test_product_advice_api.py
-uv run mypy src/omnia_api/services/product_advisor.py src/omnia_api/routers/product_advice.py src/omnia_api/schemas/product_advice.py
+uv run ruff check src/yleum_api/services/product_advisor.py src/yleum_api/services/design_plugin.py src/yleum_api/services/llm_client.py src/yleum_api/routers/product_advice.py src/yleum_api/schemas/product_advice.py src/yleum_api/main.py tests/test_product_advisor.py tests/test_product_advice_api.py
+uv run mypy src/yleum_api/services/product_advisor.py src/yleum_api/routers/product_advice.py src/yleum_api/schemas/product_advice.py
 ```
 
 Expected: all commands exit 0.

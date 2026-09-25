@@ -12,7 +12,7 @@
 
 - **ПИШЕШЬ ТОЛЬКО в `apps/orchestrator/` и `infra/`** (последнее — для docker-compose правок и nginx шаблонов).
 - **НЕ ЛЕЗЬ в `apps/web/`, `apps/api/`, `apps/llm-gateway/`**. Если нужно расширение публичного API — правь `docs/01-api-contract.md` (раздел V2) и координируйся с B (он добавит проксирующие endpoints в apps/api).
-- Контракт твоего internal API — `apps/orchestrator/src/omnia_orchestrator/schemas/runtime.py`. Меняешь — пишешь в координацию.
+- Контракт твоего internal API — `apps/orchestrator/src/yleum_orchestrator/schemas/runtime.py`. Меняешь — пишешь в координацию.
 
 ## Стек (фиксированный)
 
@@ -30,7 +30,7 @@
 
 `apps/orchestrator/` уже содержит:
 - `pyproject.toml`, `README.md`, `.env.example` — настройки и зависимости.
-- `src/omnia_orchestrator/main.py` — FastAPI app + lifespan + error handlers.
+- `src/yleum_orchestrator/main.py` — FastAPI app + lifespan + error handlers.
 - `core/config.py` — Settings с env-vars (DOCKER_HOST, PROJECTS_ROOT, BASE_DOMAIN, hibernate-времена, INTERNAL_TOKEN).
 - `core/errors.py` — error envelope (тот же формат что в apps/api).
 - `core/docker_client.py` — обёртка SDK с **stubbed методами** (`start_container`, `stop_container`, `container_status`, `destroy_container`). Все бросают `501 internal_error` с TODO-комментарием.

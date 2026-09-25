@@ -6,9 +6,9 @@
 > never breaking prod. Reuses the patterns proven on the realtime messenger this session.
 
 ## How stack selection works today (entry points)
-- `web_app → nextjs_entities` mapping: `apps/api/src/omnia_api/services/discovery.py:67-79` (`_RESULT_TYPE_TO_STACK`, `result_type_to_stack()`).
-- Default decision: `apps/api/src/omnia_api/routers/messages.py:1176-1220` (legacy path = `_infer_stack_from_text`; router path gated by `use_result_type_router`).
-- Drizzle template = orchestrator template `nextjs-postgres-drizzle`; API template `fullstack` maps to it (`apps/api/src/omnia_api/schemas/project.py:53,74-81`).
+- `web_app → nextjs_entities` mapping: `apps/api/src/yleum_api/services/discovery.py:67-79` (`_RESULT_TYPE_TO_STACK`, `result_type_to_stack()`).
+- Default decision: `apps/api/src/yleum_api/routers/messages.py:1176-1220` (legacy path = `_infer_stack_from_text`; router path gated by `use_result_type_router`).
+- Drizzle template = orchestrator template `nextjs-postgres-drizzle`; API template `fullstack` maps to it (`apps/api/src/yleum_api/schemas/project.py:53,74-81`).
 - `fullstack` is currently **unreachable** via discovery — a canary override is the only entry point.
 
 ## Canary mechanism (mirror `agentic_builder_canary_users`)

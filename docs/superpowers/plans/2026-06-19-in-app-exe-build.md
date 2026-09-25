@@ -17,28 +17,28 @@
 ## File Structure
 
 **Phase 1 — pure spec generator (zone B)**
-- Create `apps/api/src/omnia_api/services/exe_build.py` — `BuildSpec`, `build_spec(files, slug)`, `render_pyinstaller_args(spec)`, `render_nsi(spec)`, `render(spec)`. Pure, no I/O, no model.
+- Create `apps/api/src/yleum_api/services/exe_build.py` — `BuildSpec`, `build_spec(files, slug)`, `render_pyinstaller_args(spec)`, `render_nsi(spec)`, `render(spec)`. Pure, no I/O, no model.
 - Create `apps/api/tests/test_exe_build.py`.
 
 **Phase 2 — build container + orchestrator endpoint (zone D)**
 - Create `infra/exe-builder/Dockerfile` — `tobix/pywine` + PyInstaller + nsis + `build.py` entrypoint.
 - Create `infra/exe-builder/build.py` — in-container: pip install → pyinstaller → makensis → write artifacts + log.
-- Create `apps/orchestrator/src/omnia_orchestrator/services/exe_builder.py` — run the ephemeral container via `core/docker_client.py`.
-- Create `apps/orchestrator/src/omnia_orchestrator/routers/build_exe.py` — `POST /build-exe`.
-- Create `apps/orchestrator/src/omnia_orchestrator/schemas/build_exe.py`.
-- Modify `apps/orchestrator/src/omnia_orchestrator/main.py` — register the router.
+- Create `apps/orchestrator/src/yleum_orchestrator/services/exe_builder.py` — run the ephemeral container via `core/docker_client.py`.
+- Create `apps/orchestrator/src/yleum_orchestrator/routers/build_exe.py` — `POST /build-exe`.
+- Create `apps/orchestrator/src/yleum_orchestrator/schemas/build_exe.py`.
+- Modify `apps/orchestrator/src/yleum_orchestrator/main.py` — register the router.
 - Create `apps/orchestrator/tests/test_exe_builder.py`.
 
 **Phase 3 — api wiring + delivery (zone B)**
-- Modify `apps/api/src/omnia_api/core/config.py` — `use_exe_build`, `exe_*` settings.
-- Modify `apps/api/src/omnia_api/services/orchestrator_client.py` — `build_exe(...)`.
-- Create `apps/api/src/omnia_api/workers/build_exe.py` — `build_exe_job`.
-- Modify `apps/api/src/omnia_api/routers/projects.py` — `POST /{id}/build-exe`, `GET /{id}/exe/{build_id}/{artifact}`.
+- Modify `apps/api/src/yleum_api/core/config.py` — `use_exe_build`, `exe_*` settings.
+- Modify `apps/api/src/yleum_api/services/orchestrator_client.py` — `build_exe(...)`.
+- Create `apps/api/src/yleum_api/workers/build_exe.py` — `build_exe_job`.
+- Modify `apps/api/src/yleum_api/routers/projects.py` — `POST /{id}/build-exe`, `GET /{id}/exe/{build_id}/{artifact}`.
 - Create `apps/api/tests/test_build_exe_endpoint.py`.
 
 **Phase 4 — self-heal (zone B + C)**
 - Modify gateway role map (zone C) — add `exe_doctor` role → cheap model + escalation.
-- Create `apps/api/src/omnia_api/services/exe_doctor.py` — `heal(error_log, spec, sources) -> BuildSpec | None`.
+- Create `apps/api/src/yleum_api/services/exe_doctor.py` — `heal(error_log, spec, sources) -> BuildSpec | None`.
 - Create `apps/api/tests/test_exe_doctor.py`.
 
 **Phase 5 — web UX (zone A)**
@@ -56,7 +56,7 @@
 ### Task 1: `BuildSpec` + entry/name derivation
 
 **Files:**
-- Create: `apps/api/src/omnia_api/services/exe_build.py`
+- Create: `apps/api/src/yleum_api/services/exe_build.py`
 - Test: `apps/api/tests/test_exe_build.py`
 
 - [ ] **Step 1: Write the failing test**
@@ -64,7 +64,7 @@
 ```python
 # apps/api/tests/test_exe_build.py
 from __future__ import annotations
-from omnia_api.services.exe_build import build_spec, BuildSpec
+from yleum_api.services.exe_build import build_spec, BuildSpec
 
 
 def test_entry_and_name_from_snake_bundle() -> None:
@@ -87,12 +87,12 @@ def test_entry_and_name_from_snake_bundle() -> None:
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `cd apps/api && uv run pytest tests/test_exe_build.py -v`
-Expected: FAIL — `ModuleNotFoundError: omnia_api.services.exe_build`
+Expected: FAIL — `ModuleNotFoundError: yleum_api.services.exe_build`
 
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# apps/api/src/omnia_api/services/exe_build.py
+# apps/api/src/yleum_api/services/exe_build.py
 """Deterministic Windows-installer build spec for a Python project.
 
 Pure + no I/O: turns the project's files into a PyInstaller invocation and an NSIS
@@ -157,7 +157,7 @@ Expected: PASS
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/services/exe_build.py apps/api/tests/test_exe_build.py
+git add apps/api/src/yleum_api/services/exe_build.py apps/api/tests/test_exe_build.py
 git commit -m "feat(exe-build): deterministic BuildSpec from project files"
 ```
 
@@ -203,13 +203,13 @@ git commit -m "test(exe-build): GUI/asset/pygame detection"
 ### Task 3: Render PyInstaller args + NSIS script
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/services/exe_build.py`
+- Modify: `apps/api/src/yleum_api/services/exe_build.py`
 - Modify: `apps/api/tests/test_exe_build.py`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-from omnia_api.services.exe_build import render_pyinstaller_args, render_nsi, render
+from yleum_api.services.exe_build import render_pyinstaller_args, render_nsi, render
 
 
 def test_render_pyinstaller_args() -> None:
@@ -239,7 +239,7 @@ def test_render_nsi_has_install_shortcut_uninstall() -> None:
 - [ ] **Step 3: Implement**
 
 ```python
-# append to apps/api/src/omnia_api/services/exe_build.py
+# append to apps/api/src/yleum_api/services/exe_build.py
 
 def render_pyinstaller_args(spec: BuildSpec) -> list[str]:
     args = ["pyinstaller", "--onefile", "--noconfirm", "--clean", f"--name={spec.name}"]
@@ -299,7 +299,7 @@ def render(spec: BuildSpec) -> dict[str, str]:
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/services/exe_build.py apps/api/tests/test_exe_build.py
+git add apps/api/src/yleum_api/services/exe_build.py apps/api/tests/test_exe_build.py
 git commit -m "feat(exe-build): render PyInstaller args + NSIS installer script"
 ```
 
@@ -399,16 +399,16 @@ git commit -m "feat(infra): omnia-exe-builder image (Wine+PyInstaller+NSIS)"
 ### Task 5: Orchestrator `/build-exe` service + router
 
 **Files:**
-- Create: `apps/orchestrator/src/omnia_orchestrator/schemas/build_exe.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/services/exe_builder.py`
-- Create: `apps/orchestrator/src/omnia_orchestrator/routers/build_exe.py`
-- Modify: `apps/orchestrator/src/omnia_orchestrator/main.py` (register router — mirror how `routers/runtime.py` is included)
+- Create: `apps/orchestrator/src/yleum_orchestrator/schemas/build_exe.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/services/exe_builder.py`
+- Create: `apps/orchestrator/src/yleum_orchestrator/routers/build_exe.py`
+- Modify: `apps/orchestrator/src/yleum_orchestrator/main.py` (register router — mirror how `routers/runtime.py` is included)
 - Test: `apps/orchestrator/tests/test_exe_builder.py`
 
 - [ ] **Step 1: Write the schema**
 
 ```python
-# apps/orchestrator/src/omnia_orchestrator/schemas/build_exe.py
+# apps/orchestrator/src/yleum_orchestrator/schemas/build_exe.py
 from __future__ import annotations
 from pydantic import BaseModel
 
@@ -434,8 +434,8 @@ class BuildExeResult(BaseModel):
 # apps/orchestrator/tests/test_exe_builder.py
 from __future__ import annotations
 import base64
-from omnia_orchestrator.services.exe_builder import run_exe_build
-from omnia_orchestrator.schemas.build_exe import BuildExeRequest
+from yleum_orchestrator.services.exe_builder import run_exe_build
+from yleum_orchestrator.schemas.build_exe import BuildExeRequest
 
 
 def test_run_exe_build_collects_artifacts(monkeypatch, tmp_path) -> None:
@@ -446,7 +446,7 @@ def test_run_exe_build_collects_artifacts(monkeypatch, tmp_path) -> None:
         (out / "Snake.exe").write_bytes(b"MZ\x90\x00exe")
         (out / "Snake-Setup.exe").write_bytes(b"MZ\x90\x00setup")
         return 0
-    monkeypatch.setattr("omnia_orchestrator.services.exe_builder._run_container", fake_run_container)
+    monkeypatch.setattr("yleum_orchestrator.services.exe_builder._run_container", fake_run_container)
     req = BuildExeRequest(name="Snake", files={"app.py": "print(1)"},
                           pyinstaller_args=["pyinstaller", "--onefile", "app.py"],
                           installer_nsi="Name \"Snake\"")
@@ -461,7 +461,7 @@ def test_run_exe_build_collects_artifacts(monkeypatch, tmp_path) -> None:
 - [ ] **Step 4: Implement the service**
 
 ```python
-# apps/orchestrator/src/omnia_orchestrator/services/exe_builder.py
+# apps/orchestrator/src/yleum_orchestrator/services/exe_builder.py
 """Run one ephemeral omnia-exe-builder container to produce a Windows Setup.exe.
 
 Two-phase network: deps install with egress, the user-code build phase without.
@@ -526,7 +526,7 @@ def run_exe_build(req: BuildExeRequest, *, work_root: pathlib.Path) -> BuildExeR
 - [ ] **Step 5: Implement the router + register it**
 
 ```python
-# apps/orchestrator/src/omnia_orchestrator/routers/build_exe.py
+# apps/orchestrator/src/yleum_orchestrator/routers/build_exe.py
 from __future__ import annotations
 import tempfile, pathlib
 from fastapi import APIRouter
@@ -542,7 +542,7 @@ def build_exe(req: BuildExeRequest) -> BuildExeResult:
         return run_exe_build(req, work_root=pathlib.Path(d))
 ```
 
-In `apps/orchestrator/src/omnia_orchestrator/main.py`, add next to the other `include_router` calls:
+In `apps/orchestrator/src/yleum_orchestrator/main.py`, add next to the other `include_router` calls:
 ```python
 from .routers import build_exe as build_exe_router
 app.include_router(build_exe_router.router)
@@ -553,10 +553,10 @@ app.include_router(build_exe_router.router)
 - [ ] **Step 7: Commit**
 
 ```bash
-git add apps/orchestrator/src/omnia_orchestrator/schemas/build_exe.py \
-        apps/orchestrator/src/omnia_orchestrator/services/exe_builder.py \
-        apps/orchestrator/src/omnia_orchestrator/routers/build_exe.py \
-        apps/orchestrator/src/omnia_orchestrator/main.py \
+git add apps/orchestrator/src/yleum_orchestrator/schemas/build_exe.py \
+        apps/orchestrator/src/yleum_orchestrator/services/exe_builder.py \
+        apps/orchestrator/src/yleum_orchestrator/routers/build_exe.py \
+        apps/orchestrator/src/yleum_orchestrator/main.py \
         apps/orchestrator/tests/test_exe_builder.py
 git commit -m "feat(orchestrator): POST /build-exe runs ephemeral Wine builder"
 ```
@@ -568,13 +568,13 @@ git commit -m "feat(orchestrator): POST /build-exe runs ephemeral Wine builder"
 ### Task 6: Config flag + orchestrator client method
 
 **Files:**
-- Modify: `apps/api/src/omnia_api/core/config.py`
-- Modify: `apps/api/src/omnia_api/services/orchestrator_client.py`
+- Modify: `apps/api/src/yleum_api/core/config.py`
+- Modify: `apps/api/src/yleum_api/services/orchestrator_client.py`
 
 - [ ] **Step 1: Add settings** (mirror the `Field(default=...)` style already in config.py)
 
 ```python
-# in the Settings class in apps/api/src/omnia_api/core/config.py
+# in the Settings class in apps/api/src/yleum_api/core/config.py
 use_exe_build: bool = Field(default=False)            # kill switch USE_EXE_BUILD
 exe_build_max_mb: int = Field(default=150)
 exe_build_retention_days: int = Field(default=7)
@@ -583,7 +583,7 @@ exe_build_retention_days: int = Field(default=7)
 - [ ] **Step 2: Add the client method** (mirror an existing call in `orchestrator_client.py`, e.g. read-file/provision)
 
 ```python
-# in apps/api/src/omnia_api/services/orchestrator_client.py
+# in apps/api/src/yleum_api/services/orchestrator_client.py
 async def build_exe(name: str, files: dict[str, str], pyinstaller_args: list[str],
                     installer_nsi: str, requirements: str | None) -> dict:
     """Call the orchestrator's /build-exe. Returns {ok, log, setup_b64, exe_b64}."""
@@ -599,15 +599,15 @@ async def build_exe(name: str, files: dict[str, str], pyinstaller_args: list[str
 - [ ] **Step 3: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/core/config.py apps/api/src/omnia_api/services/orchestrator_client.py
+git add apps/api/src/yleum_api/core/config.py apps/api/src/yleum_api/services/orchestrator_client.py
 git commit -m "feat(exe-build): config flag + orchestrator client method"
 ```
 
 ### Task 7: RQ job + endpoints + delivery
 
 **Files:**
-- Create: `apps/api/src/omnia_api/workers/build_exe.py`
-- Modify: `apps/api/src/omnia_api/routers/projects.py`
+- Create: `apps/api/src/yleum_api/workers/build_exe.py`
+- Modify: `apps/api/src/yleum_api/routers/projects.py`
 - Test: `apps/api/tests/test_build_exe_endpoint.py`
 
 - [ ] **Step 1: Write the failing endpoint test** (mirror auth/owner-scope test setup from existing `projects` tests)
@@ -625,7 +625,7 @@ async def test_build_exe_requires_owner(client, other_users_project):
 
 @pytest.mark.asyncio
 async def test_build_exe_flag_off_returns_404(client, my_project, monkeypatch):
-    monkeypatch.setattr("omnia_api.core.config.settings.use_exe_build", False)
+    monkeypatch.setattr("yleum_api.core.config.settings.use_exe_build", False)
     r = await client.post(f"/api/projects/{my_project.id}/build-exe")
     assert r.status_code == 404            # feature gated off
 ```
@@ -635,16 +635,16 @@ async def test_build_exe_flag_off_returns_404(client, my_project, monkeypatch):
 - [ ] **Step 3: Implement the RQ job**
 
 ```python
-# apps/api/src/omnia_api/workers/build_exe.py
+# apps/api/src/yleum_api/workers/build_exe.py
 """RQ job: read committed files → build_spec → orchestrator /build-exe → (self-heal) →
 upload artifacts to MinIO → publish exe.* SSE events. Mirrors workers/preview.py."""
 from __future__ import annotations
 import asyncio
-from omnia_api.services import exe_build, orchestrator_client
-from omnia_api.services.exe_doctor import heal        # Phase 4; import is safe (pure until called)
-from omnia_api.core import minio
+from yleum_api.services import exe_build, orchestrator_client
+from yleum_api.services.exe_doctor import heal        # Phase 4; import is safe (pure until called)
+from yleum_api.core import minio
 # reuse the project's existing SSE publisher (see services/app_errors.py for the pattern)
-from omnia_api.services.app_errors import publish_event  # adjust name to the real helper
+from yleum_api.services.app_errors import publish_event  # adjust name to the real helper
 
 MAX_HEAL = 3
 
@@ -678,9 +678,9 @@ async def _run(project_id, build_id, slug, files):
     await publish_event(project_id, "exe.failed", {"build_id": build_id, "log": res["log"][-4000:]})
 ```
 
-Add `minio.put_exe_artifacts(project_id, build_id, name, res)` to `apps/api/src/omnia_api/core/minio.py` — base64-decode `setup_b64`/`exe_b64`, `put_object` under `exe/<project_id>/<build_id>/`, return `{"setup_url": ..., "exe_url": ..., "name": ..., "size": ...}` (mirror the existing put/presign helpers in that file).
+Add `minio.put_exe_artifacts(project_id, build_id, name, res)` to `apps/api/src/yleum_api/core/minio.py` — base64-decode `setup_b64`/`exe_b64`, `put_object` under `exe/<project_id>/<build_id>/`, return `{"setup_url": ..., "exe_url": ..., "name": ..., "size": ...}` (mirror the existing put/presign helpers in that file).
 
-- [ ] **Step 4: Implement the endpoints** (in `apps/api/src/omnia_api/routers/projects.py`, mirror `download_project` for owner-scope + the enqueue pattern in `services/queue.py`)
+- [ ] **Step 4: Implement the endpoints** (in `apps/api/src/yleum_api/routers/projects.py`, mirror `download_project` for owner-scope + the enqueue pattern in `services/queue.py`)
 
 ```python
 @router.post("/{project_id}/build-exe")
@@ -717,8 +717,8 @@ async def download_exe(project_id: UUID, build_id: str, artifact: str,
 - [ ] **Step 6: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/workers/build_exe.py apps/api/src/omnia_api/routers/projects.py \
-        apps/api/src/omnia_api/core/minio.py apps/api/tests/test_build_exe_endpoint.py
+git add apps/api/src/yleum_api/workers/build_exe.py apps/api/src/yleum_api/routers/projects.py \
+        apps/api/src/yleum_api/core/minio.py apps/api/tests/test_build_exe_endpoint.py
 git commit -m "feat(exe-build): RQ job, owner-scoped endpoints, MinIO delivery"
 ```
 
@@ -730,7 +730,7 @@ git commit -m "feat(exe-build): RQ job, owner-scoped endpoints, MinIO delivery"
 
 **Files:**
 - Modify: gateway role map (zone C — add `exe_doctor` → cheap model + escalation; follow how `edit`/`exe_doctor`-style roles are registered in `apps/llm-gateway`).
-- Create: `apps/api/src/omnia_api/services/exe_doctor.py`
+- Create: `apps/api/src/yleum_api/services/exe_doctor.py`
 - Test: `apps/api/tests/test_exe_doctor.py`
 
 - [ ] **Step 1: Write the failing test (mock the model call)**
@@ -738,8 +738,8 @@ git commit -m "feat(exe-build): RQ job, owner-scoped endpoints, MinIO delivery"
 ```python
 # apps/api/tests/test_exe_doctor.py
 import pytest
-from omnia_api.services.exe_build import build_spec
-from omnia_api.services import exe_doctor
+from yleum_api.services.exe_build import build_spec
+from yleum_api.services import exe_doctor
 
 
 @pytest.mark.asyncio
@@ -768,7 +768,7 @@ async def test_heal_returns_none_on_unparseable(monkeypatch):
 - [ ] **Step 3: Implement**
 
 ```python
-# apps/api/src/omnia_api/services/exe_doctor.py
+# apps/api/src/yleum_api/services/exe_doctor.py
 """Self-heal a failed PyInstaller/NSIS build: ask the exe_doctor model role for a
 structured patch (extra hidden-imports / collect-all / requirements pin) and apply it
 to the BuildSpec. Returns None when the model gives nothing usable (caller gives up)."""
@@ -812,7 +812,7 @@ async def heal(error_log: str, spec: BuildSpec, sources: dict[str, str]) -> Buil
 - [ ] **Step 5: Commit**
 
 ```bash
-git add apps/api/src/omnia_api/services/exe_doctor.py apps/api/tests/test_exe_doctor.py
+git add apps/api/src/yleum_api/services/exe_doctor.py apps/api/tests/test_exe_doctor.py
 git commit -m "feat(exe-build): exe_doctor self-heal loop (capped patch+retry)"
 ```
 

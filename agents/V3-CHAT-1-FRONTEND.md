@@ -13,7 +13,7 @@ Owner UX слоя Omnia.AI V3. Делаешь всё что юзер видит 
 ## Жёсткие границы
 
 - **Write только в `apps/web/`.** Никаких правок в `apps/api/`, `apps/llm-gateway/`, `apps/orchestrator/`, `infra/`, `apps/landing/`.
-- **Read-only:** `docs/`, `agents/`, `apps/api/src/omnia_api/schemas/` (Pydantic — оттуда зеркалишь TypeScript-типы).
+- **Read-only:** `docs/`, `agents/`, `apps/api/src/yleum_api/schemas/` (Pydantic — оттуда зеркалишь TypeScript-типы).
 - **Контракт** — `docs/01-api-contract.md` V3 секция. Если нужна правка контракта — inbox-сообщение в Chat-2 + продолжай с моком (`NEXT_PUBLIC_USE_MOCKS=true` или `apps/web/src/lib/ws-mock.ts`).
 
 ## Стек (без изменений vs AGENT-A)

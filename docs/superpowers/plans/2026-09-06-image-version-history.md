@@ -35,7 +35,7 @@
 
 ## 2. Exact immutable image capture
 
-**Files:** `apps/api/src/omnia_api/services/snapshot_preview_capture.py`, `workers/preview.py`, `routers/snapshots.py`, snapshot model and generation finalization; parent-owned screenshot runner.
+**Files:** `apps/api/src/yleum_api/services/snapshot_preview_capture.py`, `workers/preview.py`, `routers/snapshots.py`, snapshot model and generation finalization; parent-owned screenshot runner.
 
 - [x] Bind capture to saved source while the generation lease still protects that source. Compare source before and after rendering; publish no image if the comparison fails.
 - [x] Persist capture metadata/artifact identity for the exact snapshot; do not enqueue a later screenshot of whatever happens to occupy the current container.

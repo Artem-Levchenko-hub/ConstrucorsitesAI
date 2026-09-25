@@ -56,7 +56,7 @@ smoke in isolation. Verified image:
 
 Reproduce from `apps/api` with the documented unused-loopback fixture environment:
 `uv run --frozen --python 3.12 pytest -o addopts='' -q tests/test_template_materialization.py tests/test_select_mode.py tests/test_project_export.py tests/test_repo_import.py tests/test_template_registration.py tests/test_template_mapping.py tests/test_prompt_builder.py`;
-`uv run --frozen ruff check src/omnia_api/services/template_materialization.py tests/test_template_materialization.py`;
+`uv run --frozen ruff check src/yleum_api/services/template_materialization.py tests/test_template_materialization.py`;
 `uv run --frozen mypy src`. Exact outside-checkout wheel and isolated image
 commands are in the existing `.github/workflows/ci.yml` template gates.
 

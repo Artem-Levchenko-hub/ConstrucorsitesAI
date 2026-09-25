@@ -102,7 +102,7 @@ Top-3 recommendation идёт обратно с `score: 0..1` и `reasoning: str
 
 ## Preset wow-эффект — freeze ui-ux-pro-max в БД
 
-Текущий `apps/api/src/omnia_api/services/design_presets.py` содержит 8 пресетов V2. V3 добавляет:
+Текущий `apps/api/src/yleum_api/services/design_presets.py` содержит 8 пресетов V2. V3 добавляет:
 - **`ui_kit_freeze` table** (Chat-2): хранит экспорт каталога ui-ux-pro-max плагина (палитры, font-pairs, паттерны компонентов, кит-классы).
 - **seed-скрипт** `apps/api/scripts/seed_ui_kit_freeze.py` (Chat-2 пишет, **я** запускаю в dev-сессии после готовности — экспортирую руками из `~/.claude/plugins/.../ui-ux-pro-max/`).
 - **prompt_builder** (Chat-2): при сборке system prompt, помимо `_SIGNATURE_MOVES` из старого `design_presets.py`, **дополнительно** инжектит конкретные токены из `ui_kit_freeze` по `preset_id` (если запись есть). Старый каталог становится **fallback** на случай пустой freeze-БД.
@@ -282,10 +282,10 @@ Chat-2 расширяет `wallet_charges.type` enum.
 | API контракт | `docs/01-api-contract.md` (V3 секция) | я (этот документ-сосед) |
 | Schema БД | `docs/02-data-model.md` (V3 секция) | я (этот документ-сосед) |
 | Этот спек | `docs/10-v3-multistack-pivot.md` | я; правки только через inbox-запрос к мне |
-| Каталог стеков (БД) | `apps/api/src/omnia_api/seed/stack_templates.py` (новый) | Chat-2 |
+| Каталог стеков (БД) | `apps/api/src/yleum_api/seed/stack_templates.py` (новый) | Chat-2 |
 | Каталог стеков (templates) | `apps/orchestrator/templates/<stack_id>/` | Chat-3 |
-| Freeze ui-ux-pro-max | `apps/api/src/omnia_api/seed/ui_kit_freeze.py` (новый) | Chat-2 (структура) + я (заполнение данными) |
-| Onboarding state machine | `apps/api/src/omnia_api/services/onboarding.py` (новый) | Chat-2 |
+| Freeze ui-ux-pro-max | `apps/api/src/yleum_api/seed/ui_kit_freeze.py` (новый) | Chat-2 (структура) + я (заполнение данными) |
+| Onboarding state machine | `apps/api/src/yleum_api/services/onboarding.py` (новый) | Chat-2 |
 | Stack recommender | `apps/llm-gateway/src/omnia_gateway/routers/stack.py` (новый) | Chat-3 |
 | Ideological-Q генератор | `apps/llm-gateway/src/omnia_gateway/routers/onboarding.py` (новый) | Chat-3 |
 | UI онбординга | `apps/web/src/app/(app)/projects/new/` (новый каталог) | Chat-1 |
