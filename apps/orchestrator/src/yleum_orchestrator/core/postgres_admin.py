@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import re
 import secrets
 from collections.abc import Mapping, Sequence
@@ -34,6 +33,7 @@ import asyncpg  # type: ignore[import-untyped]
 import structlog
 
 from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
 
 log = structlog.get_logger("yleum_orchestrator.postgres_admin")
@@ -116,8 +116,8 @@ def build_dsn(role: str, password: str, schema: str) -> str:
     # (host.docker.internal → bridge gateway, where Postgres isn't listening).
     # The container must be attached to that network (see docker_client
     # start_container). Overridable via env if the infra names change.
-    host = os.getenv("OMNIA_RUNTIME_DB_HOST", "omnia-postgres-users")
-    port = int(os.getenv("OMNIA_RUNTIME_DB_PORT") or 5432)
+    host = rebrand_env("RUNTIME_DB_HOST", "omnia-postgres-users")
+    port = int(rebrand_env("RUNTIME_DB_PORT") or 5432)
     encoded_password = quote(password, safe="")
     return (
         f"postgresql://{role}:{encoded_password}@{host}:{port}/{db}"

@@ -34,6 +34,7 @@ from urllib.parse import urlsplit
 import structlog
 
 from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.shell import CmdResult, run
 
@@ -105,7 +106,7 @@ def _wildcard_cert_dir(host: str) -> str | None:
     `nginx -t` on reload and `ensure_tls` fails soft back to the HTTP block.
     The cert dir is `<root>/<suffix>` (the standard certbot/acme layout).
     """
-    root = os.getenv("OMNIA_WILDCARD_CERT_ROOT", "").rstrip("/")
+    root = rebrand_env("WILDCARD_CERT_ROOT", "").rstrip("/")
     if not root:
         return None
     suffix = get_settings().runtime_host_suffix
@@ -495,7 +496,7 @@ async def _issue_cert(host: str) -> bool:
     # cert (so HTTPS for the per-project preview never comes up). Redirect --home
     # to a writable runtime dir (seeded once from ~/.acme.sh so the LE account +
     # config carry over — no re-registration). Overridable via env.
-    acme_home = os.getenv("OMNIA_ACME_HOME", "/opt/omnia-runtime/acme-home")
+    acme_home = rebrand_env("ACME_HOME", "/opt/omnia-runtime/acme-home")
     # acme.sh treats LOG_LEVEL/DEBUG as integers; the orchestrator sets
     # LOG_LEVEL=INFO, which makes acme.sh's `[ "$LOG_LEVEL" -ge 2 ]` abort with
     # "integer expression expected". Strip them for the acme.sh subprocess.

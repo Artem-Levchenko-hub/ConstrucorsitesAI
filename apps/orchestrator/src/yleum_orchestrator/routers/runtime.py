@@ -52,6 +52,7 @@ from yleum_orchestrator.core.docker_client import (
 from yleum_orchestrator.core.docker_client import (
     container_status as docker_container_status,
 )
+from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.event_publisher import publish_project_event
 from yleum_orchestrator.core.internal_auth import (
@@ -2298,13 +2299,13 @@ async def status(
     # secret comes from _load_or_create_auth_secret, which is idempotent and
     # read-only once the per-project secret file exists.
     gate_seed: dict[str, str] | None = None
-    if os.getenv("OMNIA_GATE_SEED") == "1":
+    if rebrand_env("GATE_SEED") == "1":
         from yleum_orchestrator.services.provisioner import (
             _load_or_create_auth_secret,
         )
 
         gate_seed = {
-            "email": os.getenv("OMNIA_GATE_SEED_EMAIL", "gate@omnia.local"),
+            "email": rebrand_env("GATE_SEED_EMAIL", "gate@omnia.local"),
             "auth_secret": _load_or_create_auth_secret(project_id),
         }
 

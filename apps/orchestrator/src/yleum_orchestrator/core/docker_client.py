@@ -32,6 +32,7 @@ import requests  # docker SDK transport — its timeouts surface as requests err
 import structlog
 
 from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.template_materialization import (
     materialized_template,
@@ -44,7 +45,7 @@ log = structlog.get_logger("yleum_orchestrator.docker")
 # User containers join it so they reach the DB container-to-container by name
 # (the host bind is 127.0.0.1-only — unreachable from a container). Override via
 # env if the compose project/network is renamed.
-_RUNTIME_NETWORK = os.getenv("OMNIA_RUNTIME_NETWORK", "omnia-runtime_default")
+_RUNTIME_NETWORK = rebrand_env("RUNTIME_NETWORK", "omnia-runtime_default")
 _SANDBOX_ARCHIVE_MAX_BYTES = 80 * 1024 * 1024
 _SANDBOX_BOOTSTRAP_FAILURE_EXIT_CODE = "190"
 _SANDBOX_EXPORT_FAILURE_EXIT_CODE = "191"

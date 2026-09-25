@@ -16,6 +16,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from yleum_orchestrator.core.config import get_settings
+from yleum_orchestrator.core.env import rebrand_env
 
 _ACTIVE_PHASES = ("queued", "building", "pushing", "swapping", "cancelling")
 _TERMINAL_PHASES = ("done", "failed", "cancelled")
@@ -48,7 +49,7 @@ def now_iso() -> str:
 
 
 def _state_path() -> Path:
-    override = os.getenv("OMNIA_DEPLOY_STATE_PATH")
+    override = rebrand_env("DEPLOY_STATE_PATH")
     return Path(override or get_settings().deploy_state_path)
 
 

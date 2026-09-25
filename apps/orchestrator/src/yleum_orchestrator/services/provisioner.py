@@ -42,6 +42,7 @@ from yleum_orchestrator.core.docker_client import (
     unpause_container,
     write_files,
 )
+from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.event_publisher import publish_project_event
 from yleum_orchestrator.core.stack_registry import get_stack
@@ -116,14 +117,14 @@ def _integration_env(template: str | None = None) -> dict[str, str]:
         return {}
 
     out: dict[str, str] = {
-        "MINIO_ENDPOINT": os.getenv("OMNIA_MINIO_ENDPOINT", "omnia-prod-minio:9000"),
-        "MINIO_ACCESS_KEY": os.getenv("OMNIA_MINIO_ACCESS_KEY", "omnia"),
-        "MINIO_BUCKET": os.getenv("OMNIA_MINIO_UPLOAD_BUCKET", "omnia-user-uploads"),
-        "MINIO_SECURE": os.getenv("OMNIA_MINIO_SECURE", "false"),
-        "MINIO_PUBLIC_URL": os.getenv("OMNIA_MINIO_PUBLIC_URL", ""),
-        "LLM_GATEWAY_URL": os.getenv("OMNIA_LLM_GATEWAY_URL", "http://omnia-prod-gw:8001"),
+        "MINIO_ENDPOINT": rebrand_env("MINIO_ENDPOINT", "omnia-prod-minio:9000"),
+        "MINIO_ACCESS_KEY": rebrand_env("MINIO_ACCESS_KEY", "omnia"),
+        "MINIO_BUCKET": rebrand_env("MINIO_UPLOAD_BUCKET", "omnia-user-uploads"),
+        "MINIO_SECURE": rebrand_env("MINIO_SECURE", "false"),
+        "MINIO_PUBLIC_URL": rebrand_env("MINIO_PUBLIC_URL", ""),
+        "LLM_GATEWAY_URL": rebrand_env("LLM_GATEWAY_URL", "http://omnia-prod-gw:8001"),
     }
-    secret = os.getenv("OMNIA_MINIO_SECRET_KEY")
+    secret = rebrand_env("MINIO_SECRET_KEY")
     if secret:
         out["MINIO_SECRET_KEY"] = secret
     for key in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASS", "SMTP_FROM"):
@@ -436,7 +437,7 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
     # template's init-db to seed a login-able operator account so the composition
     # gate can render the authenticated cabinet. Off by default → normal apps get
     # no seed account.
-    if os.getenv("OMNIA_GATE_SEED") == "1":
+    if rebrand_env("GATE_SEED") == "1":
         env["OMNIA_GATE_SEED"] = "1"
         env["OMNIA_GATE_SEED_EMAIL"] = os.getenv(
             "OMNIA_GATE_SEED_EMAIL", "gate@omnia.local"

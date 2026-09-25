@@ -2,7 +2,7 @@ import hashlib
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,11 +12,22 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        # Поля с псевдонимами (см. omnia_release_sha) иначе перестают
+        # задаваться по имени поля: конструктор молча игнорировал бы аргумент.
+        populate_by_name=True,
     )
 
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
-    omnia_release_sha: str = Field(default="unknown")
+    # Ревизия релиза приходит из .env хоста. На время ребрендинга имя переменной
+    # меняется с OMNIA_RELEASE_SHA на YLEUM_RELEASE_SHA, и поле читает оба:
+    # новое имя в приоритете, старое остаётся страховкой от отката на прежний
+    # .env и от хоста, который перепишут позже остальных. Рассогласование здесь
+    # сразу красит проверку совпадения ревизий у двух оркестраторов.
+    omnia_release_sha: str = Field(
+        default="unknown",
+        validation_alias=AliasChoices("YLEUM_RELEASE_SHA", "OMNIA_RELEASE_SHA"),
+    )
 
     database_url: str
     database_test_url: str | None = None

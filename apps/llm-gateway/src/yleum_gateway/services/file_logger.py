@@ -21,7 +21,13 @@ from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-LOG_DIR = Path(os.environ.get("OMNIA_GATEWAY_LOG_DIR", "logs"))
+# Имя переменной меняется вместе с брендом. Читаем оба: новое в приоритете,
+# старое остаётся страховкой на время, пока .env на хостах ещё не переписан.
+LOG_DIR = Path(
+    os.environ.get("YLEUM_GATEWAY_LOG_DIR")
+    or os.environ.get("OMNIA_GATEWAY_LOG_DIR")
+    or "logs"
+)
 
 
 def _today_path() -> Path:
