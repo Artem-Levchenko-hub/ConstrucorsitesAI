@@ -585,6 +585,15 @@ class RestorationAdaptationProof:
             # Принимаем новые коды ДО того, как оркестратор начнёт их слать.
             "probe_manifest_invalid",
             "candidate_changed_during_rehearsal",
+            # Репетиция проверки состоит из шести шагов, и раньше любой из них
+            # падал под одним словом — чинить просили вслепую. Теперь шаг назван;
+            # приём здесь снова идёт впереди отправки из оркестратора.
+            "probe_readiness_failed",
+            "probe_owner_read_failed",
+            "probe_owner_mutation_failed",
+            "probe_owner_reload_failed",
+            "probe_cross_owner_denial_failed",
+            "probe_unauthenticated_denial_failed",
         }
         base_capabilities = {
             "portable_machine": True,

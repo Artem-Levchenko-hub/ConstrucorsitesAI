@@ -42,6 +42,32 @@ DatabaseWitnessReader = Callable[
 ]
 
 
+class ProbeRehearsalFailure(CellResourceError):
+    """Репетиция проверки упала на конкретной ноге, и нога названа.
+
+    Внутри ног причина стирается намеренно (`raise ... from None`), чтобы наружу
+    не утекли значения из чужой базы. Но сама нога — не данные, а имя шага, и
+    без неё отказ нечитаем: и оператор, и агент починки получали одно слово на
+    шесть разных бед.
+    """
+
+    def __init__(self, message: str, *, leg: str) -> None:
+        super().__init__(message)
+        self.leg = leg
+
+
+# Нога репетиции → код причины для отчёта. Список закрытый: в отказ попадает
+# имя шага, а не текст, поэтому утечь из базы здесь нечему.
+REHEARSAL_REASON_BY_LEG = {
+    "service_readiness": "probe_readiness_failed",
+    "signed_owner_read": "probe_owner_read_failed",
+    "signed_owner_mutation": "probe_owner_mutation_failed",
+    "signed_owner_reload": "probe_owner_reload_failed",
+    "cross_owner_denial": "probe_cross_owner_denial_failed",
+    "unauthenticated_denial": "probe_unauthenticated_denial_failed",
+}
+
+
 class _ProbeRequest(Protocol):
     @property
     def operation_id(self) -> UUID: ...
@@ -289,15 +315,23 @@ class DockerRestorationAdaptationHealthProber:
         self._suite_deadlines[activation_id] = (
             asyncio.get_running_loop().time() + _PROBE_SUITE_TIMEOUT_SECONDS
         )
+        legs = (
+            ("service_readiness", self.verify_service_readiness),
+            ("signed_owner_read", self.verify_signed_owner_read),
+            ("signed_owner_mutation", self.verify_signed_owner_create_update_delete),
+            ("signed_owner_reload", self.verify_signed_owner_reload),
+            ("cross_owner_denial", self.verify_cross_owner_denial),
+            ("unauthenticated_denial", self.verify_unauthenticated_denial),
+        )
         try:
-            evidence = [
-                await self.verify_service_readiness(request, target),
-                await self.verify_signed_owner_read(request, target),
-                await self.verify_signed_owner_create_update_delete(request, target),
-                await self.verify_signed_owner_reload(request, target),
-                await self.verify_cross_owner_denial(request, target),
-                await self.verify_unauthenticated_denial(request, target),
-            ]
+            evidence = []
+            for leg, verify in legs:
+                try:
+                    evidence.append(await verify(request, target))
+                except CellResourceError as exc:
+                    # Имя шага доживает до отчёта; текст остаётся во внутреннем
+                    # исключении и наружу по-прежнему не идёт.
+                    raise ProbeRehearsalFailure(str(exc), leg=leg) from exc
             return canonical_digest({"binding": binding, "evidence": evidence})
         finally:
             self._context_overrides.pop(activation_id, None)

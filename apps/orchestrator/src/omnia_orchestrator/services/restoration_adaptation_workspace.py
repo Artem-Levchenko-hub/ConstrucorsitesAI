@@ -1615,9 +1615,18 @@ class DockerAdaptationWorkspaceEngine:
                         backend=candidate,
                         candidate_source_manifest_digest=candidate_source_manifest,
                     )
-                except CellResourceError:
+                except CellResourceError as exc:
+                    from omnia_orchestrator.services.restoration_adaptation_health import (
+                        REHEARSAL_REASON_BY_LEG,
+                    )
+
                     rehearsal_failed = True
-                    rehearsal_reason = "probe_rehearsal_failed"
+                    # Нога, на которой споткнулись, — единственное, что делает
+                    # этот отказ пригодным для починки. Незнакомый сбой остаётся
+                    # под общим кодом, а не выдумывает ногу.
+                    rehearsal_reason = REHEARSAL_REASON_BY_LEG.get(
+                        getattr(exc, "leg", ""), "probe_rehearsal_failed"
+                    )
             candidate_after_rehearsal = await observe(
                 candidate,
                 observed_on="candidate_copy",
