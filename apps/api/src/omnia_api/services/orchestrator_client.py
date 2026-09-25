@@ -579,6 +579,12 @@ class RestorationAdaptationProof:
             "source_code_changed",
             "source_database_changed",
             "probe_rehearsal_failed",
+            # Три разные беды раньше приходили под одним кодом, и по нему нельзя
+            # было отличить «приложение не объявило проверку» от «проверка
+            # выполнилась и не прошла» и от «копия изменилась под нами».
+            # Принимаем новые коды ДО того, как оркестратор начнёт их слать.
+            "probe_manifest_invalid",
+            "candidate_changed_during_rehearsal",
         }
         base_capabilities = {
             "portable_machine": True,

@@ -99,6 +99,8 @@ class RestorationAdaptationProof(BaseModel):
         "candidate_business_data_changed",
         "candidate_technical_data_changed",
         "probe_rehearsal_failed",
+        "probe_manifest_invalid",
+        "candidate_changed_during_rehearsal",
         "source_code_changed",
         "source_database_changed",
     ] | None = None

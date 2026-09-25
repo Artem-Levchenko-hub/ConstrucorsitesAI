@@ -1571,10 +1571,17 @@ class DockerAdaptationWorkspaceEngine:
 
             rehearsal_digest: str | None = None
             rehearsal_failed = True
+            # Почему именно не удалось: три разные беды, три разных разговора.
+            # «Приложение не объявило годную проверку» чинит агент адаптации,
+            # «проверка не прошла» — разработчик, «копия изменилась под нами» —
+            # повтор операции. Один код на всё лишал оператора этой развилки.
+            rehearsal_reason = "probe_rehearsal_failed"
             try:
                 business_probe = validate_probe_contract(candidate_files, candidate_contract)
                 probe_contract_digest = business_probe.contract_digest
             except CellIdentityConflict:
+                # Проверка даже не запускалась: манифест приложения не прошёл разбор.
+                rehearsal_reason = "probe_manifest_invalid"
                 probe_contract_digest = canonical_digest(
                     {
                         "version": 1,
@@ -1610,6 +1617,7 @@ class DockerAdaptationWorkspaceEngine:
                     )
                 except CellResourceError:
                     rehearsal_failed = True
+                    rehearsal_reason = "probe_rehearsal_failed"
             candidate_after_rehearsal = await observe(
                 candidate,
                 observed_on="candidate_copy",
@@ -1617,6 +1625,7 @@ class DockerAdaptationWorkspaceEngine:
             )
             if candidate_after_rehearsal != candidate_observed:
                 rehearsal_failed = True
+                rehearsal_reason = "candidate_changed_during_rehearsal"
                 rehearsal_digest = None
 
         async with manager.operation_lock.hold(request.workspace_id):
@@ -1663,7 +1672,7 @@ class DockerAdaptationWorkspaceEngine:
         elif candidate_technical != source_technical:
             state, reason = "migration_required", "candidate_technical_data_changed"
         elif rehearsal_failed or rehearsal_digest is None:
-            state, reason = "migration_required", "probe_rehearsal_failed"
+            state, reason = "migration_required", rehearsal_reason
         else:
             state, reason = "proof_ready", None
         return AdaptationProofMaterialization(

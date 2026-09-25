@@ -662,7 +662,10 @@ async def test_docker_proof_keeps_phase_labels_out_of_physical_inventory_provena
     result = await engine.prove(request, proof)
 
     assert result.state == "migration_required"
-    assert result.reason_code == "probe_rehearsal_failed"
+    # Манифест проверки в этом наборе не задан вовсе, поэтому причина теперь
+    # называется точно: приложение не объявило годную проверку. Прежде это
+    # слипалось с настоящим провалом проверки под общим кодом.
+    assert result.reason_code == "probe_manifest_invalid"
     assert observed == ["source", "candidate_copy", "candidate_copy", "source"]
 
 
