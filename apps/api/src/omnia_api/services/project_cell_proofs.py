@@ -61,6 +61,36 @@ def _bounded_redacted_text(value: str, *, max_bytes: int) -> str:
     return bounded_redacted_text(value.strip(), max_bytes=max_bytes)
 
 
+# Сколько начала лога оставить ради контекста: команда и её заголовок.
+_FAILURE_HEAD_BYTES = 800
+_CUT_MARKER = "\n…середина пропущена…\n"
+
+
+def failure_detail_excerpt(detail: str, *, max_bytes: int = _MAX_DETAIL_BYTES) -> str:
+    """Оставить у провала то место, где он произошёл.
+
+    Описание режется по верхней границе, и резалось оно от начала. У лога
+    сборки или проверки начало — это шапка инструмента и перечень успешных
+    шагов, а ошибка всегда в конце. Живой прогон c8d0c5f7 (25.09) получил из-за
+    этого отказ с текстом «✓ Compiled successfully» и списком маршрутов: он
+    буквально противоречил случившемуся, и агент по нему чинил вслепую.
+
+    Поэтому оставляем начало как контекст, конец как саму ошибку, а вырезанную
+    середину называем вслух: молчаливый обрыв читается как «больше ничего не
+    было».
+    """
+
+    encoded = detail.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return detail
+    marker = _CUT_MARKER.encode("utf-8")
+    head_bytes = min(_FAILURE_HEAD_BYTES, max(0, max_bytes - len(marker)))
+    tail_bytes = max(0, max_bytes - head_bytes - len(marker))
+    head = encoded[:head_bytes].decode("utf-8", errors="ignore")
+    tail = encoded[len(encoded) - tail_bytes :].decode("utf-8", errors="ignore")
+    return head + _CUT_MARKER + tail
+
+
 @dataclass(frozen=True, slots=True)
 class ProofIdentity:
     workspace_id: UUID
@@ -266,7 +296,13 @@ async def record_proof_result(
         raise ProjectCellProofConflict(
             f"{dimension.value} proof result already terminal for this dimension key"
         )
-    detail_text = _bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
+    # У провала сохраняем то место, где он произошёл: начало лога — контекст,
+    # ошибка — в конце. У прошедшей проверки резать с начала по-прежнему
+    # правильно: там интересен сам факт, а не хвост.
+    detail_text = _bounded_redacted_text(
+        detail if outcome is ProofOutcome.GREEN else failure_detail_excerpt(detail),
+        max_bytes=_MAX_DETAIL_BYTES,
+    )
     safe_artifact_ref = (
         None
         if artifact_ref is None
