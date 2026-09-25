@@ -34,6 +34,7 @@ import structlog
 from yleum_orchestrator.core.config import get_settings
 from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.core.labels import with_both
 from yleum_orchestrator.core.template_materialization import (
     materialized_template,
     shared_public_files,
@@ -390,7 +391,7 @@ async def start_container(spec: ContainerSpec) -> str:
                 # name. Without this the dev/prod app cannot reach its database.
                 network=spec.network_name or _RUNTIME_NETWORK,
                 restart_policy={"Name": spec.restart_policy_name},
-                labels=labels,
+                labels=with_both(labels),
                 **security_kwargs,
             )
         except docker.errors.ImageNotFound as exc:
@@ -826,11 +827,13 @@ async def run_sandbox_command(
                     # reach host-published control-plane ports by numeric gateway IP.
                     network="none",
                     restart_policy={"Name": "no"},
-                    labels={
-                        "omnia.project_id": project_id,
-                        "omnia.kind": "sandbox",
-                        "omnia.tier": "system",
-                    },
+                    labels=with_both(
+                        {
+                            "omnia.project_id": project_id,
+                            "omnia.kind": "sandbox",
+                            "omnia.tier": "system",
+                        }
+                    ),
                     **security_kwargs,
                 )
             except docker.errors.ImageNotFound as exc:

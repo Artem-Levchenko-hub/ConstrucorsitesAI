@@ -19,6 +19,7 @@ import docker  # type: ignore[import-untyped]
 import requests
 
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+from yleum_orchestrator.core.labels import with_both
 from yleum_orchestrator.core.workspace_provider import WorkspaceProviderUnavailable
 from yleum_orchestrator.services.docker_cell_resources import (
     DockerCommandResult,
@@ -213,15 +214,20 @@ class DockerPyCellBackend:
 
     async def create_volume(self, name: str, labels: dict[str, str]) -> DockerVolumeRecord:
         self._require_identity_labels(labels)
+        # Метку нельзя поменять у существующего ресурса, поэтому второе имя
+        # добавляется только здесь, в момент создания. Ожидаемый набор меток
+        # (identity_labels) при этом не меняется — иначе сверка личности начала
+        # бы отвергать все ресурсы, созданные до ребрендинга.
+        written = with_both(labels)
 
         def _create() -> Any:
-            return self._client_obj().volumes.create(name=name, driver="local", labels=labels)
+            return self._client_obj().volumes.create(name=name, driver="local", labels=written)
 
         volume = await asyncio.to_thread(_create)
         return DockerVolumeRecord(
             resource_id=self._resource_id(volume),
             name=name,
-            labels=dict(labels),
+            labels=dict(written),
             files={},
         )
 
@@ -545,6 +551,7 @@ printf '%s\n' 'empty'
         internal: bool,
     ) -> DockerNetworkRecord:
         self._require_identity_labels(labels)
+        labels = with_both(labels)
 
         def _create() -> Any:
             if self.network_pool:
@@ -629,7 +636,7 @@ printf '%s\n' 'empty'
         kwargs: dict[str, object] = {
             "name": spec.name,
             "detach": True,
-            "labels": labels,
+            "labels": with_both(labels),
             "user": spec.user,
             "cap_add": list(spec.cap_add),
             "cap_drop": list(spec.cap_drop),
@@ -863,7 +870,9 @@ printf '%s\n' 'empty'
             ["sh", "-eu", "-c", script],
             name=container_name,
             detach=True,
-            labels=merged_labels,
+            # Сравнение с уже существующим контейнером выше идёт по merged_labels
+            # без второго имени: у контейнера, созданного до ребрендинга, его нет.
+            labels=with_both(merged_labels),
             user="0:0",
             cap_add=[],
             cap_drop=["ALL"],
