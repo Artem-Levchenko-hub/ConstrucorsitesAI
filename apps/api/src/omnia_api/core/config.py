@@ -1110,6 +1110,17 @@ class Settings(BaseSettings):
     use_generation_event_replay: bool = Field(default=False)
     use_cell_resource_profile_v2: bool = Field(default=False)
     max_generation_deadline_seconds: int = Field(default=1500, ge=60, le=7200)
+    # The agent's OWN first turn on an adaptation, replacing the ordinary limit above.
+    # Env: RESTORATION_ADAPTATION_EDIT_SECONDS.
+    # Первый ход адаптации не помещался в срок обычной правки: живой прогон 25.09
+    # (dab6c832) работал ровно до отсечки — шлюз записал 19 оплаченных вызовов
+    # подряд за 23 минуты, — и был остановлен на полном ходу, не дойдя до починки.
+    # Предыдущий прогон уложился в 1393 секунды, то есть впритык под тот же
+    # потолок. Работа объёмнее обычной по существу: свести экраны исторической
+    # версии с текущей базой и доказать работу с данными. Обычную правку при этом
+    # расширять нельзя — убежавшая генерация тратит деньги владельца тем дольше,
+    # чем шире окно, а обычные правки в 1500 укладываются.
+    restoration_adaptation_edit_seconds: int = Field(default=2700, ge=60, le=7200)
     # A restoration adaptation gets this much for checks and repairs once the agent's own
     # turn is over, even when the turn used the whole limit above. The sealed proof and
     # activation hand-off is outside both. Env: RESTORATION_ADAPTATION_REPAIR_SECONDS.

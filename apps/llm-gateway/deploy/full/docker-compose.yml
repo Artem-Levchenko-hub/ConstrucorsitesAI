@@ -266,6 +266,7 @@ services:
       MAX_GENERATION_DEADLINE_SECONDS: ${MAX_GENERATION_DEADLINE_SECONDS:-1500}
       # Default must match the code default (ac72d4cb raised it to 1800): a compose
       # fallback of 900 silently overrode the code when the .env line was removed.
+      RESTORATION_ADAPTATION_EDIT_SECONDS: ${RESTORATION_ADAPTATION_EDIT_SECONDS:-2700}
       RESTORATION_ADAPTATION_REPAIR_SECONDS: ${RESTORATION_ADAPTATION_REPAIR_SECONDS:-1800}
       RESTORATION_ADAPTATION_ACTIVATION_SECONDS: ${RESTORATION_ADAPTATION_ACTIVATION_SECONDS:-2400}
       PROJECT_CELL_HEARTBEAT_SECONDS: ${PROJECT_CELL_HEARTBEAT_SECONDS:-15}
@@ -280,6 +281,16 @@ services:
       INTEGRATION_YOOKASSA_CLIENT_SECRET: ${INTEGRATION_YOOKASSA_CLIENT_SECRET:-}
       INTEGRATION_YANDEX_CLIENT_ID: ${INTEGRATION_YANDEX_CLIENT_ID:-}
       INTEGRATION_YANDEX_CLIENT_SECRET: ${INTEGRATION_YANDEX_CLIENT_SECRET:-}
+      # Вход владельцев через VK ID / Яндекс ID (routers/auth_oauth.py) — НЕ то же,
+      # что INTEGRATION_YANDEX_* (интеграции приложений). Кнопка появляется только
+      # когда переменные доходят до api; до 25.09.2026 compose их не передавал, и
+      # значения в .env ничего не включали. generation-worker наследует эту карту и
+      # ниже перекрывает их пустыми: секрет входа нужен одному api.
+      VK_ID_CLIENT_ID: ${VK_ID_CLIENT_ID:-}
+      VK_ID_CLIENT_SECRET: ${VK_ID_CLIENT_SECRET:-}
+      YANDEX_ID_CLIENT_ID: ${YANDEX_ID_CLIENT_ID:-}
+      YANDEX_ID_CLIENT_SECRET: ${YANDEX_ID_CLIENT_SECRET:-}
+      OAUTH_LOGIN_REDIRECT_BASE_URL: ${OAUTH_LOGIN_REDIRECT_BASE_URL:-}
       INTEGRATION_BITRIX24_CLIENT_ID: ${INTEGRATION_BITRIX24_CLIENT_ID:-}
       INTEGRATION_BITRIX24_CLIENT_SECRET: ${INTEGRATION_BITRIX24_CLIENT_SECRET:-}
       INTEGRATION_AMOCRM_CLIENT_ID: ${INTEGRATION_AMOCRM_CLIENT_ID:-}
@@ -450,6 +461,12 @@ services:
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
     environment:
       <<: *api_environment
+      # Owner-login OAuth credentials belong to the api container only.
+      VK_ID_CLIENT_ID: ""
+      VK_ID_CLIENT_SECRET: ""
+      YANDEX_ID_CLIENT_ID: ""
+      YANDEX_ID_CLIENT_SECRET: ""
+      OAUTH_LOGIN_REDIRECT_BASE_URL: ""
     depends_on:
       api:
         condition: service_healthy
@@ -517,6 +534,7 @@ services:
       MAX_GENERATION_DEADLINE_SECONDS: ${MAX_GENERATION_DEADLINE_SECONDS:-1500}
       # Default must match the code default (ac72d4cb raised it to 1800): a compose
       # fallback of 900 silently overrode the code when the .env line was removed.
+      RESTORATION_ADAPTATION_EDIT_SECONDS: ${RESTORATION_ADAPTATION_EDIT_SECONDS:-2700}
       RESTORATION_ADAPTATION_REPAIR_SECONDS: ${RESTORATION_ADAPTATION_REPAIR_SECONDS:-1800}
       RESTORATION_ADAPTATION_ACTIVATION_SECONDS: ${RESTORATION_ADAPTATION_ACTIVATION_SECONDS:-2400}
       PROJECT_CELL_HEARTBEAT_SECONDS: ${PROJECT_CELL_HEARTBEAT_SECONDS:-15}

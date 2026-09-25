@@ -37,11 +37,15 @@ def test_the_ordinary_edit_window_is_left_alone() -> None:
     assert _default("max_generation_deadline_seconds") == 1500
 
 
-def test_repair_is_the_longer_half_of_an_adaptation() -> None:
-    """Смысл настройки: починка у адаптации не короче её собственной правки.
+def test_repair_is_not_shorter_than_an_ordinary_edit() -> None:
+    """Нижняя граница осмысленности: починка не мельче обычной правки.
 
     Если однажды окно починки снова окажется меньше обычного срока правки, это
     вернёт нас ровно в ту ситуацию, где агент не успевает свести код с базой.
+
+    С собственным сроком первого хода адаптации (2700) это окно не сравнивают:
+    они отмеряются от разных точек — правка от начала прогона, починка от начала
+    починки, — и порядок между ними ничего не гарантирует.
     """
     assert _default("restoration_adaptation_repair_seconds") >= _default(
         "max_generation_deadline_seconds"

@@ -43,6 +43,9 @@ from tests.test_max_finalization import (
 
 _T0 = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
 _EDIT = timedelta(seconds=1500)
+# Первый ход адаптации живёт по своему сроку: в окно обычной правки он не
+# помещался — живой прогон 25.09 (dab6c832) работал до самой отсечки.
+_ADAPT_EDIT = timedelta(seconds=2700)
 _REPAIR = timedelta(seconds=1800)
 _ACTIVATION = timedelta(seconds=2400)
 
@@ -110,7 +113,7 @@ def test_an_ordinary_run_keeps_its_single_limit() -> None:
 
 def test_an_adaptation_is_editing_until_its_checks_begin() -> None:
     deadline = generation_deadline(_run())
-    assert (deadline.stage, deadline.at) == ("edit", _T0 + _EDIT)
+    assert (deadline.stage, deadline.at) == ("edit", _T0 + _ADAPT_EDIT)
 
 
 def test_a_slow_agent_turn_cannot_eat_the_repair_window() -> None:
@@ -131,8 +134,8 @@ def test_a_quick_agent_turn_does_not_shorten_what_the_run_had() -> None:
     # Правило, а не совпадение чисел: срок — больший из обычного окна правки и
     # окна починки от её начала. Прежде эти числа случайно совпадали при
     # коротком окне починки, и тест закреплял совпадение, а не правило.
-    assert generation_deadline(run).at == max(_T0 + _EDIT, repair_started + _REPAIR)
-    assert generation_deadline(run).at >= _T0 + _EDIT
+    assert generation_deadline(run).at == max(_T0 + _ADAPT_EDIT, repair_started + _REPAIR)
+    assert generation_deadline(run).at >= _T0 + _ADAPT_EDIT
 
 
 def test_the_repair_window_opens_once() -> None:
@@ -192,13 +195,15 @@ def test_a_finished_activation_no_longer_seals() -> None:
     assert generation_deadline(run).stage == "edit"
 
 
-def test_a_requested_cancel_still_ends_by_the_ordinary_limit() -> None:
+def test_a_requested_cancel_still_ends_by_the_editing_limit() -> None:
     run = _run(status="cancel_requested")
     _seal(run)
 
     deadline = generation_deadline(run)
 
-    assert (deadline.stage, deadline.at) == ("edit", _T0 + _EDIT)
+    # Смысл: запрошенная отмена не держится потолком запечатанного доказательства,
+    # а заканчивается по сроку правки — у адаптации это её собственный срок.
+    assert (deadline.stage, deadline.at) == ("edit", _T0 + _ADAPT_EDIT)
 
 
 def test_time_spent_sealed_is_returned_to_the_repairs() -> None:
@@ -225,7 +230,7 @@ def test_a_damaged_book_falls_back_to_the_plain_limit() -> None:
         "max_finalization": {"deadline": {"repair_started_at_ms": "soon", "sealed_ms": -5}},
     }
 
-    assert generation_deadline(run).at == _T0 + _EDIT
+    assert generation_deadline(run).at == _T0 + _ADAPT_EDIT
 
 
 @pytest.fixture
@@ -428,7 +433,7 @@ async def test_the_watchdog_stops_looking_once_the_run_is_over(
     await db_session.commit()
     after = await generation_deadline_wait(session_factory=factory, generation_run_id=run.id)
 
-    assert before is not None and 1400 < before <= 1500
+    assert before is not None and 2600 < before <= 2700
     assert after is None
 
 
@@ -446,7 +451,7 @@ async def test_checks_and_repairs_open_their_own_window(
         }
     }
     # The agent's turn used the whole edit limit.
-    run.started_at = datetime.now(UTC) - _EDIT - timedelta(seconds=30)
+    run.started_at = datetime.now(UTC) - _ADAPT_EDIT - timedelta(seconds=30)
     await db_session.commit()
     repaired: list[str] = []
 

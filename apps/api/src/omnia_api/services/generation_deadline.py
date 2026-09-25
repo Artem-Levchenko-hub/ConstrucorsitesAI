@@ -61,9 +61,13 @@ def is_restoration_adaptation(run: GenerationRun) -> bool:
 def generation_deadline(run: GenerationRun) -> GenerationDeadline:
     settings = get_settings()
     started = run.started_at or run.created_at
-    edit_end = started + timedelta(seconds=settings.max_generation_deadline_seconds)
     if not is_restoration_adaptation(run):
-        return GenerationDeadline("edit", edit_end)
+        return GenerationDeadline(
+            "edit", started + timedelta(seconds=settings.max_generation_deadline_seconds)
+        )
+    # У первого хода адаптации свой срок: он сводит экраны исторической версии с
+    # текущей базой, и в окно обычной правки этот ход не помещается.
+    edit_end = started + timedelta(seconds=settings.restoration_adaptation_edit_seconds)
     book = _book(run)
     credit = timedelta(milliseconds=book.get("sealed_ms", 0))
     repair_started_ms = book.get("repair_started_at_ms")

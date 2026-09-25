@@ -26,6 +26,7 @@ def isolated_settings_env(
         "USE_GENERATION_EVENT_REPLAY",
         "USE_CELL_RESOURCE_PROFILE_V2",
         "MAX_GENERATION_DEADLINE_SECONDS",
+        "RESTORATION_ADAPTATION_EDIT_SECONDS",
         "RESTORATION_ADAPTATION_REPAIR_SECONDS",
         "RESTORATION_ADAPTATION_ACTIVATION_SECONDS",
         "PROJECT_CELL_HEARTBEAT_SECONDS",
@@ -47,6 +48,9 @@ def test_max_finalization_defaults_are_dark_and_deadlines_are_exact(
     assert settings.use_generation_event_replay is False
     assert settings.use_cell_resource_profile_v2 is False
     assert settings.max_generation_deadline_seconds == 1500
+    # 2700: первый ход адаптации не помещался в срок обычной правки — живой
+    # прогон dab6c832 работал до самой отсечки и был остановлен на ходу.
+    assert settings.restoration_adaptation_edit_seconds == 2700
     # 1800, а не 900: живой прогон 25.09 умер ровно на границе прежнего окна
     # починки, делая осмысленную работу (ac72d4cb).
     assert settings.restoration_adaptation_repair_seconds == 1800
