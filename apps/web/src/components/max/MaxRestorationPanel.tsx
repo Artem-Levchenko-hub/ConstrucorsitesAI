@@ -1,11 +1,17 @@
 "use client";
 
+import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import type { MaxRestorationController } from "@/lib/use-max-restoration";
-import type { RestoreState } from "@/lib/api/restorations";
+import { discardDraftChanges, saveDraftVersion, type RestoreState } from "@/lib/api/restorations";
 import type { RestorationAdaptationReference } from "@/lib/api/messages";
+
+// The orchestrator refuses a rollback over unsaved draft edits with this blocker text
+// (verify_source_inventory). It is our own string, so the panel keys the two owner
+// actions — save as a version, discard — on its stable prefix.
+const UNSAVED_DRAFT_PREFIX = "Текущие файлы отличаются от сохранённой версии";
 
 const labels: Record<RestoreState, string> = {
   preparing: "Подготавливаем восстановление", checking: "Проверяем совместимость",
@@ -63,6 +69,9 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
   const scope = useRef<object>({});
   const adaptationPending = useRef(false);
   const [adapting, setAdapting] = useState(false);
+  const qc = useQueryClient();
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftNote, setDraftNote] = useState<string | null>(null);
   useEffect(() => {
     scope.current = {};
     return () => { scope.current = {}; };
@@ -72,8 +81,41 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
     ? operation.report : null;
   const catalogObserved = (report?.database_state === "present" || report?.database_state === "empty")
     && !!report.checks?.some(check => check.evidence === "observed_catalog" || check.evidence === "structural_rule");
-  const retryCatalogPreparation = operation?.state === "needs_changes" && !catalogObserved;
+  const draftUnsaved = operation?.state === "needs_changes"
+    && !!report?.blockers?.some((item) => item.startsWith(UNSAVED_DRAFT_PREFIX));
+  // An early refusal over unsaved edits also leaves the catalog unobserved; it is not
+  // a catalog problem, so the retry-preparation hint must not cover it.
+  const retryCatalogPreparation = operation?.state === "needs_changes" && !catalogObserved && !draftUnsaved;
   const failure = operation?.error ? failureText(operation.error) : null;
+  const projectId = operation?.project_id ?? null;
+  async function resolveDraft(action: "save" | "discard") {
+    if (!projectId || draftBusy || r.busy) return;
+    if (action === "discard" && !window.confirm(
+      "Отбросить несохранённые правки черновика? Файлы вернутся к сохранённой версии, отменить это будет нельзя.",
+    )) return;
+    setDraftBusy(true);
+    setDraftNote(null);
+    try {
+      if (action === "save") {
+        const saved = await saveDraftVersion(projectId);
+        await r.cancel();
+        await Promise.all([
+          qc.invalidateQueries({ queryKey: ["project", projectId] }),
+          qc.invalidateQueries({ queryKey: ["snapshots", projectId] }),
+          qc.invalidateQueries({ queryKey: ["versions", projectId] }),
+        ]);
+        setDraftNote(`Правки сохранены как версия ${saved.number}. Выберите версию для восстановления ещё раз.`);
+      } else {
+        await discardDraftChanges(projectId);
+        await r.reprepare();
+        setDraftNote("Правки отброшены. Подготовка восстановления запущена заново.");
+      }
+    } catch (error) {
+      setDraftNote(error instanceof Error ? error.message : "Не удалось выполнить действие");
+    } finally {
+      setDraftBusy(false);
+    }
+  }
   return <section className="mx-4 my-3 max-w-full rounded-xl border border-border-default bg-surface-raised p-4 text-sm"
     aria-label="Восстановление версии" data-testid="max-restoration-panel">
     <h3 className="font-semibold" role="status">{operation?.state === "ready" && automatic
@@ -89,6 +131,16 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
     {retryCatalogPreparation && <p className="mt-2" data-testid="max-restoration-catalog-unavailable">
       Текущий каталог базы данных не удалось подтвердить. Повторите подготовку восстановления, когда проект снова будет доступен. Платная адаптация не запущена.
     </p>}
+    {draftUnsaved && <div className="mt-3 space-y-2" data-testid="max-restoration-draft-unsaved">
+      <p>В черновике есть правки, которых нет в сохранённой версии. Восстановление не тронет их молча: сначала решите, что с ними делать.</p>
+      <div className="flex flex-wrap gap-2">
+        <Button data-testid="max-restoration-save-draft" disabled={draftBusy || r.busy}
+          onClick={() => void resolveDraft("save")}>{draftBusy ? "Выполняем…" : "Сохранить правки как версию"}</Button>
+        <Button data-testid="max-restoration-discard-draft" variant="outline" disabled={draftBusy || r.busy}
+          onClick={() => void resolveDraft("discard")}>Отбросить правки</Button>
+      </div>
+    </div>}
+    {draftNote && <p role="status" className="mt-2" data-testid="max-restoration-draft-note">{draftNote}</p>}
     {report && <div className="mt-3 space-y-3 break-words">
       {!retryCatalogPreparation && <p>{operation?.state === "needs_changes"
         ? retryPreparation

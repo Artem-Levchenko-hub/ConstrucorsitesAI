@@ -102,6 +102,41 @@ async def record_restored_version(
     return version
 
 
+async def record_manual_version(
+    session: AsyncSession,
+    project: Project,
+    snapshot: Snapshot,
+    *,
+    label: str,
+) -> ProjectVersion:
+    """A version the owner saved by hand (no generation run behind it)."""
+    if snapshot.project_id != project.id:
+        raise ValueError("snapshot belongs to another project")
+    number = await _lock(session, project)
+    existing = await session.scalar(
+        select(ProjectVersion).where(
+            ProjectVersion.project_id == project.id,
+            ProjectVersion.snapshot_id == snapshot.id,
+            ProjectVersion.generation_run_id.is_(None),
+        )
+    )
+    if existing:
+        return existing
+    version = ProjectVersion(
+        project_id=project.id,
+        number=number,
+        snapshot_id=snapshot.id,
+        base_snapshot_id=snapshot.parent_id,
+        commit_sha=snapshot.commit_sha,
+        prompt_text=label,
+        model_id=None,
+        status="ready",
+    )
+    session.add(version)
+    await session.flush()
+    return version
+
+
 async def resolve_version(
     session: AsyncSession, version: ProjectVersion
 ) -> tuple[str, Snapshot | None]:

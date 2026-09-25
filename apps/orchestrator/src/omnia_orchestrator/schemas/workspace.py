@@ -111,6 +111,25 @@ class WorkspaceAgentWriteResponse(BaseModel):
     workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class WorkspaceDraftFilesResponse(BaseModel):
+    """The owner's draft as it is on disk, read outside any generation lease."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    files: dict[str, str]
+    workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkspaceDraftResetRequest(BaseModel):
+    """Owner-initiated rewrite of draft files (discarding unsaved edits)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    files: dict[str, str]
+    deletes: list[str] = Field(default_factory=list)
+
+
 class WorkspaceDraftApplyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

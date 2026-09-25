@@ -95,3 +95,26 @@ export function cancelRestoration(projectId: string, operationId: string) {
     method: "POST", json: {}, timeoutMs: 30_000,
   });
 }
+
+// Owner actions on unsaved draft edits. A rollback refuses while the draft's files
+// differ from the saved version; these are the two deliberate ways to resolve that.
+export interface DraftSaveResponse {
+  version_id: string;
+  number: number;
+  snapshot_id: string;
+}
+export interface DraftDiscardResponse {
+  written: number;
+  deleted: number;
+  workspace_revision: string;
+}
+export function saveDraftVersion(projectId: string) {
+  return apiFetch<DraftSaveResponse>(`/api/projects/${projectId}/draft/save-version`, {
+    method: "POST", json: {}, timeoutMs: 60_000,
+  });
+}
+export function discardDraftChanges(projectId: string) {
+  return apiFetch<DraftDiscardResponse>(`/api/projects/${projectId}/draft/discard`, {
+    method: "POST", json: {}, timeoutMs: 60_000,
+  });
+}

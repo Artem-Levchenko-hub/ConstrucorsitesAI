@@ -27,6 +27,7 @@ from omnia_api.routers import backups as backups_router
 from omnia_api.routers import billing as billing_router
 from omnia_api.routers import deploy_targets as deploy_targets_router
 from omnia_api.routers import domains as domains_router
+from omnia_api.routers import draft_changes as draft_changes_router
 from omnia_api.routers import integration_runtime as integration_runtime_router
 from omnia_api.routers import max_accounts as max_accounts_router
 from omnia_api.routers import max_integrations as max_integrations_router
@@ -158,6 +159,7 @@ def create_app() -> FastAPI:
     app.include_router(snapshots_router.router)
     app.include_router(project_versions_router.router)
     app.include_router(restorations_router.router)
+    app.include_router(draft_changes_router.router)
     app.include_router(messages_router.router)
     app.include_router(max_integrations_router.router)
     app.include_router(max_accounts_router.router)

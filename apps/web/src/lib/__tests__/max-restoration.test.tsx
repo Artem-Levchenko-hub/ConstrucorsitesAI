@@ -11,6 +11,7 @@ import { ApiError } from "@/lib/api/client";
 vi.mock("@/lib/api/restorations", () => ({
   listRestorations: vi.fn(), getRestoration: vi.fn(), prepareRestoration: vi.fn(),
   applyRestoration: vi.fn(), cancelRestoration: vi.fn(),
+  saveDraftVersion: vi.fn(), discardDraftChanges: vi.fn(),
 }));
 const oldVersion: ProjectVersion = {
   id: "v3", number: 3, project_id: "a", snapshot_id: "s3", commit_sha: "sha3",
@@ -648,4 +649,98 @@ it("keeps an unknown server reason as it is", async () => {
   await render();
   expect(container.querySelector('[role="alert"]')!.textContent).toBe("Версия недоступна: исходный снимок удалён.");
   expect(container.querySelector('[data-testid="max-restoration-failure-code"]')).toBeNull();
+});
+
+function draftUnsaved(): api.RestoreOperation {
+  const value = catalogUnavailable();
+  return {
+    ...value,
+    report: {
+      ...value.report!,
+      checks: [],
+      blockers: ["Текущие файлы отличаются от сохранённой версии. Сохраните правки; пользовательские файлы перенесите в отдельное постоянное хранилище."],
+    },
+  };
+}
+it("offers to save or discard unsaved draft edits instead of a catalog retry", async () => {
+  const blocked = draftUnsaved();
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
+  vi.mocked(api.getRestoration).mockResolvedValue(blocked);
+
+  await render();
+
+  expect(container.querySelector("[data-testid='max-restoration-draft-unsaved']")).not.toBeNull();
+  expect(container.querySelector("[data-testid='max-restoration-save-draft']")).not.toBeNull();
+  expect(container.querySelector("[data-testid='max-restoration-discard-draft']")).not.toBeNull();
+  expect(container.querySelector("[data-testid='max-restoration-retry-preparation']")).toBeNull();
+  expect(container.querySelector("[data-testid='max-restoration-catalog-unavailable']")).toBeNull();
+});
+it("discarding the edits reprepares the same version after the server confirms", async () => {
+  const blocked = draftUnsaved();
+  const freshKey = "22222222-2222-4222-8222-222222222222";
+  const randomUUID = vi.spyOn(crypto, "randomUUID").mockReturnValue(freshKey);
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
+  vi.mocked(api.getRestoration).mockResolvedValue(blocked);
+  vi.mocked(api.discardDraftChanges).mockResolvedValue({ written: 1, deleted: 1, workspace_revision: "a".repeat(64) });
+  vi.mocked(api.cancelRestoration).mockResolvedValue({
+    ...blocked, state: "cancelled", phase: "cancelled", can_cancel: false, revision: 3,
+  });
+  vi.mocked(api.prepareRestoration).mockResolvedValue({
+    ...operation("checking"), id: "fresh-operation", execution_policy: "automatic_when_safe",
+  });
+
+  await render();
+  await act(async () => container.querySelector<HTMLButtonElement>(
+    "[data-testid='max-restoration-discard-draft']",
+  )!.click());
+
+  expect(confirm).toHaveBeenCalledOnce();
+  expect(api.discardDraftChanges).toHaveBeenCalledExactlyOnceWith("a");
+  expect(api.cancelRestoration).toHaveBeenCalledExactlyOnceWith("a", "op-a");
+  expect(api.prepareRestoration).toHaveBeenCalledExactlyOnceWith("a", {
+    target_version_id: "v3",
+    expected_draft_snapshot_id: "s11",
+    idempotency_key: freshKey,
+    execution_policy: "automatic_when_safe",
+  });
+  expect(vi.mocked(api.discardDraftChanges).mock.invocationCallOrder[0])
+    .toBeLessThan(vi.mocked(api.cancelRestoration).mock.invocationCallOrder[0]);
+  expect(container.textContent).toContain("Правки отброшены");
+  randomUUID.mockRestore();
+  confirm.mockRestore();
+});
+it("a declined confirmation discards nothing", async () => {
+  const blocked = draftUnsaved();
+  const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
+  vi.mocked(api.getRestoration).mockResolvedValue(blocked);
+
+  await render();
+  await act(async () => container.querySelector<HTMLButtonElement>(
+    "[data-testid='max-restoration-discard-draft']",
+  )!.click());
+
+  expect(api.discardDraftChanges).not.toHaveBeenCalled();
+  expect(api.cancelRestoration).not.toHaveBeenCalled();
+  confirm.mockRestore();
+});
+it("saving the edits records a version, cancels the preparation and asks to pick the version again", async () => {
+  const blocked = draftUnsaved();
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
+  vi.mocked(api.getRestoration).mockResolvedValue(blocked);
+  vi.mocked(api.saveDraftVersion).mockResolvedValue({ version_id: "v4", number: 4, snapshot_id: "s13" });
+  vi.mocked(api.cancelRestoration).mockResolvedValue({
+    ...blocked, state: "cancelled", phase: "cancelled", can_cancel: false, revision: 3,
+  });
+
+  await render();
+  await act(async () => container.querySelector<HTMLButtonElement>(
+    "[data-testid='max-restoration-save-draft']",
+  )!.click());
+
+  expect(api.saveDraftVersion).toHaveBeenCalledExactlyOnceWith("a");
+  expect(api.cancelRestoration).toHaveBeenCalledExactlyOnceWith("a", "op-a");
+  expect(api.prepareRestoration).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("версия 4");
 });

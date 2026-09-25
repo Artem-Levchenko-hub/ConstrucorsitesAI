@@ -62,6 +62,8 @@ from omnia_orchestrator.schemas.workspace import (
     WorkspaceAgentOperationStatusResponse,
     WorkspaceAgentWriteRequest,
     WorkspaceAgentWriteResponse,
+    WorkspaceDraftFilesResponse,
+    WorkspaceDraftResetRequest,
     WorkspaceCapabilityResponse,
     WorkspaceControlRequest,
     WorkspaceDraftApplyRequest,
@@ -362,6 +364,111 @@ async def bootstrap_workspace_agent(
         workspace_revision=workspace_revision,
         capabilities=capabilities,
     )
+
+
+def _require_no_generation_lease(state: CellWorkspaceState) -> None:
+    """Owner draft actions run only while no generation owns the workspace.
+
+    The agent endpoints require the opposite (an active lease): a generation is
+    the only writer while it runs. Saving or discarding the owner's unsaved edits
+    happens between generations, so the guard is inverted, not bypassed.
+    """
+    if state.bundle_state != "resources_ready":
+        raise OrchestratorError(
+            code="conflict",
+            message="workspace resources are not ready",
+            status_code=409,
+        )
+    if state.active_generation_run_id is not None:
+        raise OrchestratorError(
+            code="conflict",
+            message="workspace generation lease is active",
+            status_code=409,
+            details={"generation_run_id": str(state.active_generation_run_id)},
+        )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/draft/files",
+    response_model=WorkspaceDraftFilesResponse,
+)
+async def read_workspace_draft_files(
+    workspace_id: UUID,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceDraftFilesResponse:
+    """The draft exactly as the owner sees it — for «сохранить правки как версию»."""
+    verify_internal_token(x_internal_token)
+    provider = _workspace_provider(workspace_id)
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
+        _require_no_generation_lease(state)
+        files = await _read_agent_workspace_files(manager, volume_name)
+    return WorkspaceDraftFilesResponse(
+        files=files,
+        workspace_revision=_workspace_revision(files),
+    )
+
+
+@router.post(
+    "/workspaces/{workspace_id}/draft/reset",
+    response_model=WorkspaceAgentWriteResponse,
+)
+async def reset_workspace_draft(
+    workspace_id: UUID,
+    request: WorkspaceDraftResetRequest,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceAgentWriteResponse:
+    """Rewrite the draft to the files the caller supplies — «отбросить правки».
+
+    Same patch semantics and budgets as the agent write, same stale-revision
+    conflict, but guarded by the ABSENCE of a generation lease: the owner is
+    the only writer between generations.
+    """
+    verify_internal_token(x_internal_token)
+    writes = _normalize_agent_write_files(request.files)
+    deletes = _normalize_agent_delete_paths(request.deletes, writes)
+    _require_agent_patch_budget(writes, deletes)
+    provider = _workspace_provider(workspace_id)
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
+        _require_no_generation_lease(state)
+        current_files = await _read_agent_workspace_files(manager, volume_name)
+        current_revision = _workspace_revision(current_files)
+        desired_files = _apply_agent_workspace_patch(current_files, writes, deletes)
+        _require_agent_workspace_budget(desired_files)
+        desired_revision = _workspace_revision(desired_files)
+        if current_revision != request.expected_revision:
+            if current_revision == desired_revision:
+                return WorkspaceAgentWriteResponse(
+                    written=0,
+                    deleted=0,
+                    workspace_revision=current_revision,
+                )
+            _raise_agent_stale_conflict(
+                expected_revision=request.expected_revision,
+                current_revision=current_revision,
+            )
+        writes_to_apply = {
+            path: content.encode("utf-8")
+            for path, content in writes.items()
+            if current_files.get(path) != content
+        }
+        deletes_to_apply = tuple(
+            path for path in deletes if path in current_files and path not in writes
+        )
+        await _prepare_portable_write(manager, state, desired_files)
+        if deletes_to_apply:
+            await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
+        if writes_to_apply:
+            await manager.docker.write_volume_files(volume_name, writes_to_apply)
+        updated_files = await _read_agent_workspace_files(manager, volume_name)
+        return WorkspaceAgentWriteResponse(
+            written=len(writes_to_apply),
+            deleted=len(deletes_to_apply),
+            workspace_revision=_workspace_revision(updated_files),
+        )
 
 
 @router.post(

@@ -1675,6 +1675,66 @@ async def project_cell_agent_write_files(
     return ProjectCellAgentWriteResponse.from_json(payload)
 
 
+@dataclass(frozen=True)
+class ProjectCellDraftFiles:
+    """The owner's draft as stored in the cell, read outside any generation lease."""
+
+    files: dict[str, str]
+    workspace_revision: str
+
+    def __post_init__(self) -> None:
+        _validate_workspace_revision(self.workspace_revision)
+
+    @classmethod
+    def from_json(cls, payload: dict[str, object]) -> ProjectCellDraftFiles:
+        if set(payload) != {"files", "workspace_revision"}:
+            raise OrchestratorUnavailable("Orchestrator returned an invalid draft files response")
+        files = payload.get("files")
+        revision = payload.get("workspace_revision")
+        valid_entries = type(files) is dict and all(
+            type(path) is str and type(content) is str for path, content in files.items()
+        )
+        if not valid_entries or type(revision) is not str:
+            raise OrchestratorUnavailable("Orchestrator returned an invalid draft files response")
+        assert type(files) is dict
+        return cls(files=dict(files), workspace_revision=revision)
+
+
+async def project_cell_draft_files(workspace_id: UUID) -> ProjectCellDraftFiles:
+    payload = await _request("GET", f"/internal/workspaces/{workspace_id}/draft/files")
+    return ProjectCellDraftFiles.from_json(payload)
+
+
+async def project_cell_draft_reset(
+    workspace_id: UUID,
+    *,
+    expected_revision: str,
+    files: dict[str, str],
+    deletes: Sequence[str] = (),
+) -> ProjectCellAgentWriteResponse:
+    """Rewrite draft files between generations («отбросить правки»)."""
+    if type(files) is not dict or any(
+        type(path) is not str or type(content) is not str for path, content in files.items()
+    ):
+        raise ValueError("files must be a string-to-string mapping")
+    normalized_deletes = [path for path in deletes]
+    if any(type(path) is not str for path in normalized_deletes):
+        raise ValueError("deletes must contain only strings")
+    if set(files).intersection(normalized_deletes):
+        raise ValueError("the same path cannot be written and deleted")
+    _validate_workspace_revision(expected_revision)
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{workspace_id}/draft/reset",
+        json={
+            "expected_revision": expected_revision,
+            "files": files,
+            "deletes": normalized_deletes,
+        },
+    )
+    return ProjectCellAgentWriteResponse.from_json(payload)
+
+
 async def project_cell_agent_exec(
     workspace_id: UUID,
     cmd: str,
