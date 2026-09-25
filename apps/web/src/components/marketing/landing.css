@@ -32,7 +32,14 @@
 }
 
 .yl a { color: inherit; }
-.yl :is(a, button, summary):focus-visible { outline: 3px solid #86b6ff; outline-offset: 4px; }
+/* Кольцо фокуса: WCAG 2.2 требует контраст не ниже 3:1 к соседнему цвету.
+   Синий бренда даёт 4.5–5.3:1 на светлых фонах; на финальном экране в градиенте
+   он тонет (1.25:1), поэтому там кольцо белое — 6.6:1. */
+.yl :is(a, button, summary):focus-visible {
+  outline: 3px solid var(--color-brand-blue, #0062ee);
+  outline-offset: 4px;
+}
+.yl-sendoff :is(a, button):focus-visible { outline-color: #fff; }
 
 .yl-skip { position: fixed; top: -100px; left: 20px; z-index: 50; padding: 12px; background: #fff; }
 .yl-skip:focus { top: 10px; }
