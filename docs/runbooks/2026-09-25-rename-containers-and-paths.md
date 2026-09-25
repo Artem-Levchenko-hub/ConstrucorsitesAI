@@ -76,6 +76,8 @@ Compose берёт из имени каталога. Переименуем ка
 4. **Замок выкатки занят** — чтобы никто не начал вторую выкатку посередине.
 5. **Согласие сессии откатов**: её прогон занимает до часа и переживёт рестарт платформы
    плохо.
+6. **Снимок состояния до окна**: `docker ps -a` и список живых ячеек в файл на core — чтобы
+   после окна сверять не по памяти.
 
 **Категорически нельзя** запускать здесь `docker volume prune` или `docker system prune`:
 тома остановленных ячеек выглядят как ненужные, и это уже приводило к потере данных.
@@ -115,7 +117,7 @@ ssh max-core 'sudo cp /etc/systemd/system/omnia-orchestrator.service /etc/system
 
 # 6. core: подтянуть ревизию с новыми именами контейнеров и пересоздать стек
 ssh max-core 'cd /opt/yleum && git fetch -q origin && git merge --ff-only <sha>
-              cd apps/llm-gateway/deploy/full && docker compose up -d --remove-orphans
+              cd apps/llm-gateway/deploy/full && docker compose up -d
               docker ps --format "{{.Names}}" | grep yleum-prod | sort'
 
 # 7. commerce: то же для путей и юнита (стека платформы там нет)
@@ -129,9 +131,12 @@ ssh max-core 'ssh commerce "sudo mv /opt/omnia /opt/yleum && sudo ln -s /opt/yle
                             curl -s 127.0.0.1:8003/health"'
 ```
 
-Шаг 6 пересоздаёт контейнеры под новыми именами. Старые остаются остановленными — их убирает
-`--remove-orphans`; если что-то пойдёт не так, они ещё существуют и поднимаются прежним
-compose из `/root/docker-compose.yml.pre-4-4`.
+Шаг 6 пересоздаёт контейнеры под новыми именами. **`--remove-orphans` намеренно не
+используется:** у проекта есть остановленный контейнер отключённого профиля
+(`omnia-prod-postgres` с томом `full_postgres-data`, он держится как путь отката базы), и
+проверять на проде, сочтёт ли Compose его сиротой, незачем. Старые контейнеры просто
+останутся остановленными — это и есть страховка: если что-то пойдёт не так, они поднимаются
+прежним compose из `/root/docker-compose.yml.pre-4-4`. Убрать их руками можно после проверки.
 
 ---
 
@@ -155,7 +160,7 @@ compose из `/root/docker-compose.yml.pre-4-4`.
 Откат делается в обратном порядке и целиком, а не по частям:
 
 ```bash
-ssh max-core 'cd /opt/yleum/apps/llm-gateway/deploy/full && cp /root/docker-compose.yml.pre-4-4 docker-compose.yml && docker compose up -d --remove-orphans
+ssh max-core 'cd /opt/yleum/apps/llm-gateway/deploy/full && cp /root/docker-compose.yml.pre-4-4 docker-compose.yml && docker compose up -d
               sudo systemctl disable --now yleum-orchestrator && sudo rm /etc/systemd/system/yleum-orchestrator.service
               sudo cp /root/omnia-orchestrator.service.pre-4-5 /etc/systemd/system/omnia-orchestrator.service
               sudo rm /opt/omnia && sudo mv /opt/yleum /opt/omnia && sudo rm -f /opt/yleum-runtime
