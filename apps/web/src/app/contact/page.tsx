@@ -13,8 +13,8 @@ export default function ContactPage() {
       <div className="grid gap-5 lg:grid-cols-3">
         {[
           { Icon: MessageSquare, title: "Начать проект", text: "Создайте аккаунт и опишите приложение в коротком брифе.", href: "/max/register", label: "Открыть студию" },
-          { Icon: Building2, title: "Корпоративный запуск", text: "Интеграции с внутренними системами, собственная VPS и сопровождение.", href: "mailto:sales@lead-generator.ru", label: "sales@lead-generator.ru" },
-          { Icon: Mail, title: "Поддержка", text: "Вопросы по аккаунту, публикации, оплате и работающим приложениям.", href: "mailto:support@lead-generator.ru", label: "support@lead-generator.ru" },
+          { Icon: Building2, title: "Корпоративный запуск", text: "Интеграции с внутренними системами, собственная VPS и сопровождение.", href: "mailto:office@yleum.ru", label: "office@yleum.ru" },
+          { Icon: Mail, title: "Поддержка", text: "Вопросы по аккаунту, публикации, оплате и работающим приложениям.", href: "mailto:support@yleum.ru", label: "support@yleum.ru" },
         ].map(({ Icon, title, text, href, label }) => (
           <article key={title} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-7">
             <Icon className="h-6 w-6 text-[#0381fa]" />

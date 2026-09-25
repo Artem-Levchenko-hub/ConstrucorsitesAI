@@ -79,9 +79,9 @@ export default function RequisitesPage() {
           По вопросам сервиса, документов и платежей:{" "}
           <a
             className="font-medium text-accent-secondary"
-            href="mailto:support@lead-generator.ru"
+            href="mailto:support@yleum.ru"
           >
-            support@lead-generator.ru
+            support@yleum.ru
           </a>
           .
         </p>

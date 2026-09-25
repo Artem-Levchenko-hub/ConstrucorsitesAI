@@ -30,7 +30,7 @@ export function LegalPage({
         </div>
         <div className="mt-14 border-t border-border-default pt-7 text-sm text-fg-tertiary">
           Вопросы по документу:{" "}
-          <a className="font-medium text-accent-secondary" href="mailto:support@lead-generator.ru">support@lead-generator.ru</a>
+          <a className="font-medium text-accent-secondary" href="mailto:support@yleum.ru">support@yleum.ru</a>
         </div>
       </article>
     </main>

@@ -8,7 +8,7 @@ export default function PrivacyPage() {
           Политика описывает обработку данных пользователей Yleum и
           конструктора Lead Generator. До публикации реквизитов оператора приём
           платежей остаётся отключён. Контакт оператора по вопросам данных:
-          support@lead-generator.ru.
+          privacy@yleum.ru.
         </p>
       </LegalSection>
       <LegalSection title="2. Какие данные обрабатываются">

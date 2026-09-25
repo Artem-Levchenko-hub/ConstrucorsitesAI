@@ -70,7 +70,7 @@ export default function OfferPage() {
 
       <LegalSection title="7. Отмена и возврат">
         <p>
-          Запрос на возврат направляется на support@lead-generator.ru с email
+          Запрос на возврат направляется на billing@yleum.ru с email
           аккаунта и идентификатором платежа. Неиспользованная часть может быть
           возвращена тем же способом. Уже выполненные генерации и оплаченные
           внешние услуги учитываются как фактически оказанные. Подробный порядок
@@ -122,7 +122,7 @@ export default function OfferPage() {
       <LegalSection title="12. Реквизиты и контакты">
         <p>
           Исполнитель: самозанятый, плательщик НПД. ИНН 220504676540. Email для
-          поддержки, документов и претензий: support@lead-generator.ru. Полные
+          поддержки, документов и претензий: support@yleum.ru. Полные
           актуальные сведения размещены на странице{" "}
           <Link className="font-medium text-accent-secondary" href="/requisites">
             «Реквизиты»

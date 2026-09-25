@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     smtp_port: int = Field(default=587)
     smtp_user: str | None = Field(default=None)
     smtp_password: SecretStr | None = Field(default=None)
-    smtp_from: str = Field(default="Yleum <no-reply@lead-generator.ru>")
+    smtp_from: str = Field(default="Yleum <noreply@yleum.ru>")
     smtp_starttls: bool = Field(default=True)
 
     # Legal identity shown in policies. Paid checkout stays unavailable until
@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     legal_operator_name: str | None = Field(default=None)
     legal_operator_inn: str | None = Field(default=None)
     legal_operator_address: str | None = Field(default=None)
-    legal_support_email: str = Field(default="support@lead-generator.ru")
+    legal_support_email: str = Field(default="support@yleum.ru")
     legal_document_version: str = Field(default="2026-09-25")
     admin_emails: str = Field(default="")
 
