@@ -12,6 +12,8 @@
 #                         api/воркеры/оркестраторы/воркер биллинга не пересоздаются (безопасно во
 #                         время живого прогона адаптации), OMNIA_RELEASE_SHA и expected api-переменные не меняются
 #     --legal-version V   версия юридических документов: явно пишется в env воркера биллинга
+#     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
+#                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
 #
 # Замок: /opt/omnia/.deploy.lock на core — вторая выкатка одновременно не начнётся. Если
@@ -24,11 +26,13 @@ SHA="${1:?полный sha ревизии main}"; shift || true
 WEB=1
 API=1
 LEGAL=""
+REPAIR=3600
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
     --web-only) API=0 ;;
     --legal-version) LEGAL="${2:?}"; shift ;;
+    --repair-window) REPAIR="${2:?}"; shift ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
   shift
@@ -40,7 +44,7 @@ LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
 say() { echo "== $* ($(date -u +%H:%M:%SZ))"; }
 
-say "выкатка $SHA api=$API web=$WEB legal=${LEGAL:-по умолчанию образа}"
+say "выкатка $SHA api=$API web=$WEB legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
 
@@ -51,6 +55,9 @@ trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 
 say "core: ff-merge + идентичность релиза в compose .env"
 ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
+
+say "core: окно починки адаптации в .env платформы"
+ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$REPAIR' | /opt/omnia/infra/release/update-env-value.sh .env RESTORATION_ADAPTATION_REPAIR_SECONDS - >/dev/null && grep -n '^RESTORATION_ADAPTATION_REPAIR_SECONDS=' .env"
 
 if [ -n "$LEGAL" ]; then
   # Единственный источник — .env платформы: compose отдаёт его api, worker'ам и сборке web,
@@ -68,7 +75,8 @@ api = d[\"api\"][\"environment\"]; gw = d[\"generation-worker\"][\"environment\"
 assert api.get(\"OAUTH_LOGIN_REDIRECT_BASE_URL\") == \"https://yleum.ru\", \"redirect base\"
 assert not gw.get(\"YANDEX_ID_CLIENT_SECRET\") and not wk.get(\"YANDEX_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
 assert not gw.get(\"VK_ID_CLIENT_SECRET\") and not wk.get(\"VK_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
-assert api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"1800\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
+assert api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"$REPAIR\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
+assert gw.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"$REPAIR\", gw.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
 if $API: assert d[\"api\"][\"image\"].endswith(\"$SHA\"), d[\"api\"][\"image\"]
 if $WEB: assert d[\"web\"][\"image\"].endswith(\"$SHA\"), d[\"web\"][\"image\"]
 if $WEB: assert d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\") == \"$SHA\", d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\")
