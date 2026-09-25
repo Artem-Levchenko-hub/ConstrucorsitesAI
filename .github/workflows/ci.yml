@@ -15,6 +15,7 @@ concurrency:
 jobs:
   gateway-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -24,6 +25,7 @@ jobs:
 
   api-release-gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     env:
       DATABASE_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_dev
       DATABASE_TEST_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_test
@@ -164,6 +166,7 @@ jobs:
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       RESTORATION_TEST_DATABASE_URL: postgresql://postgres:ci-restoration-only@127.0.0.1:5432/restoration_policy_test
     services:
@@ -215,6 +218,7 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -240,6 +244,7 @@ jobs:
 
   py-syntax:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -250,6 +255,7 @@ jobs:
 
   image-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     env:
       JWT_SECRET: ci-only-jwt-secret
       SECRETS_ENCRYPTION_KEY: ci-only-encryption-key
@@ -303,6 +309,7 @@ jobs:
 
   workflow-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
