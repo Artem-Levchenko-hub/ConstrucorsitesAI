@@ -143,11 +143,13 @@ async def test_save_records_the_draft_as_the_new_head_version(client, db_session
         "exact_tree": True,
     }
     assert calls["files_workspace"] == workspace.id
+    # Expired instances lazy-load synchronously under asyncio: read ids first.
+    project_id, head_id = project.id, head.id
     db_session.expire_all()
-    refreshed = await db_session.get(Project, project.id)
+    refreshed = await db_session.get(Project, project_id)
     snapshot = await db_session.get(Snapshot, refreshed.current_snapshot_id)
-    assert snapshot is not None and snapshot.id != head.id
-    assert snapshot.commit_sha == "b" * 40 and snapshot.parent_id == head.id
+    assert snapshot is not None and snapshot.id != head_id
+    assert snapshot.commit_sha == "b" * 40 and snapshot.parent_id == head_id
     version = await db_session.get(ProjectVersion, body["version_id"])
     assert version is not None and version.snapshot_id == snapshot.id
     assert version.generation_run_id is None and version.status == "ready"
@@ -184,9 +186,10 @@ async def test_discard_sends_exactly_the_patch_under_the_current_revision(
         "deletes": ["scratch.ts"],
     }
     assert "commit" not in calls
+    project_id, head_id = project.id, head.id
     db_session.expire_all()
-    refreshed = await db_session.get(Project, project.id)
-    assert refreshed.current_snapshot_id == head.id
+    refreshed = await db_session.get(Project, project_id)
+    assert refreshed.current_snapshot_id == head_id
 
 
 async def test_actions_refuse_while_the_workspace_belongs_to_a_generation(
