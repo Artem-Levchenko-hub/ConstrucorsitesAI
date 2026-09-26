@@ -171,18 +171,6 @@ class Settings(BaseSettings):
     # no-new-privileges and CPU/RAM/PID/output quotas.  This is the global kill
     # switch; API-side capability discovery fails closed when it is disabled.
     agent_sandbox_enabled: bool = Field(default=True)
-    # Dedicated runtime override for the disposable shell lane. Set to "runsc"
-    # to harden `/agent/exec-sandbox` FIRST without flipping preview/prod user
-    # containers. Empty = inherit `container_runtime`; if that too is empty the
-    # shell keeps the daemon default (today's behavior). Accept the older
-    # `OMNIA_AGENT_SANDBOX_RUNTIME` spelling for rollout docs already in flight.
-    agent_sandbox_runtime: str = Field(
-        default="",
-        validation_alias=AliasChoices(
-            "AGENT_SANDBOX_RUNTIME",
-            "OMNIA_AGENT_SANDBOX_RUNTIME",
-        ),
-    )
     runtime_db_container_name: str = Field(default="omnia-postgres-users")
 
     # `use_dep_doctor` — before each agent typecheck, scan the dev container's

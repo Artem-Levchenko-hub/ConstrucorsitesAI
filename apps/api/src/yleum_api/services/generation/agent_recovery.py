@@ -17,7 +17,10 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
     VerificationRecovery,
 )
-from yleum_api.services.generation.runtime import _apply_project_cell_preview_files
+from yleum_api.services.generation.runtime import (
+    _apply_project_cell_preview_files,
+    _require_project_cell,
+)
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
 
@@ -67,7 +70,7 @@ async def recover_stopped_candidate(
             _rollback_build = await _restore_touched_tree(
                 project_id=ids.project_id,
                 project_slug=project_info.slug,
-                handle=runtime.handle,
+                handle=_require_project_cell(runtime.handle),
                 baseline_sha=baseline.sha,
                 touched_files=_agent_res.files,
                 probe_build=operations.probe_build,
@@ -117,7 +120,7 @@ async def recover_stopped_candidate(
             _rollback_build = await _restore_max_core(
                 project_id=ids.project_id,
                 project_slug=project_info.slug,
-                handle=runtime.handle,
+                handle=_require_project_cell(runtime.handle),
                 touched_files=_agent_res.files,
                 render_core=_render_current_max_starter_files,
                 probe_build=operations.probe_build,
@@ -203,7 +206,7 @@ async def recover_rejected_candidate(
                 _rollback_build = await _restore_touched_tree(
                     project_id=ids.project_id,
                     project_slug=project_info.slug,
-                    handle=runtime.handle,
+                    handle=_require_project_cell(runtime.handle),
                     baseline_sha=baseline.sha,
                     touched_files=files,
                     probe_build=operations.probe_build,
@@ -215,7 +218,7 @@ async def recover_rejected_candidate(
                 _rollback_build = await _restore_max_core(
                     project_id=ids.project_id,
                     project_slug=project_info.slug,
-                    handle=runtime.handle,
+                    handle=_require_project_cell(runtime.handle),
                     touched_files=files,
                     render_core=_render_current_max_starter_files,
                     probe_build=operations.probe_build,
@@ -281,7 +284,7 @@ async def _restore_touched_tree(
     *,
     project_id: UUID,
     project_slug: str,
-    handle: ProjectCellExecutorHandle | None,
+    handle: ProjectCellExecutorHandle,
     baseline_sha: str,
     touched_files: dict[str, str],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
@@ -294,15 +297,11 @@ async def _restore_touched_tree(
     _new_paths = [path for path in touched_files if path not in _baseline_files]
     if _restore_files:
         await _apply_project_cell_preview_files(
-            project_id=project_id,
-            project_slug=project_slug,
             files=_restore_files,
             project_cell_handle=handle,
         )
     if _new_paths:
         await _apply_project_cell_preview_files(
-            project_id=project_id,
-            project_slug=project_slug,
             files={path: "" for path in _new_paths},
             project_cell_handle=handle,
         )
@@ -314,7 +313,7 @@ async def _restore_max_core(
     *,
     project_id: UUID,
     project_slug: str,
-    handle: ProjectCellExecutorHandle | None,
+    handle: ProjectCellExecutorHandle,
     touched_files: dict[str, str],
     render_core: Callable[[], Awaitable[dict[str, str]]],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
@@ -325,15 +324,11 @@ async def _restore_max_core(
         {path for path in touched_files if path not in _safe_files} | {"src/app/page.tsx"}
     )
     await _apply_project_cell_preview_files(
-        project_id=project_id,
-        project_slug=project_slug,
         files=_safe_files,
         project_cell_handle=handle,
     )
     if _new_paths:
         await _apply_project_cell_preview_files(
-            project_id=project_id,
-            project_slug=project_slug,
             files={path: "" for path in _new_paths},
             project_cell_handle=handle,
         )

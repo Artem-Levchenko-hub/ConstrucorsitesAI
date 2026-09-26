@@ -106,12 +106,14 @@ async def prepare_stack_prompt(
                 MaxProjectConfigPayload.model_validate(_saved_max_record.config),
                 ids.project_id,
             )["src/lib/omnia/max-config.ts"]
-    _seed_parts = await _build_agent_seed_parts(
-        ids.project_id,
-        project_info.slug,
-        project_cell_handle=runtime.handle,
-        refresh_managed_sdk=project_info.template == "max_miniapp",
-        max_config_source=_saved_max_config_source,
+    _seed_parts = (
+        await _build_agent_seed_parts(
+            runtime.handle,
+            refresh_managed_sdk=project_info.template == "max_miniapp",
+            max_config_source=_saved_max_config_source,
+        )
+        if runtime.handle is not None
+        else []
     )
     _seed_block = (
         (

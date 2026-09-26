@@ -29,6 +29,7 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.runtime import (
     _abort_unsafe_max_backend,
     _apply_project_cell_preview_files,
+    _require_project_cell,
 )
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -169,7 +170,7 @@ async def check_backend_and_normalize_css(
                     current_files=_migration_baseline,
                     files=files,
                     unsafe_paths=_migration_errors,
-                    project_cell_handle=runtime.handle,
+                    project_cell_handle=_require_project_cell(runtime.handle),
                     violation_kind="MAX migration contract",
                 )
         # Advisory log regardless of the heal flag — operators SEE a raw-DB
@@ -191,7 +192,7 @@ async def check_backend_and_normalize_css(
                     current_files={**baseline.files, **_max_seed_files},
                     files=files,
                     unsafe_paths=[violation.path for violation in _final_guard.violations],
-                    project_cell_handle=runtime.handle,
+                    project_cell_handle=_require_project_cell(runtime.handle),
                 )
         # SAST advisory log — operators SEE injection/secret findings even
         # when blocking/heal is off (runs regardless of the feedback loop).
@@ -224,10 +225,8 @@ async def check_backend_and_normalize_css(
             if _normalized_max_css != _original_max_css:
                 files["src/app/globals.css"] = _normalized_max_css
                 await _apply_project_cell_preview_files(
-                    project_id=ids.project_id,
-                    project_slug=project_info.slug,
                     files={"src/app/globals.css": _normalized_max_css},
-                    project_cell_handle=runtime.handle,
+                    project_cell_handle=_require_project_cell(runtime.handle),
                 )
                 await operations.emit(
                     "agent.step",

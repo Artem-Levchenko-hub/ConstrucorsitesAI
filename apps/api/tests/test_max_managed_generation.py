@@ -1,6 +1,5 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
-from uuid import uuid4
 
 import pytest
 
@@ -12,51 +11,6 @@ SDK_PATH = "src/lib/omnia/integration-client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
 FOOTER_PATH = "src/components/YleumCompliance.tsx"
 CONFIG_PATH = "src/lib/omnia/max-config.ts"
-
-
-@pytest.mark.parametrize("fail_delivery", [False, True])
-async def test_legacy_generation_restores_saved_config_after_provisioning(
-    monkeypatch,
-    fail_delivery,
-):
-    source = 'export const omniaMaxConfig = {app_name: "Saved", content: [{id: "tea"}]};\n'
-    tree = {CONFIG_PATH: "template defaults", "src/app/page.tsx": "existing product"}
-    seed_reads = []
-
-    async def reload(project_id, slug, files):
-        assert not seed_reads
-        if fail_delivery:
-            raise RuntimeError("delivery failed")
-        tree.update(files)
-        return {"ok": True}
-
-    async def read(*args):
-        seed_reads.append(args)
-        assert tree[CONFIG_PATH] == source
-        assert tree[SDK_PATH] == _template_file(SDK_PATH)
-        return ""
-
-    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", reload)
-    monkeypatch.setattr(runtime.orchestrator_client, "agent_list_dir", read)
-    monkeypatch.setattr(runtime.orchestrator_client, "agent_read_file", read)
-    if fail_delivery:
-        with pytest.raises(RuntimeError, match="delivery failed"):
-            await runtime._build_agent_seed_parts(
-                uuid4(),
-                "legacy",
-                refresh_managed_sdk=True,
-                max_config_source=source,
-            )
-        assert not seed_reads
-    else:
-        await runtime._build_agent_seed_parts(
-            uuid4(),
-            "legacy",
-            refresh_managed_sdk=True,
-            max_config_source=source,
-        )
-        assert seed_reads and tree[CONFIG_PATH] == source
-        assert tree["src/app/page.tsx"] == "existing product"
 
 
 @pytest.mark.parametrize("fail_delivery", [False, True])
@@ -92,23 +46,13 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
     monkeypatch.setattr(runtime, "_project_cell_read_file", read)
     if fail_delivery:
         with pytest.raises(RuntimeError, match="delivery failed"):
-            await runtime._build_agent_seed_parts(
-                uuid4(),
-                "existing",
-                project_cell_handle=handle,
-                refresh_managed_sdk=True,
-            )
+            await runtime._build_agent_seed_parts(handle, refresh_managed_sdk=True)
         assert not seed_reads
         assert tree[SDK_PATH] == "old SDK"
         assert tree[PROVIDER_PATH] == "old session bootstrap"
         return
     for _ in range(2):
-        await runtime._build_agent_seed_parts(
-            uuid4(),
-            "existing",
-            project_cell_handle=handle,
-            refresh_managed_sdk=True,
-        )
+        await runtime._build_agent_seed_parts(handle, refresh_managed_sdk=True)
     canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
     assert writes == [(canonical, ())]
     assert tree["src/app/page.tsx"] == "existing product"

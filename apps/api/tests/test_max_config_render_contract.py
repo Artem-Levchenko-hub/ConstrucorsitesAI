@@ -38,9 +38,6 @@ from yleum_api.services.generation import (
     onboarding,
     progress,
 )
-from yleum_api.services.generation import (
-    runtime as generation_runtime,
-)
 
 
 class RenderBoundary(BaseException):
@@ -186,16 +183,14 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     monkeypatch.setattr(max_data_evolution, "build_max_agent_guide", AsyncMock(return_value=""))
 
     product = {"src/app/page.tsx": "export default function Page(){return <main>Service</main>}"}
-    handle = (
-        SimpleNamespace(
-            capabilities={"portable_machine": portable},
-            is_portable=lambda: portable,
-            snapshot_files=AsyncMock(return_value={}),
-            export_files=AsyncMock(return_value=product),
-            release=AsyncMock(),
-        )
-        if portable
-        else None
+    # Ячейка есть у КАЖДОГО проекта — запасного контейнера больше нет, и
+    # «не переносимая» ячейка отличается от переносимой только возможностями.
+    handle = SimpleNamespace(
+        capabilities={"portable_machine": portable},
+        is_portable=lambda: portable,
+        snapshot_files=AsyncMock(return_value={}),
+        export_files=AsyncMock(return_value=product),
+        release=AsyncMock(),
     )
     monkeypatch.setattr(
         agent_runtime,
@@ -204,8 +199,6 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
             return_value={
                 "project_cell_handle": handle,
                 "base_agent_executor": AsyncMock(),
-                "max_sandbox_capabilities": {},
-                "max_sandbox_attested": False,
                 "max_shell_enabled": False,
                 "active_max_locked_files": frozenset(),
                 "agent_result": None,
@@ -213,9 +206,6 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         ),
     )
     monkeypatch.setattr(agent_runtime, "_project_cell_build", AsyncMock(return_value={"ok": True}))
-    monkeypatch.setattr(
-        generation_runtime.orchestrator_client, "agent_build", AsyncMock(return_value={"ok": True})
-    )
 
     async def model(**kwargs):
         state["model_ran"] = True
@@ -234,7 +224,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         return {"ok": False, "status_code": 500, "error": "baseline-runtime-red"}
 
     monkeypatch.setattr(agent_runtime, "_project_cell_runtime_check", runtime_status)
-    monkeypatch.setattr(generation_runtime.orchestrator_client, "runtime_status", runtime_status)
+    monkeypatch.setattr(agent_runtime.orchestrator_client, "runtime_status", runtime_status)
 
     real_render = max_project_kit.render_max_starter_files
 

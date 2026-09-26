@@ -13,7 +13,9 @@ import importlib
 import sys
 from collections.abc import Mapping
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
@@ -233,8 +235,6 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "MAX_SECURITY_LOCKED_FILES" in source
     assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
-    assert "base_workspace_revision" in source
-    assert "pnpm_lockfile" in source
     assert "unsafe_max_backend_paths" in source
     assert "max_model_write_rejection" in source
     assert "_project_cell_runtime_check" in source
@@ -299,18 +299,13 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
 
     calls: list[dict[str, Any]] = []
 
-    async def _hot_reload(project_id, slug, files, *, empty_files=()):
-        assert empty_files == ()
-        calls.append(
-            {
-                "project_id": project_id,
-                "slug": slug,
-                "files": dict(files),
-            }
-        )
-        return {"state": "hot_reloaded"}
+    async def _stage_patch(writes, deletes):
+        calls.append({"writes": dict(writes), "deletes": tuple(deletes)})
 
-    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", _hot_reload)
+    handle = SimpleNamespace(
+        stage_patch=_stage_patch,
+        sync_preview=AsyncMock(return_value=SimpleNamespace(failure=None)),
+    )
     generated = {
         "src/app/page.tsx": "partial UI",
         "src/app/api/report/route.js": "unsafe",
@@ -324,6 +319,7 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
                 current_files={"src/app/page.tsx": "safe UI"},
                 files=generated,
                 unsafe_paths=["src/app/api/report/route.js"],
+                project_cell_handle=handle,
             )
         )
 
@@ -335,12 +331,8 @@ def test_abort_unsafe_max_backend_rolls_back_new_file_before_rejecting(
     }
     assert calls == [
         {
-            "project_id": UUID(int=1),
-            "slug": "max-app",
-            "files": {
-                "src/app/api/report/route.js": "",
-                "src/app/page.tsx": "safe UI",
-            },
+            "writes": {"src/app/page.tsx": "safe UI"},
+            "deletes": ("src/app/api/report/route.js",),
         }
     ]
 
@@ -350,11 +342,13 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
 ) -> None:
     from yleum_api.core.errors import ApiError
 
-    async def _hot_reload(project_id, slug, files, *, empty_files=()):
-        assert empty_files == ()
+    async def _stage_patch(writes, deletes):
         raise RuntimeError("orchestrator down")
 
-    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", _hot_reload)
+    handle = SimpleNamespace(
+        stage_patch=_stage_patch,
+        sync_preview=AsyncMock(return_value=SimpleNamespace(failure=None)),
+    )
     generated = {
         "src/app/page.tsx": "partial UI",
         "src/app/api/report/route.js": "unsafe",
@@ -368,6 +362,7 @@ def test_abort_unsafe_max_backend_still_blocks_if_live_rollback_fails(
                 current_files={"src/app/page.tsx": "safe UI"},
                 files=generated,
                 unsafe_paths=["src/app/api/report/route.js"],
+                project_cell_handle=handle,
             )
         )
 

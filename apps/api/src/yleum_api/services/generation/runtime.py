@@ -9,7 +9,6 @@ from fastapi import status
 
 from yleum_api.core.errors import ApiError
 from yleum_api.services import (
-    orchestrator_client,
     project_cell_executor,
 )
 
@@ -25,6 +24,22 @@ def _agent_builder_action(
     from yleum_api.services.agent_builder import Action
 
     return Action(name=name, args=dict(args or {}))
+
+
+def _require_project_cell(
+    handle: ProjectCellExecutorHandle | None,
+) -> ProjectCellExecutorHandle:
+    """Ячейка проекта — единственная среда сборки, запасной больше нет.
+
+    Старый конструктор держал общий dev-контейнер, куда можно было писать, если
+    ячейка не поднялась. Его больше нет: писать «куда-нибудь» теперь означает
+    писать в пустоту, поэтому лучше громко остановиться.
+    """
+    if handle is None:
+        raise project_cell_executor.ProjectCellExecutorUnavailable(
+            "У проекта нет своей ячейки — собирать приложение негде."
+        )
+    return handle
 
 
 async def _project_cell_action(
@@ -82,59 +97,28 @@ async def _project_cell_read_file(
 
 
 async def _build_agent_seed_parts(
-    project_id: UUID,
-    project_slug: str,
+    project_cell_handle: ProjectCellExecutorHandle,
     *,
-    project_cell_handle: ProjectCellExecutorHandle | None = None,
     refresh_managed_sdk: bool = False,
     max_config_source: str | None = None,
 ) -> list[str]:
     if refresh_managed_sdk:
-        from yleum_api.services.max_managed_generation import (
-            managed_browser_files,
-            refresh_integration_sdk,
-        )
+        from yleum_api.services.max_managed_generation import refresh_integration_sdk
 
         # Required delivery precedes fail-soft context reads and all model work.
         # Keep this outside the try: a failed lease/write must abort generation.
-        if project_cell_handle is not None:
-            await refresh_integration_sdk(project_cell_handle, max_config_source=max_config_source)
-        else:
-            # Legacy provisioning restores template defaults. Reapply the saved
-            # profile afterwards so the model never reads that empty catalog.
-            await orchestrator_client.hot_reload(
-                project_id,
-                project_slug,
-                managed_browser_files(max_config_source),
-            )
+        await refresh_integration_sdk(project_cell_handle, max_config_source=max_config_source)
     seed_parts: list[str] = []
     try:
-        if project_cell_handle is not None:
-            ents = await _project_cell_list_dir(project_cell_handle, "entities")
-            dash = await _project_cell_list_dir(
-                project_cell_handle,
-                "src/app/(app)/dashboard",
-            )
-            crud = await _project_cell_read_file(
-                project_cell_handle,
-                "src/components/omnia/crud-resource.tsx",
-            )
-        else:
-            ents = await orchestrator_client.agent_list_dir(
-                project_id,
-                project_slug,
-                "entities",
-            )
-            dash = await orchestrator_client.agent_list_dir(
-                project_id,
-                project_slug,
-                "src/app/(app)/dashboard",
-            )
-            crud = await orchestrator_client.agent_read_file(
-                project_id,
-                project_slug,
-                "src/components/omnia/crud-resource.tsx",
-            )
+        ents = await _project_cell_list_dir(project_cell_handle, "entities")
+        dash = await _project_cell_list_dir(
+            project_cell_handle,
+            "src/app/(app)/dashboard",
+        )
+        crud = await _project_cell_read_file(
+            project_cell_handle,
+            "src/components/omnia/crud-resource.tsx",
+        )
         seed_parts.append(f"entities/ contains:\n{ents}")
         seed_parts.append(f"src/app/(app)/dashboard/ contains:\n{dash}")
         if crud:
@@ -163,13 +147,7 @@ async def _prepare_max_runtime_context(
     capacity_dispatch_token: UUID | None = None,
 ) -> dict[str, Any]:
     project_cell_handle: ProjectCellExecutorHandle | None = None
-    max_sandbox_capabilities: dict[str, Any] = {}
-    max_sandbox_attested = False
-    max_shell_enabled = _resolve_max_shell_enabled(
-        max_shell_requested=max_shell_requested,
-        sandbox_attested=False,
-        project_cell_handle=None,
-    )
+    max_shell_enabled = False
     active_max_locked_files = max_model_locked_files
     agent_result = None
     base_agent_executor = legacy_execute
@@ -214,11 +192,7 @@ async def _prepare_max_runtime_context(
                 "У проекта нет своей ячейки — собирать приложение негде."
             )
         base_agent_executor = project_cell_handle.execute
-        max_shell_enabled = _resolve_max_shell_enabled(
-            max_shell_requested=max_shell_requested,
-            sandbox_attested=False,
-            project_cell_handle=project_cell_handle,
-        )
+        max_shell_enabled = max_shell_requested
         active_max_locked_files = max_security_locked_files
         await agent_emit(
             "agent.step",
@@ -237,8 +211,6 @@ async def _prepare_max_runtime_context(
     return {
         "project_cell_handle": project_cell_handle,
         "base_agent_executor": base_agent_executor,
-        "max_sandbox_capabilities": max_sandbox_capabilities,
-        "max_sandbox_attested": max_sandbox_attested,
         "max_shell_enabled": max_shell_enabled,
         "active_max_locked_files": active_max_locked_files,
         "agent_result": agent_result,
@@ -250,10 +222,9 @@ async def _execute_max_agent_action(
     *,
     project_id: UUID,
     project_slug: str,
-    vision_context: str,
     base_agent_executor: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
     max_shell_enabled: bool,
-    project_cell_handle: ProjectCellExecutorHandle | None,
+    project_cell_handle: ProjectCellExecutorHandle,
     active_max_locked_files: frozenset[str],
     max_model_write_rejection: Callable[[str, str], str | None],
 ) -> dict[str, Any]:
@@ -261,10 +232,7 @@ async def _execute_max_agent_action(
 
     if action.name not in _KNOWN_ACTIONS:
         return {"ok": False, "error": f"unknown action {action.name}"}
-    if (
-        project_cell_handle is not None
-        and getattr(project_cell_handle, "is_portable", lambda: False)()
-    ):
+    if getattr(project_cell_handle, "is_portable", lambda: False)():
         if action.name in {"write_file", "edit_file"}:
             from yleum_api.services.secret_safety import contains_provider_secret, is_secret_file
 
@@ -277,38 +245,8 @@ async def _execute_max_agent_action(
         if action.name == "bash" and not max_shell_enabled:
             return {"ok": False, "error": "Project Cell shell is disabled by the operator."}
         return await project_cell_handle.execute(action)
-    if project_cell_handle is not None and action.name in {
-        "runtime_check",
-        "read_logs",
-        "probe",
-        "verify_isolation",
-    }:
+    if action.name in {"runtime_check", "read_logs", "probe", "verify_isolation"}:
         return await project_cell_handle.execute(action)
-    if action.name == "runtime_check":
-        runtime = await base_agent_executor(action)
-        if not runtime.get("ok"):
-            return runtime
-        from yleum_api.services.max_runtime_probe import (
-            probe_max_runtime as probe_max_runtime_legacy,
-        )
-
-        try:
-            runtime_status = await orchestrator_client.get_status(project_id)
-            base_url = str(runtime_status.get("dev_url") or "") or None
-            max_probe = await probe_max_runtime_legacy(
-                project_id,
-                project_slug,
-                base_url=base_url,
-            )
-        except Exception as probe_exc:
-            return {
-                "ok": False,
-                "detail": (f"MAX data-plane proof crashed: {type(probe_exc).__name__}"),
-            }
-        return {
-            "ok": max_probe.ok,
-            "detail": (f"{runtime.get('detail') or 'runtime route passed'}; {max_probe.detail}"),
-        }
     if action.name == "bash":
         return await _run_max_shell_action(
             action=action,
@@ -368,7 +306,7 @@ async def _abort_unsafe_max_backend(
     current_files: Mapping[str, str],
     files: dict[str, str],
     unsafe_paths: Sequence[str],
-    project_cell_handle: ProjectCellExecutorHandle | None = None,
+    project_cell_handle: ProjectCellExecutorHandle,
     violation_kind: str = "managed data isolation",
 ) -> None:
     """Fail closed on unsafe MAX backend writes.
@@ -394,8 +332,6 @@ async def _abort_unsafe_max_backend(
     if rollback_files:
         try:
             await _apply_project_cell_preview_files(
-                project_id=project_id,
-                project_slug=project_slug,
                 files=rollback_files,
                 project_cell_handle=project_cell_handle,
             )
@@ -430,15 +366,6 @@ async def _abort_unsafe_max_backend(
         message,
         status.HTTP_422_UNPROCESSABLE_CONTENT,
     )
-
-
-def _resolve_max_shell_enabled(
-    *,
-    max_shell_requested: bool,
-    sandbox_attested: bool,
-    project_cell_handle: ProjectCellExecutorHandle | None,
-) -> bool:
-    return max_shell_requested and (sandbox_attested or project_cell_handle is not None)
 
 
 def _split_project_cell_preview_patch(
@@ -493,35 +420,23 @@ async def _restore_project_cell_source(
 
 async def _apply_project_cell_preview_files(
     *,
-    project_id: UUID,
-    project_slug: str,
     files: Mapping[str, str],
-    project_cell_handle: ProjectCellExecutorHandle | None = None,
+    project_cell_handle: ProjectCellExecutorHandle,
     empty_files: Sequence[str] = (),
 ) -> None:
-    writes, deletes, explicit_empty = _split_project_cell_preview_patch(
+    writes, deletes, _explicit_empty = _split_project_cell_preview_patch(
         files,
         empty_files=empty_files,
     )
     if not writes and not deletes:
         return
-    if project_cell_handle is not None:
-        await project_cell_handle.stage_patch(writes, deletes)
-        sync_result = await project_cell_handle.sync_preview()
-        if sync_result.failure is not None:
-            raise PreviewSyncFailed(
-                sync_result.failure,
-                runtime_absent=getattr(sync_result, "runtime_absent", False),
-            )
-        return
-    payload = dict(writes)
-    payload.update({path: "" for path in deletes})
-    await orchestrator_client.hot_reload(
-        project_id,
-        project_slug,
-        payload,
-        empty_files=explicit_empty,
-    )
+    await project_cell_handle.stage_patch(writes, deletes)
+    sync_result = await project_cell_handle.sync_preview()
+    if sync_result.failure is not None:
+        raise PreviewSyncFailed(
+            sync_result.failure,
+            runtime_absent=getattr(sync_result, "runtime_absent", False),
+        )
 
 
 def _extract_max_shell_files(raw_files: Any) -> dict[str, str]:
@@ -561,8 +476,6 @@ async def _rollback_project_cell_shell_files(
         return False
     try:
         await _apply_project_cell_preview_files(
-            project_id=project_id,
-            project_slug=project_slug,
             files=rollback_files,
             project_cell_handle=project_cell_handle,
             empty_files=tuple(explicit_empty),
@@ -584,7 +497,7 @@ async def _run_max_shell_action(
     project_slug: str,
     max_shell_enabled: bool,
     base_agent_executor: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
-    project_cell_handle: ProjectCellExecutorHandle | None,
+    project_cell_handle: ProjectCellExecutorHandle,
     active_max_locked_files: frozenset[str],
     max_model_write_rejection: Callable[[str, str], str | None],
 ) -> dict[str, Any]:
@@ -602,161 +515,71 @@ async def _run_max_shell_action(
     if not cmd:
         return {"ok": False, "error": "bash needs a non-empty cmd string"}
 
-    if project_cell_handle is not None:
-        from yleum_api.services.max_generation_contract import (
-            unsafe_max_backend_paths as _unsafe_max_backend_paths,
+    from yleum_api.services.max_generation_contract import (
+        unsafe_max_backend_paths as _unsafe_max_backend_paths,
+    )
+
+    current_files = await project_cell_handle.snapshot_files()
+    shell_result = await base_agent_executor(action)
+    shell_files = _extract_max_shell_files(shell_result.get("files"))
+
+    async def _reject(error: str) -> dict[str, Any]:
+        rollback_failed = await _rollback_project_cell_shell_files(
+            project_id=project_id,
+            project_slug=project_slug,
+            snapshot_files=current_files,
+            touched_paths=tuple(shell_files),
+            project_cell_handle=project_cell_handle,
         )
-
-        current_files = await project_cell_handle.snapshot_files()
-        shell_result = await base_agent_executor(action)
-        shell_files = _extract_max_shell_files(shell_result.get("files"))
-
-        async def _reject(error: str) -> dict[str, Any]:
-            rollback_failed = await _rollback_project_cell_shell_files(
-                project_id=project_id,
-                project_slug=project_slug,
-                snapshot_files=current_files,
-                touched_paths=tuple(shell_files),
-                project_cell_handle=project_cell_handle,
+        if rollback_failed:
+            error += (
+                " Project Cell rollback also failed; preview may still show "
+                "the rejected draft until the next successful sync."
             )
-            if rollback_failed:
-                error += (
-                    " Project Cell rollback also failed; preview may still show "
-                    "the rejected draft until the next successful sync."
-                )
-            return {"ok": False, "error": error}
+        return {"ok": False, "error": error}
 
-        for path, content in shell_files.items():
-            if path in active_max_locked_files:
-                return await _reject(
-                    f"{path} is managed by Yleum. "
-                    "Shell changes must stay in product-owned files only."
-                )
-            if path.startswith("src/app/api/max/") or path.startswith("src/app/api/omnia/"):
-                return await _reject(
-                    "Yleum owns /api/max and /api/omnia. "
-                    "Shell changes there are blocked; use the "
-                    "managed integration client instead."
-                )
-            if content:
-                secret_rejection = max_model_write_rejection(path, content)
-                if secret_rejection:
-                    return await _reject(secret_rejection)
-
-        unsafe_shell_paths = _unsafe_max_backend_paths(shell_files)
-        if unsafe_shell_paths:
-            return await _reject(
-                "Direct DB access is forbidden in MAX product "
-                "files until row isolation is DB-enforced. "
-                "Use createMaxAction/getMaxActions. Unsafe: " + ", ".join(unsafe_shell_paths)
-            )
-
-        cell_shell_sync = await project_cell_handle.sync_preview()
-        result_files = dict(shell_files)
-        result_files.update(cell_shell_sync.generated_files)
-        if cell_shell_sync.failure is not None:
-            return {
-                "ok": False,
-                "error": cell_shell_sync.failure,
-                **({"files": result_files} if result_files else {}),
-            }
-
-        detail = str(shell_result.get("detail") or shell_result.get("error") or "(no output)")
-        if result_files:
-            listed = ", ".join(sorted(result_files)[:12])
-            suffix = "…" if len(result_files) > 12 else ""
-            detail += f"\n\nProject Cell synced files: {listed}{suffix}"
-        return {
-            "ok": bool(shell_result.get("ok")),
-            "detail": detail,
-            **({"files": result_files} if result_files else {}),
-        }
-
-    sandbox = await orchestrator_client.agent_exec_sandbox(project_id, project_slug, cmd)
-    shell_files = _extract_max_shell_files(sandbox.get("files"))
-    legacy_shell_sync: dict[str, Any] = {}
     for path, content in shell_files.items():
         if path in active_max_locked_files:
-            return {
-                "ok": False,
-                "error": (
-                    f"{path} is managed by Yleum. "
-                    "Shell changes must stay in product-owned files only."
-                ),
-            }
+            return await _reject(
+                f"{path} is managed by Yleum. "
+                "Shell changes must stay in product-owned files only."
+            )
         if path.startswith("src/app/api/max/") or path.startswith("src/app/api/omnia/"):
-            return {
-                "ok": False,
-                "error": (
-                    "Yleum owns /api/max and /api/omnia. "
-                    "Shell changes there are blocked; use the "
-                    "managed integration client instead."
-                ),
-            }
+            return await _reject(
+                "Yleum owns /api/max and /api/omnia. "
+                "Shell changes there are blocked; use the "
+                "managed integration client instead."
+            )
         if content:
             secret_rejection = max_model_write_rejection(path, content)
             if secret_rejection:
-                return {"ok": False, "error": secret_rejection}
-    if shell_files:
-        from yleum_api.services.max_generation_contract import (
-            unsafe_max_backend_paths as _unsafe_max_backend_paths,
+                return await _reject(secret_rejection)
+
+    unsafe_shell_paths = _unsafe_max_backend_paths(shell_files)
+    if unsafe_shell_paths:
+        return await _reject(
+            "Direct DB access is forbidden in MAX product "
+            "files until row isolation is DB-enforced. "
+            "Use createMaxAction/getMaxActions. Unsafe: " + ", ".join(unsafe_shell_paths)
         )
 
-        unsafe_shell_paths = _unsafe_max_backend_paths(shell_files)
-        if unsafe_shell_paths:
-            return {
-                "ok": False,
-                "error": (
-                    "Direct DB access is forbidden in MAX product "
-                    "files until row isolation is DB-enforced. "
-                    "Use createMaxAction/getMaxActions. Unsafe: " + ", ".join(unsafe_shell_paths)
-                ),
-            }
-        base_revision = str(sandbox.get("base_workspace_revision") or "")
-        if not base_revision:
-            return {
-                "ok": False,
-                "error": (
-                    "Sandbox did not return a workspace revision; "
-                    "stale changes were not applied. Rerun the command."
-                ),
-            }
-        try:
-            legacy_shell_sync = await orchestrator_client.hot_reload(
-                project_id,
-                project_slug,
-                shell_files,
-                base_workspace_revision=base_revision,
-            )
-        except Exception:
-            return {
-                "ok": False,
-                "error": (
-                    "Project files changed while the sandbox command "
-                    "was running; its stale diff was discarded. "
-                    "Rerun the command on the current workspace."
-                ),
-            }
-        resolved_lock = legacy_shell_sync.get("pnpm_lockfile")
-        if isinstance(resolved_lock, str):
-            shell_files["pnpm-lock.yaml"] = resolved_lock
-        if project_cell_handle is not None:
-            await project_cell_handle.apply_external_files(shell_files)
-    detail = str(sandbox.get("detail") or "(no output)")
-    if shell_files:
-        listed = ", ".join(sorted(shell_files)[:12])
-        suffix = "…" if len(shell_files) > 12 else ""
-        detail += f"\n\nSandbox synced files: {listed}{suffix}"
-    sync_failures = [
-        f"{name}={legacy_shell_sync.get(name)}: "
-        f"{legacy_shell_sync.get(name.replace('_exit_code', '_stderr_tail'), '')}"
-        for name in ("package_exit_code", "drizzle_exit_code")
-        if legacy_shell_sync.get(name) not in (None, "0", 0)
-    ]
-    if sync_failures:
-        detail += "\n\nRuntime sync failed: " + "; ".join(sync_failures)
+    cell_shell_sync = await project_cell_handle.sync_preview()
+    result_files = dict(shell_files)
+    result_files.update(cell_shell_sync.generated_files)
+    if cell_shell_sync.failure is not None:
+        return {
+            "ok": False,
+            "error": cell_shell_sync.failure,
+            **({"files": result_files} if result_files else {}),
+        }
+
+    detail = str(shell_result.get("detail") or shell_result.get("error") or "(no output)")
+    if result_files:
+        listed = ", ".join(sorted(result_files)[:12])
+        suffix = "…" if len(result_files) > 12 else ""
+        detail += f"\n\nProject Cell synced files: {listed}{suffix}"
     return {
-        "ok": bool(sandbox.get("ok")) and not sync_failures,
+        "ok": bool(shell_result.get("ok")),
         "detail": detail,
-        **({"files": shell_files} if shell_files else {}),
+        **({"files": result_files} if result_files else {}),
     }

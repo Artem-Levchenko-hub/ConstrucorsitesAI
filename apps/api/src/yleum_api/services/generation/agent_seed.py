@@ -15,6 +15,7 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
+    _require_project_cell,
     _split_project_cell_preview_patch,
 )
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
@@ -108,10 +109,8 @@ async def stage_max_starter(
                 )
             else:
                 await _apply_project_cell_preview_files(
-                    project_id=ids.project_id,
-                    project_slug=project_info.slug,
                     files=_starter_patch,
-                    project_cell_handle=runtime.handle,
+                    project_cell_handle=_require_project_cell(runtime.handle),
                 )
             _max_seed_files = _starter_files
             if runtime.handle is not None and runtime.handle.is_portable():

@@ -319,7 +319,7 @@ async def test_agent_verification_aborts_schema_only_max_candidate_before_backen
             files=files,
             ids=SimpleNamespace(project_id=uuid4()),
             project_info=SimpleNamespace(template="max_miniapp", slug="fixture"),
-            runtime=SimpleNamespace(handle=None),
+            runtime=SimpleNamespace(handle=SimpleNamespace()),
             plan=SimpleNamespace(),
             operations=SimpleNamespace(),
         )

@@ -26,8 +26,7 @@ async def test_recovery_restores_before_deleting_and_building(kind, fault, monke
         return dict(version)
 
     async def apply(**kwargs):
-        assert kwargs["project_id"] == project_id
-        assert kwargs["project_slug"] == "recovery" and kwargs["project_cell_handle"] is handle
+        assert kwargs["project_cell_handle"] is handle
         stage = "write" if len([x for x in trace if isinstance(x, tuple)]) == 0 else "delete"
         trace.append((stage, dict(kwargs["files"])))
         if stage == fault:

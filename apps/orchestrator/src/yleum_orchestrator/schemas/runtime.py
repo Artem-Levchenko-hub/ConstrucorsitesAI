@@ -101,11 +101,6 @@ class HotReloadRequest(BaseModel):
         return self
 
 
-class AgentSandboxExecRequest(BaseModel):
-    slug: str = Field(min_length=1, max_length=128)
-    cmd: str = Field(min_length=1, max_length=262_144)
-
-
 class StatusResponse(BaseModel):
     project_id: UUID
     state: RuntimeState

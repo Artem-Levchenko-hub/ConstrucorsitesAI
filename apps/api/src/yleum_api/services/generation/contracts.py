@@ -113,8 +113,6 @@ class AgentRuntimeBindings:
     vision_context: str
     shell_requested: bool
     shell_enabled: bool
-    sandbox_attested: bool
-    sandbox_capabilities: dict[str, Any]
     locked_files: frozenset[str]
     probe_runtime: Callable[[str], Awaitable[dict[str, Any]]]
     probe_build: Callable[[], Awaitable[dict[str, Any]]]

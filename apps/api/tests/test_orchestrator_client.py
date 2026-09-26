@@ -856,16 +856,13 @@ async def test_project_shell_and_dependency_sync_use_long_deadlines(
 
     await orchestrator_client.agent_build(project_id, "max-preview")
     await orchestrator_client.agent_exec(project_id, "max-preview", "pnpm test")
-    await orchestrator_client.agent_exec_sandbox(project_id, "max-preview", "pnpm test")
     await orchestrator_client.hot_reload(
         project_id,
         "max-preview",
         {"package.json": '{"name":"app"}'},
     )
 
-    assert [call["timeout"] for call in observed] == [600.0, 210.0, 1500.0, 1800.0]
-    assert observed[2]["json"] == {"slug": "max-preview", "cmd": "pnpm test"}
-    assert "params" not in observed[2]
+    assert [call["timeout"] for call in observed] == [600.0, 210.0, 1800.0]
 
 
 async def test_hot_reload_forwards_explicit_empty_files(

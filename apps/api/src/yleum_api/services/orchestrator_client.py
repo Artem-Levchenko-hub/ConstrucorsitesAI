@@ -2121,16 +2121,6 @@ async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
     )
 
 
-async def agent_exec_sandbox(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
-    """Run a shell command in the isolated project sandbox and return a diff."""
-    return await _request(
-        "POST",
-        f"/internal/projects/{project_id}/agent/exec-sandbox",
-        json={"slug": slug, "cmd": cmd},
-        timeout=1500.0,
-    )
-
-
 async def warm_routes(project_id: UUID, slug: str) -> dict[str, Any]:
     """POST /internal/projects/{id}/warm — force-compile the dev app's static
     routes so a demo opens WARM pages instead of eating a cold Turbopack compile

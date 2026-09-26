@@ -25,7 +25,7 @@ from yleum_api.services.generation.runtime import (
     _prepare_max_runtime_context,
     _project_cell_build,
     _project_cell_runtime_check,
-    _resolve_max_shell_enabled,
+    _require_project_cell,
 )
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 
@@ -56,13 +56,7 @@ async def prepare_agent_runtime(
     _max_shell_requested = (
         project_info.template == "max_miniapp" and get_settings().max_project_shell_enabled
     )
-    _max_sandbox_capabilities: dict[str, Any] = {}
-    _max_sandbox_attested = False
-    _max_shell_enabled = _resolve_max_shell_enabled(
-        max_shell_requested=_max_shell_requested,
-        sandbox_attested=False,
-        project_cell_handle=None,
-    )
+    _max_shell_enabled = False
     _active_max_locked_files: frozenset[str] = frozenset()
     async def _probe_runtime_status(path: str = "/") -> dict[str, Any]:
         if runtime.handle is not None:
@@ -101,8 +95,6 @@ async def prepare_agent_runtime(
         vision_context=_vision_context,
         shell_requested=_max_shell_requested,
         shell_enabled=_max_shell_enabled,
-        sandbox_attested=_max_sandbox_attested,
-        sandbox_capabilities=_max_sandbox_capabilities,
         locked_files=_active_max_locked_files,
         probe_runtime=_probe_runtime_status,
         probe_build=_probe_build_status,
@@ -119,10 +111,9 @@ async def prepare_agent_runtime(
                 action,
                 project_id=ids.project_id,
                 project_slug=project_info.slug,
-                vision_context=bindings.vision_context,
                 base_agent_executor=bindings.base_executor,
                 max_shell_enabled=bindings.shell_enabled,
-                project_cell_handle=runtime.handle,
+                project_cell_handle=_require_project_cell(runtime.handle),
                 active_max_locked_files=bindings.locked_files,
                 max_model_write_rejection=max_model_write_rejection,
             )
@@ -147,8 +138,6 @@ async def prepare_agent_runtime(
         )
         runtime.handle = _max_runtime["project_cell_handle"]
         bindings.base_executor = _max_runtime["base_agent_executor"]
-        bindings.sandbox_capabilities = _max_runtime["max_sandbox_capabilities"]
-        bindings.sandbox_attested = _max_runtime["max_sandbox_attested"]
         bindings.shell_enabled = _max_runtime["max_shell_enabled"]
         bindings.locked_files = _max_runtime["active_max_locked_files"]
         _agent_res = _max_runtime["agent_result"]

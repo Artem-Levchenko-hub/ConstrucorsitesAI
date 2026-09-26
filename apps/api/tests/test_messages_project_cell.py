@@ -550,22 +550,11 @@ async def test_execute_max_agent_action_routes_selected_runtime_check_without_le
         seen.append(action.name)
         return {"ok": True, "detail": "cell runtime"}
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "create_max_preview_session",
-        lambda *args, **kwargs: pytest.fail("legacy MAX preview bootstrap must stay unused"),
-    )
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "get_status",
-        lambda *args, **kwargs: pytest.fail("legacy status lookup must stay unused"),
-    )
 
     result = await runtime._execute_max_agent_action(
         Action(name="runtime_check", args={"path": "/"}),
         project_id=uuid4(),
         project_slug="max-cell",
-        vision_context="ctx",
         base_agent_executor=lambda _action: pytest.fail("legacy executor must stay unused"),
         max_shell_enabled=False,
         project_cell_handle=SimpleNamespace(execute=fake_execute),
@@ -593,7 +582,6 @@ async def test_portable_action_uses_provider_boundary_not_next_source_lock_or_au
             action,
             project_id=uuid4(),
             project_slug="portable",
-            vision_context="",
             base_agent_executor=lambda action: pytest.fail("legacy executor"),
             max_shell_enabled=True,
             project_cell_handle=handle,
@@ -615,7 +603,6 @@ async def test_execute_max_agent_action_rejects_removed_see_before_any_dispatch(
         Action(name="see", args={"path": "/"}),
         project_id=uuid4(),
         project_slug="max-no-see",
-        vision_context="old context remains compatible",
         base_agent_executor=forbidden_execute,
         max_shell_enabled=False,
         project_cell_handle=SimpleNamespace(execute=forbidden_execute) if use_cell else None,
@@ -642,22 +629,8 @@ async def test_build_agent_seed_parts_reads_from_selected_cell_without_legacy_io
             return {"ok": True, "content": "export function CrudResource() {}"}
         raise AssertionError(f"unexpected action: {action}")
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_list_dir",
-        lambda *args, **kwargs: pytest.fail("legacy list_dir must stay unused"),
-    )
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_read_file",
-        lambda *args, **kwargs: pytest.fail("legacy read_file must stay unused"),
-    )
 
-    parts = await runtime._build_agent_seed_parts(
-        uuid4(),
-        "max-cell",
-        project_cell_handle=SimpleNamespace(execute=fake_execute),
-    )
+    parts = await runtime._build_agent_seed_parts(SimpleNamespace(execute=fake_execute))
 
     assert calls == [
         ("list_dir", "entities"),
@@ -685,11 +658,6 @@ async def test_project_cell_build_routes_through_handle_without_legacy_build(
         calls.append(action.name)
         return {"ok": True, "detail": "build ok"}
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_build",
-        lambda *args, **kwargs: pytest.fail("legacy build must stay unused"),
-    )
 
     result = await runtime._project_cell_build(SimpleNamespace(execute=fake_execute))
 
@@ -707,16 +675,6 @@ async def test_project_cell_runtime_check_routes_through_handle_without_legacy_s
         calls.append((action.name, action.path))
         return {"ok": True, "detail": "runtime ok"}
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "runtime_status",
-        lambda *args, **kwargs: pytest.fail("legacy runtime_status must stay unused"),
-    )
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "get_status",
-        lambda *args, **kwargs: pytest.fail("legacy get_status must stay unused"),
-    )
 
     result = await runtime._project_cell_runtime_check(
         SimpleNamespace(execute=fake_execute),
@@ -747,11 +705,8 @@ async def test_apply_project_cell_preview_files_mirrors_cell_before_preview(
         preview_calls.append((slug, dict(files), tuple(empty_files)))
         return {"state": "hot_reloaded"}
 
-    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", fake_hot_reload)
 
     await runtime._apply_project_cell_preview_files(
-        project_id=uuid4(),
-        project_slug="max-cell",
         files={"src/app/page.tsx": "v2\n", "obsolete.txt": ""},
         project_cell_handle=SimpleNamespace(
             stage_patch=fake_stage_patch,
@@ -761,34 +716,6 @@ async def test_apply_project_cell_preview_files_mirrors_cell_before_preview(
 
     assert stage_calls == [({"src/app/page.tsx": "v2\n"}, ("obsolete.txt",))]
     assert preview_calls == []
-
-
-@pytest.mark.asyncio
-async def test_apply_project_cell_preview_files_preserves_explicit_empty_files_in_legacy_preview(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    preview_calls: list[tuple[str, dict[str, str], tuple[str, ...]]] = []
-
-    async def fake_hot_reload(project_id, slug, files, *, empty_files=()):
-        preview_calls.append((slug, dict(files), tuple(empty_files)))
-        return {"state": "hot_reloaded"}
-
-    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", fake_hot_reload)
-
-    await runtime._apply_project_cell_preview_files(
-        project_id=uuid4(),
-        project_slug="max-cell",
-        files={"empty.txt": "", "deleted.txt": ""},
-        empty_files=("empty.txt",),
-    )
-
-    assert preview_calls == [
-        (
-            "max-cell",
-            {"empty.txt": "", "deleted.txt": ""},
-            ("empty.txt",),
-        )
-    ]
 
 
 @pytest.mark.asyncio
@@ -812,11 +739,6 @@ async def test_abort_unsafe_max_backend_restores_cell_and_preview(
         preview_calls.append("sync")
         return SimpleNamespace(generated_files={}, failure=None)
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "hot_reload",
-        lambda *args, **kwargs: pytest.fail("direct hot_reload should not run with a cell handle"),
-    )
 
     with pytest.raises(ApiError) as caught:
         await runtime._abort_unsafe_max_backend(
@@ -838,25 +760,6 @@ async def test_abort_unsafe_max_backend_restores_cell_and_preview(
     }
     assert stage_calls == [({"src/app/page.tsx": "safe page\n"}, ("src/app/api/max/route.ts",))]
     assert preview_calls == ["sync"]
-
-
-def test_max_shell_kill_switch_allows_owner_cell_without_attestation() -> None:
-    assert (
-        runtime._resolve_max_shell_enabled(
-            max_shell_requested=False,
-            sandbox_attested=True,
-            project_cell_handle=SimpleNamespace(),
-        )
-        is False
-    )
-    assert (
-        runtime._resolve_max_shell_enabled(
-            max_shell_requested=True,
-            sandbox_attested=False,
-            project_cell_handle=SimpleNamespace(),
-        )
-        is True
-    )
 
 
 @pytest.mark.asyncio
@@ -881,11 +784,6 @@ async def test_run_max_shell_action_uses_project_cell_executor_without_sandbox(
         sync_calls.append("sync")
         return SimpleNamespace(generated_files={}, failure=None)
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_exec_sandbox",
-        lambda *args, **kwargs: pytest.fail("sandbox path must stay unused for Project Cell"),
-    )
 
     result = await runtime._run_max_shell_action(
         action=Action(name="bash", args={"cmd": "pnpm test"}),
@@ -908,50 +806,6 @@ async def test_run_max_shell_action_uses_project_cell_executor_without_sandbox(
     }
     assert base_calls == ["pnpm test"]
     assert sync_calls == ["sync"]
-
-
-@pytest.mark.asyncio
-async def test_run_max_shell_action_keeps_sandbox_for_non_cell(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    sandbox_calls: list[str] = []
-    hot_reload_calls: list[dict[str, str]] = []
-
-    async def fake_sandbox(_project_id, _project_slug, cmd: str) -> dict[str, object]:
-        sandbox_calls.append(cmd)
-        return {
-            "ok": True,
-            "detail": "sandbox ok",
-            "files": {"src/app/page.tsx": "v2\n"},
-            "base_workspace_revision": "a" * 64,
-        }
-
-    async def fake_hot_reload(_project_id, _slug, files, *, base_workspace_revision=None):
-        hot_reload_calls.append(dict(files))
-        assert base_workspace_revision == "a" * 64
-        return {"state": "hot_reloaded"}
-
-    monkeypatch.setattr(runtime.orchestrator_client, "agent_exec_sandbox", fake_sandbox)
-    monkeypatch.setattr(runtime.orchestrator_client, "hot_reload", fake_hot_reload)
-
-    result = await runtime._run_max_shell_action(
-        action=Action(name="bash", args={"cmd": "pnpm test"}),
-        project_id=uuid4(),
-        project_slug="max-sandbox",
-        max_shell_enabled=True,
-        base_agent_executor=lambda _action: pytest.fail("cell executor must stay unused"),
-        project_cell_handle=None,
-        active_max_locked_files=frozenset(),
-        max_model_write_rejection=lambda _path, _content: None,
-    )
-
-    assert result == {
-        "ok": True,
-        "detail": "sandbox ok\n\nSandbox synced files: src/app/page.tsx",
-        "files": {"src/app/page.tsx": "v2\n"},
-    }
-    assert sandbox_calls == ["pnpm test"]
-    assert hot_reload_calls == [{"src/app/page.tsx": "v2\n"}]
 
 
 @pytest.mark.asyncio
@@ -984,16 +838,6 @@ async def test_run_max_shell_action_rolls_back_rejected_cell_diff(
         sync_calls.append("sync")
         return SimpleNamespace(generated_files={}, failure=None)
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_exec_sandbox",
-        lambda *args, **kwargs: pytest.fail("sandbox path must stay unused for Project Cell"),
-    )
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "hot_reload",
-        lambda *args, **kwargs: pytest.fail("rollback must go through Project Cell helper"),
-    )
 
     result = await runtime._run_max_shell_action(
         action=Action(name="bash", args={"cmd": "pnpm test"}),
@@ -1039,11 +883,6 @@ async def test_rollback_project_cell_shell_files_preserves_zero_byte_snapshot(
         sync_calls.append("sync")
         return SimpleNamespace(generated_files={}, failure=None)
 
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "hot_reload",
-        lambda *args, **kwargs: pytest.fail("rollback must stay on Project Cell path"),
-    )
 
     rolled_back = await runtime._rollback_project_cell_shell_files(
         project_id=uuid4(),

@@ -18,14 +18,11 @@ import json
 import os
 import posixpath
 import re
-import shutil
-import tempfile
 from base64 import urlsafe_b64encode
 from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from hmac import new as hmac_new
 from pathlib import Path
-from time import time
 from typing import Annotated
 from urllib.parse import urlencode
 from uuid import UUID, uuid4
@@ -35,16 +32,12 @@ from fastapi import APIRouter, Header
 from yleum_orchestrator.core import postgres_admin
 from yleum_orchestrator.core.config import get_settings
 from yleum_orchestrator.core.docker_client import (
-    container_image_name,
     container_image_template,
     container_logs,
-    container_security_facts,
     destroy_container,
     destroy_project_network,
-    docker_runtime_facts,
     exec_cmd,
     find_project_container,
-    run_sandbox_command,
     write_files,
 )
 from yleum_orchestrator.core.docker_client import (
@@ -56,7 +49,6 @@ from yleum_orchestrator.core.internal_auth import (
     verify_internal_token as _verify_token,
 )
 from yleum_orchestrator.schemas.runtime import (
-    AgentSandboxExecRequest,
     CompileStatusResponse,
     DeployResponse,
     HotReloadRequest,
@@ -822,39 +814,6 @@ def _project_workspace_dir(project_id: str) -> Path:
     return Path(get_settings().projects_root) / project_id
 
 
-def _sandbox_work_base() -> Path:
-    """Host-visible root for temporary sandbox workspaces.
-
-    The orchestrator runs under systemd with ``PrivateTmp=yes``, so paths under
-    the process-local ``/tmp`` namespace are invisible to the Docker daemon and
-    bind-mount as empty directories. Stage the sandbox copy next to
-    ``projects_root`` under the shared runtime root instead.
-    """
-
-    return Path(get_settings().projects_root).parent / "agent-sandboxes"
-
-
-def _remove_stale_sandbox_workspaces(base: Path, *, now: float | None = None) -> None:
-    """Remove only abandoned sandbox staging directories older than one hour."""
-
-    cutoff = (time() if now is None else now) - _SANDBOX_STALE_AFTER_SECONDS
-    try:
-        candidates = list(base.iterdir())
-    except OSError:
-        return
-    for candidate in candidates:
-        if not candidate.name.startswith("omnia-sandbox-"):
-            continue
-        try:
-            if candidate.is_symlink() or not candidate.is_dir():
-                continue
-            if candidate.stat().st_mtime >= cutoff:
-                continue
-        except OSError:
-            continue
-        shutil.rmtree(candidate, ignore_errors=True)
-
-
 def _project_workspace_lock(project_id: str) -> asyncio.Lock:
     return _PROJECT_WORKSPACE_LOCKS.setdefault(project_id, asyncio.Lock())
 
@@ -883,20 +842,6 @@ def _sandbox_name_is_secret(name: str) -> bool:
         or lowered.startswith(".env.")
         or lowered in {"secrets.json", "secrets.yaml", "secrets.yml"}
     )
-
-
-def _copy_workspace(src: Path, dest: Path) -> None:
-    def _ignore(directory: str, names: list[str]) -> list[str]:
-        base = Path(directory)
-        return [
-            name
-            for name in names
-            if name in _SANDBOX_SKIP_NAMES
-            or _sandbox_name_is_secret(name)
-            or (base / name).is_symlink()
-        ]
-
-    shutil.copytree(src, dest, ignore=_ignore, dirs_exist_ok=True)
 
 
 def _apply_workspace_files(
@@ -1006,31 +951,6 @@ def _collect_workspace_text_files(root: Path) -> tuple[dict[str, str], set[str]]
                 status_code=413,
             )
     return files, dropped
-
-
-def _diff_workspace_files(before: dict[str, str], after: dict[str, str]) -> dict[str, str]:
-    changed = {path: content for path, content in after.items() if before.get(path) != content}
-    for path in before.keys() - after.keys():
-        changed[path] = ""
-    if len(changed) > _SANDBOX_SYNC_MAX_FILES:
-        raise OrchestratorError(
-            code="validation_failed",
-            message=(
-                f"sandbox changed too many files: {len(changed)} > {_SANDBOX_SYNC_MAX_FILES}"
-            ),
-            status_code=413,
-        )
-    total_bytes = sum(len(content.encode("utf-8")) for content in changed.values() if content)
-    if total_bytes > _SANDBOX_SYNC_MAX_TOTAL_BYTES:
-        raise OrchestratorError(
-            code="validation_failed",
-            message=(
-                "sandbox changed files exceed sync payload budget: "
-                f"{total_bytes} > {_SANDBOX_SYNC_MAX_TOTAL_BYTES}"
-            ),
-            status_code=413,
-        )
-    return changed
 
 
 @router.post("/{project_id}/max-preview-session", response_model=MaxPreviewSessionResponse)
@@ -1459,206 +1379,6 @@ async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, 
     if pnpm_lockfile is not None:
         response["pnpm_lockfile"] = pnpm_lockfile
     return response
-
-
-@router.get("/{project_id}/agent/sandbox-capabilities")
-async def agent_sandbox_capabilities(
-    project_id: str,
-    slug: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """Attest the concrete security contract behind the MAX shell tool.
-
-    The response contains facts and feature names only—never environment values
-    or credentials.  apps/api uses ``ready`` as a fail-closed gate before it
-    even advertises ``bash`` to the model.
-    """
-    _verify_token(x_internal_token)
-    settings = get_settings()
-    workspace = _project_workspace_dir(project_id)
-    runtime_name = f"omnia-dev-{slug}"
-    image = await container_image_name(runtime_name)
-    runtime_facts = await container_security_facts(runtime_name, project_id)
-    sandbox_runtime = (
-        settings.agent_sandbox_runtime.strip() or settings.container_runtime.strip()
-    )
-    sandbox_runtime_facts = await docker_runtime_facts(sandbox_runtime)
-    missing: list[str] = []
-    runtime_missing = runtime_facts.get("missing", [])
-    if not isinstance(runtime_missing, list):
-        runtime_missing = []
-    if not settings.agent_sandbox_enabled:
-        missing.append("agent_sandbox_disabled")
-    if not workspace.is_dir():
-        missing.append("workspace_missing")
-    if not image:
-        missing.append("template_image_missing")
-    if not runtime_facts.get("ready"):
-        missing.extend(f"runtime:{item}" for item in runtime_missing)
-    sandbox_runtime_missing = sandbox_runtime_facts.get("missing", [])
-    if not isinstance(sandbox_runtime_missing, list):
-        sandbox_runtime_missing = []
-    if not sandbox_runtime_facts.get("ready"):
-        missing.extend(
-            f"sandbox_runtime:{item}" for item in sandbox_runtime_missing
-        )
-    return {
-        "ready": not missing,
-        "profile": "ephemeral-secretless-v2",
-        "missing": missing,
-        "capabilities": {
-            "shell": True,
-            "dependency_manifest_edit": True,
-            "dependency_sync_without_lifecycle_scripts": True,
-            "source_generators": True,
-            "tests": True,
-            "workspace_diff": True,
-        },
-        "isolation": {
-            "ephemeral": True,
-            "non_root": True,
-            "read_only_rootfs": True,
-            "tmpfs_workspace": True,
-            "host_workspace_writable": False,
-            "network": False,
-            "runtime_network": False,
-            "host_gateway": False,
-            "docker_socket": False,
-            "runtime_secrets": False,
-            "cap_drop_all": True,
-            "no_new_privileges": True,
-            "pids_limit": max(1, settings.container_pids_limit or 256),
-            "runtime": sandbox_runtime_facts.get("runtime", "unavailable"),
-        },
-        "runtime_attestation": runtime_facts,
-        "sandbox_runtime_attestation": sandbox_runtime_facts,
-    }
-
-
-@router.post("/{project_id}/agent/exec-sandbox")
-async def agent_exec_sandbox(
-    project_id: str,
-    payload: AgentSandboxExecRequest,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """Run one shell command in an isolated project sandbox and return a diff.
-
-    The sandbox starts from the mirrored project workspace on disk, not the
-    live preview container, so the caller can inspect and vet shell-produced
-    file changes before syncing them into the running app.
-    """
-    _verify_token(x_internal_token)
-    await record_activity(project_id)
-    if not get_settings().agent_sandbox_enabled:
-        raise OrchestratorError(
-            code="container_failure",
-            message="agent sandbox is disabled by the operator",
-            status_code=503,
-        )
-    low = payload.cmd.strip()
-    if not low:
-        raise OrchestratorError(
-            code="validation_failed",
-            message="empty cmd",
-            status_code=400,
-        )
-    if any(bad in low for bad in _EXEC_DENY):
-        return {"ok": False, "detail": "command blocked by safety denylist"}
-    if _command_exposes_environment(low):
-        return {
-            "ok": False,
-            "detail": "command blocked: environment and secret enumeration is not allowed",
-        }
-
-    workspace = _project_workspace_dir(project_id)
-    if not workspace.is_dir():
-        raise OrchestratorError(
-            code="not_found",
-            message="project sandbox workspace not found",
-            status_code=404,
-        )
-    image = await container_image_name(f"omnia-dev-{payload.slug}")
-    if not image:
-        raise OrchestratorError(
-            code="not_found",
-            message="project dev container image not found",
-            status_code=404,
-        )
-
-    settings = get_settings()
-    sandbox_runtime = (
-        settings.agent_sandbox_runtime.strip() or settings.container_runtime.strip()
-    )
-    sandbox_runtime_facts = await docker_runtime_facts(sandbox_runtime)
-    sandbox_runtime_missing = sandbox_runtime_facts.get("missing", [])
-    if not isinstance(sandbox_runtime_missing, list):
-        sandbox_runtime_missing = []
-    if not sandbox_runtime_facts.get("ready"):
-        runtime_name = str(sandbox_runtime_facts.get("runtime") or "unavailable")
-        reason = ",".join(str(item) for item in sandbox_runtime_missing if str(item))
-        detail = f"sandbox runtime unavailable: {runtime_name}"
-        if reason:
-            detail += f" ({reason})"
-        return {"ok": False, "detail": detail, "files": {}, "changed": "0", "dropped": ""}
-
-    network_name = f"omnia-proj-{project_id}" if settings.isolate_project_network else None
-    sandbox_base = _sandbox_work_base()
-    sandbox_base.mkdir(parents=True, exist_ok=True)
-    await asyncio.to_thread(_remove_stale_sandbox_workspaces, sandbox_base)
-    sandbox_tmp = Path(
-        tempfile.mkdtemp(prefix=f"omnia-sandbox-{project_id}-", dir=str(sandbox_base))
-    )
-    try:
-        sandbox_root = sandbox_tmp / "workspace"
-        async with _project_workspace_lock(project_id):
-            before_files, before_dropped = await asyncio.to_thread(
-                _collect_workspace_text_files, workspace
-            )
-            await asyncio.to_thread(_copy_workspace, workspace, sandbox_root)
-            base_revision = _workspace_revision(before_files)
-        try:
-            result = await run_sandbox_command(
-                image=image,
-                workspace_dir=sandbox_root,
-                project_id=project_id,
-                cmd=payload.cmd,
-                network_name=network_name,
-                runtime=sandbox_runtime,
-                harden=settings.container_harden,
-                pids_limit=settings.container_pids_limit,
-                timeout_sec=180,
-                max_output=_AGENT_MAX_BUILD,
-            )
-        except OrchestratorError as exc:
-            if exc.code == "container_not_running":
-                raise
-            return {"ok": False, "detail": exc.message, "files": {}, "changed": "0", "dropped": ""}
-        after_files, after_dropped = await asyncio.to_thread(
-            _collect_workspace_text_files, sandbox_root
-        )
-    finally:
-        shutil.rmtree(sandbox_tmp, ignore_errors=True)
-
-    changed_files = _diff_workspace_files(before_files, after_files)
-    ok = result["exit_code"] == "0"
-    out = _redact_exec_output((result["stdout"] + "\n" + result["stderr"]).strip())
-    detail = out[:_AGENT_MAX_BUILD] or ("ok" if ok else "non-zero exit")
-    if changed_files:
-        detail += f"\n\nSandbox prepared {len(changed_files)} file change(s)."
-    new_dropped = sorted(after_dropped.difference(before_dropped))
-    if new_dropped:
-        preview = ", ".join(new_dropped[:10])
-        suffix = "…" if len(new_dropped) > 10 else ""
-        detail += f"\nDropped unsynced files: {preview}{suffix}"
-    return {
-        "ok": ok,
-        "exit_code": result["exit_code"],
-        "detail": detail,
-        "files": changed_files,
-        "base_workspace_revision": base_revision,
-        "changed": str(len(changed_files)),
-        "dropped": ",".join(new_dropped),
-    }
 
 
 # ── Agentic builder tools (Phase 0) ─────────────────────────────────────────

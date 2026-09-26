@@ -60,7 +60,7 @@ async def _refuse(monkeypatch: pytest.MonkeyPatch, rollback: AsyncMock) -> ApiEr
             files=dict(_UNSAFE),
             ids=SimpleNamespace(project_id=uuid4()),
             project_info=SimpleNamespace(template="max_miniapp", slug="fixture"),
-            runtime=SimpleNamespace(handle=None),
+            runtime=SimpleNamespace(handle=SimpleNamespace()),
             plan=SimpleNamespace(),
             operations=SimpleNamespace(),
         )
