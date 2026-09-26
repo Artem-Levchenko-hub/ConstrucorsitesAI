@@ -411,11 +411,14 @@ class DockerOwnerCanaryProvider:
             )
             mark_workspace_deleted(resource_manager.profile.state_path, workspace_id, mutation)
             try:
-                if retained:
-                    await self._retain_final_checkpoint(
-                        original, checkpoint_ref, mutation, sealed_ref=sealed_ref
-                    )
-                else:
+                reused = retained and await self._retain_final_checkpoint(
+                    original, checkpoint_ref, mutation, sealed_ref=sealed_ref
+                )
+                if not reused:
+                    # Ячейка может числиться «на паузе» и при этом не иметь ни
+                    # одного запечатанного снимка: живой случай a0710ef0 —
+                    # каждая попытка падала на дампе остановленной базы, и снести
+                    # её было нельзя вовсе. Переиспользовать нечего — снимаем заново.
                     await checkpoint_manager.create(
                         workspace_id,
                         checkpoint_ref,
@@ -486,7 +489,9 @@ class DockerOwnerCanaryProvider:
         mutation: LifecycleMutation,
         *,
         sealed_ref: str | None = None,
-    ) -> None:
+    ) -> bool:
+        """Переиспользовать уже запечатанный снимок; False — переиспользовать нечего."""
+
         manager = self._require_resource_manager()
         checkpoints = self._require_checkpoint_manager()
         if sealed_ref is None:
@@ -502,7 +507,11 @@ class DockerOwnerCanaryProvider:
             None,
         )
         if previous_ref is None or state.resource_names is None:
-            raise CellRestoreFailed("retained workspace has no completed checkpoint")
+            # Ни одна операция так и не запечатала снимок — переиспользовать
+            # нечего. Это не тупик: снимок можно снять заново, и решает это
+            # вызывающий. Раньше здесь был отказ, и ячейка, попавшая в такое
+            # состояние, не удалялась НИКОГДА (живой случай a0710ef0).
+            return False
         volume = state.resource_names.checkpoint_volume
         manifest = await checkpoints._load_manifest(volume, previous_ref)
         checkpoints._validate_restore_manifest(
@@ -536,6 +545,7 @@ class DockerOwnerCanaryProvider:
             manifest=final,
             artifacts=artifacts,
         )
+        return True
 
     async def _execute_composite_restore_status(
         self,

@@ -143,3 +143,54 @@ async def test_a_degraded_cell_can_still_be_put_to_sleep(tmp_path) -> None:
 
     assert dumps, "сон запечатан без базы"
     assert b"owner row" in dumps[-1]
+
+
+@pytest.mark.asyncio
+async def test_a_paused_cell_without_any_sealed_snapshot_is_still_destroyable(tmp_path) -> None:
+    """Живой тупик a0710ef0: «на паузе», но ни одного снимка так и не запечатано.
+
+    Снос ячейки, числящейся на паузе, переиспользует ранее запечатанный снимок
+    вместо нового дампа — это правильно и проверено отдельно. Но если ни одна
+    операция снимок так и не запечатала (каждая падала на дампе остановленной
+    базы), переиспользовать нечего, и снос отказывал словами «retained workspace
+    has no completed checkpoint». Навсегда: ячейка оставалась на хосте, держала
+    ресурсы и не удалялась ни одной попыткой.
+
+    Отказываться тут нечем: снимок ещё можно снять, база поднимается на время
+    чтения. Поэтому «переиспользовать нечего» — это не тупик, а указание снять
+    заново.
+    """
+    provider, manager, _checkpoints, docker, spec, names = await _degraded_cell(tmp_path)
+    await docker.write_volume_files(
+        names.postgres_volume, {"db.json": b'[{"id": 1, "note": "owner row"}]'}
+    )
+    # Ровно живое состояние: связка числится «на паузе», а среди операций нет
+    # ни одной завершённой со снимком.
+    manager.state_store.set_bundle_state(
+        spec.workspace_id,
+        bundle_state="resources_paused",
+    )
+    state = manager._require_state(spec.workspace_id)
+    assert not [
+        item for item in state.operations if item.status == "completed" and item.checkpoint_ref
+    ], "в ячейке нашёлся запечатанный снимок — проверка стала бы пустой"
+
+    dumps: list[bytes] = []
+    original = docker.postgres_dump
+
+    async def _record(container_name: str, password: str) -> bytes:
+        payload = await original(container_name, password)
+        dumps.append(payload)
+        return payload
+
+    docker.postgres_dump = _record  # type: ignore[method-assign]
+
+    await provider.execute_control(
+        spec.workspace_id,
+        ControlAction(kind="destroy"),
+        LifecycleMutation(uuid4(), 4, "e" * 64),
+    )
+
+    assert not docker.containers, "ячейка снова не снеслась"
+    assert dumps, "снимок сноса ушёл бы без базы"
+    assert b"owner row" in dumps[-1]
