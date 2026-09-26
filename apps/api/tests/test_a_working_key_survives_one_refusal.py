@@ -122,3 +122,59 @@ async def test_a_success_in_one_run_does_not_vouch_for_another() -> None:
 
     assert "проверьте блокировку" in str(failure.value)
     assert len(attempts) == 2, f"чужой успех не должен разрешать повторы: {len(attempts)}"
+
+
+@pytest.mark.asyncio
+async def test_the_refusal_carries_what_the_provider_actually_said() -> None:
+    """Прогон c3ca1587 умер за минуту, и понять причину было нельзя.
+
+    «Провайдер отклонил ключ доступа» — это НАША формулировка; сам провайдер
+    отвечает по-разному: неверный ключ, исчерпанный баланс, заблокированный
+    аккаунт, слишком много запросов. Шлюз этот ответ сохраняет и отдаёт дальше,
+    а платформа его выбрасывала — владельца отправляли проверять ключ, не
+    сказав, что именно с ним не так.
+    """
+
+    def reply(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401, json={"error": {"message": "Insufficient balance for this request"}}
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError) as failure:
+            await agent_native._call_messages(client, _URL, [], "s", run_id="run-say")
+
+    assert "Insufficient balance" in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_a_plain_text_answer_is_carried_too() -> None:
+    """Не всякий отказ приходит разобранным JSON — например, ответ от прокси."""
+
+    def reply(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, text="<html>401 Unauthorized</html>")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError) as failure:
+            await agent_native._call_messages(client, _URL, [], "s", run_id="run-html")
+
+    assert "401 Unauthorized" in str(failure.value)
+
+
+@pytest.mark.asyncio
+async def test_anything_key_shaped_never_leaves_the_platform() -> None:
+    """Провайдер иногда возвращает сам ключ — наружу он уйти не должен."""
+
+    def reply(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": {"message": "Invalid key sk-abcdef0123456789abcdef0123456789"}},
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError) as failure:
+            await agent_native._call_messages(client, _URL, [], "s", run_id="run-secret")
+
+    message = str(failure.value)
+    assert "abcdef0123456789" not in message, message
+    assert "Invalid key" in message, "вместе с ключом вырезали и объяснение"

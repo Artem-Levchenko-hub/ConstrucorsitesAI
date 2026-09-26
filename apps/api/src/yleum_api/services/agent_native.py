@@ -6,7 +6,7 @@ whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool return
 real compiler errors as a ``tool_result`` and the model fixes them itself
 (do → check → fix), with no taste/vision judges here.
 
-Owns ONLY the loop + protocol. Reuses ``agent_builder.make_docs_media_executor`` for
+Owns ONLY the loop + protocol. Reuses ``agent_builder.make_container_executor`` for
 the actual file/container ops, and calls the gateway's native ``/v1/messages``
 adapter (``routers/messages_native.py``), which preserves the Anthropic-shaped
 tool-use contract while the gateway maps it to the selected upstream.
@@ -80,6 +80,27 @@ _CALL_RETRIES = 7
 _AUTH_RETRIES_AFTER_SUCCESS = 2
 _AUTH_RETRY_DELAY_S = 5.0
 _RUNS_WITH_A_LIVE_KEY: set[str] = set()
+
+
+
+def _provider_complaint(response: Any) -> str:
+    """Что провайдер ответил своими словами — коротко и без похожего на ключ.
+
+    26.09.2026: прогон умер с «провайдер отклонил ключ», и понять, блокировка
+    это или исчерпанный баланс, было нельзя — ответ провайдера платформа
+    выбрасывала. Шлюз его как раз сохраняет, так что терялся он именно здесь.
+    """
+
+    import re
+
+    try:
+        body = response.json()
+        raw = body.get("error", {}).get("message") if isinstance(body, dict) else None
+    except Exception:
+        raw = None
+    text = str(raw or getattr(response, "text", "") or "")[:200]
+    # Похожее на ключ или токен наружу не выносим, даже если провайдер его вернул.
+    return re.sub(r"[A-Za-z0-9_\-]{20,}", "…", text).strip()
 _CALL_RETRY_WINDOW_S = 210.0
 # The first verified MAX production loop completed a five-screen product inside
 # one 40-turn transcript. Keep that headroom so callers do not need a second
@@ -169,7 +190,7 @@ def _normalize_agent_path(path: str) -> str:
 # hibernate stopped a container mid-build → 40 min of doomed 500 bursts).
 _INFRA_DEAD_ABORT_AT = 3
 
-# Native tool schemas — mirror the action set the Project Cell executor serves.
+# Native tool schemas — mirror the action set of make_container_executor._execute.
 # `done` ends the loop. Kept intentionally minimal (fact tools only): the model
 # decides everything else itself, like Claude Code.
 _STR: dict[str, Any] = {"type": "string"}
@@ -827,6 +848,7 @@ async def _call_messages(
             # surfacing an opaque "соединение потеряно" 3+ minutes later.
             if r.status_code in {401, 403}:
                 proven = bool(run_id) and str(run_id) in _RUNS_WITH_A_LIVE_KEY
+                complaint = _provider_complaint(r)
                 refusal = RuntimeError(
                     "PROVIDER_AUTH_FAILED: провайдер модели отклонил ключ доступа"
                     + (
@@ -835,6 +857,7 @@ async def _call_messages(
                         if proven
                         else "; проверьте блокировку и разрешения ключа."
                     )
+                    + (f" Ответ провайдера: {complaint}" if complaint else "")
                 )
                 if proven and auth_attempt < _AUTH_RETRIES_AFTER_SUCCESS:
                     # Этот ключ только что работал, значит «отклонён» — не про него.
@@ -846,9 +869,11 @@ async def _call_messages(
                     continue
                 raise refusal
             if r.status_code == 402:
+                complaint = _provider_complaint(r)
                 raise RuntimeError(
                     "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
                     "пополни ключ и повтори промпт"
+                    + (f" Ответ провайдера: {complaint}" if complaint else "")
                 )
             if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
                 last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
