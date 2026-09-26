@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
+import { PRELOADED_FONTS } from "./font-preload";
 import "./fonts.css";
 import "./globals.css";
 import { publicOrigin } from "@/lib/public-origin";
@@ -137,6 +138,11 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <head>
+        {/* Шрифты первого экрана — иначе браузер узнаёт о них только после
+            разбора стилей и полторы секунды показывает запасной шрифт. */}
+        {PRELOADED_FONTS.map((href) => (
+          <link key={href} rel="preload" as="font" type="font/woff2" href={href} crossOrigin="anonymous" />
+        ))}
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{ __html: JSON.stringify(orgJsonLd) }}

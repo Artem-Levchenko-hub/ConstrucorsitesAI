@@ -212,6 +212,39 @@ export function LoyaltyScreen() {
   );
 }
 
+/**
+ * Рамка телефона вокруг экрана приложения.
+ *
+ * Мы продаём мини-приложение ВНУТРИ мессенджера, то есть вещь, которую человек
+ * открывает в телефоне. Плоская карточка читается как сайт и заставляет
+ * додумывать; телефон читается за полсекунды и без единого слова объяснений.
+ *
+ * Рамка намеренно скромная: тонкая грань, один мягкий свет снизу, никаких
+ * бликов и отражений. Её работа — задать контекст, а не соревноваться с
+ * содержимым за внимание.
+ *
+ * Строка состояния и полоска жеста нарисованы, а не взяты картинкой: так они
+ * остаются чёткими на любом экране и не добавляют ни одного запроса к сети.
+ * Для экранного диктора рамка невидима — она декорация вокруг уже описанного
+ * содержимого.
+ */
+export function PhoneFrame({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="ys-phone-frame">
+      <div className="ys-phone-status" aria-hidden="true">
+        <span className="ys-phone-time">9:41</span>
+        <span className="ys-phone-island" />
+        <span className="ys-phone-meters">
+          <i className="ys-phone-signal" />
+          <i className="ys-phone-battery" />
+        </span>
+      </div>
+      <div className="ys-phone-viewport">{children}</div>
+      <span className="ys-phone-home" aria-hidden="true" />
+    </div>
+  );
+}
+
 const registry: Record<ScreenKind, () => React.JSX.Element> = {
   cafe: CafeScreen,
   "cafe-after": CafeAfterScreen,
@@ -222,9 +255,17 @@ const registry: Record<ScreenKind, () => React.JSX.Element> = {
   loyalty: LoyaltyScreen,
 };
 
-export function AppScreen({ kind }: { kind: ScreenKind }) {
+export function AppScreen({ kind, framed = true }: { kind: ScreenKind; framed?: boolean }) {
   const Screen = registry[kind];
-  return <Screen />;
+  // Рамка по умолчанию: все превью на витрине — это мини-приложения в телефоне.
+  // Отключается там, где телефон уже нарисован снаружи.
+  return framed ? (
+    <PhoneFrame>
+      <Screen />
+    </PhoneFrame>
+  ) : (
+    <Screen />
+  );
 }
 
 /** Лента экранов во всю ширину — визуальный «что отсюда выходит». */

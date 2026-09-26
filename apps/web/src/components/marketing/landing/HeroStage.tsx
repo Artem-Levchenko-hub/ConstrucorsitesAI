@@ -5,6 +5,8 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 
 import { LANDING_PROMPT_MAX_LENGTH, startWithPrompt } from "@/lib/landing-prompt";
 
+import { PhoneFrame } from "./AppScreens";
+
 /**
  * Первый экран витрины: запрос владельца печатается сам, а рядом появляется
  * приложение, которым можно пользоваться прямо на странице — добавить позицию,
@@ -93,6 +95,7 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
       {tabs}
 
       <div className="ys-phone" aria-live="polite">
+        <PhoneFrame>
         <div className="ys-screen">
           <div className="ys-screen-top">
             <ChevronLeft size={15} />
@@ -173,6 +176,7 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
             )}
           </div>
         </div>
+        </PhoneFrame>
       </div>
     </>
   );
