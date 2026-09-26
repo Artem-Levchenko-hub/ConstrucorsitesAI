@@ -53,12 +53,10 @@ from yleum_orchestrator.schemas.runtime import (
     KeepAliveRequest,
     KeepAliveResponse,
     MaxPreviewSessionResponse,
-    RuntimeStatusResponse,
     StatusResponse,
 )
 from yleum_orchestrator.services import (
     demo_seed_writer,
-    dep_doctor,
     nginx_writer,
 )
 from yleum_orchestrator.services.hibernate import (
@@ -73,8 +71,6 @@ from yleum_orchestrator.services.port_allocator import (
 from yleum_orchestrator.services.provisioner import (
     load_existing_auth_secret,
 )
-from yleum_orchestrator.services.runtime_probe import probe_runtime_error
-from yleum_orchestrator.services.warm import warm_routes
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
 
@@ -1420,110 +1416,6 @@ async def agent_grep(
     return {"ok": True, "detail": out if out else "(no matches)"}
 
 
-async def _run_dep_doctor(container_name: str) -> str:
-    """Install missing allowlisted deps BEFORE typecheck so a TS2307 "Cannot find
-    module" (kit-file drift or a generated import of an undeclared package) heals
-    instead of aborting the whole build — the agent edits source, but a baked
-    ``node_modules`` is not a source file. Returns a short status line (empty when
-    nothing was installed). Fail-soft: any error → "" and the typecheck then
-    surfaces the real module error exactly as today (no regression)."""
-    if not get_settings().use_dep_doctor:
-        return ""
-    try:
-        pj = await exec_cmd(
-            container_name,
-            cmd=["cat", "--", "package.json"],
-            workdir="/app",
-            max_output=_AGENT_MAX_READ,
-        )
-        if pj["exit_code"] != "0":
-            return ""
-        imports = await exec_cmd(
-            container_name,
-            cmd=["sh", "-lc", 'grep -rhsE "(from|import|require)" src 2>/dev/null || true'],
-            # Generous cap: import lines across a whole src/ tree already exceed the
-            # 16 KB grep cap on the default nextjs-entities template (~28 KB), which
-            # would silently drop packages past the cut and leave them uninstalled.
-            workdir="/app",
-            max_output=_AGENT_MAX_READ,
-        )
-        missing = dep_doctor.plan_installs(pj["stdout"], imports["stdout"])
-        if not missing:
-            return ""
-        # Names passed the allowlist AND a strict package-name regex, so they
-        # carry no shell metacharacters — safe to interpolate into `pnpm add`.
-        res = await exec_cmd(
-            container_name,
-            cmd=["sh", "-lc", f"cd /app && pnpm add {' '.join(missing)}"],
-            workdir="/app",
-            timeout_sec=120,
-            max_output=_AGENT_MAX_BUILD,
-        )
-        verb = "installed" if res["exit_code"] == "0" else "FAILED to install"
-        note = f"[dep-doctor] {verb}: {' '.join(missing)}"
-        print(note, flush=True)
-        return note
-    except OrchestratorError:
-        return ""
-
-
-@router.post("/{project_id}/agent/build")
-async def agent_build(
-    project_id: str,
-    slug: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """Run the project's local TypeScript typecheck — a real, deterministic
-    correctness signal independent of HMR timing. Non-zero exit returns the
-    actual compiler errors so the agent can fix them. A dep-doctor pass first
-    installs any missing allowlisted package (see ``_run_dep_doctor``)."""
-    _verify_token(x_internal_token)
-    await record_activity(project_id)
-    container_name = f"omnia-dev-{slug}"
-    dep_note = await _run_dep_doctor(container_name)
-    # Next dev writes route validators for the source tree that existed at the
-    # time of its last successful compile. Agent writes/rollback can replace or
-    # remove a page faster than HMR refreshes those generated imports, which made
-    # a valid restored tree fail on a ghost `.next/types/app/page.ts` reference.
-    # Remove only regenerable route validators before the independent source
-    # typecheck; keep routes.d.ts because next-env.d.ts references it directly.
-    try:
-        await exec_cmd(
-            container_name,
-            cmd=[
-                "rm",
-                "-rf",
-                "--",
-                "/app/.next/types/app",
-                "/app/.next/types/validator.ts",
-            ],
-            workdir="/app",
-            max_output=1_024,
-        )
-    except OrchestratorError:
-        pass
-    try:
-        result = await exec_cmd(
-            container_name,
-            cmd=["/app/node_modules/.bin/tsc", "--noEmit", "-p", "/app/tsconfig.json"],
-            workdir="/app",
-            timeout_sec=180,
-            max_output=_AGENT_MAX_BUILD,
-        )
-    except OrchestratorError as exc:
-        if exc.code == "container_not_running":
-            raise
-        return {"ok": False, "error": exc.message}
-    ok = result["exit_code"] == "0"
-    detail = (result["stdout"] + "\n" + result["stderr"]).strip()
-    body = "typecheck clean" if ok else detail[:_AGENT_MAX_BUILD]
-    # Surface the dep-doctor action in the observation so the agent + operators
-    # see "[dep-doctor] installed: sonner" instead of a silent self-heal.
-    if dep_note:
-        body = f"{dep_note}\n{body}"
-    return {"ok": ok, "detail": body}
-
-
 # Phase 1: a bounded shell tool for the agent. Runs an arbitrary command inside
 # the project's dev container via `sh -lc`. Safe-by-construction: the container
 # is cap-dropped (ALL), non-root (1000:1000), memory-capped, loopback-bound, on
@@ -1678,66 +1570,6 @@ async def status(
         dev_url=nginx_writer.dev_url(derived_slug) if derived_slug else None,
         keep_alive=keep_alive,
         gate_seed=gate_seed,
-    )
-
-
-@router.post("/{project_id}/warm")
-async def warm(
-    project_id: str,
-    slug: str | None = None,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, int | str]:
-    """Pre-warm the dev app's static routes so a demo hits WARM pages.
-
-    `next dev` compiles each route lazily on first request (~30-90 s cold), so a
-    reviewer eats that per page. apps/api calls this fire-and-forget right after a
-    successful build to force those first requests itself. Best-effort: a missing
-    container or any warm failure returns a benign summary, never an error — the
-    app just falls back to the normal cold-first-hit behaviour.
-    """
-    _verify_token(x_internal_token)
-
-    name = await find_project_container(project_id, kind="dev")
-    if name is None and slug:
-        name = f"omnia-dev-{slug}"
-    if name is None:
-        return {"warmed": 0, "note": "no container"}
-    return await warm_routes(name)
-
-
-@router.get("/{project_id}/runtime-status", response_model=RuntimeStatusResponse)
-async def runtime_status(
-    project_id: str,
-    slug: str | None = None,
-    path: str = "/",
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> RuntimeStatusResponse:
-    """Whether the running dev app currently 5xx's on render.
-
-    A compile-clean app can still throw a 500 when a route is actually rendered
-    (server components / data fetching run lazily, per-route). apps/api polls
-    this right after a build so a broken-on-load preview surfaces as a card
-    instead of leaving the user staring at a Next.js error overlay.
-
-    Missing / paused container → ``ok=True`` (nothing to probe) — same fail-soft
-    posture as ``/compile-status``: never raise a 404 the caller must special-case.
-    """
-    _verify_token(x_internal_token)
-    from uuid import UUID
-
-    name = await find_project_container(project_id, kind="dev")
-    if name is None and slug:
-        name = f"omnia-dev-{slug}"
-    if name is None:
-        return RuntimeStatusResponse(project_id=UUID(project_id), ok=True)
-
-    probe = await probe_runtime_error(name, path=path)
-    return RuntimeStatusResponse(
-        project_id=UUID(project_id),
-        ok=probe.ok,
-        status_code=probe.status_code,
-        error=probe.error,
-        file=probe.file,
     )
 
 

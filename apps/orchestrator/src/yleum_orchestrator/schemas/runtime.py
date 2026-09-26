@@ -219,12 +219,3 @@ class DeployResponse(BaseModel):
     error_stage: str | None = None
     reason_code: str | None = None
 
-
-class RuntimeStatusResponse(BaseModel):
-    project_id: UUID
-    # True = the running app served its route without a server error (or there's
-    # nothing to probe); False = the rendered route returned 5xx.
-    ok: bool
-    status_code: int | None = None  # HTTP status the probe observed (None = no response)
-    error: str | None = None  # parsed Next.js error excerpt from the dev logs
-    file: str | None = None  # first implicated project source file

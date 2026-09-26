@@ -854,14 +854,13 @@ async def test_project_shell_and_dependency_sync_use_long_deadlines(
     monkeypatch.setattr(orchestrator_client, "_request", fake_request)
     project_id = UUID("00000000-0000-0000-0000-000000000001")
 
-    await orchestrator_client.agent_build(project_id, "max-preview")
     await orchestrator_client.hot_reload(
         project_id,
         "max-preview",
         {"package.json": '{"name":"app"}'},
     )
 
-    assert [call["timeout"] for call in observed] == [600.0, 1800.0]
+    assert [call["timeout"] for call in observed] == [1800.0]
 
 
 async def test_hot_reload_forwards_explicit_empty_files(

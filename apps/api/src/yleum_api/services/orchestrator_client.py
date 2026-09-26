@@ -2010,27 +2010,6 @@ async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
     )
 
 
-async def runtime_status(
-    project_id: UUID, *, slug: str | None = None, path: str = "/"
-) -> dict[str, Any]:
-    """GET /internal/projects/<uuid>/runtime-status — does the running app 5xx?
-
-    Returns `{"project_id", "ok": bool, "status_code": int|None, "error": str|None,
-    "file": str|None}`. `ok=False` only when the rendered route returns 5xx — a
-    compile-clean app that still crashes on render. Used right after a build,
-    after the compile probe comes back clean. Fail-soft on the orchestrator side:
-    a missing/paused container returns `ok=True`, never a 404.
-    """
-    params: dict[str, str] = {"path": path}
-    if slug:
-        params["slug"] = slug
-    return await _request(
-        "GET",
-        f"/internal/projects/{project_id}/runtime-status",
-        params=params,
-    )
-
-
 # ── Agentic builder tools (Phase 0) ─────────────────────────────────────────
 # Thin wrappers the api-side agent loop (services/agent_builder.py) calls to act
 # on the live dev container. Each maps to a /agent/* orchestrator endpoint.
@@ -2045,27 +2024,6 @@ async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "
     )
     detail = resp.get("detail")
     return detail if isinstance(detail, str) else ""
-
-
-async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
-    """Run the container typecheck; returns {ok: bool, detail/error: str}."""
-    return await _request(
-        "POST",
-        f"/internal/projects/{project_id}/agent/build",
-        params={"slug": slug},
-        timeout=600.0,
-    )
-
-
-async def warm_routes(project_id: UUID, slug: str) -> dict[str, Any]:
-    """POST /internal/projects/{id}/warm — force-compile the dev app's static
-    routes so a demo opens WARM pages instead of eating a cold Turbopack compile
-    per click. Best-effort: called fire-and-forget after a successful build."""
-    return await _request(
-        "POST",
-        f"/internal/projects/{project_id}/warm",
-        params={"slug": slug},
-    )
 
 
 async def hot_reload(

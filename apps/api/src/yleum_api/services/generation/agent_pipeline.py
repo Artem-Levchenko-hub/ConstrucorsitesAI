@@ -514,13 +514,14 @@ async def run_agent_generation(
                 require_max_data=False,
             )
         else:
+            from yleum_api.services.generation.runtime import _require_project_cell
             from yleum_api.services.release_proof import run_release_proof
 
             _release_verdict = await run_release_proof(
                 ids.project_id,
                 project_info.slug,
                 require_max_data=True,
-                project_cell_handle=runtime.handle,
+                project_cell_handle=_require_project_cell(runtime.handle),
             )
         if _att_capture is None:
             _att_capture = []

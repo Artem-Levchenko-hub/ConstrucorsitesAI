@@ -169,34 +169,6 @@ async def probe_signed_business_endpoint(
     }
 
 
-async def probe_max_runtime(
-    project_id: UUID,
-    project_slug: str,
-    *,
-    base_url: str | None = None,
-) -> MaxRuntimeProbe:
-    """Prove signed preview auth plus one tenant-scoped protected DB read.
-
-    Returned details contain status/cause only. The signed URL and session cookie
-    never reach logs, model observations, or persisted attestations.
-    """
-
-    try:
-        payload = await orchestrator_client.create_max_preview_session(project_id)
-    except Exception as exc:
-        return MaxRuntimeProbe(False, f"preview session unavailable: {type(exc).__name__}")
-    bootstrap_url = _valid_bootstrap_url(
-        payload,
-        project_id=project_id,
-        project_slug=project_slug,
-        base_url=base_url,
-    )
-    if not bootstrap_url:
-        return MaxRuntimeProbe(False, "preview session returned an invalid signed URL")
-
-    return await _probe_signed_runtime(bootstrap_url)
-
-
 async def probe_max_cell_runtime(
     preview: orchestrator_client.ProjectCellPreviewSession,
     *,
@@ -386,4 +358,4 @@ async def _probe_signed_runtime(
     )
 
 
-__all__ = ["MaxRuntimeProbe", "probe_max_runtime"]
+__all__ = ["MaxRuntimeProbe"]

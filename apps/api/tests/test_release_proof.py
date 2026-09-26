@@ -14,92 +14,6 @@ from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
 from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
 
-async def test_release_proof_combines_build_runtime_and_transport_checks(
-    monkeypatch,
-) -> None:
-    project_id = uuid4()
-
-    async def build(_project_id, _slug):
-        return {"ok": True, "detail": "typecheck clean"}
-
-    async def runtime(_project_id, *, slug, path):
-        assert slug == "max-app"
-        assert path == "/"
-        return {"ok": True, "status_code": 200}
-
-    async def status(_project_id):
-        return {"state": "running", "dev_url": "https://max-app-dev.example.test"}
-
-    async def security(base_url):
-        assert base_url == "https://max-app-dev.example.test"
-        return FunctionalVerdict(
-            passed=True,
-            checks=[Check("nosniff", True, "present")],
-            summary="passed",
-        )
-
-    settings = get_settings().model_copy(update={"use_security_gate": True})
-    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
-    monkeypatch.setattr(release_proof.orchestrator_client, "agent_build", build)
-    monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", runtime)
-    monkeypatch.setattr(release_proof.orchestrator_client, "get_status", status)
-    monkeypatch.setattr(
-        "yleum_api.services.security_gate.run_security_gate",
-        security,
-    )
-
-    verdict = await release_proof.run_release_proof(project_id, "max-app")
-
-    assert verdict.passed
-    assert [(check.name, check.ok) for check in verdict.checks] == [
-        ("typecheck", True),
-        ("runtime", True),
-        ("nosniff", True),
-    ]
-
-
-async def test_release_proof_blocks_max_when_protected_data_probe_fails(
-    monkeypatch,
-) -> None:
-    project_id = uuid4()
-
-    async def build(_project_id, _slug):
-        return {"ok": True, "detail": "typecheck clean"}
-
-    async def runtime(_project_id, *, slug, path):
-        return {"ok": True, "status_code": 200}
-
-    async def status(_project_id):
-        return {"state": "running", "dev_url": "https://max-app-dev.example.test"}
-
-    async def max_probe(_project_id, _slug, *, base_url):
-        assert base_url == "https://max-app-dev.example.test"
-        return MaxRuntimeProbe(False, "protected MAX data read failed (HTTP 401)")
-
-    settings = get_settings().model_copy(update={"use_security_gate": False})
-    monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
-    monkeypatch.setattr(release_proof.orchestrator_client, "agent_build", build)
-    monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", runtime)
-    monkeypatch.setattr(release_proof.orchestrator_client, "get_status", status)
-    monkeypatch.setattr(
-        "yleum_api.services.max_runtime_probe.probe_max_runtime",
-        max_probe,
-    )
-
-    verdict = await release_proof.run_release_proof(
-        project_id,
-        "max-app",
-        require_max_data=True,
-    )
-
-    assert verdict.passed is False
-    assert [(check.name, check.ok) for check in verdict.checks] == [
-        ("typecheck", True),
-        ("runtime", True),
-        ("max_data_plane", False),
-    ]
-
-
 async def test_release_proof_uses_only_selected_project_cell_runtime(monkeypatch) -> None:
     project_id = uuid4()
     workspace_id = uuid4()
@@ -139,9 +53,6 @@ async def test_release_proof_uses_only_selected_project_cell_runtime(monkeypatch
 
     settings = get_settings().model_copy(update={"use_security_gate": False})
     monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
-    monkeypatch.setattr(release_proof.orchestrator_client, "agent_build", forbidden)
-    monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", forbidden)
-    monkeypatch.setattr(release_proof.orchestrator_client, "get_status", forbidden)
     monkeypatch.setattr(
         "yleum_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
     )
@@ -208,9 +119,6 @@ async def test_release_proof_uses_fallback_probe_route_when_home_page_is_missing
 
     settings = get_settings().model_copy(update={"use_security_gate": False})
     monkeypatch.setattr(release_proof, "get_settings", lambda: settings)
-    monkeypatch.setattr(release_proof.orchestrator_client, "agent_build", forbidden)
-    monkeypatch.setattr(release_proof.orchestrator_client, "runtime_status", forbidden)
-    monkeypatch.setattr(release_proof.orchestrator_client, "get_status", forbidden)
     monkeypatch.setattr(
         "yleum_api.services.max_runtime_probe.probe_max_cell_runtime", cell_probe
     )

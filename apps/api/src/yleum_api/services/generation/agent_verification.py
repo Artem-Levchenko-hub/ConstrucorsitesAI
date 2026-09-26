@@ -10,7 +10,6 @@ from yleum_api.core.config import get_settings
 from yleum_api.core.errors import ApiError
 from yleum_api.services import (
     agent_builder,
-    orchestrator_client,
 )
 from yleum_api.services.generation.agent_messages import (
     _agent_result_message,
@@ -294,25 +293,6 @@ async def probe_agent_candidate(
         else:
             print("[PP] agentic_smoke runtime ok", flush=True)
 
-            # Fire-and-forget route pre-warm: `next dev` compiles each
-            # route lazily on FIRST hit (~30-90s cold), so a reviewer eats
-            # that per page on a demo. Force those first hits now, in the
-            # background, so the pages are WARM when they land. Best-effort
-            # — never blocks the response, never fails the build.
-            if runtime.handle is None:
-
-                async def _warm_bg() -> None:
-                    try:
-                        _w = await orchestrator_client.warm_routes(
-                            ids.project_id, project_info.slug
-                        )
-                        print(f"[PP] warm routes {_w}", flush=True)
-                    except Exception as _w_exc:
-                        print(f"[PP] warm skipped: {_w_exc!r}", flush=True)
-
-                _warm_task = asyncio.create_task(_warm_bg())
-                # Hold a ref so the task isn't GC'd mid-flight; discard on done.
-                _warm_task.add_done_callback(lambda _t: None)
     except Exception as _sm_exc:
         raise_if_terminal_cell_error(_sm_exc)
         print(f"[PP] agentic_smoke skipped: {_sm_exc!r}", flush=True)

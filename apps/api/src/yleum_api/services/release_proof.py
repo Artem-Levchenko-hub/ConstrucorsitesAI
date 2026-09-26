@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING
 from uuid import UUID
 
 from yleum_api.core.config import get_settings
-from yleum_api.services import orchestrator_client
 from yleum_api.services.agent_builder import Action
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 
@@ -22,7 +21,7 @@ async def run_release_proof(
     *,
     proof: ProofBundle | None = None,
     require_max_data: bool = False,
-    project_cell_handle: ProjectCellExecutorHandle | None = None,
+    project_cell_handle: ProjectCellExecutorHandle,
 ) -> FunctionalVerdict:
     """Prove that the live project typechecks, serves HTTP and has safe transport.
 
@@ -37,10 +36,7 @@ async def run_release_proof(
         checks.extend(proof_bundle_verdict(proof, require_max_data=False).checks)
     else:
         try:
-            if project_cell_handle is None:
-                typecheck = await orchestrator_client.agent_build(project_id, project_slug)
-            else:
-                typecheck = await project_cell_handle.execute(Action(name="build", args={}))
+            typecheck = await project_cell_handle.execute(Action(name="build", args={}))
             checks.append(
                 Check(
                     "typecheck",
@@ -53,9 +49,7 @@ async def run_release_proof(
 
     base_url: str | None = None
     cell_preview: ProjectCellPreviewSession | None = None
-    if proof is not None and project_cell_handle is not None and (
-        require_max_data or settings.use_security_gate
-    ):
+    if proof is not None and (require_max_data or settings.use_security_gate):
         try:
             cell_preview = await project_cell_handle.create_preview_session()
             base_url = cell_preview.preview_url
@@ -63,16 +57,9 @@ async def run_release_proof(
             checks.append(Check("signed_preview_session", False, f"probe failed: {exc!r}"))
     if proof is None:
         try:
-            if project_cell_handle is None:
-                runtime = await orchestrator_client.runtime_status(
-                    project_id,
-                    slug=project_slug,
-                    path="/",
-                )
-            else:
-                runtime = await project_cell_handle.execute(
-                    Action(name="runtime_check", args={"path": "/"})
-                )
+            runtime = await project_cell_handle.execute(
+                Action(name="runtime_check", args={"path": "/"})
+            )
             checks.append(
                 Check(
                     "runtime",
@@ -85,13 +72,7 @@ async def run_release_proof(
                     )[:240],
                 )
             )
-            if project_cell_handle is None:
-                status_payload = await orchestrator_client.get_status(project_id)
-                raw_base_url = (
-                    status_payload.get("dev_url") if isinstance(status_payload, dict) else None
-                )
-                base_url = str(raw_base_url) if raw_base_url else None
-            elif require_max_data or settings.use_security_gate:
+            if require_max_data or settings.use_security_gate:
                 cell_preview = await project_cell_handle.create_preview_session()
                 base_url = cell_preview.preview_url
         except Exception as exc:
@@ -100,7 +81,7 @@ async def run_release_proof(
     if require_max_data:
         try:
             if proof is not None:
-                if project_cell_handle is None or cell_preview is None:
+                if cell_preview is None:
                     raise RuntimeError("exact MAX behavior probe unavailable")
                 from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
                 from yleum_api.services.max_runtime_routes import (
@@ -124,14 +105,6 @@ async def run_release_proof(
                     portable_project_id=project_id,
                     expected_epoch=proof.identity.fencing_epoch,
                     proof_key=proof.identity.proof_key,
-                )
-            elif project_cell_handle is None:
-                from yleum_api.services.max_runtime_probe import probe_max_runtime
-
-                max_probe = await probe_max_runtime(
-                    project_id,
-                    project_slug,
-                    base_url=base_url,
                 )
             else:
                 from yleum_api.services.max_runtime_probe import probe_max_cell_runtime
@@ -163,7 +136,7 @@ async def run_release_proof(
     mandatory_max_security = proof is not None and require_max_data
     if settings.use_security_gate or mandatory_max_security:
         try:
-            if project_cell_handle is not None and base_url is None:
+            if base_url is None:
                 cell_preview = await project_cell_handle.create_preview_session()
                 base_url = cell_preview.preview_url
             if not base_url:
