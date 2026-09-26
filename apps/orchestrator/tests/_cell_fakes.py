@@ -87,6 +87,16 @@ class FakeDockerBackend:
         return record
 
     async def remove_volume(self, name: str) -> None:
+        mounted_by = sorted(
+            item.name for item in self.containers.values() if name in item.volumes
+        )
+        if mounted_by:
+            # `docker volume rm --force` снимает только «нет такого тома». Том,
+            # смонтированный в существующий контейнер, всё равно отвечает 409
+            # «volume is in use» — а настоящий бэкенд зовёт remove именно с этим
+            # force. Без отказа стенд разрешает снести том раньше контейнера:
+            # на проде это оставит висеть и том, и саму операцию.
+            raise CellResourceError(f"volume {name} is in use by {', '.join(mounted_by)}")
         record = self.volumes.pop(name, None)
         if record is not None:
             self.removed_resources.append(record.resource_id)
