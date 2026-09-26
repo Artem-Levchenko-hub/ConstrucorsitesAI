@@ -87,11 +87,18 @@ async def test_dispatch_loop_overlaps_runs_reuses_slots_and_reports_waiters(
         async def __aexit__(self, *_args):
             pass
 
-        async def scalars(self, _query):
-            return SimpleNamespace(all=lambda: [i for i in ids if statuses[i] != "completed"])
-
-        async def execute(self, _query):
-            return SimpleNamespace(all=lambda: list(statuses.items()))
+    async def scan(_session, active):
+        # Distinct real hosts isolate the global connection-budget invariant
+        # from the separately tested per-host provisional admission bound.
+        rows = {
+            run_id: generation.HostDispatch(run_id, f"host-{index:02}", statuses[run_id])
+            for index, run_id in enumerate(ids)
+        }
+        return (
+            {run_id: rows[run_id] for run_id in active},
+            [rows[run_id] for run_id in ids if statuses[run_id] != "completed"],
+            [],
+        )
 
     async def execute(run_id):
         tasks.append(asyncio.current_task())
@@ -113,6 +120,7 @@ async def test_dispatch_loop_overlaps_runs_reuses_slots_and_reports_waiters(
 
     monkeypatch.setattr(generation, "get_engine", lambda: object())
     monkeypatch.setattr(generation, "async_sessionmaker", lambda *_a, **_kw: Session)
+    monkeypatch.setattr(generation, "_load_dispatch_scan", scan)
     monkeypatch.setattr(generation, "get_redis", lambda: SimpleNamespace(set=redis_set))
     monkeypatch.setattr(generation, "execute_dispatch", execute)
     monkeypatch.setattr(

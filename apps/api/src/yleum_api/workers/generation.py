@@ -12,10 +12,12 @@ import json
 import logging
 from collections.abc import Mapping, Sequence
 from contextlib import suppress
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import exists, or_, select, text, update
+from sqlalchemy import Select, and_, exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -29,7 +31,7 @@ from yleum_api.core.redis import get_redis
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
-from yleum_api.models.project_cell import ProjectCellOperation
+from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.services.generation_execution_context import execution_run_id
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
@@ -306,58 +308,226 @@ def select_runs_to_start(
     return starting
 
 
+@dataclass(frozen=True)
+class HostDispatch:
+    run_id: UUID
+    host: str | None
+    status: str = "pending"
+    admitted: bool = False
+    maintenance: bool = False
+
+
+def _host_key(host: str | None) -> str:
+    # A missing durable workspace is one unknown bucket, never guessed as core.
+    return "" if host is None else "h:" + host
+
+
+def select_host_runs_to_start(
+    candidates: Sequence[HostDispatch],
+    active: Mapping[UUID, object],
+    active_info: Mapping[UUID, HostDispatch],
+    limit: int,
+    *,
+    maintenance: Sequence[HostDispatch] = (),
+    after_host: str | None = None,
+    prefer_maintenance: bool = True,
+) -> list[HostDispatch]:
+    """Reserve one provisional dispatch per real host before creating any tasks.
+
+    Admitted work still consumes the global connection budget. This is a local
+    worker admission bound, not a host running quota or a cluster-wide lock.
+    """
+    room = limit - len(active)
+    if room <= 0:
+        return []
+    occupied = {
+        _host_key(info.host)
+        for run_id in active
+        if not (info := active_info.get(run_id, HostDispatch(run_id, None))).admitted
+        and not info.maintenance
+    }
+    cleanup = [item for item in maintenance if item.run_id not in active][:1]
+    selected = list(cleanup) if room > 1 or prefer_maintenance else []
+    # READ COMMITTED queries can observe a run move from unstarted to cleanup.
+    reserved_ids = {item.run_id for item in maintenance}
+    heads: dict[str, HostDispatch] = {}
+    for item in candidates:
+        if item.run_id not in active and item.run_id not in reserved_ids:
+            heads.setdefault(_host_key(item.host), item)
+    hosts = sorted(heads)
+    if after_host is not None:
+        hosts = [host for host in hosts if host > after_host] + [
+            host for host in hosts if host <= after_host
+        ]
+    for host in hosts:
+        if len(selected) >= room:
+            break
+        if host not in occupied:
+            selected.append(heads[host])
+            occupied.add(host)
+    # Prefer fresh on alternating single-slot scans, but never waste a slot
+    # when that lane is empty or its hosts are still awaiting admission.
+    return selected or cleanup
+
+
+def _unstarted_candidates_query(active: Sequence[UUID]) -> Select[Any]:
+    # Rank within each durable host BEFORE the bounded outer window: hundreds
+    # of older requests on A must not hide the first request on B.
+    ranked = (
+        select(
+            GenerationRun.id.label("run_id"),
+            ProjectCellWorkspace.orchestrator.label("host"),
+            GenerationRun.created_at.label("created_at"),
+            func.row_number()
+            .over(
+                partition_by=ProjectCellWorkspace.orchestrator,
+                order_by=(GenerationRun.created_at, GenerationRun.id),
+            )
+            .label("host_position"),
+        )
+        .outerjoin(
+            ProjectCellWorkspace, ProjectCellWorkspace.project_id == GenerationRun.project_id
+        )
+        .where(
+            GenerationRun.execution_backend == "worker",
+            GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+            GenerationRun.status != "cancel_requested",
+            GenerationRun.execution_started_at.is_(None),
+            GenerationRun.id.not_in(active),
+        )
+        .subquery()
+    )
+    return (
+        select(ranked.c.run_id, ranked.c.host)
+        .where(ranked.c.host_position == 1)
+        .order_by(ranked.c.created_at, ranked.c.run_id)
+        .limit(100)
+    )
+
+
+def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
+    # Ownership and unknown effects are still decided by execute_dispatch.
+    return (
+        select(GenerationRun.id, ProjectCellWorkspace.orchestrator)
+        .outerjoin(
+            ProjectCellWorkspace,
+            ProjectCellWorkspace.project_id == GenerationRun.project_id,
+        )
+        .where(
+            GenerationRun.execution_backend == "worker",
+            GenerationRun.id.not_in(active),
+            or_(
+                GenerationRun.status == "cancel_requested",
+                and_(
+                    GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
+                    GenerationRun.execution_started_at.is_not(None),
+                ),
+                and_(
+                    GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
+                    exists().where(
+                        ProjectCellOperation.execution_run_id == GenerationRun.id,
+                        ProjectCellOperation.status == "running",
+                    ),
+                ),
+            ),
+        )
+        .order_by(GenerationRun.created_at, GenerationRun.id)
+        .limit(100)
+    )
+
+
+async def _load_dispatch_scan(
+    session: AsyncSession, active: Sequence[UUID]
+) -> tuple[dict[UUID, HostDispatch], list[HostDispatch], list[HostDispatch]]:
+    info = {}
+    if active:
+        rows = (
+            await session.execute(
+                select(
+                    GenerationRun.id,
+                    GenerationRun.status,
+                    GenerationRun.agent_state["capacity_admitted_dispatch_token"],
+                    ProjectCellWorkspace.orchestrator,
+                )
+                .outerjoin(
+                    ProjectCellWorkspace,
+                    ProjectCellWorkspace.project_id == GenerationRun.project_id,
+                )
+                .where(GenerationRun.id.in_(active))
+            )
+        ).all()
+        for run_id, status, token, host in rows:
+            admitted = False
+            if status == "running" and token is not None:
+                # Match generation_runs.capacity_admitted_dispatch_token's UUID
+                # semantics on the raw JSON value; don't cast JSON to SQL text.
+                try:
+                    UUID(str(token))
+                    admitted = True
+                except (TypeError, ValueError):
+                    pass
+            info[run_id] = HostDispatch(run_id, host, status, admitted)
+    candidates = [
+        HostDispatch(run_id, host)
+        for run_id, host in (await session.execute(_unstarted_candidates_query(active))).all()
+    ]
+    maintenance = [
+        HostDispatch(run_id, host, maintenance=True)
+        for run_id, host in (await session.execute(_maintenance_candidates_query(active))).all()
+    ]
+    return info, candidates, maintenance
+
+
 async def _run_dispatch_forever() -> None:
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     active: dict[UUID, asyncio.Task[bool]] = {}
+    active_info: dict[UUID, HostDispatch] = {}
+    after_host: str | None = None
+    after_maintenance: UUID | None = None
+    prefer_maintenance = True
     while True:
         try:
             for run_id, task in list(active.items()):
                 if task.done():
-                    # Drop the completed task before observing its exception.
-                    # A pre-claim DB failure must not poison every later scan.
                     active.pop(run_id)
+                    active_info.pop(run_id, None)
                     task.result()
             async with factory() as session:
-                # Query active IDs separately: cleanup tasks may no longer be in
-                # the candidate window or have a terminal GenerationRun status.
-                statuses = (
-                    {
-                        run_id: status
-                        for run_id, status in (
-                            await session.execute(
-                                select(GenerationRun.id, GenerationRun.status).where(
-                                    GenerationRun.id.in_(active)
-                                )
-                            )
-                        ).all()
-                    }
-                    if active
-                    else {}
+                observed, candidates, maintenance = await _load_dispatch_scan(session, list(active))
+            for run_id in active:
+                previous = active_info.get(run_id, HostDispatch(run_id, None))
+                active_info[run_id] = replace(
+                    observed.get(run_id, HostDispatch(run_id, previous.host, status="unknown")),
+                    maintenance=previous.maintenance,
                 )
-                candidates = list(
-                    (
-                        await session.scalars(
-                            select(GenerationRun.id)
-                            .where(
-                                GenerationRun.execution_backend == "worker",
-                                or_(
-                                    GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
-                                    exists().where(
-                                        ProjectCellOperation.execution_run_id == GenerationRun.id,
-                                        ProjectCellOperation.status == "running",
-                                    ),
-                                ),
-                            )
-                            .order_by(GenerationRun.created_at)
-                            .limit(100)
-                        )
-                    ).all()
-                )
+            # Avoid a still-owned orphan at the head monopolizing cleanup scans.
+            maintenance_ids = [item.run_id for item in maintenance]
+            if after_maintenance in maintenance_ids:
+                pivot = maintenance_ids.index(after_maintenance) + 1
+                maintenance = maintenance[pivot:] + maintenance[:pivot]
             limit = current_dispatch_limit()
-            for run_id in select_runs_to_start(candidates, active, limit):
-                active[run_id] = asyncio.create_task(execute_dispatch(run_id))
-            running = sum(statuses.get(run_id) == "running" for run_id in active)
-            waiting = sum(statuses.get(run_id) == "queued_for_capacity" for run_id in active)
+            starting = select_host_runs_to_start(
+                candidates,
+                active,
+                active_info,
+                limit,
+                maintenance=maintenance,
+                after_host=after_host,
+                prefer_maintenance=prefer_maintenance,
+            )
+            if starting:
+                # One persistently lock-busy cleanup must not starve fresh work
+                # when only one connection-budget slot is available.
+                prefer_maintenance = not starting[0].maintenance
+            for item in starting:
+                active_info[item.run_id] = item
+                active[item.run_id] = asyncio.create_task(execute_dispatch(item.run_id))
+                if item.maintenance:
+                    after_maintenance = item.run_id
+                else:
+                    after_host = _host_key(item.host)
+            running = sum(info.status == "running" for info in active_info.values())
+            waiting = sum(info.status == "queued_for_capacity" for info in active_info.values())
             await get_redis().set(
                 HEARTBEAT_KEY,
                 dispatch_heartbeat_payload(
