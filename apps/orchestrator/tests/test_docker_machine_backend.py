@@ -714,6 +714,220 @@ def test_owner_readiness_can_skip_unused_success_logs_but_keeps_failure_logs(
     assert reads == (["service.log"] if include_logs or not running else [])
 
 
+def stale_service_fixture(tmp_path, *, missing=True, stop_failure=None):
+    import docker
+
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    service = manifest.services[0]
+    events = []
+    children = [1]  # Real failure: the original web child is alive despite exec 404.
+
+    class Machine:
+        id = "owned-product"
+        status = "running"
+
+        def __init__(self):
+            self.labels = {**runtime.labels("development"), "omnia.fencing_epoch": "7"}
+            self.attrs = {
+                "HostConfig": {"NetworkMode": "container:guard"}, "Config": {"Labels": self.labels},
+            }
+
+        def reload(self):
+            events.append("reload:" + self.status)
+
+        def stop(self, timeout):
+            events.append("stop")
+            assert runtime._metadata()["services"]
+            if stop_failure == "error":
+                raise docker.errors.APIError("stop failed")
+            if stop_failure != "still_running":
+                children[0] = 0
+                self.status = "exited"
+
+        def start(self):
+            events.append("start")
+            assert children[0] == 0
+            assert runtime._metadata()["services"] == {}
+            self.status = "running"
+
+    machine = Machine()
+    postgres = SimpleNamespace(
+        labels={**runtime.labels("project-postgres"), "omnia.fencing_epoch": "7"},
+        attrs={"Config": {"Labels": runtime.labels("project-postgres")}},
+        stop=lambda **_kw: pytest.fail("project database must not be stopped"),
+    )
+    proxy = SimpleNamespace(
+        labels=runtime.labels("egress-proxy"), status="running", reload=lambda: None,
+        attrs={
+            "Config": {"Labels": runtime.labels("egress-proxy")},
+            "NetworkSettings": {
+                "Networks": {runtime.internal_network: {"IPAddress": "10.0.0.2"}},
+            },
+        },
+    )
+    objects = {runtime.machine_name: machine, runtime.project_postgres_name: postgres,
+               runtime.stem + "-proxy": proxy}
+
+    def inspect(identifier):
+        events.append("inspect:" + identifier)
+        if identifier == "old" and missing:
+            raise docker.errors.NotFound("No such exec instance")
+        return {"Running": True, "ContainerID": machine.id}
+
+    def create(*args, **kwargs):
+        assert children[0] == 0
+        events.append("new-exec")
+        return {"Id": "new"}
+
+    def start_exec(*args, **kwargs):
+        children[0] += 1
+        events.append("exec-start")
+
+    runtime.client = SimpleNamespace(
+        containers=SimpleNamespace(get=lambda name: objects[name]),
+        networks=SimpleNamespace(get=lambda _: SimpleNamespace(attrs={
+            "Internal": True, "Labels": {"omnia.workspace_id": str(runtime.workspace_id)},
+        })),
+        api=SimpleNamespace(exec_inspect=inspect, exec_create=create, exec_start=start_exec),
+    )
+    runtime._network = lambda *_args, **_kwargs: SimpleNamespace(name="public")
+    runtime._wait_proxy_ready = lambda *_args: None
+    runtime._volume = lambda *_args: None
+    runtime._ensure_namespace_guard = lambda *_args: SimpleNamespace(id="guard")
+    runtime._ensure_project_postgres = lambda *_args: events.append("postgres-reused")
+    runtime.volume_mapping = lambda *_args: {}
+    runtime.container_options = lambda *_args: {}
+    saved = {
+        "manifest": manifest.model_dump(mode="json"), "epoch": 7,
+        "services": {service.name: {"exec_id": "old", "epoch": 7, "log": "old.log"}},
+        "exec_logs": {"command": "command.log"}, "exec_pids": {"command": "command.pid"},
+    }
+    write_controller_json(runtime.metadata_path, saved)
+    return runtime, manifest, service, events, children, saved
+
+
+def test_missing_service_exec_is_nonready_but_never_directly_duplicated(tmp_path):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    runtime, _, service, events, children, saved = stale_service_fixture(tmp_path)
+    status = runtime.service_status(service, 7, include_logs=False)
+    assert status["state"] == "missing" and status["ready"] is False
+    with pytest.raises(CellResourceError, match="recovery"):
+        runtime.start_service(service, 7)
+    assert children == [1] and "new-exec" not in events
+    assert runtime._metadata() == saved
+
+
+def test_ensure_missing_exec_stops_live_orphan_before_clear_and_restart(tmp_path):
+    runtime, manifest, service, events, children, _ = stale_service_fixture(tmp_path)
+    runtime.ensure(manifest, 7)
+    runtime.start_service(service, 7)
+    assert events.index("stop") < events.index("reload:exited") < events.index("start")
+    assert events.index("start") < events.index("new-exec") < events.index("exec-start")
+    assert children == [1]
+    assert runtime._metadata()["services"][service.name]["exec_id"] == "new"
+
+
+@pytest.mark.parametrize("failure", ["error", "still_running"])
+def test_unconfirmed_product_stop_preserves_records_and_cannot_duplicate(tmp_path, failure):
+    import docker
+
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    runtime, manifest, _, events, children, saved = stale_service_fixture(
+        tmp_path, stop_failure=failure,
+    )
+    expected = docker.errors.APIError if failure == "error" else CellResourceError
+    with pytest.raises(expected):
+        runtime.ensure(manifest, 7)
+    assert children == [1]
+    assert runtime._metadata() == saved
+    assert "start" not in events and "new-exec" not in events
+
+
+def test_healthy_same_epoch_reuse_preserves_service_and_command_ownership(tmp_path):
+    runtime, manifest, service, events, children, saved = stale_service_fixture(
+        tmp_path, missing=False,
+    )
+    runtime.ensure(manifest, 7)
+    runtime.start_service(service, 7)
+    assert "stop" not in events and "start" not in events and "new-exec" not in events
+    assert children == [1]
+    for key in ("services", "exec_logs", "exec_pids"):
+        assert runtime._metadata()[key] == saved[key]
+
+
+@pytest.mark.parametrize("method", ["service_status", "start_service", "ensure"])
+def test_service_inspect_server_errors_propagate_without_recovery(tmp_path, method):
+    import docker
+
+    runtime, manifest, service, events, children, saved = stale_service_fixture(tmp_path)
+    def fail(_identifier):
+        raise docker.errors.APIError("Docker unavailable")
+    runtime.client.api.exec_inspect = fail
+    with pytest.raises(docker.errors.APIError):
+        getattr(runtime, method)(manifest if method == "ensure" else service, 7)
+    assert children == [1] and runtime._metadata() == saved
+    assert "stop" not in events and "new-exec" not in events
+
+
+@pytest.mark.parametrize("fault", ["metadata_epoch", "service_epoch", "owner", "exec_container"])
+def test_stale_service_recovery_requires_exact_owned_epoch_and_container(tmp_path, fault):
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime, manifest, service, events, children, saved = stale_service_fixture(tmp_path)
+    if fault == "metadata_epoch":
+        saved["epoch"] = 8
+    elif fault == "service_epoch":
+        saved["services"][service.name]["epoch"] = 8
+    elif fault == "owner":
+        runtime._container().attrs["Config"]["Labels"]["omnia.owner_id"] = str(uuid4())
+    else:
+        runtime.client.api.exec_inspect = lambda _: {"Running": True, "ContainerID": "foreign"}
+    write_controller_json(runtime.metadata_path, saved)
+    with pytest.raises(CellIdentityConflict):
+        runtime.ensure(manifest, 7)
+    assert children == [1] and runtime._metadata() == saved
+    assert "stop" not in events and "new-exec" not in events
+
+
+def test_completed_service_exec_is_not_mistaken_for_lost_ownership(tmp_path):
+    runtime, manifest, _, events, _, saved = stale_service_fixture(tmp_path)
+    runtime.client.api.exec_inspect = lambda _: {"Running": False, "ContainerID": "owned-product"}
+    runtime.ensure(manifest, 7)
+    runtime.ensure(manifest, 7)
+    assert "stop" not in events and "start" not in events
+    assert runtime._metadata()["services"] == saved["services"]
+
+
+def test_missing_exec_with_embedded_data_store_requires_explicit_recovery(tmp_path):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime, manifest, _, events, children, saved = stale_service_fixture(tmp_path)
+    value = manifest.model_dump(mode="json")
+    value["services"][0]["mounts"] = [{"volume": "data", "target": "/data"}]
+    value["tasks"] += [
+        {"name": "quiet", "role": "quiesce", "argv": ["sh", "quiet.sh"]},
+        {"name": "recover", "role": "restore_check", "argv": ["sh", "recover.sh"]},
+    ]
+    value["data_stores"] = [{
+        "name": "local", "volumes": ["data"],
+        "quiesce_task": "quiet", "restore_check_task": "recover",
+    }]
+    manifest = MachineManifest.model_validate(value)
+    saved["manifest"] = manifest.model_dump(mode="json")
+    write_controller_json(runtime.metadata_path, saved)
+    with pytest.raises(CellResourceError, match=r"data-store.*recovery"):
+        runtime.ensure(manifest, 7)
+    assert children == [1] and runtime._metadata() == saved
+    assert "stop" not in events and "start" not in events and "new-exec" not in events
+
+
 @pytest.mark.parametrize("failure", ["timeout", "bad_output"])
 def test_interrupted_stat_helper_is_removed_without_certifying_volumes(
     tmp_path,
@@ -1439,7 +1653,8 @@ def test_is_running_reports_live_project_postgres_even_without_machine_process(t
     assert runtime.is_running() is True
 
 
-def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path):
+@pytest.mark.parametrize("change", ["manifest", "epoch"])
+def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path, change):
     from types import SimpleNamespace
 
     from yleum_orchestrator.services.project_machine import write_controller_json
@@ -1447,7 +1662,8 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path)
     runtime = backend(tmp_path)
     before = MachineManifest.model_validate(payload())
     after = before.model_copy(deep=True)
-    after.services[0].argv = ["python3", "new.py"]
+    if change == "manifest":
+        after.services[0].argv = ["python3", "new.py"]
     write_controller_json(runtime.metadata_path, {"manifest": before.model_dump(mode="json")})
     runtime._container = lambda: SimpleNamespace(labels={"omnia.fencing_epoch": "7"})
     runtime._project_postgres = lambda: None
@@ -1463,7 +1679,7 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path)
 
     runtime.client = SimpleNamespace(networks=SimpleNamespace(get=network))
     with pytest.raises(ReachedCreate):
-        runtime.ensure(after, 7)
+        runtime.ensure(after, 7 if change == "manifest" else 8)
     assert operations == [("capture", before.digest()), ("remove", {"expected_epoch": 7})]
 
 

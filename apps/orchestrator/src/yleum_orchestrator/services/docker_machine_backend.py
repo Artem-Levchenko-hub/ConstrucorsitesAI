@@ -512,6 +512,7 @@ class DockerMachineBackend:
         self.container_options(manifest, "pending", epoch)
         existing = self._container()
         reuse_existing = False
+        preserve_exec_state = False
         if existing is not None:
             physical_epoch = int(existing.labels.get("omnia.fencing_epoch", "0"))
             if physical_epoch > epoch:
@@ -528,8 +529,36 @@ class DockerMachineBackend:
                 self.remove(expected_epoch=physical_epoch)
             else:
                 existing.reload()
+                if metadata.get("epoch") != epoch:
+                    raise CellIdentityConflict("reused machine metadata epoch changed")
+                missing_service_exec = False
+                if existing.status == "running":
+                    for record in metadata["services"].values():
+                        if record.get("epoch") != epoch:
+                            raise CellIdentityConflict("reused service epoch changed")
+                        try:
+                            inspected = self.client.api.exec_inspect(record["exec_id"])
+                        except docker.errors.NotFound:
+                            missing_service_exec = True
+                            continue
+                        if inspected.get("ContainerID") != existing.id:
+                            raise CellIdentityConflict("reused service container changed")
+                    if missing_service_exec:
+                        if manifest.data_stores:
+                            # Embedded stores require their explicit quiesce flow;
+                            # a lost exec cannot authorize killing their writers.
+                            raise CellResourceError("data-store service recovery requires quiesce")
+                        # Docker may forget an exec whose web descendants are still
+                        # alive. Only stopping the whole owned product container
+                        # proves that a replacement cannot duplicate those writers.
+                        existing.stop(timeout=10)
+                        existing.reload()
+                        if existing.status != "exited":
+                            raise CellResourceError("service recovery stop was not confirmed")
+                    else:
+                        preserve_exec_state = True
                 if existing.status != "running":
-                    metadata["quiesce_state"] = None
+                    metadata.update(quiesce_state=None, services={}, exec_logs={}, exec_pids={})
                     write_controller_json(self.metadata_path, metadata)
                     existing.start()
                 reuse_existing = True
@@ -587,6 +616,7 @@ class DockerMachineBackend:
                 # guard; every volume, and therefore every record, stays in place.
                 self.remove(expected_epoch=physical_epoch)
                 reuse_existing = False
+                preserve_exec_state = False
         for name in self.volume_mapping(manifest):
             if name != self.workspace_volume:
                 self._volume(name)
@@ -597,9 +627,9 @@ class DockerMachineBackend:
             guard_id=guard.id,
             manifest=manifest.model_dump(mode="json"),
             epoch=epoch,
-            services={},
-            exec_logs={},
-            exec_pids={},
+            services=metadata["services"] if preserve_exec_state else {},
+            exec_logs=metadata["exec_logs"] if preserve_exec_state else {},
+            exec_pids=metadata["exec_pids"] if preserve_exec_state else {},
             quiesce_state=None,
         )
         write_controller_json(self.metadata_path, metadata)
@@ -1073,7 +1103,11 @@ class DockerMachineBackend:
         metadata = self._metadata()
         previous = metadata["services"].get(service.name)
         if previous:
-            info = self.client.api.exec_inspect(previous["exec_id"])
+            try:
+                info = self.client.api.exec_inspect(previous["exec_id"])
+            except docker.errors.NotFound as exc:
+                # No service PID receipt exists; the old child may still be alive.
+                raise CellResourceError("service exec missing; fenced recovery required") from exc
             if info["Running"]:
                 return
         log = f"/run/omnia-logs/service-{service.name}-{epoch}.log"
@@ -1111,7 +1145,10 @@ class DockerMachineBackend:
         )
         while True:
             machine_remaining_seconds(1)
-            info = self.client.api.exec_inspect(record["exec_id"])
+            try:
+                info = self.client.api.exec_inspect(record["exec_id"])
+            except docker.errors.NotFound:
+                return {"name": service.name, "state": "missing", "ready": False, "log_tail": ""}
             running = bool(info["Running"])
             if not running:
                 break
