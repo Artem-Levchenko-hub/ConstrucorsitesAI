@@ -156,32 +156,6 @@ async def test_upload_uses_private_projects_bucket(monkeypatch):
     client.set_bucket_policy.assert_not_called()
 
 
-async def test_legacy_max_worker_never_reads_live_source(monkeypatch):
-    from yleum_api.workers import preview
-
-    sid, pid = uuid4(), uuid4()
-    session = AsyncMock()
-    session.get.side_effect = [
-        SimpleNamespace(project_id=pid, commit_sha="a" * 40),
-        SimpleNamespace(template="max_miniapp"),
-    ]
-    context = AsyncMock()
-    context.__aenter__.return_value = session
-    factory = Mock(return_value=context)
-    engine = SimpleNamespace(dispose=AsyncMock())
-    monkeypatch.setattr(preview, "get_settings", lambda: SimpleNamespace(database_url="test"))
-    monkeypatch.setattr(preview, "create_async_engine", lambda *_: engine)
-    monkeypatch.setattr(preview, "async_sessionmaker", lambda *_, **__: factory)
-    read = Mock()
-    monkeypatch.setattr(preview.repo_svc, "read_files", read)
-    resolve = AsyncMock()
-    monkeypatch.setattr(preview, "_resolve_live_url", resolve)
-    await preview._render_async(str(sid))
-    read.assert_not_called()
-    resolve.assert_not_called()
-    engine.dispose.assert_awaited_once()
-
-
 async def test_cached_source_cannot_substitute_fresh_physical_read(harness):
     h = harness
     h.handle.snapshot_files = AsyncMock(return_value=dict(h.files))

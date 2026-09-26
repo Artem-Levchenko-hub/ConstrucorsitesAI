@@ -15,7 +15,6 @@ from yleum_api.schemas.snapshot import RollbackRequest, SnapshotPublic, snapshot
 from yleum_api.schemas.snapshot import snapshot_public_dict as _snapshot_dict
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.project_versions import record_restored_version
-from yleum_api.services.queue import enqueue_preview
 from yleum_api.services.snapshot_restore import apply_legacy_restore, ensure_restore_supported
 
 router = APIRouter(prefix="/api/projects", tags=["rollback"])
@@ -98,8 +97,6 @@ async def post_rollback(
     await record_restored_version(session, project, new_snapshot, target)
     await session.commit()
     await session.refresh(new_snapshot)
-
-    await asyncio.to_thread(enqueue_preview, new_snapshot.id)
 
     await publish_event(
         project_id, "snapshot.created", {"snapshot": snapshot_event_dict(new_snapshot)}

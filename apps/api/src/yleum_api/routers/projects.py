@@ -48,7 +48,6 @@ from yleum_api.services.max_access import require_max_studio_access
 from yleum_api.services.preset_classifier import classify_preset_sync
 from yleum_api.services.project_cell_access import admit_new_project_cell
 from yleum_api.services.project_cell_deletion import teardown_project_cell
-from yleum_api.services.queue import enqueue_preview
 from yleum_api.services.run_bundle import build_launchers
 
 _UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
@@ -81,9 +80,6 @@ async def _commit_first_snapshot(session: SessionDep, project: Project, commit_s
     await session.refresh(project)
     await session.refresh(snapshot)
 
-    # For a MAX project the worker returns at once: MAX thumbnails are captured
-    # under the generation lease, never by this deferred job.
-    await asyncio.to_thread(enqueue_preview, snapshot.id)
     await publish_event(
         project.id,
         "snapshot.created",

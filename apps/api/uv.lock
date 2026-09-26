@@ -744,7 +744,6 @@ dependencies = [
     { name = "pyjwt" },
     { name = "python-slugify" },
     { name = "redis" },
-    { name = "rq" },
     { name = "slowapi" },
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "structlog" },
@@ -779,7 +778,6 @@ requires-dist = [
     { name = "pyjwt", specifier = ">=2.10,<3.0" },
     { name = "python-slugify", specifier = ">=8.0,<9.0" },
     { name = "redis", specifier = ">=5.0,<6.0" },
-    { name = "rq", specifier = ">=1.16,<2.0" },
     { name = "slowapi", specifier = ">=0.1.9,<1.0" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0,<3.0" },
     { name = "structlog", specifier = ">=24.1,<25.0" },
@@ -1255,19 +1253,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6a/cf/128b1b6d7086200c9f387bd4be9b2572a30b90745ef078bd8b235042dc9f/redis-5.3.1.tar.gz", hash = "sha256:ca49577a531ea64039b5a36db3d6cd1a0c7a60c34124d46924a45b956e8cf14c", size = 4626200, upload-time = "2025-07-25T08:06:27.778Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/26/5c5fa0e83c3621db835cfc1f1d789b37e7fa99ed54423b5f519beb931aa7/redis-5.3.1-py3-none-any.whl", hash = "sha256:dc1909bd24669cc31b5f67a039700b16ec30571096c5f1f0d9d2324bff31af97", size = 272833, upload-time = "2025-07-25T08:06:26.317Z" },
-]
-
-[[package]]
-name = "rq"
-version = "1.16.2"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "click" },
-    { name = "redis" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/c5/1d/a020e8f3559293635dd6283d037bfc15f866136498da3db1e5416c65773d/rq-1.16.2.tar.gz", hash = "sha256:5c5b9ad5fbaf792b8fada25cc7627f4d206a9a4455aced371d4f501cc3f13b34", size = 629881, upload-time = "2024-05-01T07:13:14.136Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/35/db396caf7cfe71a9e661cea520b276f1472df25015e7cb9143c65a1dca6d/rq-1.16.2-py3-none-any.whl", hash = "sha256:52e619f6cb469b00e04da74305045d244b75fecb2ecaa4f26422add57d3c5f09", size = 90911, upload-time = "2024-05-01T07:13:11.158Z" },
 ]
 
 [[package]]

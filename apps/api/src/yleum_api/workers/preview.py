@@ -1,55 +1,47 @@
-"""RQ job: рендер PNG-превью snapshot'а через Playwright."""
+"""Live screenshots of a running app — the picture behind a MAX version card.
+
+One entry point, :func:`capture_live_url_report`: open the app's live URL in a
+headless browser (optionally through a signed bootstrap URL first, so the shot
+is of the app as an authenticated visitor sees it), wait until it has actually
+painted, and take one screenshot per requested viewport width. Failures are
+kept, not raised: a width that times out is reported as an issue and the rest
+still come back, because a missing thumbnail must never fail a build.
+
+``services/snapshot_preview_capture`` is the only caller — it uploads the PNGs
+and persists them against the version.
+
+The deferred RQ job that used to live here (screenshot a static page off disk,
+or a legacy dev container over the runtime network) left with the site builder:
+a MAX app's thumbnail is captured inside the generation lease, with exact
+before/after source checks, so a late background shot could only mislabel it.
+"""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import json
 import re
-import tempfile
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
-from pathlib import Path
-from typing import cast
 from urllib.parse import urlsplit, urlunsplit
-from uuid import UUID
 
-import redis.asyncio as aioredis
-from minio import Minio
 from playwright.async_api import (
     Page,
-    ViewportSize,
     async_playwright,
 )
 from playwright.async_api import (
     TimeoutError as PlaywrightTimeoutError,
 )
-from sqlalchemy import update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from yleum_api.core import minio as minio_core
 from yleum_api.core.config import get_settings
-from yleum_api.core.redis import project_channel
-from yleum_api.models.project import Project
-from yleum_api.models.snapshot import Snapshot
-from yleum_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as CONTAINER_NEXT
-from yleum_api.services import dev_container
-from yleum_api.services import repo as repo_svc
 
-VIEWPORT: ViewportSize = {"width": 1280, "height": 800}
 GOTO_TIMEOUT_MS = 15_000
 _LIVE_SIGNED_BOOTSTRAP_TIMEOUT_MS = 120_000
 
-# Container-backed templates render from a live dev container, not from repo
-# files — their git repo only tracks AI-generated files, no root `index.html`.
-# The canonical browser-container family is imported from schemas.project.
-# `spa` (Vite + React, Phase 7.2) renders from its dev container too.
 # `domcontentloaded` (NOT networkidle): broken images + the Tailwind Play-CDN keep
 # the network busy, so networkidle never settles and Page.goto times out at 15s —
 # which made the acceptance gate SKIP responsive+vision and ship junk as passed=True.
 # domcontentloaded fires reliably; we then settle async for two things:
 # (1) the Tailwind Play-CDN JIT compiles utility classes, (2) web-fonts paint.
-# We ALSO force `reduced_motion="reduce"` on every capture page so omnia-kit's
+# We force `reduced_motion="reduce"` on every capture page so the app's
 # reveal / scroll-reveal animations — all gated behind
 # `@media (prefers-reduced-motion: no-preference)` — render in their FINAL
 # visible state instead of their opacity:0 start. Without it the screenshot
@@ -57,22 +49,6 @@ _LIVE_SIGNED_BOOTSTRAP_TIMEOUT_MS = 120_000
 # thumbnail even when the live page is fine). This settle is the belt to that
 # suspenders: fonts + Tailwind JIT have a beat to apply before we shoot.
 _RENDER_SETTLE_MS = 600
-
-# Acceptance-gate render harness (Phase 11, Sprint 1.2).
-DEFAULT_CAPTURE_WIDTHS: tuple[int, ...] = (360, 768, 1440)
-# Sub-pixel rounding means scrollWidth can exceed the viewport by ~1px even on
-# a perfectly-fitting page; only flag real horizontal overflow above this.
-_OVERFLOW_TOLERANCE_PX = 2
-
-
-@dataclass(frozen=True)
-class CaptureResult:
-    """One rendered viewport: the PNG plus its overflow measurement."""
-
-    png: bytes
-    viewport_width: int
-    scroll_width: int
-    has_overflow: bool
 
 
 @dataclass(frozen=True)
@@ -166,35 +142,6 @@ async def _await_content(page: Page) -> None:
         )
     except Exception:
         pass
-
-
-def _rewrite_minio_to_internal(content: str) -> str:
-    """Repoint resolved ``<img src>`` from the PUBLIC MinIO URL to the INTERNAL
-    endpoint for the duration of a render.
-
-    The image-resolver bakes ``data-omnia-gen`` photos as absolute public URLs
-    (``{minio_public_url}/<bucket>/<key>``) so real browsers load them. But the
-    preview worker renders the page from inside its container, where the public
-    host (``constructor.lead-generator.ru`` → the host's own public IP) is
-    **unreachable** — the container can't hairpin-NAT back to the host, so every
-    such ``<img>`` hangs (``net::ERR`` / connect timeout) and the screenshot
-    lands on an empty hero. ``_await_paint``'s 3s budget can't fix an
-    unreachable URL — it just bounds the inevitable failure, so the timeline
-    thumbnail and the design-judge both saw an image-less (``выглядит пусто``)
-    page even though the deployed site is fine.
-
-    Internal ``http://minio:9000/<bucket>/<key>`` answers in <10ms from the
-    worker, so we swap the base **only in the in-memory copy fed to chromium**.
-    The committed/served files are untouched — public URLs still ship to users.
-    Idempotent and a no-op for pages with no MinIO images (plain str.replace).
-    """
-    settings = get_settings()
-    public = settings.minio_public_url.rstrip("/") + "/"
-    scheme = "https" if settings.minio_secure else "http"
-    internal = f"{scheme}://{settings.minio_endpoint}/"
-    if public == internal:  # already internal (e.g. local dev) — nothing to do
-        return content
-    return content.replace(public, internal)
 
 
 # Bounded best-effort wait for a CONTAINER app's client-side data fetches to
@@ -419,349 +366,3 @@ async def capture_live_url_report(
         finally:
             await browser.close()
     return LiveCaptureReport(out, tuple(issues))
-
-
-async def capture(
-    files: dict[str, str],
-    widths: Sequence[int] = DEFAULT_CAPTURE_WIDTHS,
-    *,
-    height: int = 900,
-    full_page: bool = False,
-) -> dict[int, CaptureResult]:
-    """Render ``files`` at each width and return PNG bytes + overflow flag.
-
-    The acceptance gate uses this to (1) screenshot a freeform page for the
-    vision audit and (2) detect horizontal scroll / broken responsiveness
-    (``scroll_width > viewport`` means content spills sideways). One browser,
-    one page per width. Screenshot returns **bytes** (no `path=`) so callers
-    can pipe it straight into a vision message or MinIO.
-
-    Raises ``ValueError`` if there is no root ``index.html`` to load.
-    """
-    if "index.html" not in files:
-        raise ValueError("capture() requires an index.html at the repo root")
-
-    out: dict[int, CaptureResult] = {}
-    with tempfile.TemporaryDirectory(prefix="omnia-capture-") as tmp:
-        workdir = Path(tmp)
-        for path, content in files.items():
-            full = workdir / path
-            full.parent.mkdir(parents=True, exist_ok=True)
-            full.write_text(_rewrite_minio_to_internal(content), encoding="utf-8")
-        index_uri = (workdir / "index.html").as_uri()
-
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(headless=True)
-            try:
-                for w in widths:
-                    page = await browser.new_page(
-                        viewport={"width": int(w), "height": height},
-                        reduced_motion="reduce",
-                    )
-                    try:
-                        await page.goto(
-                            index_uri,
-                            wait_until="domcontentloaded",
-                            timeout=GOTO_TIMEOUT_MS,
-                        )
-                        # Web-fonts ready + remote images painted + Tailwind-JIT
-                        # beat before measuring overflow / screenshotting.
-                        await _await_paint(page)
-                        scroll_width = await page.evaluate(
-                            "() => document.documentElement.scrollWidth"
-                        )
-                        png = await page.screenshot(full_page=full_page)
-                    finally:
-                        await page.close()
-                    sw = int(scroll_width or w)
-                    out[int(w)] = CaptureResult(
-                        png=png,
-                        viewport_width=int(w),
-                        scroll_width=sw,
-                        has_overflow=sw > int(w) + _OVERFLOW_TOLERANCE_PX,
-                    )
-            finally:
-                await browser.close()
-    return out
-
-
-# Container-to-container URL of a running dev preview now lives in the shared
-# `dev_container` service (R-04 single source — the entity composition gate uses
-# the same builder). Kept as a module-level alias so existing call sites and
-# tests (`preview._resolve_live_url`) are unchanged.
-_resolve_live_url = dev_container.resolve_live_url
-
-
-async def capture_live_url(
-    url: str,
-    widths: Sequence[int] = (1440, 360),
-    *,
-    height: int = 900,
-    settle_container: bool = True,
-    full_page: bool = False,
-    bootstrap_url: str | None = None,
-) -> dict[int, bytes]:
-    """Screenshot a LIVE running URL (the dev container's preview) at each width.
-
-    This standalone capture utility is not a generation completion gate. Mirrors the
-    live-container branch of ``_render_async`` (await client-side data + paint
-    before the shot) but returns raw PNG bytes per width like ``capture()``.
-
-    Fail-soft per viewport: a width that times out / crashes is skipped (not
-    raised), so one flaky viewport can't blind the whole audit. Returns an empty
-    dict if every width failed — the caller treats that as "couldn't see".
-    """
-    return (
-        await capture_live_url_report(
-            url,
-            widths,
-            height=height,
-            settle_container=settle_container,
-            full_page=full_page,
-            bootstrap_url=bootstrap_url,
-        )
-    ).screenshots
-
-
-async def capture_diagnostics(
-    url: str,
-    *,
-    timeout_ms: int = GOTO_TIMEOUT_MS,
-    bootstrap_url: str | None = None,
-) -> dict[str, list[str]]:
-    """Load a live URL once and collect BROWSER-side signals a screenshot can't
-    show: console errors/warnings, uncaught page errors, and failed (>=400) network
-    requests. Diagnostic callers can inspect JS errors and broken fetches on load
-    independently of screenshot appearance.
-
-    Fail-soft: any error returns whatever was collected so far (never raises)."""
-    console_errors: list[str] = []
-    failed: list[str] = []
-    stage_errors: list[str] = []
-    startup_timeout_ms = (
-        max(timeout_ms, _LIVE_SIGNED_BOOTSTRAP_TIMEOUT_MS) if bootstrap_url else timeout_ms
-    )
-
-    def _on_console(msg: object) -> None:
-        try:
-            msg_type = str(getattr(msg, "type", ""))
-            msg_text = str(getattr(msg, "text", ""))
-            if msg_type in ("error", "warning"):
-                console_errors.append(_redact_text(f"{msg_type}: {msg_text}"))
-        except Exception:
-            pass
-
-    def _on_response(resp: object) -> None:
-        try:
-            status = int(getattr(resp, "status", 0))
-            request = getattr(resp, "request", None)
-            method = str(getattr(request, "method", "GET"))
-            raw_url = _redact_url(str(getattr(resp, "url", "")))
-            if status >= 400:
-                failed.append(_redact_text(f"{status} {method} {raw_url}"))
-        except Exception:
-            pass
-
-    def _on_pageerror(err: object) -> None:
-        try:
-            console_errors.append(_redact_text(f"pageerror: {err}"))
-        except Exception:
-            pass
-
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        try:
-            page = await browser.new_page(viewport={"width": 1280, "height": 900})
-            page.on("console", _on_console)
-            page.on("response", _on_response)
-            page.on("pageerror", _on_pageerror)
-            try:
-                if bootstrap_url:
-                    try:
-                        await page.goto(
-                            bootstrap_url,
-                            wait_until="domcontentloaded",
-                            timeout=startup_timeout_ms,
-                        )
-                    except Exception as exc:
-                        stage_errors.append(_live_capture_issue("bootstrap", exc).to_text())
-                        return {
-                            "console_errors": list(dict.fromkeys(console_errors))[:12],
-                            "failed_requests": list(dict.fromkeys(failed))[:12],
-                            "stage_errors": list(dict.fromkeys(stage_errors))[:6],
-                        }
-                await page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=startup_timeout_ms,
-                )
-                await _await_container_ready(page)
-                await _await_paint(page)
-                await _await_content(page)
-            except Exception as exc:
-                stage_errors.append(_live_capture_issue("warmup", exc).to_text())
-            finally:
-                await page.close()
-        finally:
-            await browser.close()
-
-    return {
-        "console_errors": list(dict.fromkeys(console_errors))[:12],
-        "failed_requests": list(dict.fromkeys(failed))[:12],
-        "stage_errors": list(dict.fromkeys(stage_errors))[:6],
-    }
-
-
-async def _render_async(snapshot_id: str) -> None:
-    settings = get_settings()
-    sid = UUID(snapshot_id)
-
-    engine = create_async_engine(settings.database_url)
-    factory = async_sessionmaker(engine, expire_on_commit=False)
-    try:
-        async with factory() as session:
-            snapshot = await session.get(Snapshot, sid)
-            if snapshot is None:
-                return
-            project_id = snapshot.project_id
-            commit_sha = snapshot.commit_sha
-            project = await session.get(Project, project_id)
-            template = project.template if project is not None else None
-
-        # MAX history captures are created under the generation lease with exact
-        # before/after source checks. A deferred live screenshot can label newer
-        # content as an older snapshot and must never overwrite that provenance.
-        if template == "max_miniapp":
-            return
-
-        files = await asyncio.to_thread(repo_svc.read_files, project_id, commit_sha)
-
-        # Two render sources: a static template screenshots its repo `index.html`
-        # off disk; a container template screenshots the LIVE dev container over
-        # the runtime network. The source is decided by the TEMPLATE, not by
-        # whether an index.html happens to be in the repo: a Vite `spa` DOES ship
-        # an index.html in its repo, but that file is a bare `<div id=root>` +
-        # `<script src="/src/main.tsx">` shell — screenshotting it off-disk via
-        # file:// can't run the dev server, so /src/main.tsx never loads and the
-        # thumbnail comes out BLANK WHITE (owner report 2026-07-18). Container
-        # templates therefore ALWAYS render from the live container.
-        is_container = template in CONTAINER_NEXT
-        has_index = "index.html" in files
-        if not has_index and not is_container:
-            return
-
-        live_url: str | None = None
-        if is_container:
-            live_url = await _resolve_live_url(project_id)
-            if live_url is None:
-                return  # container not running / unreachable — no thumbnail now
-
-        with tempfile.TemporaryDirectory(prefix=f"omnia-preview-{sid}-") as tmp:
-            workdir = Path(tmp)
-            png_path = workdir / "preview.png"
-
-            if live_url is not None:
-                target_url = live_url
-            else:
-                for path, content in files.items():
-                    full = workdir / path
-                    full.parent.mkdir(parents=True, exist_ok=True)
-                    full.write_text(_rewrite_minio_to_internal(content), encoding="utf-8")
-                target_url = (workdir / "index.html").as_uri()
-
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                try:
-                    page = await browser.new_page(viewport=VIEWPORT, reduced_motion="reduce")
-                    # Abort unreachable web fonts so the screenshot's font-wait
-                    # can't hang → blank white thumbnail (2026-07-18).
-                    await _block_external_fonts(page)
-                    # Reroute public MinIO assets to the internal endpoint so a
-                    # live container app's images + video actually paint (worker
-                    # has no public egress) — "always load everything, even the
-                    # cinematic video effect".
-                    if live_url is not None:
-                        await _route_media_internal(page)
-                    await page.goto(
-                        target_url,
-                        wait_until="domcontentloaded",
-                        timeout=GOTO_TIMEOUT_MS,
-                    )
-                    # A live container app paints its shell first, then fetches its
-                    # data client-side — wait for that to settle so the thumbnail
-                    # shows real content, not the empty skeleton. Static pages
-                    # render off disk with no such fetch (and load the Tailwind
-                    # Play-CDN, where networkidle never fires) → they skip it.
-                    if live_url is not None:
-                        await _await_container_ready(page)
-                    # Same settle as capture(): fonts + images painted + JIT beat,
-                    # and reduced_motion so reveal-animated content isn't opacity:0.
-                    await _await_paint(page)
-                    await page.screenshot(path=str(png_path), full_page=False)
-                finally:
-                    await browser.close()
-
-            # Content-hash the PNG into the key so a RE-render (bug-fix / repair)
-            # produces a NEW url the browser has never cached. `<sid>.png` was
-            # served `immutable`, so a fixed re-render stayed BLANK/stale in the
-            # browser even after Ctrl+Shift+R (owner 2026-07-18). Content-addressed
-            # → the key changes ONLY when the screenshot changes, so `immutable`
-            # is now correct AND the cache always busts on a real re-render.
-            digest = hashlib.sha256(png_path.read_bytes()).hexdigest()[:12]
-            preview_key = f"{snapshot_id}-{digest}.png"
-
-            client = Minio(
-                settings.minio_endpoint,
-                access_key=settings.minio_access_key,
-                secret_key=settings.minio_secret_key.get_secret_value(),
-                secure=settings.minio_secure,
-            )
-            # Self-heal the previews bucket's public-read policy on every render
-            # so a private/mis-provisioned bucket never leaves thumbnails 403 in
-            # the browser (owner report 2026-07-18 — the project-card photos and
-            # snapshot preview all 403'd because `previews` was never made public).
-            await asyncio.to_thread(
-                minio_core.ensure_public_bucket,
-                client,
-                settings.minio_bucket_previews,
-            )
-            await asyncio.to_thread(
-                client.fput_object,
-                settings.minio_bucket_previews,
-                preview_key,
-                str(png_path),
-                content_type="image/png",
-            )
-
-        async with factory() as session:
-            await session.execute(
-                update(Snapshot).where(Snapshot.id == sid).values(preview_key=preview_key)
-            )
-            await session.commit()
-
-        preview_url = (
-            f"{settings.minio_public_url.rstrip('/')}/"
-            f"{settings.minio_bucket_previews}/{preview_key}"
-        )
-        from_url = cast(Callable[..., aioredis.Redis], aioredis.from_url)
-        r = from_url(settings.redis_url, decode_responses=True)
-        try:
-            payload = json.dumps(
-                {
-                    "type": "preview.ready",
-                    "data": {
-                        "snapshot_id": snapshot_id,
-                        "preview_url": preview_url,
-                    },
-                }
-            )
-            await r.publish(project_channel(project_id), payload)
-        finally:
-            await r.aclose()
-    finally:
-        await engine.dispose()
-
-
-def render_preview(snapshot_id: str) -> None:
-    """Sync entrypoint для RQ. Внутри гонит асинхронный pipeline."""
-    asyncio.run(_render_async(snapshot_id))

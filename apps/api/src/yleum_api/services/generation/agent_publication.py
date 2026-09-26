@@ -27,7 +27,6 @@ from yleum_api.services.promotion_permit import (
     canonical_files_digest,
     require_promotion_permit,
 )
-from yleum_api.services.queue import enqueue_preview
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -144,7 +143,7 @@ async def publish_agent_candidate(
                 )
             except Exception as _ae:  # never affect the build
                 print(f"[ATTEST] persist skipped: {_ae}", flush=True)
-        if project_info.template == "max_miniapp" and runtime.handle is not None:
+        if runtime.handle is not None:
             from yleum_api.services.snapshot_preview_capture import capture_snapshot_frontend
 
             await capture_snapshot_frontend(
@@ -154,8 +153,6 @@ async def publish_agent_candidate(
                 files,
                 runtime.handle,
             )
-        else:
-            await asyncio.to_thread(enqueue_preview, _agent_snap_id)
         await publish_event(
             ids.project_id,
             "snapshot.created",

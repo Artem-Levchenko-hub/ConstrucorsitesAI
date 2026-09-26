@@ -196,7 +196,6 @@ async def execute(path, env):
         real_create = target.create_generation_snapshot
         patch.setattr(target, "create_generation_snapshot", capture_snapshot)
         patch.setattr(target, "get_settings", env["get_settings"])
-        patch.setattr(target, "enqueue_preview", lambda *_: None)
         patch.setattr(target, "publish_event", noop)
         patch.setattr(target, "_snapshot_payload", lambda row: {"id": str(row.id)})
         common = dict(

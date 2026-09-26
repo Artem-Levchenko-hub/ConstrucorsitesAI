@@ -17,7 +17,6 @@ async def test_target_requires_fingerprint_confirmation_and_preflight(
     client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
 
     async def fake_publish(*_args, **_kwargs) -> None:
         return None
