@@ -28,27 +28,15 @@ from yleum_api.schemas.message import (
     PromptRequest,
     PromptResponse,
 )
-from yleum_api.schemas.project import is_fullstack
-from yleum_api.services import stack_routing
 from yleum_api.services.billing_accounts import resolve_billing_account
 from yleum_api.services.chip_pixel_gate import spec_from_discovery
 from yleum_api.services.discovery import BUILD as DISCOVERY_BUILD
 from yleum_api.services.discovery import (
     DiscoveryResult,
-    _explicit_static,
-    _has_account_intent,
-    _has_conversion_intent,
     _infer_code_from_text,
     _infer_run_intent,
     _infer_run_intent_maybe,
-    _infer_stack_from_text,
-    _infer_web_pivot,
     _is_run_decline,
-    _resolve_messenger_stack,
-    classify_result_type,
-    detect_appification,
-    resolve_result_type,
-    result_type_to_stack,
     run_discovery,
     wants_build_now,
     zero_question_build,
@@ -110,8 +98,6 @@ class PromptAcceptance:
     run_decline: bool
     run_ask: bool
     settings: Settings
-    pivoted_to_web: bool
-    escalated_to_app: bool
     discovery_result: DiscoveryResult | None
     async_onboarding: bool
     do_clarify: bool
@@ -147,7 +133,6 @@ class PromptAcceptance:
         await self.check_admission()
         await self.route_existing_project()
         await self.conduct_interview()
-        await self.route_first_build()
         await self.select_intent_and_model()
         await self.persist_messages()
         await self.dispatch()
@@ -396,73 +381,6 @@ class PromptAcceptance:
         # bypass the interview entirely and go straight to generation.
         self.settings = get_settings()
 
-        # Code→web pivot (owner 2026-06-19): a `code` project has no live preview. A
-        # FOLLOW-UP asking to RUN it as a web page ("сделай веб-вид", "в браузере",
-        # "запусти здесь") flips it onto the previewable `static` web template (instant
-        # /p/<slug>, no container) so the next build is an openable page. Non-destructive
-        # (existing source stays — the build PORTS it). Gated to a real follow-up on a
-        # code project + explicit web intent → never touches first-build routing or a
-        # normal code edit. Fail-soft (R-10). `pivoted_to_web` forces the full-build
-        # path below (a fresh page is a build, not a surgical edit).
-        self.pivoted_to_web = False
-        if (
-            not self.is_first_build
-            and self.project.template == "code"
-            and self.settings.use_auto_stack_routing
-            and _infer_web_pivot(self.payload.prompt)
-        ):
-            try:
-                self.pivoted_to_web = await stack_routing.pivot_code_to_web(
-                    self.session, self.project
-                )
-            except Exception as _pv_exc:
-                await self.session.rollback()
-                # A failed commit leaves `project` expired; a later attribute access
-                # would lazy-load on the poisoned session → MissingGreenlet → 500 for
-                # the WHOLE request. Re-fetch a clean, attached instance so the build
-                # proceeds normally (as the un-pivoted project).
-                self.project = await self.session.get(Project, self.project_id) or self.project
-                logging.getLogger(__name__).warning("code→web pivot failed: %r", _pv_exc)
-
-        # Static→app escalation (P-H1, owner 2026-06-21): a FOLLOW-UP on a STATIC
-        # project that clearly asks to become a real app ("переделай в полноценное
-        # приложение: вход, кабинет, база записей") must escalate the stack
-        # static→container, not surgical-edit the flat page — the H1 blind spot (until
-        # now a follow-up could NEVER escalate, since `switch_to_stack` runs only inside
-        # the first-build branch). Non-destructive, like the code→web pivot above:
-        # `pivot_static_to_app` flips the template only — the static snapshot stays
-        # rollback-able, the orchestrated build writes the app on top, and the container
-        # scaffold comes from the orchestrator (nextjs_entities has no api-side scaffold
-        # dir). Gated to a real follow-up on a static-class project (not a container,
-        # not a `code` project — those have their own pivots) + a confident
-        # app-ification ask, behind the default-OFF flag. `escalated_to_app` forces the
-        # full-build path below (a freshly-templated app is a BUILD, not a surgical
-        # edit). Fail-soft (R-10): a hiccup falls back to the un-escalated project.
-        self.escalated_to_app = False
-        if (
-            not self.is_first_build
-            and not self.selected_dump
-            and not is_fullstack(self.project.template)
-            and self.project.template != "code"
-            and self.settings.use_followup_appification
-            and self.settings.use_auto_stack_routing
-            and detect_appification(self.payload.prompt)
-        ):
-            _esc_stack = _infer_stack_from_text(self.payload.prompt)  # → nextjs_entities
-            if _esc_stack:
-                try:
-                    self.escalated_to_app = bool(
-                        await stack_routing.pivot_static_to_app(
-                            self.session, self.project, _esc_stack
-                        )
-                    )
-                except Exception as _esc_exc:
-                    await self.session.rollback()
-                    self.project = await self.session.get(Project, self.project_id) or self.project
-                    logging.getLogger(__name__).warning(
-                        "static→app escalation failed: %r", _esc_exc
-                    )
-
     async def conduct_interview(self) -> None:
         self.discovery_result: DiscoveryResult | None = None
         # Async onboarding: set when the slow first-turn plan is deferred out of the
@@ -548,43 +466,6 @@ class PromptAcceptance:
                 # provision the dev container, so the build yields a real app instead
                 # of a flat page. Fail-soft (R-10) — a hiccup falls back to a static
                 # build rather than dead-ending onboarding.
-                if self.settings.use_auto_stack_routing:
-                    _build_stack: str | None = self.discovery_result.stack
-                    # Real-time net on the FULL conversation intent, not just this turn's
-                    # trigger. A skip-survey / "Постройте сейчас" build sends a trigger
-                    # phrase with NO "мессенджер"/"чат" word, so discovery's stack pick
-                    # (which weighs the current turn) loses the original intent and ships
-                    # an spa/entities dashboard — the owner's "создай мессенджер → не чат"
-                    # failure (live: prompt «создай мессенджер», trigger «Постройте
-                    # сейчас» → spa dashboard). Re-check across EVERY user message so the
-                    # original messenger intent still forces the realtime chat stack.
-                    try:
-                        _full_intent = (
-                            " ".join(m["content"] for m in _history if m.get("role") == "user")
-                            + " "
-                            + self.payload.prompt
-                        )
-                        _resolved_stack = _resolve_messenger_stack(_build_stack, _full_intent)
-                        if _resolved_stack != _build_stack:
-                            logging.getLogger(__name__).info(
-                                "discovery-build messenger override (full intent): '%s'→'%s'",
-                                _build_stack,
-                                _resolved_stack,
-                            )
-                            _build_stack = _resolved_stack
-                    except Exception as _rt_exc:
-                        logging.getLogger(__name__).warning(
-                            "realtime full-intent inference failed: %r", _rt_exc
-                        )
-                    try:
-                        await stack_routing.switch_to_stack(
-                            self.session, self.project, _build_stack or ""
-                        )
-                    except Exception as _sr_exc:
-                        await self.session.rollback()
-                        logging.getLogger(__name__).warning(
-                            "stack_routing switch failed (static fallback): %r", _sr_exc
-                        )
                 # Persist the chip→spec the user steered onboarding toward, so
                 # downstream gates can check the live render against what was picked
                 # (V2.5.0). Set AFTER stack-routing so a routing rollback can't wipe
@@ -612,132 +493,10 @@ class PromptAcceptance:
             self.discovery_result is not None and self.discovery_result.action != DISCOVERY_BUILD
         )
 
-    async def route_first_build(self) -> None:
-        if (
-            self.is_first_build
-            and not self.credential_redirect
-            and not self.explain_failed_build
-            and self.discovery_result is None
-            and not self.discovery_ask
-            and not self.do_clarify
-            and not self.async_onboarding
-            and not self.selected_dump
-            and self.settings.use_auto_stack_routing
-        ):
-            # Routing intent across the WHOLE conversation, not just this turn. The
-            # skip-survey build trigger is «Постройте сейчас» (no messenger/chat word),
-            # so a realtime net on payload.prompt alone misses and ships an spa/entities
-            # dashboard — the owner's "создай мессенджер → не чат" failure (live: prompt
-            # «создай мессенджер», skip → trigger «Постройте сейчас» → spa). Pull the
-            # project's prior user messages so the original intent still routes.
-            _fb_intent = self.payload.prompt
-            try:
-                _prior_user = list(
-                    (
-                        await self.session.execute(
-                            select(Message.content)
-                            .where(
-                                Message.project_id == self.project_id,
-                                Message.role == "user",
-                            )
-                            .order_by(Message.created_at.asc())
-                            .limit(40)
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                _fb_intent = " ".join([*(c for c in _prior_user if c), self.payload.prompt])
-            except Exception as _fbi_exc:
-                logging.getLogger(__name__).warning(
-                    "first-build intent load failed (using current turn): %r", _fbi_exc
-                )
-            # Code intent (program/script, any language) takes priority over the
-            # backend net — "напиши скрипт на python" must not be pulled into an
-            # auth-backed web app (owner 2026-06-18). And static is opt-in: if nothing
-            # specific fires, default to `spa` (interactive React) unless the user
-            # EXPLICITLY asked for a plain static HTML page — same policy as discovery.
-            if self.settings.use_result_type_router:
-                # RT-1: decide the RESULT TYPE first (semantic LLM + keyword safety-net),
-                # then map type→stack. Each sub-slice is independently gated so OFF = the
-                # legacy net behaviour, byte-identical.
-                _rt_llm, _rt_conf = await classify_result_type(
-                    self.payload.prompt, language=self.project.language
-                )
-                _rt = resolve_result_type(self.payload.prompt, _rt_llm, _rt_conf)
-                if _rt is None:
-                    # Unsure → legacy nets (preserves today's behaviour for the un-typed tail).
-                    _inferred_stack = (
-                        _infer_code_from_text(self.payload.prompt)
-                        or _infer_stack_from_text(self.payload.prompt)
-                        or (None if _explicit_static(self.payload.prompt) else "spa")
-                    )
-                else:
-                    # web_app from FRAMING only ships when the appify slice is on; without
-                    # it (and without a real account ask) framing falls back to today's path.
-                    if (
-                        _rt == "web_app"
-                        and not self.settings.result_type_firstbuild_appify
-                        and not _has_account_intent(self.payload.prompt)
-                        and _infer_stack_from_text(self.payload.prompt) != "nextjs_entities"
-                    ):
-                        # web_app from FRAMING alone (no real backend signal) demotes when
-                        # the appify slice is off. But a genuine data/CRUD backend prompt
-                        # (legacy net → nextjs_entities) keeps web_app regardless — never
-                        # downgrade a real backend app to a no-backend spa.
-                        _rt = "landing" if _has_conversion_intent(self.payload.prompt) else "site"
-                    # landing→entities suppression (BS-7) ships only with the lead-sink slice.
-                    if (
-                        _rt == "landing"
-                        and not self.settings.result_type_landing_lead_sink
-                        and _infer_stack_from_text(self.payload.prompt) == "nextjs_entities"
-                    ):
-                        _inferred_stack = "nextjs_entities"  # keep today's escalation
-                    else:
-                        _inferred_stack = result_type_to_stack(_rt)
-                        if _inferred_stack == "static" and not _explicit_static(
-                            self.payload.prompt
-                        ):
-                            _inferred_stack = "spa"
-            else:
-                _inferred_stack = (
-                    _infer_code_from_text(self.payload.prompt)
-                    or _infer_stack_from_text(self.payload.prompt)
-                    or (None if _explicit_static(self.payload.prompt) else "spa")
-                )
-            # Real-time override (G001): a messenger / chat / live-feed / collab prompt
-            # is a REAL-TIME app, not a CRUD entities app — on nextjs_entities the
-            # "messages" become a refresh-to-see TABLE, never a live chat (the #1
-            # "опять эти entities" messenger failure). The result-type router has no
-            # realtime type (web_app → nextjs_entities), so the realtime net is bypassed
-            # on this path; force realtime here when the messenger/chat net fires (and
-            # the user didn't ask for plain static or a script). Mirrors the realtime
-            # net in discovery.plan_discovery.
-            _resolved_stack = _resolve_messenger_stack(_inferred_stack, _fb_intent)
-            if _resolved_stack != _inferred_stack:
-                logging.getLogger(__name__).info(
-                    "first-build messenger override: '%s'→'%s' (full intent)",
-                    _inferred_stack,
-                    _resolved_stack,
-                )
-                _inferred_stack = _resolved_stack
-            if _inferred_stack:
-                try:
-                    await stack_routing.switch_to_stack(self.session, self.project, _inferred_stack)
-                except Exception as _sr_exc:
-                    await self.session.rollback()
-                    logging.getLogger(__name__).warning(
-                        "first-build stack_routing switch failed (static fallback): %r",
-                        _sr_exc,
-                    )
-
     async def select_intent_and_model(self) -> None:
         intent = decide_intent(
             self.effective_prompt,
-            # A code→web pivot or a static→app escalation just re-templated the project;
-            # the new page/app doesn't exist yet, so it's a full BUILD, never a surgical
-            # edit — treat it like a first build for triage (owner 2026-06-19; P-H1).
-            is_first_prompt=self.is_first_build or self.pivoted_to_web or self.escalated_to_app,
+            is_first_prompt=self.is_first_build,
             selected_count=len(self.selected_dump or []),
             # App-ification triage rule (P-H1), flag-gated so it's a no-op until enabled.
             appify_enabled=self.settings.use_followup_appification,

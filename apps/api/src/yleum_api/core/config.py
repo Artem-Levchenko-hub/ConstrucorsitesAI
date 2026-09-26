@@ -626,7 +626,6 @@ class Settings(BaseSettings):
     # user never has to pick a stack or hit «Запустить». Kill switch (R-10):
     # USE_AUTO_STACK_ROUTING=false (discovery still recommends in the brief, but
     # the project stays static — old behaviour).
-    use_auto_stack_routing: bool = Field(default=True)
     # Follow-up app-ification (P-H1, 2026-06-21). A FOLLOW-UP on a STATIC project
     # that clearly asks to become a real app ("переделай в полноценное приложение:
     # вход, кабинет, база") escalates the stack static→container instead of
@@ -635,13 +634,13 @@ class Settings(BaseSettings):
     # rollback-able and the orchestrated build writes the app on top. Default OFF:
     # the feature ships dark and is enabled (USE_FOLLOWUP_APPIFICATION=true) only
     # after live verification, so prod behaviour is unchanged until then.
-    use_followup_appification: bool = Field(default=True)
     # ── Result-type router (RT-1, 2026-06-22) ────────────────────────────
     # First-class `result_type` (landing/web_app/tool/site/code) decided on the
     # FIRST prompt SEPARATELY from the stack, by a cheap LLM classifier (role
     # `result_type`) with the existing keyword nets as a deterministic safety-net.
     # Master switch: OFF → the first-build stack decision is byte-identical to
     # today (only the legacy _infer_* nets run). Kill: USE_RESULT_TYPE_ROUTER=false.
+    use_followup_appification: bool = Field(default=True)
     use_result_type_router: bool = Field(default=True)
     # Sub-slice (independently flippable): a `landing` result-type with a conversion
     # word («запись/бронь/оформить заказ») builds as a PUBLIC lead-capture landing
@@ -1152,6 +1151,14 @@ class Settings(BaseSettings):
     # RESTORATION_ADAPTATION_ACTIVATION_SECONDS.
     restoration_adaptation_activation_seconds: int = Field(default=2400, ge=300, le=7200)
     # Separate admission budget: serialized jobs may wait longer than one run.
+    # Сколько проектов одновременно могут ПОДНИМАТЬ ячейку на одном хосте.
+    # Раньше очередь пускала строго одного: пока он поднимался, остальные ждали,
+    # даже когда на хосте было место. Владелец 26.09: «множество пользователей
+    # должны запускать генерацию одновременно, а не по очереди». Порядок очереди
+    # сохраняется — расширяется только голова. Последнее слово всё равно за
+    # оркестратором: если хост действительно занят, он вежливо откажет и проект
+    # вернётся в ожидание, не потеряв место.
+    project_cell_parallel_admissions: int = Field(default=4, ge=1, le=32)
     project_cell_capacity_wait_seconds: int = Field(default=3600, ge=30, le=7200)
     project_cell_heartbeat_seconds: int = Field(default=15, ge=1, le=300)
     project_cell_watchdog_grace_seconds: int = Field(default=20, ge=1, le=600)

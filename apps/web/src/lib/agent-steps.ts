@@ -1,4 +1,24 @@
+import { CAPACITY_WAITING_COPY } from "@/lib/agent-transcript";
 import type { AgentStep } from "@/lib/api/types";
+
+/**
+ * Ожидание мощности приходит повторяющимся событием (раз в 15 секунд и на
+ * каждое изменение позиции в очереди). Владелец 26.09 показал скриншот, где
+ * пятиминутное ожидание выглядело как восемнадцать одинаковых строк «Ожидаю
+ * ресурсы сервера» подряд — это читается как поломка, а не как ожидание.
+ *
+ * Схлопываем ТОЛЬКО подряд идущие строки ожидания и оставляем последнюю: в ней
+ * самая свежая позиция в очереди. Обычные шаги сборки не трогаем — там
+ * повторение бывает осмысленным (два одинаковых действия над разными файлами
+ * различаются путём, но встречаются и настоящие повторы).
+ */
+function collapseRepeatedWaiting(steps: AgentStep[]): AgentStep[] {
+  return steps.filter((step, index) => {
+    if (step.action !== CAPACITY_WAITING_COPY.title) return true;
+    const next = steps[index + 1];
+    return next?.action !== CAPACITY_WAITING_COPY.title;
+  });
+}
 
 function identity(step: AgentStep, index: number): string {
   if (step.eventId) return step.eventId;
@@ -47,11 +67,12 @@ export function mergeAgentStepsBySequence(
     durableCounts.set(key, remaining - 1);
     return false;
   });
-  return reconciled.sort((left, right) => {
+  const ordered = reconciled.sort((left, right) => {
     const leftSeq = left.seq ?? Number.MAX_SAFE_INTEGER;
     const rightSeq = right.seq ?? Number.MAX_SAFE_INTEGER;
     return leftSeq - rightSeq;
   });
+  return collapseRepeatedWaiting(ordered);
 }
 
 export function restorePersistedAgentSteps(

@@ -29,6 +29,8 @@ class CellResourceSettings(Protocol):
     cell_helper_memory_bytes: int
     cell_managed_core_cpu_cores: float
     cell_managed_core_memory_bytes: int
+    cell_admission_cpu_cores: float
+    cell_admission_memory_bytes: int
     cell_host_cpu_reserve_cores: float
     cell_host_memory_reserve_bytes: int
     cell_required_free_disk_bytes: int
@@ -149,6 +151,9 @@ class CellResourceProfile:
     helper_memory_bytes: int = 128 * 1024**2
     managed_core_cpu_cores: float = 0.35
     managed_core_memory_bytes: int = 768 * 1024**2
+    # Ноль = вывести рабочий объём из состава ячейки (см. admission_quota).
+    admission_cpu_cores: float = 0.0
+    admission_memory_bytes: int = 0
 
     @property
     def is_v2(self) -> bool:
@@ -247,6 +252,47 @@ class CellResourceProfile:
         )
 
     @property
+    def admission_quota(self) -> CellResourceQuota:
+        """Сколько ячейка занимает В УЧЁТЕ ДОПУСКА — рабочий объём, не потолок.
+
+        Потолки контейнеров (full_quota) отвечают на вопрос «сколько ячейке
+        РАЗРЕШЕНО взять в пике», и это правильный предел для docker. Но тот же
+        потолок использовался как бронь: каждая ячейка занимала 3.2 ядра и
+        6.1 ГБ из хоста навсегда, поэтому на восьмиядерной машине помещались
+        ровно две, а третья получала «Ожидаю ресурсы сервера» без конца.
+
+        Замер на проде 26.09.2026, живая ячейка в простое: 0.03 ядра и 333 МБ
+        на все восемь контейнеров — против брони в 3.2 ядра и 6.1 ГБ, то есть
+        в двадцать-тридцать раз меньше. Две базы комплекта (postgres 2 ГБ и
+        redis 1 ГБ по потолку) держали 23 и 11 МБ.
+
+        Поэтому бронируется рабочий объём: по процессору — машина приложения
+        (единственное, что реально считает во время сборки), по памяти — машина
+        приложения, её ядро и её база. Потолки не меняются: одинокая ячейка
+        по-прежнему может разогнаться до полного объёма, потому что процессор
+        делится по времени, а не выдаётся в собственность.
+
+        Диск и inode остаются по полной броне: их разделить нельзя.
+        """
+
+        full = self.full_quota
+        if not self.is_v2:
+            # Комплекты первой версии не трогаем: их состав другой.
+            return full
+        cpu = self.admission_cpu_cores or self.active_machine_cpu_cores
+        memory = self.admission_memory_bytes or (
+            self.active_machine_memory_bytes
+            + self.managed_core_memory_bytes
+            + self.project_postgres_memory_bytes
+        )
+        return CellResourceQuota(
+            cpu_cores=min(cpu, full.cpu_cores),
+            memory_bytes=min(memory, full.memory_bytes),
+            disk_bytes=full.disk_bytes,
+            inodes=full.inodes,
+        )
+
+    @property
     def full_quota(self) -> CellResourceQuota:
         """Maximum simultaneous footprint, with every component counted once."""
 
@@ -273,6 +319,8 @@ class CellResourceProfile:
             project_postgres_memory_bytes=int(settings.cell_project_postgres_memory_bytes),
             helper_cpu_cores=float(settings.cell_helper_cpu_cores),
             helper_memory_bytes=int(settings.cell_helper_memory_bytes),
+            admission_cpu_cores=float(settings.cell_admission_cpu_cores),
+            admission_memory_bytes=int(settings.cell_admission_memory_bytes),
             managed_core_cpu_cores=float(settings.cell_managed_core_cpu_cores),
             managed_core_memory_bytes=int(settings.cell_managed_core_memory_bytes),
             host_cpu_reserve_cores=float(settings.cell_host_cpu_reserve_cores),

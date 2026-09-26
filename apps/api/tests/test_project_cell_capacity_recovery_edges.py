@@ -147,7 +147,9 @@ async def test_durable_running_ensure_waits_until_bounded_capacity_deadline(
     monkeypatch.setattr(
         project_cell_capacity,
         "get_settings",
-        lambda: SimpleNamespace(project_cell_capacity_wait_seconds=0.2),
+        lambda: SimpleNamespace(
+            project_cell_capacity_wait_seconds=0.2, project_cell_parallel_admissions=4
+        ),
     )
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as session:

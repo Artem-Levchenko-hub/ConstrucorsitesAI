@@ -7,11 +7,13 @@ import json
 import os
 import shlex
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
+
+import structlog
 
 from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
@@ -33,6 +35,13 @@ from yleum_orchestrator.services.cell_state import (
     CellStateStore,
     CellWorkspaceState,
 )
+
+_log = structlog.get_logger("yleum_orchestrator.cell_capacity")
+
+# Живым считается не только running: контейнер в created или restarting — это
+# ячейка, которая прямо сейчас поднимается, и место у неё отбирать нельзя.
+_LIVE_CONTAINER_STATES = frozenset({"running", "created", "restarting", "paused"})
+
 
 _ALLOWED_HELPER_KINDS = frozenset(
     {
@@ -315,6 +324,10 @@ class DockerCellResourceManager:
     capacity_lock: WorkspaceOperationLock | None = None
     capacity_reservations: CellCapacityReservationStore | None = None
     namespace: str = "prod"
+    # Сколько бронь живёт без единого запущенного контейнера, прежде чем её
+    # отпустят. Запас на идущую операцию: она бронирует до того, как поднимет
+    # контейнеры, и отбирать у неё место нельзя.
+    idle_reservation_grace_seconds: int = 600
     draft_port_registry_path: str | None = None
     machine_runtime: Any | None = None
 
@@ -970,7 +983,83 @@ class DockerCellResourceManager:
                 continue
             store.release(reservation.workspace_id, reservation.mutation)
             recovered += 1
+        recovered += await self._release_idle_reservations_locked(
+            now=now, workspace_id=workspace_id
+        )
         return recovered
+
+    async def _release_idle_reservations_locked(
+        self,
+        *,
+        now: datetime,
+        workspace_id: UUID | None = None,
+    ) -> int:
+        """Отпустить бронь, за которой не стоит ни один живой контейнер.
+
+        Пауза ячейки бронь отпускает — это есть в коде давно. Но если ячейка
+        остановилась НЕ через паузу (упала операция, перезагрузили сервер), её
+        запись остаётся, и хост считает занятыми ядра, которых никто не ест.
+        26.09.2026 так и было: канарейка мониторинга стояла с 23.09 с отметкой
+        «операция не удалась», контейнеры лежали, а 3.2 ядра числились за ней —
+        и владелец не мог создать приложение на почти пустой машине.
+
+        Отпускаем осторожно, только когда все условия сошлись:
+          * бронь подтверждена и старше льготного срока (идущая операция могла
+            ещё не поднять контейнеры — её трогать нельзя);
+          * у ячейки нет НИ ОДНОГО контейнера в состоянии running;
+          * последняя операция завершилась (или состояния нет вовсе): на
+            промежуточной фазе ячейка как раз поднимается;
+          * это не опубликованное приложение (у него своя отметка).
+
+        Разбуженная ячейка проходит допуск заново — ровно как после паузы.
+        """
+
+        store = self._capacity_reservation_store()
+        grace = timedelta(seconds=self.idle_reservation_grace_seconds)
+        released = 0
+        for reservation in store.all():
+            if workspace_id is not None and reservation.workspace_id != workspace_id:
+                continue
+            if reservation.status != "confirmed":
+                continue
+            if reservation.workload != "runtime":
+                # Проверочный кандидат (кандидат отката, адаптация) бронирует
+                # место РАНЬШЕ, чем поднимает контейнеры, и несколько минут может
+                # не иметь ни одного запущенного. Отобрать у него бронь — значит
+                # уронить адаптацию отказом «не хватило ядер», который укажет не
+                # туда. У него отдельный бюджет и свой путь освобождения, поэтому
+                # сверка его не касается вовсе (предупреждение пришло со стороны
+                # откатов, и оно про живой случай, а не про теорию).
+                continue
+            if now - reservation.created_at < grace:
+                # Отсчёт идёт от создания брони, а не от последней записи о
+                # состоянии: медленное поднятие контейнеров не должно выводить
+                # ячейку за льготный срок.
+                continue
+            state = self.state_store.load(reservation.workspace_id)
+            if state is not None and state.phase not in ("completed", "failed"):
+                continue
+            marker = (
+                Path(self.profile.state_path).parent
+                / "cell-publications"
+                / "identities"
+                / f"{reservation.workspace_id}.json"
+            )
+            if marker.exists() or marker.is_symlink():
+                continue
+            containers = await self.docker.list_workspace_containers(reservation.workspace_id)
+            if any(container.state in _LIVE_CONTAINER_STATES for container in containers):
+                continue
+            store.release(reservation.workspace_id, reservation.mutation)
+            released += 1
+            _log.info(
+                "capacity.idle_reservation_released",
+                workspace_id=str(reservation.workspace_id),
+                cpu_cores=reservation.cpu_cores,
+                memory_bytes=reservation.memory_bytes,
+                reason="ни один контейнер ячейки не запущен",
+            )
+        return released
 
     def _release_capacity(self, workspace_id: UUID, mutation: LifecycleMutation) -> None:
         store = self._capacity_reservation_store()

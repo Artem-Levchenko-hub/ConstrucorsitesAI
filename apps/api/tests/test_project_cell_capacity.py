@@ -96,10 +96,12 @@ async def test_capacity_turn_is_fifo_by_created_at_then_id(db_session: AsyncSess
 
     turns = [await claim_capacity_turn(db_session, run.id) for run in (first, second, third)]
 
-    assert [(turn.is_head, turn.position) for turn in turns] == [
+    # Порядок очереди прежний, но ход дают не только первому: на хосте бывает
+    # место сразу на нескольких, и держать остальных — это то самое «по очереди».
+    assert [(turn.may_start, turn.position) for turn in turns] == [
         (True, 1),
-        (False, 2),
-        (False, 3),
+        (True, 2),
+        (True, 3),
     ]
 
 
@@ -126,10 +128,10 @@ async def test_capacity_queue_and_hibernation_victims_are_per_orchestrator_host(
         run.id: await claim_capacity_turn(db_session, run.id)
         for run in (on_core_first, on_commerce, on_core_second)
     }
-    assert (turns[on_core_first.id].is_head, turns[on_core_first.id].position) == (True, 1)
+    assert (turns[on_core_first.id].may_start, turns[on_core_first.id].position) == (True, 1)
     # the commerce run is the head of its own queue although it was created later
-    assert (turns[on_commerce.id].is_head, turns[on_commerce.id].position) == (True, 1)
-    assert (turns[on_core_second.id].is_head, turns[on_core_second.id].position) == (False, 2)
+    assert (turns[on_commerce.id].may_start, turns[on_commerce.id].position) == (True, 1)
+    assert (turns[on_core_second.id].may_start, turns[on_core_second.id].position) == (True, 2)
 
     # a requester on core gets the idle core cell, never the commerce one
     victim = await claim_idle_hibernation_victim(db_session, requesting_run_id=on_core_second.id)
@@ -431,7 +433,9 @@ async def test_queue_deadline_interrupts_slow_provider_but_preserves_unknown_eff
     monkeypatch.setattr(
         project_cell_capacity,
         "get_settings",
-        lambda: SimpleNamespace(project_cell_capacity_wait_seconds=2),
+        lambda: SimpleNamespace(
+            project_cell_capacity_wait_seconds=2, project_cell_parallel_admissions=4
+        ),
     )
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as session:
@@ -1012,3 +1016,67 @@ async def test_wake_rejects_a_mismatched_capacity_answer(monkeypatch) -> None:
 
     with pytest.raises(oc.OrchestratorUnavailable):
         await oc.HttpProjectCellOrchestratorClient().control(request)
+
+
+async def test_the_queue_admits_several_projects_at_once_but_still_bounds_the_herd(
+    db_session: AsyncSession,
+) -> None:
+    """Владелец 26.09: «множество пользователей должны запускать генерацию
+    одновременно, а не по очереди».
+
+    Очередь по-прежнему упорядочена и по-прежнему ограничена — иначе на хост
+    разом ломились бы все и получали отказы. Но голова теперь шире одного:
+    сколько именно, решает настройка, а окончательное «да» всё равно за
+    оркестратором, который знает настоящую занятость хоста.
+    """
+    owner = User(email=f"parallel-{uuid4().hex}@example.test", password_hash="x")
+    db_session.add(owner)
+    await db_session.flush()
+    now = datetime.now(UTC)
+    runs = []
+    for index in range(6):
+        _, run, _ = await _project_run(
+            db_session,
+            owner,
+            created_at=now - timedelta(seconds=10 - index),
+            label=f"p{index}",
+        )
+        runs.append(run)
+
+    turns = [await claim_capacity_turn(db_session, run.id) for run in runs]
+
+    assert [turn.position for turn in turns] == [1, 2, 3, 4, 5, 6]
+    assert [turn.may_start for turn in turns] == [True, True, True, True, False, False]
+
+
+async def test_a_run_that_is_not_queued_never_gets_a_turn(db_session: AsyncSession) -> None:
+    """Нулевая позиция значит «в очереди его нет» и не должна читаться как ход.
+
+    Проверка узкая намеренно: расширение головы делается сравнением позиции с
+    пределом, и без этой границы «нет в очереди» стало бы «можно начинать».
+    """
+    owner = User(email=f"unqueued-{uuid4().hex}@example.test", password_hash="x")
+    db_session.add(owner)
+    await db_session.flush()
+    _, run, _ = await _project_run(db_session, owner, created_at=datetime.now(UTC), label="z")
+    run.status = "running"
+    await db_session.flush()
+
+    turn = await claim_capacity_turn(db_session, run.id)
+
+    assert (turn.position, turn.may_start) == (0, False)
+
+
+def test_the_waiting_line_names_the_place_in_the_queue() -> None:
+    """Пять минут одинаковой строки «Ожидаю ресурсы сервера» читаются как поломка.
+
+    Владелец 26.09 прислал скриншот именно с этим. Номер в очереди — то немногое,
+    что превращает ожидание в понятное: видно, что очередь движется. Первому
+    номер не показываем: он уже занимает место.
+    """
+    from yleum_api.services.project_cell_capacity import _WAITING_DETAIL, _waiting_detail
+
+    assert _waiting_detail(1) == _WAITING_DETAIL
+    assert _waiting_detail(0) == _WAITING_DETAIL
+    assert _waiting_detail(4).startswith("Вы 4-й в очереди.")
+    assert _WAITING_DETAIL in _waiting_detail(4)
