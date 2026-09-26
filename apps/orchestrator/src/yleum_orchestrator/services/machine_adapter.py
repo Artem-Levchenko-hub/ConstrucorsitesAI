@@ -40,6 +40,7 @@ from yleum_orchestrator.services.project_machine import (
     write_controller_json,
 )
 from yleum_orchestrator.services.restoration_database import close_controller_socket
+from yleum_orchestrator.services.studio_origins import studio_origins
 
 MACHINE_APPLY_TIMEOUT_SECONDS = 900
 MACHINE_APPLY_CLEANUP_RESERVE_SECONDS = 30
@@ -814,7 +815,7 @@ class MachineAdapter:
             **({
                 "public_mode": True,
                 "public_origin": (runtime_env or {}).get("OMNIA_PUBLIC_APP_ORIGIN", ""),
-            } if public_mode else {}),
+            } if public_mode else {"owner_origins": studio_origins()}),
         }
         runtime_stamp = self.root / (
             "public-boundary-runtime" if public_mode else "owner-boundary-runtime"

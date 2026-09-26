@@ -6,15 +6,17 @@ import pytest
 
 from yleum_api.services import security_gate
 from yleum_api.services.security_gate import (
-    OWNER_PREVIEW_FRAMING_POLICY,
     PUBLIC_MAX_FRAMING_POLICY,
     SecCheck,
     assert_cors_safe,
     assert_payload_cap,
     assert_security_headers,
+    owner_preview_framing_policy,
     summarize,
     surface_verdict_from_headers,
 )
+
+OWNER_PREVIEW_FRAMING_POLICY = owner_preview_framing_policy()
 
 
 def test_headers_present_pass() -> None:
@@ -294,9 +296,12 @@ async def test_signed_embedded_gate_checks_protected_api_and_final_document(
 
 
 def test_owner_and_public_framing_policies_are_distinct() -> None:
-    assert "constructor.lead-generator.ru" in OWNER_PREVIEW_FRAMING_POLICY
+    # Превью владельца встраивает кабинет, публичное — клиенты MAX. Адрес
+    # кабинета берётся из настройки, поэтому проверяем разделение, а не домен.
+    assert OWNER_PREVIEW_FRAMING_POLICY.startswith("frame-ancestors 'self' ")
     assert "web.max.ru" not in OWNER_PREVIEW_FRAMING_POLICY
     assert "web.max.ru" in PUBLIC_MAX_FRAMING_POLICY
+    assert OWNER_PREVIEW_FRAMING_POLICY != PUBLIC_MAX_FRAMING_POLICY
 
 
 def test_surface_blocks_on_missing_nosniff() -> None:
@@ -315,3 +320,54 @@ def test_surface_blocks_on_wildcard_cors_with_credentials() -> None:
     )
     assert v.passed is False
     assert any("CORS" in c.name and not c.ok for c in v.checks)
+
+
+def test_expected_framing_follows_the_cabinet_address(monkeypatch) -> None:
+    """Адрес кабинета сменился при переименовании — ожидание должно ехать за ним.
+
+    Вшитый адрес однажды уже привёл к тому, что браузер перестал показывать
+    превью владельцу, а проверка этого не заметила: обе стороны сверялись с
+    одним и тем же устаревшим значением.
+    """
+    from yleum_api.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(
+        "yleum_api.services.security_gate.get_settings",
+        lambda: settings.model_copy(update={"web_base_url": "https://yleum.ru/"}),
+    )
+    assert security_gate.owner_preview_framing_policy() == (
+        "frame-ancestors 'self' https://yleum.ru"
+    )
+
+
+def test_extra_allowed_cabinet_does_not_fail_the_check(monkeypatch) -> None:
+    """Превью разрешает и запасной кабинет: проверке достаточно нужного адреса."""
+    from yleum_api.core.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(
+        "yleum_api.services.security_gate.get_settings",
+        lambda: settings.model_copy(update={"web_base_url": "https://yleum.ru"}),
+    )
+    served = (
+        "frame-ancestors 'self' https://yleum.ru https://constructor.lead-generator.ru"
+    )
+    checks = assert_security_headers(
+        {"x-content-type-options": "nosniff", "content-security-policy": served},
+        require_embedded_framing=True,
+    )
+    assert all(check.ok for check in checks)
+
+    without_cabinet = assert_security_headers(
+        {
+            "x-content-type-options": "nosniff",
+            "content-security-policy": (
+                "frame-ancestors 'self' https://constructor.lead-generator.ru"
+            ),
+        },
+        require_embedded_framing=True,
+    )
+    assert any(
+        "frame-ancestors" in check.name and not check.ok for check in without_cabinet
+    )

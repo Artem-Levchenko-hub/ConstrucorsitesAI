@@ -35,7 +35,23 @@ _PUBLIC_ANONYMOUS = {
 _SESSION_COOKIE = "__Host-max_session"
 _EMBEDDED_COOKIES = ("__Host-max_session_embedded", "__Host-max_session_partitioned")
 _PUBLIC_FRAMING = "frame-ancestors 'self' https://web.max.ru https://max.ru"
-_OWNER_FRAMING = "frame-ancestors 'self' https://constructor.lead-generator.ru"
+# Адрес кабинета приходит в конфигурации шлюза: он менялся при переименовании,
+# а вшитый адрес означает, что после переезда браузер перестаёт показывать
+# превью владельцу. Старые шлюзы без этого ключа продолжают работать на
+# запасном адресе, пока контроллер не пересоздаст их с новой конфигурацией.
+_FALLBACK_OWNER_ORIGINS = ("https://constructor.lead-generator.ru",)
+_ORIGIN_RE = re.compile(r"^https://[a-z0-9.-]{1,253}(:\d{1,5})?$")
+
+
+def owner_framing(origins: object) -> str:
+    """Политика встраивания превью владельца для перечисленных кабинетов."""
+    allowed = [
+        origin for origin in (origins if isinstance(origins, list) else [])
+        if isinstance(origin, str) and _ORIGIN_RE.match(origin)
+    ] or list(_FALLBACK_OWNER_ORIGINS)
+    return "frame-ancestors 'self' " + " ".join(dict.fromkeys(allowed))
+
+
 _BOOTSTRAP_SCRIPT = """
 (() => {
   const message = document.getElementById('status');
@@ -245,13 +261,14 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     def end_headers(self) -> None:
-        public = cast(BoundaryServer, self.server).config.get("public_mode") is True
+        config = cast(BoundaryServer, self.server).config
+        public = config.get("public_mode") is True
         # Origin checks stop CSRF, but not clicks inside a hostile iframe. Owner
         # drafts embed only in Studio; public releases embed only in MAX clients.
         # A separate CSP intersects, never weakens any upstream policy.
         self.send_header(
             "Content-Security-Policy",
-            _PUBLIC_FRAMING if public else _OWNER_FRAMING,
+            _PUBLIC_FRAMING if public else owner_framing(config.get("owner_origins")),
         )
         super().end_headers()
 

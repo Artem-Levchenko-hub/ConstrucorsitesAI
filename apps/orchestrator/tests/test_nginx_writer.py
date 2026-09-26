@@ -201,9 +201,12 @@ def test_dev_vhost_injects_platform_inspector_for_old_projects() -> None:
     assert "location = /_omnia/inspector.js" in block
     assert "127.0.0.1:8200/api/kit/omnia-inspector.js" in block
     assert 'data-omnia-platform-inspector="1"' in block
+    # Адрес кабинета едет за настройкой: после переименования он сменился, и
+    # вшитое значение оставило бы инспектор слушать чужой origin.
     assert (
-        'data-omnia-parent-origin="https://constructor.lead-generator.ru"' in block
+        f'data-omnia-parent-origin="{nginx_writer._workspace_origin()}"' in block
     )
+    assert 'data-omnia-parent-origin="https://yleum.ru"' in block
     assert 'proxy_set_header Accept-Encoding ""' in block
     assert "sub_filter '</body>'" in block
 

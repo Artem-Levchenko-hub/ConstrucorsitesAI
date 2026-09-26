@@ -312,12 +312,12 @@ async def test_max_proof_bundle_still_executes_exact_candidate_behavior(monkeypa
         require_embedded_framing,
         framing_policy,
     ):
-        from yleum_api.services.security_gate import OWNER_PREVIEW_FRAMING_POLICY
+        from yleum_api.services.security_gate import owner_preview_framing_policy
 
         assert base_url == preview.preview_url
         assert bootstrap_url == preview.bootstrap_url
         assert require_embedded_framing is True
-        assert framing_policy == OWNER_PREVIEW_FRAMING_POLICY
+        assert framing_policy == owner_preview_framing_policy()
         calls.append("same_session_security")
         return FunctionalVerdict(True, [Check("embedded security", True, "green")], "green")
 

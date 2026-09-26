@@ -20,12 +20,26 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from urllib.parse import urlsplit
 
+from yleum_api.core.config import get_settings
 from yleum_api.services.render_settle import goto_and_settle
 
-OWNER_PREVIEW_FRAMING_POLICY = (
-    "frame-ancestors 'self' https://constructor.lead-generator.ru"
-)
 PUBLIC_MAX_FRAMING_POLICY = "frame-ancestors 'self' https://web.max.ru https://max.ru"
+
+
+def owner_preview_framing_policy() -> str:
+    """Политика встраивания, которую обязан отдавать превью владельца.
+
+    Адрес кабинета берётся из настройки, а не вшивается: при переименовании он
+    сменился с constructor.lead-generator.ru на yleum.ru, и вшитое значение
+    означало бы, что браузер перестал показывать превью, а проверка этого не
+    заметила — обе стороны сверялись с одним и тем же устаревшим адресом.
+    Оркестратор разрешает ещё и запасной кабинет; проверка требует лишь того,
+    чтобы нужный адрес входил в разрешённые.
+    """
+    origin = urlsplit(get_settings().web_base_url.strip().rstrip("/"))
+    if origin.scheme not in ("http", "https") or not origin.netloc:
+        raise RuntimeError("WEB_BASE_URL must be a plain http(s) origin")
+    return f"frame-ancestors 'self' {origin.scheme}://{origin.netloc}".lower()
 
 
 @dataclass
@@ -81,7 +95,7 @@ def assert_security_headers(
     headers: dict[str, str],
     *,
     require_embedded_framing: bool = False,
-    framing_policy: str = OWNER_PREVIEW_FRAMING_POLICY,
+    framing_policy: str | None = None,
 ) -> list[SecCheck]:
     """The conservative headers G006 sets must be present on responses."""
     checks: list[SecCheck] = []
@@ -94,7 +108,9 @@ def assert_security_headers(
         checks.append(
             SecCheck(
                 "CSP frame-ancestors matches embedded MAX policy",
-                _has_embedded_framing_policy(csp, framing_policy),
+                _has_embedded_framing_policy(
+                    csp, framing_policy or owner_preview_framing_policy()
+                ),
                 "present" if csp else "missing",
             )
         )
@@ -146,7 +162,7 @@ def surface_verdict_from_headers(
     *,
     require_embedded_framing: bool = False,
     protected_status: int | None = None,
-    framing_policy: str = OWNER_PREVIEW_FRAMING_POLICY,
+    framing_policy: str | None = None,
     document_headers: dict[str, str] | None = None,
     document_status: int | None = None,
 ) -> SecurityVerdict:
@@ -204,7 +220,7 @@ async def run_security_gate(
     *,
     bootstrap_url: str | None = None,
     require_embedded_framing: bool = False,
-    framing_policy: str = OWNER_PREVIEW_FRAMING_POLICY,
+    framing_policy: str | None = None,
 ) -> SecurityVerdict:
     """Drive the live preview, capture the main route's response headers, and
     return the transport-surface verdict (:func:`surface_verdict_from_headers`).

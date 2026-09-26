@@ -102,6 +102,7 @@ def test_actual_http_boundary_rejects_bad_auth_and_strips_product_credentials():
         "machine_host": "127.0.0.1",
         "core_host": "127.0.0.1",
         "routes": [{"path": "/", "port": product.server_port}],
+        "owner_origins": ["https://yleum.ru", "https://constructor.lead-generator.ru"],
     }
     threads = [
         threading.Thread(target=server.serve_forever, daemon=True) for server in (product, gateway)
@@ -133,7 +134,7 @@ def test_actual_http_boundary_rejects_bad_auth_and_strips_product_credentials():
         status, content, response_headers = request("/", headers)
         assert status == 200 and content == b"non-Next product"
         assert response_headers["Content-Security-Policy"] == (
-            "frame-ancestors 'self' https://constructor.lead-generator.ru"
+            "frame-ancestors 'self' https://yleum.ru https://constructor.lead-generator.ru"
         )
         assert "Set-Cookie" not in response_headers
         assert received[0]["X-Omnia-User-ID"] == "user-A"
@@ -338,3 +339,44 @@ setTimeout(() => process.stdout.write(JSON.stringify({calls, navigation, message
     assert len(result["navigation"]) == reloads
     if not reloads:
         assert result["message"]["textContent"]
+
+
+def test_owner_framing_follows_the_cabinet_address_and_keeps_the_spare_one(monkeypatch) -> None:
+    """Браузер показывает превью только тем кабинетам, что перечислены здесь.
+
+    После переименования кабинет переехал на yleum.ru, а политика осталась со
+    старым адресом — и браузер перестал встраивать превью владельца (проверено
+    живьём на проде 26.09). Адрес обязан приходить из настроек, а запасной
+    кабинет — оставаться разрешённым, пока он жив.
+    """
+    from yleum_orchestrator.core.config import Settings
+    from yleum_orchestrator.services import studio_origins as studio_origins_module
+    from yleum_orchestrator.services.machine_boundary import owner_framing
+    from yleum_orchestrator.services.studio_origins import studio_origins
+
+    settings = Settings(
+        _env_file=None,
+        database_url="postgresql://test:test@127.0.0.1:5432/test",
+        internal_token="test-internal-token-not-a-real-secret",
+    )
+    monkeypatch.setattr(studio_origins_module, "get_settings", lambda: settings)
+
+    origins = studio_origins()
+    assert origins[0] == "https://yleum.ru"
+    assert "https://constructor.lead-generator.ru" in origins
+
+    policy = owner_framing(origins)
+    assert policy == (
+        "frame-ancestors 'self' https://yleum.ru https://constructor.lead-generator.ru"
+    )
+
+    # Шлюз, созданный до этой правки, не знает ключа и остаётся на запасном
+    # кабинете, а не отдаёт пустую политику, встраиваемую откуда угодно.
+    assert owner_framing(None) == (
+        "frame-ancestors 'self' https://constructor.lead-generator.ru"
+    )
+    # Адреса приходят из настроек платформы, но заголовок собирается из них
+    # буквально: значение не по форме не должно попасть в политику.
+    assert owner_framing(["http://evil.example", "https://ok.example", "junk"]) == (
+        "frame-ancestors 'self' https://ok.example"
+    )

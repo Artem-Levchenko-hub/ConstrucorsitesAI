@@ -5,7 +5,7 @@ import { getMaxUser } from "@/lib/max/session";
 
 const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";
 const PLATFORM_API = (
-  process.env.OMNIA_PLATFORM_API_URL || "https://constructor.lead-generator.ru"
+  process.env.OMNIA_PLATFORM_API_URL || "https://yleum.ru"
 ).replace(/\/$/, "");
 
 type Context = { params: Promise<{ path: string[] }> };

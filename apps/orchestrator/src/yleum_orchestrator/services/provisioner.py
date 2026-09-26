@@ -57,6 +57,7 @@ from yleum_orchestrator.schemas.runtime import (
 )
 from yleum_orchestrator.services import nginx_writer
 from yleum_orchestrator.services.port_allocator import get_port_allocator
+from yleum_orchestrator.services.studio_origins import platform_api_url
 
 # Fallback DSN — syntactically valid, points nowhere. Used only when Postgres
 # schema provisioning fails (degraded mode): the template's db module still
@@ -422,9 +423,7 @@ async def _provision_once(req: ProvisionRequest) -> ProvisionResponse:
         "DATABASE_URL": database_url,
         "NODE_ENV": "development",
         "OMNIA_PROJECT_ID": str(req.project_id),
-        "OMNIA_PLATFORM_API_URL": os.getenv(
-            "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
-        ),
+        "OMNIA_PLATFORM_API_URL": platform_api_url(),
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": dev_origin,
         "AUTH_TRUST_HOST": "true",

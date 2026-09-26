@@ -42,6 +42,7 @@ from yleum_orchestrator.services.build_artifact_inventory import (
 )
 from yleum_orchestrator.services.port_allocator import get_prod_port_allocator
 from yleum_orchestrator.services.provisioner import _template_source_dir
+from yleum_orchestrator.services.studio_origins import platform_api_url
 
 log = structlog.get_logger("yleum_orchestrator.builder")
 
@@ -296,9 +297,7 @@ async def _deploy_remote(
         "PORT": "3000",
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PROJECT_ID": project_id,
-        "OMNIA_PLATFORM_API_URL": os.getenv(
-            "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
-        ),
+        "OMNIA_PLATFORM_API_URL": platform_api_url(),
         "AUTH_SECRET": auth_secret,
         "AUTH_URL": app_url,
         "AUTH_TRUST_HOST": "true",
@@ -590,9 +589,7 @@ async def _run(
                 "PORT": "3000",
                 "HOSTNAME": "0.0.0.0",  # standalone server must bind all ifaces
                 "OMNIA_PROJECT_ID": project_id,
-                "OMNIA_PLATFORM_API_URL": os.getenv(
-                    "OMNIA_PLATFORM_API_URL", "https://constructor.lead-generator.ru"
-                ),
+                "OMNIA_PLATFORM_API_URL": platform_api_url(),
                 "DATABASE_URL": _resolve_runtime_dsn(project_id),
                 "AUTH_SECRET": auth_secret,
                 "AUTH_URL": prod_origin,

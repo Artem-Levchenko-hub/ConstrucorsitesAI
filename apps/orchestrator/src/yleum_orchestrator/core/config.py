@@ -235,7 +235,12 @@ class Settings(BaseSettings):
     # rendered into a data attribute and enforced by the inspector's message
     # listener; a random third-party page cannot frame a preview and exfiltrate
     # its DOM through the picker protocol.
-    workspace_origin: str = Field(default="https://constructor.lead-generator.ru")
+    workspace_origin: str = Field(default="https://yleum.ru")
+    # Кабинет переехал с constructor.lead-generator.ru на yleum.ru, и старый
+    # адрес остаётся запасным. Пока он жив, оба адреса разрешено встраивать
+    # превью: политика из одного адреса означала бы, что в другом кабинете
+    # браузер просто не покажет iframe (так и случилось после переименования).
+    workspace_legacy_origins: str = Field(default="https://constructor.lead-generator.ru")
 
     # Per-host Let's Encrypt (HTTP-01 via webroot). No DNS API token needed
     # because sslip.io hosts already resolve to us. Fail-soft: if a cert can't

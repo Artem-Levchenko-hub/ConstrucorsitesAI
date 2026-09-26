@@ -177,7 +177,7 @@ async def run_release_proof(
                     base_url,
                     bootstrap_url=cell_preview.bootstrap_url,
                     require_embedded_framing=True,
-                    framing_policy=security_gate.OWNER_PREVIEW_FRAMING_POLICY,
+                    framing_policy=security_gate.owner_preview_framing_policy(),
                 )
             else:
                 security = await security_gate.run_security_gate(base_url)

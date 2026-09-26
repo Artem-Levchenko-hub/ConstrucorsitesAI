@@ -191,9 +191,9 @@
       },
       "src/app/api/omnia/integrations/[...path]/route.ts": {
         "mode": "100644",
-        "git_blob": "e5954252289f6e12e55f44efb01699fa12573f25",
-        "bytes": 4092,
-        "sha256": "8bf6f292cb51aba551d22f5025f9aa892a5bab319c649507a0adb6faf16da86a"
+        "git_blob": "570c02dfcb9f9d6bdf0e16962ed3300f21cc00c6",
+        "bytes": 4071,
+        "sha256": "48ede51ac6a7d0b932e31e9f855be0410f9abb2b032323e7fc8eea4b7d3f94be"
       },
       "src/app/api/omnia/preview-session/route.ts": {
         "mode": "100644",
