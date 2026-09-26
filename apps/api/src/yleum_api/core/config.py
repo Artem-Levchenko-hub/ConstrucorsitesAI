@@ -696,8 +696,10 @@ class Settings(BaseSettings):
     # nobody (today's behaviour). Env: AGENTIC_BUILDER_CANARY_USERS.
     agentic_builder_canary_users: str = Field(default="")
     project_cell_docker_canary_enabled: bool = Field(default=False)
-    # Admission for newly created MAX projects only; persisted assignments survive rollback.
-    project_cell_general_availability_enabled: bool = Field(default=False)
+    # Admission for newly created MAX projects. Default ON since the legacy
+    # dev-container runtime left with the site builder: a project that is not
+    # admitted to a cell has nowhere to be built, so creation refuses instead.
+    project_cell_general_availability_enabled: bool = Field(default=True)
     project_cell_canary_emails: str = Field(default="")
     use_generation_worker: bool = Field(default=False)
     # Сколько сборок воркер ведёт одновременно. Это ГЛАВНЫЙ предел числа

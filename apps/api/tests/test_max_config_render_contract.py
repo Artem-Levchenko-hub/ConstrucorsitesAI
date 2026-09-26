@@ -182,7 +182,6 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     monkeypatch.setattr(agent_preparation, "_build_agent_seed_parts", AsyncMock(return_value=[]))
     monkeypatch.setattr(agent_seed, "_apply_project_cell_preview_files", AsyncMock())
     monkeypatch.setattr(agent_recovery, "_apply_project_cell_preview_files", AsyncMock())
-    monkeypatch.setattr(lifecycle.stack_routing, "ensure_provisioned", AsyncMock())
     monkeypatch.setattr(integration_generation, "generation_context", AsyncMock(return_value=""))
     monkeypatch.setattr(max_data_evolution, "build_max_agent_guide", AsyncMock(return_value=""))
 

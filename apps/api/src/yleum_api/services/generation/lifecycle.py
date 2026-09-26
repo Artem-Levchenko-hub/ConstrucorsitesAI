@@ -20,7 +20,6 @@ from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as CONTAINER_NEXT
 from yleum_api.services import (
     agent_builder,
-    stack_routing,
 )
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.generation.agent_finalization import AdaptationActivationPending
@@ -105,36 +104,6 @@ async def _process_prompt(
     runtime.coordinator = None
     runtime.deadline_task = None
 
-    async def _provision_legacy_runtime_with_progress() -> None:
-        await _record_agent_step(
-            {
-                "step": None,
-                "kind": "step",
-                "action": "Подготавливаю среду проекта",
-                "tool": "runtime",
-                "path": "",
-                "detail": "Запускаю контейнер и жду готовности перед сборкой.",
-                "ok": True,
-            }
-        )
-        await stack_routing.ensure_provisioned(
-            project_id,
-            project_slug,
-            project_template,
-            require_ready=True,
-        )
-        await _record_agent_step(
-            {
-                "step": None,
-                "kind": "step",
-                "action": "Среда готова",
-                "tool": "runtime",
-                "path": "",
-                "detail": "Контейнер запущен, начинаю сборку приложения.",
-                "ok": True,
-            }
-        )
-
     try:
         async with factory() as session:
             from yleum_api.services.restoration_adaptation import append_adaptation_context
@@ -175,17 +144,6 @@ async def _process_prompt(
             str(user_id),
         ):
             raise RuntimeError(_BUILDER_DISABLED)
-        _defer_max_runtime_provision = project_template == "max_miniapp"
-
-        # Auto stack-routing, part 2: container-backed stacks need a live dev
-        # container for the post-build hot_reload to land in. Provision it now —
-        # at the START of the worker — so it warms up in parallel with the
-        # (minutes-long) generation below. Idempotent + fail-soft: if the
-        # container already exists this is a no-op; if the orchestrator hiccups
-        # the build still ships the snapshot and hot_reload/«Запустить» retries.
-        if not _defer_max_runtime_provision:
-            await _provision_legacy_runtime_with_progress()
-
         if current_sha:
             current_files = await asyncio.to_thread(repo_svc.read_files, project_id, current_sha)
         print(f"[PP] files_loaded count={len(current_files)}", flush=True)
@@ -243,8 +201,6 @@ async def _process_prompt(
         baseline = SourceBaseline(current_snapshot_id, current_sha, current_files)
         await run_agent_generation(
             _consume_free_generation=_consume_free_generation,
-            _defer_max_runtime_provision=_defer_max_runtime_provision,
-            _provision_legacy_runtime_with_progress=_provision_legacy_runtime_with_progress,
             baseline=baseline,
             capacity_dispatch_token=capacity_dispatch_token,
             factory=factory,

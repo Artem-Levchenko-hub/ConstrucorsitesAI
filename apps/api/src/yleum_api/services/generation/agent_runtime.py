@@ -12,7 +12,6 @@ from yleum_api.core.config import get_settings
 from yleum_api.services import (
     agent_builder,
     orchestrator_client,
-    project_cell_executor,
 )
 from yleum_api.services.generation.contracts import (
     AgentRuntimeBindings,
@@ -43,8 +42,6 @@ async def prepare_agent_runtime(
     prompt_text: str,
     _design_contract: Any,
     _agent_res: agent_builder.AgentResult | None,
-    _defer_max_runtime_provision: bool,
-    _provision_legacy_runtime_with_progress: Callable[[], Awaitable[None]],
     capacity_dispatch_token: UUID | None,
 ) -> tuple[AgentRuntimeBindings, agent_builder.AgentResult | None]:
     _agent_emit = progress.emit_agent_event
@@ -67,15 +64,6 @@ async def prepare_agent_runtime(
         project_cell_handle=None,
     )
     _active_max_locked_files: frozenset[str] = frozenset()
-    _legacy_runtime_ready = not _defer_max_runtime_provision
-
-    async def _ensure_legacy_runtime_ready() -> None:
-        nonlocal _legacy_runtime_ready
-        if _legacy_runtime_ready:
-            return
-        await _provision_legacy_runtime_with_progress()
-        _legacy_runtime_ready = True
-
     async def _probe_runtime_status(path: str = "/") -> dict[str, Any]:
         if runtime.handle is not None:
             return await _project_cell_runtime_check(
@@ -152,7 +140,6 @@ async def prepare_agent_runtime(
             vision_context=bindings.vision_context,
             legacy_execute=bindings.base_executor,
             max_shell_requested=bindings.shell_requested,
-            ensure_legacy_runtime_ready=_ensure_legacy_runtime_ready,
             agent_emit=_agent_emit,
             max_model_locked_files=MAX_MODEL_LOCKED_FILES,
             max_security_locked_files=MAX_SECURITY_LOCKED_FILES,
@@ -207,88 +194,4 @@ async def prepare_agent_runtime(
 
             bindings.execute = _agent_executor
 
-    # Seed the agent with the project layout + the CrudResource component
-    # up-front so it does NOT burn steps re-discovering the fixed template
-    # (the #1 latency sink observed in the first live runs). Fail-soft.
-    if project_info.template == "max_miniapp" and runtime.handle is None:
-        await _ensure_legacy_runtime_ready()
-
     return bindings, _agent_res
-
-
-async def select_nonmax_runtime(
-    *,
-    _agent_emit: Callable[[str, dict[str, Any]], Awaitable[None]],
-    _agent_res: agent_builder.AgentResult | None,
-    bindings: AgentRuntimeBindings,
-    ids: GenerationIds,
-    project_info: ProjectGenerationFacts,
-    runtime: GenerationRuntime,
-) -> agent_builder.AgentResult | None:
-    if _agent_res is None and project_info.template != "max_miniapp":
-        try:
-            runtime.handle = await project_cell_executor.maybe_create_project_cell_executor(
-                project_id=ids.project_id,
-                project_slug=project_info.slug,
-                project_template=project_info.template,
-                user_id=ids.user_id,
-                generation_run_id=ids.run_id,
-                legacy_execute=bindings.base_executor,
-                vision_context=bindings.vision_context,
-                agent_emit=lambda payload: _agent_emit(
-                    "agent.step",
-                    {
-                        **payload,
-                        "action": "capacity_wait",
-                        "human": payload.get("action", "Ожидаю ресурсы сервера"),
-                        "ok": True,
-                    },
-                ),
-            )
-        except project_cell_executor.ProjectCellExecutorUnavailable as _cell_exc:
-            await _agent_emit(
-                "agent.step",
-                {
-                    "step": 0,
-                    "action": "project_cell",
-                    "human": "Project Cell не подготовился",
-                    "path": "",
-                    "detail": str(_cell_exc),
-                    "ok": False,
-                },
-            )
-            _agent_res = agent_builder.AgentResult(
-                done=False,
-                summary=(
-                    f"Генерация не запускалась: owner-only Project Cell недоступен ({_cell_exc})."
-                ),
-                files={},
-                steps=0,
-                stop_reason="project_cell_unavailable",
-            )
-        else:
-            if runtime.handle is not None:
-                bindings.base_executor = runtime.handle.execute
-                bindings.execute = runtime.handle.execute
-                bindings.shell_enabled = _resolve_max_shell_enabled(
-                    max_shell_requested=bindings.shell_requested,
-                    sandbox_attested=bindings.sandbox_attested,
-                    project_cell_handle=runtime.handle,
-                )
-                bindings.locked_files = MAX_SECURITY_LOCKED_FILES
-                await _agent_emit(
-                    "agent.step",
-                    {
-                        "step": 0,
-                        "action": "project_cell",
-                        "human": "Подключаю owner-only Project Cell",
-                        "path": "",
-                        "detail": (
-                            "Кодовая генерация идёт в изолированном workspace; "
-                            "preview/runtime синхронизируются только для проверки."
-                        ),
-                        "ok": True,
-                    },
-                )
-
-    return _agent_res

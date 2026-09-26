@@ -40,7 +40,7 @@ from yleum_api.services.generation.agent_recovery import (
     recover_rejected_candidate,
     recover_stopped_candidate,
 )
-from yleum_api.services.generation.agent_runtime import prepare_agent_runtime, select_nonmax_runtime
+from yleum_api.services.generation.agent_runtime import prepare_agent_runtime
 from yleum_api.services.generation.agent_seed import render_current_max_starter, stage_max_starter
 from yleum_api.services.generation.agent_verification import (
     apply_legacy_design_and_result_text,
@@ -78,8 +78,6 @@ async def publish_finalized_candidate_once(
 async def run_agent_generation(
     *,
     _consume_free_generation: Callable[[AsyncSession], Awaitable[None]],
-    _defer_max_runtime_provision: bool,
-    _provision_legacy_runtime_with_progress: Callable[[], Awaitable[None]],
     baseline: SourceBaseline,
     capacity_dispatch_token: UUID | None,
     factory: async_sessionmaker[AsyncSession],
@@ -157,8 +155,6 @@ async def run_agent_generation(
         prompt_text=prompt_text,
         _design_contract=_design_contract,
         _agent_res=_agent_res,
-        _defer_max_runtime_provision=_defer_max_runtime_provision,
-        _provision_legacy_runtime_with_progress=_provision_legacy_runtime_with_progress,
         capacity_dispatch_token=capacity_dispatch_token,
     )
     _stack = await prepare_stack_prompt(
@@ -210,15 +206,6 @@ async def run_agent_generation(
         bindings=bindings,
         ids=ids,
         orchestrate=orchestrate,
-        project_info=project_info,
-        runtime=runtime,
-    )
-
-    _agent_res = await select_nonmax_runtime(
-        _agent_emit=_agent_emit,
-        _agent_res=_agent_res,
-        bindings=bindings,
-        ids=ids,
         project_info=project_info,
         runtime=runtime,
     )

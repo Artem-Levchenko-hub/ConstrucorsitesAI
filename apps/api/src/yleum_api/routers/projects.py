@@ -123,13 +123,23 @@ async def create_project(
             or None
         )
 
+    # A project that cannot get its own cell has nowhere to be built: the legacy
+    # dev-container runtime left with the site builder. Refuse at creation rather
+    # than hand the owner a project that will fail on the first prompt.
+    if not admit_new_project_cell(owner):
+        raise ApiError(
+            "runtime_unavailable",
+            "Сейчас нельзя создать приложение: среда приложений недоступна. "
+            "Попробуйте позже или напишите в поддержку.",
+            status.HTTP_409_CONFLICT,
+        )
     project = Project(
         owner_id=owner.id,
         name=payload.name,
         slug=slug,
         template=payload.template,
         design_preset_id=preset_id,
-        project_cell_enabled=admit_new_project_cell(owner),
+        project_cell_enabled=True,
     )
     session.add(project)
     await session.flush()

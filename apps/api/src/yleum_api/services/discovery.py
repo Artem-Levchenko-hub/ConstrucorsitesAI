@@ -47,7 +47,7 @@ _ZERO_QUESTION_MIN_AXES = 2
 
 # Stacks the discovery may recommend. ``static`` builds immediately with no
 # container; the container stacks (``fullstack`` / ``nextjs_entities`` / ``spa``)
-# are routed to the orchestrator by the provisioning step (``stack_routing``).
+# are provisioned as the project's own cell when the build starts.
 # ``spa`` (Vite + React, no backend) is the no-ceiling escape hatch for an
 # INTERACTIVE tool/app that needs real build tooling but no accounts/DB — see the
 # stack-choice rules in ``_SYSTEM`` (Phase 7.2 multi-stack).

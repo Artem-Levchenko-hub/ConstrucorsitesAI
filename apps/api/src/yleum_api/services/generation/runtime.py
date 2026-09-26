@@ -157,7 +157,6 @@ async def _prepare_max_runtime_context(
     vision_context: str,
     legacy_execute: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
     max_shell_requested: bool,
-    ensure_legacy_runtime_ready: Callable[[], Awaitable[None]],
     agent_emit: Callable[[str, dict[str, Any]], Awaitable[None]],
     max_model_locked_files: frozenset[str],
     max_security_locked_files: frozenset[str],
@@ -208,50 +207,33 @@ async def _prepare_max_runtime_context(
         )
         raise
     else:
-        if project_cell_handle is not None:
-            base_agent_executor = project_cell_handle.execute
-            max_shell_enabled = _resolve_max_shell_enabled(
-                max_shell_requested=max_shell_requested,
-                sandbox_attested=False,
-                project_cell_handle=project_cell_handle,
+        if project_cell_handle is None:
+            # No cell, and no legacy dev container to fall back on since the site
+            # builder left. Refuse loudly instead of building somewhere else.
+            raise project_cell_executor.ProjectCellExecutorUnavailable(
+                "У проекта нет своей ячейки — собирать приложение негде."
             )
-            active_max_locked_files = max_security_locked_files
-            await agent_emit(
-                "agent.step",
-                {
-                    "step": 0,
-                    "action": "project_cell",
-                    "human": "Подключаю owner-only Project Cell",
-                    "path": "",
-                    "detail": (
-                        "Кодовая генерация идёт в изолированном workspace; "
-                        "preview/runtime синхронизируются только для проверки."
-                    ),
-                    "ok": True,
-                },
-            )
-        else:
-            await ensure_legacy_runtime_ready()
-            if max_shell_requested:
-                try:
-                    max_sandbox_capabilities = await orchestrator_client.agent_sandbox_capabilities(
-                        project_id,
-                        project_slug,
-                    )
-                except Exception as sandbox_cap_exc:
-                    print(
-                        f"[PP] MAX sandbox attestation unavailable: {sandbox_cap_exc!r}",
-                        flush=True,
-                    )
-            max_sandbox_attested = bool(max_sandbox_capabilities.get("ready"))
-            max_shell_enabled = _resolve_max_shell_enabled(
-                max_shell_requested=max_shell_requested,
-                sandbox_attested=max_sandbox_attested,
-                project_cell_handle=None,
-            )
-            active_max_locked_files = (
-                max_security_locked_files if max_shell_enabled else max_model_locked_files
-            )
+        base_agent_executor = project_cell_handle.execute
+        max_shell_enabled = _resolve_max_shell_enabled(
+            max_shell_requested=max_shell_requested,
+            sandbox_attested=False,
+            project_cell_handle=project_cell_handle,
+        )
+        active_max_locked_files = max_security_locked_files
+        await agent_emit(
+            "agent.step",
+            {
+                "step": 0,
+                "action": "project_cell",
+                "human": "Подключаю owner-only Project Cell",
+                "path": "",
+                "detail": (
+                    "Кодовая генерация идёт в изолированном workspace; "
+                    "preview/runtime синхронизируются только для проверки."
+                ),
+                "ok": True,
+            },
+        )
     return {
         "project_cell_handle": project_cell_handle,
         "base_agent_executor": base_agent_executor,

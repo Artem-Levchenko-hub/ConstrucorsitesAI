@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 
 from yleum_api.core.config import Settings, get_settings
+from yleum_api.core.errors import ApiError
 from yleum_api.models.project import Project
 from yleum_api.models.user import User
 from yleum_api.services import project_cell_access as access
@@ -39,10 +40,14 @@ def user(**changes):
     return User(**(values | changes))
 
 
-def test_general_availability_defaults_off_and_does_not_reclassify_legacy():
+def test_general_availability_is_on_by_default_and_does_not_reclassify_legacy():
+    """Admission is the default now — a project without a cell has no runtime.
+
+    It still says nothing about EXISTING rows: a legacy project is classified by
+    its own flag, never by the rollout switch.
+    """
     settings = Settings(project_cell_general_availability_enabled=True)
-    assert hasattr(settings, "project_cell_general_availability_enabled")
-    assert Settings.model_fields["project_cell_general_availability_enabled"].default is False
+    assert Settings.model_fields["project_cell_general_availability_enabled"].default is True
     assert access.admit_new_project_cell(user(), settings) is True
     decision = access.decide_project_cell_selection(user(), settings=settings)
     assert decision.enabled is False
@@ -76,7 +81,9 @@ def test_assigned_provider_survives_admission_switch_rollback(marker, workspace)
 
 def test_existing_canary_selection_remains_available():
     settings = Settings(
-        project_cell_docker_canary_enabled=True, project_cell_canary_emails="new-owner@example.test"
+        project_cell_docker_canary_enabled=True,
+        project_cell_canary_emails="new-owner@example.test",
+        project_cell_general_availability_enabled=False,
     )
     assert access.decide_project_cell_selection(user(), settings=settings).enabled
     assert access.admit_new_project_cell(user(), settings) is False
@@ -121,7 +128,7 @@ def test_provider_marker_cannot_be_set_through_public_project_payloads():
 
 
 @pytest.mark.parametrize("enabled", [True, False])
-async def test_normal_create_persists_server_decision_without_provisioning(monkeypatch, enabled):
+async def test_create_needs_a_cell_and_never_makes_a_project_without_one(monkeypatch, enabled):
     from yleum_api.routers import projects
     from yleum_api.schemas.project import ProjectCreate
 
@@ -144,14 +151,25 @@ async def test_normal_create_persists_server_decision_without_provisioning(monke
     monkeypatch.setattr(projects, "publish_event", AsyncMock())
     # Plan limits read the billing tables; this test owns a stub session.
     monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())
-    created = await projects.create_project(
+    call = projects.create_project(
         ProjectCreate.model_validate(
             {"name": "Test", "template": "max_miniapp", "project_cell_enabled": True}
         ),
         session,
         user(),
     )
-    assert created.project_cell_enabled is enabled
+    if not enabled:
+        # No cell to admit the project to — and no legacy runtime to fall back
+        # on since the site builder left. Refuse instead of creating a project
+        # that could never be built.
+        with pytest.raises(ApiError) as caught:
+            await call
+        assert caught.value.code == "runtime_unavailable"
+        assert inserted == []
+        session.commit.assert_not_awaited()
+        return
+    created = await call
+    assert created.project_cell_enabled is True
     assert created in inserted
     session.commit.assert_awaited_once()
 

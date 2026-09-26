@@ -1948,39 +1948,6 @@ async def project_cell_apply_business_config(
     return applied
 
 
-async def provision(
-    *,
-    project_id: UUID,
-    slug: str,
-    template: str,
-    tier: str = "free",
-    initial_env: dict[str, str] | None = None,
-    timeout: float = 1320.0,  # noqa: ASYNC109 - cold rebuild + dependency sync can take minutes
-) -> dict[str, Any]:
-    """POST /internal/projects/provision — first-time scaffold + start.
-
-    A stale template image is rebuilt during the first cold start. Production
-    builds regularly exceed the generic 30-second orchestrator deadline, while
-    provisioning continues successfully in the background. Keep this request
-    alive long enough for the real result so the UI never reports a false
-    preview failure for a container that is still starting.
-    """
-    payload: dict[str, Any] = {
-        "project_id": str(project_id),
-        "slug": slug,
-        "template": template,
-        "tier": tier,
-    }
-    if initial_env:
-        payload["initial_env"] = initial_env
-    return await _request(
-        "POST",
-        "/internal/projects/provision",
-        json=payload,
-        timeout=timeout,
-    )
-
-
 async def set_keep_alive(project_id: UUID, *, enabled: bool) -> dict[str, Any]:
     """Persist whether the project's dev runtime may be auto-hibernated."""
     return await _request(
