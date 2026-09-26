@@ -143,9 +143,9 @@
       },
       "src/app/api/max/session/route.ts": {
         "mode": "100644",
-        "git_blob": "0ca78f11ac55cd5d186938da14f289e7196b2177",
-        "bytes": 3227,
-        "sha256": "ad26ddd3f1dc138b9ba435d84270310e302cb38ed8fb73ad0a07ad976c8e1f3d"
+        "git_blob": "6d55c98d91234478a2d3bfee14091a5279712dfd",
+        "bytes": 3429,
+        "sha256": "e7fa8b1280e174af0a31586a0cd81008dc3b42dd94bbad9999533f7d3a4161a3"
       },
       "src/app/api/max/webhook/route.ts": {
         "mode": "100644",
@@ -233,9 +233,9 @@
       },
       "src/components/MaxAppProvider.tsx": {
         "mode": "100644",
-        "git_blob": "e5153dcc0fb273347c16eaaeff4ab933f672c146",
-        "bytes": 8027,
-        "sha256": "447b9ac09f342408b80e2d8ed911c2732db8c71a1e7f8cb7b6e9350337070072"
+        "git_blob": "35a07a05a902f976c178acf5ec6dcf7ade2853a5",
+        "bytes": 7821,
+        "sha256": "c0cc8a4e4dd384e4074afc8b41e0ae70395264f28e3ae2841ab0ac37e2500333"
       },
       "src/components/YleumCompliance.tsx": {
         "mode": "100644",
