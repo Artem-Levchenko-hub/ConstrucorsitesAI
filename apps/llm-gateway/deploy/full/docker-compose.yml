@@ -212,6 +212,7 @@ services:
         condition: service_completed_successfully
     environment: &api_environment
       USE_GENERATION_WORKER: ${USE_GENERATION_WORKER:-true}
+      GENERATION_WORKER_MAX_CONCURRENT: ${GENERATION_WORKER_MAX_CONCURRENT:-8}
       ENV: prod
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}

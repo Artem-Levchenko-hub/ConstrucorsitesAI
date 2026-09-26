@@ -708,6 +708,17 @@ class Settings(BaseSettings):
     project_cell_general_availability_enabled: bool = Field(default=False)
     project_cell_canary_emails: str = Field(default="")
     use_generation_worker: bool = Field(default=False)
+    # Сколько сборок воркер ведёт одновременно. Это ГЛАВНЫЙ предел числа
+    # пользователей, которые могут запустить генерацию в одну минуту: мощности
+    # ячеек с 26.09 хватает на 14 на площадку, а воркер пускал ровно 8 — и это
+    # число было вписано в код, то есть менялось только пересборкой.
+    #
+    # Поднимать его стоит по замеру, а не на глаз: на восьмиядерном хосте восемь
+    # сборок — это уже примерно по ядру на сборку, дальше они начнут отнимать
+    # процессор друг у друга и каждая станет медленнее. Насыщение видно в
+    # сердцебиении воркера (поля active и limit) — когда active подолгу равен
+    # limit, предел действительно мешает, и тогда его можно двигать.
+    generation_worker_max_concurrent: int = Field(default=8, ge=1, le=64)
     use_max_finalization_coordinator: bool = Field(default=False)
     use_project_cell_activity_watchdog: bool = Field(default=False)
     use_generation_event_replay: bool = Field(default=False)
