@@ -265,12 +265,12 @@ jobs:
         run: uv sync --frozen
       - name: Lint and typecheck orchestrator
         working-directory: apps/orchestrator
-        run: >-
-          uv run ruff check
-          src/yleum_orchestrator/core/release.py
-          src/yleum_orchestrator/routers/health.py
-          tests/test_health.py
-          && uv run mypy src
+        # Стиль проверяется по всему пакету, как в api: список из трёх файлов был
+        # пережитком времён, когда остальное не проходило проверку. Сейчас чисто
+        # (281 файл, ноль замечаний), поэтому сужение только скрывало бы новое.
+        # Типы пока только по src: на тестах strict-mypy даёт 3030 замечаний,
+        # это отдельная работа и она не про качество продукта.
+        run: uv run ruff check . && uv run mypy src
       - name: Run orchestrator tests
         working-directory: apps/orchestrator
         # A test that hangs longer than four minutes dumps every thread's stack into the
