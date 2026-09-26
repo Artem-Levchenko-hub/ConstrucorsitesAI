@@ -81,7 +81,7 @@ it.each(["loading", "error"])("never marks stale requirements complete while rea
     api.readiness.mockRejectedValue(new Error("offline"));
   } else api.readiness.mockImplementation(() => new Promise(() => {}));
   await mount(<MaxLaunchPanel project={project} />);
-  if (state === "error") await settle(() => expect(container.textContent).toContain("Статус недоступен"));
+  if (state === "error") await settle(() => expect(container.textContent).toContain("Не дозвонились"));
   const requirements = container.querySelector('[aria-label="Путь до публикации"]');
   expect(requirements).not.toBeNull();
   expect(requirements!.querySelectorAll('[data-state="done"]')).toHaveLength(0);
@@ -97,7 +97,7 @@ it("keeps unknown launch readiness distinct from completed preparation", async (
 it("stops showing an in-progress readiness check after the request fails", async () => {
   api.readiness.mockRejectedValue(new Error("offline"));
   await mount(<MaxLaunchPanel project={project} />);
-  await settle(() => expect(container.textContent).toContain("Статус недоступен"));
+  await settle(() => expect(container.textContent).toContain("Не дозвонились"));
   expect(container.textContent).not.toContain("Проверяем…");
   expect(container.querySelector("progress")).toBeNull();
   expect(container.querySelector('[data-testid="max-launch-current-step"]')?.getAttribute("role")).toBe("alert");
@@ -131,10 +131,13 @@ it("offers a retry for failed status queries without showing stale success", asy
   client.setQueryDefaults(["max-readiness", project.id], { staleTime: 0 });
   api.readiness.mockRejectedValue(new Error("offline"));
   await mount(dashboard());
-  await settle(() => expect(container.textContent).toContain("Не удалось проверить публикацию"));
+  // Одно событие — одна формулировка на весь кабинет: что случилось, опасно ли
+  // это и что нажать. Раньше то же самое называлось тремя разными фразами.
+  await settle(() => expect(container.textContent).toContain("Не дозвонились до сервера"));
+  expect(container.textContent).toContain("продолжает работать");
   expect(container.textContent).not.toContain("Текущая версия опубликована");
   api.readiness.mockResolvedValue(readiness(false));
-  const retry = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Повторить проверку"));
+  const retry = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Проверить ещё раз"));
   expect(retry).toBeDefined();
   await act(async () => retry!.click());
   await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
@@ -146,8 +149,8 @@ it("distinguishes history loading and failure from an empty history", async () =
   await settle(() => expect(container.textContent).toContain("Загружаем историю"));
   expect(container.textContent).not.toContain("после первой публикации");
   await act(async () => { reject(new Error("offline")); });
-  await settle(() => expect(container.textContent).toContain("Не удалось загрузить историю"));
-  expect(container.textContent).toContain("Не удалось загрузить историю");
+  await settle(() => expect(container.textContent).toContain("Не дозвонились до сервера"));
+  expect(container.textContent).toContain("Сами публикации на месте");
   expect(container.textContent).not.toContain("после первой публикации");
 });
 it("shows an explicit empty history after a successful empty response", async () => {

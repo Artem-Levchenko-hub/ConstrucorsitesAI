@@ -21,6 +21,7 @@ import {
 } from "@/lib/api/max-studio";
 import type { MaxProjectConfig, MaxProjectConfigPayload } from "@/lib/api/types";
 import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
+import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
 import { cn } from "@/lib/utils";
 import "./max-studio.css";
 import "./max-project-workspace.css";
@@ -245,7 +246,7 @@ export function MaxProjectSetupDialog({
           </div>
 
           {config.isError ? (
-            <div role="alert" className="p-6 text-sm"><p>Не удалось загрузить данные приложения.</p><Button variant="outline" className="mt-3" onClick={() => void config.refetch()}>Повторить загрузку</Button></div>
+            <div role="alert" className="p-6 text-sm"><p><strong>{MAX_STATUS_COPY.config.title}.</strong> {MAX_STATUS_COPY.config.hint}</p><Button variant="outline" className="mt-3" onClick={() => void config.refetch()}>{MAX_STATUS_COPY.config.retry}</Button></div>
           ) : config.isLoading || !current ? (
             <div className="flex min-h-44 flex-1 items-center justify-center">
               <Loader2 className="h-5 w-5 animate-spin text-accent" />

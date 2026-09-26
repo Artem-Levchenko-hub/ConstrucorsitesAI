@@ -60,9 +60,10 @@ it("distinguishes loading, query failure, retry and a real empty workspace", asy
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Загружаем приложения");
   expect(container.textContent).not.toContain("Первого проекта ещё нет");
   await act(async () => { reject(new Error("network offline")); });
-  await settle(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain("Не удалось загрузить приложения"));
+  await settle(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain("Не дозвонились до сервера"));
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Проекты никуда не делись");
   expect(container.textContent).not.toContain("Первого проекта ещё нет");
-  await click("Повторить");
+  await click("Проверить ещё раз");
   await settle(() => expect(container.textContent).toContain("Первого проекта ещё нет"));
 });
 

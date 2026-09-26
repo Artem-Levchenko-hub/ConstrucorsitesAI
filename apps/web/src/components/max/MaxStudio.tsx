@@ -18,6 +18,7 @@ import { buildMaxProjectPrompt, type MaxAppTypeId, type MaxFeature, type MaxStyl
 import { containsChatSecret, redactChatSecrets, resolveChatCredential } from "@/lib/max-chat-credentials";
 import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
 import { MaxStudioHeader } from "./MaxStudioHeader";
+import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
 import { MaxProjectWizard } from "./MaxProjectWizard";
 import "./max-studio.css";
 
@@ -232,9 +233,9 @@ export function MaxStudio({ email }: { email: string }) {
           ) : projects.isError ? (
             <section role="alert" className="max-projects-empty">
               <CircleAlert className="mx-auto size-7 text-danger-fg" />
-              <h2>Не удалось загрузить приложения</h2>
-              <p>Проверьте подключение и попробуйте ещё раз.</p>
-              <Button variant="outline" disabled={projects.isFetching} onClick={() => void projects.refetch()}>Повторить</Button>
+              <h2>{MAX_STATUS_COPY.projects.title}</h2>
+              <p>{MAX_STATUS_COPY.projects.hint}</p>
+              <Button variant="outline" disabled={projects.isFetching} onClick={() => void projects.refetch()}>{MAX_STATUS_COPY.projects.retry}</Button>
             </section>
           ) : search.trim() && maxProjects.length === 0 ? (
             <section className="max-projects-empty">

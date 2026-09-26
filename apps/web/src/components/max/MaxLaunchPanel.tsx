@@ -15,6 +15,7 @@ import { isMaxDeployActive } from "@/lib/max-launch-state";
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
 import { type HeartbeatWatch, heartbeatStale, formatElapsed, observeHeartbeat, publicationBytesLabel, publicationElapsedMs, publicationFailureText, publicationStageLabel } from "@/lib/max-publication-progress";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
+import { MAX_STATUS_COPY, MAX_UNKNOWN_LABEL } from "@/lib/max-status-copy";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLaunchButton } from "./MaxLaunchButton";
 import { MaxPublicationRequirements, PUBLICATION_REQUIREMENTS } from "./MaxPublicationRequirements";
@@ -64,7 +65,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const published = !stateError && deploy.isSuccess && !busyDeploy && publication === "published";
   const failed = !deploy.isError && deploy.data?.phase === "failed";
   const productionUrl = published ? deploy.data?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
-  const title = stateError ? "Не удалось проверить готовность"
+  const title = stateError ? MAX_STATUS_COPY.readiness.title
     : busyDeploy ? "Публикация продолжается"
     : !available ? "Проверяем готовность…"
     : deploy.isPending ? "Проверяем публикацию…"
@@ -86,13 +87,13 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
     <aside data-product-shell data-max-studio data-testid="max-launch-panel" className={`max-launch-panel max-studio-launch${standalone ? " max-studio-launch-standalone" : ""}`}>
       {!standalone && <header className="max-launch-dialog-heading"><div><p className="max-project-eyebrow">{project.name}</p><h2>Запуск в MAX</h2></div><button type="button" onClick={onClose ?? toggleTimeline} aria-label="Свернуть панель запуска" className="max-project-back"><X className="size-5" /></button></header>}
       <div className="max-launch-panel-scroll max-studio-launch-body">
-        <div className="max-launch-readiness"><span>Готовность к публикации</span><strong>{readiness.isError ? "Статус недоступен" : available ? `Готово ${requiredDone} из ${PUBLICATION_REQUIREMENTS.length}` : "Проверяем…"}</strong>
+        <div className="max-launch-readiness"><span>Готовность к публикации</span><strong>{readiness.isError ? MAX_UNKNOWN_LABEL : available ? `Готово ${requiredDone} из ${PUBLICATION_REQUIREMENTS.length}` : "Проверяем…"}</strong>
           {!readiness.isError && <progress data-testid="max-launch-progress" aria-label="Готовность к публикации" value={available ? requiredDone / PUBLICATION_REQUIREMENTS.length * 100 : 0} max={100} />}
         </div>
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
-          <p>{stateError ? "Повторите проверку, чтобы получить актуальный статус сервера." : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
+          <p>{stateError ? MAX_STATUS_COPY.readiness.hint : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
           {busyDeploy && <div data-testid="max-launch-publication-progress" className="max-launch-publication-progress" aria-live="polite">
             <strong>{stageLabel || "Публикуем"}</strong>
             {elapsedMs !== null && <span>идёт {formatElapsed(elapsedMs)}</span>}
@@ -105,7 +106,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
           {failed && <div role="alert" className="text-sm text-danger-fg"><p>{failure.title}</p>{failure.detail && <p className="max-launch-failure-detail">{failure.detail}</p>}</div>}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">
-            {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>Повторить проверку</Button>
+            {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>{MAX_STATUS_COPY.readiness.retry}</Button>
               : deploy.isPending ? <Button disabled><Loader2 className="size-4 animate-spin" />Проверяем публикацию…</Button>
               : published ? productionUrl && <Button asChild><a href={productionUrl} target="_blank" rel="noreferrer">Открыть приложение <ExternalLink className="size-4" /></a></Button>
               : busyDeploy || currentStage?.id === "publish" || !available ? <MaxLaunchButton projectId={project.id} />
