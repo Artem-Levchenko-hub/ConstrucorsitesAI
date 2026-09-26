@@ -119,3 +119,49 @@ export function buildMaxProjectPrompt(brief: MaxProjectBrief): string {
   }
   return prompt;
 }
+
+/** Что даёт каждая функция и какой экран показать в предпросмотре мастера. */
+export type MaxFeatureScreen =
+  | "profile"
+  | "catalog"
+  | "search"
+  | "favorites"
+  | "loyalty"
+  | "booking"
+  | "notifications"
+  | "history";
+
+export const MAX_FEATURE_INFO: Record<MaxFeature, { summary: string; screen: MaxFeatureScreen }> = {
+  "Профиль пользователя": {
+    summary: "Личный экран: имя из MAX, заказы и записи этого человека, его настройки.",
+    screen: "profile",
+  },
+  "Каталог или лента": {
+    summary: "Товары, услуги или материалы карточками — с названием, ценой и кнопкой действия.",
+    screen: "catalog",
+  },
+  "Поиск и фильтры": {
+    summary: "Строка поиска и быстрые фильтры, чтобы найти нужное за пару касаний.",
+    screen: "search",
+  },
+  "Избранное": {
+    summary: "Отметка «сохранить» на карточке и отдельный экран с отложенным.",
+    screen: "favorites",
+  },
+  "Баллы и награды": {
+    summary: "Счёт баллов, прогресс до следующего уровня и обмен баллов на награды.",
+    screen: "loyalty",
+  },
+  "Онлайн-запись": {
+    summary: "Выбор дня и свободного времени с подтверждением записи.",
+    screen: "booking",
+  },
+  "Уведомления бота": {
+    summary: "Бот MAX сам пишет пользователю о статусе заказа, записи или акции.",
+    screen: "notifications",
+  },
+  "История действий": {
+    summary: "Лента прошлых заказов, записей и обращений — видно, что уже было.",
+    screen: "history",
+  },
+};

@@ -12,6 +12,7 @@ import {
   Play,
   RefreshCw,
   Signal,
+  Sparkles,
   Wifi,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -337,6 +338,16 @@ export function MaxLivePreview({
     { label: "Последняя версия", done: managedKit.isSuccess },
     { label: "Безопасная сессия", done: Boolean(previewUrl) },
   ];
+  // До первой сборки показывать нечего: технический прогресс запуска сервера
+  // владельцу ничего не объясняет, поэтому ждём первую версию молча. Реальный
+  // отказ превью при этом остаётся виден — тишина не должна прятать ошибку.
+  const awaitingFirstBuild =
+    !viewingHistorical &&
+    !snapshotsLoading &&
+    !historyError &&
+    !showPreviewError &&
+    versions.length === 0 &&
+    !displayPreviewUrl;
 
   async function openSeparatePreview() {
     const popup = window.open("about:blank", "_blank");
@@ -572,22 +583,28 @@ export function MaxLivePreview({
                     </>
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
-                      {preparing ? (
+                      {awaitingFirstBuild ? (
+                        <Sparkles className="size-7 text-[#0381fa]" />
+                      ) : preparing ? (
                         <Loader2 className="size-7 animate-spin text-[#0381fa]" />
                       ) : (
                         <Play className="size-7 text-[#0381fa]" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
-                        {showPreviewError
-                          ? "Превью пока недоступно"
-                          : preparationLabel}
+                        {awaitingFirstBuild
+                          ? "Превью появится после первой сборки"
+                          : showPreviewError
+                            ? "Превью пока недоступно"
+                            : preparationLabel}
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-fg-tertiary">
-                        {showPreviewError
-                          ? "Yleum не смог создать защищённую сессию. Данные приложения не раскрыты."
-                          : "Обычно подготовка занимает от 15 до 60 секунд."}
+                        {awaitingFirstBuild
+                          ? "Опишите в чате, что нужно приложению, — готовый экран откроется здесь."
+                          : showPreviewError
+                            ? "Yleum не смог создать защищённую сессию. Данные приложения не раскрыты."
+                            : "Обычно подготовка занимает от 15 до 60 секунд."}
                       </p>
-                      {!showPreviewError && (
+                      {!showPreviewError && !awaitingFirstBuild && (
                         <ol className="mt-5 w-full space-y-2 text-left">
                           {preparationSteps.map((step) => (
                             <li key={step.label} className="flex items-center gap-2 text-[10px] text-fg-secondary">

@@ -53,6 +53,15 @@ describe("MAX live preview surface", () => {
     expect(livePreview).toContain("{showPreviewError && (");
   });
 
+  it("waits for the first build instead of narrating server start-up", () => {
+    expect(livePreview).toContain("const awaitingFirstBuild =");
+    expect(livePreview).toContain("versions.length === 0");
+    expect(livePreview).toContain("Превью появится после первой сборки");
+    expect(livePreview).toContain("{!showPreviewError && !awaitingFirstBuild && (");
+    // Молчание про сборку не должно прятать реальный отказ превью.
+    expect(livePreview).toContain("!showPreviewError &&\n    versions.length === 0");
+  });
+
   it("shows live gateway-ledger spend by generation stage", () => {
     expect(workspaceShell).toContain("<MaxUsageBreakdown projectId={project.id}");
     expect(usageBreakdown).toContain('queryKey: ["max-usage", projectId]');

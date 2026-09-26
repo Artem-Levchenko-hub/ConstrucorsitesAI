@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { Check, Loader2, Sparkles } from "lucide-react";
+import { Check, Eye, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_STYLES, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_STYLES, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
+import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
 import "./max-studio.css";
 
@@ -34,6 +35,9 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   onSubmit: () => Promise<unknown>;
 }) {
   const [step, setStep] = useState(0);
+  const [pinnedFeature, setPinnedFeature] = useState<MaxFeature | null>(null);
+  const [hoveredFeature, setHoveredFeature] = useState<MaxFeature | null>(null);
+  const previewedFeature = hoveredFeature ?? pinnedFeature;
   const [submitting, setSubmitting] = useState(false);
   const submitLock = useRef(false);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -99,8 +103,34 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={values.primaryAction} onChange={event => onChange({ primaryAction: event.target.value })} placeholder="Например, обменять баллы на награду" /></div>
             </>}
             {step === 2 && <>
-              <fieldset><legend className="text-sm font-medium">Функции</legend><div className="mt-3 flex flex-wrap gap-2">{MAX_FEATURES.map(feature => <button key={feature} type="button" aria-pressed={values.features.includes(feature)} className="max-wizard-option text-xs" onClick={() => onChange({ features: values.features.includes(feature) ? values.features.filter(item => item !== feature) : [...values.features, feature] })}>{feature}</button>)}</div></fieldset>
-              <fieldset><legend className="text-sm font-medium">Стиль</legend><div className="mt-3 grid gap-2 sm:grid-cols-3">{MAX_STYLES.map(item => <button key={item.id} type="button" aria-pressed={values.style === item.id} className="max-wizard-option text-sm" onClick={() => onChange({ style: item.id })}>{item.label}</button>)}</div></fieldset>
+              <fieldset>
+                <legend className="text-sm font-medium">Функции</legend>
+                <p className="max-wizard-note">Нажмите на функцию, чтобы добавить её в приложение. Кнопка <Eye aria-hidden="true" className="inline size-3.5 -mt-0.5" /> показывает, как выглядит такой экран.</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2" onMouseLeave={() => setHoveredFeature(null)}>
+                  {MAX_FEATURES.map(feature => {
+                    const selected = values.features.includes(feature);
+                    return <div key={feature} className="max-feature-chip" data-selected={selected}>
+                      <button type="button" aria-pressed={selected} className="max-feature-chip__toggle" onClick={() => onChange({ features: selected ? values.features.filter(item => item !== feature) : [...values.features, feature] })}>
+                        <span className="max-feature-chip__check" aria-hidden="true">{selected && <Check className="size-3" />}</span>
+                        <span className="max-feature-chip__copy">
+                          <span className="max-feature-chip__label">{feature}</span>
+                          <span className="max-feature-chip__hint">{MAX_FEATURE_INFO[feature].summary}</span>
+                        </span>
+                      </button>
+                      <button type="button" className="max-feature-chip__peek" aria-pressed={previewedFeature === feature}
+                        aria-label={`Показать пример экрана: ${feature}`} title="Показать пример экрана"
+                        onMouseEnter={() => setHoveredFeature(feature)}
+                        onFocus={() => setHoveredFeature(feature)}
+                        onBlur={() => setHoveredFeature(null)}
+                        onClick={() => setPinnedFeature(pinnedFeature === feature ? null : feature)}>
+                        <Eye className="size-3.5" aria-hidden="true" />
+                      </button>
+                    </div>;
+                  })}
+                </div>
+                <MaxFeaturePreview feature={previewedFeature} />
+              </fieldset>
+              <fieldset><legend className="text-sm font-medium">Стиль</legend><div className="mt-3 grid gap-2 sm:grid-cols-3">{MAX_STYLES.map(item => <button key={item.id} type="button" aria-pressed={values.style === item.id} className="max-wizard-option max-wizard-option--style" onClick={() => onChange({ style: item.id })}><span className="text-sm font-medium">{item.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{item.description}</span></button>)}</div></fieldset>
               <div className="space-y-2"><Label htmlFor="max-brand">Цвета бренда</Label><Input id="max-brand" value={values.brandColors} onChange={event => onChange({ brandColors: event.target.value })} placeholder="#0062ee, графит, молочный" /></div>
             </>}
             {step === 3 && <MaxProjectReview {...values} />}

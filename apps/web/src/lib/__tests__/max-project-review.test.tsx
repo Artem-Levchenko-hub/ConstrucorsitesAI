@@ -77,17 +77,27 @@ it("presents the project identity and main action before a semantic feature and 
   expect(action?.textContent).toContain(values.primaryAction);
 
   const featureList = review?.querySelector('[aria-labelledby="max-review-features"] ul');
-  expect([...featureList!.querySelectorAll("li")].map(item => item.lastElementChild?.textContent)).toEqual(features);
+  expect(
+    [...featureList!.querySelectorAll("li")].map(
+      item => item.querySelector(".max-project-review__feature-label")?.textContent,
+    ),
+  ).toEqual(features);
+  // Каждая функция объясняется словами, а не только называется.
+  expect(featureList?.querySelector("small")?.textContent?.length ?? 0).toBeGreaterThan(20);
 
-  const details = review?.querySelector("dl");
-  expect([...details!.querySelectorAll("dt")].map(term => term.textContent)).toEqual([
+  const facts = review?.querySelector<HTMLElement>(".max-project-review__facts");
+  expect([...facts!.querySelectorAll("h4")].map(term => term.textContent)).toEqual([
     "Тип приложения",
-    "Аудитория",
-    "Стиль",
-    "Цвета бренда",
+    "Для кого",
+    "Оформление",
   ]);
-  expect(details?.textContent).toContain("Каталог");
-  expect(details?.textContent).toContain("Яркий");
+  expect(facts?.textContent).toContain("Каталог");
+  expect(facts?.textContent).toContain("Яркий");
+  expect(facts?.textContent).toContain(values.audience);
+
+  // Владелец должен понимать, что произойдёт по кнопке «Создать проект».
+  const next = review?.querySelector('[aria-labelledby="max-review-next"]');
+  expect(next?.querySelectorAll("ol li")).toHaveLength(3);
 });
 
 it("uses wrapping, shrinkable review groups that remain bounded at 320px", async () => {
@@ -99,10 +109,10 @@ it("uses wrapping, shrinkable review groups that remain bounded at 320px", async
   review.style.width = "320px";
   const title = review.querySelector<HTMLElement>("h3")!;
   const action = review.querySelector<HTMLElement>('[aria-labelledby="max-review-primary-action"]')!;
-  const details = review.querySelector<HTMLElement>("dl")!;
+  const facts = review.querySelector<HTMLElement>(".max-project-review__facts")!;
 
   expect(getComputedStyle(review).maxWidth).toBe("100%");
   expect(getComputedStyle(title).overflowWrap).toBe("anywhere");
   expect(getComputedStyle(action).minWidth).toBe("0px");
-  expect(getComputedStyle(details).gridTemplateColumns).toBe("minmax(0, 1fr)");
+  expect(getComputedStyle(facts).gridTemplateColumns).toBe("minmax(0, 1fr)");
 });

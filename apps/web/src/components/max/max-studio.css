@@ -100,6 +100,20 @@
 .max-wizard-option { min-height: 44px; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 8px; text-align: left; }
 .max-wizard-option:hover { border-color: var(--color-border-strong); }
 .max-wizard-option[aria-pressed=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); }
+.max-wizard-option--style { display: block; }
+.max-wizard-note { margin-top: 6px; color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; }
+.max-feature-chip { display: flex; align-items: stretch; gap: 2px; min-width: 0; border: 1px solid var(--color-border-default); border-radius: 8px; background: var(--color-surface); }
+.max-feature-chip:hover { border-color: var(--color-border-strong); }
+.max-feature-chip[data-selected=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); }
+.max-feature-chip__toggle { display: flex; align-items: flex-start; gap: 9px; flex: 1; min-width: 0; padding: 11px 4px 11px 11px; text-align: left; }
+.max-feature-chip__check { display: grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; flex-shrink: 0; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-surface); color: var(--color-accent); }
+.max-feature-chip[data-selected=true] .max-feature-chip__check { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-fg-on-accent); }
+.max-feature-chip__copy { min-width: 0; }
+.max-feature-chip__label { display: block; color: var(--color-fg-primary); font-size: 13px; font-weight: 500; line-height: 1.35; }
+.max-feature-chip__hint { display: block; margin-top: 3px; color: var(--color-fg-secondary); font-size: 11px; line-height: 1.5; }
+.max-feature-chip__peek { display: grid; place-items: center; width: 34px; flex-shrink: 0; border-left: 1px solid var(--color-border-subtle); border-radius: 0 7px 7px 0; color: var(--color-fg-tertiary); }
+.max-feature-chip__peek:hover, .max-feature-chip__peek[aria-pressed=true] { background: var(--color-surface-3); color: var(--color-accent); }
+.max-feature-chip[data-selected=true] .max-feature-chip__peek { border-left-color: #cbdafd; }
 .max-wizard-review > div { padding: 14px 0; border-bottom: 1px solid var(--color-border-subtle); }
 .max-wizard-review > div:first-child { padding-top: 0; }
 .max-wizard-review dt { font-size: 12px; color: var(--color-fg-secondary); }
