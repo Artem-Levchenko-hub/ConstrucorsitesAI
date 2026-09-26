@@ -77,6 +77,15 @@ class FakeDockerBackend:
 
     async def create_volume(self, name: str, labels: dict[str, str]) -> DockerVolumeRecord:
         await self._before_mutation("volume_create")
+        existing = self.volumes.get(name)
+        if existing is not None:
+            # `docker volume create` на существующем имени возвращает ТОТ ЖЕ том:
+            # данные целы, метки не меняются (метку существующему ресурсу вообще
+            # нельзя поменять — об этом есть комментарий в настоящем бэкенде).
+            # Стенд раньше делал новую пустую запись, то есть стирал данные. Это
+            # ложь в опасную сторону: путь, который пересоздаёт том, здесь видел
+            # пустоту, а на проде — старое содержимое.
+            return existing
         record = DockerVolumeRecord(
             resource_id=self._next_id("volume"),
             name=name,
@@ -175,6 +184,11 @@ class FakeDockerBackend:
         internal: bool,
     ) -> DockerNetworkRecord:
         await self._before_mutation("network_create")
+        if name in self.networks:
+            # Настоящий бэкенд зовёт networks.create(..., check_duplicate=True),
+            # и демон отвечает отказом «network with name … already exists».
+            # Стенд молча подменял запись, пряча повторное создание.
+            raise CellResourceError(f"network with name {name} already exists")
         record = DockerNetworkRecord(
             resource_id=self._next_id("network"),
             name=name,

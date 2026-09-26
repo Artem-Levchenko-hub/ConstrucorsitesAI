@@ -110,3 +110,42 @@ async def test_a_stopped_container_still_holds_its_network_and_volume() -> None:
         await docker.remove_network("cell-internal")
     with pytest.raises(CellResourceError):
         await docker.remove_volume("cell-data")
+
+
+@pytest.mark.asyncio
+async def test_creating_an_existing_volume_keeps_its_data() -> None:
+    """`docker volume create` на существующем имени возвращает ТОТ ЖЕ том.
+
+    Это ложь в опасную сторону, и потому она хуже «разрешаем лишнее»: стенд
+    раньше делал новую пустую запись, то есть стирал данные. Путь, который
+    пересоздаёт том, видел здесь пустоту, а на проде — старое содержимое. Такая
+    проверка зелёная ровно до того дня, когда чужое прошлое всплывает в свежей
+    ячейке.
+    """
+    docker = FakeDockerBackend()
+    await docker.create_volume("cell-data", labels={"omnia.resource_kind": "postgres"})
+    await docker.write_volume_files("cell-data", {"db.json": b"[1]"})
+
+    again = await docker.create_volume("cell-data", labels={"omnia.resource_kind": "redis"})
+
+    assert again.files == {"db.json": b"[1]"}, "данные тома обязаны пережить повторное создание"
+    assert again.labels == {"omnia.resource_kind": "postgres"}, (
+        "метку существующему тому поменять нельзя — настоящий Docker её не трогает"
+    )
+    assert await docker.read_volume_files("cell-data") == {"db.json": b"[1]"}
+
+
+@pytest.mark.asyncio
+async def test_creating_an_existing_network_is_refused() -> None:
+    """Настоящий бэкенд зовёт create с check_duplicate=True, и демон отвечает отказом.
+
+    Проверено мутацией: убери проверку существования в _ensure_network — и набор
+    краснеет здесь же, на жизненном цикле черновика.
+    """
+    docker = FakeDockerBackend()
+    await docker.create_network("cell-internal", labels={}, internal=True)
+
+    with pytest.raises(CellResourceError) as refusal:
+        await docker.create_network("cell-internal", labels={}, internal=True)
+
+    assert "already exists" in str(refusal.value)
