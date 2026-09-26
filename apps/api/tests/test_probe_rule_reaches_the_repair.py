@@ -129,3 +129,27 @@ def test_real_rule_names_pass_the_shape_check(rule: str) -> None:
 def test_nothing_but_a_rule_name_gets_through(smuggled: str) -> None:
     """Узость поля — это и есть защита: данным владельца в него не пролезть."""
     assert not _PROBE_RULE_NAME.fullmatch(smuggled)
+
+
+def test_the_stored_proof_keeps_the_broken_rule_too() -> None:
+    """Разбор прогона 5fdae5f1: в итоговой причине правило есть, в записи — нет.
+
+    Словарь, который кладётся в состояние прогона, перечисляет поля вручную, и
+    `reason_detail` в этом перечне не было. Код причины сам по себе слишком
+    общий — годность манифеста решают четырнадцать правил, — поэтому всё, что
+    читает запись доказательства (разбор прогона, отчёт, будущий интерфейс),
+    видело голый `probe_manifest_invalid` без единого объяснения, хотя платформа
+    правило знала и даже показала его агенту.
+    """
+    import re
+    from pathlib import Path
+
+    source = Path(
+        __file__
+    ).resolve().parents[1] / "src" / "yleum_api" / "services" / "max_finalization.py"
+    text = source.read_text(encoding="utf-8")
+    stored = re.search(
+        r'state\["restoration_adaptation_proof"\] = \{(.*?)\n        \}', text, re.S
+    )
+    assert stored is not None, "не нашёл запись доказательства — проверка стала бы пустой"
+    assert '"reason_detail": receipt.reason_detail' in stored.group(1)

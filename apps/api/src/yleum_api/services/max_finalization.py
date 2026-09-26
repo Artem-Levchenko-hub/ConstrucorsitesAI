@@ -1118,6 +1118,12 @@ class MaxFinalizationCoordinator:
         state["restoration_adaptation_proof"] = {
             "state": receipt.state,
             "reason_code": receipt.reason_code,
+            # Нарушенное правило нужно хранить рядом с кодом, а не только в
+            # свободном тексте итоговой причины: код сам по себе слишком общий
+            # (годность манифеста решают четырнадцать правил), и всё, что читает
+            # запись доказательства — разбор, отчёт, будущий интерфейс — видело
+            # бы голый код без объяснения.
+            "reason_detail": receipt.reason_detail,
             "proof_digest": receipt.proof_digest,
             "proof_attempt": receipt.proof_attempt,
             "operation_id": str(receipt.operation_id),
