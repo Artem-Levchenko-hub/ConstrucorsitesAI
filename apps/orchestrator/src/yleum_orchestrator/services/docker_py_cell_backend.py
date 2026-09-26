@@ -34,6 +34,10 @@ _POSTGRES_ROOT = "/var/lib/postgresql"
 _POSTGRES_DATA = "/var/lib/postgresql/PGDATA"
 _POSTGRES_PASSWORD_FILE = "/run/secrets/postgres-password.txt"
 _POSTGRES_CELL_HBA_RULE = "host all all samenet scram-sha-256"
+# Остановленную базу поднимают только на время чтения дампа: postgres
+# открывается за секунды, и ждать его дольше половины минуты незачем.
+_POSTGRES_WAKE_ATTEMPTS = 30
+_POSTGRES_WAKE_INTERVAL_SECONDS = 1.0
 _REDIS_DATA = "/data"
 _WORKSPACE_SOURCE = "/workspace-src"
 _WORKSPACE_RUN_ROOT = "/work"
@@ -717,13 +721,18 @@ printf '%s\n' 'empty'
     async def postgres_dump(self, container_name: str, password: str) -> bytes:
         container = await self._require_container_obj(container_name)
         env = {"PGPASSWORD": password}
-        payload = await asyncio.to_thread(
-            self._exec_checked,
-            container,
-            ["pg_dump", "-Fc", "-U", "postgres", "-d", "postgres"],
-            f"postgres dump {container_name}",
-            env,
-        )
+        woken = await self._wake_database_for_reading(container_name, password)
+        try:
+            payload = await asyncio.to_thread(
+                self._exec_checked,
+                container,
+                ["pg_dump", "-Fc", "-U", "postgres", "-d", "postgres"],
+                f"postgres dump {container_name}",
+                env,
+            )
+        finally:
+            if woken:
+                await self.stop_container(container_name)
         if not payload:
             raise CellResourceError("postgres dump returned an empty payload")
         if len(payload) > self.archive_limit_bytes:
@@ -731,6 +740,33 @@ printf '%s\n' 'empty'
                 f"postgres dump exceeds {self.archive_limit_bytes} bytes"
             )
         return payload
+
+    async def _wake_database_for_reading(self, container_name: str, password: str) -> bool:
+        """Поднять остановленную базу ячейки на время чтения и сказать, поднимали ли.
+
+        Дамп снимается через exec, а в неработающий контейнер Docker с exec не
+        пускает — отвечает 409 «is not running». Из-за этого снос остановленной
+        ячейки падал, операция оставалась неопределённой, и ячейка навсегда
+        застревала в состоянии «удаляется» (живой случай: a0710ef0 на commerce,
+        26.09.2026). Просто пропустить дамп нельзя: снимок сноса без базы — это
+        молчаливая потеря данных владельца, которую заметят только при попытке
+        восстановления. Данные лежат на томе, поэтому базу поднимают ровно для
+        чтения и гасят обратно.
+        """
+
+        container = await self._require_container_obj(container_name)
+        await asyncio.to_thread(container.reload)
+        if str(getattr(container, "status", "")) == "running":
+            return False
+        await self.start_container(container_name)
+        for _ in range(_POSTGRES_WAKE_ATTEMPTS):
+            if await self.postgres_smoke_query(container_name, password):
+                return True
+            await asyncio.sleep(_POSTGRES_WAKE_INTERVAL_SECONDS)
+        await self.stop_container(container_name)
+        raise CellResourceError(
+            f"postgres dump {container_name} could not wake its stopped database"
+        )
 
     async def postgres_restore(self, container_name: str, dump: bytes, password: str) -> None:
         container = await self._require_container_obj(container_name)

@@ -5,6 +5,7 @@ import json
 from dataclasses import replace
 from uuid import UUID
 
+from yleum_orchestrator.core.cell_resources import CellResourceError
 from yleum_orchestrator.services.docker_cell_resources import (
     CellInventorySnapshot,
     DockerCommandResult,
@@ -260,14 +261,37 @@ class FakeDockerBackend:
         ]
 
     async def postgres_dump(self, container_name: str, password: str) -> bytes:
-        _ = password
         record = self.containers.get(container_name)
         if record is None:
             raise RuntimeError("postgres container missing")
-        volume_name = record.volumes[0]
-        files = self.volumes[volume_name].files
-        rows = json.loads(files.get("db.json", b"[]").decode("utf-8"))
-        return json.dumps(rows, sort_keys=True).encode("utf-8")
+        # Дамп снимается через exec, а в неработающий контейнер Docker с exec не
+        # пускает. Стенд обязан вести себя так же, иначе снос остановленной
+        # ячейки здесь зелёный, а на проде падает с 409 — как и случилось
+        # 26.09.2026 с ячейкой a0710ef0. Данные лежат на томе, поэтому базу
+        # поднимают ровно на время чтения и гасят обратно.
+        woken = record.state != "running"
+        if woken:
+            await self.start_container(container_name)
+            if await self.postgres_smoke_query(container_name, password) is False:
+                await self.stop_container(container_name)
+                raise CellResourceError(
+                    f"postgres dump {container_name} could not wake its stopped database"
+                )
+        try:
+            record = self.containers[container_name]
+            if record.state != "running":
+                # Ровно то, чем отвечает настоящий Docker на exec в стоящий
+                # контейнер: 409 Conflict "... is not running".
+                raise CellResourceError(
+                    f"postgres dump {container_name} failed: container is not running"
+                )
+            volume_name = record.volumes[0]
+            files = self.volumes[volume_name].files
+            rows = json.loads(files.get("db.json", b"[]").decode("utf-8"))
+            return json.dumps(rows, sort_keys=True).encode("utf-8")
+        finally:
+            if woken:
+                await self.stop_container(container_name)
 
     async def postgres_restore(self, container_name: str, dump: bytes, password: str) -> None:
         _ = password

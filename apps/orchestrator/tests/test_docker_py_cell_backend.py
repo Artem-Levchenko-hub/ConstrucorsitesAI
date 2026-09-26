@@ -370,6 +370,12 @@ class _FakeContainer:
         demux: bool = False,
         user: str | None = None,
     ) -> _FakeExecResult:
+        if self.status != "running":
+            # Настоящий Docker не пускает exec в неработающий контейнер, а
+            # стенд пускал — из-за этого снос остановленной ячейки падал на
+            # проде (409 на pg_dump), а здесь проходил. Стенд без этой строки
+            # слеп к целому классу отказов.
+            raise _docker_api_error(409, f"container {self.id} is not running")
         self.exec_calls.append(
             {
                 "command": list(command),
@@ -1261,13 +1267,21 @@ async def test_postgres_dump_restore_and_smoke_use_exec_and_archives() -> None:
     )
 
     dump = await backend.postgres_dump("omnia-cell-test-postgres", "secret")
+    # Восстановление в проде всегда идёт в поднятый обслуживающий контейнер —
+    # cell_checkpoint создаёт и запускает его сам, — поэтому и здесь так.
+    await backend.start_container("omnia-cell-test-postgres")
     await backend.postgres_restore("omnia-cell-test-postgres", b"restore-bytes", "secret")
     smoke = await backend.postgres_smoke_query("omnia-cell-test-postgres", "secret")
     container = client.containers.items["omnia-cell-test-postgres"]
 
+    def _first(program: str) -> dict[str, Any]:
+        # По имени программы, а не по номеру: снятие дампа с остановленной базы
+        # добавляет перед ним пробу готовности, и жёсткие номера от неё поедут.
+        return next(item for item in container.exec_calls if item["command"][0] == program)
+
     assert dump == b"pg-dump-bytes"
     assert smoke is True
-    assert container.exec_calls[0]["command"] == [
+    assert _first("pg_dump")["command"] == [
         "pg_dump",
         "-Fc",
         "-U",
@@ -1275,20 +1289,20 @@ async def test_postgres_dump_restore_and_smoke_use_exec_and_archives() -> None:
         "-d",
         "postgres",
     ]
-    assert container.exec_calls[0]["environment"] == {"PGPASSWORD": "secret"}
+    assert _first("pg_dump")["environment"] == {"PGPASSWORD": "secret"}
     assert container.put_archive_calls[0][0] == "/"
     uploaded = _extract(container.put_archive_calls[0][1])
     assert uploaded["project-cell.dump"] == b"restore-bytes"
-    assert container.exec_calls[1]["command"][:5] == [
+    assert _first("pg_restore")["command"][:5] == [
         "pg_restore",
         "--clean",
         "--if-exists",
         "-U",
         "postgres",
     ]
-    assert container.exec_calls[1]["command"][-1] == "/project-cell.dump"
-    assert container.exec_calls[1]["environment"] == {"PGPASSWORD": "secret"}
-    assert container.exec_calls[3]["command"] == [
+    assert _first("pg_restore")["command"][-1] == "/project-cell.dump"
+    assert _first("pg_restore")["environment"] == {"PGPASSWORD": "secret"}
+    assert _first("psql")["command"] == [
         "psql",
         "-U",
         "postgres",
@@ -1297,7 +1311,7 @@ async def test_postgres_dump_restore_and_smoke_use_exec_and_archives() -> None:
         "-tAc",
         "select 1",
     ]
-    assert container.exec_calls[3]["environment"] == {"PGPASSWORD": "secret"}
+    assert _first("psql")["environment"] == {"PGPASSWORD": "secret"}
 
 
 @pytest.mark.asyncio
