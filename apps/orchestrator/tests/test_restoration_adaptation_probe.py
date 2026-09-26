@@ -8,6 +8,75 @@ from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 from yleum_orchestrator.services.restoration_adaptation_probe import validate_probe_contract
 
 
+def test_initial_witness_hints_use_only_observed_identifiers_and_omit_defaults():
+    from yleum_orchestrator.services.restoration_adaptation_probe import initial_witness_hints
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
+
+    raw = _contract()
+    raw["tables"][0]["columns"].extend(
+        [
+            {
+                "name": "completed",
+                "type": "boolean",
+                "nullable": False,
+                "meaning": "PRIVATE_BUSINESS_VALUE",
+            },
+            {"name": "created_at", "type": "timestamp", "nullable": False, "default": "now()"},
+            {
+                "name": "secret_note",
+                "type": "text",
+                "nullable": True,
+                "default": "'PRIVATE_DEFAULT_VALUE'::text",
+            },
+        ]
+    )
+    hints = initial_witness_hints(DataContract.model_validate(raw))
+    assert hints == [
+        "correct witness for orders id id owner max_user_id value probe_value "
+        "create_values completed"
+    ]
+    assert "PRIVATE" not in str(hints)
+
+
+@pytest.mark.parametrize(
+    "unsupported", ["read_only", "no_owner", "non_uuid", "composite", "no_text"]
+)
+def test_initial_witness_hints_do_not_advertise_unsupported_tables(unsupported):
+    from yleum_orchestrator.services.restoration_adaptation_probe import initial_witness_hints
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
+
+    raw = _contract()
+    table = raw["tables"][0]
+    if unsupported == "read_only":
+        table["read_only"] = True
+    elif unsupported == "no_owner":
+        table["owner_column"] = None
+    elif unsupported == "non_uuid":
+        table["columns"][0]["type"] = "integer"
+    elif unsupported == "composite":
+        table["primary_key"] = ["id", "max_user_id"]
+    else:
+        table["columns"][2]["type"] = "boolean"
+    assert initial_witness_hints(DataContract.model_validate(raw)) == []
+
+
+def test_initial_witness_hints_bound_whole_examples_without_truncating_identifiers():
+    from copy import deepcopy
+
+    from yleum_orchestrator.services.restoration_adaptation_probe import initial_witness_hints
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
+
+    table = _contract()["tables"][0]
+    tables = [{**deepcopy(table), "name": f"entity_{i:02d}"} for i in range(40)]
+    tables[0]["columns"].extend(
+        [{"name": f"required_{i:02d}", "type": "text", "nullable": False} for i in range(60)]
+    )
+    hints = initial_witness_hints(DataContract.model_validate({"version": 1, "tables": tables}))
+    assert len(hints) == 32
+    assert all(len(hint) <= 600 for hint in hints)
+    assert not any("entity_00 " in hint for hint in hints)
+
+
 def _contract(*, include_visits: bool = False) -> dict[str, object]:
     tables: list[dict[str, object]] = [
         {

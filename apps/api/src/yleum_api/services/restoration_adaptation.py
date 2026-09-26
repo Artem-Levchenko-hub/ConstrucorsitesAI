@@ -51,6 +51,55 @@ _SIMPLE_TEMPLATE_EXPRESSION = re.compile(
 
 RESTORATION_PROBE_PATH = ".omnia/restoration-probe.json"
 _PROBE_MANIFEST_KEYS = {"version", "endpoint", "witnesses", "max_payload_bytes"}
+_WITNESS_HINT_CODE = "activation_probe_witness_hint"
+_HINT_IDENTIFIER = r"[A-Za-z_][A-Za-z0-9_]{0,62}"
+_WITNESS_HINT = re.compile(
+    rf"correct witness for ({_HINT_IDENTIFIER}) id {_HINT_IDENTIFIER} "
+    rf"owner {_HINT_IDENTIFIER} value {_HINT_IDENTIFIER}"
+    rf"(?: create_values {_HINT_IDENTIFIER}(?: {_HINT_IDENTIFIER})*)?"
+)
+
+
+def _initial_witness_checks(report: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Recognize controller guidance without promoting arbitrary report prose."""
+    hints = []
+    entities: set[str] = set()
+    for check in (report or {}).get("checks", []):
+        if not isinstance(check, dict) or (
+            check.get("code") != _WITNESS_HINT_CODE
+            or check.get("status") != "not_applicable"
+            or check.get("severity") != "info"
+            or check.get("operation") != "activation_probe"
+            or check.get("evidence") != "observed_catalog"
+        ):
+            continue
+        value = check.get("resolution")
+        match = (
+            _WITNESS_HINT.fullmatch(value) if isinstance(value, str) and len(value) <= 600 else None
+        )
+        if match is None or match[1] != check.get("object") or match[1] in entities:
+            continue
+        hints.append(check)
+        entities.add(match[1])
+        if len(hints) == 32:
+            break
+    return hints
+
+
+def _initial_witness_guidance(report: dict[str, Any] | None) -> str:
+    hints = _initial_witness_checks(report)
+    if not hints:
+        return ""
+    return (
+        "\nINITIAL BUSINESS WITNESS GUIDANCE (observed at preparation; recheck CURRENT schema)\n"
+        "These are bounded schema-only examples, not an exhaustive entity list or proof. "
+        "create_values lists required field names, not business values. Resolve their types and "
+        "constraints on the isolated copy; never copy existing rows or guess business values.\n"
+        + "\n".join(str(check["resolution"]) for check in hints)
+        + "\n"
+    )
+
+
 _PROBE_REQUIREMENTS = """\
 ADAPTIVE RESTORATION ACTIVATION PROBE (SERVER REQUIREMENT)
 Create `.omnia/restoration-probe.json` with exactly these JSON fields: version=1,
@@ -405,6 +454,7 @@ def _compatibility_report(raw: object) -> dict[str, Any] | None:
     if len(serialized.encode()) > 64 * 1024:
         # The agent needs the conflicts and the functions to keep, not every
         # per-table count or passed check: trim those before refusing.
+        hints = _initial_witness_checks(report)
         report = {
             **report,
             "inventory": None,
@@ -412,6 +462,15 @@ def _compatibility_report(raw: object) -> dict[str, Any] | None:
             "checks": [c for c in report["checks"] if c["severity"] != "info"][:200],
         }
         serialized = json.dumps(report, ensure_ascii=False)
+        # Optional guidance must never make an otherwise admissible report fail.
+        # Keep whole checks only; the final bounded report is what the bundle signs.
+        for hint in hints:
+            report["checks"].append(hint)
+            candidate = json.dumps(report, ensure_ascii=False)
+            if len(candidate.encode()) <= 64 * 1024:
+                serialized = candidate
+            else:
+                report["checks"].pop()
     if len(serialized.encode()) > 64 * 1024 or contains_provider_secret(serialized):
         raise _conflict("Отчёт совместимости требует повторной безопасной подготовки.")
     return report
@@ -655,6 +714,7 @@ async def append_adaptation_context(
             "functions and verified checks. This is a new draft, not publication.\n"
         )
         + restoration_probe_requirements()
+        + _initial_witness_guidance(report)
         + _adaptation_work_plan(raw.get("data_contract_diff"), report, files)
         + "\n"
         + json.dumps({**bundle, "files": files}, ensure_ascii=False)

@@ -43,6 +43,7 @@ from yleum_orchestrator.services.project_machine import (
     machine_effect,
     write_controller_json,
 )
+from yleum_orchestrator.services.restoration_adaptation_probe import initial_witness_hints
 from yleum_orchestrator.services.restoration_binding import (
     canonical_digest,
     exact_inventory_partition_digests,
@@ -625,6 +626,7 @@ def preparation_report(
     inventory: InventoryReport | None = None,
     checks: list[CompatibilityCheck] | None = None,
     capabilities: CapabilityDiff | None = None,
+    observed_contract: DataContract | None = None,
 ) -> dict[str, Any]:
     blocked = blockers or []
     if inventory is not None:
@@ -684,8 +686,33 @@ def preparation_report(
         report["inventory"] = inventory.model_dump(mode="json") if inventory else None
         # Every conflict/warning is kept; passed checks are capped to stay inside
         # the API's bounded report.
+        hints = []
+        if (
+            observed_contract is not None
+            and inventory is not None
+            and inventory.presence == "present"
+            and inventory.coverage == "complete"
+            and inventory.schema_analysis == "complete"
+            and inventory.observed_on == "source"
+        ):
+            hints = [
+                CompatibilityCheck(
+                    code="activation_probe_witness_hint",
+                    status="not_applicable",
+                    severity="info",
+                    operation="activation_probe",
+                    object=hint.split(" ")[3],
+                    evidence="observed_catalog",
+                    explanation=(
+                        "Schema identifiers only; recheck the current contract before proof."
+                    ),
+                    resolution=hint,
+                )
+                for hint in initial_witness_hints(observed_contract)
+            ]
         kept = [check for check in checks or [] if check.severity != "info"][:800]
-        kept += [check for check in checks or [] if check.severity == "info"][:100]
+        kept += hints
+        kept += [check for check in checks or [] if check.severity == "info"][: 100 - len(hints)]
         report["checks"] = [check.model_dump(mode="json") for check in kept]
         report["capabilities"] = capabilities.model_dump(mode="json") if capabilities else None
     return report
@@ -1908,6 +1935,7 @@ class CodeRestorationEngine:
                         inventory=inventory,
                         checks=checks,
                         capabilities=capabilities,
+                        observed_contract=current_contract,
                     ),
                     "request_digest": request.digest(),
                     "workspace_revision": current_revision,
@@ -1949,6 +1977,7 @@ class CodeRestorationEngine:
                         inventory=inventory,
                         checks=checks,
                         capabilities=capabilities,
+                        observed_contract=current_contract,
                     ),
                 }
             finally:

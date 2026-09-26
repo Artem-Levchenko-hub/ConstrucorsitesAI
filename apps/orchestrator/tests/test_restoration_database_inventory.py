@@ -168,3 +168,59 @@ def test_presence_does_not_clear_incompatible_report(state):
 
 def test_early_unclassified_files_report_never_claims_no_database_rows():
     assert preparation_report(blockers=["unclassified files"])["database_state"] == "unknown"
+
+
+@pytest.mark.parametrize("schema_analysis", ["complete", "partial"])
+def test_incompatible_report_supplies_initial_witness_only_for_complete_catalog(schema_analysis):
+    from yleum_orchestrator.services.restoration_data_contract import DataContract
+    from yleum_orchestrator.services.versioning.contracts import CompatibilityCheck, InventoryReport
+
+    contract = DataContract.model_validate(
+        {
+            "version": 1,
+            "tables": [
+                {
+                    "name": "tasks",
+                    "owner_column": "user_id",
+                    "primary_key": ["id"],
+                    "columns": [
+                        {"name": "id", "type": "uuid", "nullable": False},
+                        {"name": "user_id", "type": "text", "nullable": False},
+                        {"name": "title", "type": "text", "nullable": False},
+                        {"name": "completed", "type": "boolean", "nullable": False},
+                    ],
+                }
+            ],
+        }
+    )
+    inventory = InventoryReport(
+        presence="present",
+        coverage="complete",
+        schema_analysis=schema_analysis,
+        observed_on="source",
+    )
+    passed = CompatibilityCheck(
+        code="unchanged",
+        status="compatible",
+        severity="info",
+        operation="insert",
+        object="tasks",
+        evidence="observed_catalog",
+        explanation="Compatible",
+    )
+    report = preparation_report(
+        blockers=["new_required_column:tasks.completed"],
+        inventory=inventory,
+        checks=[passed] * 120,
+        observed_contract=contract,
+    )
+    hints = [c for c in report["checks"] if c["code"] == "activation_probe_witness_hint"]
+    assert report["mode"] == "adapted"
+    assert report["blockers"] == ["new_required_column:tasks.completed"]
+    if schema_analysis == "complete":
+        assert len(hints) == 1
+        assert hints[0]["resolution"] == (
+            "correct witness for tasks id id owner user_id value title create_values completed"
+        )
+    else:
+        assert hints == []

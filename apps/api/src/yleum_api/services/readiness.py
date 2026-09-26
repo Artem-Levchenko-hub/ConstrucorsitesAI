@@ -38,7 +38,7 @@ def parse_worker_heartbeat(raw: bytes | str | None) -> tuple[bool, str]:
 
 
 def parse_worker_load(raw: bytes | str | None) -> str:
-    """Загрузка воркера сборок в виде «идёт/разрешено», например «3/8».
+    """Занятые слоты / эффективный предел, включая ожидание мощности.
 
     Старое сердцебиение этих полей не содержит, поэтому отсутствие — обычное
     дело, а не поломка: отвечаем «unknown» и ничего не ломаем.
@@ -56,6 +56,27 @@ def parse_worker_load(raw: bytes | str | None) -> str:
     if not isinstance(active, int) or not isinstance(limit, int):
         return "unknown"
     return f"{active}/{limit}"
+
+
+def parse_worker_dispatch_details(raw: bytes | str | None) -> dict[str, str]:
+    """Public-safe counts; old workers must not look like zero active builds."""
+    fields = {
+        "running": "generation_worker_running",
+        "waiting_capacity": "generation_worker_waiting_capacity",
+        "other": "generation_worker_other",
+        "configured_limit": "generation_worker_configured_limit",
+        "limit": "generation_worker_effective_limit",
+    }
+    try:
+        value = json.loads(raw) if raw else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        value = {}
+    if not isinstance(value, dict):
+        value = {}
+    return {
+        output: str(value[key]) if type(value.get(key)) is int and value[key] >= 0 else "unknown"
+        for key, output in fields.items()
+    }
 
 
 def heartbeat_payload() -> str:
@@ -193,12 +214,14 @@ async def probe_readiness() -> ReadinessReport:
     )
     generation_ok, generation_release = True, "unknown"
     generation_load = "unknown"
+    generation_details = parse_worker_dispatch_details(None)
     if get_settings().use_generation_worker:
         try:
             async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
                 raw_generation = await get_redis().get("omnia:health:generation-worker")
             generation_ok, generation_release = parse_worker_heartbeat(raw_generation)
             generation_load = parse_worker_load(raw_generation)
+            generation_details = parse_worker_dispatch_details(raw_generation)
         except Exception:
             generation_ok = False
     # The billing tick (renewals, open-order reconciliation) beats under its own
@@ -230,11 +253,10 @@ async def probe_readiness() -> ReadinessReport:
             **(
                 {
                     "generation_worker_release_sha": generation_release,
-                    # «3/8» — сколько сборок идёт и сколько разрешено. Это ответ
-                    # на вопрос «предел одновременных сборок мешает или нет»:
-                    # пока второе число заметно больше первого, поднимать его
-                    # незачем, а равенство подолгу означает, что упёрлись.
+                    # Legacy slot occupancy includes capacity waiters. The
+                    # separate counts explain why the dispatcher is full.
                     "generation_worker_load": generation_load,
+                    **generation_details,
                 }
                 if get_settings().use_generation_worker
                 else {}

@@ -1,13 +1,17 @@
-"""Изоляция данных в приложениях MAX доказывается базой, а не чтением кода.
+"""Лабораторная проверка SQL-политик шаблона под ограниченной ролью.
 
 Приложение пишет агент, и фильтр «только мои записи» в новом маршруте он может
 забыть. Поэтому запрет живёт в PostgreSQL: политики уровня строк шаблона
 (``templates/max-miniapp-nextjs/drizzle/0002_row_level_security.sql``).
 
-Проверка воспроизводит прод как есть, а не удобную лабораторию:
-  * схема принадлежит той же роли, под которой работает приложение
-    (``CREATE SCHEMA ... AUTHORIZATION``, см. ``core/postgres_admin.py``) — именно
-    поэтому политикам нужен FORCE: владелец таблицы иначе обходит RLS;
+Эта проверка НЕ доказывает изоляцию production. Docker/K8s public core пока
+запускают миграции и сервер с одним DATABASE_URL пользователя postgres;
+суперпользователь обходит даже FORCE. Отрицательный контроль ниже показывает
+этот обход. Для production нужны проверка фактической роли и независимый A/B-probe.
+
+В лабораторной конфигурации:
+  * схема принадлежит роли NOSUPERUSER NOBYPASSRLS — поэтому политикам нужен
+    FORCE: обычный владелец таблицы иначе обходит RLS;
   * миграции подаются тем же текстом, что подаёт ``scripts/apply-migrations.mjs``
     (без маркеров шагов и без квалификатора ``"public".``);
   * личность запроса приходит в ``app.max_user_id``, как её ставит ``withMaxUser``.
@@ -45,7 +49,7 @@ def _migration_sql(name: str) -> str:
 
 
 class Probe:
-    """psql поверх одноразовой базы: отдельно за суперпользователя и за приложение."""
+    """psql одноразовой базы: администратор и ограниченная лабораторная роль."""
 
     def __init__(self, dsn: str, schema: str, role: str) -> None:
         self.dsn = dsn
@@ -68,7 +72,7 @@ class Probe:
         return outcome.stdout.decode().strip()
 
     def app(self, script: str, *, identity: str | None) -> str:
-        """Запрос так, как его делает приложение: роль приложения + личность."""
+        """Запрос ограниченной лабораторной роли с заданной личностью."""
         prologue = f"SET ROLE {self.role};\nSET search_path TO {self.schema};\n"
         if identity is not None:
             # PERFORM внутри DO ничего не печатает: иначе значение личности
@@ -108,7 +112,7 @@ def probe() -> Iterator[Probe]:
     schema = f"rls_probe_{suffix}"
     role = f"rls_probe_app_{suffix}"
     probe = Probe(dsn, schema, role)
-    # Роль приложения владеет схемой — ровно как create_schema на проде.
+    # Модель ограниченного владельца; текущие dedicated runtime DB используют postgres.
     subprocess.run(
         ["psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", dsn],
         input=(
@@ -245,6 +249,32 @@ def test_the_platform_reader_still_sees_every_row(probe: Probe) -> None:
     assert total.splitlines()[-1] == "2", (
         f"платформенный читатель видит {total} вместо двух строк — политики задели снимки и "
         "сверку данных при откате"
+    )
+
+
+@pytest.mark.parametrize("identity", [None, USER_A])
+def test_superuser_bypasses_forced_row_security_even_with_identity(
+    probe: Probe, identity: str | None
+) -> None:
+    """FORCE и личность не защищают запросы с runtime-правами суперпользователя."""
+    _seed_two_users(probe)
+    assert probe.superuser(
+        "SELECT rolsuper FROM pg_roles WHERE rolname = current_user;"
+    ) == "t", "negative control requires a disposable superuser connection"
+    identity_sql = ""
+    if identity is not None:
+        identity_sql = (
+            "DO $ident$ BEGIN PERFORM set_config('app.max_user_id', "
+            f"'{identity}', false); END $ident$;\n"
+        )
+    visible = probe.superuser(
+        "SET row_security = on;\n"
+        + identity_sql
+        + "SELECT DISTINCT max_user_id FROM max_business_actions ORDER BY max_user_id;"
+    )
+    assert visible.splitlines() == [USER_A, USER_B], (
+        "negative control must expose both owners under superuser privileges; "
+        "passing restricted-role tests alone cannot prove runtime isolation"
     )
 
 

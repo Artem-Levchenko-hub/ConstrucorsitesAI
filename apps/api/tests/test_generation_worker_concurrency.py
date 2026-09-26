@@ -109,7 +109,12 @@ def test_the_limit_is_read_from_settings_on_every_scan(monkeypatch: pytest.Monke
     monkeypatch.setattr(
         generation, "get_settings", lambda: SimpleNamespace(generation_worker_max_concurrent=12)
     )
-    assert generation.current_dispatch_limit() == 12
+    assert generation.current_dispatch_limit() == 8, "запас соединений важнее настройки"
+
+    monkeypatch.setattr(
+        generation, "get_settings", lambda: SimpleNamespace(generation_worker_max_concurrent=3)
+    )
+    assert generation.current_dispatch_limit() == 3
 
     monkeypatch.setattr(
         generation, "get_settings", lambda: SimpleNamespace(generation_worker_max_concurrent=0)

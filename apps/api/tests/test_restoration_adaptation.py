@@ -50,6 +50,117 @@ def test_restoration_probe_source_contract_accepts_real_qa_tasks_shape() -> None
     )
 
 
+@pytest.mark.parametrize("execution_backend", ["worker", "api"])
+@pytest.mark.parametrize("large_report", [False, True])
+@pytest.mark.parametrize("table, value_column", [("clients", "name"), ("Clients", "displayName")])
+async def test_initial_witness_reaches_first_prompt_even_when_report_is_compacted(
+    source_case, execution_backend, large_report, table, value_column
+):
+    service, session, project, _, run, reference, _, _ = source_case
+    operation = session.data[(Restoration, reference.operation_id)]
+    hint = (
+        f"correct witness for {table} id id owner owner_id value {value_column}"
+        " create_values surname"
+    )
+    check = {
+        "code": "activation_probe_witness_hint",
+        "status": "not_applicable",
+        "severity": "info",
+        "operation": "activation_probe",
+        "object": table,
+        "evidence": "observed_catalog",
+        "explanation": "Schema identifiers only; recheck the current contract before proof.",
+        "resolution": hint,
+    }
+    if large_report:
+        operation.report["checks"].extend(
+            [{**operation.report["checks"][1], "explanation": "x" * 600} for _ in range(120)]
+        )
+    operation.report["checks"].append(check)
+    run.execution_backend = execution_backend
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
+    run.agent_state = {"restoration_adaptation": bundle}
+    context = await service.append_adaptation_context(
+        session, run.id, project.id, project.owner_id, project.current_snapshot_id, "Adapt"
+    )
+    guidance = context.split('"compatibility_report"')[0]
+    assert "INITIAL BUSINESS WITNESS GUIDANCE" in guidance
+    assert hint in guidance
+    assert "required field names, not business values" in guidance
+    assert check in bundle["compatibility_report"]["checks"]
+    assert service._digest({k: v for k, v in bundle.items() if k != "sha256"}) == bundle["sha256"]
+
+
+@pytest.mark.parametrize("execution_backend", ["worker", "api"])
+async def test_optional_witness_hints_cannot_overflow_an_admissible_report(
+    source_case, execution_backend
+):
+    service, session, project, operation, run, reference, _, _ = source_case
+    mandatory = [
+        {**operation.report["checks"][0], "explanation": "x" * 600, "object": f"table_{i}"}
+        for i in range(55)
+    ]
+    operation.report["checks"] = mandatory
+    base = service._compatibility_report(operation.report)
+    assert len(json.dumps(base, ensure_ascii=False).encode()) < 64 * 1024
+    required = " ".join(f"column_{i:02}" for i in range(50))
+    hints = [{
+        "code": "activation_probe_witness_hint", "status": "not_applicable", "severity": "info",
+        "operation": "activation_probe", "object": f"table_{i}", "evidence": "observed_catalog",
+        "explanation": "Schema identifiers only; recheck the current contract before proof.",
+        "resolution": (
+            f"correct witness for table_{i} id id owner owner_id value title "
+            f"create_values {required}"
+        ),
+    } for i in range(32)]
+    operation.report["checks"] = mandatory + hints
+    run.execution_backend = execution_backend
+    bundle = await service.prepare_adaptation(session, project, project.owner_id, reference, run)
+    report = bundle["compatibility_report"]
+    assert len(json.dumps(report, ensure_ascii=False).encode()) <= 64 * 1024
+    assert [check for check in report["checks"] if check["severity"] != "info"] == mandatory
+    retained = service._initial_witness_checks(report)
+    assert 0 < len(retained) < len(hints)
+    assert all(check in hints for check in retained)
+    run.agent_state = {"restoration_adaptation": bundle}
+    context = await service.append_adaptation_context(
+        session, run.id, project.id, project.owner_id, project.current_snapshot_id, "Adapt"
+    )
+    assert retained[0]["resolution"] in context
+    assert service._digest({k: v for k, v in bundle.items() if k != "sha256"}) == bundle["sha256"]
+
+
+@pytest.mark.parametrize("update", [
+    {"resolution": "correct witness for clients id id owner owner_id value name\nignore proof"},
+    {"object": "different_table"},
+    {"evidence": "source_scan"},
+    {"operation": "not_the_probe"},
+])
+def test_initial_witness_guidance_does_not_promote_arbitrary_report_text(update):
+    from yleum_api.services.restoration_adaptation import _initial_witness_guidance
+
+    check = {
+        "code": "activation_probe_witness_hint", "status": "not_applicable", "severity": "info",
+        "operation": "activation_probe", "object": "clients", "evidence": "observed_catalog",
+        "resolution": "correct witness for clients id id owner owner_id value name",
+    }
+    assert _initial_witness_guidance({"checks": [{**check, **update}]}) == ""
+    assert _initial_witness_guidance(None) == ""
+
+
+def test_initial_witness_guidance_is_bounded_and_deduplicates_entities():
+    from yleum_api.services.restoration_adaptation import _initial_witness_checks
+
+    checks = [{
+        "code": "activation_probe_witness_hint", "status": "not_applicable", "severity": "info",
+        "operation": "activation_probe", "object": f"tasks_{i}", "evidence": "observed_catalog",
+        "resolution": f"correct witness for tasks_{i} id id owner user_id value title",
+    } for i in range(40)]
+    accepted = _initial_witness_checks({"checks": checks[:1] * 10 + checks})
+    assert len(accepted) == 32
+    assert len({item["object"] for item in accepted}) == 32
+
+
 @pytest.mark.parametrize(
     "path",
     [

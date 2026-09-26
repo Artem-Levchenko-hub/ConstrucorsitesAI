@@ -19,7 +19,12 @@ from sqlalchemy import exists, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
-from yleum_api.core.db import get_engine
+from yleum_api.core.db import (
+    DATABASE_POOL_CAPACITY,
+    GENERATION_CONNECTIONS_PER_RUN,
+    GENERATION_QUERY_CONNECTION_RESERVE,
+    get_engine,
+)
 from yleum_api.core.redis import get_redis
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
@@ -229,27 +234,32 @@ async def execute_dispatch(run_id: UUID) -> bool:
 
 
 def current_dispatch_limit() -> int:
-    """Сколько сборок разрешено вести одновременно прямо сейчас.
+    """Budget ownership + one work checkout per run, plus shared query reserve.
 
-    Читается на каждом заходе, а не один раз при старте: поменять предел можно
-    перезапуском воркера, без пересборки образа. Ноль и отрицательные значения
-    подтянуты к единице — предел «ноль» означал бы остановку всех сборок, и это
-    точно не то, чего хотел человек, меняющий настройку.
+    Increasing this cap requires a new connection budget, not just a setting:
+    the work transaction can outlive a query during bootstrap/reconciliation.
     """
 
-    return max(1, int(get_settings().generation_worker_max_concurrent))
+    configured = max(1, int(get_settings().generation_worker_max_concurrent))
+    budget = (DATABASE_POOL_CAPACITY - GENERATION_QUERY_CONNECTION_RESERVE) // (
+        GENERATION_CONNECTIONS_PER_RUN
+    )
+    return min(configured, budget)
 
 
-def dispatch_heartbeat_payload(*, active: int, limit: int) -> str:
-    """Сердцебиение воркера: кто он, когда жив и насколько загружен.
+def dispatch_heartbeat_payload(
+    *,
+    active: int,
+    limit: int,
+    configured_limit: int | None = None,
+    running: int | None = None,
+    waiting_capacity: int | None = None,
+    other: int | None = None,
+) -> str:
+    """Slots include waiters; separate DB-state counts explain their occupancy.
 
-    Поля active и limit отвечают на вопрос «предел одновременных сборок мешает
-    или нет?». Без них его пришлось бы решать на глаз, а поднимать предел вслепую
-    значит отнять процессор у каждой идущей сборки. Когда active подолгу равен
-    limit — предел действительно упирается.
-
-    Прежние читатели (проба готовности платформы) берут отсюда только
-    release_sha, поэтому новые поля им не мешают.
+    Counts are a scan-time snapshot, not evidence of concurrent model calls.
+    Missing fields from older workers remain unknown to compatible readers.
     """
 
     return json.dumps(
@@ -258,6 +268,16 @@ def dispatch_heartbeat_payload(*, active: int, limit: int) -> str:
             "at": datetime.now(UTC).isoformat(),
             "active": active,
             "limit": limit,
+            **{
+                key: value
+                for key, value in {
+                    "configured_limit": configured_limit,
+                    "running": running,
+                    "waiting_capacity": waiting_capacity,
+                    "other": other,
+                }.items()
+                if value is not None
+            },
         }
     )
 
@@ -298,6 +318,22 @@ async def _run_dispatch_forever() -> None:
                     active.pop(run_id)
                     task.result()
             async with factory() as session:
+                # Query active IDs separately: cleanup tasks may no longer be in
+                # the candidate window or have a terminal GenerationRun status.
+                statuses = (
+                    {
+                        run_id: status
+                        for run_id, status in (
+                            await session.execute(
+                                select(GenerationRun.id, GenerationRun.status).where(
+                                    GenerationRun.id.in_(active)
+                                )
+                            )
+                        ).all()
+                    }
+                    if active
+                    else {}
+                )
                 candidates = list(
                     (
                         await session.scalars(
@@ -320,9 +356,18 @@ async def _run_dispatch_forever() -> None:
             limit = current_dispatch_limit()
             for run_id in select_runs_to_start(candidates, active, limit):
                 active[run_id] = asyncio.create_task(execute_dispatch(run_id))
+            running = sum(statuses.get(run_id) == "running" for run_id in active)
+            waiting = sum(statuses.get(run_id) == "queued_for_capacity" for run_id in active)
             await get_redis().set(
                 HEARTBEAT_KEY,
-                dispatch_heartbeat_payload(active=len(active), limit=limit),
+                dispatch_heartbeat_payload(
+                    active=len(active),
+                    limit=limit,
+                    configured_limit=int(get_settings().generation_worker_max_concurrent),
+                    running=running,
+                    waiting_capacity=waiting,
+                    other=len(active) - running - waiting,
+                ),
                 ex=30,
             )
         except Exception:

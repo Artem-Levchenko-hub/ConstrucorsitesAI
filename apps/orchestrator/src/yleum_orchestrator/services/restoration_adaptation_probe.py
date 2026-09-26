@@ -254,6 +254,41 @@ def correct_witness_hint(table: DataTable) -> str:
     return " ".join(parts)
 
 
+def initial_witness_hints(contract: DataContract) -> list[str]:
+    """Bounded schema identifiers for the first attempt, never stored business values.
+
+    This is guidance, not a complete insert fixture or a replacement for validation.
+    Omit an oversized example intact: cutting it would hide required columns.
+    """
+    hints: list[str] = []
+    for table in sorted(contract.tables, key=lambda item: item.name):
+        if (
+            table.name in _MANAGED_TABLES
+            or table.read_only
+            or table.owner_column is None
+            or table.owner_reference is not None
+            or len(table.primary_key) != 1
+            or table.primary_key[0] == table.owner_column
+        ):
+            continue
+        columns = {column.name: column for column in table.columns}
+        if "uuid" not in columns[table.primary_key[0]].type.casefold():
+            continue
+        reserved = {table.primary_key[0], table.owner_column}
+        if not any(
+            column.name not in reserved
+            and any(token in column.type.casefold() for token in _TEXT_TYPES)
+            for column in table.columns
+        ):
+            continue
+        hint = correct_witness_hint(table)
+        if len(hint) <= 600:
+            hints.append(hint)
+        if len(hints) == 32:
+            break
+    return hints
+
+
 def _witness_complaints(
     witness: ActivationBusinessWitness, table: DataTable
 ) -> list[str]:
