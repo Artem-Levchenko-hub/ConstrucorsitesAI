@@ -25,7 +25,7 @@ from typing import Any
 import httpx
 
 from yleum_api.core.config import get_settings, model_for_role
-from yleum_api.services.chip_pixel_gate import (
+from yleum_api.services.build_spec import (
     compile_build_spec,
     spec_confidence,
     spec_from_discovery,
@@ -649,7 +649,7 @@ class DiscoveryResult:
     # построим»): the resolved design tokens (accent hex/family, theme, tone,
     # sections) the gathered answers steer toward, so the popup can paint a live
     # mini-hero that morphs on every answer instead of only echoing words. Shape
-    # is :func:`chip_pixel_gate.spec_preview`'s payload (or None when nothing
+    # is :func:`build_spec.spec_preview`'s payload (or None when nothing
     # design-relevant has been decided). None on the first turn and on BUILD turns.
     design_preview: dict[str, Any] | None = None
 

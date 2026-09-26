@@ -29,7 +29,7 @@ from yleum_api.schemas.message import (
     PromptResponse,
 )
 from yleum_api.services.billing_accounts import resolve_billing_account
-from yleum_api.services.chip_pixel_gate import spec_from_discovery
+from yleum_api.services.build_spec import spec_from_discovery
 from yleum_api.services.discovery import BUILD as DISCOVERY_BUILD
 from yleum_api.services.discovery import (
     DiscoveryResult,
