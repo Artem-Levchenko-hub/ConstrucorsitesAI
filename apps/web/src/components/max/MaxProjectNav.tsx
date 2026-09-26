@@ -123,7 +123,7 @@ export function MaxProjectNav({
     <div>
       {showProgress && (
         <div className="mb-3 rounded-[8px] border border-border-default bg-surface-base px-3 py-3">
-          <div className="flex items-center justify-between gap-2 text-[10px] text-fg-tertiary">
+          <div className="flex items-center justify-between gap-2 text-[11px] text-fg-tertiary">
             <span>Путь до запуска</span>
             <span className="tabular-nums">
               {readiness.isSuccess

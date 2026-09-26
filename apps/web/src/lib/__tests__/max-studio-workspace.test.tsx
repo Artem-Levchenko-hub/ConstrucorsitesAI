@@ -48,7 +48,7 @@ it("keeps search editable with a clear action when no names match", async () => 
   await change('input[placeholder="Найти проект"]', "несуществующий");
   expect(container.querySelector('input[placeholder="Найти проект"]')).toBeTruthy();
   expect(container.textContent).toContain("Ничего не найдено");
-  expect(container.textContent).not.toContain("Первого проекта ещё нет");
+  expect(container.textContent).not.toContain("Первого приложения ещё нет");
   await click("Сбросить поиск");
   expect(container.textContent).toContain("Кофе рядом");
 });
@@ -58,13 +58,13 @@ it("distinguishes loading, query failure, retry and a real empty workspace", asy
   mocks.list.mockReturnValueOnce(new Promise((_, fail) => { reject = fail; }));
   await render();
   expect(container.querySelector('[role="status"]')?.textContent).toContain("Загружаем приложения");
-  expect(container.textContent).not.toContain("Первого проекта ещё нет");
+  expect(container.textContent).not.toContain("Первого приложения ещё нет");
   await act(async () => { reject(new Error("network offline")); });
   await settle(() => expect(container.querySelector('[role="alert"]')?.textContent).toContain("Не дозвонились до сервера"));
   expect(container.querySelector('[role="alert"]')?.textContent).toContain("Проекты никуда не делись");
-  expect(container.textContent).not.toContain("Первого проекта ещё нет");
+  expect(container.textContent).not.toContain("Первого приложения ещё нет");
   await click("Проверить ещё раз");
-  await settle(() => expect(container.textContent).toContain("Первого проекта ещё нет"));
+  await settle(() => expect(container.textContent).toContain("Первого приложения ещё нет"));
 });
 
 it("validates name and idea, retains answers through Back, and creates only after review", async () => {
@@ -137,4 +137,24 @@ it("uses readiness for the next project action and falls back to management when
   await act(async () => { await client.invalidateQueries({ queryKey: ["max-readiness", "coffee"] }); });
   await settle(() => expect(container.querySelector('.max-project-next')?.textContent).toContain("Проверить документы"));
   expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee?data=policies");
+});
+
+it("предлагает готовые идеи вместо пустых двух третей экрана", async () => {
+  // На первом экране список занимал верхнюю треть, ниже — пустота: ни
+  // подсказки «с чего начать», ни примеров.
+  mocks.list.mockResolvedValue([project]);
+  mocks.readiness.mockResolvedValue({ items: [{ id: "build", done: true }] });
+  await render();
+  await settle(() => expect(container.textContent).toContain("С чего начать"));
+  const ideas = [...container.querySelectorAll<HTMLButtonElement>(".max-studio-idea")];
+  expect(ideas).toHaveLength(3);
+
+  // Идея не создаёт проект молча — она заполняет мастер, который можно поправить.
+  await act(async () => ideas[0].click());
+  await settle(() => expect(document.querySelector('[role="dialog"]')).not.toBeNull());
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("Что создаём?");
+  expect(dialog.querySelector<HTMLInputElement>("#max-project-name")?.value).toBe("Кофейня");
+  expect(dialog.querySelector<HTMLTextAreaElement>("#max-project-idea")?.value).toContain("предзаказ");
+  expect(mocks.create).not.toHaveBeenCalled();
 });

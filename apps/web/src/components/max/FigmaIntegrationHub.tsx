@@ -413,7 +413,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
         </div>
 
         <div className="mt-5 overflow-hidden rounded-[12px] border border-border-default bg-surface">
-          <div className="hidden grid-cols-[1.3fr_.8fr_130px_190px] border-b border-border-default px-5 py-3 font-mono text-[9px] uppercase tracking-[.1em] text-fg-tertiary lg:grid">
+          <div className="hidden grid-cols-[1.3fr_.8fr_130px_190px] border-b border-border-default px-5 py-3 font-mono text-[11px] uppercase tracking-[.1em] text-fg-tertiary lg:grid">
             <span>Сервис</span><span>Возможности</span><span>Статус</span><span />
           </div>
           {catalog.isLoading ? (

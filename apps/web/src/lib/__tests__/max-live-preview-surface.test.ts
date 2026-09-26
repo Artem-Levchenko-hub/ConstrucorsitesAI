@@ -30,7 +30,7 @@ describe("MAX live preview surface", () => {
 
   it("separates the preview with a white workspace, not an extra rounded card", () => {
     expect(editorLayout).toContain('className="max-editor-desktop-preview"');
-    expect(editorStyles).toContain(".max-editor-desktop-preview { min-height: 0; overflow: hidden; border-left: 1px solid #e2e7ef; background: #fff; }");
+    expect(editorStyles).toContain(".max-editor-desktop-preview { min-height: 0; overflow: hidden; border-left: 1px solid #e3e0dc; background: #fff; }");
     expect(editorStyles).toContain("[data-max-editor]");
   });
 

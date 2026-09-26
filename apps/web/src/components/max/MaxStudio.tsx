@@ -19,6 +19,7 @@ import { containsChatSecret, redactChatSecrets, resolveChatCredential } from "@/
 import { MaxStudioProjectCard } from "./MaxStudioProjectCard";
 import { MaxStudioHeader } from "./MaxStudioHeader";
 import { MAX_STATUS_COPY } from "@/lib/max-status-copy";
+import { MaxStudioIdeas, type MaxStudioIdea } from "./MaxStudioIdeas";
 import { MaxProjectWizard } from "./MaxProjectWizard";
 import "./max-studio.css";
 
@@ -199,6 +200,16 @@ export function MaxStudio({ email }: { email: string }) {
 
   const allMaxProjects = (projects.data ?? []).filter((project) => project.template === "max_miniapp");
 
+  /** Готовая идея заполняет мастер, а не создаёт проект молча. */
+  function applyIdea(idea: MaxStudioIdea) {
+    setName(idea.title);
+    setIdea(idea.idea);
+    setAppType(idea.appType);
+    setAudience(idea.audience);
+    setPrimaryAction(idea.primaryAction);
+    setDialogOpen(true);
+  }
+
   return (
     <div data-max-studio className="max-studio-workspace">
       <MaxStudioHeader email={email} />
@@ -246,9 +257,9 @@ export function MaxStudio({ email }: { email: string }) {
           ) : allMaxProjects.length === 0 ? (
             <section className="max-projects-empty">
               <FolderKanban className="mx-auto size-7 text-accent" />
-              <h2>Первого проекта ещё нет</h2>
-              <p>Опишите задачу — Yleum поможет создать приложение и подготовить его к запуску.</p>
-              <Button variant="outline" onClick={() => setDialogOpen(true)}>Описать идею</Button>
+              <h2>Первого приложения ещё нет</h2>
+              <p>Опишите задачу своими словами — ИИ соберёт рабочее приложение внутри MAX. Или возьмите готовую идею ниже.</p>
+              <Button onClick={() => setDialogOpen(true)}>Описать свою идею</Button>
             </section>
           ) : (
             <section className="max-projects-list" aria-label="Приложения">
@@ -257,6 +268,12 @@ export function MaxStudio({ email }: { email: string }) {
               </div>
               {maxProjects.map((project) => <MaxStudioProjectCard key={project.id} project={project} />)}
             </section>
+          )}
+
+          {/* Две трети первого экрана оставались пустыми: ни подсказки, ни
+              примеров. Идеи показываем и новичку, и владельцу пары проектов. */}
+          {!projects.isPending && !projects.isError && !search.trim() && (
+            <MaxStudioIdeas onPick={applyIdea} />
           )}
         </div>
       </main>

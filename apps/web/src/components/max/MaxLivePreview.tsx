@@ -421,7 +421,7 @@ export function MaxLivePreview({
           ) : <h2 className="mt-1 truncate text-sm font-semibold">{viewingHistorical ? "Версия недоступна" : "Текущая версия"}</h2>}
         </div>
         <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
-          {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[10px] text-fg-secondary">
+          {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[11px] text-fg-secondary">
             <span className={`size-1.5 rounded-full ${connected ? "bg-success" : "bg-fg-tertiary"}`} title={connected ? "Подключено" : "Запускается"} />
             <span className="sr-only">{connected ? "Подключено" : "Запускается"}</span>
           </span>}
@@ -430,7 +430,7 @@ export function MaxLivePreview({
               type="button"
               onClick={retryPreview}
               disabled={recoverPreview.isPending}
-              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border-default px-2.5 py-1 text-[10px] font-medium text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary disabled:cursor-not-allowed disabled:opacity-45 sm:px-3"
+              className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border-default px-2.5 py-1 text-[11px] font-medium text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary disabled:cursor-not-allowed disabled:opacity-45 sm:px-3"
               title="Обновить превью"
               aria-label="Обновить превью"
               data-testid="max-refresh-preview"
@@ -559,7 +559,7 @@ export function MaxLivePreview({
                             <Loader2 className="size-3 animate-spin text-accent" />
                             {preparationLabel}
                           </p>
-                          <p className="mt-1 text-[9px] text-fg-tertiary">
+                          <p className="mt-1 text-[11px] text-fg-tertiary">
                             Пока показываем последнюю рабочую версию.
                           </p>
                         </div>
@@ -574,7 +574,7 @@ export function MaxLivePreview({
                             type="button"
                             onClick={retryPreview}
                             disabled={recoverPreview.isPending}
-                            className="mt-1 text-[10px] font-medium text-[#6a95fa]"
+                            className="mt-1 text-[11px] font-medium text-[#6a95fa]"
                           >
                             {recoverPreview.isPending ? "Обновляем…" : "Повторить проверку"}
                           </button>
@@ -607,7 +607,7 @@ export function MaxLivePreview({
                       {!showPreviewError && !awaitingFirstBuild && (
                         <ol className="mt-5 w-full space-y-2 text-left">
                           {preparationSteps.map((step) => (
-                            <li key={step.label} className="flex items-center gap-2 text-[10px] text-fg-secondary">
+                            <li key={step.label} className="flex items-center gap-2 text-[11px] text-fg-secondary">
                               <span className={`grid size-4 place-items-center rounded-full border ${step.done ? "border-success bg-success/10 text-success-fg" : "border-border-default text-fg-tertiary"}`}>
                                 {step.done ? <Check className="size-2.5" /> : <span className="size-1 rounded-full bg-current" />}
                               </span>
@@ -631,7 +631,7 @@ export function MaxLivePreview({
                             )}
                             {recoverPreview.isPending ? "Обновляем…" : "Повторить"}
                           </button>
-                          <p className="text-[9px] leading-4 text-fg-tertiary">
+                          <p className="text-[11px] leading-4 text-fg-tertiary">
                             Если ошибка повторяется, откройте панель запуска — там указан ответственный шаг.
                           </p>
                         </div>
@@ -651,7 +651,7 @@ export function MaxLivePreview({
                 type="button"
                 onClick={() => onSelectVersion(null)}
                 disabled={restoringSnapshot}
-                className="inline-flex min-h-11 items-center rounded-[9px] px-2.5 text-[10px] font-medium text-fg-secondary hover:bg-surface-overlay hover:text-fg-primary disabled:opacity-45"
+                className="inline-flex min-h-11 items-center rounded-[9px] px-2.5 text-[11px] font-medium text-fg-secondary hover:bg-surface-overlay hover:text-fg-primary disabled:opacity-45"
                 data-testid="max-return-current-version"
               >
                 Живое превью
@@ -659,7 +659,7 @@ export function MaxLivePreview({
               {onPrepareRestoration ? <button
                 type="button" onClick={() => selectedSnapshot && prepareRestoration(selectedSnapshot)}
                 disabled={!restorationEnabled || restorationBusy || !selectedSnapshot?.snapshot_id}
-                className="inline-flex min-h-11 items-center rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[10px] font-semibold text-accent disabled:opacity-45"
+                className="inline-flex min-h-11 items-center rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[11px] font-semibold text-accent disabled:opacity-45"
                 data-testid="max-prepare-restoration"
                 title={!selectedSnapshot?.snapshot_id ? "У этой версии нет сохранённых исходников"
                   : !restorationEnabled ? "Подготовка восстановления сейчас недоступна"
@@ -668,7 +668,7 @@ export function MaxLivePreview({
                 type="button"
                 onClick={() => setRestoreTargetId(selectedSnapshot?.id ?? null)}
                 disabled={restoringSnapshot || !selectedSnapshot?.can_restore || !selectedSnapshot.snapshot_id}
-                className="inline-flex min-h-11 items-center gap-1.5 rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[10px] font-semibold text-accent hover:bg-accent/15 disabled:opacity-45"
+                className="inline-flex min-h-11 items-center gap-1.5 rounded-[9px] border border-accent/30 bg-accent/10 px-3 text-[11px] font-semibold text-accent hover:bg-accent/15 disabled:opacity-45"
                 data-testid="max-restore-version"
               >
                 {restoringSnapshot && <Loader2 className="size-3 animate-spin" />}
@@ -680,7 +680,7 @@ export function MaxLivePreview({
               type="button"
               onClick={() => void openSeparatePreview()}
               disabled={!connected || separatePreview.isPending}
-              className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[10px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
+              className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               data-testid="max-open-preview-separate"
               title={connected ? undefined : "Сначала дождитесь запуска предпросмотра"}
             >

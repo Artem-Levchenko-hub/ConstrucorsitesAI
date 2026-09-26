@@ -147,8 +147,12 @@ describe("light MAX editor theme", () => {
     rule.walkDecls((declaration) => { editorTokens[declaration.prop] = declaration.value; });
   });
   it("keeps secondary text and primary actions readable on the light canvas", () => {
+    // Фон берём из самой темы: после перехода кабинета на тёплую бумагу сайта
+    // жёстко вписанный сюда цвет проверял бы несуществующий экран.
+    const canvas = editorTokens["--color-bg-base"];
+    expect(canvas).toBe("#f9f8f6");
     for (const token of ["--color-fg-primary", "--color-fg-secondary", "--color-fg-tertiary"]) {
-      expect(contrast(editorTokens[token], "#f7f8fb")).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(editorTokens[token], canvas), token).toBeGreaterThanOrEqual(4.5);
     }
     expect(contrast("#ffffff", editorTokens["--color-accent"])).toBeGreaterThanOrEqual(4.5);
     expect(editorTokens["--color-accent-fg"]).toBe(editorTokens["--color-fg-on-accent"]);

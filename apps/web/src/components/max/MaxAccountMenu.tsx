@@ -88,7 +88,7 @@ export function MaxAccountMenu({
             <span className="block truncate text-xs font-medium">
               {email.split("@")[0]}
             </span>
-            <span className="block truncate text-[9px] text-fg-tertiary">
+            <span className="block truncate text-[11px] text-fg-tertiary">
               {email}
             </span>
           </span>
@@ -137,7 +137,7 @@ export function MaxAccountMenu({
       <form action={logoutAction} className="mt-1">
         <button
           type="submit"
-          className="flex min-h-11 w-full items-center gap-2 rounded-[8px] px-2 text-[10px] text-fg-tertiary transition-colors hover:bg-surface-base hover:text-fg-primary"
+          className="flex min-h-11 w-full items-center gap-2 rounded-[8px] px-2 text-[11px] text-fg-tertiary transition-colors hover:bg-surface-base hover:text-fg-primary"
         >
           <LogOut className="size-3.5" />
           Выйти

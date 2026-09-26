@@ -20,12 +20,12 @@ import {
 } from "lucide-react";
 import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
-const ink = "#192335";
+const ink = "#14141a";
 const paper = "#ffffff";
-const canvas = "#f7f8fb";
-const line = "#dce2ec";
+const canvas = "#f9f8f6";
+const line = "#e3e0dc";
 const accent = "#0062ee";
-const muted = "#627087";
+const muted = "#7d7d87";
 const success = "#187443";
 
 type Callout = {

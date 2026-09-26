@@ -1,49 +1,49 @@
 /* Opt-in light MAX surfaces. Put data-max-studio on portal roots as well. */
 [data-max-studio] {
   color-scheme: light;
-  --color-bg-base: #f7f8fb;
+  --color-bg-base: #f9f8f6;
   --color-bg-elevated-1: #fff;
   --color-surface: #fff;
-  --color-surface-2: #f7f8fb;
-  --color-surface-3: #eef2f7;
-  --color-surface-base: #f7f8fb;
+  --color-surface-2: #f9f8f6;
+  --color-surface-3: #efedea;
+  --color-surface-base: #f9f8f6;
   --color-surface-raised: #fff;
   --color-surface-overlay: #fff;
   --color-surface-input: #fff;
-  --color-surface-panel-dark: #f7f8fb;
+  --color-surface-panel-dark: #f9f8f6;
   --color-surface-glass: rgb(255 255 255 / .94);
-  --color-border-subtle: #e9edf3;
-  --color-border-default: #dce2ec;
-  --color-border-strong: #b9c4d5;
+  --color-border-subtle: #eeebe7;
+  --color-border-default: #e3e0dc;
+  --color-border-strong: #c9c4bd;
   --color-border-accent: #0062ee;
-  --color-fg-primary: #192335;
-  --color-fg-secondary: #526079;
-  --color-fg-tertiary: #627087;
-  --color-fg-muted: #627087;
+  --color-fg-primary: #14141a;
+  --color-fg-secondary: #55555f;
+  --color-fg-tertiary: #6d6d77;
+  --color-fg-muted: #6d6d77;
   --color-fg-on-accent: #fff;
   --color-fg-on-danger: #fff;
-  --color-label-1: #192335;
-  --color-label-2: #526079;
-  --color-label-3: #627087;
+  --color-label-1: #14141a;
+  --color-label-2: #55555f;
+  --color-label-3: #6d6d77;
   --color-accent: #0062ee;
   --color-accent-fg: #fff;
   --color-accent-hover: #0050c8;
-  --color-accent-subtle: #edf3ff;
+  --color-accent-subtle: #eaf0ff;
   --color-accent-secondary: #0050c8;
   --color-success: #187443;
   --color-success-fg: #187443;
   --color-danger: #b42318;
   --color-danger-fg: #b42318;
   --color-warning: #756000;
-  --color-ink: #192335;
+  --color-ink: #14141a;
   --color-paper: #fff;
-  --color-warm-white: #f7f8fb;
-  --color-muted-ink: #526079;
-  --color-warm-border: #dce2ec;
+  --color-warm-white: #f9f8f6;
+  --color-muted-ink: #55555f;
+  --color-warm-border: #e3e0dc;
   color: var(--color-fg-primary);
 }
 [data-max-studio] :is(button, a, summary):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 3px; }
-[data-max-studio] ::selection { background: #dce8ff; color: #192335; }
+[data-max-studio] ::selection { background: #dce8ff; color: #14141a; }
 .max-studio-workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--color-bg-base); }
 .max-studio-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-shrink: 0; min-height: 76px; padding: 12px 32px; border-bottom: 1px solid var(--color-border-default); background: var(--color-surface); }
 .max-projects-main { flex: 1; min-height: 0; overflow-y: auto; }
@@ -69,7 +69,7 @@
 .max-project-actions > a, .max-project-actions > button { position: relative; z-index: 2; }
 .max-project-identity { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
 .max-project-monogram, .max-project-thumbnail { display: grid; flex-shrink: 0; width: 40px; height: 40px; border-radius: 6px; }
-.max-project-monogram { place-items: center; background: var(--color-accent-subtle); color: var(--color-accent); font-size: 19px; }
+.max-project-monogram { place-items: center; background: var(--color-accent-subtle); color: var(--color-accent); font-size: 20px; }
 .max-project-thumbnail { border: 1px solid var(--color-border-default); background: var(--color-surface-3); object-fit: cover; object-position: top; }
 .max-project-identity h2 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
 .max-project-identity h2 a:hover { color: var(--color-accent); }
@@ -90,12 +90,12 @@
 .max-project-status--needs-input { color: #756000; }
 .max-project-status--ready { color: #187443; }
 .max-project-status--failed { color: #b42318; }
-.max-project-status--pending { color: #526079; }
+.max-project-status--pending { color: #55555f; }
 .max-project-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .max-project-next { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 1; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 6px; color: var(--color-accent-secondary); font-size: 13px; font-weight: 500; }
 .max-project-next:hover { background: var(--color-accent-subtle); border-color: var(--color-accent); }
 .max-projects-empty { padding: 64px 24px; background: var(--color-surface); border: 1px solid var(--color-border-default); border-radius: 10px; text-align: center; }
-.max-projects-empty h2 { margin: 16px 0 12px; font-size: 24px; font-weight: 600; }
+.max-projects-empty h2 { margin: 16px 0 12px; font-size: 20px; font-weight: 600; }
 .max-projects-empty p { max-width: 450px; margin: 0 auto 24px; line-height: 1.65; color: var(--color-fg-secondary); }
 [data-max-studio].max-project-wizard { display: flex; flex-direction: column; gap: 0; max-width: 700px; max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; border-radius: 10px; background: var(--color-surface); }
 .max-wizard-heading { flex-shrink: 0; padding: 24px 60px 0 24px; }
@@ -122,7 +122,7 @@
 .max-feature-chip__hint { display: block; margin-top: 3px; color: var(--color-fg-secondary); font-size: 11px; line-height: 1.5; }
 .max-feature-chip__peek { display: grid; place-items: center; width: 34px; flex-shrink: 0; border-left: 1px solid var(--color-border-subtle); border-radius: 0 7px 7px 0; color: var(--color-fg-tertiary); }
 .max-feature-chip__peek:hover, .max-feature-chip__peek[aria-pressed=true] { background: var(--color-surface-3); color: var(--color-accent); }
-.max-feature-chip[data-selected=true] .max-feature-chip__peek { border-left-color: #cbdafd; }
+.max-feature-chip[data-selected=true] .max-feature-chip__peek { border-left-color: #c6d8fb; }
 .max-wizard-review > div { padding: 14px 0; border-bottom: 1px solid var(--color-border-subtle); }
 .max-wizard-review > div:first-child { padding-top: 0; }
 .max-wizard-review dt { font-size: 12px; color: var(--color-fg-secondary); }
@@ -140,7 +140,7 @@
   .max-studio-header { min-height: 68px; padding: 12px 18px; gap: 8px; }
   .max-projects-content { padding: 28px 18px 56px; }
   .max-projects-heading { align-items: flex-start; flex-direction: column; gap: 20px; }
-  .max-projects-heading h1 + p { font-size: 14px; }
+  .max-projects-heading h1 + p { font-size: 13px; }
   .max-projects-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
   .max-projects-search { width: 100%; }
   /* На телефоне строка становится карточкой: состояние узнаётся полоской
@@ -162,3 +162,17 @@
 @media (prefers-reduced-motion: reduce) {
   [data-max-studio] *, [data-max-studio] *::before, [data-max-studio] *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }
+
+/* Первый экран больше не пустой на две трети: готовые идеи под списком. */
+.max-studio-ideas { margin-top: 36px; }
+.max-studio-ideas header h2 { font-size: 17px; font-weight: 600; letter-spacing: -.02em; }
+.max-studio-ideas header p { margin-top: 5px; color: var(--color-fg-secondary); font-size: 13px; line-height: 1.6; }
+.max-studio-ideas-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+.max-studio-idea { display: grid; gap: 10px; align-content: start; min-height: 44px; padding: 16px; border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-surface); text-align: left; }
+.max-studio-idea:hover { border-color: var(--color-accent); box-shadow: 0 1px 2px rgb(20 20 26 / .04); }
+.max-studio-idea-icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 6px; background: var(--color-accent-subtle); color: var(--color-accent); }
+.max-studio-idea-copy { min-width: 0; }
+.max-studio-idea-title { display: block; color: var(--color-fg-primary); font-size: 15px; font-weight: 600; }
+.max-studio-idea-text { display: block; margin-top: 5px; color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; }
+.max-studio-idea-go { display: inline-flex; align-items: center; gap: 6px; color: var(--color-accent-secondary); font-size: 12px; font-weight: 500; }
+@media (max-width: 900px) { .max-studio-ideas-grid { grid-template-columns: minmax(0, 1fr); } }
