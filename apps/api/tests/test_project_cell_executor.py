@@ -744,7 +744,6 @@ async def _prepare_executor(
         pytest.fail("selected cell must never call a legacy runtime")
 
     monkeypatch.setattr(orchestrator_client, "hot_reload", forbidden_docs_media)
-    monkeypatch.setattr(orchestrator_client, "create_max_preview_session", forbidden_docs_media)
 
     handle = await project_cell_executor.maybe_create_project_cell_executor(
         project_id=expected_project_id,

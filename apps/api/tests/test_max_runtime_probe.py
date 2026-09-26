@@ -180,12 +180,6 @@ async def test_cell_runtime_uses_cell_cookie_and_route_without_legacy(
 ):
     from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
-    def forbidden(*args, **kwargs):
-        pytest.fail("cell runtime must not resolve legacy preview")
-
-    monkeypatch.setattr(
-        max_runtime_probe.orchestrator_client, "create_max_preview_session", forbidden,
-    )
     observed: list[str] = []
 
     def handler(request):

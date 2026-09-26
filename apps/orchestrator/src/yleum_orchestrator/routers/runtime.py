@@ -19,12 +19,11 @@ import os
 import posixpath
 import re
 from base64 import urlsafe_b64encode
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from hashlib import sha256
 from hmac import new as hmac_new
 from pathlib import Path
 from typing import Annotated
-from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Header
@@ -52,7 +51,6 @@ from yleum_orchestrator.schemas.runtime import (
     HotReloadRequest,
     KeepAliveRequest,
     KeepAliveResponse,
-    MaxPreviewSessionResponse,
     StatusResponse,
 )
 from yleum_orchestrator.services import (
@@ -67,9 +65,6 @@ from yleum_orchestrator.services.hibernate import (
 from yleum_orchestrator.services.port_allocator import (
     get_port_allocator,
     get_prod_port_allocator,
-)
-from yleum_orchestrator.services.provisioner import (
-    load_existing_auth_secret,
 )
 
 router = APIRouter(prefix="/internal/projects", tags=["runtime"])
@@ -944,71 +939,6 @@ def _collect_workspace_text_files(root: Path) -> tuple[dict[str, str], set[str]]
     return files, dropped
 
 
-@router.post("/{project_id}/max-preview-session", response_model=MaxPreviewSessionResponse)
-async def create_max_preview_session(
-    project_id: UUID,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> MaxPreviewSessionResponse:
-    """Issue a short-lived, development-only MAX preview bootstrap URL.
-
-    This deliberately never starts containers or creates secrets: callers can
-    bootstrap only a running MAX template which was previously provisioned.
-    """
-    _verify_token(x_internal_token)
-    canonical_project_id = str(project_id)
-
-    container_name = await find_project_container(canonical_project_id, kind="dev")
-    if container_name is None:
-        raise OrchestratorError(
-            code="not_found",
-            message="no running MAX preview for this project",
-            status_code=404,
-        )
-    status = await docker_container_status(container_name)
-    if status["state"] != "running":
-        raise OrchestratorError(
-            code="container_not_running",
-            message="MAX preview container is not running",
-            status_code=409,
-        )
-    if await container_image_template(container_name) != _MAX_PREVIEW_TEMPLATE:
-        raise OrchestratorError(
-            code="unsupported_stack",
-            message="project is not a MAX Mini App preview",
-            status_code=409,
-        )
-
-    secret = load_existing_auth_secret(canonical_project_id)
-    if secret is None:
-        # A missing secret is not repaired here: doing so would make an unknown
-        # project bootstrap-able and would hide an incomplete provision.
-        raise OrchestratorError(
-            code="not_found",
-            message="MAX preview credentials are unavailable",
-            status_code=404,
-        )
-
-    now = datetime.now(UTC)
-    expires_at = now + _MAX_PREVIEW_BOOTSTRAP_TTL
-    expires = int(expires_at.timestamp())
-    signature = _max_preview_bootstrap_signature(secret, canonical_project_id, expires)
-    slug = container_name.removeprefix("omnia-dev-")
-    origin = nginx_writer.dev_url(slug)
-    if not origin.startswith("https://"):
-        raise OrchestratorError(
-            code="container_failure",
-            message="MAX preview requires an HTTPS development origin",
-            status_code=503,
-        )
-    query = urlencode({"expires": expires, "signature": signature})
-    bootstrap_url = f"{origin}{_MAX_PREVIEW_BOOTSTRAP_PATH}?{query}"
-    return MaxPreviewSessionResponse(
-        project_id=project_id,
-        bootstrap_url=bootstrap_url,
-        expires_at=expires_at.isoformat().replace("+00:00", "Z"),
-    )
-
-
 @router.post("/{project_id}/heartbeat")
 async def heartbeat(
     project_id: str,
@@ -1477,7 +1407,6 @@ async def get_deploy(
 ) -> DeployResponse:
     """Last deploy state for a project (phase / prod_url / image_tag / error)."""
     _verify_token(x_internal_token)
-    from uuid import UUID
 
     from yleum_orchestrator.services.cell_publication import get_cell_publication_service
 
@@ -1495,7 +1424,6 @@ async def get_deploy_history(
     x_internal_token: Annotated[str | None, Header()] = None,
 ) -> list[DeployResponse]:
     _verify_token(x_internal_token)
-    from uuid import UUID
 
     from yleum_orchestrator.services.cell_publication import get_cell_publication_service
 
@@ -1515,7 +1443,6 @@ async def status(
     `127.0.0.1:<port>` loopback, which was the "connection refused" preview.
     """
     _verify_token(x_internal_token)
-    from uuid import UUID
 
     name = await find_project_container(project_id, kind="dev")
     keep_alive = is_keep_alive_enabled(project_id)
@@ -1590,7 +1517,6 @@ async def destroy(
     the same rationale as `status`/`hot-reload` (no project_id↔name registry).
     """
     _verify_token(x_internal_token)
-    from uuid import UUID
 
     pid = UUID(project_id)
 

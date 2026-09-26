@@ -2,18 +2,15 @@ from __future__ import annotations
 
 import logging
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.models.message import Message
-from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.project import orchestrator_template
 from yleum_api.services import agent_builder
-from yleum_api.services.build_plan import BuildPlan, merge_plan_into_spec
 from yleum_api.services.generation.agent_messages import (
     _is_continue_request,
     _recover_max_resume_prompt,
@@ -212,13 +209,3 @@ async def prepare_stack_prompt(
         )
     return StackPrompt(_seed_block, _orch_name, _stack_guide, _skills, _stack_system, _bare_stack)
 
-
-async def persist_build_plan(
-    factory: async_sessionmaker[AsyncSession], project_id: UUID, plan: BuildPlan
-) -> None:
-    """Persist a completed model plan in a fresh transaction."""
-    async with factory() as session:
-        project = await session.get(Project, project_id)
-        if project is not None:
-            project.discovery_spec = merge_plan_into_spec(project.discovery_spec, plan)
-            await session.commit()

@@ -1825,11 +1825,6 @@ async def project_cell_agent_operation_status(
     return ProjectCellAgentOperationStatus.from_json(payload)
 
 
-async def create_max_preview_session(project_id: UUID) -> dict[str, Any]:
-    """POST a short-lived, signed bootstrap session for a MAX preview."""
-    return await _request("POST", f"/internal/projects/{project_id}/max-preview-session")
-
-
 async def project_cell_apply_draft(
     workspace_id: UUID,
     *,
