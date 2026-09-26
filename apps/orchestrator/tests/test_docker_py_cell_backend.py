@@ -354,6 +354,17 @@ class _FakeContainer:
         self.manager.items.pop(self.name, None)
         self.status = "removed"
 
+    def _rootfs_is_read_only(self, path: str) -> bool:
+        """Запись отвергается только в собственный корень — тома и tmpfs пишутся."""
+        if not self.kwargs.get("read_only", False):
+            return False
+        target = PurePosixPath(path if path.startswith("/") else "/" + path)
+        mounted = [
+            PurePosixPath(str(mount["bind"]))
+            for mount in (self.kwargs.get("volumes") or {}).values()
+        ] + [PurePosixPath(str(name)) for name in (self.kwargs.get("tmpfs") or {})]
+        return not any(target == point or point in target.parents for point in mounted)
+
     def logs(self, tail: int = 50) -> bytes:
         _ = tail
         return self.logs_output
@@ -369,6 +380,13 @@ class _FakeContainer:
 
     def put_archive(self, *, path: str, data: bytes) -> bool:
         self.put_archive_calls.append((path, data))
+        if self._rootfs_is_read_only(path):
+            # Проверено на живом демоне 26.09.2026: 400 Bad Request,
+            # "container rootfs is marked read-only" — и в остановленном
+            # контейнере, и в запущенном. Стенд разрешал такую запись, то есть
+            # был мягче мира: сделай обслуживающий контейнер неизменяемым, и
+            # восстановление из снимка сломалось бы только на проде.
+            raise _docker_api_error(400, "container rootfs is marked read-only")
         extracted = _extract(data)
         if path == "/volume":
             mounted_name = next(iter((self.kwargs.get("volumes") or {}).keys()))
@@ -577,11 +595,37 @@ def _backend(client: _FakeClient) -> DockerPyCellBackend:
     )
 
 
+def _maintenance_spec(name: str) -> DockerContainerSpec:
+    """Обслуживающий контейнер так, как его создаёт cell_checkpoint: корень записываемый."""
+    return DockerContainerSpec(
+        name=name,
+        image="postgres@sha256:" + "1" * 64,
+        labels=_labels("postgres-maintenance"),
+        user="postgres",
+        cap_add=[],
+        cap_drop=["ALL"],
+        read_only=False,
+        privileged=False,
+        security_opt=["no-new-privileges:true"],
+        ports={},
+        env={},
+        volumes=("pg-vol",),
+        mounts=(),
+        network_names=(),
+        helper=True,
+        pids_limit=128,
+        memory_limit_bytes=512 * 1024 * 1024,
+        cpu_quota=1.5,
+    )
+
+
 def _docker_api_error(status_code: int, explanation: str) -> docker.errors.APIError:
     response = SimpleNamespace(
         status_code=status_code,
         url="http+docker://localhost/v1.51/containers/helper",
-        reason="Conflict" if status_code == 409 else "Not Found",
+        reason={400: "Bad Request", 403: "Forbidden", 409: "Conflict"}.get(
+            status_code, "Not Found"
+        ),
     )
     return docker.errors.APIError(
         explanation,
@@ -1285,21 +1329,29 @@ async def test_postgres_dump_restore_and_smoke_use_exec_and_archives() -> None:
     )
 
     dump = await backend.postgres_dump("omnia-cell-test-postgres", "secret")
-    # Восстановление в проде всегда идёт в поднятый обслуживающий контейнер —
-    # cell_checkpoint создаёт и запускает его сам, — поэтому и здесь так.
-    await backend.start_container("omnia-cell-test-postgres")
-    await backend.postgres_restore("omnia-cell-test-postgres", b"restore-bytes", "secret")
-    smoke = await backend.postgres_smoke_query("omnia-cell-test-postgres", "secret")
-    container = client.containers.items["omnia-cell-test-postgres"]
+    # Восстановление в проде идёт НЕ в саму базу, а в обслуживающий контейнер,
+    # который cell_checkpoint создаёт с записываемым корнем именно ради файла
+    # дампа (у самой базы корень неизменяемый, и Docker отвечает 400
+    # "container rootfs is marked read-only"). Повторяем эту форму.
+    helper_name = "omnia-cell-test-postgres-maintenance"
+    await backend.create_container(_maintenance_spec(helper_name))
+    await backend.start_container(helper_name)
+    await backend.postgres_restore(helper_name, b"restore-bytes", "secret")
+    smoke = await backend.postgres_smoke_query(helper_name, "secret")
+    container = client.containers.items[helper_name]
+    database = client.containers.items["omnia-cell-test-postgres"]
 
     def _first(program: str) -> dict[str, Any]:
         # По имени программы, а не по номеру: снятие дампа с остановленной базы
         # добавляет перед ним пробу готовности, и жёсткие номера от неё поедут.
         return next(item for item in container.exec_calls if item["command"][0] == program)
 
+    def _first_on_database(program: str) -> dict[str, Any]:
+        return next(item for item in database.exec_calls if item["command"][0] == program)
+
     assert dump == b"pg-dump-bytes"
     assert smoke is True
-    assert _first("pg_dump")["command"] == [
+    assert _first_on_database("pg_dump")["command"] == [
         "pg_dump",
         "-Fc",
         "-U",
@@ -1307,7 +1359,7 @@ async def test_postgres_dump_restore_and_smoke_use_exec_and_archives() -> None:
         "-d",
         "postgres",
     ]
-    assert _first("pg_dump")["environment"] == {"PGPASSWORD": "secret"}
+    assert _first_on_database("pg_dump")["environment"] == {"PGPASSWORD": "secret"}
     assert container.put_archive_calls[0][0] == "/"
     uploaded = _extract(container.put_archive_calls[0][1])
     assert uploaded["project-cell.dump"] == b"restore-bytes"

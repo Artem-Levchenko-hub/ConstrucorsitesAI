@@ -319,6 +319,16 @@ class FakeDockerBackend:
         record = self.containers.get(container_name)
         if record is None:
             raise RuntimeError("postgres container missing")
+        if record.read_only:
+            # Восстановление кладёт файл дампа в корень контейнера, а Docker
+            # отвечает на это 400 "container rootfs is marked read-only"
+            # (проверено на живом демоне 26.09.2026). Поэтому обслуживающий
+            # контейнер и создаётся с записываемым корнем; стенд обязан это
+            # различать, иначе решение выглядит необязательным.
+            raise CellResourceError(
+                f"postgres restore {container_name} failed: "
+                "container rootfs is marked read-only"
+            )
         rows = json.loads(dump.decode("utf-8"))
         volume_name = record.volumes[0]
         await self.write_volume_files(volume_name, {"db.json": json.dumps(rows).encode("utf-8")})
