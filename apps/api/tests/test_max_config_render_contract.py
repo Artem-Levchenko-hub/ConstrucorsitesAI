@@ -224,7 +224,6 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         return {"ok": False, "status_code": 500, "error": "baseline-runtime-red"}
 
     monkeypatch.setattr(agent_runtime, "_project_cell_runtime_check", runtime_status)
-    monkeypatch.setattr(agent_runtime.orchestrator_client, "runtime_status", runtime_status)
 
     real_render = max_project_kit.render_max_starter_files
 

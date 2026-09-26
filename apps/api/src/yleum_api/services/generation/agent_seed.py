@@ -71,7 +71,7 @@ async def stage_max_starter(
     # product page, then ALWAYS continues through the bounded native Google
     # agent below. There is no product UI template to recolour or mistake
     # for a completed application.
-    if project_info.template == "max_miniapp" and orchestrate and not _max_has_generated_snapshot:
+    if orchestrate and not _max_has_generated_snapshot:
         try:
             _starter_files = await _render_current_max_starter_files()
             if _design_contract:

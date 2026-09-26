@@ -519,7 +519,7 @@ async def run_agent_generation(
             _release_verdict = await run_release_proof(
                 ids.project_id,
                 project_info.slug,
-                require_max_data=project_info.template == "max_miniapp",
+                require_max_data=True,
                 project_cell_handle=runtime.handle,
             )
         if _att_capture is None:

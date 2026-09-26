@@ -11,7 +11,7 @@ known-id из этого файла. Поэтому никаких generation-in
 таком тоне». Модель полирует, не творит.
 
 Pipeline:
-1. ``preset_classifier.classify_preset(name, template, prompt) -> preset_id`` —
+1. ``preset_classifier.classify_preset_sync(name, template, prompt) -> preset_id`` —
    выбирает один из ключей ``PRESETS``.
 2. ``prompt_builder.build_system_prompt(template, preset_id)`` —
    инжектит ``format_preset_block(preset_id)`` СРАЗУ после ``_STYLE_KIT``

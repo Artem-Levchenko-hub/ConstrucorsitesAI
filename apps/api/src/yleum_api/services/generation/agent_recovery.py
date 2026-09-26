@@ -41,29 +41,18 @@ async def recover_stopped_candidate(
     operations: AgentOperations,
 ) -> tuple[agent_builder.AgentResult, bool, dict[str, str], int]:
     _seg = _agent_res.segments
-    # A stopped run is never committed as a partially implemented edit,
-    # even when its local typecheck happens to be green. Restore every
-    # touched path from the last snapshot, remove newly-created files,
-    # and verify the known-good application deterministically. This is
-    # what makes "stop at wallet/step limit" compatible with the promise
-    # that Studio always leaves a complete application behind.
-    _bounded_stop = _agent_res.stop_reason in {
-        "max_steps_green",
-        "max_steps_red",
-        "provider_stopped_green",
-        "provider_stopped_red",
-    }
-    # For MAX, a green bounded stop has already passed both the source
-    # build and the brief-aware completion contract (including local
-    # proof recovery above). Shipping it is safer than discarding a
-    # complete product merely because the provider turn ended. Other
-    # stacks preserve the historical conservative rollback policy.
-    _must_restore_previous = (not _agent_res.done and not _agent_res.needs_finalization) or (
-        _bounded_stop and project_info.template != "max_miniapp"
-    )
-    _first_max_without_product = (
-        project_info.template == "max_miniapp" and not _max_has_generated_snapshot
-    )
+    # Остановленный прогон никогда не коммитится как наполовину сделанная
+    # правка, даже если локальная проверка типов случайно зелёная: каждый
+    # тронутый путь восстанавливается из последнего снимка, новые файлы
+    # удаляются, а известно-рабочее приложение проверяется детерминированно.
+    # Именно это делает «остановку по лимиту» совместимой с обещанием, что
+    # Studio всегда оставляет после себя целое приложение.
+    # Зелёная ограниченная остановка уже прошла и сборку исходников, и договор
+    # о завершённости по брифу (включая локальное восстановление доказательства
+    # выше). Выкатить её безопаснее, чем выбросить готовый продукт только
+    # потому, что ход провайдера закончился.
+    _must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization
+    _first_max_without_product = not _max_has_generated_snapshot
     if _must_restore_previous and baseline.sha and not _first_max_without_product:
         try:
             _unsafe_stop_reason = _agent_res.stop_reason
@@ -212,7 +201,7 @@ async def recover_rejected_candidate(
                     probe_build=operations.probe_build,
                 )
                 _verification_rolled_back = bool(_rollback_build.get("ok"))
-            elif project_info.template == "max_miniapp":
+            else:
                 # A brand-new MAX project has no product snapshot yet. Its
                 # safe fallback is the versioned core without a product page.
                 _rollback_build = await _restore_max_core(

@@ -39,11 +39,13 @@ async def test_candidate_probe_never_turns_fatal_infra_into_unknown_green(failed
             _total_steps=1,
             files={},
             ids=SimpleNamespace(project_id=uuid4()),
-            project_info=SimpleNamespace(template="nextjs_entities", slug="synthetic"),
+            project_info=SimpleNamespace(template="max_miniapp", slug="synthetic"),
             runtime=SimpleNamespace(coordinator=None, handle=object()),
             operations=SimpleNamespace(probe_runtime=runtime_probe, probe_build=build_probe),
         )
-    assert calls == (["runtime"] if failed_probe == "runtime" else ["runtime", "build"])
+    # Зелёная первая проверка рантайма повторяется после паузы на пересборку,
+    # поэтому до сборки доходят две записи «runtime», а не одна.
+    assert calls == (["runtime"] if failed_probe == "runtime" else ["runtime", "runtime", "build"])
 
 
 @pytest.mark.asyncio

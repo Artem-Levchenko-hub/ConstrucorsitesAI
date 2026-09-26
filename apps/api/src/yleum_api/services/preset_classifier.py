@@ -18,21 +18,15 @@ Pipeline:
 
 from __future__ import annotations
 
-import json
 import logging
 import re
-import uuid
 
-from yleum_api.core.config import model_for_role
 from yleum_api.services.design_presets import PRESETS
-from yleum_api.services.llm_client import stream_chat_completion
 
 log = logging.getLogger(__name__)
 
 DEFAULT_PRESET_ID = "editorial-trust"
 # Reference default only — the live model is resolved at call time via
-# model_for_role("classify") (see _llm_classify). Mirrors ROLE_MODEL_MAP.
-CLASSIFIER_MODEL = "claude-haiku-4-5"
 MIN_HEURISTIC_SCORE = 1  # минимум совпавших keyword-стемов
 HEURISTIC_LEAD = 1  # лидер должен опережать второго на это число matches
 STEM_LEN = 5  # длина префикса для матчинга русских падежных форм
@@ -358,71 +352,6 @@ def _build_classifier_prompt(
 Без объяснений, без JSON, без markdown — ТОЛЬКО id из списка выше."""
 
 
-async def _llm_classify(
-    project_name: str,
-    template: str,
-    first_prompt: str | None,
-    discovery_spec: dict[str, object] | None = None,
-) -> str | None:
-    """Спросить Haiku. Вернуть preset_id или None при ошибке/мусоре.
-
-    Cold-start retry: proxyapi.ru/anthropic иногда отдаёт пустой стрим на
-    первый запрос после простоя (см. ``llm-gateway/services/warmup.py``).
-    Делаем до двух попыток — если первая вернула < 2 символов, ретраим
-    один раз. С warmup-loop в gateway это становится крайне редким.
-    """
-    prompt = _build_classifier_prompt(project_name, template, first_prompt, discovery_spec)
-    messages = [
-        {
-            "role": "system",
-            "content": "Ты строгий классификатор. Отвечаешь ровно одним id из заданного списка.",
-        },
-        {"role": "user", "content": prompt},
-    ]
-    raw = ""
-    for attempt in range(2):
-        chunks: list[str] = []
-        try:
-            async for event in stream_chat_completion(
-                messages=messages,
-                model=model_for_role("classify"),
-                user_id=_CLASSIFIER_USER_ID,
-                project_id=_CLASSIFIER_PROJECT_ID,
-                message_id=str(uuid.uuid4()),
-            ):
-                if delta := event.get("delta"):
-                    chunks.append(delta)
-                if event.get("error"):
-                    log.warning("preset classifier llm error: %s", event["error"])
-                    return None
-        except Exception:
-            log.exception("preset classifier llm exception")
-            return None
-        raw = "".join(chunks).strip()
-        if len(raw) >= 2:
-            break
-        log.info(
-            "preset classifier empty response (attempt=%d, len=%d) — retrying",
-            attempt, len(raw),
-        )
-    # ищем подстроку с валидным preset_id (модель иногда оборачивает в кавычки/json)
-    raw_low = raw.lower()
-    for pid in PRESETS:
-        if pid in raw_low:
-            return pid
-    # last chance — json-формат
-    try:
-        data = json.loads(raw)
-        if isinstance(data, dict):
-            pid_val = data.get("preset_id")
-            if isinstance(pid_val, str) and pid_val in PRESETS:
-                return pid_val
-    except json.JSONDecodeError:
-        pass
-    log.info("preset classifier llm returned garbage: %r", raw[:200])
-    return None
-
-
 def _substring_industry_match(text: str) -> str | None:
     """Найти первый high-confidence industry fragment как подстроку.
 
@@ -442,54 +371,6 @@ def _substring_industry_match(text: str) -> str | None:
         if fragment in low and preset_id in PRESETS:
             return preset_id
     return None
-
-
-async def classify_preset(
-    project_name: str,
-    template: str,
-    first_prompt: str | None = None,
-    discovery_spec: dict[str, object] | None = None,
-) -> str:
-    """Главный API. Возвращает preset_id; никогда не падает.
-
-    Порядок:
-    1. substring-match high-confidence industry fragments (аптек, клиник, …);
-    2. heuristic по объединённому ``project_name + first_prompt``;
-    3. LLM-fallback (Haiku) если эвристика амбивалентна — **тут консультируется
-       ``discovery_spec`` (V2.5-override): онбординг-чипы юзера попадают в промпт
-       классификатора как ПОДСКАЗКА для tie-break;
-    4. DEFAULT_PRESET_ID.
-
-    ``discovery_spec`` намеренно НЕ переопределяет шаги 1–2: уверенный
-    индустриальный сигнал («клиника») оставляет свой industry-preset, а
-    эстетику чипа честит уже writer (V2.5c). Чип влияет только на
-    действительно амбивалентном пути (где иначе горел бы платный LLM-вызов
-    или DEFAULT).
-    """
-    combined = f"{project_name or ''}\n{first_prompt or ''}"
-
-    fragment_pick = _substring_industry_match(combined)
-    if fragment_pick is not None:
-        log.info("preset classifier substring picked %s", fragment_pick)
-        return fragment_pick
-
-    scores = _heuristic_score(combined)
-    picked = _pick_heuristic(scores)
-    if picked is not None:
-        log.info(
-            "preset classifier heuristic picked %s (scores=%s)",
-            picked,
-            {k: v for k, v in scores.items() if v > 0},
-        )
-        return picked
-
-    llm_pick = await _llm_classify(project_name, template, first_prompt, discovery_spec)
-    if llm_pick is not None:
-        log.info("preset classifier llm picked %s", llm_pick)
-        return llm_pick
-
-    log.info("preset classifier defaulting to %s", DEFAULT_PRESET_ID)
-    return DEFAULT_PRESET_ID
 
 
 def classify_preset_sync(
@@ -512,8 +393,6 @@ def classify_preset_sync(
 
 
 __all__ = [
-    "CLASSIFIER_MODEL",
     "DEFAULT_PRESET_ID",
-    "classify_preset",
     "classify_preset_sync",
 ]

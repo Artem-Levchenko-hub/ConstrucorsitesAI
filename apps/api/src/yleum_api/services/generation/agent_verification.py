@@ -59,9 +59,6 @@ async def check_backend_and_normalize_css(
         from yleum_api.services.backend_guardrail import check_backend as _check_backend
 
         def _guard_view() -> dict[str, str]:
-            if project_info.template != "max_miniapp":
-                return files
-
             return {
                 path: content
                 for path, content in {**baseline.files, **files}.items()
@@ -75,29 +72,28 @@ async def check_backend_and_normalize_css(
                     violations=[],
                     summary="Project data is isolated from managed MAX credentials",
                 )
-            if project_info.template == "max_miniapp":
-                from yleum_api.services.max_generation_contract import unsafe_max_backend_paths
+            from yleum_api.services.max_generation_contract import unsafe_max_backend_paths
 
-                unsafe = unsafe_max_backend_paths(_guard_view())
-                violations = [
-                    Violation(
-                        path=path,
-                        rule="raw product DB access is not isolated",
-                        detail=(
-                            "use createMaxAction/getMaxActions from the managed integration client"
-                        ),
-                    )
-                    for path in unsafe
-                ]
-                return GuardrailVerdict(
-                    safe=not violations,
-                    violations=violations,
-                    summary=(
-                        "MAX managed persistence boundary OK"
-                        if not violations
-                        else "MAX managed persistence boundary failed"
+            unsafe = unsafe_max_backend_paths(_guard_view())
+            violations = [
+                Violation(
+                    path=path,
+                    rule="raw product DB access is not isolated",
+                    detail=(
+                        "use createMaxAction/getMaxActions from the managed integration client"
                     ),
                 )
+                for path in unsafe
+            ]
+            return GuardrailVerdict(
+                safe=not violations,
+                violations=violations,
+                summary=(
+                    "MAX managed persistence boundary OK"
+                    if not violations
+                    else "MAX managed persistence boundary failed"
+                ),
+            )
             return _check_backend(_guard_view())
 
         _guard_attempt = 0
@@ -149,30 +145,29 @@ async def check_backend_and_normalize_css(
                 project_id=str(ids.project_id),
             )
             files.update(_heal.files)
-        if project_info.template == "max_miniapp":
-            from yleum_api.services.max_data_evolution import max_migration_contract_errors
+        from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
-            _migration_baseline = {**baseline.files, **_max_seed_files}
-            _migration_candidate = dict(_migration_baseline)
-            for _path, _content in files.items():
-                if _content == "":
-                    _migration_candidate.pop(_path, None)
-                else:
-                    _migration_candidate[_path] = _content
-            _migration_errors = max_migration_contract_errors(
-                _migration_baseline,
-                _migration_candidate,
+        _migration_baseline = {**baseline.files, **_max_seed_files}
+        _migration_candidate = dict(_migration_baseline)
+        for _path, _content in files.items():
+            if _content == "":
+                _migration_candidate.pop(_path, None)
+            else:
+                _migration_candidate[_path] = _content
+        _migration_errors = max_migration_contract_errors(
+            _migration_baseline,
+            _migration_candidate,
+        )
+        if _migration_errors:
+            await _abort_unsafe_max_backend(
+                project_id=ids.project_id,
+                project_slug=project_info.slug,
+                current_files=_migration_baseline,
+                files=files,
+                unsafe_paths=_migration_errors,
+                project_cell_handle=_require_project_cell(runtime.handle),
+                violation_kind="MAX migration contract",
             )
-            if _migration_errors:
-                await _abort_unsafe_max_backend(
-                    project_id=ids.project_id,
-                    project_slug=project_info.slug,
-                    current_files=_migration_baseline,
-                    files=files,
-                    unsafe_paths=_migration_errors,
-                    project_cell_handle=_require_project_cell(runtime.handle),
-                    violation_kind="MAX migration contract",
-                )
         # Advisory log regardless of the heal flag — operators SEE a raw-DB
         # escape even when self-heal is off (the silent-failure guard).
         _final_guard = _backend_verdict()
@@ -181,19 +176,18 @@ async def check_backend_and_normalize_css(
                 f"[PP] backend_guardrail VIOLATIONS: {_final_guard.summary}",
                 flush=True,
             )
-            if project_info.template == "max_miniapp":
-                await _abort_unsafe_max_backend(
-                    project_id=ids.project_id,
-                    project_slug=project_info.slug,
-                    # A first MAX build seeds a verified platform core
-                    # before model writes begin.  Treat that core as part
-                    # of the safe baseline so a rejected product draft
-                    # restores the core instead of deleting it.
-                    current_files={**baseline.files, **_max_seed_files},
-                    files=files,
-                    unsafe_paths=[violation.path for violation in _final_guard.violations],
-                    project_cell_handle=_require_project_cell(runtime.handle),
-                )
+            await _abort_unsafe_max_backend(
+                project_id=ids.project_id,
+                project_slug=project_info.slug,
+                # A first MAX build seeds a verified platform core
+                # before model writes begin.  Treat that core as part
+                # of the safe baseline so a rejected product draft
+                # restores the core instead of deleting it.
+                current_files={**baseline.files, **_max_seed_files},
+                files=files,
+                unsafe_paths=[violation.path for violation in _final_guard.violations],
+                project_cell_handle=_require_project_cell(runtime.handle),
+            )
         # SAST advisory log — operators SEE injection/secret findings even
         # when blocking/heal is off (runs regardless of the feedback loop).
         if get_settings().use_sast_gate:
@@ -216,7 +210,7 @@ async def check_backend_and_normalize_css(
     # in Turbopack with "@import rules must precede all rules". Repair
     # only import placement before the independent runtime gate; product
     # styles remain entirely model-owned and no extra model call is used.
-    if project_info.template == "max_miniapp" and "src/app/globals.css" in files:
+    if "src/app/globals.css" in files:
         try:
             from yleum_api.services.max_generation_contract import normalize_max_globals_css
 
@@ -282,7 +276,7 @@ async def probe_agent_candidate(
             if runtime.coordinator is not None
             else await operations.probe_runtime("/")
         )
-        if runtime.coordinator is None and project_info.template == "max_miniapp" and _rt.get("ok"):
+        if runtime.coordinator is None and _rt.get("ok"):
             # A first request can still hit the previous Turbopack graph
             # while HMR notices the last write. Require a second green
             # response after a short settle window before publishing.
@@ -413,11 +407,7 @@ async def repair_legacy_edit(
                 pass
             try:
                 _rep = await agent_builder.run_agent_build(
-                    system_prompt=(
-                        agent_builder.build_edit_system_prompt(plan.stack_guide)
-                        if project_info.template == "max_miniapp"
-                        else agent_builder.EDIT_SYSTEM_PROMPT
-                    ),
+                    system_prompt=agent_builder.build_edit_system_prompt(plan.stack_guide),
                     user_prompt=_repair_user,
                     model=plan.escalate_model or plan.model,
                     escalate_model=plan.escalate_model,

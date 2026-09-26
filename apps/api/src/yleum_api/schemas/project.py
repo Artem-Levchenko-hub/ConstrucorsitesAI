@@ -58,11 +58,12 @@ _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
 }
 
 
-# Browser-container family used by generation, live preview and legacy HMR.
-# This is distinct from all container backends (which include api/tgbot) and
-# from database requirements. Consumers retain their own admission guards;
-# membership does not grant preview, restore or Project Cell permissions.
-CONTAINER_BROWSER_TEMPLATES = ("fullstack", "nextjs_entities", "spa", "realtime", "max_miniapp")
+# Семейство стеков, которые генерация умеет собирать. После отделения
+# конструктора сайтов в нём остался один — приложение MAX: другие стеки ушли
+# вместе со своими шаблонами (этап 6), создать проект с ними нельзя с этапа 3б,
+# и на проде таких проектов нет. Проверки доступа у вызывающих остаются своими:
+# членство здесь не даёт ни превью, ни восстановления, ни ячейки.
+CONTAINER_BROWSER_TEMPLATES = ("max_miniapp",)
 
 
 def is_fullstack(template: str) -> bool:

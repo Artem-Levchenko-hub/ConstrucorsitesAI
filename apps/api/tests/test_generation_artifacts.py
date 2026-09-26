@@ -42,7 +42,7 @@ def records():
         owner_id=owner.id,
         name="Publication fixture",
         slug=f"artifact-{uuid4().hex}",
-        template="blank",
+        template="max_miniapp",
     )
     parent = Snapshot(
         id=uuid4(),
@@ -125,6 +125,83 @@ class OfflineSession:
             raise RuntimeError("fixture refresh failure")
 
 
+def green_max_promotion(rows, files):
+    """Здоровая публикация MAX: доказательство, разрешение и живая ячейка.
+
+    Другого пути публикации не осталось — приложение MAX всегда выкатывается
+    по неизменяемому зелёному разрешению, поэтому общий стенд собирает его
+    сразу, а частные сценарии подменяют нужную деталь.
+    """
+    from types import SimpleNamespace
+
+    from yleum_api.services.max_finalization import ProofBundle
+    from yleum_api.services.promotion_permit import (
+        canonical_files_digest,
+        issue_promotion_permit,
+        release_receipt_digest,
+        release_receipt_ref,
+    )
+
+    run = rows[4]
+    identity = SimpleNamespace(
+        id=uuid4(),
+        workspace_id=uuid4(),
+        generation_run_id=run.id,
+        fencing_epoch=7,
+        proof_key="1" * 64,
+        workspace_revision="2" * 64,
+    )
+    build_digest = canonical_files_digest(files)
+    green = lambda ref: SimpleNamespace(  # noqa: E731
+        proof_id=identity.id,
+        workspace_id=identity.workspace_id,
+        outcome="green",
+        artifact_ref=ref,
+        redacted_detail="green",
+    )
+    proof = ProofBundle(
+        identity=identity,
+        full_build=green(f"build/sha256/{build_digest}"),
+        runtime=green("verification/sha256/" + "4" * 64),
+        release=green(
+            release_receipt_ref(
+                artifact_digest=build_digest,
+                receipt_digest=release_receipt_digest(
+                    proof_key=identity.proof_key,
+                    artifact_digest=build_digest,
+                    detail="green",
+                ),
+            )
+        ),
+    )
+    current = SimpleNamespace(
+        proof_key=identity.proof_key,
+        workspace_id=identity.workspace_id,
+        generation_run_id=identity.generation_run_id,
+        fencing_epoch=identity.fencing_epoch,
+        workspace_revision=identity.workspace_revision,
+    )
+
+    async def current_identity():
+        return current
+
+    async def snapshot_files():
+        return dict(files)
+
+    return {
+        "_max_finalization_proof": proof,
+        "_promotion_permit": issue_promotion_permit(proof),
+        "runtime": GenerationRuntime(
+            handle=SimpleNamespace(
+                workspace_id=identity.workspace_id,
+                current_identity=current_identity,
+                refresh_snapshot_files=None,
+                snapshot_files=snapshot_files,
+            )
+        ),
+    }
+
+
 def context(rows, factory, trace, monkeypatch, **overrides):
     owner, project, parent, message, run = rows[:5]
     original = {"old.txt": "preserve", "page.txt": "old"}
@@ -159,10 +236,9 @@ def context(rows, factory, trace, monkeypatch, **overrides):
         accumulated="A useful change.",
         usage_data={"tokens_in": 11, "tokens_out": 23},
         _agent_step_log=[{"action": "write", "path": "page.txt"}],
-        _max_finalization_proof=None,
-        _promotion_permit=None,
-        template="blank",
+        template="max_miniapp",
         is_free=True,
+        **green_max_promotion(rows, {"page.txt": "new", "empty.txt": ""}),
     )
     env.update(overrides)
     return env, calls, original
@@ -265,12 +341,13 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
     ]
     assert calls[0][0][2] == "AI(agent): " + "P" * 50
     assert calls[0][0][3] == parent.commit_sha
-    assert calls[0][1] == {"exact_tree": False}
+    # Публикация MAX всегда идёт по доказательству, то есть точным деревом:
+    # отсутствующий путь удаляется, пустой файл остаётся пустым файлом.
+    assert calls[0][1] == {"exact_tree": True}
     assert repo.read_files(project.id, parent.commit_sha) == original
-    # Ordinary commits interpret empty strings as deletion, unlike exact_tree.
     assert repo.read_files(project.id, snapshot.commit_sha) == {
-        "old.txt": "preserve",
         "page.txt": "new",
+        "empty.txt": "",
     }
     assert len(session.durable) == 6
 
@@ -421,9 +498,7 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
 async def test_agent_proof_exact_tree_deletes_absent_and_preserves_empty(monkeypatch):
     rows, trace = records(), []
     session = OfflineSession(rows, trace)
-    env, calls, original = context(
-        rows, lambda: session, trace, monkeypatch, _max_finalization_proof=object()
-    )
+    env, calls, original = context(rows, lambda: session, trace, monkeypatch)
     snapshot = (await execute("agent", env))["snapshot"]
     assert calls[0][1] == {"exact_tree": True}
     assert repo.read_files(rows[1].id, snapshot.commit_sha) == {"page.txt": "new", "empty.txt": ""}
@@ -440,8 +515,7 @@ async def test_max_publication_requires_green_promotion_permit_before_git(monkey
         lambda: session,
         trace,
         monkeypatch,
-        template="max_miniapp",
-        _max_finalization_proof=object(),
+        _promotion_permit=None,
     )
 
     with pytest.raises(PromotionPermitError) as raised:

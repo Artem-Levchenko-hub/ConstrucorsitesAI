@@ -224,7 +224,10 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "_seg < 2" not in source
     assert "_first_max_without_product" in source
     assert "func.length(func.trim(Snapshot.prompt_text)) > 0" in source
-    assert '_bounded_stop and project_info.template != "max_miniapp"' in source
+    assert (
+        "_must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization"
+        in source
+    )
     assert "MAX_SECURITY_LOCKED_FILES" in source
     assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
@@ -281,7 +284,7 @@ def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None
     verdict_source = source[
         source.index("def _backend_verdict()") : source.index("_guard_attempt = 0")
     ]
-    assert 'if project_info.template == "max_miniapp":' in verdict_source
+    assert "unsafe_max_backend_paths(_guard_view())" in verdict_source
     assert "and _max_shell_enabled" not in verdict_source
 
 

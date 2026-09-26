@@ -51,7 +51,7 @@ async def execute_agent_turn(
         _completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = (
             None
         )
-        if project_info.template == "max_miniapp" and not _is_edit:
+        if not _is_edit:
             from yleum_api.services.max_generation_contract import (
                 max_completion_gap,
                 max_source_completion_gap,
@@ -85,11 +85,7 @@ async def execute_agent_turn(
 
             _completion_check = _max_completion_check
 
-        _native_max_segments = (
-            get_settings().agent_max_segments
-            if project_info.template == "max_miniapp" and not _is_edit
-            else 1
-        )
+        _native_max_segments = get_settings().agent_max_segments if not _is_edit else 1
         _agent_res = await agent_native.run_native_build(
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
             task=plan.user,
@@ -125,9 +121,7 @@ async def execute_agent_turn(
             bare_mode=plan.bare_stack,
         )
     _provider_failure = _agent_res.summary if _agent_res.stop_reason == "provider_error" else None
-    if _provider_failure and not (
-        baseline.sha and (project_info.template != "max_miniapp" or _max_has_generated_snapshot)
-    ):
+    if _provider_failure and not (baseline.sha and _max_has_generated_snapshot):
         raise RuntimeError(_provider_failure)
     if runtime.handle is not None:
         _agent_res.files = await runtime.handle.export_files()

@@ -200,8 +200,7 @@ class PromptAcceptance:
                 MaxProjectConfig, self.project_id, populate_existing=True
             )
             if (
-                self.project.template != "max_miniapp"
-                or config is None
+                config is None
                 or config.owner_id != self.current_user.id
                 or config.config_version != self.payload.max_config_version
             ):
@@ -215,9 +214,7 @@ class PromptAcceptance:
     async def check_admission(self) -> None:
         from yleum_api.services.secret_safety import contains_provider_secret
 
-        self.credential_redirect = (
-            self.project.template == "max_miniapp" and contains_provider_secret(self.payload.prompt)
-        )
+        self.credential_redirect = contains_provider_secret(self.payload.prompt)
 
         # Snapshot absence alone cannot decide what the user wants after a failed
         # first build. Read the durable run state before billing/discovery/routing:
@@ -619,8 +616,8 @@ class PromptAcceptance:
                     selected_elements=self.selected_dump,
                 ),
             )
-            capacity_dispatch_token = uuid4() if self.project.template == "max_miniapp" else None
-            if self.project.template == "max_miniapp" and get_settings().use_generation_worker:
+            capacity_dispatch_token = uuid4()
+            if get_settings().use_generation_worker:
                 self.generation_run.execution_backend = "worker"
             await self.session.commit()
             if self.generation_run.execution_backend == "api":

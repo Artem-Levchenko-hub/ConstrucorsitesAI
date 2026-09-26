@@ -258,10 +258,7 @@ def _agent_step_budget(project_template: str, *, configured_steps: int) -> int:
     working product. Other stacks retain their configured budget and one segment.
     """
 
-    steps = max(1, int(configured_steps))
-    if project_template == "max_miniapp":
-        return max(steps, _MAX_STABLE_SINGLE_PASS_STEPS)
-    return steps
+    return max(max(1, int(configured_steps)), _MAX_STABLE_SINGLE_PASS_STEPS)
 
 
 _CONTINUE_KEYWORDS: frozenset[str] = frozenset(

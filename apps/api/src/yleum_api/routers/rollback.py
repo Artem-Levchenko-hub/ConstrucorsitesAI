@@ -10,23 +10,14 @@ from yleum_api.core.errors import ApiError
 from yleum_api.core.redis import publish_event
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
-from yleum_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as _CONTAINER_NEXT
 from yleum_api.schemas.snapshot import RollbackRequest, SnapshotPublic, snapshot_event_dict
 from yleum_api.schemas.snapshot import snapshot_public_dict as _snapshot_dict
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.project_versions import record_restored_version
-from yleum_api.services.snapshot_restore import apply_legacy_restore, ensure_restore_supported
+from yleum_api.services.snapshot_restore import ensure_restore_supported
 
 router = APIRouter(prefix="/api/projects", tags=["rollback"])
 
-# Container-backed Next.js/Vite templates serve the live preview from a running
-# dev container (`omnia-dev-<slug>`), NOT from a re-rendered static file. A git
-# checkout alone reverts the repo but leaves the container serving the *old* code
-# (the build / edit / style-patch paths all push files into the container via
-# `hot_reload`; rollback must do the same or "вернуться назад" is a visible no-op
-# on the live preview). Static templates (blank/landing/portfolio/blog) have no
-# persistent container — their preview re-renders from repo files, so they roll
-# back correctly without this. The shared family is imported from schemas.project.
 
 
 def with_rollback_deletions(
@@ -61,21 +52,8 @@ async def post_rollback(
     if target is None or target.project_id != project_id:
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
 
-    # The tree the container is serving RIGHT NOW (pre-rollback HEAD) — needed
-    # to compute files the rollback must DELETE from the live container below.
-    old_sha: str | None = None
-    if project.current_snapshot_id is not None:
-        _cur = await session.get(Snapshot, project.current_snapshot_id)
-        old_sha = _cur.commit_sha if _cur is not None else None
-
     # Unsupported MAX activation must fail before touching Git, the Cell or data.
     ensure_restore_supported(project.template)
-    if project.template in _CONTAINER_NEXT:
-        target_files = await asyncio.to_thread(repo_svc.read_files, project_id, target.commit_sha)
-        old_files = (
-            await asyncio.to_thread(repo_svc.read_files, project_id, old_sha) if old_sha else {}
-        )
-        await apply_legacy_restore(project_id, project.slug, target_files, old_files)
 
     # Only acknowledge canonical restoration after the runtime accepted the source.
     new_sha = await asyncio.to_thread(repo_svc.checkout, project_id, target.commit_sha)

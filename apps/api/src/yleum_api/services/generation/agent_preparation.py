@@ -44,41 +44,40 @@ async def classify_agent_turn(
     _is_continue = _has_prior_build and _is_continue_request(prompt_text)
     _is_edit = (not orchestrate) and not _is_continue
     _max_has_generated_snapshot = False
-    if project_info.template == "max_miniapp":
-        async with factory() as _max_history_session:
-            _max_has_generated_snapshot = bool(
-                await _max_history_session.scalar(
-                    select(func.count(Snapshot.id)).where(
-                        Snapshot.project_id == ids.project_id,
-                        Snapshot.prompt_text.is_not(None),
-                        func.length(func.trim(Snapshot.prompt_text)) > 0,
-                    )
+    async with factory() as _max_history_session:
+        _max_has_generated_snapshot = bool(
+            await _max_history_session.scalar(
+                select(func.count(Snapshot.id)).where(
+                    Snapshot.project_id == ids.project_id,
+                    Snapshot.prompt_text.is_not(None),
+                    func.length(func.trim(Snapshot.prompt_text)) > 0,
                 )
             )
-            if _is_continue and not _max_has_generated_snapshot:
-                _prior_max_prompts = list(
-                    (
-                        await _max_history_session.scalars(
-                            select(Message.content)
-                            .where(
-                                Message.project_id == ids.project_id,
-                                Message.role == "user",
-                                Message.id != ids.user_message_id,
-                            )
-                            .order_by(Message.created_at.desc())
-                            .limit(20)
+        )
+        if _is_continue and not _max_has_generated_snapshot:
+            _prior_max_prompts = list(
+                (
+                    await _max_history_session.scalars(
+                        select(Message.content)
+                        .where(
+                            Message.project_id == ids.project_id,
+                            Message.role == "user",
+                            Message.id != ids.user_message_id,
                         )
-                    ).all()
-                )
-                _recovered_max_prompt = _recover_max_resume_prompt(_prior_max_prompts)
-                if _recovered_max_prompt:
-                    prompt_text = _recovered_max_prompt
-                    _is_continue = False
-                    _is_edit = False
-                    print(
-                        "[PP] MAX resume recovered original brief from history",
-                        flush=True,
+                        .order_by(Message.created_at.desc())
+                        .limit(20)
                     )
+                ).all()
+            )
+            _recovered_max_prompt = _recover_max_resume_prompt(_prior_max_prompts)
+            if _recovered_max_prompt:
+                prompt_text = _recovered_max_prompt
+                _is_continue = False
+                _is_edit = False
+                print(
+                    "[PP] MAX resume recovered original brief from history",
+                    flush=True,
+                )
 
     return AgentTurnClassification(prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot)
 
@@ -94,22 +93,21 @@ async def prepare_stack_prompt(
     runtime: GenerationRuntime,
 ) -> StackPrompt:
     _saved_max_config_source = None
-    if project_info.template == "max_miniapp":
-        from yleum_api.models.max_project_config import MaxProjectConfig
-        from yleum_api.schemas.max_studio import MaxProjectConfigPayload
-        from yleum_api.services.max_project_kit import render_max_managed_files
+    from yleum_api.models.max_project_config import MaxProjectConfig
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_project_kit import render_max_managed_files
 
-        async with factory() as _config_session:
-            _saved_max_record = await _config_session.get(MaxProjectConfig, ids.project_id)
-        if _saved_max_record is not None:
-            _saved_max_config_source = render_max_managed_files(
-                MaxProjectConfigPayload.model_validate(_saved_max_record.config),
-                ids.project_id,
-            )["src/lib/omnia/max-config.ts"]
+    async with factory() as _config_session:
+        _saved_max_record = await _config_session.get(MaxProjectConfig, ids.project_id)
+    if _saved_max_record is not None:
+        _saved_max_config_source = render_max_managed_files(
+            MaxProjectConfigPayload.model_validate(_saved_max_record.config),
+            ids.project_id,
+        )["src/lib/omnia/max-config.ts"]
     _seed_parts = (
         await _build_agent_seed_parts(
             runtime.handle,
-            refresh_managed_sdk=project_info.template == "max_miniapp",
+            refresh_managed_sdk=True,
             max_config_source=_saved_max_config_source,
         )
         if runtime.handle is not None
@@ -159,21 +157,20 @@ async def prepare_stack_prompt(
         if _orch_name and _orch_name != "nextjs-entities"
         else None
     )
-    if project_info.template == "max_miniapp":
-        from yleum_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
+    from yleum_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
 
-        _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
-        from yleum_api.services.integration_generation import generation_context
+    _stack_guide = f"{_stack_guide or ''}\n\n{MAX_MODEL_DIRECTIVE}".strip()
+    from yleum_api.services.integration_generation import generation_context
 
-        async with factory() as _integration_session:
-            _integration_guide = await generation_context(_integration_session, ids.project_id)
-        _stack_guide += "\n\n" + _integration_guide
-        from yleum_api.services.max_data_evolution import build_max_agent_guide
+    async with factory() as _integration_session:
+        _integration_guide = await generation_context(_integration_session, ids.project_id)
+    _stack_guide += "\n\n" + _integration_guide
+    from yleum_api.services.max_data_evolution import build_max_agent_guide
 
-        _stack_guide = await build_max_agent_guide(
-            _stack_guide,
-            runtime.handle,
-        )
+    _stack_guide = await build_max_agent_guide(
+        _stack_guide,
+        runtime.handle,
+    )
     # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
     # perf canons aligned with the gates) when enabled. None → unchanged.
     _skills = (

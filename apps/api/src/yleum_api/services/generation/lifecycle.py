@@ -34,7 +34,6 @@ from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.publication import consume_free_generation
 from yleum_api.services.generation_runs import set_generation_run_status
 from yleum_api.services.llm_client import set_free_generation
-from yleum_api.services.preset_classifier import classify_preset
 from yleum_api.services.project_memory import render_project_memory_context
 
 # Assets of the separated static kit; they never belong in the model's context.
@@ -152,34 +151,6 @@ async def _process_prompt(
         # (saves tokens and stops the model rewriting them from what it "saw").
         current_files = {p: c for p, c in current_files.items() if p not in _KIT_FILES}
 
-        # Auto-classify design preset on first prompt if not set yet.
-        # Heuristic is sync+cheap; LLM-fallback (Haiku, ~150 tokens) only fires
-        # if heuristic is ambiguous. Cached in projects.design_preset_id forever.
-        if not project_design_preset_id and project_template != "max_miniapp":
-            try:
-                project_design_preset_id = await classify_preset(
-                    project_name=project_name,
-                    template=project_template,
-                    first_prompt=prompt_text,
-                    # V2.5-override — the persisted onboarding chips tie-break the
-                    # classifier's LLM-fallback (catalog+cart→retail, booking→
-                    # services, tone disambiguates). Confident industry signal
-                    # still wins first; this only acts on the ambiguous path.
-                    discovery_spec=project_discovery_spec,
-                )
-                # Persist so subsequent prompts skip the classifier entirely.
-                async with factory() as cls_session:
-                    cls_proj = await cls_session.get(Project, project_id)
-                    if cls_proj is not None and not cls_proj.design_preset_id:
-                        cls_proj.design_preset_id = project_design_preset_id
-                        await cls_session.commit()
-                print(
-                    f"[PP] preset_classified preset_id={project_design_preset_id}",
-                    flush=True,
-                )
-            except Exception as cls_exc:
-                _log.warning("preset classify failed: %r", cls_exc)
-                project_design_preset_id = None
 
         # ── Agentic builder ─────────────────────────────────────────────────
         # A real plan→act→observe→verify agent loop: the model reads/writes files

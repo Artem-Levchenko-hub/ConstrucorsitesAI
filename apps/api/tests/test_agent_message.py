@@ -133,10 +133,6 @@ def test_max_build_restores_proven_single_pass_budget() -> None:
     assert _agent_step_budget("max_miniapp", configured_steps=48) == 48
 
 
-def test_other_stacks_keep_their_configured_budget() -> None:
-    assert _agent_step_budget("nextjs_postgres", configured_steps=24) == 24
-
-
 def test_done_uses_model_summary() -> None:
     m = _agent_result_message(
         _res(done=True, summary="Собрал аптеку: каталог, кабинет, поиск.", stop_reason="done"),
