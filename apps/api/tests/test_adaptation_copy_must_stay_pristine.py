@@ -38,22 +38,38 @@ def _instruction() -> str:
     return re.sub(r'"\s*\n\s*"', "", inspect.getsource(module))
 
 
-def test_the_agent_is_told_to_leave_the_copy_as_it_found_it() -> None:
-    """Главное: требование убрать за собой вообще произносится."""
+def test_the_agent_is_told_to_test_only_on_rows_it_created() -> None:
+    """Главное требование: чужие записи не трогать вовсе.
+
+    Первая редакция говорила «верни копию как было: удали созданное и отмени
+    изменённое». Офлайн-проверка на настоящей базе показала, что вторая половина
+    невыполнима: вернуть видимое значение мало — у строки есть колонки, на которые
+    агент не смотрит (отметка времени изменения), и сверка видит их тоже. Поэтому
+    формулировка ужесточена: проверять изменение и удаление только на своих
+    записях.
+    """
     text = _instruction()
 
-    assert "leave the isolated copy exactly as you found it" in text
+    assert "Test only on rows you create yourself" in text
+    assert "never update or delete a row that was already there" in text
 
 
 def test_the_reason_is_explained_not_just_ordered() -> None:
     """Голое «убери за собой» агент трактует как необязательную уборку.
 
     Ему важно знать, что именно от этого зависит: доказательство берут с той же
-    копии и сверяют с данными владельца.
+    копии и сверяют с данными владельца построчно.
     """
     text = _instruction()
 
     assert "compared with the owner's live data" in text
+
+
+def test_the_invisible_columns_trap_is_spelled_out() -> None:
+    """Без этого агент «вернёт как было» видимое значение и всё равно получит отказ."""
+    text = _instruction()
+
+    assert "Restoring the text you changed is NOT enough" in text
 
 
 def test_the_permission_to_write_is_not_withdrawn() -> None:
