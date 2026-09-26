@@ -296,7 +296,10 @@ async def test_postgres_scan_keeps_host_b_visible_and_reads_real_admission(db_se
     db_session.add(owner)
     await db_session.flush()
     projects = [
-        Project(id=uuid4(), owner_id=owner.id, name="Fairness", slug=f"fair-{uuid4().hex}")
+        Project(
+            id=uuid4(), owner_id=owner.id, name="Fairness",
+            slug=f"fair-{uuid4().hex}", template="max_miniapp",
+        )
         for _ in range(111)
     ]
     db_session.add_all(projects)
