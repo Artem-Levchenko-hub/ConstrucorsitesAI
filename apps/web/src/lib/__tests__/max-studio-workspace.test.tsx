@@ -127,7 +127,10 @@ it("uses readiness for the next project action and falls back to management when
   mocks.list.mockResolvedValue([project]);
   mocks.readiness.mockRejectedValueOnce(new Error("status unavailable"));
   await render();
-  await settle(() => expect(container.textContent).toContain("Не удалось проверить готовность"));
+  // Потеря связи описывается владельцу тем же правилом, что и остальные
+  // ошибки: что случилось, опасно ли это и что делать дальше.
+  await settle(() => expect(container.textContent).toContain("Не дозвонились до сервера"));
+  expect(container.textContent).toContain("Приложение и данные это не ломает");
   expect(container.querySelector('.max-project-next')?.getAttribute("href")).toBe("/max/coffee/dashboard");
   mocks.readiness.mockResolvedValue({ items: [{ id: "build", done: true }] });
   await act(async () => { await client.invalidateQueries({ queryKey: ["max-readiness", "coffee"] }); });

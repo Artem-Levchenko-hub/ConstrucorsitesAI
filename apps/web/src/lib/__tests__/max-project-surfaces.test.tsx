@@ -58,14 +58,20 @@ it("shows publication blockers without expanding details and links each unfinish
   api.readiness.mockResolvedValue(state);
   await mount(<MaxLaunchPanel project={project} />);
   await settle(() => expect(container.querySelector('[data-requirement="build"][data-state="done"]')).not.toBeNull());
-  const requirements = container.querySelector('[aria-label="Обязательно до публикации"]');
+  const requirements = container.querySelector('[aria-label="Путь до публикации"]');
   expect(requirements).not.toBeNull();
   expect(requirements!.closest("details")).toBeNull();
-  expect(requirements!.querySelectorAll('[data-requirement]')).toHaveLength(3);
+  // Панель считает за владельца, а не оставляет ему список без итога.
+  expect(requirements!.textContent).toContain("До публикации осталось 2 шага из 3");
+  // Шаг после публикации живёт в том же маршруте, приглушённым: он не
+  // требование, но владелец должен знать, что его ждёт.
+  expect(requirements!.querySelectorAll('[data-requirement]')).toHaveLength(4);
   expect(requirements!.querySelector('[data-requirement="legal"] a')?.getAttribute("href")).toBe("/max/project-surfaces?data=policies");
   expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
-  expect(requirements!.querySelector('[data-requirement="max_url"]')).toBeNull();
-  expect(container.querySelector('[aria-label="После публикации"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
+  expect(requirements!.querySelector('[data-requirement="max_url"]')?.getAttribute("data-state")).toBe("later");
+  expect(requirements!.querySelector('[data-requirement="max_url"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
+  // Длинный дисклеймер больше не самый заметный текст на экране.
+  expect(container.querySelector(".max-publication-optional")?.tagName).toBe("DETAILS");
 });
 
 it.each(["loading", "error"])("never marks stale requirements complete while readiness is %s", async state => {
@@ -76,7 +82,7 @@ it.each(["loading", "error"])("never marks stale requirements complete while rea
   } else api.readiness.mockImplementation(() => new Promise(() => {}));
   await mount(<MaxLaunchPanel project={project} />);
   if (state === "error") await settle(() => expect(container.textContent).toContain("Статус недоступен"));
-  const requirements = container.querySelector('[aria-label="Обязательно до публикации"]');
+  const requirements = container.querySelector('[aria-label="Путь до публикации"]');
   expect(requirements).not.toBeNull();
   expect(requirements!.querySelectorAll('[data-state="done"]')).toHaveLength(0);
   expect(requirements!.querySelectorAll('[data-state="unknown"]')).toHaveLength(3);

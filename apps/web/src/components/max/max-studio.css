@@ -74,14 +74,23 @@
 .max-project-identity h2 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
 .max-project-identity h2 a:hover { color: var(--color-accent); }
 .max-project-identity p { margin-top: 5px; font-size: 12px; color: var(--color-fg-secondary); }
-.max-project-state { font-size: 13px; line-height: 1.5; }
+.max-project-state { display: grid; gap: 6px; min-width: 0; font-size: 13px; line-height: 1.5; }
 .max-project-state > p { display: flex; gap: 7px; align-items: flex-start; }
+.max-project-state strong { color: var(--color-fg-primary); font-size: 13px; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
+.max-project-state[data-project-status=live] strong { color: var(--color-success-fg); }
+.max-project-state[data-project-status=offline] strong { color: var(--color-fg-secondary); }
+.max-project-state small { display: block; color: var(--color-fg-secondary); }
+/* Полоса пути к запуску: видно продвижение, не читая цифр. */
+.max-project-progress { display: inline-flex; gap: 3px; }
+.max-project-progress > span { width: 22px; height: 4px; border-radius: 999px; background: var(--color-surface-3); }
+.max-project-progress > span[data-done=true] { background: var(--color-accent); }
+.max-project-url { display: inline-flex; align-items: center; gap: 5px; margin-top: 5px; max-width: 100%; color: var(--color-accent-secondary); font-size: 12px; }
+.max-project-url:hover { color: var(--color-accent); }
 .max-project-status--setup { color: #0050c8; }
 .max-project-status--needs-input { color: #756000; }
 .max-project-status--ready { color: #187443; }
 .max-project-status--failed { color: #b42318; }
 .max-project-status--pending { color: #526079; }
-.max-project-state small { display: block; margin-top: 5px; color: var(--color-fg-secondary); }
 .max-project-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .max-project-next { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 1; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 7px; color: var(--color-accent-secondary); font-size: 13px; font-weight: 500; }
 .max-project-next:hover { background: var(--color-accent-subtle); border-color: var(--color-accent); }

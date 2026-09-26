@@ -94,19 +94,22 @@ describe("Yleum project card", () => {
     return container.querySelector<HTMLElement>(`[data-project-status="${kind}"]`)!;
   }
 
-  it("distinguishes setup, required input, ready, failed and pending states", async () => {
+  it("says what is happening with the app instead of naming a stage", async () => {
+    // Владелец читал имя этапа («Сборка приложения») и не понимал, идёт она,
+    // её надо начать или она сломалась. В строке стоит законченная фраза о его
+    // приложении, полоса пройденного пути и подсказка «почему это важно».
     const states: Array<{
       id: string;
       result: MaxReadiness | Error | Promise<never>;
-      kind: string;
-      color: string;
-      icon: string;
+      tone: string;
+      title: string;
+      filled: number | null;
     }> = [
-      { id: "setup", result: readiness([]), kind: "setup", color: "rgb(0, 80, 200)", icon: "lucide-wrench" },
-      { id: "input", result: readiness(["build"]), kind: "needs-input", color: "rgb(117, 96, 0)", icon: "lucide-circle-alert" },
-      { id: "ready", result: readiness(["build", "legal", "bot", "publish", "max_url"]), kind: "ready", color: "rgb(24, 116, 67)", icon: "lucide-circle-check" },
-      { id: "failed", result: new Error("offline"), kind: "failed", color: "rgb(180, 35, 24)", icon: "lucide-triangle-alert" },
-      { id: "pending", result: new Promise<never>(() => {}), kind: "pending", color: "rgb(82, 96, 121)", icon: "lucide-clock3" },
+      { id: "setup", result: readiness([]), tone: "build", title: "Приложение ещё не собрано", filled: 1 },
+      { id: "input", result: readiness(["build"]), tone: "connect", title: "Собрано, остались документы", filled: 2 },
+      { id: "ready", result: readiness(["build", "legal", "bot", "publish", "max_url"]), tone: "live", title: "Работает у пользователей", filled: 6 },
+      { id: "failed", result: new Error("offline"), tone: "offline", title: "Не дозвонились до сервера", filled: null },
+      { id: "pending", result: new Promise<never>(() => {}), tone: "checking", title: "Проверяем состояние", filled: null },
     ];
 
     mocks.readiness.mockImplementation((id: string) => {
@@ -116,12 +119,17 @@ describe("Yleum project card", () => {
 
     for (const state of states) {
       await renderProject({ ...baseProject, id: state.id });
-      const status = await waitForStatus(state.kind);
-      expect(getComputedStyle(status).color).toBe(state.color);
-      expect(
-        [...(status.querySelector("svg")?.classList ?? [])],
-        state.kind,
-      ).toContain(state.icon);
+      const status = await waitForStatus(state.tone);
+      expect(status.querySelector("strong")?.textContent, state.tone).toBe(state.title);
+      expect(status.querySelector("small")?.textContent?.length ?? 0).toBeGreaterThan(20);
+      const filled = status.querySelectorAll('.max-project-progress > span[data-done="true"]');
+      if (state.filled === null) {
+        // Пока состояние неизвестно, полосы нет: пустая полоса читалась бы
+        // как «ничего не сделано».
+        expect(status.querySelector(".max-project-progress"), state.tone).toBeNull();
+      } else {
+        expect(filled.length, state.tone).toBe(state.filled);
+      }
     }
   });
 
