@@ -24,10 +24,28 @@ def client(app: FastAPI) -> Iterator[TestClient]:
         yield c
 
 
-def test_health(client: TestClient) -> None:
+def test_health(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Здоровье теперь зависит от того, есть ли куда записать списание.
+
+    Раньше проба отвечала «ок» всегда, и 25–26.09 это стоило десяти часов
+    оплаченных и выброшенных ответов: база была недоступна, а снаружи всё
+    выглядело здоровым. Поэтому здесь рабочее состояние задаётся явно.
+    """
+    from yleum_gateway.core import db
+
+    monkeypatch.setattr(db, "_pool", object())
+
     r = client.get("/health")
     assert r.status_code == 200
     assert r.json() == {"status": "ok"}
+
+
+def test_health_is_honest_without_a_database(client: TestClient) -> None:
+    """А без базы проба обязана краснеть — именно этого и не хватило на проде."""
+    r = client.get("/health")
+
+    assert r.status_code == 503
+    assert r.json()["status"] == "degraded"
 
 
 def test_models_endpoint_lists_all_supported(client: TestClient) -> None:

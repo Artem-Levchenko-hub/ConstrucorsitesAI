@@ -39,6 +39,24 @@ async def close_pool() -> None:
         _pool = None
 
 
+async def try_init_pool() -> asyncpg.Pool | None:
+    """Поднять пул, если его нет, и НЕ бросить, если база недоступна.
+
+    25–26.09.2026: при старте шлюз не смог подключиться к базе, записал
+    предупреждение и продолжил работать. Доступ открыли через семь минут, но
+    шлюз об этом не узнал — он больше не пытался. Десять часов каждый вызов
+    модели оплачивался и выбрасывался. Поэтому попытка подняться должна
+    повторяться сама, а не один раз при старте.
+    """
+
+    if _pool is not None:
+        return _pool
+    try:
+        return await init_pool()
+    except Exception:  # база ещё недоступна — это не повод падать целиком
+        return None
+
+
 def get_pool() -> asyncpg.Pool:
     if _pool is None:
         raise RuntimeError("DB pool not initialized — call init_pool() in lifespan")

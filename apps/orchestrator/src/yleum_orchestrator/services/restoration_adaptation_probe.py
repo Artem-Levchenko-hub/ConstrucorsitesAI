@@ -225,7 +225,6 @@ def correct_witness_hint(table: DataTable) -> str:
     сутки приносили по одному факту каждый именно потому, что этого не делалось.
     """
 
-    columns = {column.name: column for column in table.columns}
     reserved = {table.primary_key[0] if table.primary_key else "", table.owner_column or ""}
     value = next(
         (

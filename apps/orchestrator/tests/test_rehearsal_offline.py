@@ -23,6 +23,8 @@ import uuid
 import httpx
 import pytest
 
+from tests._probe_reference_app import ProbeReferenceApp
+from tests._versioning_pg import pg  # noqa: F401
 from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     ActivationBusinessProbe,
     ActivationBusinessWitness,
@@ -32,8 +34,6 @@ from yleum_orchestrator.services.restoration_adaptation_health import (
     ProbeRehearsalFailure,
 )
 
-from tests._probe_reference_app import ProbeReferenceApp
-from tests._versioning_pg import pg  # noqa: F401
 
 def _text(value: object) -> str:
     """Обвязка отдаёт вывод psql байтами — приводим к строке в одном месте."""
@@ -88,12 +88,22 @@ def _probe(witness: ActivationBusinessWitness) -> ActivationBusinessProbe:
             {
                 "name": "leads",
                 "columns": [
-                    {"name": "id", "type": "uuid", "nullable": False, "default": "gen_random_uuid()"},
+                    {
+                        "name": "id",
+                        "type": "uuid",
+                        "nullable": False,
+                        "default": "gen_random_uuid()",
+                    },
                     {"name": "max_user_id", "type": "text", "nullable": False},
                     {"name": "name", "type": "text", "nullable": False},
                     {"name": "phone", "type": "text", "nullable": False},
                     {"name": "note", "type": "text", "nullable": True},
-                    {"name": "status", "type": "text", "nullable": False, "default": "'новая'::text"},
+                    {
+                        "name": "status",
+                        "type": "text",
+                        "nullable": False,
+                        "default": "'новая'::text",
+                    },
                 ],
                 "owner_column": "max_user_id",
                 "primary_key": ["id"],
@@ -207,7 +217,7 @@ def rehearsal(pg, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
 
 async def test_the_reference_implementation_passes_every_leg(rehearsal) -> None:
     """Главное: контракт выполним, и вот код, который его выполняет."""
-    run, _pg, _app = rehearsal
+    run, _db, _app = rehearsal
 
     digest = await run()
 
@@ -216,12 +226,12 @@ async def test_the_reference_implementation_passes_every_leg(rehearsal) -> None:
 
 async def test_the_rehearsal_leaves_the_table_as_it_found_it(rehearsal) -> None:
     """Репетиция обязана убирать за собой — иначе она сама ломает сверку копии."""
-    run, pg, _app = rehearsal
-    before = _text(pg.run("SELECT count(*) FROM public.leads;")).strip()
+    run, db, _app = rehearsal
+    before = _text(db.run("SELECT count(*) FROM public.leads;")).strip()
 
     await run()
 
-    assert _text(pg.run("SELECT count(*) FROM public.leads;")).strip() == before
+    assert _text(db.run("SELECT count(*) FROM public.leads;")).strip() == before
 
 
 async def test_a_taken_key_answered_with_a_server_error_names_the_cross_owner_leg(
@@ -235,7 +245,7 @@ async def test_a_taken_key_answered_with_a_server_error_names_the_cross_owner_le
     закреплено, какой именно шаг назовёт отказ, чтобы по живому прогону это
     читалось сразу.
     """
-    run, _pg, app = rehearsal
+    run, _db, app = rehearsal
     app._exists = lambda _item_id: False  # приложение «забыло» про занятый ключ
 
     with pytest.raises(ProbeRehearsalFailure) as failure:
@@ -256,7 +266,7 @@ async def test_answering_a_missing_row_with_403_breaks_the_owner_leg_first(rehea
     то есть выдаёт факт чужих данных самим ответом. Здесь закреплено, на каком
     шаге это всплывёт, чтобы по живому прогону читалось сразу.
     """
-    run, _pg, app = rehearsal
+    run, _db, app = rehearsal
     original_reply = app._reply
 
     async def reply(send, status, payload):

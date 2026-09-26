@@ -16,12 +16,11 @@ from __future__ import annotations
 
 import pytest
 
+from tests._versioning_pg import pg  # noqa: F401
 from yleum_orchestrator.services.restoration_adaptation_workspace import (
     content_inventory_partition_digests,
 )
 from yleum_orchestrator.services.versioning.contracts import InventoryObject, InventoryReport
-
-from tests._versioning_pg import pg  # noqa: F401
 
 # Схема проекта b5c4c26d слово в слово из его миграций.
 _SCHEMA = """
@@ -84,10 +83,10 @@ def digests(pg, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
 
 def test_a_created_row_changes_the_copy(digests) -> None:
     """Иначе проверять нечего: сверка обязана замечать записи агента."""
-    pg, digest = digests
+    db, digest = digests
     before = digest()
 
-    pg.run(
+    db.run(
         "INSERT INTO public.leads (id, max_user_id, name, phone) VALUES "
         "('33333333-3333-3333-3333-333333333333', 'owner-1', 'Проверка', '+70000000000');"
     )
@@ -101,10 +100,10 @@ def test_deleting_what_the_agent_created_restores_the_copy(digests) -> None:
     Если бы не возвращала, вчерашнее требование «верни копию как было» было бы
     невыполнимым, и адаптация не смогла бы доказать работу с данными в принципе.
     """
-    pg, digest = digests
+    db, digest = digests
     before = digest()
 
-    pg.run(
+    db.run(
         "INSERT INTO public.leads (id, max_user_id, name, phone) VALUES "
         "('33333333-3333-3333-3333-333333333333', 'owner-1', 'Проверка', '+70000000000');"
         "DELETE FROM public.leads WHERE id='33333333-3333-3333-3333-333333333333';"
@@ -121,10 +120,10 @@ def test_touching_an_existing_row_is_not_undone_by_restoring_the_visible_value(d
     отметка времени изменения уже не та. Значит правило должно быть жёстче:
     трогать чужие записи нельзя вовсе, проверять изменение надо на своей.
     """
-    pg, digest = digests
+    db, digest = digests
     before = digest()
 
-    pg.run(
+    db.run(
         "UPDATE public.leads SET note='проверка', updated_at=now() "
         "WHERE id='11111111-1111-1111-1111-111111111111';"
         "UPDATE public.leads SET note='Заметка 1' "
@@ -141,10 +140,10 @@ def test_a_full_restore_of_an_existing_row_does_return(digests) -> None:
     колонки, на которые агент не смотрит. Требовать этого от него нельзя —
     проще запретить трогать чужие записи.
     """
-    pg, digest = digests
+    db, digest = digests
     before = digest()
 
-    pg.run(
+    db.run(
         "CREATE TEMP TABLE kept AS SELECT * FROM public.leads "
         "WHERE id='11111111-1111-1111-1111-111111111111';"
         "UPDATE public.leads SET note='проверка', updated_at=now() "
@@ -154,3 +153,30 @@ def test_a_full_restore_of_an_existing_row_does_return(digests) -> None:
     )
 
     assert digest() == before
+
+
+def test_row_level_security_does_not_hide_rows_from_the_platform_reader(digests) -> None:
+    """Политики уровня строк не должны ломать сверку копии при откате.
+
+    Соседняя сессия вводит политики на шести служебных таблицах приложения:
+    строка видна только своему владельцу, причём с FORCE — то есть правило
+    действует и на владельца таблицы. Платформа при откате считает отпечаток по
+    ВСЕМ строкам от имени суперпользователя; суперпользователь политики обходит.
+
+    Если бы это было не так, отпечатки копии и источника расходились бы на
+    пустом месте и КАЖДЫЙ откат упирался бы в «данные копии изменились». Поэтому
+    проверка стоит здесь, в наборе откатов, а не только у автора политик.
+    """
+    db, digest = digests
+    before = digest()
+
+    db.run(
+        'ALTER TABLE public.max_users ENABLE ROW LEVEL SECURITY;'
+        'ALTER TABLE public.max_users FORCE ROW LEVEL SECURITY;'
+        'CREATE POLICY max_users_own_rows ON public.max_users '
+        "USING (max_user_id = current_setting('app.max_user_id', true)) "
+        "WITH CHECK (max_user_id = current_setting('app.max_user_id', true));"
+    )
+
+    # Личность не задана: приложение на этом месте увидело бы пусто.
+    assert digest() == before, "политики скрыли строки от платформенного читателя"
