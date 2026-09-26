@@ -836,7 +836,13 @@ class DockerRestorationAdaptationHealthProber:
             raise CellResourceError("candidate probe runtime identity changed")
         _machine, observed_backend = manager.machine_runtime.parts(state)
         if (
-            observed_backend is not backend
+            # Сравниваем то, ЧЕМ объект является, а не тот ли это самый объект.
+            # Живой parts() собирает новый объект доступа на каждый вызов, поэтому
+            # сравнение через `is not` отвергало кандидата ВСЕГДА — и шесть шагов
+            # репетиции не выполнялись на проде ни разу: наружу уходило общее
+            # «репетиция провалилась». Воспроизведено на стенде 26.09.
+            observed_backend.workspace_volume != backend.workspace_volume
+            or observed_backend.project_postgres_volume != backend.project_postgres_volume
             or backend.workspace_volume != target.code_volume
             or backend.project_postgres_volume != target.database_volume
             or live_database_volume_identity_digest(

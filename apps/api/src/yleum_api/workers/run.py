@@ -1,15 +1,18 @@
-"""Entrypoint для `python -m yleum_api.workers.run` (или `uv run rq worker omnia-previews`)."""
+"""Фоновый процесс платформы: `python -m yleum_api.workers.run`.
+
+Он не обслуживает очередь задач — очередь ушла вместе с отложенным рендером
+превью конструктора сайтов. Остались долгоживущие циклы, которым нужен процесс
+рядом с API: сердцебиение воркера (его видит `/api/health`), тик подписок,
+уборка вложений доски задач и досведение незавершённых восстановлений версий.
+Процесс держится на этих потоках и завершается только по сигналу.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import threading
 
-from redis import Redis
-from rq import Connection, Worker
-
 from yleum_api.core.config import get_settings
-from yleum_api.services.queue import QUEUE_NAME
 from yleum_api.services.readiness import run_worker_heartbeat_forever
 from yleum_api.services.restoration_reconciliation import run_restoration_reconciliation_forever
 from yleum_api.services.subscription_lifecycle import run_subscription_lifecycle_forever
@@ -59,9 +62,9 @@ def main() -> None:
         name="restoration-reconciliation",
         daemon=True,
     ).start()
-    conn = Redis.from_url(get_settings().redis_url)
-    with Connection(conn):
-        Worker([QUEUE_NAME]).work(with_scheduler=False)
+    # Потоки — демоны, поэтому процесс держит вот это ожидание: он живёт, пока
+    # его не остановят (docker stop / systemd), как и раньше с циклом очереди.
+    threading.Event().wait()
 
 
 if __name__ == "__main__":

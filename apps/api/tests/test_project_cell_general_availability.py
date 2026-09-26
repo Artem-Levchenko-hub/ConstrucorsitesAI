@@ -141,7 +141,6 @@ async def test_normal_create_persists_server_decision_without_provisioning(monke
 
     session = SimpleNamespace(add=add, flush=AsyncMock(), commit=AsyncMock(), refresh=AsyncMock())
     monkeypatch.setattr(projects.repo_svc, "init_repo", lambda *_: "a" * 40)
-    monkeypatch.setattr(projects, "enqueue_preview", lambda _: None)
     monkeypatch.setattr(projects, "publish_event", AsyncMock())
     # Plan limits read the billing tables; this test owns a stub session.
     monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())

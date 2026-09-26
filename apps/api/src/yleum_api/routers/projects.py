@@ -20,8 +20,6 @@ from yleum_api.core.deps import (
 from yleum_api.core.errors import ApiError
 from yleum_api.core.minio import preview_public_url
 from yleum_api.core.redis import publish_event
-from yleum_api.models.custom_domain import CustomDomain
-from yleum_api.models.deploy_target import DeployTarget
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.message import Message
@@ -48,7 +46,6 @@ from yleum_api.services.max_access import require_max_studio_access
 from yleum_api.services.preset_classifier import classify_preset_sync
 from yleum_api.services.project_cell_access import admit_new_project_cell
 from yleum_api.services.project_cell_deletion import teardown_project_cell
-from yleum_api.services.queue import enqueue_preview
 from yleum_api.services.run_bundle import build_launchers
 
 _UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
@@ -81,9 +78,6 @@ async def _commit_first_snapshot(session: SessionDep, project: Project, commit_s
     await session.refresh(project)
     await session.refresh(snapshot)
 
-    # For a MAX project the worker returns at once: MAX thumbnails are captured
-    # under the generation lease, never by this deferred job.
-    await asyncio.to_thread(enqueue_preview, snapshot.id)
     await publish_event(
         project.id,
         "snapshot.created",
@@ -275,64 +269,6 @@ async def update_project(
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     if payload.image_gen_enabled is not None:
         project.image_gen_enabled = payload.image_gen_enabled
-    # BYO-VPS: назначить/снять цель деплоя. Отличаем «прислали null» (снять,
-    # вернуть на наш хостинг) от «поле не прислали» (не трогать) через
-    # model_fields_set. Чужую цель назначить нельзя — проверяем владение.
-    if "deploy_target_id" in payload.model_fields_set:
-        if (
-            project.previous_deploy_target_id is not None
-            and project.deploy_target_id != payload.deploy_target_id
-        ):
-            raise ApiError(
-                "deploy_target_switch_pending",
-                "Сначала опубликуйте проект на уже выбранной цели — затем можно сменить её снова.",
-                status.HTTP_409_CONFLICT,
-            )
-        previous_target = (
-            await session.get(DeployTarget, project.deploy_target_id)
-            if project.deploy_target_id
-            else None
-        )
-        selected_target: DeployTarget | None = None
-        if payload.deploy_target_id is None:
-            project.deploy_target_id = None
-        else:
-            target = await session.get(DeployTarget, payload.deploy_target_id)
-            if target is None or target.owner_id != current_user.id:
-                raise ApiError(
-                    "deploy_target_not_found", "VPS не найден", status.HTTP_404_NOT_FOUND
-                )
-            if target.verify_status != "ok" or not target.known_host_key or not target.resolved_ip:
-                raise ApiError(
-                    "deploy_target_not_verified",
-                    "Сначала подтвердите ключ сервера и завершите проверку VPS.",
-                    status.HTTP_409_CONFLICT,
-                )
-            selected_target = target
-            project.deploy_target_id = target.id
-        if previous_target is not None and previous_target.id != project.deploy_target_id:
-            project.previous_deploy_target_id = previous_target.id
-        expected_ip = (
-            str(selected_target.resolved_ip)
-            if selected_target is not None
-            else get_settings().our_public_ip
-        )
-        domains = (
-            (
-                await session.execute(
-                    select(CustomDomain).where(CustomDomain.project_id == project.id)
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for domain in domains:
-            if domain.expected_ip != expected_ip:
-                domain.expected_ip = expected_ip
-                domain.dns_status = "pending"
-                domain.cert_status = "none"
-                domain.verified_at = None
-                domain.last_detail = "Цель публикации изменилась — обновите A-запись."
     await session.commit()
     await session.refresh(project)
     return project
@@ -381,32 +317,7 @@ async def delete_project(
                 status.HTTP_502_BAD_GATEWAY,
             ) from exc
 
-    remote_target_ids = {
-        target_id
-        for target_id in (
-            project.deploy_target_id,
-            project.previous_deploy_target_id,
-        )
-        if target_id is not None
-    }
-    if remote_target_ids:
-        for target_id in remote_target_ids:
-            target = await session.get(DeployTarget, target_id)
-            if target is None or not target.known_host_key or not target.resolved_ip:
-                continue
-            await orchestrator_client.teardown_remote_project(
-                project.id,
-                {
-                    "host": target.ssh_host,
-                    "port": target.ssh_port,
-                    "user": target.ssh_user,
-                    "auth_type": target.ssh_auth_type,
-                    "secret": decrypt_strong(target.ssh_secret_enc),
-                    "known_host_key": target.known_host_key,
-                    "resolved_ip": target.resolved_ip,
-                },
-            )
-    elif is_fullstack(project.template):
+    if is_fullstack(project.template):
         # Containers/schema/nginx — idempotent teardown. Errors propagate
         # (503/4xx) so the project row survives for a retry, no orphans.
         await orchestrator_client.destroy(project.id, project.slug)

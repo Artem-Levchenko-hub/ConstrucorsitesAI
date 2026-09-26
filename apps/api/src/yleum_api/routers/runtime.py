@@ -30,8 +30,6 @@ from yleum_api.core.crypto import decrypt_strong
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
-from yleum_api.models.custom_domain import CustomDomain
-from yleum_api.models.deploy_target import DeployTarget
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
@@ -194,12 +192,11 @@ async def start_runtime(
     if cell_status is not None:
         return cell_status
     _, plan = await _billing_plan_for_user(session, current_user.id)
-    # Map api-side `template` to the orchestrator's actual template dir.
-    # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
-    # image — they ship as plain HTML via /p/<slug>. We default those to
-    # `nextjs-postgres-drizzle` so a V1 user who hits "Start" can still
-    # opt into a full backend (lazy upgrade) without re-creating the project.
-    orch_template = orchestrator_template(project.template) or "nextjs-postgres-drizzle"
+    # Map api-side `template` to the orchestrator's actual template dir. Only the
+    # MAX app has one now; a row of the separated site builder has no image to
+    # provision, so the fallback is the app template rather than a stack that no
+    # longer ships.
+    orch_template = orchestrator_template(project.template) or "max-miniapp-nextjs"
     payload = await orchestrator_client.provision(
         project_id=project_id,
         slug=project.slug,
@@ -296,36 +293,7 @@ async def get_runtime_logs(
         tail = 1
     elif tail > 5000:
         tail = 5000
-    if kind == "prod" and project.deploy_target_id is not None:
-        target = await session.get(DeployTarget, project.deploy_target_id)
-        if (
-            target is None
-            or target.verify_status != "ok"
-            or not target.known_host_key
-            or not target.resolved_ip
-        ):
-            raise ApiError(
-                "deploy_target_not_verified",
-                "Нельзя прочитать логи: VPS требует повторной проверки.",
-                status.HTTP_409_CONFLICT,
-            )
-        payload = await orchestrator_client.get_remote_logs(
-            project_id,
-            {
-                "host": target.ssh_host,
-                "port": target.ssh_port,
-                "user": target.ssh_user,
-                "auth_type": target.ssh_auth_type,
-                "secret": decrypt_strong(target.ssh_secret_enc),
-                "known_host_key": target.known_host_key,
-                "resolved_ip": target.resolved_ip,
-            },
-            tail=tail,
-        )
-        payload.setdefault("tail", tail)
-        payload.setdefault("container_name", None)
-    else:
-        payload = await orchestrator_client.get_logs(project_id, tail=tail, kind=kind)
+    payload = await orchestrator_client.get_logs(project_id, tail=tail, kind=kind)
     return RuntimeLogs(
         container_name=payload.get("container_name"),
         tail=int(payload.get("tail", tail)),
@@ -442,11 +410,6 @@ async def trigger_deploy(
         return _to_deploy_status(payload)
     sha = body.commit_sha if body is not None else None
     idempotency_key = body.idempotency_key if body is not None else None
-    # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем
-    # креды и передаём оркестратору, чтобы он развернул образ на машине юзера.
-    # None = наш хостинг (текущее поведение).
-    target: dict[str, Any] | None = None
-    domains: list[str] | None = None
     runtime_env: dict[str, str] | None = None
     if project.template == "max_miniapp":
         max_integration = (
@@ -460,40 +423,6 @@ async def trigger_deploy(
                 "MAX_WEBHOOK_SECRET": decrypt_strong(max_integration.webhook_secret_enc),
                 "MAX_API_BASE_URL": "https://platform-api2.max.ru",
             }
-    if project.deploy_target_id is not None:
-        dt = await session.get(DeployTarget, project.deploy_target_id)
-        if dt is not None:
-            if dt.verify_status != "ok" or not dt.known_host_key or not dt.resolved_ip:
-                raise ApiError(
-                    "deploy_target_not_verified",
-                    "Выбранный VPS не прошёл защищённую проверку. Проверьте его заново.",
-                    status.HTTP_409_CONFLICT,
-                )
-            target = {
-                "host": dt.ssh_host,
-                "port": dt.ssh_port,
-                "user": dt.ssh_user,
-                "auth_type": dt.ssh_auth_type,
-                "secret": decrypt_strong(dt.ssh_secret_enc),
-                "known_host_key": dt.known_host_key,
-                "resolved_ip": dt.resolved_ip,
-                "label": dt.label,
-                "id": str(dt.id),
-            }
-            # Домены проекта — агент настроит их на VPS юзера (edge + авто-SSL).
-            rows = (
-                (
-                    await session.execute(
-                        select(CustomDomain.host).where(
-                            CustomDomain.project_id == project_id,
-                            CustomDomain.dns_status == "ok",
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            domains = list(rows) or None
     # Production release proof is fail-closed: the exact commit must have a
     # passing, digest-valid attestation. Dev can keep the gate advisory.
     settings = get_settings()
@@ -531,8 +460,6 @@ async def trigger_deploy(
     payload = await orchestrator_client.deploy(
         project_id,
         commit_sha=sha,
-        target=target,
-        domains=domains,
         runtime_env=runtime_env,
         idempotency_key=publication_key,
     )
@@ -541,7 +468,7 @@ async def trigger_deploy(
             session,
             project,
             idempotency_key=publication_key,
-            backend="byo_vps" if target is not None else "legacy_deploy",
+            backend="legacy_deploy",
             commit_sha=sha,
         )
         await session.commit()
@@ -561,56 +488,8 @@ async def get_last_deploy(
     controller is an error, not a successful status. Snapshot identity is
     preserved so readiness can identify the exact published version.
     """
-    project = await _project_owned_by(session, project_id, current_user.id)
+    await _project_owned_by(session, project_id, current_user.id)
     payload = await orchestrator_client.get_deploy(project_id)
-    current_target = str(project.deploy_target_id) if project.deploy_target_id else None
-    deploy_matches_target = payload.get("target_id") == current_target
-    if (
-        payload.get("phase") == "done"
-        and deploy_matches_target
-        and project.previous_deploy_target_id is not None
-    ):
-        previous = await session.get(DeployTarget, project.previous_deploy_target_id)
-        if previous is not None and previous.known_host_key and previous.resolved_ip:
-            await orchestrator_client.teardown_remote_project(
-                project.id,
-                {
-                    "host": previous.ssh_host,
-                    "port": previous.ssh_port,
-                    "user": previous.ssh_user,
-                    "auth_type": previous.ssh_auth_type,
-                    "secret": decrypt_strong(previous.ssh_secret_enc),
-                    "known_host_key": previous.known_host_key,
-                    "resolved_ip": previous.resolved_ip,
-                },
-            )
-        project.previous_deploy_target_id = None
-        await session.commit()
-    if (
-        payload.get("phase") == "done"
-        and deploy_matches_target
-        and project.deploy_target_id is not None
-    ):
-        domains = (
-            (
-                await session.execute(
-                    select(CustomDomain).where(
-                        CustomDomain.project_id == project_id,
-                        CustomDomain.dns_status == "ok",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        changed = False
-        for domain in domains:
-            if domain.cert_status not in {"active", "issuing"}:
-                domain.cert_status = "issuing"
-                domain.last_detail = "Caddy на VPS выпускает HTTPS-сертификат."
-                changed = True
-        if changed:
-            await session.commit()
     return _to_deploy_status(payload)
 
 

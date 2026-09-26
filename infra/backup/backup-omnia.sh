@@ -57,6 +57,11 @@ CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
 PLATFORM_CTR="${PLATFORM_CTR:-$(pick_ctr yleum-prod-postgres omnia-prod-postgres)}"
+# ВНИМАНИЕ: это НЕ «ещё не переименовано». На проде база платформы живёт на
+# хостовом PostgreSQL (режим host), и роль там берётся из строки подключения —
+# с 26.09 это `yleum`. Значение ниже используется ТОЛЬКО в режиме container, то
+# есть на пути отката к остановленному контейнеру с базой, где роли `yleum`
+# никогда не существовало. Поменять его на `yleum` значит сломать откат.
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
 # Where the platform DB lives (Phase 2 of the core infrastructure):

@@ -97,8 +97,8 @@ apps/api/
 │       │   └── billing.py                (списания)
 │       ├── workers/
 │       │   ├── __init__.py
-│       │   ├── preview.py                (RQ job: Playwright render → MinIO)
-│       │   └── run.py                    (entrypoint: rq worker)
+│       │   ├── preview.py                (живой скриншот приложения через Playwright)
+│       │   └── run.py                    (фоновые циклы: heartbeat, подписки, уборка)
 │       └── templates/                    (стартовые шаблоны для new project)
 │           ├── blank/index.html
 │           ├── landing/                  (index.html, style.css)
@@ -173,7 +173,7 @@ apps/api/
    - Сохранить в MinIO: `previews/{snapshot_id}.png` (bucket `previews`, public read).
    - `UPDATE snapshots SET preview_key = ...`.
    - Опубликовать в Redis pubsub `project:{project_id}` событие `preview.ready`.
-2. **`workers/run.py`** — entrypoint для `rq worker omnia-previews`. Запускается отдельным процессом в docker-compose как сервис `worker`.
+2. **`workers/run.py`** — фоновый процесс платформы (`python -m yleum_api.workers.run`): сердцебиение воркера для `/api/health`, тик подписок, уборка вложений доски, досведение восстановлений. Запускается отдельным процессом в docker-compose как сервис `worker`. Очереди задач больше нет — отложенный рендер превью ушёл вместе с конструктором сайтов.
 3. **`services/ws_hub.py`** — `Hub` класс: словарь `{project_id: set[WebSocket]}`. Методы `connect`, `disconnect`, `publish(project_id, event)`. Отдельная задача в lifespan слушает Redis pubsub и распределяет события по соединениям.
 4. **`routers/ws.py`** — `/api/ws/projects/:id`:
    - Аутентификация: cookie `omnia_session` ИЛИ `?token=<jwt>` query.
@@ -230,7 +230,7 @@ uv run alembic upgrade head
 
 # dev
 uv run uvicorn yleum_api.main:app --reload --port 8000
-uv run rq worker omnia-previews              # отдельный терминал
+uv run python -m yleum_api.workers.run       # отдельный терминал
 
 # тесты
 uv run pytest -q

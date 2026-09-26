@@ -112,7 +112,7 @@ async def test_delete_container_project_tears_down_runtime(
     fake_teardown,
 ) -> None:
     owner = await _make_user(db_session, "owner2@example.com")
-    project = await _make_project(db_session, owner, template="nextjs_entities")
+    project = await _make_project(db_session, owner, template="max_miniapp")
     slug = project.slug
     await db_session.commit()
     as_user(owner)
@@ -166,7 +166,7 @@ async def test_delete_project_preserves_usage_and_clears_project_refs(
     ):
         await db_session.execute(text(ddl))
     owner = await _make_user(db_session, "usage-owner@example.com")
-    project = await _make_project(db_session, owner, template="nextjs_entities")
+    project = await _make_project(db_session, owner, template="max_miniapp")
     message = Message(project_id=project.id, role="assistant", content="done")
     db_session.add(message)
     await db_session.flush()
@@ -253,7 +253,7 @@ async def test_delete_is_idempotent_second_call_404(
     fake_teardown,
 ) -> None:
     owner = await _make_user(db_session, "owner6@example.com")
-    project = await _make_project(db_session, owner, template="nextjs_entities")
+    project = await _make_project(db_session, owner, template="max_miniapp")
     await db_session.commit()
     as_user(owner)
 

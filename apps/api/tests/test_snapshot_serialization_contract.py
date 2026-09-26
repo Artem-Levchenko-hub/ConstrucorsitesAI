@@ -170,7 +170,6 @@ async def test_actual_mutation_consumers_preserve_response_and_event(
     )
     events = AsyncMock()
     monkeypatch.setattr(module, "publish_event", events)
-    monkeypatch.setattr(module, "enqueue_preview", Mock())
     monkeypatch.setattr(
         module.repo_svc,
         "read_files",

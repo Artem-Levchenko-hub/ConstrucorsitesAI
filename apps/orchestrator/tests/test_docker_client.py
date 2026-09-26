@@ -236,7 +236,7 @@ def _spec(image: str) -> ContainerSpec:
 async def test_start_container_recreates_on_image_change(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Stack switch (drizzle→nextjs-entities) re-provisions with a new image.
+    """Stack switch (bare→MAX) re-provisions with a new image.
     The stale container must be removed and a fresh one created from the new
     image — otherwise generated entity code runs against the wrong template's
     kit and 500s on `@/components/ui/*`. Regression for the stack-switch bug."""
@@ -244,11 +244,11 @@ async def test_start_container_recreates_on_image_change(
     client = _FakeClient(stale)
     monkeypatch.setattr(docker_client, "_get_client", lambda: client)
 
-    cid = await docker_client.start_container(_spec("omnia-template-nextjs-entities:dev"))
+    cid = await docker_client.start_container(_spec("omnia-template-max-miniapp-nextjs:dev"))
 
     assert stale.removed is True, "stale container must be removed on image change"
     assert client.containers.run_called is True
-    assert client.containers.run_image == "omnia-template-nextjs-entities:dev"
+    assert client.containers.run_image == "omnia-template-max-miniapp-nextjs:dev"
     assert cid == "new-container-id"
 
 
@@ -257,11 +257,11 @@ async def test_start_container_reuses_when_image_matches(
 ) -> None:
     """Same image tag (incl. a same-tag rebuild) → reuse the running container,
     never recreate. A rebuild must not disturb live apps mid-session."""
-    same = _FakeContainer("live-id", "omnia-template-nextjs-entities:dev", status="running")
+    same = _FakeContainer("live-id", "omnia-template-max-miniapp-nextjs:dev", status="running")
     client = _FakeClient(same)
     monkeypatch.setattr(docker_client, "_get_client", lambda: client)
 
-    cid = await docker_client.start_container(_spec("omnia-template-nextjs-entities:dev"))
+    cid = await docker_client.start_container(_spec("omnia-template-max-miniapp-nextjs:dev"))
 
     assert same.removed is False
     assert client.containers.run_called is False
@@ -273,7 +273,7 @@ async def test_stop_container_releases_memory_from_legacy_paused_state(
 ) -> None:
     paused = _FakeContainer(
         "paused-id",
-        "omnia-template-nextjs-entities:dev",
+        "omnia-template-max-miniapp-nextjs:dev",
         status="paused",
     )
     client = _FakeClient(paused)
@@ -291,7 +291,7 @@ async def test_stop_container_releases_memory_from_restarting_state(
 ) -> None:
     restarting = _FakeContainer(
         "restarting-id",
-        "omnia-template-nextjs-entities:dev",
+        "omnia-template-max-miniapp-nextjs:dev",
         status="restarting",
     )
     client = _FakeClient(restarting)
@@ -308,7 +308,7 @@ async def test_stop_container_is_idempotent_when_already_exited(
 ) -> None:
     exited = _FakeContainer(
         "exited-id",
-        "omnia-template-nextjs-entities:dev",
+        "omnia-template-max-miniapp-nextjs:dev",
         status="exited",
     )
     client = _FakeClient(exited)
@@ -326,7 +326,7 @@ async def test_write_files_preserves_only_root_runtime_entrypoint_mode(
 ) -> None:
     running = _FakeContainer(
         "running-id",
-        "omnia-template-nextjs-entities:dev",
+        "omnia-template-max-miniapp-nextjs:dev",
         status="running",
     )
     client = _FakeClient(running)
@@ -356,7 +356,7 @@ async def test_write_files_preserves_explicit_empty_file_and_deletes_legacy_empt
 ) -> None:
     running = _FakeContainer(
         "running-id",
-        "omnia-template-nextjs-entities:dev",
+        "omnia-template-max-miniapp-nextjs:dev",
         status="running",
     )
     client = _FakeClient(running)
@@ -386,13 +386,7 @@ async def test_write_files_preserves_explicit_empty_file_and_deletes_legacy_empt
 
 def test_dev_templates_invoke_entrypoint_through_shell() -> None:
     templates = Path(__file__).resolve().parents[1] / "templates"
-    for template in (
-        "bare-nextjs",
-        "max-miniapp-nextjs",
-        "nextjs-entities",
-        "nextjs-postgres-drizzle",
-        "nextjs-realtime",
-    ):
+    for template in ("bare-nextjs", "max-miniapp-nextjs"):
         dockerfile = (templates / template / "Dockerfile.dev").read_text(encoding="utf-8")
         assert 'CMD ["sh", "./docker-entrypoint.sh"]' in dockerfile
 
@@ -863,13 +857,13 @@ async def test_start_container_harden_without_pids_limit_omits_it(
 async def test_container_image_name_reads_container_config_image(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    live = _FakeContainer("live-id", "ghcr.io/acme/omnia-template-nextjs-entities:dev")
+    live = _FakeContainer("live-id", "ghcr.io/acme/omnia-template-max-miniapp-nextjs:dev")
     client = _FakeClient(live)
     monkeypatch.setattr(docker_client, "_get_client", lambda: client)
 
     image = await docker_client.container_image_name("omnia-dev-x")
 
-    assert image == "ghcr.io/acme/omnia-template-nextjs-entities:dev"
+    assert image == "ghcr.io/acme/omnia-template-max-miniapp-nextjs:dev"
 
 
 def _tar_bytes(

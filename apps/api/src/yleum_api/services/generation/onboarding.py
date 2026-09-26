@@ -5,7 +5,7 @@ from dataclasses import replace
 from yleum_api.core.config import get_settings
 from yleum_api.models.project import Project
 from yleum_api.schemas.message import SurveyQuestion
-from yleum_api.services.chip_pixel_gate import spec_from_discovery, spec_preview
+from yleum_api.services.build_spec import spec_from_discovery, spec_preview
 from yleum_api.services.discovery import (
     DiscoveryResult,
     PlannedQuestion,

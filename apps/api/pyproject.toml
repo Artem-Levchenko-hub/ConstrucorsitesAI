@@ -14,7 +14,6 @@ dependencies = [
     "asyncpg>=0.29,<1.0",
     "alembic>=1.13,<2.0",
     "redis>=5.0,<6.0",
-    "rq>=1.16,<2.0",
     "minio>=7.2,<8.0",
     "pygit2>=1.15,<2.0",
     "playwright>=1.47,<2.0",
@@ -113,5 +112,5 @@ plugins = ["pydantic.mypy"]
 exclude = ["migrations/"]
 
 [[tool.mypy.overrides]]
-module = ["passlib.*", "rq.*", "pygit2.*", "minio.*", "slugify.*"]
+module = ["passlib.*", "pygit2.*", "minio.*", "slugify.*"]
 ignore_missing_imports = true

@@ -4,8 +4,8 @@ Adding a container stack touches several places that silently drift apart: the
 `Template` literal, the orchestrator-name map, and the actual scaffold directory
 (plus a DB migration + web label map elsewhere). When they disagree, project
 creation 500s or the orchestrator can't find an image. This test fails fast if
-the api-side trio is inconsistent — it would have caught a `realtime` map entry
-with no template dir, the exact integration tail of G001.
+the api-side trio is inconsistent — it would have caught a map entry pointing at
+a template dir that no longer ships.
 """
 
 from __future__ import annotations
@@ -40,13 +40,6 @@ def test_every_orchestrator_template_dir_exists() -> None:
         assert (path / "Dockerfile.dev").is_file(), (
             f"template {dir_name!r} has no Dockerfile.dev — orchestrator can't build it"
         )
-
-
-def test_realtime_stack_registered() -> None:
-    # Regression guard for G001: the realtime stack must stay fully wired.
-    assert "realtime" in _TEMPLATE_VALUES
-    assert _ORCHESTRATOR_TEMPLATE_BY_API.get("realtime") == "nextjs-realtime"
-    assert (_TEMPLATES_DIR / "nextjs-realtime" / "Dockerfile.dev").is_file()
 
 
 def test_max_miniapp_stack_registered() -> None:

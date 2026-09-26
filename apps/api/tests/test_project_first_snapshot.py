@@ -1,15 +1,14 @@
 """Characterisation of how a new project gets its first snapshot.
 
 ``create_project`` ends with: first snapshot → project pointer → commit (a slug
-collision is a 409) → refresh → preview job → ``snapshot.created``. Frozen BEFORE
-that tail got one owner, unchanged AFTER. (GitHub import shared the tail until it
-moved out with the site builder.) Actual handler and models; git, queue and pub/sub
-stay in memory.
+collision is a 409) → refresh → ``snapshot.created``. Frozen BEFORE that tail got
+one owner, unchanged AFTER. (GitHub import shared the tail until it moved out with
+the site builder; so did the deferred preview job.) Actual handler and models; git
+and pub/sub stay in memory.
 """
 
 from __future__ import annotations
 
-import threading
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
@@ -95,18 +94,12 @@ def world(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         minio_public_url="https://objects.example.test/", minio_bucket_previews="previews"
     )
     monkeypatch.setattr(minio, "get_settings", lambda: settings)
-    state = SimpleNamespace(order=None, threads={})
-
-    def enqueue(snapshot_id: UUID) -> None:
-        state.order.append("preview")
-        state.threads["preview"] = threading.get_ident()
-        state.enqueued = snapshot_id
+    state = SimpleNamespace(order=None)
 
     async def publish(project_id: UUID, kind: str, data: dict[str, Any]) -> None:
         state.order.append("event")
         state.event = (project_id, kind, data)
 
-    monkeypatch.setattr(projects, "enqueue_preview", enqueue)
     monkeypatch.setattr(projects, "publish_event", publish)
     monkeypatch.setattr(projects.repo_svc, "init_repo", Mock(return_value="a" * 40))
     # Plan limits read the billing tables; these tests own a stub session.
@@ -128,9 +121,7 @@ async def test_new_project_is_committed_with_its_first_snapshot_then_announced(w
     assert snapshot.id is not None, "the snapshot must be flushed before it is pointed at"
     assert project.current_snapshot_id == snapshot.id
     assert session.pointer_at_commit == snapshot.id, "the pointer belongs to the same commit"
-    assert session.order == ["commit", "refresh-project", "refresh-snapshot", "preview", "event"]
-    assert world.enqueued == snapshot.id
-    assert world.threads["preview"] != threading.get_ident()
+    assert session.order == ["commit", "refresh-project", "refresh-snapshot", "event"]
     event_project, kind, data = world.event
     assert (event_project, kind) == (project.id, "snapshot.created")
     assert data["snapshot"]["id"] == str(snapshot.id)
@@ -151,4 +142,4 @@ async def test_slug_collision_is_a_conflict_and_announces_nothing(world):
         409,
     )
     assert session.order == ["commit", "rollback"]
-    assert not hasattr(world, "enqueued") and not hasattr(world, "event")
+    assert not hasattr(world, "event")

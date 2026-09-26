@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowUp, Check, ChevronLeft, Minus, MoreHorizontal, Plus } from "lucide-react";
+import { ArrowUp, Check, ChevronLeft, Clock, Minus, MoreHorizontal, Plus, Search, Users } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { LANDING_PROMPT_MAX_LENGTH, startWithPrompt } from "@/lib/landing-prompt";
 
-import { PhoneFrame } from "./AppScreens";
+import { Chips, PhoneFrame, Promo, Strip } from "./AppScreens";
+import { ProductArt, type ArtKind } from "./ProductArt";
 
 /**
  * Первый экран витрины: запрос владельца печатается сам, а рядом появляется
@@ -36,17 +37,34 @@ const scenarios: Record<Scenario, { tab: string; event: string; prompt: string; 
 
 const order: Scenario[] = ["cafe", "salon", "club", "shop"];
 
-const menu = [
-  { id: "cap", title: "Капучино", note: "250 мл · на обычном молоке", price: 240 },
-  { id: "flat", title: "Флэт уайт", note: "Больше кофе, меньше молока", price: 260 },
-  { id: "raf", title: "Раф ванильный", note: "300 мл · сливочный", price: 320 },
+type Item = { id: string; title: string; note: string; price: number; art: ArtKind };
+
+const menu: Item[] = [
+  { id: "cap", title: "Капучино", note: "250 мл · на обычном молоке", price: 240, art: "cappuccino" },
+  { id: "flat", title: "Флэт уайт", note: "Больше кофе, меньше молока", price: 260, art: "flatwhite" },
+  { id: "cro", title: "Круассан", note: "С миндалём · из печи в 7:30", price: 190, art: "croissant" },
+  { id: "che", title: "Чизкейк", note: "Кусок · нью-йорк", price: 290, art: "cheesecake" },
 ];
-const goods = [
-  { id: "mon", title: "Монстера", note: "В наличии", price: 1400 },
-  { id: "fic", title: "Фикус", note: "В наличии", price: 980 },
-  { id: "zam", title: "Замиокулькас", note: "Осталось 3", price: 1150 },
+const goods: Item[] = [
+  { id: "mon", title: "Монстера", note: "В кашпо 17 см · в наличии", price: 1400, art: "monstera" },
+  { id: "fic", title: "Фикус", note: "Высота 60 см · в наличии", price: 980, art: "ficus" },
+  { id: "zam", title: "Замиокулькас", note: "В кашпо 15 см · осталось 3", price: 1150, art: "zamioculcas" },
+  { id: "cal", title: "Калатея", note: "Высота 40 см · в наличии", price: 890, art: "calathea" },
 ];
 const slots = ["10:00", "12:30", "14:00", "16:30"];
+
+/* Плашка и категории у каждого сценария свои: они отвечают на вопрос «зачем
+   клиент открыл приложение именно сейчас», а он у кофейни и у магазина разный. */
+const catalogueTop: Record<"cafe" | "shop", { promo: [string, string, string]; chips: string[] }> = {
+  cafe: {
+    promo: ["Заберите без очереди", "Будет готово к 8:40", "15 мин"],
+    chips: ["Кофе", "Выпечка", "Десерты", "Чай"],
+  },
+  shop: {
+    promo: ["Самовывоз сегодня", "Соберём за 2 часа", "бесплатно"],
+    chips: ["Новое", "Неприхотливые", "Крупные", "Кашпо"],
+  },
+};
 
 const noMotion = { subscribe: () => () => {}, get: () => false };
 
@@ -123,10 +141,21 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
           <div className="ys-screen-body">
             {(scenario === "cafe" || scenario === "shop") && (
               <>
-                <p className="ys-kicker">{scenario === "cafe" ? "Меню на сегодня" : "Витрина"}</p>
+                <Promo
+                  kicker={catalogueTop[scenario].promo[0]}
+                  title={catalogueTop[scenario].promo[1]}
+                  pill={catalogueTop[scenario].promo[2]}
+                  tone={scenario}
+                />
+                <div className="ys-search">
+                  <Search size={12} />
+                  {scenario === "cafe" ? "Поиск по меню" : "Поиск по витрине"}
+                </div>
+                <Chips items={catalogueTop[scenario].chips} />
                 {catalogue.map(item => (
-                  <div className="ys-row" key={item.id}>
-                    <div>
+                  <div className="ys-row ys-row--art" key={item.id}>
+                    <ProductArt kind={item.art} />
+                    <div className="ys-row-text">
                       <strong>{item.title}</strong>
                       <small>{item.note}</small>
                     </div>
@@ -137,22 +166,34 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
                           <b>{cart[item.id]}</b>
                         </>
                       ) : (
-                        <b className="ys-price">{item.price} ₽</b>
+                        <b className="ys-price">{item.price.toLocaleString("ru-RU")} ₽</b>
                       )}
                       <button type="button" onClick={() => add(item.id, 1)} aria-label={`Добавить ${item.title}`}><Plus size={14} /></button>
                     </div>
                   </div>
                 ))}
-                <div className={`ys-action${items ? " is-on" : ""}`}>
-                  {items ? `Оформить · ${total.toLocaleString("ru-RU")} ₽` : "Выберите позицию"}
-                </div>
+                <Strip
+                  title={scenario === "cafe" ? "Бонусная карта" : "Карта покупателя"}
+                  note={scenario === "cafe" ? "Шестой кофе в подарок" : "5% возвращается бонусами"}
+                  value={scenario === "cafe" ? "4 из 6" : "640 ₽"}
+                />
               </>
             )}
 
             {scenario === "salon" && (
               <>
+                <Promo kicker="Ближайшее окно" title={`Сегодня в ${slot}`} pill="60 мин" tone="salon" />
                 <div className="ys-line"><span>Услуга</span><strong>Стрижка · 60 мин</strong></div>
                 <div className="ys-line"><span>Мастер</span><strong>Анна <Check size={13} /></strong></div>
+                <p className="ys-kicker">Сентябрь</p>
+                <div className="ys-week">
+                  {[["Пн", "22"], ["Вт", "23"], ["Ср", "24"], ["Чт", "25"], ["Пт", "26"]].map(([day, date], i) => (
+                    <span key={day} className={i === 2 ? "is-on" : undefined}>
+                      <em>{day}</em>
+                      {date}
+                    </span>
+                  ))}
+                </div>
                 <p className="ys-kicker">Свободное время</p>
                 <div className="ys-slots">
                   {slots.map(time => (
@@ -167,30 +208,65 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
                     </button>
                   ))}
                 </div>
-                <p className="ys-note">Подтверждение придёт в MAX</p>
-                <div className="ys-action is-on">Записаться на {slot}</div>
+                <p className="ys-note">
+                  <Clock size={12} />
+                  Подтверждение придёт в MAX
+                </p>
+                <p className="ys-kicker">Другие услуги</p>
+                <div className="ys-line"><span>Окрашивание · 2 ч</span><strong>3 500 ₽</strong></div>
+                <div className="ys-line"><span>Укладка · 40 мин</span><strong>1 200 ₽</strong></div>
+                <div className="ys-line"><span>Уход для волос · 30 мин</span><strong>900 ₽</strong></div>
+                <Strip title="Анна Соколова" note="Мастер · 6 лет в студии" value="4,9" />
               </>
             )}
 
             {scenario === "club" && (
               <>
                 <div className="ys-hero-card ys-hero-card--club">
+                  <Users size={26} />
                   <strong>Обсуждаем<br />«Маленького принца»</strong>
                   <span>20 сентября · 19:00 · онлайн</span>
+                </div>
+                <div className="ys-faces">
+                  <span />
+                  <span />
+                  <span />
+                  <small>идут 14 человек</small>
                 </div>
                 <p className="ys-kicker">Что будет на встрече</p>
                 <ul className="ys-list">
                   <li>Обсудим героев и любимые цитаты</li>
                   <li>Выберем книгу на следующий месяц</li>
+                  <li>Разыграем два бумажных издания</li>
                 </ul>
-                <button
-                  type="button"
-                  className={`ys-action${joined ? " is-done" : " is-on"}`}
-                  onClick={() => { onTouch(); setJoined(v => !v); }}
-                >
-                  {joined ? "Вы записаны" : "Участвовать"}
-                </button>
+                <p className="ys-kicker">Прошлые встречи</p>
+                <div className="ys-line"><span>«Мартин Иден»</span><strong>6 сентября</strong></div>
+                <div className="ys-line"><span>«Три товарища»</span><strong>23 августа</strong></div>
+                <Strip title="Книга на октябрь" note="Голосование открыто до 28 сентября" value="5 книг" />
               </>
+            )}
+          </div>
+
+          {/* Главное действие закреплено у нижнего края, как в настоящем
+              приложении: клиент ищет его там и не должен докручивать экран. */}
+          <div className="ys-bar">
+            {(scenario === "cafe" || scenario === "shop") && (
+              <>
+                <span>{items ? `Корзина · ${items}` : "Корзина пуста"}</span>
+                <b className={items ? "is-on" : undefined}>
+                  {items ? `Оформить · ${total.toLocaleString("ru-RU")} ₽` : "Выберите позицию"}
+                </b>
+              </>
+            )}
+            {scenario === "salon" && <b className="is-on">Записаться на {slot}</b>}
+            {scenario === "club" && (
+              <button
+                type="button"
+                className={`ys-bar-button${joined ? " is-done" : " is-on"}`}
+                onClick={() => { onTouch(); setJoined(v => !v); }}
+              >
+                {joined ? "Вы записаны" : "Участвовать"}
+              </button>
             )}
           </div>
         </div>

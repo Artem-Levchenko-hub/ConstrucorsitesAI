@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Mapping, Sequence
 from contextlib import suppress
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -227,6 +228,64 @@ async def execute_dispatch(run_id: UUID) -> bool:
                 await ownership.commit()
 
 
+def current_dispatch_limit() -> int:
+    """Сколько сборок разрешено вести одновременно прямо сейчас.
+
+    Читается на каждом заходе, а не один раз при старте: поменять предел можно
+    перезапуском воркера, без пересборки образа. Ноль и отрицательные значения
+    подтянуты к единице — предел «ноль» означал бы остановку всех сборок, и это
+    точно не то, чего хотел человек, меняющий настройку.
+    """
+
+    return max(1, int(get_settings().generation_worker_max_concurrent))
+
+
+def dispatch_heartbeat_payload(*, active: int, limit: int) -> str:
+    """Сердцебиение воркера: кто он, когда жив и насколько загружен.
+
+    Поля active и limit отвечают на вопрос «предел одновременных сборок мешает
+    или нет?». Без них его пришлось бы решать на глаз, а поднимать предел вслепую
+    значит отнять процессор у каждой идущей сборки. Когда active подолгу равен
+    limit — предел действительно упирается.
+
+    Прежние читатели (проба готовности платформы) берут отсюда только
+    release_sha, поэтому новые поля им не мешают.
+    """
+
+    return json.dumps(
+        {
+            "release_sha": get_settings().omnia_release_sha,
+            "at": datetime.now(UTC).isoformat(),
+            "active": active,
+            "limit": limit,
+        }
+    )
+
+
+def select_runs_to_start(
+    candidates: Sequence[UUID],
+    active: Mapping[UUID, object],
+    limit: int,
+) -> list[UUID]:
+    """Какие сборки начать в этот заход.
+
+    Порядок кандидатов — по времени создания, то есть кто раньше нажал, тот
+    раньше и пойдёт. Уже идущие пропускаем: повторный запуск той же сборки
+    означал бы двойные эффекты. Предел общий, а не на пользователя.
+    """
+
+    room = limit - len(active)
+    if room <= 0:
+        return []
+    starting: list[UUID] = []
+    for run_id in candidates:
+        if len(starting) >= room:
+            break
+        if run_id not in active:
+            starting.append(run_id)
+    return starting
+
+
 async def _run_dispatch_forever() -> None:
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     active: dict[UUID, asyncio.Task[bool]] = {}
@@ -258,17 +317,12 @@ async def _run_dispatch_forever() -> None:
                         )
                     ).all()
                 )
-            for run_id in candidates:
-                if run_id not in active and len(active) < 8:
-                    active[run_id] = asyncio.create_task(execute_dispatch(run_id))
+            limit = current_dispatch_limit()
+            for run_id in select_runs_to_start(candidates, active, limit):
+                active[run_id] = asyncio.create_task(execute_dispatch(run_id))
             await get_redis().set(
                 HEARTBEAT_KEY,
-                json.dumps(
-                    {
-                        "release_sha": get_settings().omnia_release_sha,
-                        "at": datetime.now(UTC).isoformat(),
-                    }
-                ),
+                dispatch_heartbeat_payload(active=len(active), limit=limit),
                 ex=30,
             )
         except Exception:

@@ -211,14 +211,6 @@ async def prepare_stack_prompt(
             "Единственное исключение: НЕ дублируй <html>/<body> в "
             "src/app/layout.tsx (корневой) — это ломает гидрацию и реалтайм."
         )
-    # Hand the agent the EXACT signatures of the locked primitives (instead
-    # of «read the files + check yourself» — a weak model skipped the reads
-    # and hallucinated `getChannels` / its own `Channel` type / `useChannel()`
-    # then looped on TS2305/TS2322/TS2554). Independent of design_mood and of
-    # `orchestrate` so an EDIT on a realtime app gets the contract too.
-    if _orch_name == "nextjs-realtime" and get_settings().use_primitive_contract:
-        _seed_block = _seed_block + ("\n\n" + agent_builder.realtime_primitives_contract())
-
     return StackPrompt(_seed_block, _orch_name, _stack_guide, _skills, _stack_system, _bare_stack)
 
 

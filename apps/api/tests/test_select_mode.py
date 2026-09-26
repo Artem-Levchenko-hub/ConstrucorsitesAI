@@ -5,7 +5,6 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from yleum_api.routers.public import _INSPECTOR_JS, _KIT_ASSETS
 from yleum_api.schemas.message import PromptRequest, SelectedElement
 
 # ── schema clamps (R-10 fail-fast at the boundary) ───────────────────────────
@@ -46,13 +45,10 @@ def test_inspector_copies_stay_in_sync() -> None:
 
     repo = Path(__file__).resolve().parents[3]  # apps/api/tests/<file> -> repo root
     canonical = repo / "apps/api/src/yleum_api/static/omnia-inspector.js"
+    # One template ships an app now; its copy must stay byte-identical to the
+    # canonical inspector the kit route serves (a template that silently drops it
+    # kills select-mode and the manual editor in the draft preview).
     copies = [
-        repo / "apps/orchestrator/templates/nextjs-postgres-drizzle/public/omnia-inspector.js",
-        repo / "apps/orchestrator/templates/nextjs-entities/public/omnia-inspector.js",
-        # nextjs-realtime (messengers) shipped WITHOUT the inspector — select-mode
-        # + the manual style editor were dead on every messenger until it was added.
-        # Pin it here so a new template can't silently drop it again.
-        repo / "apps/orchestrator/templates/nextjs-realtime/public/omnia-inspector.js",
         repo / "apps/orchestrator/templates/max-miniapp-nextjs/public/omnia-inspector.js",
     ]
     want = canonical.read_bytes()
@@ -106,16 +102,3 @@ def test_inspector_has_precise_selector_and_cross_origin_guards() -> None:
     assert 'case "omnia:preview:chrome"' in src
     assert "scrollbar-width:none" in src
     assert 'post({ type: "omnia:inspect:ready", version: 4 })' in src
-
-
-def test_vite_spa_loads_canonical_inspector_only_inside_workspace() -> None:
-    """SPA is a browser stack too: its preview must not expose dead edit buttons."""
-    repo = Path(__file__).resolve().parents[3]
-    index = (
-        repo / "apps/orchestrator/templates/vite-react-spa/index.html"
-    ).read_text(encoding="utf-8")
-    assert "window.self === window.top" in index
-    assert "document.referrer" in index
-    assert "/api/kit/omnia-inspector.js" in index
-    assert 'data-omnia-inspector-loader' in index
-    assert _INSPECTOR_JS.encode("utf-8") == _KIT_ASSETS["omnia-inspector.js"]

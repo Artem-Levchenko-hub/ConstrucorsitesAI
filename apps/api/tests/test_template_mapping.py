@@ -20,31 +20,17 @@ from yleum_api.schemas.project import (
 )
 
 
-@pytest.mark.parametrize(
-    "api_value,expected_orchestrator",
-    [
-        ("fullstack", "nextjs-postgres-drizzle"),
-        ("spa", "vite-react-spa"),
-        ("tgbot", "telegram-bot-aiogram"),
-        ("api", "fastapi-postgres"),
-        ("max_miniapp", "max-miniapp-nextjs"),
-    ],
-)
-def test_container_backed_templates_map_to_directory(
-    api_value: str, expected_orchestrator: str
-) -> None:
-    assert orchestrator_template(api_value) == expected_orchestrator
+def test_the_max_app_maps_to_its_directory() -> None:
+    assert orchestrator_template("max_miniapp") == "max-miniapp-nextjs"
 
 
 @pytest.mark.parametrize(
-    "static_value", ["blank", "landing", "portfolio", "blog"]
+    "separated_value", ["blank", "landing", "portfolio", "blog", "fullstack", "spa", "tgbot", "api"]
 )
-def test_static_templates_have_no_orchestrator_directory(
-    static_value: str,
-) -> None:
-    """Static templates render via /p/<slug>, no container — mapper must
-    return None so `routers/runtime.py` can pick its fallback policy."""
-    assert orchestrator_template(static_value) is None
+def test_separated_templates_have_no_orchestrator_directory(separated_value: str) -> None:
+    """Every stack of the site builder left with its template dir: the mapper
+    must answer None so nothing tries to provision an image that is not built."""
+    assert orchestrator_template(separated_value) is None
 
 
 def test_unknown_template_returns_none() -> None:
@@ -53,18 +39,16 @@ def test_unknown_template_returns_none() -> None:
     assert orchestrator_template("totally-invented-stack") is None
 
 
-@pytest.mark.parametrize(
-    "container_template", ["fullstack", "spa", "tgbot", "api", "max_miniapp"]
-)
-def test_is_fullstack_true_for_container_backed(container_template: str) -> None:
-    assert is_fullstack(container_template) is True
+def test_is_fullstack_true_only_for_the_max_app() -> None:
+    assert is_fullstack("max_miniapp") is True
 
 
 @pytest.mark.parametrize(
-    "static_template", ["blank", "landing", "portfolio", "blog"]
+    "separated_template",
+    ["blank", "landing", "portfolio", "blog", "fullstack", "spa", "tgbot", "api"],
 )
-def test_is_fullstack_false_for_static(static_template: str) -> None:
-    assert is_fullstack(static_template) is False
+def test_is_fullstack_false_for_separated_templates(separated_template: str) -> None:
+    assert is_fullstack(separated_template) is False
 
 
 def test_every_orchestrator_template_directory_exists_on_disk() -> None:
@@ -75,7 +59,7 @@ def test_every_orchestrator_template_directory_exists_on_disk() -> None:
     # apps/api/tests/test_template_mapping.py → repo_root/apps/orchestrator/templates
     repo_root = Path(__file__).resolve().parents[3]
     templates_dir = repo_root / "apps" / "orchestrator" / "templates"
-    for api_value in ("fullstack", "spa", "tgbot", "api", "max_miniapp"):
+    for api_value in ("max_miniapp",):
         directory = orchestrator_template(api_value)
         assert directory is not None
         candidate = templates_dir / directory
@@ -92,7 +76,7 @@ def test_template_literal_includes_new_values() -> None:
 
     values = set(get_args(Template))
     assert {"fullstack", "spa", "tgbot", "api", "max_miniapp"} <= values
-    assert {"blank", "landing", "portfolio", "blog"} <= values
+    assert {"blank", "landing", "portfolio", "blog"} <= values  # rows still read
     assert "code" in values  # owner 2026-06-18: language-agnostic source
 
 

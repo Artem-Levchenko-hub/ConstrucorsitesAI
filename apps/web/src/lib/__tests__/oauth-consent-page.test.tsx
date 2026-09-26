@@ -21,6 +21,17 @@ async function render(ticket?: string): Promise<string> {
   return renderToStaticMarkup(await OAuthCompletePage({ searchParams: Promise.resolve({ ticket }) }));
 }
 
+/**
+ * Запас по времени. Тест ничего не ждёт по сети — он ПЕРВЫМ в наборе тянет
+ * страницу кабинета через динамический импорт, а вместе с ней всё её дерево
+ * зависимостей, и платит за разовую компиляцию этого дерева. В одиночку файл
+ * проходит за две секунды, но когда параллельно идут остальные 94 файла, разовая
+ * компиляция растягивается и упирается в стандартные пять секунд. Падение при
+ * этом выглядит как поломка страницы согласий, хотя страница ни при чём —
+ * именно так этот файл трижды краснел на исправлениях, которые его не касались.
+ */
+const SLOW_FIRST_IMPORT = 20_000;
+
 describe("/oauth/complete", () => {
   it("asks for the same three consents before creating the account", async () => {
     pending.value = {
@@ -50,7 +61,7 @@ describe("/oauth/complete", () => {
     // Обещание о минимуме данных проверяется здесь: под кнопками входа его
     // больше нет, а человек принимает его именно на этом экране.
     expect(html).toContain("храним только email");
-  });
+  }, SLOW_FIRST_IMPORT);
 
   it("explains an expired or used ticket and offers the usual ways in", async () => {
     for (const ticket of [undefined, "stale"]) {
@@ -60,5 +71,5 @@ describe("/oauth/complete", () => {
       expect(html).toContain('href="/max/register"');
       expect(html).not.toContain("terms_accepted");
     }
-  });
+  }, SLOW_FIRST_IMPORT);
 });

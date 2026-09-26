@@ -2034,66 +2034,6 @@ async def deploy(
     return await _request("POST", "/internal/projects/deploy", json=payload)
 
 
-async def verify_deploy_target(target: dict[str, Any]) -> dict[str, Any]:
-    """POST /internal/deploy-targets/verify — SSH-коннект к чужому VPS + проверка docker.
-
-    `target` несёт РАСШИФРОВАННЫЕ креды (host/port/user/auth_type/secret) — канал
-    за X-Internal-Token, на одной машине это localhost. Возвращает
-    `{ok, detail, docker_ok, docker_version, host_key}`.
-    """
-    return await _request("POST", "/internal/deploy-targets/verify", json=target, timeout=45.0)
-
-
-async def teardown_remote_project(project_id: UUID, target: dict[str, Any]) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/internal/deploy-targets/teardown",
-        json={"project_id": str(project_id), **target},
-        timeout=150.0,
-    )
-
-
-async def get_remote_logs(
-    project_id: UUID, target: dict[str, Any], *, tail: int = 200
-) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/internal/deploy-targets/logs",
-        params={"tail": tail},
-        json={"project_id": str(project_id), **target},
-        timeout=45.0,
-    )
-
-
-async def sync_remote_routes(
-    project_id: UUID,
-    slug: str,
-    target: dict[str, Any],
-    domains: list[str],
-) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/internal/deploy-targets/routes",
-        json={
-            "project_id": str(project_id),
-            "slug": slug,
-            "domains": domains,
-            **target,
-        },
-        timeout=60.0,
-    )
-
-
-async def publish_custom_domain(payload: dict[str, Any]) -> dict[str, Any]:
-    """POST /internal/domains/publish — nginx-vhost для чужого host + выпуск SSL.
-
-    payload: {host, project_id, slug}. Оркестратор пишет vhost host → контейнер
-    проекта и выпускает Let's Encrypt (HTTP-01). Возвращает
-    `{ok, cert_status, detail}`. Таймаут высокий — acme может идти долго.
-    """
-    return await _request("POST", "/internal/domains/publish", json=payload, timeout=120.0)
-
-
 async def publish_project_cell(project_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
     """Submit durable public release; private payload is never logged."""
     return await _request(

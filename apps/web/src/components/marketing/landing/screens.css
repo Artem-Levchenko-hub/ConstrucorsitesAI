@@ -1,4 +1,3 @@
-@import "./imagery.css";
 
 /* Экраны приложений, первый экран витрины и коллажи.
    Всё нарисовано разметкой, а не картинками: остаётся чётким на любом экране
@@ -47,6 +46,34 @@
 .ys-row strong { font-size: 12px; font-weight: 600; }
 .ys-row small { display: block; margin-top: 2px; font-size: 9px; color: #8a8a93; }
 .ys-row b { font-size: 12px; font-weight: 600; white-space: nowrap; }
+/* Строка каталога с рисунком товара: та же строка, но человек сначала видит
+   вещь, а потом читает название. На маленьком экране это решает, задержится он
+   взглядом или пролистает. */
+.ys-row--art { gap: 9px; }
+/* Рамка рисунка товара. Сами рисунки — вектор в ProductArt.tsx; здесь только
+   размер и скругление. Высота намеренно скромная: карточка на маленьком экране
+   должна оставаться карточкой с названием и ценой, а не превращаться в альбом.
+   Рисунок вписывается в бокс целиком, поэтому предмет никогда не обрезается. */
+.ys-art { display: block; height: 46px; overflow: hidden; border-radius: 9px; }
+.ys-art svg { display: block; width: 100%; height: 100%; }
+.ys-row--art .ys-art { flex: none; width: 40px; height: 40px; }
+.ys-row-text { flex: 1; min-width: 0; }
+
+/* Полоска-итог внизу раздела: бонусы, мастер, голосование. В настоящем
+   приложении такие строки и удерживают человека — из-за них он возвращается,
+   а не заказывает один раз. */
+.ys-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: #f5f3f0;
+}
+.ys-strip strong { display: block; font-size: 11px; font-weight: 600; }
+.ys-strip small { display: block; margin-top: 2px; font-size: 9px; color: #8a8a93; }
+.ys-strip b { font-size: 11px; font-weight: 700; white-space: nowrap; }
 
 .ys-stepper { display: flex; align-items: center; gap: 7px; }
 .ys-stepper button {
@@ -283,6 +310,23 @@ button.ys-action { cursor: pointer; }
 }
 .ys-bar b.is-on { background: var(--color-brand-blue, #0062ee); }
 .ys-bar > b:only-child { flex: 1; text-align: center; }
+/* Кнопка в нижней полосе — та же плашка, но нажимаемая: на первом экране
+   витрины этот элемент настоящий, посетитель им пользуется. */
+.ys-bar-button {
+  flex: 1;
+  padding: 8px 12px;
+  border: 0;
+  border-radius: 9px;
+  background: #1f1d1d;
+  color: #fff;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+.ys-bar-button.is-on { background: var(--color-brand-blue, #0062ee); }
+.ys-bar-button.is-done { background: color-mix(in srgb, #1d7a45 12%, #fff); color: #1d7a45; }
 
 .ys-steps { display: grid; gap: 9px; }
 .ys-step { display: flex; align-items: center; gap: 9px; font-size: 11px; color: #9a9aa3; }
@@ -391,6 +435,20 @@ button.ys-action { cursor: pointer; }
 .ys-collage-item--3 { transform: translateY(-4px) rotate(-1.6deg); }
 .ys-collage-item--4 { transform: translateY(20px) rotate(1deg); }
 .ys-collage figcaption { margin-top: 30px; font-size: 12px; color: #8a8a93; text-align: center; }
+
+/* Телефон в ленте уже настоящего, но экран внутри должен остаться ТЕМ ЖЕ.
+   Если просто отдать содержимому 208 пикселей, оно перевёрстывается под узкую
+   колонку и нижний ряд карточек срезается краем экрана — именно так «Круассан»
+   оказывался обрезанным на полуслове. `zoom` вместо этого верстает экран в его
+   родной ширине (320 — как в первом блоке) и показывает уменьшенным, как
+   настоящий скриншот телефона: пропорции те же, ничего не теряется. */
+.ys-collage-item .ys-phone-status,
+.ys-collage-item .ys-phone-viewport { zoom: 0.65; }
+
+@media (max-width: 720px) {
+  .ys-collage-item .ys-phone-status,
+  .ys-collage-item .ys-phone-viewport { zoom: 0.5375; }
+}
 
 @media (max-width: 1000px) {
   /* На узком экране лента не обрезается молча, а листается пальцем. */

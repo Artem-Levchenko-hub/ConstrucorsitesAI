@@ -29,7 +29,6 @@ async def _register_and_create(
     monkeypatch: pytest.MonkeyPatch,
 ) -> str:
     monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "b" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
 
     async def fake_publish(*_args, **_kwargs) -> None:
         return None

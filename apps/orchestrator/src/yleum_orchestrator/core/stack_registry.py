@@ -59,44 +59,16 @@ def _stack(
     )
 
 
-# The template dirs shipped today (apps/orchestrator/templates/). New stacks plug
-# in by adding an entry here once their richer fields (readiness/env/migrate) are wired.
+# The template dirs shipped today (apps/orchestrator/templates/). Seven stacks of the
+# site builder left with it; what stays is the MAX app template and the blank box the
+# owner's bare-mode experiment still points at.
 STACKS: dict[str, StackSpec] = {
     # The bare experiment deliberately has no fixed framework or build contract.
     # It remains provisionable, but remote production deploy is rejected early
     # until the generated project supplies an explicit production recipe.
     "bare-nextjs": _stack("bare-nextjs"),
-    "nextjs-entities": _stack(
-        "nextjs-entities",
-        production_dockerfile="Dockerfile.prod",
-        needs_database=True,
-    ),
-    "nextjs-postgres-drizzle": _stack(
-        "nextjs-postgres-drizzle",
-        production_dockerfile="Dockerfile.prod",
-        needs_database=True,
-    ),
-    "nextjs-realtime": _stack(
-        "nextjs-realtime",
-        production_dockerfile="Dockerfile.prod",
-        needs_database=True,
-    ),
     "max-miniapp-nextjs": _stack(
         "max-miniapp-nextjs",
-        production_dockerfile="Dockerfile.prod",
-        needs_database=True,
-    ),
-    "vite-react-spa": _stack(
-        "vite-react-spa",
-        production_dockerfile="Dockerfile.prod",
-    ),
-    "fastapi-postgres": _stack(
-        "fastapi-postgres",
-        production_dockerfile="Dockerfile.prod",
-        needs_database=True,
-    ),
-    "telegram-bot-aiogram": _stack(
-        "telegram-bot-aiogram",
         production_dockerfile="Dockerfile.prod",
         needs_database=True,
     ),
