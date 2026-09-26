@@ -329,3 +329,134 @@
   .yl-shop-peek,
   .yl-after-screens > * { transform: none; }
 }
+
+/* ── возможности как работающие фрагменты ────────────────────────────────────
+   Список с галочками сообщает, что возможность заявлена; кусочек настоящего
+   экрана сообщает, что она существует. Разница между «у нас есть онлайн-запись»
+   и календарём со свободными окнами — это разница между обещанием и
+   доказательством. */
+.yl-caps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(270px, 1fr));
+  gap: 18px;
+}
+.yl-cap {
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid var(--yl-line, #e6e3df);
+  background: #fff;
+}
+.yl-cap h3 { margin-top: 16px; font-size: 17px; letter-spacing: -0.02em; }
+.yl-cap p { margin-top: 5px; font-size: 14px; line-height: 1.45; color: var(--yl-ink-2, #55555f); }
+/* Фрагмент фиксированной высоты: иначе карточки в ряду разъезжаются, и ряд
+   перестаёт читаться как один набор. */
+.yl-cap-demo {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-height: 142px;
+  padding: 13px;
+  border-radius: 13px;
+  background: var(--yl-tint, #f4f2ef);
+}
+
+.yl-cap-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-size: 12px; }
+.yl-cap-row strong { display: block; font-weight: 600; }
+.yl-cap-row small { display: block; font-size: 10.5px; color: #9a9aa3; }
+.yl-cap-row b { font-weight: 700; }
+
+.yl-cap-week { display: flex; gap: 5px; }
+.yl-cap-week span {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  justify-items: center;
+  padding: 6px 0;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 650;
+}
+.yl-cap-week em { font-size: 9px; font-style: normal; color: #9a9aa3; }
+.yl-cap-week span.is-on { background: var(--color-brand-blue, #0062ee); color: #fff; }
+.yl-cap-week span.is-on em { color: rgb(255 255 255 / 0.75); }
+.yl-cap-slots { display: flex; flex-wrap: wrap; gap: 5px; }
+.yl-cap-slots span { padding: 5px 9px; border-radius: 8px; background: #fff; font-size: 11.5px; }
+.yl-cap-slots span.is-on { background: #14141a; color: #fff; }
+
+.yl-cap-total { display: flex; align-items: baseline; justify-content: space-between; }
+.yl-cap-total span { font-size: 12px; color: #55555f; }
+.yl-cap-total strong { font-size: 20px; letter-spacing: -0.02em; }
+.yl-cap-pay { display: flex; gap: 6px; }
+.yl-cap-pay span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  background: #fff;
+  font-size: 11.5px;
+}
+.yl-cap-pay span.is-on { background: #14141a; color: #fff; }
+.yl-cap-cta {
+  margin-top: 2px;
+  padding: 8px;
+  border-radius: 9px;
+  background: var(--color-brand-blue, #0062ee);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  text-align: center;
+}
+
+.yl-cap-msg { max-width: 92%; padding: 9px 11px; border-radius: 12px; font-size: 12px; line-height: 1.4; }
+.yl-cap-msg--you { justify-self: end; background: var(--color-brand-blue, #0062ee); color: #fff; border-bottom-right-radius: 4px; }
+.yl-cap-msg--app { background: #fff; border-bottom-left-radius: 4px; }
+
+.yl-cap-loyal { display: flex; align-items: baseline; justify-content: space-between; font-size: 12px; }
+.yl-cap-loyal strong { font-size: 16px; }
+.yl-cap-stamps { display: flex; gap: 6px; }
+.yl-cap-stamps i { flex: 1; height: 9px; border-radius: 999px; background: #e2ded8; }
+.yl-cap-stamps i.is-on { background: var(--color-brand-blue, #0062ee); }
+.yl-cap-hint { font-size: 11px; color: #9a9aa3; }
+
+.yl-cap-event { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 11px; background: #fff; font-size: 12px; }
+.yl-cap-event div { flex: 1; min-width: 0; }
+.yl-cap-event strong { display: block; font-weight: 600; }
+.yl-cap-event small { display: block; font-size: 10.5px; color: #9a9aa3; }
+.yl-cap-dot { display: grid; width: 20px; height: 20px; place-items: center; border-radius: 50%; background: var(--color-brand-blue, #0062ee); color: #fff; }
+.yl-cap-dot--sync { background: #1d7a45; }
+.yl-cap-ok { display: grid; place-items: center; color: #1d7a45; }
+
+/* ── интеграции: настоящие имена вместо слова «интеграции» ───────────────── */
+.yl-integrations { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.yl-integration { padding: 14px 16px; border-radius: 14px; border: 1px solid var(--yl-line, #e6e3df); background: #fff; }
+.yl-integration strong { display: block; font-size: 15px; letter-spacing: -0.01em; }
+.yl-integration span { display: block; margin-top: 3px; font-size: 13px; color: var(--yl-ink-2, #55555f); }
+.yl-integrations-note { grid-column: 1 / -1; margin-top: 4px; }
+
+/* ── ниши: человек должен найти себя за две секунды ──────────────────────── */
+.yl-niches { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.yl-niche {
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--yl-line, #e6e3df);
+  background: #fff;
+  font-size: 14px;
+  color: var(--yl-ink-1, #14141a);
+}
+
+/* ── подзаголовок внутри секции ─────────────────────────────────────────── */
+.yl-subhead { font-size: 19px; letter-spacing: -0.02em; text-align: center; }
+.yl-head--sub { margin-top: 44px; }
+
+/* ── то, что обычно настраивают неделями ────────────────────────────────── */
+.yl-platform { margin-top: 44px; }
+.yl-platform .yl-subhead { margin-bottom: 18px; }
+.yl-platform-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; }
+.yl-platform-grid > div { display: grid; grid-template-columns: auto 1fr; gap: 3px 9px; align-items: start; }
+.yl-platform-grid svg { grid-row: 1 / 3; margin-top: 2px; color: var(--color-brand-blue, #0062ee); }
+.yl-platform-grid strong { font-size: 14.5px; }
+.yl-platform-grid span { font-size: 13px; color: var(--yl-ink-2, #55555f); }

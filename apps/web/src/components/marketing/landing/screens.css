@@ -1,3 +1,5 @@
+@import "./imagery.css";
+
 /* Экраны приложений, первый экран витрины и коллажи.
    Всё нарисовано разметкой, а не картинками: остаётся чётким на любом экране
    и наследует палитру бренда. */
@@ -159,15 +161,128 @@ button.ys-action { cursor: pointer; }
 .ys-hero-card--loyalty { background: linear-gradient(140deg, #dff0ff, #cfe2ff); color: #14396b; }
 .ys-hero-card--loyalty strong { font-size: 30px; letter-spacing: -0.04em; }
 
+/* ── каталог: сетка карточек ─────────────────────────────────────────────── */
 .ys-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.ys-tile { display: grid; gap: 4px; padding: 9px; border-radius: 10px; background: #f4f2ef; }
-.ys-tile span { display: block; height: 46px; border-radius: 7px; background: #dfdbd4; }
-.ys-tile--a span { background: linear-gradient(150deg, #cfe3cd, #a9c9a6); }
-.ys-tile--b span { background: linear-gradient(150deg, #d8e6d2, #b5cfae); }
-.ys-tile--c span { background: linear-gradient(150deg, #d2e0da, #a8c3b8); }
-.ys-tile--d span { background: linear-gradient(150deg, #e2ddcd, #c4bba1); }
-.ys-tile strong { font-size: 10px; }
-.ys-tile b { font-size: 10px; color: #55555f; }
+.ys-tile {
+  display: grid;
+  gap: 3px;
+  padding: 7px;
+  border-radius: 11px;
+  border: 1px solid #efece8;
+  background: #fff;
+}
+.ys-tile strong { font-size: 10px; line-height: 1.25; }
+.ys-tile small { font-size: 8px; color: #9a9aa3; }
+.ys-tile > div { display: flex; align-items: center; justify-content: space-between; margin-top: 2px; }
+.ys-tile b { font-size: 10.5px; font-weight: 700; }
+/* Кнопка добавления: клиент нажимает именно её, поэтому она цветная и заметная. */
+.ys-tile i {
+  display: grid;
+  width: 17px;
+  height: 17px;
+  place-items: center;
+  border-radius: 6px;
+  background: var(--color-brand-blue, #0062ee);
+  color: #fff;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 1;
+}
+
+/* ── плашка события: то, ради чего клиент открыл приложение сейчас ────────── */
+.ys-promo {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 11px;
+  color: #fff;
+}
+.ys-promo span { display: block; font-size: 7.5px; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.82; }
+.ys-promo strong { display: block; margin-top: 2px; font-size: 11.5px; }
+.ys-promo em {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.22);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 650;
+}
+.ys-promo--cafe { background: linear-gradient(105deg, #2d5bf0, #4a3df3); }
+.ys-promo--salon { background: linear-gradient(105deg, #7a4bf0, #b06ef5); }
+.ys-promo--shop { background: linear-gradient(105deg, #1f7a52, #2f9d63); }
+.ys-promo--status { background: linear-gradient(105deg, #1d6f3f, #2f9a5c); }
+
+/* ── строка категорий ────────────────────────────────────────────────────── */
+.ys-chips { display: flex; gap: 5px; overflow: hidden; }
+.ys-chips span {
+  flex-shrink: 0;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid #e6e3df;
+  font-size: 9px;
+  color: #55555f;
+}
+.ys-chips span.is-on { border-color: transparent; background: #14141a; color: #fff; }
+
+/* ── неделя в записи ─────────────────────────────────────────────────────── */
+.ys-week { display: flex; gap: 4px; }
+.ys-week span {
+  display: grid;
+  flex: 1;
+  gap: 1px;
+  justify-items: center;
+  padding: 5px 0;
+  border-radius: 8px;
+  border: 1px solid #e6e3df;
+  font-size: 10px;
+  font-weight: 650;
+}
+.ys-week em { font-size: 7.5px; font-style: normal; font-weight: 600; color: #9a9aa3; }
+.ys-week span.is-on { border-color: transparent; background: var(--color-brand-blue, #0062ee); color: #fff; }
+.ys-week span.is-on em { color: rgb(255 255 255 / 0.75); }
+
+/* ── участники встречи ───────────────────────────────────────────────────── */
+.ys-faces { display: flex; align-items: center; gap: 4px; }
+.ys-faces span {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #fff;
+  background: linear-gradient(140deg, #cfd8f5, #8fa3e8);
+}
+.ys-faces span + span { margin-left: -9px; }
+.ys-faces small { margin-left: 5px; font-size: 9px; color: #9a9aa3; }
+
+/* ── отметки в карте лояльности ──────────────────────────────────────────── */
+.ys-stamps { display: flex; gap: 5px; }
+.ys-stamps i { flex: 1; height: 7px; border-radius: 999px; background: #e8e4de; }
+.ys-stamps i.is-on { background: var(--color-brand-blue, #0062ee); }
+
+/* ── нижняя полоса действия ──────────────────────────────────────────────── */
+.ys-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 9px 12px 11px;
+  border-top: 1px solid #efece8;
+  background: #fff;
+  font-size: 10px;
+}
+.ys-bar span { color: #55555f; }
+.ys-bar b {
+  padding: 7px 12px;
+  border-radius: 9px;
+  background: #1f1d1d;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 650;
+}
+.ys-bar b.is-on { background: var(--color-brand-blue, #0062ee); }
+.ys-bar > b:only-child { flex: 1; text-align: center; }
 
 .ys-steps { display: grid; gap: 9px; }
 .ys-step { display: flex; align-items: center; gap: 9px; font-size: 11px; color: #9a9aa3; }
@@ -176,7 +291,7 @@ button.ys-action { cursor: pointer; }
 .ys-step.is-done i { background: #1d7a45; }
 
 /* ── первый экран ────────────────────────────────────────────────────────── */
-.ys-stage { display: grid; justify-items: center; gap: 22px; width: 100%; }
+.ys-stage { position: relative; display: grid; justify-items: center; gap: 22px; width: 100%; }
 .ys-stage-prompt {
   position: relative;
   width: min(100%, 560px);
@@ -263,6 +378,9 @@ button.ys-action { cursor: pointer; }
   align-items: flex-start;
   justify-content: center;
   padding-inline: 16px;
+  /* Запас сверху и снизу под сдвиги и наклоны: без него корпуса срезает краем
+     секции, и аккуратная лента превращается в обрубки. */
+  padding-block: 12px 48px;
   min-width: max-content;
   margin-inline: auto;
 }
@@ -301,6 +419,12 @@ button.ys-action { cursor: pointer; }
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  /* Форма телефона ПОСТОЯННАЯ и не зависит от содержимого. Пока высоту задавало
+     содержимое, экран с двумя строками выходил коротышкой, а длинное меню не
+     помещалось и обрезалось на полуслове — сразу видно, что это не телефоны.
+     9:19,5 — пропорция современного аппарата. Что не поместилось, просто не
+     видно ниже края экрана, ровно как в жизни. */
+  aspect-ratio: 9 / 19.5;
   padding: 0 0 9px;
   border: 1px solid #dcd8d2;
   border-radius: 30px;
@@ -346,7 +470,12 @@ button.ys-action { cursor: pointer; }
   background-clip: content-box;
   padding: 1px;
 }
+/* Экран занимает всю высоту корпуса, иначе под коротким содержимым зияла бы
+   прозрачная дыра вместо белого экрана; тело прокручивается под закреплённой
+   нижней полосой, как в настоящем приложении. */
 .ys-phone-viewport { flex: 1; min-height: 0; overflow: hidden; }
+.ys-phone-viewport > * { height: 100%; display: flex; flex-direction: column; }
+.ys-phone-viewport .ys-screen-body { flex: 1; min-height: 0; overflow: hidden; align-content: start; }
 /* Экран внутри рамки теряет собственную обводку и тень: две рамки подряд
    выглядят как ошибка вёрстки. */
 .ys-phone-viewport .ys-screen {
@@ -365,4 +494,34 @@ button.ys-action { cursor: pointer; }
   background: #14141a;
   opacity: 0.22;
   transform: translateX(-50%);
+}
+
+/* ── плашки владельца вокруг телефона ────────────────────────────────────────
+   Телефон показывает, что видит клиент. Эти две плашки показывают, что в это же
+   время видит владелец: заказ пришёл и оплачен, приложение опубликовано. Для
+   экранного диктора они скрыты — это иллюстрация, а не содержание страницы. */
+.ys-owner-note {
+  position: absolute;
+  z-index: 2;
+  display: none;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 13px 9px 11px;
+  border-radius: 13px;
+  border: 1px solid #ebe8e3;
+  background: #fff;
+  box-shadow: 0 16px 36px rgb(20 20 26 / 0.10);
+  text-align: left;
+  white-space: nowrap;
+}
+.ys-owner-note strong { display: block; font-size: 12px; }
+.ys-owner-note small { display: block; margin-top: 1px; font-size: 10.5px; color: #8a8a93; }
+.ys-owner-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--color-brand-blue, #0062ee); }
+.ys-owner-dot--live { background: #1d7a45; }
+/* Показываем только там, где рядом с телефоном есть свободное поле: на узком
+   экране плашки накрыли бы сам телефон и мешали бы, а не помогали. */
+@media (min-width: 1060px) {
+  .ys-owner-note { display: flex; }
+  .ys-owner-note--order { left: max(0px, calc(50% - 430px)); top: 46%; }
+  .ys-owner-note--live { right: max(0px, calc(50% - 470px)); top: 30%; }
 }
