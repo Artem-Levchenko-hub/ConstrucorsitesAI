@@ -1,4 +1,4 @@
-import { act, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { act, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +9,8 @@ import type {
   MaxProjectConfig,
   MaxPreviewSession,
   Project,
+  Message,
+  ProjectVersion,
   RuntimeStatus,
 } from "@/lib/api/types";
 
@@ -21,6 +23,11 @@ const syncMaxManagedKit = vi.fn<
 const getRuntime = vi.fn<(projectId: string) => Promise<RuntimeStatus>>();
 const startRuntime = vi.fn<(projectId: string) => Promise<RuntimeStatus>>();
 const toastError = vi.fn();
+const listMessages = vi.fn<(projectId: string) => Promise<Message[]>>();
+
+vi.mock("@/lib/api/messages", () => ({
+  listMessages: (projectId: string) => listMessages(projectId),
+}));
 
 vi.mock("@/lib/api/max-studio", () => ({
   createMaxPreviewSession: (projectId: string) =>
@@ -152,6 +159,25 @@ const PROJECT: Project = {
   updated_at: "2026-09-02T20:00:00Z",
 };
 
+function buildMessage(status: Message["generation_status"], id = "build-1"): Message {
+  return {
+    id, project_id: PROJECT.id, snapshot_id: null, role: "assistant", content: "",
+    model_id: null, tokens_in: null, tokens_out: null, selected_elements: null,
+    created_at: "2026-09-26T14:39:22Z", generation_status: status,
+  };
+}
+
+function buildVersion(status: ProjectVersion["status"] = "failed"): ProjectVersion {
+  return {
+    id: "version-1", number: 1, project_id: PROJECT.id,
+    source_message_id: "build-1", generation_run_id: "run-1",
+    snapshot_id: "seed-snapshot", commit_sha: "a".repeat(40),
+    prompt_text: "Synthetic QA", model_id: null, created_at: "2026-09-26T14:39:22Z",
+    status, preview_status: "missing", previews: [], is_current: status === "ready",
+    can_restore: status === "ready",
+  };
+}
+
 async function flushPromises(rounds: number = 4): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
     await act(async () => {
@@ -211,6 +237,7 @@ describe("MAX live preview recovery", () => {
       ResizeObserverMock as typeof globalThis.ResizeObserver;
     getRuntime.mockResolvedValue(runtime());
     startRuntime.mockResolvedValue(runtime());
+    listMessages.mockResolvedValue([]);
     queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -233,10 +260,13 @@ describe("MAX live preview recovery", () => {
       globalThis.ResizeObserver = originalResizeObserver;
     }
     vi.useRealTimers();
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
-  function renderPreview(currentSnapshotId: string | null) {
+  function renderPreview(
+    currentSnapshotId: string | null,
+    overrides: Partial<ComponentProps<typeof MaxLivePreview>> = {},
+  ) {
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
@@ -249,11 +279,234 @@ describe("MAX live preview recovery", () => {
             onSelectVersion={vi.fn()}
             onRestoreSnapshot={vi.fn().mockResolvedValue(undefined)}
             restoringSnapshot={false}
+            {...overrides}
           />
         </QueryClientProvider>,
       );
     });
   }
+
+  it.each(["failed", "cancelled"] as const)(
+    "stops first-build preparation after durable %s even with a seed snapshot",
+    async (status) => {
+      queryClient.setQueryData(["messages", PROJECT.id], [buildMessage(status)]);
+      listMessages.mockResolvedValue([buildMessage(status)]);
+      getRuntime.mockResolvedValue(runtime("provisioning"));
+      renderPreview("seed-snapshot", { versions: [buildVersion(status)] });
+      await flushPromises();
+      expect(container.textContent).toContain(status === "failed"
+        ? "Первая сборка не завершена" : "Первая сборка отменена");
+      expect(container.textContent).not.toContain("от 15 до 60 секунд");
+      expect(container.querySelector(".animate-spin")).toBeNull();
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(syncMaxManagedKit).not.toHaveBeenCalled();
+      expect(createMaxPreviewSession).not.toHaveBeenCalled();
+      expect(container.querySelector<HTMLButtonElement>("[data-testid='max-refresh-preview']")?.disabled)
+        .toBe(true);
+    },
+  );
+
+  it("restores the failed-first-build state from history after a reload", async () => {
+    listMessages.mockResolvedValue([buildMessage("failed")]);
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await waitForValue(() => container.textContent?.includes("Первая сборка не завершена"));
+    expect(container.textContent).not.toContain("от 15 до 60 секунд");
+    expect(startRuntime).not.toHaveBeenCalled();
+  });
+
+  it("releases the terminal state immediately for a new optimistic request and opens its ready build", async () => {
+    const failed = buildMessage("failed");
+    listMessages.mockResolvedValue([failed]);
+    queryClient.setQueryData(["messages", PROJECT.id], [failed]);
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    startRuntime.mockResolvedValue(runtime("provisioning"));
+    syncMaxManagedKit.mockResolvedValue(managedKit("built-snapshot"));
+    createMaxPreviewSession.mockResolvedValue(session("https://new-build.example"));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await flushPromises();
+    expect(container.textContent).toContain("Первая сборка не завершена");
+
+    const optimistic = buildMessage(null, "optimistic-next");
+    listMessages.mockResolvedValue([failed, optimistic]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, optimistic]));
+    await waitForValue(() => startRuntime.mock.calls.length === 1);
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, buildMessage("running", "next")]));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+    act(() => {
+      queryClient.setQueryData(["messages", PROJECT.id], [failed, buildMessage("completed", "next")]);
+      queryClient.setQueryData(["runtime", PROJECT.id], runtime());
+    });
+    renderPreview("built-snapshot", { versions: [{ ...buildVersion("ready"), snapshot_id: "built-snapshot" }] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://new-build.example/");
+  });
+
+  it("stops a scheduled start retry when the first generation fails", async () => {
+    vi.useFakeTimers();
+    listMessages.mockResolvedValue([buildMessage("running")]);
+    queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("running")]);
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    startRuntime.mockRejectedValue(new ApiError(503, { code: "orchestrator_unavailable", message: "busy" }));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    listMessages.mockResolvedValue([buildMessage("failed")]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("failed")]));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Первая сборка не завершена");
+  });
+
+  it.each(["sync", "session"] as const)("cancels scheduled %s retries after a first-build failure", async (stage) => {
+    vi.useFakeTimers();
+    const running = buildMessage("running");
+    queryClient.setQueryData(["messages", PROJECT.id], [running]);
+    listMessages.mockResolvedValue([running]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
+    const target = stage === "sync" ? syncMaxManagedKit : createMaxPreviewSession;
+    target.mockRejectedValue(new ApiError(503, { code: "orchestrator_unavailable", message: "busy" }));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30); });
+    expect(target).toHaveBeenCalledTimes(1);
+    const failed = buildMessage("failed");
+    listMessages.mockResolvedValue([failed]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed]));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(target).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Первая сборка не завершена");
+  });
+
+  it("does not revive the previous scheduled start when a new request arrives before its retry", async () => {
+    vi.useFakeTimers();
+    const running = buildMessage("running");
+    queryClient.setQueryData(["messages", PROJECT.id], [running]);
+    listMessages.mockResolvedValue([running]);
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    startRuntime.mockRejectedValueOnce(new ApiError(503, { code: "orchestrator_unavailable", message: "busy" }))
+      .mockResolvedValue(runtime("provisioning"));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    const failed = buildMessage("failed");
+    listMessages.mockResolvedValue([failed]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed]));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    const next = buildMessage(null, "new-request");
+    listMessages.mockResolvedValue([failed, next]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, next]));
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    expect(startRuntime).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_600); });
+    expect(startRuntime).toHaveBeenCalledTimes(2);
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+  });
+
+  it("shows the first-build invitation before any generation", async () => {
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview(null);
+    await flushPromises();
+    expect(container.textContent).toContain("Превью появится после первой сборки");
+    expect(container.textContent).not.toContain("от 15 до 60 секунд");
+  });
+
+  it.each([
+    { snapshotsLoading: true }, { historyError: true },
+    { historyCurrent: false }, { hasOlder: true },
+  ])("does not infer terminal first-build failure from incomplete history %j", async (state) => {
+    queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("failed")]);
+    listMessages.mockResolvedValue([buildMessage("failed")]);
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview("seed-snapshot", { versions: [buildVersion()], ...state });
+    await flushPromises();
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+  });
+
+  it.each(["queued", "running"] as const)("does not let a stale failed message block a new %s version", async (status) => {
+    queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("failed")]);
+    listMessages.mockResolvedValue([buildMessage("failed")]);
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview("seed-snapshot", { versions: [buildVersion(status)] });
+    await flushPromises();
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+    expect(getRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not infer generation failure from a failed message-history request", async () => {
+    listMessages.mockRejectedValue(new Error("offline"));
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await flushPromises();
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+  });
+
+  it("does not treat iframe load during the first running build as proof of a successful version", async () => {
+    const running = buildMessage("running");
+    queryClient.setQueryData(["messages", PROJECT.id], [running]);
+    listMessages.mockResolvedValue([running]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
+    // Browsers emit load for cross-origin HTTP error pages as well as app pages.
+    createMaxPreviewSession.mockResolvedValue(session("https://error-page.example"));
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => frame.dispatchEvent(new Event("load")));
+    const failed = buildMessage("failed");
+    listMessages.mockResolvedValue([failed]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed]));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    await waitForValue(() => container.textContent?.includes("Первая сборка не завершена"));
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.querySelector(".animate-spin")).toBeNull();
+    expect(container.textContent).not.toContain("Подключено");
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='max-refresh-preview']")?.disabled).toBe(true);
+    expect(container.querySelector<HTMLButtonElement>("[data-testid='max-open-preview-separate']")?.disabled).toBe(true);
+  });
+
+  it("keeps a working prior version when a later generation fails", async () => {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://working.example"));
+    renderPreview("snapshot-1", { versions: [buildVersion("ready")] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => frame.dispatchEvent(new Event("load")));
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("failed", "next")]));
+    renderPreview("snapshot-1", { versions: [{ ...buildVersion(), id: "failed-next", number: 2 }, buildVersion("ready")] });
+    await flushPromises();
+    expect(container.querySelector("iframe")?.src).toBe("https://working.example/");
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+  });
+
+  it("keeps historical inspection separate from the failed live first build", async () => {
+    queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("failed")]);
+    listMessages.mockResolvedValue([buildMessage("failed")]);
+    renderPreview("seed-snapshot", { versions: [buildVersion()], selectedVersionId: "version-1" });
+    await flushPromises();
+    expect(container.querySelector("[data-testid='max-history-unavailable']")).not.toBeNull();
+    expect(container.textContent).not.toContain("Первая сборка не завершена");
+    expect(startRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not carry a working iframe into another project's failed first build", async () => {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://working.example"));
+    renderPreview("snapshot-1", { versions: [buildVersion("ready")] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => frame.dispatchEvent(new Event("load")));
+    const other = { ...PROJECT, id: "other-project" };
+    const failure = { ...buildMessage("failed"), project_id: other.id };
+    queryClient.setQueryData(["messages", other.id], [failure]);
+    listMessages.mockResolvedValue([failure]);
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    renderPreview("other-seed", { project: other, versions: [{ ...buildVersion(), project_id: other.id }] });
+    await flushPromises();
+    expect(container.querySelector("iframe")).toBeNull();
+    expect(container.textContent).toContain("Первая сборка не завершена");
+  });
 
   it("keeps the last working iframe while a new snapshot sync is still preparing", async () => {
     const nextManagedKit = deferred<MaxProjectConfig>();
@@ -420,6 +673,19 @@ describe("MAX live preview recovery", () => {
     expect(frame.getAttribute("src")).toBe("https://recovered.example");
     expect(startRuntime).toHaveBeenCalledTimes(2);
     expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not show the previous start error once runtime polling sees recovery", async () => {
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    startRuntime.mockRejectedValueOnce(new ApiError(403, { code: "forbidden", message: "unavailable" }));
+    const pendingSync = deferred<MaxProjectConfig>();
+    syncMaxManagedKit.mockImplementationOnce(() => pendingSync.promise);
+    renderPreview("snapshot-1", { versions: [buildVersion("ready")] });
+    await waitForValue(() => container.textContent?.includes("Превью пока недоступно"));
+    act(() => queryClient.setQueryData(["runtime", PROJECT.id], runtime()));
+    await waitForValue(() => container.textContent?.includes("Синхронизируем последнюю версию"));
+    expect(container.textContent).not.toContain("Превью пока недоступно");
+    expect(container.textContent).toContain("Синхронизируем последнюю версию");
   });
 
   it("shows a toast when manual preview refresh fails", async () => {

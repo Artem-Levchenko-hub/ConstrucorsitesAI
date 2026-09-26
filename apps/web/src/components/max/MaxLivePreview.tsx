@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BatteryFull,
@@ -31,6 +31,8 @@ import {
   createMaxPreviewSession,
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
+import { listMessages } from "@/lib/api/messages";
+import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project, ProjectVersion } from "@/lib/api/types";
 import { versionStatusLabel } from "@/lib/project-version";
@@ -50,7 +52,10 @@ const PREVIEW_RETRY_DELAY_MS = 1_500;
 const previewRetryDelay = (attempt: number) =>
   Math.min(PREVIEW_RETRY_DELAY_MS * 2 ** attempt, 10_000);
 
+class PreviewPreparationStoppedError extends Error {}
+
 function isTransientPreviewError(error: unknown): boolean {
+  if (error instanceof PreviewPreparationStoppedError) return false;
   if (!(error instanceof ApiError)) return true;
   if (error.status === 0 || error.status === 409 || error.status >= 500) {
     return true;
@@ -135,25 +140,54 @@ export function MaxLivePreview({
   const promptContentId = useId();
   const promptToggle = useRef<HTMLButtonElement>(null);
   const promptOpen = Boolean(displayedVersion && promptTargetId === displayedVersion.id);
-  const historySelected = useRef(viewingHistorical);
+  const [lastWorkingPreview, setLastWorkingPreview] = useState<{ projectId: string; url: string } | null>(null);
+  const lastWorkingUrl = lastWorkingPreview?.projectId === project.id ? lastWorkingPreview.url : null;
+  const messages = useQuery({
+    queryKey: ["messages", project.id],
+    queryFn: () => listMessages(project.id),
+    enabled: !viewingHistorical,
+  });
+  const lastMessage = messages.data?.[messages.data.length - 1];
+  // A seed snapshot is not proof of a successful build. Incomplete history is
+  // likewise not proof that no working version exists. iframe load can also
+  // come from an HTTP error page, so a remembered URL is not build evidence.
+  const noSuccessfulBuild = !snapshotsLoading && !historyError && historyCurrent && !hasOlder &&
+    !versions.some((version) => version.status === "ready" || version.status === "unchanged");
+  const firstBuildTerminal = !viewingHistorical && noSuccessfulBuild && messages.isSuccess &&
+    !versions.some((version) => version.status === "queued" || version.status === "running") &&
+    lastMessage?.role === "assistant" && !isChatMessageStreaming(lastMessage) &&
+    (lastMessage.generation_status === "failed" || lastMessage.generation_status === "cancelled")
+      ? lastMessage.generation_status : null;
+  const previewDisabled = viewingHistorical || Boolean(firstBuildTerminal) ||
+    (noSuccessfulBuild && messages.isPending);
+  // Each pause/project change retires the old mutation, including retries
+  // already sleeping when a new generation releases the pause again.
+  const activity = useMemo(() => ({ projectId: project.id, disabled: previewDisabled }), [project.id, previewDisabled]);
+  const previewActivity = useRef(activity);
   useEffect(() => {
-    historySelected.current = viewingHistorical;
-    if (!viewingHistorical) return;
+    previewActivity.current = activity;
+  }, [activity]);
+  const activityBlocked = () => previewActivity.current.projectId !== project.id || previewActivity.current.disabled;
+  const started = useRef(false);
+  useEffect(() => {
+    started.current = false;
+  }, [project.id, previewDisabled]);
+  useEffect(() => {
+    if (!previewDisabled) return;
     // Disabling an observer does not cancel an already scheduled query retry.
+    void queryClient.cancelQueries({ queryKey: ["runtime", project.id] });
     void queryClient.cancelQueries({ queryKey: ["max-managed-kit-sync", project.id] });
     void queryClient.cancelQueries({ queryKey: ["max-preview-session", project.id] });
-  }, [viewingHistorical, project.id, queryClient]);
-  const started = useRef(false);
+  }, [previewDisabled, project.id, queryClient]);
   const deviceStage = useRef<HTMLDivElement>(null);
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const [deviceScale, setDeviceScale] = useState(0.72);
-  const [lastWorkingUrl, setLastWorkingUrl] = useState<string | null>(null);
   const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
   const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
-    enabled: !viewingHistorical,
+    enabled: !previewDisabled,
     retry: false,
     refetchInterval: (query) => {
       const state = query.state.data?.state;
@@ -161,22 +195,24 @@ export function MaxLivePreview({
     },
   });
   const start = useMutation({
-    mutationFn: () => {
-      if (historySelected.current) throw new Error("Открыта история версий");
+    mutationFn: (activity: typeof previewActivity.current) => {
+      if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
       return startRuntime(project.id);
     },
     // Cold restoration is bounded by the server. A competing start or a lost
     // response is retryable; auth/ownership failures are not.
     retry: (failureCount, error) =>
-      !historySelected.current && failureCount < 20 && isTransientPreviewError(error),
+      !activityBlocked() && failureCount < 20 && isTransientPreviewError(error),
     retryDelay: previewRetryDelay,
-    onSuccess: (value) => queryClient.setQueryData(["runtime", project.id], value),
+    onSuccess: (value, activity) => {
+      if (activity === previewActivity.current) queryClient.setQueryData(["runtime", project.id], value);
+    },
   });
   const runtimeRunning = runtime.data?.state === "running";
   const managedKit = useQuery({
     queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId],
     queryFn: () => syncMaxManagedKit(project.id),
-    enabled: !viewingHistorical && runtimeRunning,
+    enabled: !previewDisabled && runtimeRunning,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
     retryDelay: previewRetryDelay,
@@ -193,7 +229,7 @@ export function MaxLivePreview({
       managedKit.data?.synced_snapshot_id ?? null,
     ],
     queryFn: () => createMaxPreviewSession(project.id),
-    enabled: !viewingHistorical && runtimeRunning && managedKit.isSuccess,
+    enabled: !previewDisabled && runtimeRunning && managedKit.isSuccess,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
     retryDelay: previewRetryDelay,
@@ -206,22 +242,25 @@ export function MaxLivePreview({
   });
   const recoverPreview = useMutation({
     mutationFn: async () => {
+      const activity = previewActivity.current;
+      const recoveryBlocked = () => activityBlocked() || activity !== previewActivity.current;
+      if (recoveryBlocked()) return null;
       const runtimeResult = await runtime.refetch();
-      if (historySelected.current) return null;
+      if (recoveryBlocked()) return null;
       let activeRuntime = runtimeResult.data ?? runtime.data ?? null;
       if (
         !activeRuntime ||
         ["stopped", "paused", "failed"].includes(activeRuntime.state)
       ) {
-        activeRuntime = await start.mutateAsync();
+        activeRuntime = await start.mutateAsync(activity);
       }
-      if (historySelected.current || activeRuntime.state !== "running") {
+      if (recoveryBlocked() || activeRuntime.state !== "running") {
         // Polling below will connect once preparation completes. Do not mint
         // sessions (or show a false failure) while a generation/wake is active.
         return null;
       }
       const managedKitResult = await managedKit.refetch();
-      if (historySelected.current) return null;
+      if (recoveryBlocked()) return null;
       if (!managedKitResult.data) {
         throw (
           managedKitResult.error ??
@@ -254,12 +293,12 @@ export function MaxLivePreview({
   });
 
   useEffect(() => {
-    if (viewingHistorical || runtime.isLoading || started.current) return;
+    if (previewDisabled || runtime.isLoading || started.current) return;
     if (runtime.isError || !runtime.data || ["stopped", "paused", "failed"].includes(runtime.data.state)) {
       started.current = true;
-      start.mutate();
+      start.mutate(previewActivity.current);
     }
-  }, [viewingHistorical, runtime.isLoading, runtime.isError, runtime.data, start]);
+  }, [previewDisabled, runtime.isLoading, runtime.isError, runtime.data, start]);
 
   useEffect(() => {
     const stage = deviceStage.current;
@@ -304,8 +343,10 @@ export function MaxLivePreview({
     return () => window.removeEventListener("message", syncPreviewChrome);
   }, []);
 
-  const previewUrl = previewSession.data?.url ?? null;
-  const connected = Boolean(previewUrl ?? lastWorkingUrl);
+  const previewUrl = firstBuildTerminal ? null : previewSession.data?.url ?? null;
+  const displayPreviewUrl = firstBuildTerminal ? null : previewUrl ?? lastWorkingUrl;
+  const connected = Boolean(displayPreviewUrl);
+  const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "Сборка не завершена" : "Запускается";
   // A cold provision can outlive an earlier start request. Once polling sees
   // the runtime running, that old mutation error is no longer relevant and
   // must not replace the active "preparing" state with a false failure.
@@ -314,14 +355,13 @@ export function MaxLivePreview({
   const previewError =
     (managedKit.isError ? managedKit.error : null) ??
     previewSessionError ??
-    (!runtimeRunning && start.isError ? start.error : null) ??
+    (!runtimeRunning && start.isError && start.variables === activity ? start.error : null) ??
     (runtime.isError ? runtime.error : null);
   const preparing =
     runtime.isLoading ||
     start.isPending ||
     (runtimeRunning && (managedKit.isLoading || previewSession.isLoading));
-  const showPreviewError = Boolean(previewError) && !preparing;
-  const displayPreviewUrl = previewUrl ?? lastWorkingUrl;
+  const showPreviewError = !firstBuildTerminal && Boolean(previewError) && !preparing;
   const selectedVersion = selectedSnapshot?.number ?? null;
   const galleryIndex = gallery.findIndex((version) => version.id === selectedVersionId);
   const previousVersion = galleryIndex >= 0 ? gallery[galleryIndex + 1] : undefined;
@@ -422,20 +462,20 @@ export function MaxLivePreview({
         </div>
         <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
           {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[11px] text-fg-secondary">
-            <span className={`size-1.5 rounded-full ${connected ? "bg-success" : "bg-fg-tertiary"}`} title={connected ? "Подключено" : "Запускается"} />
-            <span className="sr-only">{connected ? "Подключено" : "Запускается"}</span>
+            <span className={`size-1.5 rounded-full ${connected ? "bg-success" : "bg-fg-tertiary"}`} title={connectionLabel} />
+            <span className="sr-only">{connectionLabel}</span>
           </span>}
           {!viewingHistorical && (
             <button
               type="button"
               onClick={retryPreview}
-              disabled={recoverPreview.isPending}
+              disabled={previewDisabled || recoverPreview.isPending}
               className="inline-flex min-h-8 items-center gap-1.5 rounded-full border border-border-default px-2.5 py-1 text-[11px] font-medium text-fg-secondary transition-colors hover:bg-surface-overlay hover:text-fg-primary disabled:cursor-not-allowed disabled:opacity-45 sm:px-3"
               title="Обновить превью"
               aria-label="Обновить превью"
               data-testid="max-refresh-preview"
             >
-              {recoverPreview.isPending ? (
+              {!firstBuildTerminal && recoverPreview.isPending ? (
                 <Loader2 className="size-3 animate-spin" />
               ) : (
                 <RefreshCw className="size-3" />
@@ -546,7 +586,7 @@ export function MaxLivePreview({
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
                       onLoad={(event) => {
-                        if (previewUrl) setLastWorkingUrl(previewUrl);
+                        if (previewUrl) setLastWorkingPreview({ projectId: project.id, url: previewUrl });
                         event.currentTarget.contentWindow?.postMessage(
                           { type: "omnia:preview:chrome", hideScrollbar: true },
                           "*",
@@ -573,7 +613,7 @@ export function MaxLivePreview({
                           <button
                             type="button"
                             onClick={retryPreview}
-                            disabled={recoverPreview.isPending}
+                            disabled={previewDisabled || recoverPreview.isPending}
                             className="mt-1 text-[11px] font-medium text-[#6a95fa]"
                           >
                             {recoverPreview.isPending ? "Обновляем…" : "Повторить проверку"}
@@ -583,7 +623,9 @@ export function MaxLivePreview({
                     </>
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
-                      {awaitingFirstBuild ? (
+                      {firstBuildTerminal ? (
+                        <CircleAlert className="size-7 text-fg-secondary" />
+                      ) : awaitingFirstBuild ? (
                         <Sparkles className="size-7 text-accent" />
                       ) : preparing ? (
                         <Loader2 className="size-7 animate-spin text-accent" />
@@ -591,20 +633,26 @@ export function MaxLivePreview({
                         <Play className="size-7 text-accent" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
-                        {awaitingFirstBuild
+                        {firstBuildTerminal
+                          ? firstBuildTerminal === "cancelled" ? "Первая сборка отменена" : "Первая сборка не завершена"
+                          : awaitingFirstBuild
                           ? "Превью появится после первой сборки"
                           : showPreviewError
                             ? "Превью пока недоступно"
                             : preparationLabel}
                       </p>
                       <p className="mt-2 text-[12px] leading-5 text-fg-tertiary">
-                        {awaitingFirstBuild
+                        {firstBuildTerminal
+                          ? firstBuildTerminal === "cancelled"
+                            ? "Чтобы продолжить, отправьте запрос в чате ещё раз."
+                            : "Причина — в чате. После исправления отправьте запрос ещё раз."
+                          : awaitingFirstBuild
                           ? "Опишите в чате, что нужно приложению, — готовый экран откроется здесь."
                           : showPreviewError
                             ? "Yleum не смог создать защищённую сессию. Данные приложения не раскрыты."
                             : "Обычно подготовка занимает от 15 до 60 секунд."}
                       </p>
-                      {!showPreviewError && !awaitingFirstBuild && (
+                      {!firstBuildTerminal && !showPreviewError && !awaitingFirstBuild && (
                         <ol className="mt-5 w-full space-y-2 text-left">
                           {preparationSteps.map((step) => (
                             <li key={step.label} className="flex items-center gap-2 text-[11px] text-fg-secondary">
@@ -621,10 +669,10 @@ export function MaxLivePreview({
                           <button
                             type="button"
                             onClick={retryPreview}
-                            disabled={recoverPreview.isPending}
+                            disabled={previewDisabled || recoverPreview.isPending}
                             className="inline-flex min-h-11 items-center gap-2 rounded-[10px] border border-border-default px-4 text-[12px] font-medium text-fg-primary"
                           >
-                            {recoverPreview.isPending ? (
+                            {!firstBuildTerminal && recoverPreview.isPending ? (
                               <Loader2 className="size-4 animate-spin" />
                             ) : (
                               <RefreshCw className="size-4" />

@@ -1,11 +1,16 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
-import { extname, join, resolve } from "node:path";
+import { extname, join, relative, resolve, sep } from "node:path";
 
 import postcss from "postcss";
 import { describe, expect, it } from "vitest";
 
 const SRC = resolve(process.cwd(), "src");
 const GLOBALS = resolve(SRC, "app/globals.css");
+
+// Match the same source-relative allowlist on Windows and POSIX.
+function sourcePath(path: string): string {
+  return relative(SRC, path).split(sep).join("/");
+}
 
 function collectFiles(directory: string): string[] {
   return readdirSync(directory).flatMap((entry) => {
@@ -110,7 +115,7 @@ describe("dark blue product theme", () => {
 
   it("contains no orange color or orange utility in production UI source", () => {
     const violations = collectFiles(SRC).flatMap((path) => {
-      if (path.endsWith(IMAGERY_ONLY)) return [];
+      if (sourcePath(path) === IMAGERY_ONLY) return [];
       const source = readFileSync(path, "utf8");
       const colors = source.match(/#[0-9a-f]{6}\b/gi) ?? [];
       const orangeColors = colors.filter((color) => isOrange(color));
@@ -121,7 +126,7 @@ describe("dark blue product theme", () => {
       });
       const orangeUtilities = source.match(/(?:orange|amber)-\d{2,3}/gi) ?? [];
       return [...new Set([...orangeColors, ...orangeFunctionalColors, ...orangeUtilities])].map(
-        (value) => `${path.slice(SRC.length + 1)}: ${value}`,
+        (value) => `${sourcePath(path)}: ${value}`,
       );
     });
 
@@ -132,7 +137,7 @@ describe("dark blue product theme", () => {
     const violations = collectFiles(SRC).flatMap((path) => {
       const source = readFileSync(path, "utf8");
       return source.match(/text-\[#(?:248a4b|c63d35|a9302a)\]/gi)?.map(
-        (value) => `${path.slice(SRC.length + 1)}: ${value}`,
+        (value) => `${sourcePath(path)}: ${value}`,
       ) ?? [];
     });
 
@@ -189,7 +194,7 @@ describe("единая палитра продукта", () => {
 
   it("не держит отменённые цвета в компонентах кабинета", () => {
     const violations = collectFiles(SRC).flatMap((path) => {
-      const relative = path.slice(SRC.length + 1);
+      const relative = sourcePath(path);
       if (TOKEN_FILES.some((allowed) => relative === allowed)) return [];
       if (relative.startsWith("lib/__tests__/")) return [];
       // Внутренние инструменты команды живут своей жизнью и владельцу не видны.
