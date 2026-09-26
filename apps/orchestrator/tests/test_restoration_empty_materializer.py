@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
+
 DRIZZLE_CONFIG = '''import type { Config } from "drizzle-kit";
 
 export default {
@@ -338,6 +340,8 @@ async def _prepare_empty(
     files: dict[str, str],
     *,
     materialized_schema: str = "exact",
+    project_only_catalog: bool = False,
+    legacy_identity: bool = False,
 ):
     from tests.test_code_restoration_engine import Lock
     from tests.test_project_machine_manifest import payload
@@ -479,7 +483,7 @@ async def _prepare_empty(
         objects_digest="c" * 64,
         technical_state_digest="d" * 64,
         identity_rows_digest="e" * 64,
-        identity_relations=[],
+        identity_relations=["public.max_users"] if legacy_identity else [],
         observation_kind="source",
     )
 
@@ -533,10 +537,16 @@ async def _prepare_empty(
         return expected_contract
 
     def materialized_catalog(backend):
+        if backend is source:
+            return DataContract(version=1), [], []
         assert backend is candidate
         events.append("candidate-catalog-observed")
         actual_payload = expected_contract.model_dump(mode="json")
         actual_payload["tables"][0]["columns"][2]["json_keys"] = None
+        if project_only_catalog:
+            actual_payload["tables"] = [
+                table for table in actual_payload["tables"] if table["name"] == "qa_tasks"
+            ]
         if materialized_schema == "missing_table":
             actual_payload["tables"] = []
         elif materialized_schema == "missing_json_column":
@@ -635,6 +645,118 @@ async def test_direct_sql_r0_records_only_executed_sql_after_physical_schema_che
                                           materialized_schema="missing_table")
     assert result["state"] == "needs_changes"
     assert not any(kind == "recorded" for kind, _ in calls)
+
+
+def _external_core_files():
+    from yleum_orchestrator.core.stack_registry import get_stack
+    from yleum_orchestrator.services import project_migrations
+    from yleum_orchestrator.services.cell_draft_support import trusted_template_source
+
+    template = trusted_template_source(get_stack("max-miniapp-nextjs").template_dir)
+    files = drizzle_files()
+    files.pop("drizzle.config.ts")
+    for path in project_migrations.LEGACY_PATHS:
+        files[path] = (template / path).read_text(encoding="utf-8")
+    # Live A/B retained exact declarations with project-specific surrounding code.
+    files["src/lib/db/schema.ts"] = (
+        "// historical project\n" + (template / "src/lib/db/schema.ts").read_text(encoding="utf-8")
+        + '\nexport const qaTasks = pgTable("qa_tasks", {id: uuid("id").primaryKey()});\n'
+    )
+    sql = "CREATE TABLE qa_tasks(id uuid PRIMARY KEY);"
+    files["drizzle/0002_tasks.sql"] = sql
+    return files
+
+
+async def test_external_core_r0_does_not_materialize_obsolete_canonical_core(
+    tmp_path, monkeypatch,
+):
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services import project_migrations
+
+    files = _external_core_files()
+    sql = files["drizzle/0002_tasks.sql"]
+    calls = []
+    monkeypatch.setattr(module, "admin_sql", lambda _backend, statement, **kw:
+                        calls.append(("executed", statement)))
+    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations",
+                        lambda _backend, selected: calls.append(("recorded", selected)))
+    result, _ = await _prepare_empty(
+        tmp_path, monkeypatch, files, project_only_catalog=True,
+    )
+    assert result["state"] == "ready"
+    assert calls == [("executed", sql), ("recorded", {"drizzle/0002_tasks.sql": sql})]
+
+
+@pytest.mark.parametrize("change", [
+    "edited_sql", "edited_declaration", "duplicate", "mutation", "alias",
+    "module_export", "comment_only", "explicit_contract",
+])
+def test_external_core_projection_rejects_ambiguous_source(change):
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services.code_restoration_engine import (
+        PreparationNeedsChanges,
+        external_core_empty_sql,
+    )
+
+    files = _external_core_files()
+    key = "src/lib/db/schema.ts"
+    if change == "edited_sql":
+        files["drizzle/0000_max_core.sql"] += "\nSELECT 1;"
+    elif change == "edited_declaration":
+        files[key] = files[key].replace('maxUserId: text("max_user_id")',
+                                        'maxUserId: uuid("max_user_id")')
+    elif change == "duplicate":
+        files[key] += '\nexport const maxUsers = pgTable("custom", {});'
+    elif change == "mutation":
+        files[key] += '\nmaxUsers.firstName.notNull = false;'
+    elif change == "alias":
+        files[key] += '\nconst custom = maxUsers;'
+    elif change == "module_export":
+        files[key] += '\nmodule.exports["maxUsers"] = qaTasks;'
+    elif change == "comment_only":
+        files[key] = "/*\n" + files[key] + "\n*/"
+    elif change == "explicit_contract":
+        files[".omnia/data-contract.json"] = '{"version":1,"tables":[]}'
+    with pytest.raises((CellResourceError, PreparationNeedsChanges)):
+        external_core_empty_sql(files)
+
+
+async def test_external_core_r0_does_not_hide_actual_same_named_project_table(
+    tmp_path, monkeypatch,
+):
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services import project_migrations
+
+    files = _external_core_files()
+    monkeypatch.setattr(module, "admin_sql", lambda *_args, **_kwargs: "")
+    recorded = []
+    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations",
+                        lambda *_args: recorded.append(True))
+    # Actual catalog includes max_catalog_items; never remove it from observation.
+    result, _ = await _prepare_empty(tmp_path, monkeypatch, files)
+    assert result["state"] == "needs_changes"
+    assert result["report"]["blockers"] == [
+        "Историческая схема не создана в изолированной базе."
+    ]
+    assert not recorded
+
+
+async def test_embedded_legacy_identity_keeps_historical_materialization(
+    tmp_path, monkeypatch,
+):
+    from yleum_orchestrator.services import code_restoration_engine as module
+    from yleum_orchestrator.services import project_migrations
+
+    files = _external_core_files()
+    executed = []
+    monkeypatch.setattr(module, "admin_sql", lambda _backend, sql, **kw: executed.append(sql))
+    monkeypatch.setattr(
+        project_migrations, "record_witnessed_project_migrations", lambda *_args: None,
+    )
+    result, events = await _prepare_empty(tmp_path, monkeypatch, files, legacy_identity=True)
+    assert result["state"] == "ready"
+    assert executed == [files[name] for name in sorted(files) if name.endswith(".sql")]
+    assert "identity-installed" in events
 
 
 async def test_successful_materializer_without_expected_table_needs_changes(

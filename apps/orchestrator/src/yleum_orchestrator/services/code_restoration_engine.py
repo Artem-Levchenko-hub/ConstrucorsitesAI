@@ -468,6 +468,116 @@ def historical_sql_migrations(files: dict[str, str]) -> list[tuple[str, str]] | 
     return migrations
 
 
+def _schema_statements(source: str) -> list[tuple[str, str]]:
+    """Keep exact statement text and mask comments/literals for identity checks."""
+    result: list[tuple[str, str]] = []
+    masked = list(source)
+    quote = ""
+    comment = ""
+    escaped = False
+    depth = 0
+    start = 0
+    i = 0
+    while i < len(source):
+        char, pair = source[i], source[i:i + 2]
+        if comment:
+            masked[i] = " "
+            if comment == "//" and char == "\n":
+                comment = ""
+            elif comment == "/*" and pair == "*/":
+                masked[i + 1] = " "
+                i += 1
+                comment = ""
+        elif quote:
+            masked[i] = " "
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = ""
+        elif pair in {"//", "/*"}:
+            comment = pair
+            masked[i] = masked[i + 1] = " "
+            i += 1
+        elif char in {"'", '"', "`"}:
+            quote = char
+            masked[i] = " "
+        elif char in "({[":
+            depth += 1
+        elif char in ")}]":
+            depth -= 1
+        elif char == ";" and depth == 0:
+            code = "".join(masked[start:i + 1])
+            offset = len(code) - len(code.lstrip())
+            result.append((source[start + offset:i + 1], code.lstrip()))
+            start = i + 1
+        if depth < 0:
+            raise PreparationNeedsChanges("Не удалось подтвердить исторические объявления схемы.")
+        i += 1
+    if quote or comment == "/*" or depth:
+        raise PreparationNeedsChanges("Не удалось подтвердить исторические объявления схемы.")
+    if source[start:].strip():
+        result.append((source[start:], "".join(masked[start:])))
+    return result
+
+
+def external_core_empty_sql(
+    files: dict[str, str],
+) -> tuple[list[tuple[str, str]], set[str]]:
+    """Separate obsolete, exact core artifacts from an external-core project DB.
+
+    Called only after the source catalog proves those core tables absent. The
+    actual candidate catalog is never projected: project SQL with the same table
+    names remains visible to the strict structural comparison.
+    """
+    from yleum_orchestrator.core.stack_registry import get_stack
+    from yleum_orchestrator.services.cell_draft_support import trusted_template_source
+    from yleum_orchestrator.services.project_migrations import LEGACY_PATHS, select_migrations
+
+    if files.get(".omnia/data-contract.json"):
+        raise PreparationNeedsChanges(
+            "Явное описание исторической схемы требует отдельной проверки."
+        )
+    template = trusted_template_source(get_stack("max-miniapp-nextjs").template_dir)
+    legacy = {path: (template / path).read_text(encoding="utf-8") for path in LEGACY_PATHS}
+    selected = select_migrations(files, legacy)
+    if not all(path in files for path in LEGACY_PATHS):
+        raise PreparationNeedsChanges("Неполный набор исторических служебных миграций.")
+    canonical = _schema_statements(
+        (template / "src/lib/db/schema.ts").read_text(encoding="utf-8").replace("\r\n", "\n")
+    )
+    declarations = {
+        match.group(1): raw for raw, code in canonical
+        if (match := re.match(r"export const ([A-Za-z_$][\w$]*)\s*=", code))
+    }
+    canonical_text = {raw for raw, _ in canonical}
+    seen: set[str] = set()
+    forbidden = set(declarations) | {
+        "module", "exports", "eval", "Function", "globalThis", "require",
+    }
+    for raw, code in _schema_statements(files["src/lib/db/schema.ts"].replace("\r\n", "\n")):
+        match = re.match(r"export const ([A-Za-z_$][\w$]*)\s*=", code)
+        name = match.group(1) if match else None
+        if name in declarations:
+            if name in seen or raw != declarations[name]:
+                raise PreparationNeedsChanges("Исторические служебные объявления схемы изменены.")
+            seen.add(name)
+        elif raw not in canonical_text and (
+            forbidden.intersection(re.findall(r"[A-Za-z_$][\w$]*", code)) or "${" in raw
+        ):
+            raise PreparationNeedsChanges(
+                "Схема проекта зависит от исторических служебных объявлений."
+            )
+    names = {
+        match.group(1) for raw in declarations.values()
+        if (match := re.search(r'pgTable\("([a-z_]+)"', raw))
+    }
+    if seen != set(declarations) or names != _MANAGED_MAX_TABLES:
+        raise PreparationNeedsChanges("Не подтверждены исторические служебные объявления схемы.")
+    return list(selected.items()), names
+
+
 def empty_materializer_blocker(files: dict[str, str]) -> str | None:
     """Назвать владельцу, ЧЕГО не хватает для восстановления исторической схемы.
 
@@ -1377,6 +1487,7 @@ class CodeRestorationEngine:
         observed_database_state: RestorationDatabaseState = "unknown"
         empty_materializer: list[str] | None = None
         empty_sql_migrations: list[tuple[str, str]] | None = None
+        external_core_tables: set[str] = set()
         with machine_budget(870):
             async with manager.operation_lock.hold(request.workspace_id):
                 try:
@@ -1569,6 +1680,37 @@ class CodeRestorationEngine:
                         # исполняет код владельца и потому пробуется последним
                         # только по историческим причинам — риск у него меньше.
                         empty_sql_migrations = historical_sql_migrations(files)
+                        if (
+                            empty_sql_migrations is not None
+                            and not empty_witness.identity_relations
+                            and any(path in files for path in (
+                                "drizzle/0000_max_core.sql", "drizzle/0001_business_core.sql",
+                            ))
+                        ):
+                            source_catalog = await machine_effect(
+                                describe_live_catalog, source
+                            )
+                            source_contract, source_blockers, source_unsupported = source_catalog
+                            if not any(table.name in _MANAGED_MAX_TABLES
+                                       for table in source_contract.tables):
+                                try:
+                                    if source_blockers or source_unsupported:
+                                        raise PreparationNeedsChanges(
+                                            "Не подтверждена изоляция служебной базы проекта."
+                                        )
+                                    empty_sql_migrations, external_core_tables = (
+                                        external_core_empty_sql(files)
+                                    )
+                                except (PreparationNeedsChanges, CellResourceError) as error:
+                                    return {
+                                        "state": "needs_changes",
+                                        "candidate_id": None,
+                                        "report": preparation_report(
+                                            blockers=[str(error)],
+                                            observed_database_state=observed_database_state,
+                                            capabilities=capabilities,
+                                        ),
+                                    }
                     if empty_materializer is None and empty_sql_migrations is None:
                         return {
                             "state": "needs_changes",
@@ -1724,6 +1866,11 @@ class CodeRestorationEngine:
                         for _name, _sql in empty_sql_migrations:
                             await machine_effect(admin_sql, candidate, _sql)
                     expected_contract = await machine_effect(candidate_contract, candidate, files)
+                    if external_core_tables:
+                        expected_contract = expected_contract.model_copy(update={
+                            "tables": [table for table in expected_contract.tables
+                                       if table.name not in external_core_tables],
+                        })
                     materialized_contract, catalog_blockers, unsupported = await machine_effect(
                         describe_live_catalog, candidate
                     )
