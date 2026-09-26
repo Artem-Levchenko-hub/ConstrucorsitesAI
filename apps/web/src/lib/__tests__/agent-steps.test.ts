@@ -198,3 +198,38 @@ describe("лента без дублей: повтор действия — од
     expect(second[0].key).toBe(first[0].key);
   });
 });
+
+describe("счётчик повторов переживает сборку ленты", () => {
+  const waitingStep = (seq: number, detail: string): AgentStep => ({
+    eventId: `q${seq}`,
+    runId: "44444444-4444-4444-4444-444444444444",
+    seq,
+    step: null,
+    kind: "step",
+    action: CAPACITY_WAITING_COPY.title,
+    path: "",
+    detail,
+  });
+
+  it("восемнадцать ожиданий дают одну строку и честное «×18»", () => {
+    // Лента схлопывает повторы ожидания ещё при сборке, оставляя самую свежую
+    // строку. Если не сохранить число выброшенных, счётчик в интерфейсе всегда
+    // показывал бы «один раз» — ровно для того случая, ради которого он и нужен.
+    const merged = mergeAgentStepsBySequence(
+      [],
+      Array.from({ length: 18 }, (_, index) => waitingStep(index + 1, `Вы ${18 - index}-й в очереди`)),
+    );
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].detail).toBe("Вы 1-й в очереди");
+
+    const rows = collapseAgentSteps(merged);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].repeats).toBe(18);
+  });
+
+  it("одиночное ожидание остаётся без счётчика", () => {
+    const rows = collapseAgentSteps(mergeAgentStepsBySequence([], [waitingStep(1, "Вы 2-й в очереди")]));
+    expect(rows[0].repeats).toBe(1);
+  });
+});

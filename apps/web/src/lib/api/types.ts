@@ -854,6 +854,9 @@ export type AgentStep = {
   operationId?: Uuid;
   /** Raw tool name (write_file/build/…) for icon selection. */
   tool?: string;
+  /** Сколько одинаковых событий схлопнулось в эту строку при сборке ленты.
+   *  Поле клиентское: сервер его не присылает, оно появляется в кэше. */
+  repeatedCount?: number;
   /** What the step did inside — content/output preview, shown on drill-in. */
   detail?: string;
   /** false = the step failed (drill-in shows the error). */

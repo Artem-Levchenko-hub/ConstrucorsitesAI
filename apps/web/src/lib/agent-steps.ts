@@ -11,13 +11,26 @@ import type { AgentStep } from "@/lib/api/types";
  * самая свежая позиция в очереди. Обычные шаги сборки не трогаем — там
  * повторение бывает осмысленным (два одинаковых действия над разными файлами
  * различаются путём, но встречаются и настоящие повторы).
+ *
+ * Выброшенные строки не исчезают бесследно: их число остаётся в `repeatedCount`
+ * у выжившей. Без этого счётчик повторов в ленте всегда показывал бы «один
+ * раз», хотя ожидание длилось восемнадцать событий.
  */
 function collapseRepeatedWaiting(steps: AgentStep[]): AgentStep[] {
-  return steps.filter((step, index) => {
-    if (step.action !== CAPACITY_WAITING_COPY.title) return true;
-    const next = steps[index + 1];
-    return next?.action !== CAPACITY_WAITING_COPY.title;
-  });
+  const rows: AgentStep[] = [];
+  let waitingRun = 0;
+  for (const step of steps) {
+    if (step.action !== CAPACITY_WAITING_COPY.title) {
+      waitingRun = 0;
+      rows.push(step);
+      continue;
+    }
+    waitingRun += 1;
+    const previous = rows.at(-1);
+    if (waitingRun > 1 && previous?.action === CAPACITY_WAITING_COPY.title) rows.pop();
+    rows.push(waitingRun > 1 ? { ...step, repeatedCount: waitingRun } : step);
+  }
+  return rows;
 }
 
 function identity(step: AgentStep, index: number): string {
@@ -121,14 +134,15 @@ export function collapseAgentSteps(steps: AgentStep[] = []): CollapsedAgentStep[
   steps.forEach((step, index) => {
     const previous = rows.at(-1);
     if (previous && visibleIdentity(previous.step) === visibleIdentity(step)) {
-      previous.repeats += 1;
+      // Часть повторов могла схлопнуться ещё при сборке ленты — считаем и их.
+      previous.repeats += step.repeatedCount ?? 1;
       previous.step = step;
       previous.index = index;
       return;
     }
     rows.push({
       step,
-      repeats: 1,
+      repeats: step.repeatedCount ?? 1,
       key: step.eventId ?? `${step.runId ?? "local"}:${step.seq ?? index}`,
       index,
     });
