@@ -25,7 +25,6 @@ export function MaxRegisterForm() {
             type="email"
             autoComplete="email"
             required
-            placeholder="name@company.ru"
             className="h-12 border-border-default bg-surface"
           />
         </div>
