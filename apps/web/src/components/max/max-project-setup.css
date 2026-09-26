@@ -26,6 +26,11 @@
 .max-project-setup [role=tablist] .max-setup-tab[aria-selected=true] { color: var(--color-accent-secondary); background: var(--color-surface); }
 .max-project-setup .max-setup-tab[aria-selected=true]::after { position: absolute; content: ""; height: 3px; inset: auto 12px -1px; background: var(--color-accent); border-radius: 2px 2px 0 0; }
 .max-project-setup .max-setup-tab:focus-visible { outline-offset: -4px; }
+/* Публикацию блокирует ровно одна вкладка — её видно снаружи, не открывая. */
+.max-setup-tab-mark { display: inline-grid; place-items: center; width: 14px; height: 14px; margin-left: 6px; border-radius: 999px; vertical-align: -2px; }
+.max-setup-tab-mark[data-state=pending] { background: var(--color-accent); box-shadow: 0 0 0 3px rgb(0 98 238 / .14); }
+.max-setup-tab-mark[data-state=done] { background: var(--color-success); color: #fff; }
+.max-project-setup .max-setup-tab[data-required=pending] { color: var(--color-accent-secondary); }
 .max-setup-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 26px 28px 32px; scrollbar-gutter: stable; }
 .max-setup-section { animation: max-setup-enter .16s ease-out; }
 .max-project-setup .max-setup-intro h3 { font-size: 20px; line-height: 1.35; font-weight: 600; letter-spacing: -.02em; }

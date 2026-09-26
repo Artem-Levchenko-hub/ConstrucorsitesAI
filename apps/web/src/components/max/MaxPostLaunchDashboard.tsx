@@ -12,6 +12,7 @@ import { getDeployHistory, getLastDeploy, getRuntime } from "@/lib/api/runtime";
 import type { DeployPhase, RuntimeState } from "@/lib/api/types";
 import { getMaxPublicationState } from "@/lib/max-publication-state";
 import { isMaxDeployActive } from "@/lib/max-launch-state";
+import { relativeDateLabel } from "@/lib/relative-date";
 
 const phaseLabels: Record<DeployPhase, string> = {
   idle: "Ещё не запускалась", queued: "В очереди", building: "Сборка", pushing: "Передача сборки",
@@ -37,6 +38,21 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
   const latest = deploy.isSuccess ? deploy.data : undefined;
   const integrationLabel = integration.isError ? "Не удалось проверить" : integration.isPending ? "Проверяем…" : integration.data?.connected ? integration.data.bot_name ?? "Подключён" : "Не подключён";
 
+  // «Версия 7 · 17 сентября» вместо служебного тега образа: владельцу нужен
+  // ответ «что опубликовано», а не имя сборки.
+  const everPublished = Boolean(latest && latest.phase !== "idle");
+  const buildTag = latest?.image_tag?.split(":").at(-1) ?? null;
+  const releaseName = latest
+    ? latest.phase === "done"
+      ? buildTag ? `Версия ${buildTag}` : "Текущая версия приложения"
+      : phaseLabels[latest.phase]
+    : "Нет данных";
+  const releaseWhen = latest?.finished_at
+    ? relativeDateLabel(latest.finished_at) ?? new Date(latest.finished_at).toLocaleString("ru-RU")
+    : latest?.started_at
+      ? `начата ${relativeDateLabel(latest.started_at) ?? new Date(latest.started_at).toLocaleString("ru-RU")}`
+      : "Время неизвестно";
+
   function refreshStatus() { void readiness.refetch(); void deploy.refetch(); void runtime.refetch(); void integration.refetch(); }
 
   return (
@@ -59,24 +75,37 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
         </section>
         <section className="max-dashboard-release" aria-labelledby="max-release-heading">
           <h2 id="max-release-heading">Последняя публикация</h2>
-          <p>Сведения о последней операции на сервере</p>
-          <dl>
-            <div><dt>Статус операции</dt><dd>{deploy.isError ? "Не удалось загрузить" : deploy.isPending ? "Проверяем…" : latest ? phaseLabels[latest.phase] : "Нет данных"}</dd></div>
-            <div><dt>Версия сборки</dt><dd>{latest?.image_tag?.split(":").at(-1) ?? "—"}</dd></div>
-            <div><dt>Размещение</dt><dd>{latest?.target_label ?? "—"}</dd></div>
-            <div><dt>Операция завершена</dt><dd>{latest?.finished_at ? new Date(latest.finished_at).toLocaleString("ru-RU") : "—"}</dd></div>
-          </dl>
-          <p className="max-dashboard-monitoring-note">Постоянный мониторинг доступности не подключён. Успешная публикация подтверждает проверку при выпуске версии.</p>
+          {/* Раньше здесь стояли прочерки в трёх полях из четырёх: пустой
+              прочерк читается как поломка, а не как «этого ещё не было».
+              Пока публикаций нет, вместо таблицы — одна честная строка. */}
+          {!everPublished ? (
+            <p className="max-dashboard-empty">
+              {deploy.isError
+                ? "Не дозвонились до сервера — состояние публикации покажем, когда он ответит."
+                : deploy.isPending
+                  ? "Проверяем, была ли публикация…"
+                  : "Публикаций ещё не было. Здесь появится, что именно опубликовано и по какому адресу открывается."}
+            </p>
+          ) : (
+            <dl>
+              <div><dt>Что опубликовано</dt><dd>{releaseName}</dd></div>
+              <div><dt>Где открывается</dt><dd>{url
+                ? <a className="max-dashboard-url" href={url} target="_blank" rel="noreferrer">{url}<ExternalLink className="size-4 shrink-0" /></a>
+                : "Адрес появится после успешной публикации"}</dd></div>
+              <div><dt>Когда</dt><dd>{releaseWhen}</dd></div>
+            </dl>
+          )}
+          <p className="max-dashboard-monitoring-note">Приложение проверяется при каждой публикации. Постоянного наблюдения за доступностью пока нет: если приложение перестанет открываться между публикациями, мы не узнаем об этом сами — напишите нам.</p>
         </section>
       </div>
 
       <section className="max-dashboard-system" aria-labelledby="max-system-heading">
         <header><div><h2 id="max-system-heading">Состояние и подключения</h2><p>Данные среды разработки и связи с MAX</p></div><Button variant="outline" onClick={refreshStatus} disabled={runtime.isFetching || integration.isFetching || readiness.isFetching || deploy.isFetching}><RefreshCw className="size-4" />Обновить</Button></header>
-        <div className="max-dashboard-system-row"><div><h3>Среда разработки</h3><p>Используется редактором и превью. Её активность не определяет публикацию приложения.</p></div>
+        <div className="max-dashboard-system-row"><div><h3>Рабочая среда редактора</h3><p>В ней открывается живое превью, пока вы правите приложение. На опубликованную версию у пользователей она не влияет.</p></div>
           <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">Не удалось проверить среду</p> : runtime.isPending ? <p>Проверяем…</p> : <><p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p><RuntimeButton projectId={projectId} display="compact" /></>}</div>
         </div>
         <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}?panel=max`}>Настроить MAX</Link></Button></div>
-        <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3><p>Серверные события приложения</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? "Не удалось проверить" : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
+        <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3><p>Через неё MAX сообщает приложению о событиях: новых пользователях, нажатиях, сообщениях боту</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? "Не удалось проверить" : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
       </section>
 
       <section className="max-dashboard-history" aria-labelledby="max-history-heading">

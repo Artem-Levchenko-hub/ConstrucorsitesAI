@@ -119,8 +119,11 @@ it.each([true, false])("reports publication evidence without claiming continuous
   api.readiness.mockResolvedValue(readiness(published));
   await mount(dashboard());
   await settle(() => expect(container.textContent).toContain(published ? "Текущая версия опубликована" : "Текущая версия не опубликована"));
-  expect(container.textContent).toContain("Среда разработки");
-  expect(container.textContent).toContain("Постоянный мониторинг доступности не подключён");
+  expect(container.textContent).toContain("Рабочая среда редактора");
+  // Про наблюдение говорим прямо: не «мониторинг не подключён», а что это
+  // значит для владельца, если приложение перестанет открываться.
+  expect(container.textContent).toContain("Постоянного наблюдения за доступностью пока нет");
+  expect(container.textContent).toContain("мы не узнаем об этом сами");
   expect(container.textContent).not.toContain("Отвечает");
 });
 it("offers a retry for failed status queries without showing stale success", async () => {
@@ -156,4 +159,26 @@ it("reports a failed deployment separately from an unpublished draft", async () 
   await mount(dashboard());
   await settle(() => expect(container.textContent).toContain("Последняя публикация не завершилась"));
   expect(container.textContent).toContain("Сборка не завершена");
+});
+
+it("вместо прочерков говорит, что публикаций ещё не было", async () => {
+  // Три поля из четырёх стояли прочерками: пустой прочерк читается как
+  // поломка. Пока публикации не было, честная строка понятнее таблицы.
+  api.deploy.mockResolvedValue({ ...release, phase: "idle", run_id: null, finished_at: null, prod_url: null, image_tag: null });
+  await mount(dashboard());
+  await settle(() => expect(container.textContent).toContain("Публикаций ещё не было"));
+  expect(container.querySelector(".max-dashboard-release dl")).toBeNull();
+  expect(container.textContent).not.toContain("Версия сборки");
+});
+
+it("после публикации отвечает, что опубликовано, где открывается и когда", async () => {
+  api.readiness.mockResolvedValue(readiness(true));
+  api.deploy.mockResolvedValue(release);
+  await mount(dashboard());
+  await settle(() => expect(container.querySelector(".max-dashboard-release dl")).not.toBeNull());
+  const fields = [...container.querySelectorAll(".max-dashboard-release dt")].map(node => node.textContent);
+  expect(fields).toEqual(["Что опубликовано", "Где открывается", "Когда"]);
+  expect(container.querySelector(".max-dashboard-release dd")?.textContent).toBe("Версия v1");
+  // Про наблюдение за доступностью говорим прямо, а не техническим отрицанием.
+  expect(container.textContent).toContain("мы не узнаем об этом сами");
 });

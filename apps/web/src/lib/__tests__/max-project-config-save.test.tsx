@@ -335,3 +335,33 @@ it("saves content before showing an explicit, version-bound AI application actio
     await act(async () => root.unmount()); container.remove(); client.clear();
   }
 });
+
+it("показывает снаружи, какая вкладка блокирует публикацию", async () => {
+  // Четыре вкладки выглядели одинаково, хотя публикацию блокирует ровно одна:
+  // владелец либо заполнял всё подряд, либо упирался в отказ при публикации.
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  try {
+    await act(async () => root.render(<QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" /></QueryClientProvider>));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+
+    const policies = [...document.querySelectorAll<HTMLButtonElement>('[role="tab"]')].at(-1)!;
+    expect(policies.textContent).toContain("Политики");
+    expect(policies.getAttribute("data-required")).toBe("pending");
+    expect(policies.querySelector(".max-setup-tab-mark")?.getAttribute("aria-label")).toBe("Нужно для публикации");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Для публикации нужно одно");
+    // На остальных вкладках метки нет: они не блокируют запуск.
+    expect(document.querySelectorAll(".max-setup-tab-mark")).toHaveLength(1);
+
+    // Как только документы подтверждены, метка становится галочкой.
+    await act(async () => policies.click());
+    const consent = [...document.querySelectorAll<HTMLInputElement>('[role="tabpanel"] input[type="checkbox"]')][0];
+    await act(async () => consent.click());
+    expect(policies.getAttribute("data-required")).toBe("done");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Всё, что нужно для публикации, заполнено");
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});

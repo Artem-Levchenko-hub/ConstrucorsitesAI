@@ -111,6 +111,8 @@ export function MaxProjectSetupDialog({
       toast.error("Не удалось сохранить", { description: errorMessage(error) });
     },
   });
+  // Публикацию блокирует ровно одно поле данных — подтверждение документов.
+  const termsAccepted = Boolean((draft ?? config.data?.config)?.legal.terms_accepted);
   const saved = config.data?.config;
   const changedSections = current && saved
     ? [
@@ -195,7 +197,12 @@ export function MaxProjectSetupDialog({
               Данные приложения
             </DialogTitle>
             <DialogDescription className="max-setup-description">
-              Реквизиты не нужны — их проверяет MAX. Для публикации достаточно подтвердить документы приложения во вкладке «Политики»; название владельца и email поддержки — по желанию.</DialogDescription>
+              {/* Вкладки выглядели одинаково, хотя публикацию блокирует ровно
+                  одна. Строка сразу отвечает, что ещё нужно, а что по желанию. */}
+              {termsAccepted
+                ? "Всё, что нужно для публикации, заполнено. Остальные разделы — по желанию: они делают приложение подробнее, но не блокируют запуск."
+                : "Для публикации нужно одно: подтвердить документы приложения во вкладке «Политики». Реквизиты не нужны — их проверяет MAX, остальные разделы можно заполнить позже."}
+            </DialogDescription>
           </DialogHeader>
 
           <div className="max-setup-tabs">
@@ -219,8 +226,19 @@ export function MaxProjectSetupDialog({
                     document.getElementById(`${tabsId}-${SETUP_SECTIONS[next].id}`)?.focus();
                   }}
                   className="max-setup-tab"
+                  data-required={item.id === "policies" ? (termsAccepted ? "done" : "pending") : undefined}
                 >
                   {item.label}
+                  {item.id === "policies" && (
+                    <span
+                      className="max-setup-tab-mark"
+                      data-state={termsAccepted ? "done" : "pending"}
+                      aria-label={termsAccepted ? "Документы подтверждены" : "Нужно для публикации"}
+                      title={termsAccepted ? "Документы подтверждены" : "Нужно для публикации"}
+                    >
+                      {termsAccepted ? <Check className="size-3" aria-hidden="true" /> : null}
+                    </span>
+                  )}
                 </button>
               ))}
             </div>
