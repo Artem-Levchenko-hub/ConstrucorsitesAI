@@ -1,5 +1,7 @@
 import { ImageResponse } from "next/og";
 
+import { OG_FONTS } from "./og-fonts";
+
 // Node runtime — Edge requires streaming infra our standalone container lacks.
 export const runtime = "nodejs";
 export const size = { width: 180, height: 180 };
@@ -32,6 +34,6 @@ export default function AppleIcon() {
         />
       </div>
     ),
-    { ...size },
+    { ...size, fonts: OG_FONTS },
   );
 }

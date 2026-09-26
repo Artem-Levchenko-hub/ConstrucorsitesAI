@@ -3,14 +3,17 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 /**
- * Каждое семейство шрифтов, объявленное в layout, скачивается из Google ВО ВРЕМЯ
- * СБОРКИ. Значит лишнее семейство — это не лишние килобайты, а ещё один способ
- * уронить выкатку в день, когда Google недоступен: сборка падает целиком, и падает
- * она на проде, посреди волны. Так уже дважды краснел CI 25.09.2026, причём обе
- * попытки подряд.
+ * Две вещи, которые здесь охраняются.
  *
- * Правило простое: объявили шрифт — покажите строку CSS, которая его читает.
- * До этой проверки в сборку ходили пять семейств, а читались стилями три.
+ * Первая: сборка не должна ходить за шрифтами наружу. Пока семейства
+ * подключались через `next/font/google`, КАЖДАЯ сборка образа — и в проверке, и
+ * на проде посреди выкатки — зависела от доступности чужого сервиса. 25.09.2026
+ * это дважды подряд уронило сборку, включая повторную попытку. Теперь файлы
+ * лежат в репозитории, и возврат к загрузке по сети должен быть заметен сразу.
+ *
+ * Вторая: каждое объявленное семейство должно кем-то использоваться. Лишний
+ * шрифт — это лишние килобайты у посетителя и лишний файл в сборке; до уборки
+ * 25.09 объявлено было пять семейств, а читалось стилями три.
  */
 const root = join(__dirname, "..", "..");
 
@@ -22,9 +25,12 @@ const CSS_FILES = [
   "components/marketing/max-public.css",
 ];
 
+function fontsCss(): string {
+  return readFileSync(join(root, "app/fonts.css"), "utf8");
+}
+
 function declaredFontVariables(): string[] {
-  const layout = readFileSync(join(root, "app/layout.tsx"), "utf8");
-  return [...layout.matchAll(/variable:\s*"(--font-[a-z0-9-]+)"/g)].map((m) => m[1]);
+  return [...fontsCss().matchAll(/^\s*(--font-[a-z0-9-]+):/gm)].map((m) => m[1]);
 }
 
 function cssSources(): string {
@@ -37,7 +43,16 @@ function cssSources(): string {
   }).join("\n");
 }
 
-describe("семейства шрифтов", () => {
+describe("шрифты", () => {
+  it("не скачиваются во время сборки", () => {
+    const layout = readFileSync(join(root, "app/layout.tsx"), "utf8");
+
+    expect(layout).not.toContain("next/font/google");
+    // Файлы должны браться из репозитория — относительным путём, а не по сети.
+    expect(fontsCss()).toContain('url("./fonts/');
+    expect(fontsCss()).not.toContain("https://");
+  });
+
   it("каждое объявленное семейство читается хотя бы одной строкой стилей", () => {
     const declared = declaredFontVariables();
     expect(declared.length).toBeGreaterThan(0);
@@ -45,7 +60,15 @@ describe("семейства шрифтов", () => {
     const css = cssSources();
     const unused = declared.filter((variable) => !css.includes(`var(${variable})`));
 
-    expect(unused, `объявлены в layout, но не используются: ${unused.join(", ")}`).toEqual([]);
+    expect(unused, `объявлены, но не используются: ${unused.join(", ")}`).toEqual([]);
+  });
+
+  it("у каждого семейства есть и латиница, и кириллица", () => {
+    const css = fontsCss();
+    for (const family of ["inter", "onest", "jetbrains-mono"]) {
+      expect(css, `${family}: нет латиницы`).toContain(`./fonts/${family}-latin.woff2`);
+      expect(css, `${family}: нет кириллицы`).toContain(`./fonts/${family}-cyrillic.woff2`);
+    }
   });
 
   it("проверка смотрит на настоящие файлы стилей, а не на пустоту", () => {

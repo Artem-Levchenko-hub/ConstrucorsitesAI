@@ -1,5 +1,7 @@
 import { ImageResponse } from "next/og";
 
+import { OG_FONT_FAMILY, OG_FONTS } from "./og-fonts";
+
 // Node runtime — Edge requires streaming infra our standalone container lacks.
 export const runtime = "nodejs";
 export const alt = "Yleum — приложение для MAX без команды разработки";
@@ -25,7 +27,7 @@ export default function OpenGraphImage() {
           flexDirection: "column",
           justifyContent: "center",
           padding: "80px",
-          fontFamily: "Inter, system-ui, sans-serif",
+          fontFamily: OG_FONT_FAMILY,
         }}
       >
         <div
@@ -90,6 +92,6 @@ export default function OpenGraphImage() {
         </div>
       </div>
     ),
-    { ...size },
+    { ...size, fonts: OG_FONTS },
   );
 }

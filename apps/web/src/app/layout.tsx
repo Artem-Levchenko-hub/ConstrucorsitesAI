@@ -1,35 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Inter, JetBrains_Mono, Onest } from "next/font/google";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages, getTranslations } from "next-intl/server";
+import "./fonts.css";
 import "./globals.css";
 import { publicOrigin } from "@/lib/public-origin";
 import { Providers } from "./providers";
-
-const inter = Inter({
-  subsets: ["latin", "cyrillic"],
-  variable: "--font-inter",
-  weight: ["400", "500", "600", "700"],
-  display: "swap",
-});
-
-// Заголовочный шрифт лендинга: плотная геометрика с полноценной кириллицей.
-// Здесь только те семейства, которые действительно читает CSS. Каждое лишнее —
-// это ещё один поход в Google во время сборки, а значит ещё один способ уронить
-// выкатку в день, когда Google недоступен.
-const onest = Onest({
-  subsets: ["latin", "cyrillic"],
-  variable: "--font-onest",
-  weight: ["500", "600", "700"],
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin", "cyrillic"],
-  variable: "--font-jetbrains",
-  weight: ["400", "500", "600"],
-  display: "swap",
-});
 
 const SITE_NAME = "Yleum";
 
@@ -160,10 +135,7 @@ export default async function RootLayout({
   const orgJsonLd = organizationJsonLd(publicOrigin());
 
   return (
-    <html
-      lang={locale}
-      className={`${inter.variable} ${onest.variable} ${jetbrainsMono.variable}`}
-    >
+    <html lang={locale}>
       <head>
         <script
           type="application/ld+json"
