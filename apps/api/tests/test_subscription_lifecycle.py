@@ -10,7 +10,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import (
-    BUSINESS_PLAN_ID,
     PRO_PLAN_ID,
     BillingAccount,
     BillingPaymentMethod,
@@ -311,81 +310,3 @@ async def test_failed_renewal_grace_then_downgrades_and_revokes_keep_alive(
     )
     assert len(live) == 1
     assert live[0].plan_id != PRO_PLAN_ID
-
-
-async def test_business_keep_alive_entitlement_enforces_one_slot(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user, account, free = await _registered_billing_context(
-        client,
-        db_session,
-        email="always-on-slot@example.com",
-    )
-    first = Project(
-        owner_id=user.id,
-        name="First runtime",
-        slug="first-runtime-slot",
-        template="blank",
-    )
-    second = Project(
-        owner_id=user.id,
-        name="Second runtime",
-        slug="second-runtime-slot",
-        template="blank",
-    )
-    db_session.add_all([first, second])
-    await db_session.commit()
-
-    free_denied = await client.post(
-        f"/api/projects/{first.id}/runtime/keep-alive",
-        json={"enabled": True},
-    )
-    assert free_denied.status_code == 402
-    assert free_denied.json()["error"]["code"] == "subscription_entitlement_required"
-
-    free.status = "expired"
-    free.ended_at = datetime.now(UTC)
-    await db_session.flush()
-    db_session.add(
-        Subscription(
-            billing_account_id=account.id,
-            user_id=user.id,
-            plan_id=BUSINESS_PLAN_ID,
-            status="active",
-            auto_renew=False,
-            current_period_start=datetime.now(UTC),
-            current_period_end=datetime.now(UTC) + timedelta(days=30),
-        )
-    )
-    await db_session.commit()
-
-    async def fake_provision(**kwargs: object) -> dict[str, object]:
-        return {
-            "state": "running",
-            "container_name": f"omnia-dev-{kwargs['slug']}",
-            "port": 3200,
-            "dev_url": "https://preview.test",
-        }
-
-    async def fake_keep_alive(project_id, *, enabled: bool):
-        return {"project_id": str(project_id), "enabled": enabled}
-
-    monkeypatch.setattr(orchestrator_client, "provision", fake_provision)
-    monkeypatch.setattr(orchestrator_client, "set_keep_alive", fake_keep_alive)
-    enabled = await client.post(
-        f"/api/projects/{first.id}/runtime/keep-alive",
-        json={"enabled": True},
-    )
-    assert enabled.status_code == 200
-    assert enabled.json()["keep_alive"] is True
-    await db_session.refresh(first)
-    assert first.keep_alive_enabled is True
-
-    full = await client.post(
-        f"/api/projects/{second.id}/runtime/keep-alive",
-        json={"enabled": True},
-    )
-    assert full.status_code == 409
-    assert full.json()["error"]["code"] == "subscription_entitlement_required"

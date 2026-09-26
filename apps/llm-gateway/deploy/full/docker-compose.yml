@@ -390,7 +390,6 @@ services:
       ALLOW_STUB_TOPUP: ${ALLOW_STUB_TOPUP:-false}
       # Production release gate. The api also forces fail-closed for ENV=prod, so
       # a bad override cannot silently publish an unproven build.
-      DEPLOY_ATTESTATION_BLOCKING: ${DEPLOY_ATTESTATION_BLOCKING:-true}
       # Host-resolver map so the gate browser (runs in api) reaches the app's
       # canonical public preview host from inside docker (e.g.
       # "MAP *.preview.lead-generator.ru 172.21.0.1" → host nginx bridge gateway).

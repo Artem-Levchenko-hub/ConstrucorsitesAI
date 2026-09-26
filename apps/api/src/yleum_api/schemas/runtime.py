@@ -47,17 +47,6 @@ class RuntimeStatus(BaseModel):
     keep_alive: bool = False
 
 
-class RuntimeStopRequest(BaseModel):
-    pause: bool = Field(
-        default=True,
-        description="True = docker pause (faster wake, keeps RAM). False = docker stop.",
-    )
-
-
-class RuntimeKeepAliveRequest(BaseModel):
-    enabled: bool
-
-
 class DeployRequest(BaseModel):
     commit_sha: str | None = Field(
         default=None,
@@ -110,16 +99,3 @@ class DeployStatus(BaseModel):
     metrics: dict[str, int] = Field(default_factory=dict)
     error_stage: str | None = None
     reason_code: str | None = None
-
-
-class RuntimeLogs(BaseModel):
-    """Recent container stdout+stderr, capped at `tail` lines.
-
-    Returned by GET /api/projects/:id/runtime/logs. `logs` is a single
-    newline-joined string — the frontend renders it in a scrollable mono
-    panel and (optionally) polls every few seconds for live updates.
-    """
-
-    container_name: str | None = None
-    tail: int
-    logs: str

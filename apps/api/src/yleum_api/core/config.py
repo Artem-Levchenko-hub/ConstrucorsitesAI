@@ -479,14 +479,6 @@ class Settings(BaseSettings):
     # proven"; DB-persist + deploy-gating land in a follow-up. Env: USE_BUILD_ATTESTATION.
     use_build_attestation: bool = Field(default=True)
 
-    # Deploy-attestation gate (fresh-plan Step 3 — "deploy ↔ proven"). At deploy the
-    # api looks up the exact build's saved attestation and verifies its digest.
-    # Dev stays advisory by default; production is always fail-closed even if an
-    # operator accidentally sets DEPLOY_ATTESTATION_BLOCKING=false. Projects built
-    # before digest inputs were persisted must be rebuilt before their next deploy.
-    # Env: USE_DEPLOY_ATTESTATION_GATE / DEPLOY_ATTESTATION_BLOCKING.
-    use_deploy_attestation_gate: bool = Field(default=True)
-    deploy_attestation_blocking: bool = Field(default=False)
 
     # Wallet self-top-up (MVP stub) — POST /api/wallet/topup credits the caller's
     # OWN wallet by a user-supplied amount with NO payment. Fine for closed beta

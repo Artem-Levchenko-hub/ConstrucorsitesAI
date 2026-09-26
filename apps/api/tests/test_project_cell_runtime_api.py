@@ -178,13 +178,14 @@ async def test_unsupported_cell_actions_fail_closed(client, db_session, monkeypa
     _deny_legacy(monkeypatch)
     before = project.current_snapshot_id
     base = f"/api/projects/{project.id}"
-    for method, path, body in (
-        ("GET", "/runtime/logs", None), ("POST", "/runtime/stop", {}),
-        ("POST", "/runtime/keep-alive", {"enabled": True}),
-        ("POST", "/deploy", {}),
-    ):
+    # Pausing, keep-alive and container logs are gone from the API entirely —
+    # for a cell they could only refuse. Publication is the one action that
+    # still has to fail closed while the cell has nothing to publish.
+    for method, path, body in (("POST", "/deploy", {}),):
         response = await client.request(method, base + path, json=body)
         assert response.status_code == 409, (path, response.text)
+    for path in ("/runtime/logs", "/runtime/keep-alive", "/runtime/stop"):
+        assert (await client.request("POST", base + path, json={})).status_code == 404
     await db_session.refresh(project)
     assert project.current_snapshot_id == before
 
@@ -312,15 +313,23 @@ async def test_competing_preview_start_returns_retryable_busy_without_waiting(
     assert workspace.fencing_epoch == 7
 
 
-async def test_unselected_project_keeps_legacy_runtime(client, db_session, monkeypatch):
+async def test_project_without_a_cell_is_refused_not_routed_to_a_legacy_runtime(
+    client, db_session, monkeypatch,
+):
+    """The legacy dev-container runtime left with the site builder.
+
+    A row that somehow has no cell must get an honest refusal — the old code
+    called an orchestrator runtime that no longer exists.
+    """
     _, project, _, _ = await _seed(db_session, monkeypatch, cell=False)
     monkeypatch.setattr(get_settings(), "project_cell_general_availability_enabled", True)
     assert project.project_cell_enabled is False
     legacy = AsyncMock(return_value={"state": "stopped", "keep_alive": False})
     monkeypatch.setattr(oc, "get_status", legacy)
     response = await client.get(f"/api/projects/{project.id}/runtime")
-    assert response.status_code == 200
-    legacy.assert_awaited_once_with(project.id)
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "runtime_unavailable"
+    legacy.assert_not_awaited()
 
 
 async def test_start_uses_fenced_cell_snapshot_under_project_lock(

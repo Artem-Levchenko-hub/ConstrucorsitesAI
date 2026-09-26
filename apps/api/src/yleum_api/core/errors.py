@@ -35,6 +35,8 @@ ErrorCode = Literal[
     "too_large",
     "upload_failed",
     "no_snapshot",
+    # Проект без своей ячейки: среды приложения не существует.
+    "runtime_unavailable",
     "deploy_not_proven",
     "max_integration_not_found",
     "max_integration_required",

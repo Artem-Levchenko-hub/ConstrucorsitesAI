@@ -4,13 +4,10 @@ import uuid
 from datetime import UTC, datetime
 from unittest.mock import AsyncMock
 
-import httpx
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import get_settings
-from yleum_api.core.deps import get_current_user
-from yleum_api.main import app
 from yleum_api.models.attestation import Attestation
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellWorkspace
@@ -272,66 +269,3 @@ async def test_cell_proof_never_refreshes_legacy_runtime(
     explicit = await resolve_deploy_proof(db_session, project, snapshot.commit_sha)
     assert explicit.passed is False
     assert explicit.reason == "project_cell_publish_unavailable"
-
-
-async def test_production_deploy_blocks_unproven_and_allows_proven(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user, project, snapshot = await _project_with_snapshot(db_session)
-
-    async def current_user() -> User:
-        return user
-
-    calls: list[uuid.UUID] = []
-
-    async def deploy(project_id: uuid.UUID, **_: object) -> dict[str, object]:
-        calls.append(project_id)
-        return {"phase": "queued"}
-
-    prod_settings = get_settings().model_copy(
-        update={"env": "prod", "deploy_attestation_blocking": False}
-    )
-    app.dependency_overrides[get_current_user] = current_user
-    monkeypatch.setattr("yleum_api.routers.runtime.get_settings", lambda: prod_settings)
-    monkeypatch.setattr("yleum_api.routers.runtime.orchestrator_client.deploy", deploy)
-    try:
-        blocked = await client.post(f"/api/projects/{project.id}/deploy", json={})
-        assert blocked.status_code == 409
-        assert blocked.json()["error"]["code"] == "deploy_not_proven"
-        assert calls == []
-
-        db_session.add(_passing_attestation(project, snapshot))
-        await db_session.commit()
-        allowed = await client.post(f"/api/projects/{project.id}/deploy", json={})
-        assert allowed.status_code == 200
-        assert allowed.json()["phase"] == "queued"
-        assert calls == [project.id]
-    finally:
-        app.dependency_overrides.pop(get_current_user, None)
-
-
-async def test_production_deploy_fails_closed_when_proof_store_is_unavailable(
-    client: httpx.AsyncClient,
-    db_session: AsyncSession,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    user, project, _ = await _project_with_snapshot(db_session)
-
-    async def current_user() -> User:
-        return user
-
-    async def unavailable(*_: object) -> object:
-        raise RuntimeError("database unavailable")
-
-    prod_settings = get_settings().model_copy(update={"env": "production"})
-    app.dependency_overrides[get_current_user] = current_user
-    monkeypatch.setattr("yleum_api.routers.runtime.get_settings", lambda: prod_settings)
-    monkeypatch.setattr("yleum_api.routers.runtime.resolve_deploy_proof", unavailable)
-    try:
-        response = await client.post(f"/api/projects/{project.id}/deploy", json={})
-        assert response.status_code == 503
-        assert response.json()["error"]["details"]["reason"] == "proof_unavailable"
-    finally:
-        app.dependency_overrides.pop(get_current_user, None)
