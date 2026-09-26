@@ -250,15 +250,9 @@ button.ys-action { cursor: pointer; }
 .ys-tabs button:hover { color: #55555f; }
 .ys-tabs button[aria-pressed="true"] { color: #14141a; }
 
-.ys-phone {
-  width: min(100%, 320px);
-  padding: 7px;
-  border: 1px solid #e0ddd8;
-  border-radius: 26px;
-  background: #fff;
-  box-shadow: 0 28px 60px rgb(20 20 26 / 0.12);
-}
-.ys-phone .ys-screen { border: 0; border-radius: 20px; box-shadow: none; }
+/* Обёртка задаёт только ширину: саму рамку рисует общий компонент телефона,
+   тот же, что и в остальных превью — чтобы герой не выглядел иначе прочих. */
+.ys-phone { width: min(100%, 320px); }
 .ys-stage-caption { max-width: 420px; font-size: 12px; line-height: 1.5; color: #8a8a93; text-align: center; }
 
 /* ── коллаж во всю ширину ────────────────────────────────────────────────── */
@@ -296,4 +290,79 @@ button.ys-action { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   .ys-caret { animation: none; }
   .ys-collage-item { transform: none; }
+}
+
+/* ── рамка телефона ──────────────────────────────────────────────────────────
+   Мини-приложение живёт в телефоне, и превью должно это показывать без слов.
+   Рамка скромная: тонкая грань, один мягкий свет снизу, никаких бликов —
+   её работа задать контекст, а не спорить с содержимым за внимание. */
+.ys-phone-frame {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0 0 9px;
+  border: 1px solid #dcd8d2;
+  border-radius: 30px;
+  background: #fff;
+  box-shadow: 0 22px 48px rgb(20 20 26 / 0.10);
+}
+.ys-phone-status {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 26px;
+  padding: 0 16px;
+  font-size: 10px;
+  font-weight: 650;
+  color: #14141a;
+}
+.ys-phone-island {
+  position: absolute;
+  left: 50%;
+  top: 5px;
+  width: 58px;
+  height: 16px;
+  border-radius: 999px;
+  background: #14141a;
+  transform: translateX(-50%);
+}
+.ys-phone-meters { display: inline-flex; align-items: center; gap: 4px; }
+/* Значки нарисованы фигурами, а не шрифтом и не картинкой: остаются чёткими
+   на любом экране и не добавляют ни одного запроса к сети. */
+.ys-phone-signal {
+  width: 13px;
+  height: 9px;
+  background: linear-gradient(to top right, #14141a 50%, transparent 50%);
+  border-radius: 1px;
+}
+.ys-phone-battery {
+  width: 17px;
+  height: 9px;
+  border: 1.2px solid #14141a;
+  border-radius: 3px;
+  background: linear-gradient(to right, #14141a 72%, transparent 72%);
+  background-clip: content-box;
+  padding: 1px;
+}
+.ys-phone-viewport { flex: 1; min-height: 0; overflow: hidden; }
+/* Экран внутри рамки теряет собственную обводку и тень: две рамки подряд
+   выглядят как ошибка вёрстки. */
+.ys-phone-viewport .ys-screen {
+  border: 0;
+  border-top: 1px solid #efece8;
+  border-radius: 0;
+  box-shadow: none;
+}
+.ys-phone-home {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  width: 92px;
+  height: 3px;
+  border-radius: 999px;
+  background: #14141a;
+  opacity: 0.22;
+  transform: translateX(-50%);
 }
