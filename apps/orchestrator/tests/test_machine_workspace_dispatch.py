@@ -229,6 +229,9 @@ async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
             await self.release_command.wait()
             return DockerCommandResult(exit_code=0, output="done", timed_out=False)
 
+        def migration_receipt(self, state, operation_id):
+            return None  # This test exercises journal readability, not database execution.
+
     runtime = BlockingRuntime()
     manager.machine_runtime = runtime
     files = {".omnia/cell.json": json.dumps(payload()), "server.py": "print('python')"}

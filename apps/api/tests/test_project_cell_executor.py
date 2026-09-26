@@ -1219,6 +1219,41 @@ async def test_portable_executor_advertises_capabilities_and_dispatches_manifest
     assert isinstance(harness.exec_calls[0]["operation_id"], UUID)
 
 
+@pytest.mark.parametrize("with_receipt", [False, True])
+async def test_full_build_executor_rejects_green_stdout_without_database_receipt(
+    monkeypatch, db_session, test_engine, with_receipt,
+):
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/app/page.tsx": "product"},
+        capabilities={"portable_machine": True},
+        cell_exec_result={"ok": True, "exit_code": 0, "timed_out": False,
+                          "detail": '[project-migrations:v1]{"contract":"project-migrations-v1"}'},
+    )
+    original_exec = project_cell_executor.project_cell_agent_exec
+
+    async def response(workspace_id, *args, **kwargs):
+        result = await original_exec(workspace_id, *args, **kwargs)
+        receipt = {
+            "contract": "project-migrations-v1", "mode": "apply",
+            "workspace_id": str(workspace_id),
+            "generation_run_id": str(kwargs["generation_run_id"]),
+            "fencing_epoch": kwargs["fencing_epoch"],
+            "source_revision": kwargs["expected_revision"],
+            "source_digest": "2" * 64, "database_identity": "3" * 64,
+            "catalog_digest": "4" * 64, "migration_count": 1,
+        }
+        return replace(result, project_migration_receipt=receipt if with_receipt else None)
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", response)
+    result = await harness.handle.run_role(
+        project_cell_executor.ProjectCellCommandRole.FULL_BUILD, uuid4(),
+    )
+    assert result.ok is with_receipt
+    if not with_receipt:
+        assert "migration receipt is missing or stale" in result.redacted_detail
+
+
 @pytest.mark.parametrize("ok,timed_out", [(True, False), (False, False), (False, True)])
 async def test_clean_portable_shell_retains_preview_and_proof_identity(
     monkeypatch,

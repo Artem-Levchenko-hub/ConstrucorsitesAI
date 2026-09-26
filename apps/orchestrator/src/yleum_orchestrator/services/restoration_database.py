@@ -16,14 +16,25 @@ def admin_args(backend: Any) -> tuple[list[str], dict[str, str]]:
     )
 
 
-def admin_sql(backend: Any, sql: str, *, max_bytes: int = 4 * 1024 * 1024) -> bytes:
+def admin_sql(
+    backend: Any, sql: str, *, max_bytes: int = 4 * 1024 * 1024,
+    lifetime_seconds: int | None = None,
+) -> bytes:
     postgres = backend._project_postgres()
     if postgres is None:
         raise CellResourceError("project database is not running")
     args, env = admin_args(backend)
+    command = ["psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", *args]
+    if lifetime_seconds is not None:
+        lifetime = min(lifetime_seconds, int(machine_remaining_seconds(lifetime_seconds)))
+        if lifetime < 1:
+            raise CellResourceError("controller database execution budget exhausted")
+        # Closing a Docker attach socket does not terminate psql. Kill the
+        # client inside the container so it cannot submit a later COMMIT.
+        command = ["timeout", "-s", "KILL", str(lifetime), *command]
     execution = backend.client.api.exec_create(
         postgres.id,
-        ["psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", *args],
+        command,
         stdin=True,
         environment=env,
     )

@@ -39,6 +39,13 @@ from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
+from yleum_orchestrator.services.project_migrations import (
+    LEGACY_PATHS,
+    RECEIPT_PREFIX,
+    adaptation_database,
+    run_project_migrations,
+    select_migrations,
+)
 from yleum_orchestrator.services.restoration_database import close_controller_socket
 from yleum_orchestrator.services.studio_origins import studio_origins
 
@@ -303,6 +310,8 @@ class MachineAdapter:
                     "revision": request.expected_revision,
                     "manifest": manifest.digest(),
                     "timeout_seconds": request.timeout_seconds,
+                    **({"migration_contract": "project-migrations-v1"}
+                       if request.task_role == "full_build" else {}),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -365,6 +374,11 @@ class MachineAdapter:
             )
 
         output: list[str] = []
+        if role == "full_build":
+            try:
+                await self._project_migrations(state, request, verify_applied=False)
+            except CellResourceError as exc:
+                return await finish(exit_code=1, output=str(exc))
         heartbeat_seconds = int(
             getattr(self.settings, "cell_machine_command_heartbeat_seconds", 15)
         )
@@ -425,8 +439,9 @@ class MachineAdapter:
                 await asyncio.sleep(0.2)
         if role == "full_build":
             try:
+                receipt = await self._project_migrations(state, request, verify_applied=True)
                 await self._activate_runtime(state, manifest, request)
-            except MachineServiceFailed as exc:
+            except (MachineServiceFailed, CellResourceError) as exc:
                 # A failed product start is command evidence, not a transport
                 # rejection. Finish the durable request and retain task logs.
                 # finish() keeps the last 24k characters; bound this payload
@@ -434,7 +449,50 @@ class MachineAdapter:
                 failure = str(exc)[:4000]
                 task_tail = "\n".join(output)[-19000:]
                 return await finish(exit_code=1, output=f"{failure}\n{task_tail}")
+            output.append(RECEIPT_PREFIX + json.dumps(receipt, sort_keys=True))
+            self._store_migration_receipt(state, request.operation_id, receipt)
         return await finish(exit_code=0, output="\n".join(output))
+
+    def _store_migration_receipt(
+        self, state: Any, operation_id: UUID, receipt: dict[str, Any],
+    ) -> None:
+        machine, _backend = self.parts(state)
+        saved = machine.state()
+        saved["operations"][str(operation_id)]["project_migration_receipt"] = receipt
+        write_controller_json(machine.path, saved)
+
+    def migration_receipt(self, state: Any, operation_id: UUID) -> dict[str, Any] | None:
+        machine, _backend = self.parts(state)
+        return cast(dict[str, Any] | None, machine.state().get("operations", {}).get(
+            str(operation_id), {}
+        ).get("project_migration_receipt"))
+
+    async def _project_migrations(
+        self, state: Any, request: Any, *, verify_applied: bool,
+    ) -> dict[str, Any]:
+        from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
+        from yleum_orchestrator.services.cell_draft_support import trusted_template_source
+
+        machine, backend = self.parts(state)
+        verify_only = adaptation_database(state, machine.state())
+        files = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
+        # Adaptation verifies its copied DB, never classifies/replays historical SQL.
+        migrations = {}
+        if not verify_only:
+            template = trusted_template_source(get_stack("max-miniapp-nextjs").template_dir)
+            legacy = {path: (template / path).read_text(encoding="utf-8") for path in LEGACY_PATHS}
+            migrations = select_migrations(files, legacy)
+        receipt: dict[str, Any] = await machine_effect(
+            run_project_migrations, backend, migrations,
+            verify_only=verify_only, verify_applied=verify_applied,
+        )
+        receipt.update(
+            workspace_id=str(state.workspace_id),
+            generation_run_id=str(request.generation_run_id),
+            fencing_epoch=request.fencing_epoch,
+            source_revision=request.expected_revision,
+        )
+        return receipt
 
     async def _activate_runtime(self, state: Any, manifest: MachineManifest, request: Any) -> None:
         """Start services from the exact successful full-build workspace."""

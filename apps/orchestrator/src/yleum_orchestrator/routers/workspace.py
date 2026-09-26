@@ -623,6 +623,11 @@ async def exec_workspace_agent_command(
                 before_identity=before_identity,
                 after_identity=after_identity,
                 environment_mutated=before_identity != after_identity,
+                project_migration_receipt=(
+                    manager.machine_runtime.migration_receipt(state, request.operation_id)
+                    if request.task_role == "full_build" and result.exit_code == 0
+                    else None
+                ),
             )
             await machine.store_transport_response(
                 operation_id=request.operation_id,

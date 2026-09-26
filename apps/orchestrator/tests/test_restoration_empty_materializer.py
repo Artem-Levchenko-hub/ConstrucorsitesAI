@@ -612,6 +612,31 @@ async def test_schema_only_empty_prepare_is_exact_ready_and_uses_no_compatibilit
     ]
 
 
+async def test_direct_sql_r0_records_only_executed_sql_after_physical_schema_check(
+    tmp_path, monkeypatch,
+):
+    from yleum_orchestrator.services import code_restoration_engine as engine_module
+    from yleum_orchestrator.services import project_migrations
+
+    calls = []
+    monkeypatch.setattr(engine_module, "admin_sql", lambda _backend, sql, **kw:
+                        calls.append(("executed", sql)))
+    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations",
+                        lambda _backend, sql: calls.append(("recorded", sql)))
+    files = drizzle_files()
+    files.pop("drizzle.config.ts")
+    files["drizzle/0002_tasks.sql"] = "CREATE TABLE qa_tasks(id uuid);"
+    result, _events = await _prepare_empty(tmp_path, monkeypatch, files)
+    assert result["state"] == "ready"
+    assert calls == [("executed", files["drizzle/0002_tasks.sql"]),
+                     ("recorded", {"drizzle/0002_tasks.sql": files["drizzle/0002_tasks.sql"]})]
+    calls.clear()
+    result, _events = await _prepare_empty(tmp_path / "rejected", monkeypatch, files,
+                                          materialized_schema="missing_table")
+    assert result["state"] == "needs_changes"
+    assert not any(kind == "recorded" for kind, _ in calls)
+
+
 async def test_successful_materializer_without_expected_table_needs_changes(
     tmp_path, monkeypatch
 ):

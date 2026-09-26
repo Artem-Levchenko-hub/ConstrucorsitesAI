@@ -209,6 +209,8 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activ
 
     runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
     runtime.parts = lambda state: (Machine(), object())
+    runtime._project_migrations = AsyncMock(return_value={"contract": "project-migrations-v1"})
+    runtime._store_migration_receipt = lambda *_: None
     from yleum_orchestrator.services.machine_services import MachineServiceFailed
 
     runtime._activate_runtime = AsyncMock(
@@ -241,6 +243,37 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activ
         assert 4096 < len(result.output) <= 24000
     assert commands == [["pnpm", "build"], ["pnpm", "test"]]
     runtime._activate_runtime.assert_awaited_once()
+    assert runtime._project_migrations.await_count == 2
+
+
+async def test_full_build_migration_failure_never_builds_or_activates():
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    api = module()
+    machine = SimpleNamespace(
+        ensure=AsyncMock(), request_start=AsyncMock(return_value=None),
+        request_finish=AsyncMock(side_effect=lambda _mutation, result: result),
+        exec_start=AsyncMock(),
+    )
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.parts = lambda _: (machine, object())
+    runtime._project_migrations = AsyncMock(side_effect=CellResourceError("pending SQL failed"))
+    runtime._activate_runtime = AsyncMock()
+    value = payload()
+    value["tasks"] = [{"name": "build", "role": "full_build", "argv": ["pnpm", "build"]}]
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
+        cmd="omnia:full_build", task_role="full_build",
+    )
+    result = await runtime.execute(
+        SimpleNamespace(), MachineManifest.model_validate(value), request
+    )
+    assert result.exit_code == 1
+    assert "pending SQL failed" in result.output
+    machine.exec_start.assert_not_awaited()
+    runtime._activate_runtime.assert_not_awaited()
 
 
 def test_capabilities_advertise_dedicated_project_postgres():

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -225,6 +225,7 @@ class WorkspaceAgentExecResponse(BaseModel):
     before_identity: WorkspaceIdentityDigest
     after_identity: WorkspaceIdentityDigest
     environment_mutated: bool
+    project_migration_receipt: dict[str, Any] | None = None
 
 
 class WorkspaceAgentOperationStatusResponse(BaseModel):

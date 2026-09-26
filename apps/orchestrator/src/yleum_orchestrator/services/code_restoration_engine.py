@@ -1737,6 +1737,18 @@ class CodeRestorationEngine:
                         raise PreparationNeedsChanges(
                             "Историческая схема не создана в изолированной базе."
                         )
+                    if empty_sql_migrations is not None:
+                        from yleum_orchestrator.services.project_migrations import (
+                            record_witnessed_project_migrations,
+                        )
+
+                        # Only this controller-executed SQL inventory was witnessed.
+                        # Never copy newer applied entries or guess from source files.
+                        await machine_effect(
+                            record_witnessed_project_migrations,
+                            candidate,
+                            dict(empty_sql_migrations),
+                        )
                     await machine_effect(
                         self._install_identity_rows,
                         candidate,

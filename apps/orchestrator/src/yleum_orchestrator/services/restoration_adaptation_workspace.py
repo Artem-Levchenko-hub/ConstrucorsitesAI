@@ -1809,6 +1809,7 @@ class DockerAdaptationWorkspaceEngine:
             {
                 "workspace_id": str(candidate_id),
                 "manifest": manifest.model_dump(mode="json"),
+                "restoration_adaptation_run_id": str(request.generation_run_id),
                 "epoch": 1,
                 "ready_epoch": None,
                 "operations": {},

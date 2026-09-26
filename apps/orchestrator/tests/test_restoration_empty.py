@@ -96,6 +96,35 @@ def test_empty_witness_is_one_repeatable_read_exact_snapshot(monkeypatch):
     assert "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY" in seen[1]
 
 
+def test_project_checksum_journal_is_technical_only_when_shape_and_rows_attested(monkeypatch):
+    from yleum_orchestrator.services import restoration_empty as module
+
+    journal = {"schema": "public", "name": "__omnia_project_migrations", "kind": "table",
+               "row_count": 1, "project_ledger_attestation": {
+                   "shape_attested": True, "rows_valid": True, "rows_digest": "b" * 64}}
+    def observe(value):
+        monkeypatch.setattr(module, "admin_sql", _admin_result(_payload(relations=[value])))
+        return module.observe_empty_database(
+            SimpleNamespace(), operation_id=UUID(int=1), workspace_id=UUID(int=2),
+            project_id=UUID(int=3), database_identity_digest="a" * 64, observation_kind="source",
+        )
+
+    witness = observe(journal)
+    assert witness is not None
+    # Never copy future applied SQL into an older R0 schema.
+    assert witness.identity_relations == []
+    changed = observe({**journal, "project_ledger_attestation": {
+        **journal["project_ledger_attestation"], "rows_digest": "c" * 64}})
+    assert changed is not None
+    assert changed.technical_state_digest != witness.technical_state_digest
+    assert changed.identity_rows_digest == witness.identity_rows_digest
+    for field in ("shape_attested", "rows_valid"):
+        altered = {**journal, "project_ledger_attestation": {
+            **journal["project_ledger_attestation"], field: False}}
+        assert observe(altered) is None
+    assert observe({**journal, "name": "customer_records"}) is None
+
+
 def test_empty_witness_fails_closed_for_nonzero_unknown_or_advanced_state(monkeypatch):
     from yleum_orchestrator.services import restoration_empty as module
 

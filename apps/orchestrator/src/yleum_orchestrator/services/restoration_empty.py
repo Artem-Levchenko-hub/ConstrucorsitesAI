@@ -19,6 +19,7 @@ from yleum_orchestrator.services.restoration_database import admin_sql
 
 ObservationKind = Literal["source", "candidate_copy", "quiesced_source"]
 _LEDGER_IDENTITY = ("public", "__omnia_migrations")
+_PROJECT_LEDGER_IDENTITY = ("public", "__omnia_project_migrations")
 _MAX_USERS_IDENTITY = ("public", "max_users")
 _MAX_USERS_COLUMNS = [
     ["id", "uuid", True, "gen_random_uuid()"],
@@ -150,6 +151,24 @@ SELECT json_build_object(
         jsonb_build_array(name,applied_at) ORDER BY name)::text,'[]'),'UTF8')),'hex') AS digest
         FROM public.__omnia_migrations$ledger$, false, false, '')))[1]::text))
     ELSE NULL END,
+   'project_ledger_attestation', CASE
+    WHEN schema_name='public' AND relname='__omnia_project_migrations'
+    THEN json_build_object('shape_attested', owner_is_controller
+     AND columns::jsonb = '[
+       ["name","text",true,null], ["sha256","text",true,null],
+       ["applied_at","timestamp with time zone",true,"now()"]
+     ]'::jsonb
+     AND primary_key::jsonb = '["name"]'::jsonb AND unique_keys::jsonb = '[]'::jsonb,
+     'rows_valid', ((xpath('/table/row/valid/text()', query_to_xml(
+       $journal$SELECT coalesce(bool_and(name ~ '^drizzle/[^/]+[.]sql$'
+        AND length(name)<=1024 AND sha256 ~ '^[0-9a-f]{64}$'),true) AS valid
+        FROM public.__omnia_project_migrations$journal$, false, false, '')))[1]::text)::boolean,
+     'rows_digest', ((xpath('/table/row/digest/text()', query_to_xml(
+       $journal$SELECT encode(sha256(convert_to(coalesce(jsonb_agg(
+        jsonb_build_array(name,sha256,applied_at)
+        ORDER BY name)::text,'[]'),'UTF8')),'hex') AS digest
+        FROM public.__omnia_project_migrations$journal$, false, false, '')))[1]::text))
+    ELSE NULL END,
    'max_users_attestation', CASE WHEN schema_name='public' AND relname='max_users'
     THEN json_build_object('owner_is_controller',owner_is_controller,
       'columns',columns,'primary_key',primary_key,'unique_keys',unique_keys,
@@ -236,12 +255,16 @@ def _classified_relations(payload: dict[str, Any]) -> list[dict[str, Any]] | Non
         seen.add(identity)
         classification = "business"
         identity_rows_digest = None
-        if identity == _LEDGER_IDENTITY:
-            attestation = raw.get("ledger_attestation")
+        technical_rows_digest = None
+        if identity in {_LEDGER_IDENTITY, _PROJECT_LEDGER_IDENTITY}:
+            project_ledger = identity == _PROJECT_LEDGER_IDENTITY
+            attestation = raw.get("project_ledger_attestation" if project_ledger else
+                                  "ledger_attestation")
             rows_digest = attestation.get("rows_digest") if isinstance(attestation, dict) else None
             canonical = bool(
                 isinstance(attestation, dict)
                 and attestation.get("shape_attested") is True
+                and (not project_ledger or attestation.get("rows_valid") is True)
                 and isinstance(rows_digest, str)
                 and len(rows_digest) == 64
             )
@@ -249,7 +272,13 @@ def _classified_relations(payload: dict[str, Any]) -> list[dict[str, Any]] | Non
                 return None
             if canonical:
                 classification = "technical"
-                identity_rows_digest = rows_digest
+                if project_ledger:
+                    # Applied SQL belongs to this schema state, not identity.
+                    # Copying it into an older materialized schema would falsely
+                    # mark future migrations applied. R0 must not preserve it.
+                    technical_rows_digest = rows_digest
+                else:
+                    identity_rows_digest = rows_digest
         elif identity == _MAX_USERS_IDENTITY:
             attestation = raw.get("max_users_attestation")
             rows_digest = attestation.get("rows_digest") if isinstance(attestation, dict) else None
@@ -276,6 +305,8 @@ def _classified_relations(payload: dict[str, Any]) -> list[dict[str, Any]] | Non
                 "row_count": raw["row_count"],
                 "rls": raw.get("rls") is True,
                 "identity_rows_digest": identity_rows_digest,
+                **({"technical_rows_digest": technical_rows_digest}
+                   if technical_rows_digest is not None else {}),
             }
         )
     return sorted(result, key=lambda item: (item["schema"], item["name"]))

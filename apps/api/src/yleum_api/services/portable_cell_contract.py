@@ -68,6 +68,14 @@ extensions there. The platform snapshots and restore-smokes its disk. Database
 superuser access does not grant container, host or managed-platform privileges.
 Persistent data still needs backward-compatible migrations. Follow the appended
 MAX DATA EVOLUTION POLICY; admin access is not permission to discard existing data.
+Project drizzle/*.sql files are applied transactionally by the controller before
+full_build tasks, including runtime_check. Add new files; never edit an applied
+migration or also apply these files manually. Call runtime_check before
+testing their persisted data. Direct SQL on your own database remains available.
+Do not forge migration journal entries or clear existing data to pass a check:
+an untracked existing database requires explicit migration reconciliation.
+Restoration adaptation only verifies the copied database; never replay historical
+migrations or change its schema.
 
 MAX AUTH AND MANAGED INTEGRATIONS ARE A SEPARATE TRUSTED BOUNDARY.
 PostgreSQL-backed managed APIs remain in the trusted core. /api/max/* and /api/omnia/* stay

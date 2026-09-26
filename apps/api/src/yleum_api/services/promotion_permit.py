@@ -12,7 +12,7 @@ from typing import Any
 from uuid import UUID
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
-MAX_FULL_BUILD_CONTRACT_VERSION = "max-full-build-files-v1"
+MAX_FULL_BUILD_CONTRACT_VERSION = "max-full-build-project-migrations-v2"
 MAX_RELEASE_PROOF_CONTRACT_VERSION = "max-release-v2"
 MAX_EMBEDDED_SECURITY_POLICY_VERSION = "owner-preview-csp-v1"
 

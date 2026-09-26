@@ -350,6 +350,30 @@ def invalidated_dimensions(
     return frozenset(invalid)
 
 
+def valid_project_migration_receipt(
+    receipt: object, *, workspace_id: UUID, generation_run_id: UUID, fencing_epoch: int,
+    source_revision: str, adaptation: bool,
+) -> bool:
+    if not isinstance(receipt, dict):
+        return False
+    expected = {
+        "contract": "project-migrations-v1",
+        "mode": "verify_only" if adaptation else "apply",
+        "workspace_id": str(workspace_id), "generation_run_id": str(generation_run_id),
+        "fencing_epoch": fencing_epoch, "source_revision": source_revision,
+    }
+    return (
+        all(receipt.get(key) == value for key, value in expected.items())
+        and type(receipt.get("migration_count")) is int
+        and 0 <= receipt["migration_count"] <= 256
+        and all(
+            isinstance(receipt.get(key), str)
+            and re.fullmatch(r"[0-9a-f]{64}", receipt[key]) is not None
+            for key in ("source_digest", "database_identity", "catalog_digest")
+        )
+    )
+
+
 def portable_selected(capabilities: dict[str, object], files: dict[str, str]) -> bool:
     # Capability comes from the selected trusted provider; a source file alone
     # must never weaken legacy checks or advertise unavailable execution.
@@ -906,12 +930,25 @@ async def maybe_create_project_cell_executor(
             )
         before = _proof_identity(result.before_identity)
         after = _proof_identity(result.after_identity)
+        migration_ok = (
+            role is not ProjectCellCommandRole.FULL_BUILD
+            or not result.ok
+            or valid_project_migration_receipt(
+                getattr(result, "project_migration_receipt", None),
+                workspace_id=agent_workspace_id, generation_run_id=leased_run_id,
+                fencing_epoch=fencing_epoch, source_revision=before.workspace_revision,
+                adaptation=restoration_adaptation,
+            )
+        )
         return ProjectCellCommandObservation(
             operation_id=result.operation_id,
             role=role,
-            ok=result.ok,
+            ok=result.ok and migration_ok,
             timed_out=result.timed_out,
-            redacted_detail=result.detail,
+            redacted_detail=(
+                result.detail if migration_ok else
+                "Project database migration receipt is missing or stale; build rejected"
+            ),
             before=before,
             after=after,
             invalidated_dimensions=invalidated_dimensions(before, after),
