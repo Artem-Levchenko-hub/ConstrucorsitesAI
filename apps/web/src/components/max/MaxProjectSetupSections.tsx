@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import type { MaxContentItem, MaxProjectConfigPayload } from "@/lib/api/types";
-import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
+import { MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO } from "@/lib/max-brief";
 import { MaxContentItemFields } from "./MaxContentItemEditor";
 
 export type SetupSection = "details" | "content" | "owner" | "policies";
@@ -53,6 +53,11 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
   onChange: (value: MaxProjectConfigPayload) => void;
 }) {
   const summaryLength = Array.from(current.summary.trim()).length;
+  // Функции, введённые раньше руками или агентом, словарю не принадлежат —
+  // показываем их отдельной строкой, а не теряем при переключении карточек.
+  const extraFeatures = current.features.filter(
+    feature => !(MAX_FEATURES as readonly string[]).includes(feature),
+  );
   const updateContent = (index: number, patch: Partial<MaxContentItem>) => {
     const content = [...current.content];
     content[index] = { ...content[index], ...patch };
@@ -96,11 +101,31 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
           onChange={event => onChange({ ...current, audience: event.target.value })} />
       </div>
       <div className="max-setup-field max-setup-wide">
-        <Label htmlFor="max-config-features">Возможности приложения</Label>
-        <Textarea id="max-config-features" className="max-setup-short-textarea" value={current.features.join(", ")}
-          placeholder="Заказы, бонусы, запись, уведомления" aria-describedby="max-config-features-hint"
-          onChange={event => onChange({ ...current, features: event.target.value.split(",").map(feature => feature.trim()).filter(Boolean).slice(0, 24) })} />
-        <p id="max-config-features-hint" className="max-setup-hint">До 24 функций, через запятую.</p>
+        {/* В мастере создания функции выбираются карточками с пояснениями, а
+            здесь была строка через запятую: один смысл двумя интерфейсами.
+            Теперь тот же словарь и тот же способ выбора. */}
+        <span className="max-content-label" id="max-config-features-label">Возможности приложения</span>
+        <div className="max-setup-features" role="group" aria-labelledby="max-config-features-label">
+          {MAX_FEATURES.map(feature => {
+            const selected = current.features.includes(feature);
+            return <button key={feature} type="button" aria-pressed={selected} className="max-setup-feature"
+              onClick={() => onChange({
+                ...current,
+                features: selected
+                  ? current.features.filter(item => item !== feature)
+                  : [...current.features, feature].slice(0, 24),
+              })}>
+              <span className="max-setup-feature-check" aria-hidden="true">{selected && <Check className="h-3 w-3" />}</span>
+              <span>
+                <span className="max-setup-feature-label">{feature}</span>
+                <span className="max-setup-feature-hint">{MAX_FEATURE_INFO[feature].summary}</span>
+              </span>
+            </button>;
+          })}
+        </div>
+        {extraFeatures.length > 0 && (
+          <p className="max-setup-hint">Добавлено вручную: {extraFeatures.join(", ")} — останется как есть.</p>
+        )}
       </div>
     </Group>
     <Group title="Оформление" description="Можно оставить текущий стиль. Дополнительные цвета не нужны для публикации.">

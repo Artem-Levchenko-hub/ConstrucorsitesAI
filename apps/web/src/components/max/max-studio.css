@@ -143,8 +143,17 @@
   .max-projects-heading h1 + p { font-size: 14px; }
   .max-projects-toolbar { align-items: stretch; flex-direction: column; gap: 8px; }
   .max-projects-search { width: 100%; }
-  .max-project-row { grid-template-columns: minmax(0, 1fr); padding: 20px 16px; }
+  /* На телефоне строка становится карточкой: состояние узнаётся полоской
+     слева, а действие занимает всю ширину — это главный элемент карточки. */
+  .max-project-row { grid-template-columns: minmax(0, 1fr); padding: 20px 16px 20px 20px; }
+  .max-project-row::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--color-border-strong); }
+  .max-project-row:has([data-project-status=build])::before { background: var(--color-border-strong); }
+  .max-project-row:has([data-project-status=connect])::before { background: var(--color-accent); }
+  .max-project-row:has([data-project-status=live])::before { background: var(--color-success); }
+  .max-project-row:has([data-project-status=offline])::before { background: var(--color-fg-tertiary); }
   .max-project-state { padding-left: 54px; }
+  .max-project-actions { width: 100%; }
+  .max-project-next { flex: 1; justify-content: center; gap: 8px; }
   .max-projects-empty { padding: 40px 16px; }
   .max-wizard-heading { padding: 20px 56px 0 20px; }
   .max-wizard-body { padding: 20px; }

@@ -365,7 +365,12 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   );
   const catalogContent = (
     <>
-      <p className="mt-4 max-w-[850px] text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
+      {/* Абзац предупреждения был первым, что видит человек на экране выбора
+          сервисов. Текст остался, но уступил место самим сервисам. */}
+      <details className="mt-4 max-w-[850px] rounded-[6px] border border-border-subtle bg-surface-base px-4 py-3">
+        <summary className="cursor-pointer text-sm font-medium text-accent-secondary">Что даёт подключение</summary>
+        <p className="mt-2 text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
+      </details>
       <section className="max-integration-summary mt-6 grid gap-4 lg:grid-cols-[1fr_220px]">
         <div className="rounded-[12px] border border-border-default bg-surface p-6">
           <div className="flex items-start gap-4">
@@ -440,41 +445,45 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                 const reusable = connection?.status === "active" && !connection.bound_to_project;
                 const Icon = providerIcons[provider.key] ?? CloudCog;
                 return (
-                  <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[1.3fr_.8fr_130px_190px] lg:items-center">
-                    <div className="flex items-center gap-3">
-                      <span className="grid size-10 shrink-0 place-items-center rounded-[8px] border border-border-default bg-surface text-accent"><Icon className="size-4" /></span>
-                      <div><h3 className="text-sm font-semibold">{provider.name}</h3><p className={cn("mt-1 text-xs text-fg-tertiary", !platform && "line-clamp-1")}>{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p></div>
-                    </div>
-                    <div className="flex flex-wrap gap-1.5">
-                      {provider.capabilities.slice(0, 3).map((item) => <span key={item} className="rounded-full border border-border-default px-2 py-1 text-[9px] text-fg-secondary">{item}</span>)}
-                    </div>
-                    <div>
-                      {connected ? <span className="inline-flex items-center gap-1.5 text-xs font-medium text-success-fg"><Check className="size-3.5" />{platform ? "Встроено" : "Подключено"}</span>
-                        : platform && provider.available ? <span className="text-xs text-fg-tertiary">Не включено</span>
-                        : needsSetup ? <span className="text-xs text-danger-fg">Требуется настройка</span>
-                        : reusable ? <span className="text-xs text-accent-secondary">Есть у бизнеса</span>
-                        : provider.available ? <span className="text-xs text-fg-tertiary">Не подключено</span>
-                        : <span className="text-xs text-fg-tertiary">Готовим</span>}
+                  <article key={provider.key} className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_200px] lg:items-center">
+                    <div className="flex items-start gap-3">
+                      <span className="grid size-10 shrink-0 place-items-center rounded-[6px] border border-border-default bg-surface text-accent"><Icon className="size-4" /></span>
+                      <div className="min-w-0">
+                        <h3 className="flex flex-wrap items-center gap-2 text-sm font-semibold">
+                          {provider.name}
+                          {/* Состояние — значком у названия: колонка со словом
+                              «Не подключено» повторяла кнопку в той же строке. */}
+                          {connected ? <span className="inline-flex items-center gap-1 text-xs font-medium text-success-fg"><Check className="size-3.5" />{platform ? "Встроено" : "Подключено"}</span>
+                            : needsSetup ? <span className="text-xs font-medium text-danger-fg">Требуется настройка</span>
+                            : reusable ? <span className="text-xs font-medium text-accent-secondary">Есть у бизнеса</span>
+                            : !provider.available ? <span className="text-xs font-medium text-fg-tertiary">Готовим</span>
+                            : null}
+                        </h3>
+                        <p className="mt-1 text-xs leading-5 text-fg-tertiary">{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p>
+                        {provider.capabilities.length > 0 && (
+                          <p className="mt-1 text-xs text-fg-tertiary">{provider.capabilities.slice(0, 3).join(" · ")}</p>
+                        )}
+                      </div>
                     </div>
                     <div className="flex flex-wrap justify-end gap-1">
                       {platform ? (
                         provider.key === "llmgw" && provider.available ? (
                           <>
-                            {connected && implementationFeatures[provider.key] && <Button size="sm" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                            {connected && implementationFeatures[provider.key] && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
                             <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={platformAi.isPending} onClick={() => platformAi.mutate(!connected)}>{connected ? "Выключить ИИ" : "Включить ИИ"}</Button>
                           </>
                         ) : null
                       ) : connected ? (
                         <>
-                          {implementationFeatures[provider.key] && <Button size="sm" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                          {implementationFeatures[provider.key] && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
                           <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-secondary hover:bg-surface-base sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
                           <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-tertiary hover:bg-danger/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
                       ) : reusable ? (
-                        <Button size="sm" className="h-11 sm:h-8" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
+                        <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
                       ) : provider.available ? (
-                        <Button size="sm" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
+                        <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Подключить <ChevronRight className="size-3.5" /></Button>
                       ) : (
                         <a href={provider.docs_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-fg-tertiary">Требования <ExternalLink className="size-3" /></a>
                       )}

@@ -40,7 +40,8 @@
 .max-setup-intro p { max-width: 640px; margin-top: 7px; font-size: 13px; line-height: 1.65; color: var(--color-fg-secondary); }
 .max-setup-group { min-width: 0; margin: 25px 0 0; padding: 0; border: 0; }
 .max-setup-group + .max-setup-group { margin-top: 30px; padding-top: 25px; border-top: 1px solid var(--color-border-default); }
-.max-setup-group legend { float: left; width: 100%; margin-bottom: 16px; font-size: 14px; font-weight: 600; color: var(--color-accent-secondary); }
+/* Синий ведёт к действию, а не к подписи: заголовки групп тёмные. */
+.max-setup-group legend { float: left; width: 100%; margin-bottom: 16px; font-size: 14px; font-weight: 600; color: var(--color-fg-primary); }
 .max-setup-group legend + * { clear: both; }
 .max-setup-group-note { margin: -8px 0 16px; font-size: 12px; line-height: 1.6; color: var(--color-fg-secondary); }
 .max-setup-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px 20px; }
@@ -52,6 +53,16 @@
   border: 1px solid var(--color-border-strong); border-radius: 6px;
   background: var(--color-surface); color: var(--color-fg-primary);
   font-size: 14px; font-weight: 400; line-height: 1.5; box-shadow: none;
+}
+/* Системный вид выпадающего списка выбивался из остальных полей кабинета:
+   своя стрелка и те же отступы, что у инпутов. */
+.max-project-setup .max-setup-field select {
+  appearance: none;
+  padding-right: 38px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--color-fg-secondary) 50%), linear-gradient(135deg, var(--color-fg-secondary) 50%, transparent 50%);
+  background-position: calc(100% - 20px) 20px, calc(100% - 15px) 20px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
 }
 .max-project-setup .max-setup-field :is(input, textarea)::placeholder { color: var(--color-fg-tertiary); opacity: 1; }
 .max-project-setup .max-setup-field :is(input, textarea, select):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; box-shadow: none; }
@@ -131,6 +142,16 @@
 .max-content-steps b { color: var(--color-fg-primary); font-weight: 600; }
 .max-content-item-layout { display: grid; grid-template-columns: minmax(0, 1fr) 216px; gap: 22px; align-items: start; min-width: 0; }
 .max-content-label { font-size: 13px; font-weight: 500; line-height: 1.5; color: var(--color-fg-primary); }
+/* Функции — теми же карточками, что в мастере создания приложения. */
+.max-setup-features { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.max-setup-feature { display: flex; align-items: flex-start; gap: 9px; min-height: 44px; padding: 11px; border: 1px solid var(--color-border-default); border-radius: 6px; background: var(--color-surface); text-align: left; }
+.max-setup-feature:hover { border-color: var(--color-border-strong); }
+.max-setup-feature[aria-pressed=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); }
+.max-setup-feature-check { display: grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; flex-shrink: 0; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-surface); color: var(--color-accent); }
+.max-setup-feature[aria-pressed=true] .max-setup-feature-check { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-fg-on-accent); }
+.max-setup-feature-label { display: block; color: var(--color-fg-primary); font-size: 13px; font-weight: 500; line-height: 1.35; }
+.max-setup-feature-hint { display: block; margin-top: 3px; color: var(--color-fg-secondary); font-size: 11px; line-height: 1.5; }
+@media (max-width: 560px) { .max-setup-features { grid-template-columns: minmax(0, 1fr); } }
 .max-content-photo { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .max-content-upload { display: inline-flex; align-items: center; gap: 7px; min-height: 44px; padding: 8px 12px; border: 1px solid var(--color-accent); border-radius: 6px; background: var(--color-accent-subtle); color: var(--color-accent-secondary); font-size: 12px; font-weight: 500; }
 .max-content-upload:hover:not(:disabled) { background: #dfebff; }
