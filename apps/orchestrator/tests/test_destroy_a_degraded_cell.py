@@ -13,6 +13,12 @@
 
 Здесь закреплён исход, который видит владелец: ячейка сносится, и её снимок
 содержит базу. Не «снос прошёл, а данных в снимке нет».
+
+Тот же корень бьёт и по «усыпить приложение»: в тот же день операция pause на
+ячейке a5a60aa7 (core) ушла в indeterminate с тем же 409 на том же дампе —
+цепочка _execute_composite_pause_status → checkpoint create → postgres_dump.
+Владелец нажимает «усыпить», ничего не происходит, а операция висит. Поэтому
+пауза закреплена здесь же, рядом со сносом.
 """
 
 from __future__ import annotations
@@ -110,3 +116,30 @@ async def test_the_database_does_not_stay_up_after_the_seal(tmp_path) -> None:
     ]
     assert running, "база не поднималась — значит дамп снят не с неё"
     assert names.postgres_container not in docker.containers
+
+
+@pytest.mark.asyncio
+async def test_a_degraded_cell_can_still_be_put_to_sleep(tmp_path) -> None:
+    """Живой случай a5a60aa7: «усыпить» падало на том же дампе, что и снос."""
+    provider, _manager, _checkpoints, docker, spec, names = await _degraded_cell(tmp_path)
+    await docker.write_volume_files(
+        names.postgres_volume, {"db.json": b'[{"id": 1, "note": "owner row"}]'}
+    )
+    dumps: list[bytes] = []
+    original = docker.postgres_dump
+
+    async def _record(container_name: str, password: str) -> bytes:
+        payload = await original(container_name, password)
+        dumps.append(payload)
+        return payload
+
+    docker.postgres_dump = _record  # type: ignore[method-assign]
+
+    await provider.execute_control(
+        spec.workspace_id,
+        ControlAction(kind="pause", checkpoint_ref="sleep-1"),
+        LifecycleMutation(uuid4(), 3, "c" * 64),
+    )
+
+    assert dumps, "сон запечатан без базы"
+    assert b"owner row" in dumps[-1]
