@@ -37,14 +37,6 @@ def test_generation_toolsets_keep_functional_tools_without_visual_judge(tools: l
 
 
 @pytest.mark.asyncio
-async def test_container_executor_rejects_visual_action() -> None:
-    # The vision module itself left with the site builder: nothing is left to call.
-    execute = agent_builder.make_container_executor(project_id="test-project", slug="test-slug")
-    result = await execute(agent_builder.Action("see", {"path": "/"}))
-    assert result["ok"] is False
-
-
-@pytest.mark.asyncio
 async def test_native_rejects_stale_visual_tool_call_and_still_finishes_functionally(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

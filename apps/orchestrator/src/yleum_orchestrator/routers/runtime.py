@@ -33,7 +33,6 @@ from yleum_orchestrator.core import postgres_admin
 from yleum_orchestrator.core.config import get_settings
 from yleum_orchestrator.core.docker_client import (
     container_image_template,
-    container_logs,
     destroy_container,
     destroy_project_network,
     exec_cmd,
@@ -49,12 +48,10 @@ from yleum_orchestrator.core.internal_auth import (
     verify_internal_token as _verify_token,
 )
 from yleum_orchestrator.schemas.runtime import (
-    CompileStatusResponse,
     DeployResponse,
     HotReloadRequest,
     KeepAliveRequest,
     KeepAliveResponse,
-    LogsResponse,
     MaxPreviewSessionResponse,
     RuntimeStatusResponse,
     StatusResponse,
@@ -64,7 +61,6 @@ from yleum_orchestrator.services import (
     dep_doctor,
     nginx_writer,
 )
-from yleum_orchestrator.services.compile_status import parse_next_compile_error
 from yleum_orchestrator.services.hibernate import (
     is_keep_alive_enabled,
     record_activity,
@@ -91,7 +87,6 @@ _READABLE_FILES = frozenset({"src/app/globals.css"})
 # Agentic builder (Phase 0) caps — bound each observation so one fat result
 # can't blow the agent's context window.
 _AGENT_MAX_READ = 1_000_000
-_AGENT_MAX_LIST = 16_000
 _AGENT_MAX_GREP = 16_000
 _AGENT_MAX_BUILD = 24_000
 _SANDBOX_SYNC_MAX_FILES = 5_000
@@ -1389,67 +1384,6 @@ async def _hot_reload_locked(payload: HotReloadRequest, slug: str) -> dict[str, 
 # (1000:1000) inside the cap-dropped container; `_safe_app_path` blocks escape.
 
 
-@router.get("/{project_id}/agent/read-file")
-async def agent_read_file(
-    project_id: str,
-    slug: str,
-    path: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """Read ANY file under /app from the running dev container (agent loop)."""
-    _verify_token(x_internal_token)
-    # An agent op IS activity: without this the hibernate sweeper sees a purely
-    # reading build agent as idle and docker-stops the container MID-BUILD
-    # (2026-07-08 incident). Same for every agent/* handler below.
-    await record_activity(project_id)
-    rel = _safe_app_path(path)
-    container_name = f"omnia-dev-{slug}"
-    try:
-        result = await exec_cmd(
-            container_name,
-            cmd=["cat", "--", rel],
-            workdir="/app",
-            max_output=_AGENT_MAX_READ,
-        )
-    except OrchestratorError as exc:
-        if exc.code == "container_not_running":
-            raise  # structured 409 → apps/api circuit breaker aborts the build
-        return {"found": False, "content": ""}
-    found = result["exit_code"] == "0"
-    return {
-        "found": found,
-        "content": result["stdout"] if found else "",
-        "error": "" if found else (result["stderr"][:500] or "not found"),
-    }
-
-
-@router.get("/{project_id}/agent/list-dir")
-async def agent_list_dir(
-    project_id: str,
-    slug: str,
-    path: str = ".",
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """List a directory under /app (agent loop)."""
-    _verify_token(x_internal_token)
-    await record_activity(project_id)
-    rel = _safe_app_path(path)
-    container_name = f"omnia-dev-{slug}"
-    try:
-        result = await exec_cmd(
-            container_name,
-            cmd=["ls", "-la", "--", rel],
-            workdir="/app",
-            max_output=_AGENT_MAX_LIST,
-        )
-    except OrchestratorError as exc:
-        if exc.code == "container_not_running":
-            raise
-        return {"ok": False, "detail": "container not running"}
-    ok = result["exit_code"] == "0"
-    return {"ok": ok, "detail": result["stdout"] if ok else result["stderr"]}
-
-
 @router.get("/{project_id}/agent/grep")
 async def agent_grep(
     project_id: str,
@@ -1644,52 +1578,6 @@ def _command_exposes_environment(cmd: str) -> bool:
     return bool(_EXEC_ENV_ENUM_RE.search(cmd.strip()))
 
 
-@router.post("/{project_id}/agent/exec")
-async def agent_exec(
-    project_id: str,
-    slug: str,
-    cmd: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """Run a shell command in the project's dev container (agent `bash` tool)."""
-    _verify_token(x_internal_token)
-    await record_activity(project_id)
-    low = (cmd or "").strip()
-    if not low:
-        raise OrchestratorError(
-            code="validation_failed",
-            message="empty cmd",
-            status_code=400,
-        )
-    if any(bad in low for bad in _EXEC_DENY):
-        return {"ok": False, "detail": "command blocked by safety denylist"}
-    if _command_exposes_environment(low):
-        return {
-            "ok": False,
-            "detail": "command blocked: environment and secret enumeration is not allowed",
-        }
-    container_name = f"omnia-dev-{slug}"
-    try:
-        result = await exec_cmd(
-            container_name,
-            cmd=["sh", "-lc", cmd],
-            workdir="/app",
-            timeout_sec=180,
-            max_output=_AGENT_MAX_BUILD,
-        )
-    except OrchestratorError as exc:
-        if exc.code == "container_not_running":
-            raise
-        return {"ok": False, "detail": exc.message}
-    ok = result["exit_code"] == "0"
-    out = _redact_exec_output((result["stdout"] + "\n" + result["stderr"]).strip())
-    return {
-        "ok": ok,
-        "exit_code": result["exit_code"],
-        "detail": out[:_AGENT_MAX_BUILD] or ("ok" if ok else "non-zero exit"),
-    }
-
-
 @router.get("/{project_id}/deploy", response_model=DeployResponse)
 async def get_deploy(
     project_id: str,
@@ -1793,52 +1681,6 @@ async def status(
     )
 
 
-@router.get("/{project_id}/logs", response_model=LogsResponse)
-async def logs(
-    project_id: str,
-    slug: str | None = None,
-    tail: int = 200,
-    kind: str = "dev",
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> LogsResponse:
-    """Tail recent stdout/stderr from the project's container.
-
-    Reads via `docker logs --tail N` (`docker_client.container_logs`). No
-    follow stream yet — frontend polls every 3 s for live updates. Caller
-    must pick `kind="dev"` (default) or `"prod"`; we resolve the container
-    name via the same label-lookup pattern used by /status and /stop.
-
-    Missing container returns 200 with empty `logs` — UI shows "No logs"
-    instead of a confusing 404 when the project has been hibernated.
-    """
-    _verify_token(x_internal_token)
-    from uuid import UUID
-
-    name = await find_project_container(project_id, kind=kind)
-    if name is None and slug:
-        name = f"omnia-{kind}-{slug}"
-    if name is None:
-        return LogsResponse(
-            project_id=UUID(project_id),
-            container_name=None,
-            tail=tail,
-            logs="",
-        )
-
-    if tail < 1:
-        tail = 1
-    elif tail > 5000:
-        tail = 5000  # cap to keep payloads bounded
-
-    result = await container_logs(name, tail=tail, kind=kind)
-    return LogsResponse(
-        project_id=UUID(project_id),
-        container_name=name,
-        tail=tail,
-        logs=result["logs"],
-    )
-
-
 @router.post("/{project_id}/warm")
 async def warm(
     project_id: str,
@@ -1861,36 +1703,6 @@ async def warm(
     if name is None:
         return {"warmed": 0, "note": "no container"}
     return await warm_routes(name)
-
-
-@router.get("/{project_id}/compile-status", response_model=CompileStatusResponse)
-async def compile_status(
-    project_id: str,
-    slug: str | None = None,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> CompileStatusResponse:
-    """Whether the dev container's Next.js/Turbopack build currently fails.
-
-    apps/api polls this right after a hot-reload so the chat can surface a
-    compile error as a card instead of leaving the user on a broken preview.
-    Reads recent dev logs and parses them (see ``services.compile_status``).
-
-    Missing container → ``ok=True`` (no app, nothing to report) — same
-    fail-soft posture as ``/logs``: never raise a 404 the caller would have to
-    special-case.
-    """
-    _verify_token(x_internal_token)
-    from uuid import UUID
-
-    name = await find_project_container(project_id, kind="dev")
-    if name is None and slug:
-        name = f"omnia-dev-{slug}"
-    if name is None:
-        return CompileStatusResponse(project_id=UUID(project_id), ok=True)
-
-    result = await container_logs(name, tail=250, kind="dev")
-    ok, error, file = parse_next_compile_error(result["logs"])
-    return CompileStatusResponse(project_id=UUID(project_id), ok=ok, error=error, file=file)
 
 
 @router.get("/{project_id}/runtime-status", response_model=RuntimeStatusResponse)

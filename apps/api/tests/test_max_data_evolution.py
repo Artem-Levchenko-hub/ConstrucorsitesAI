@@ -10,7 +10,6 @@ from yleum_api.core.errors import ApiError
 from yleum_api.services import (
     agent_builder,
     agent_native,
-    autoheal,
     max_generation_contract,
 )
 from yleum_api.services.generation import (
@@ -385,58 +384,3 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
     if mode == "native":
         assert "MAX VERIFICATION OVERRIDE" in prompt
 
-
-@pytest.mark.parametrize("template", ["max_miniapp", "fullstack"])
-async def test_autoheal_sends_project_policy_to_actual_agent_boundary(monkeypatch, template):
-    monkeypatch.setattr(
-        autoheal,
-        "get_settings",
-        lambda: SimpleNamespace(
-            use_autoheal_on_open=True,
-            autoheal_debounce_seconds=300,
-        ),
-    )
-    monkeypatch.setattr(
-        autoheal,
-        "get_redis",
-        lambda: SimpleNamespace(
-            set=AsyncMock(return_value=True),
-        ),
-    )
-    monkeypatch.setattr(
-        autoheal.orchestrator_client,
-        "compile_status",
-        AsyncMock(
-            side_effect=[{"ok": False, "error": "type mismatch"}, {"ok": True}],
-        ),
-    )
-    captured = []
-
-    async def run(**kwargs):
-        captured.append(kwargs)
-        return SimpleNamespace(files={"src/app/page.tsx": "fixed"})
-
-    monkeypatch.setattr(autoheal.agent_builder, "run_agent_build", run)
-    result = await autoheal.maybe_autoheal_on_open(uuid4(), "fixture", template=template)
-    assert result == {"healed": True, "files": 1}
-    assert len(captured) == 1
-    assert captured[0]["system_prompt"].count(POLICY_HEADER) == (template == "max_miniapp")
-    if template == "fullstack":
-        assert captured[0]["system_prompt"] == agent_builder.EDIT_SYSTEM_PROMPT
-    else:
-        assert "Use `window.WebApp` only" in captured[0]["system_prompt"]
-
-
-async def test_disabled_autoheal_does_not_load_guide_or_call_model(monkeypatch):
-    monkeypatch.setattr(
-        autoheal,
-        "get_settings",
-        lambda: SimpleNamespace(
-            use_autoheal_on_open=False,
-        ),
-    )
-    run = AsyncMock(side_effect=AssertionError("disabled autoheal must not spend tokens"))
-    monkeypatch.setattr(autoheal.agent_builder, "run_agent_build", run)
-    result = await autoheal.maybe_autoheal_on_open(uuid4(), "fixture", template="max_miniapp")
-    assert result == {"healed": False, "reason": "disabled"}
-    run.assert_not_called()

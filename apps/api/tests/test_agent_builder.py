@@ -11,8 +11,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from yleum_api.services import agent_builder as ab
 
 # ── parse_action ────────────────────────────────────────────────────────────
@@ -457,96 +455,12 @@ def test_agent_tracks_package_manager_generated_lockfile() -> None:
     assert result.files["pnpm-lock.yaml"] == "lockfileVersion: '9.0'\n"
 
 
-def test_container_write_surfaces_resolved_lockfile(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from yleum_api.services import orchestrator_client
-
-    async def hot_reload(*args, **kwargs):
-        return {"state": "hot_reloaded", "pnpm_lockfile": "lockfileVersion: '9.0'\n"}
-
-    monkeypatch.setattr(orchestrator_client, "hot_reload", hot_reload)
-    execute = ab.make_container_executor(project_id="project-1", slug="max-app")
-
-    observation = asyncio.run(
-        execute(
-            ab.Action(
-                name="write_file",
-                args={"path": "package.json", "content": '{"name":"app"}'},
-            )
-        )
-    )
-
-    assert observation["ok"] is True
-    assert observation["files"] == {"pnpm-lock.yaml": "lockfileVersion: '9.0'\n"}
-
-
-@pytest.mark.parametrize(
-    "upstream_code",
-    ["migration_apply_failed", "migration_reconciliation_required"],
-)
-def test_container_write_propagates_mandatory_max_migration_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    upstream_code: str,
-) -> None:
-    from yleum_api.services import orchestrator_client
-
-    async def hot_reload(*args, **kwargs):
-        raise orchestrator_client.OrchestratorBadRequest(
-            "MAX migration runner failed after source files were written; "
-            "database changes were not confirmed",
-            status_code=409,
-            upstream_code=upstream_code,
-        )
-
-    monkeypatch.setattr(orchestrator_client, "hot_reload", hot_reload)
-    execute = ab.make_container_executor(project_id="project-1", slug="max-app")
-
-    with pytest.raises(
-        orchestrator_client.OrchestratorBadRequest,
-        match="source files were written",
-    ):
-        asyncio.run(
-            execute(
-                ab.Action(
-                    name="write_file",
-                    args={"path": "drizzle/0004.sql", "content": "SELECT 4;"},
-                )
-            )
-        )
-
-
 # ── removed visual action and functional verification ────────────────────────
 
 
 def test_parse_rejects_removed_see_action():
     a = ab.parse_action('look\n<omnia:action name="see">{"path":"/dashboard"}</omnia:action>')
     assert a is None
-
-
-def test_container_runtime_check_receives_requested_route(monkeypatch):
-    """Removing visual review does not remove real route verification."""
-    from yleum_api.services import orchestrator_client
-
-    captured = {}
-
-    async def _fake_runtime(project_id, **kwargs):
-        captured.update(project_id=project_id, **kwargs)
-        return {"ok": True, "status_code": 200}
-
-    monkeypatch.setattr(orchestrator_client, "runtime_status", _fake_runtime)
-    execute = ab.make_container_executor(
-        project_id="project-1",
-        slug="slug",
-    )
-    result = asyncio.run(execute(ab.Action(name="runtime_check", args={"path": "/dashboard"})))
-
-    assert result["ok"] is True
-    assert captured == {
-        "project_id": "project-1",
-        "path": "/dashboard",
-        "slug": "slug",
-    }
 
 
 def test_runtime_check_loop_fixes_then_done():
@@ -771,33 +685,6 @@ _FONTS_IMPORT = (
     '@import url("https://fonts.googleapis.com/css2?'
     'family=Libre+Franklin:wght@400;500;600;700&family=Lora:wght@400;500;600&display=swap");'
 )
-
-
-def test_css_import_hoist_fonts_with_semicolons() -> None:
-    """The live breakage: a Google-Fonts @import (inner `;` in `wght@400;500`)
-    placed AFTER :root must be hoisted to the top — the regex must NOT stop at the
-    first inner semicolon (that made the sanitizer silently no-op, 2026-07-16)."""
-    bad = ".x{a:1}\n}\n" + _FONTS_IMPORT + "\n:root {\n  --radius: 0.625rem;\n}"
-    out = ab._sanitize_css_imports("src/app/globals.css", bad)
-    assert out.lstrip().startswith(_FONTS_IMPORT), out[:120]
-    assert not ab._css_import_misplaced(out)
-    assert "--radius" in out and ".x{a:1}" in out  # rules survive
-
-
-def test_css_import_correct_file_untouched() -> None:
-    good = _FONTS_IMPORT + "\n:root{--a:1}"
-    assert ab._sanitize_css_imports("src/app/globals.css", good) == good
-
-
-def test_css_import_charset_stays_first() -> None:
-    cs = '@charset "utf-8";\n.a{x:1}\n' + _FONTS_IMPORT
-    out = ab._sanitize_css_imports("g.css", cs)
-    assert out.startswith('@charset "utf-8";\n' + _FONTS_IMPORT)
-
-
-def test_css_import_non_css_untouched() -> None:
-    src = ".x{a:1}\n" + _FONTS_IMPORT
-    assert ab._sanitize_css_imports("src/app/page.tsx", src) == src
 
 
 if __name__ == "__main__":

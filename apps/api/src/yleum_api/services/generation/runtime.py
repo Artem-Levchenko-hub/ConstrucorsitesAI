@@ -139,7 +139,7 @@ async def _prepare_max_runtime_context(
     user_id: UUID,
     generation_run_id: UUID,
     vision_context: str,
-    legacy_execute: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
+    docs_media_execute: Callable[[AgentBuilderAction], Awaitable[dict[str, Any]]],
     max_shell_requested: bool,
     agent_emit: Callable[[str, dict[str, Any]], Awaitable[None]],
     max_model_locked_files: frozenset[str],
@@ -150,7 +150,7 @@ async def _prepare_max_runtime_context(
     max_shell_enabled = False
     active_max_locked_files = max_model_locked_files
     agent_result = None
-    base_agent_executor = legacy_execute
+    base_agent_executor = docs_media_execute
     try:
         project_cell_handle = await project_cell_executor.maybe_create_project_cell_executor(
             project_id=project_id,
@@ -158,7 +158,7 @@ async def _prepare_max_runtime_context(
             project_template="max_miniapp",
             user_id=user_id,
             generation_run_id=generation_run_id,
-            legacy_execute=legacy_execute,
+            docs_media_execute=docs_media_execute,
             vision_context=vision_context,
             agent_emit=lambda payload: agent_emit(
                 "agent.step",

@@ -533,7 +533,7 @@ async def maybe_create_project_cell_executor(
     project_template: str,
     user_id: UUID,
     generation_run_id: UUID,
-    legacy_execute: Executor,
+    docs_media_execute: Executor,
     vision_context: str = "",
     agent_emit: Callable[[dict[str, object]], Awaitable[None]] | None = None,
     capacity_dispatch_token: UUID | None = None,
@@ -1415,7 +1415,7 @@ async def maybe_create_project_cell_executor(
                     runtime_result["files"] = merged
                 return runtime_result
             if action.name in {"docs", "provider_docs", "generate_media"}:
-                return await legacy_execute(action)
+                return await docs_media_execute(action)
             return {"ok": False, "error": f"unknown cell action {action.name}"}
         except OrchestratorUnavailable as exc:
             return {

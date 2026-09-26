@@ -220,22 +220,6 @@ class DeployResponse(BaseModel):
     reason_code: str | None = None
 
 
-class LogsResponse(BaseModel):
-    project_id: UUID
-    container_name: str | None = None
-    tail: int
-    logs: str  # raw stdout+stderr concatenated, UTF-8, newline-separated
-
-
-class CompileStatusResponse(BaseModel):
-    project_id: UUID
-    # True = dev server is compiling cleanly (or no outstanding error); False =
-    # the AI-written code currently fails to compile / errors at render.
-    ok: bool
-    error: str | None = None  # compact, ANSI-stripped excerpt of the error block
-    file: str | None = None  # first implicated project source file (e.g. src/app/page.tsx)
-
-
 class RuntimeStatusResponse(BaseModel):
     project_id: UUID
     # True = the running app served its route without a server error (or there's

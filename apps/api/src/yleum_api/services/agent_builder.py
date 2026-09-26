@@ -18,7 +18,7 @@ Design rules that keep it safe to ship:
   * The EXECUTOR is injected (`execute` callable) so the loop is fully
     unit-testable with a fake — no container needed in tests.
   * Pure engine here; the production executor that talks to the orchestrator is
-    `make_container_executor(...)` at the bottom.
+    `make_docs_media_executor(...)` at the bottom.
   * Bounded: `max_steps` hard cap, per-action output truncation. No unbounded
     grind.
   * Gated by ``Settings.use_agentic_builder`` at the call site. This loop is the
@@ -51,7 +51,6 @@ from pathlib import Path
 from typing import Any
 
 from yleum_api.services import llm_client
-from yleum_api.services.exact_edit import validate_exact_edit
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -1115,251 +1114,33 @@ _EXPORT_DECL_RE = re.compile(
     r"export\s+(?:async\s+)?(?:function|const|let|class|type|interface|enum)\s+([A-Za-z0-9_]+)"
 )
 _EXPORT_LIST_RE = re.compile(r"export\s*\{([^}]+)\}")
-
-
-def _resolve_app_module(spec: str) -> list[str]:
-    """Candidate src/ paths for a `@/...` tsconfig-alias import specifier."""
-    if not spec.startswith("@/"):
-        return []
-    base = "src/" + spec[2:]
-    return [f"{base}.ts", f"{base}.tsx", f"{base}/index.ts", f"{base}/index.tsx"]
-
-
-async def _enrich_build_failure(detail: str, project_id: Any, slug: str) -> str:
-    """On a tsc failure, attach the SOURCE OF TRUTH so the model fixes it instead
-    of guessing/looping: the REAL exports of an `@/...` module it imported wrong
-    (the «getChannels vs listUserChannels» hallucination that looped a build to
-    death). Harness-hardening — a weak model is only as good as the feedback it
-    gets. Bounded (≤4 modules) + fail-soft (any error → original detail)."""
-    from yleum_api.services import orchestrator_client
-
-    specs: set[str] = set(_BUILD_MOD_ERR_RE.findall(detail or ""))
-    specs |= {m for m, _member in _BUILD_NO_MEMBER_RE.findall(detail or "")}
-    specs = {s for s in specs if s.startswith("@/")}
-    if not specs:
-        return detail
-    blocks: list[str] = []
-    for spec in sorted(specs)[:4]:
-        for cand in _resolve_app_module(spec):
-            try:
-                content = await orchestrator_client.agent_read_file(
-                    project_id, slug, cand
-                )
-            except Exception:
-                content = None
-            if not content:
-                continue
-            names: list[str] = list(_EXPORT_DECL_RE.findall(content))
-            for grp in _EXPORT_LIST_RE.findall(content):
-                names += [
-                    x.strip().split(" as ")[-1].strip()
-                    for x in grp.split(",")
-                    if x.strip()
-                ]
-            names = sorted({n for n in names if n})
-            if names:
-                blocks.append(
-                    f"{spec} реально экспортирует: {', '.join(names)} — "
-                    "импортируй ТОЛЬКО эти имена, не выдумывай."
-                )
-            break
-    if not blocks:
-        return detail
-    return (detail or "") + "\n\nПОДСКАЗКА ХАРНЕССА (реальные API):\n" + "\n".join(blocks)
-
-
-# ── Nested-layout sanitizer (harness-hardening, deterministic) ──────────────
-#
-# In Next.js App Router ONLY the root `src/app/layout.tsx` may render <html>/
-# <body>; a nested group layout (e.g. `src/app/(app)/layout.tsx`) that also emits
-# them produces a duplicate <html>/<body>, which BREAKS React hydration — and a
-# broken hydration kills every client component, including the realtime
-# `useChannel` hook, so messages silently stop arriving. The thin-base design
-# directive asks the model to restyle `(app)/layout.tsx`, and a weak model adds
-# <html><body> there even when told not to (observed live twice). A prompt can't
-# guarantee this; the engine can. Strip the offending wrapper on write — a nested
-# layout NEVER legitimately contains <html>/<head>/<body>, so this only ever fixes
-# a real bug. Code-level kill switch below (no config plumbing into the executor).
-_SANITIZE_NESTED_LAYOUTS = True
-_HTML_OPEN_RE = re.compile(r"<html\b[^>]*>", re.IGNORECASE)
-_HTML_CLOSE_RE = re.compile(r"</html\s*>", re.IGNORECASE)
-_HEAD_BLOCK_RE = re.compile(r"<head\b[^>]*>.*?</head\s*>", re.IGNORECASE | re.DOTALL)
-_BODY_OPEN_RE = re.compile(r"<body\b([^>]*)>", re.IGNORECASE)
-_BODY_CLOSE_RE = re.compile(r"</body\s*>", re.IGNORECASE)
-
-
-def _is_nested_layout(path: str) -> bool:
-    """A `layout.tsx` that is NOT the root `src/app/layout.tsx`."""
-    p = (path or "").replace("\\", "/").lstrip("./")
-    return p.endswith("/layout.tsx") and p != "src/app/layout.tsx"
-
-
-def _sanitize_nested_layout(path: str, content: str) -> str:
-    """Drop <html>/<head>/<body> from a NESTED layout (root keeps them). Returns
-    the content unchanged when it's not a nested layout or has no such tags — so a
-    correct layout is byte-identical. <body className=…> becomes <div className=…>
-    to preserve the styling the model attached to it."""
-    if not _SANITIZE_NESTED_LAYOUTS or not _is_nested_layout(path):
-        return content
-    low = content.lower()
-    if "<html" not in low and "<body" not in low and "<head" not in low:
-        return content
-    out = _HEAD_BLOCK_RE.sub("", content)
-    out = _HTML_OPEN_RE.sub("", out)
-    out = _HTML_CLOSE_RE.sub("", out)
-    out = _BODY_OPEN_RE.sub(r"<div\1>", out)
-    out = _BODY_CLOSE_RE.sub("</div>", out)
-    return out
-
-
-# ── CSS @import sanitizer (harness-hardening, deterministic) ────────────────
-#
-# CSS requires every `@import` to precede all other rules (only `@charset` and
-# `@layer` may come before it). A weak model writes a Google-Fonts `@import`
-# mid-file — after `:root{}` or other rules — and Turbopack aborts the WHOLE
-# build with "@import rules must precede all rules aside from @charset and @layer"
-# (observed live 2026-07-15: globals.css:1931 killed a messenger build). A prompt
-# can't guarantee ordering; the engine can. On write, hoist every @import to the
-# top (after an optional @charset), preserving their order. A file whose imports
-# are already correctly placed is returned byte-identical.
-# NB: match to the `;` at END OF LINE, not the first `;` — a Google-Fonts
-# @import URL carries inner semicolons (`wght@400;500;600;700`), and a `[^;{}]*`
-# stop-at-first-`;` regex matched NOTHING, so the sanitizer silently no-op'd and
-# the broken build shipped (live 2026-07-16, globals.css:1760). `[^\n]*;` is
-# greedy and backtracks to the last `;` on the line, capturing the whole import.
-_CSS_IMPORT_RE = re.compile(r"(?im)^[ \t]*@import[^\n]*;[ \t]*$\n?")
-_CSS_CHARSET_RE = re.compile(r"(?im)^[ \t]*@charset[^\n]*;[ \t]*$\n?")
-
-
-def _is_css(path: str) -> bool:
-    return (path or "").replace("\\", "/").lower().endswith(".css")
-
-
-def _css_import_misplaced(content: str) -> bool:
-    """True if any @import appears AFTER a real CSS rule — the exact condition
-    Turbopack rejects. Comments, blank lines, @charset and @layer don't count as
-    rules."""
-    seen_rule = False
-    for line in content.splitlines():
-        s = line.strip()
-        if not s or s.startswith(("/*", "*", "//")):
-            continue
-        low = s.lower()
-        if low.startswith(("@charset", "@layer")):
-            continue
-        if low.startswith("@import"):
-            if seen_rule:
-                return True
-            continue
-        seen_rule = True
-    return False
-
-
-def _sanitize_css_imports(path: str, content: str) -> str:
-    """Hoist every @import to the top of a .css file (after @charset). No-op — and
-    byte-identical — unless an @import is actually misplaced, so a correct file is
-    never rewritten."""
-    if not _is_css(path) or "@import" not in content.lower():
-        return content
-    if not _css_import_misplaced(content):
-        return content
-    imports = [m.group(0).strip() for m in _CSS_IMPORT_RE.finditer(content)]
-    if not imports:
-        return content  # @import lives inside a rule/comment — leave it alone
-    rest = _CSS_IMPORT_RE.sub("", content)
-    charset = ""
-    cm = _CSS_CHARSET_RE.search(rest)
-    if cm:
-        charset = cm.group(0).strip() + "\n"
-        rest = _CSS_CHARSET_RE.sub("", rest, count=1)
-    block = "".join(i + "\n" for i in imports)
-    return charset + block + rest.lstrip("\n")
-
-
-def make_container_executor(
+def make_docs_media_executor(
     *,
     project_id: Any,
-    slug: str,
     emit: Any = None,
-    vision_context: str = "",
 ) -> Executor:
-    """Bind the abstract actions to the live dev container via orchestrator_client.
+    """Действия агента, которые ничего не знают о среде проекта.
 
-    Imported lazily so the pure engine + its tests carry no orchestrator/httpx
-    dependency. Each branch returns the observation dict the loop feeds back.
+    Всё, что трогает код приложения (чтение, запись, сборка, команды,
+    проверки среды), исполняет ячейка проекта. Здесь остались три действия,
+    у которых среды просто нет: справка по внешней библиотеке, справка по
+    провайдеру интеграции и генерация картинки или короткого видео.
 
-    ``emit`` (optional, same callback the loop uses) lets a multi-stage tool —
-    ``generate_media`` — surface its INTERNAL steps (first frame → last frame →
-    Kling stitch) as live transcript sub-steps. Absent → those stages run silent.
-
-    ``vision_context`` is retained for compatibility with existing callers;
-    generation no longer executes a visual-judge action.
+    ``emit`` (тот же обратный вызов, что и у цикла) позволяет многошаговой
+    генерации медиа показывать свои внутренние шаги в живой ленте; без него
+    они идут молча.
     """
     from yleum_api.core.config import get_settings
-    from yleum_api.services import orchestrator_client
 
-    # Per-BUILD video budget (this executor is created once per build). Video is
-    # ~₽60/clip on Yleum's own balance — far pricier than a ₽1.50 image and with
-    # no wallet gate on the service-account path — so cap distinct clips per build
-    # (review 2026-07-17). Mutable box so the closure can bump it.
+    # Бюджет видео на ОДНУ сборку (исполнитель создаётся один раз за сборку).
+    # Ролик стоит примерно ₽60 на балансе Yleum — это в сорок раз дороже
+    # картинки и без кошелькового ограничения, поэтому число разных роликов
+    # за сборку ограничено (разбор 2026-07-17). Список — чтобы замыкание
+    # могло его увеличивать.
     _video_used = [0]
-
-    def _hot_reload_failure(
-        result: dict[str, Any], *, path: str, content: str, detail: str
-    ) -> dict[str, Any] | None:
-        """Turn package/schema apply failures into repairable agent observations.
-
-        The file is already durable at this point.  Returning it even on failure
-        keeps the loop's workspace snapshot honest while ``ok=False`` makes the
-        model fix the broken dependency or migration before it can claim done.
-        """
-        failures = [
-            (
-                name,
-                result.get(name),
-                result.get(name.replace("_exit_code", "_stderr_tail"), ""),
-            )
-            for name in ("package_exit_code", "drizzle_exit_code")
-            if result.get(name) not in (None, "0", 0)
-        ]
-        if not failures:
-            return None
-        error = "; ".join(
-            f"{name}={code}: {stderr}" for name, code, stderr in failures
-        )
-        generated_files = _hot_reload_generated_files(result)
-        return {
-            "ok": False,
-            "error": f"runtime apply failed after {detail}: {error}",
-            "content": content,
-            "files": {path: content, **generated_files},
-        }
-
-    def _hot_reload_generated_files(result: dict[str, Any]) -> dict[str, str]:
-        lockfile = result.get("pnpm_lockfile")
-        return {"pnpm-lock.yaml": lockfile} if isinstance(lockfile, str) else {}
 
     async def _execute(action: Action) -> dict[str, Any]:
         try:
-            if action.name == "list_dir":
-                detail = await orchestrator_client.agent_list_dir(
-                    project_id, slug, action.path or ".")
-                return {"ok": True, "detail": detail}
-
-            if action.name == "read_file":
-                content = await orchestrator_client.agent_read_file(
-                    project_id, slug, action.path)
-                if content is None:
-                    return {"ok": False, "error": f"not found: {action.path}"}
-                return {"ok": True, "content": _truncate(content, _MAX_READ_CHARS)}
-
-            if action.name == "grep":
-                detail = await orchestrator_client.agent_grep(
-                    project_id, slug,
-                    pattern=str(action.args.get("pattern", "")),
-                    path=action.path or "src")
-                return {"ok": True, "detail": detail}
-
             if action.name == "docs":
                 # Up-to-date EXTERNAL-library docs from Context7 — so the model uses
                 # the real CURRENT API instead of a hallucinated/stale one (the #1
@@ -1396,129 +1177,6 @@ def make_container_executor(
                     "detail": f"provider docs: {provider_key}",
                 }
 
-            if action.name == "write_file":
-                content = action.args.get("content")
-                if not isinstance(content, str) or not action.path:
-                    return {"ok": False, "error": "write_file needs path + content"}
-                # Deterministic guards: a nested layout must never carry
-                # <html>/<body> (duplicate root tags break hydration → kill the
-                # realtime client); a CSS @import must sit at the top or Turbopack
-                # aborts the whole build.
-                content = _sanitize_nested_layout(action.path, content)
-                content = _sanitize_css_imports(action.path, content)
-                hot_reload_result = await orchestrator_client.hot_reload(
-                    project_id=project_id, slug=slug, files={action.path: content})
-                failure = _hot_reload_failure(
-                    hot_reload_result,
-                    path=action.path,
-                    content=content,
-                    detail=f"writing {action.path}",
-                )
-                if failure:
-                    return failure
-                return {
-                    "ok": True,
-                    "content": content,
-                    "files": _hot_reload_generated_files(hot_reload_result),
-                    "detail": f"wrote {action.path} ({len(content)} bytes)",
-                }
-
-            if action.name == "edit_file":
-                search = action.args.get("search")
-                replace = action.args.get("replace")
-                if not action.path or not isinstance(search, str) or replace is None:
-                    return {"ok": False, "error": "edit_file needs path, search, replace"}
-                current = await orchestrator_client.agent_read_file(
-                    project_id, slug, action.path)
-                if current is None:
-                    return {"ok": False, "error": f"not found: {action.path}"}
-                edit_error = validate_exact_edit(current, search)
-                if edit_error is not None:
-                    return {"ok": False, "error": edit_error}
-                new_content = current.replace(search, str(replace), 1)
-                new_content = _sanitize_nested_layout(action.path, new_content)
-                new_content = _sanitize_css_imports(action.path, new_content)
-                hot_reload_result = await orchestrator_client.hot_reload(
-                    project_id=project_id, slug=slug, files={action.path: new_content})
-                failure = _hot_reload_failure(
-                    hot_reload_result,
-                    path=action.path,
-                    content=new_content,
-                    detail=f"patching {action.path}",
-                )
-                if failure:
-                    return failure
-                return {
-                    "ok": True,
-                    "content": new_content,
-                    "files": _hot_reload_generated_files(hot_reload_result),
-                    "detail": f"patched {action.path}",
-                }
-
-            if action.name == "build":
-                res = await orchestrator_client.agent_build(project_id, slug)
-                ok = bool(res.get("ok"))
-                detail = res.get("detail") or res.get("error") or "build clean"
-                if not ok:
-                    # Enrich the failure with the REAL exports of any @/ module the
-                    # model imported wrong, so it fixes the import instead of looping
-                    # on a hallucinated name. Fail-soft.
-                    try:
-                        detail = await _enrich_build_failure(detail, project_id, slug)
-                    except Exception:
-                        pass
-                    # The agent gets the full `detail` in its observation; log a
-                    # tail here too so operators can SEE the real compiler error
-                    # behind a stuck loop (grep "build FAILED" in the api logs).
-                    print(
-                        f"[AGENT] build FAILED slug={slug}: {str(detail)[:600]}",
-                        flush=True,
-                    )
-                return {"ok": ok, "detail": detail}
-
-            if action.name == "bash":
-                cmd = action.args.get("cmd")
-                if not isinstance(cmd, str) or not cmd.strip():
-                    return {"ok": False, "error": "bash needs a non-empty cmd string"}
-                res = await orchestrator_client.agent_exec(project_id, slug, cmd)
-                return {"ok": bool(res.get("ok")),
-                        "detail": res.get("detail") or "(no output)"}
-
-            if action.name == "read_logs":
-                # Live dev-server stdout/stderr — the RUNTIME errors `build`
-                # (typecheck) can't see (an unhandled exception, a failed import
-                # at request time, a crashed route). Tail is bounded; the loop
-                # truncates the observation to _MAX_OBS_CHARS on top.
-                try:
-                    _tail = int(action.args.get("tail", 120))
-                except (TypeError, ValueError):
-                    _tail = 120
-                res = await orchestrator_client.get_logs(
-                    project_id, tail=max(20, min(_tail, 400)))
-                logs = res.get("logs") if isinstance(res, dict) else ""
-                return {"ok": True, "detail": (logs or "").strip() or "(no logs yet)"}
-
-            if action.name == "runtime_check":
-                # Actually HIT a route in the running app and report the REAL HTTP
-                # status. ok=False ONLY on a 5xx (a compile-clean app that still
-                # crashes on render) — that's a real failure observation, not an
-                # executor error, so the loop reads it and fixes the named file.
-                path = action.args.get("path") or "/"
-                res = await orchestrator_client.runtime_status(
-                    project_id, slug=slug, path=str(path))
-                ok = bool(res.get("ok", True))
-                code = res.get("status_code")
-                if ok:
-                    detail = f"route {path} renders OK (HTTP {code or 200})"
-                else:
-                    err = res.get("error") or "5xx"
-                    where = res.get("file")
-                    detail = (
-                        f"route {path} FAILED (HTTP {code or 500}): {err}"
-                        + (f" — in {where}" if where else "")
-                    )
-                return {"ok": ok, "detail": detail}
-
             if action.name == "generate_media":
                 # Real ASSET: generate a photoreal image (flux) or a short cinematic
                 # video (Kling: Flux first+last frame → interpolate) on the same
@@ -1551,69 +1209,7 @@ def make_container_executor(
                     emit=emit,
                 )
 
-            if action.name == "probe":
-                # Real END-TO-END eye: make an authenticated request as a logged-in
-                # test user and read the EXACT status + body — the only way to prove
-                # an interactive feature (send/save/submit) actually works, which a
-                # clean build + 200 home page do NOT. Lazily imported (Playwright).
-                from yleum_api.services import agent_probe
-
-                return await agent_probe.run_probe(
-                    project_id,
-                    method=str(action.args.get("method") or "GET"),
-                    path=action.path or "/",
-                    body=action.args.get("body"),
-                )
-
-            if action.name == "verify_isolation":
-                # Cross-tenant proof: log in TWO users, A creates, B must be denied.
-                # The agent supplies its OWN create/read endpoints (it just wrote
-                # them), so there is no guessing and no false block. Returns a
-                # functional verdict; ok=False on any leak so the loop fixes it.
-                from yleum_api.services import isolation_gate
-
-                _iv = await isolation_gate.run_isolation_probe(
-                    project_id,
-                    create=action.args.get("create"),
-                    read=action.args.get("read"),
-                )
-                return {
-                    "ok": _iv.passed,
-                    "detail": _iv.summary
-                    + "\n"
-                    + "\n".join(
-                        f"  - {'OK' if c.ok else 'FAIL'} {c.name}: {c.detail}"
-                        for c in _iv.checks
-                    ),
-                }
-
             return {"ok": False, "error": f"unknown action {action.name}"}
-        except orchestrator_client.OrchestratorUnavailable as exc:
-            # Container/orchestrator unreachable — the WORLD died, not the app.
-            # Tag it so the loops' circuit breaker can abort instead of feeding
-            # an endless stream of 500s to the model (2026-07-08 incident).
-            return {
-                "ok": False,
-                "error": f"infra: {exc.message}",
-                "infra_dead": True,
-            }
-        except orchestrator_client.OrchestratorBadRequest as exc:
-            if exc.upstream_code in {
-                "migration_apply_failed",
-                "migration_reconciliation_required",
-            }:
-                # The source write already landed, but the canonical MAX runner
-                # did not confirm the database state. This is a mandatory gate,
-                # not a model-repair observation that may later be ignored.
-                raise
-            # The orchestrator's structured 409 "container_not_running" (a dead
-            # container that in-line wake could not revive) is infra death too.
-            _infra = "container_not_running" in str(exc.details or "")
-            return {
-                "ok": False,
-                "error": f"{'infra: ' if _infra else ''}{exc.message}",
-                **({"infra_dead": True} if _infra else {}),
-            }
         except Exception as exc:  # never let an executor crash kill the loop
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 

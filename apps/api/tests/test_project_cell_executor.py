@@ -700,7 +700,7 @@ async def _prepare_executor(
             expires_at="2030-01-01T00:00:00+00:00",
         )
 
-    async def legacy_execute(action: Action) -> dict[str, object]:
+    async def docs_media_execute(action: Action) -> dict[str, object]:
         legacy_actions.append(action.name)
         return {"ok": True, "detail": f"legacy:{action.name}"}
 
@@ -740,11 +740,11 @@ async def _prepare_executor(
     monkeypatch.setattr(project_cell_executor, "project_cell_create_preview_session", fake_preview)
     from yleum_api.services import orchestrator_client
 
-    def forbidden_legacy(*args, **kwargs):
+    def forbidden_docs_media(*args, **kwargs):
         pytest.fail("selected cell must never call a legacy runtime")
 
-    monkeypatch.setattr(orchestrator_client, "hot_reload", forbidden_legacy)
-    monkeypatch.setattr(orchestrator_client, "create_max_preview_session", forbidden_legacy)
+    monkeypatch.setattr(orchestrator_client, "hot_reload", forbidden_docs_media)
+    monkeypatch.setattr(orchestrator_client, "create_max_preview_session", forbidden_docs_media)
 
     handle = await project_cell_executor.maybe_create_project_cell_executor(
         project_id=expected_project_id,
@@ -752,7 +752,7 @@ async def _prepare_executor(
         project_template="max_miniapp",
         user_id=owner.id,
         generation_run_id=expected_run_id,
-        legacy_execute=legacy_execute,
+        docs_media_execute=docs_media_execute,
         capacity_dispatch_token=capacity_dispatch_token,
     )
     assert handle is not None
@@ -791,7 +791,7 @@ async def test_non_max_templates_skip_project_cell_executor() -> None:
         project_template="blank",
         user_id=uuid4(),
         generation_run_id=uuid4(),
-        legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+        docs_media_execute=lambda _action: None,  # type: ignore[arg-type]
     )
 
     assert handle is None
@@ -970,7 +970,7 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
             project_template="max_miniapp",
             user_id=owner.id,
             generation_run_id=new_run.id,
-            legacy_execute=ensure,
+            docs_media_execute=ensure,
         )
     assert calls == (
         (
@@ -1184,7 +1184,7 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
             reason="not_selected",
         )
 
-    async def forbidden_legacy(_action):
+    async def forbidden_docs_media(_action):
         pytest.fail("adaptation must never obtain a legacy executor")
 
     monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", legacy_readiness)
@@ -1195,7 +1195,7 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
             project_template="max_miniapp",
             user_id=owner.id,
             generation_run_id=run.id,
-            legacy_execute=forbidden_legacy,
+            docs_media_execute=forbidden_docs_media,
         )
 
 
@@ -1851,7 +1851,7 @@ async def test_disabled_routing_never_falls_back_for_a_durable_cell(
 
     monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", disabled_readiness)
 
-    async def forbidden_legacy(_action):
+    async def forbidden_docs_media(_action):
         pytest.fail("must not execute legacy commands")
 
     kwargs = dict(
@@ -1860,7 +1860,7 @@ async def test_disabled_routing_never_falls_back_for_a_durable_cell(
         project_template="max_miniapp",
         user_id=owner.id,
         generation_run_id=run.id,
-        legacy_execute=forbidden_legacy,
+        docs_media_execute=forbidden_docs_media,
     )
     if existing_cell:
         with pytest.raises(
@@ -1905,7 +1905,7 @@ async def test_selected_but_unready_project_cell_raises_unavailable(
             project_template="max_miniapp",
             user_id=owner.id,
             generation_run_id=run.id,
-            legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+            docs_media_execute=lambda _action: None,  # type: ignore[arg-type]
         )
 
     assert "Project Cell selected but not ready" in str(caught.value)
@@ -1987,7 +1987,7 @@ async def test_bootstrap_rejects_mismatched_active_lease_before_agent_activation
             project_template="max_miniapp",
             user_id=owner.id,
             generation_run_id=run.id,
-            legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+            docs_media_execute=lambda _action: None,  # type: ignore[arg-type]
         )
 
     assert "active lease does not match the run" in str(caught.value)
@@ -2072,7 +2072,7 @@ async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
             project_template="max_miniapp",
             user_id=owner.id,
             generation_run_id=run.id,
-            legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+            docs_media_execute=lambda _action: None,  # type: ignore[arg-type]
         )
 
     assert "workspace generation lease mismatch" in str(caught.value)
@@ -2164,7 +2164,7 @@ async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
                 project_template="max_miniapp",
                 user_id=owner.id,
                 generation_run_id=run.id,
-                legacy_execute=lambda _action: None,  # type: ignore[arg-type]
+                docs_media_execute=lambda _action: None,  # type: ignore[arg-type]
                 capacity_dispatch_token=dispatch_token,
             )
         except project_cell_executor.ProjectCellExecutorUnavailable:

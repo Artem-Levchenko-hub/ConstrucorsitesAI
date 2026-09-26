@@ -46,11 +46,9 @@ async def prepare_agent_runtime(
 ) -> tuple[AgentRuntimeBindings, agent_builder.AgentResult | None]:
     _agent_emit = progress.emit_agent_event
     _vision_context = _design_contract.vision_context if _design_contract else prompt_text
-    _base_agent_executor = agent_builder.make_container_executor(
+    _base_agent_executor = agent_builder.make_docs_media_executor(
         project_id=ids.project_id,
-        slug=project_info.slug,
         emit=_agent_emit,
-        vision_context=_vision_context,
     )
     _agent_executor: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
     _max_shell_requested = (
@@ -129,7 +127,7 @@ async def prepare_agent_runtime(
             user_id=ids.user_id,
             generation_run_id=ids.run_id,
             vision_context=bindings.vision_context,
-            legacy_execute=bindings.base_executor,
+            docs_media_execute=bindings.base_executor,
             max_shell_requested=bindings.shell_requested,
             agent_emit=_agent_emit,
             max_model_locked_files=MAX_MODEL_LOCKED_FILES,

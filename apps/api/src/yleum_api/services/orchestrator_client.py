@@ -2010,36 +2010,6 @@ async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
     )
 
 
-async def get_logs(project_id: UUID, *, tail: int = 200, kind: str = "dev") -> dict[str, Any]:
-    """GET /internal/projects/<uuid>/logs — tail container stdout+stderr.
-
-    Returns `{"project_id", "container_name", "tail", "logs": "<text>"}`.
-    `logs` is a single UTF-8 string with newline-separated lines.
-    """
-    return await _request(
-        "GET",
-        f"/internal/projects/{project_id}/logs",
-        params={"tail": tail, "kind": kind},
-    )
-
-
-async def compile_status(project_id: UUID, *, slug: str | None = None) -> dict[str, Any]:
-    """GET /internal/projects/<uuid>/compile-status — does the dev build fail?
-
-    Returns `{"project_id", "ok": bool, "error": str|None, "file": str|None}`.
-    `ok=True` when the Next.js dev server is compiling cleanly (or has no
-    outstanding error). Used right after a hot-reload to surface a compile
-    failure as a chat card. Fail-soft on the orchestrator side: a missing
-    container returns `ok=True`, never a 404.
-    """
-    params = {"slug": slug} if slug else None
-    return await _request(
-        "GET",
-        f"/internal/projects/{project_id}/compile-status",
-        params=params,
-    )
-
-
 async def runtime_status(
     project_id: UUID, *, slug: str | None = None, path: str = "/"
 ) -> dict[str, Any]:
@@ -2066,30 +2036,6 @@ async def runtime_status(
 # on the live dev container. Each maps to a /agent/* orchestrator endpoint.
 
 
-async def agent_read_file(project_id: UUID, slug: str, path: str) -> str | None:
-    """Read ANY file under /app from the dev container; None if missing/down."""
-    resp = await _request(
-        "GET",
-        f"/internal/projects/{project_id}/agent/read-file",
-        params={"slug": slug, "path": path},
-    )
-    if not resp.get("found"):
-        return None
-    content = resp.get("content")
-    return content if isinstance(content, str) else None
-
-
-async def agent_list_dir(project_id: UUID, slug: str, path: str = ".") -> str:
-    """List a directory under /app; returns the ls output (or an error line)."""
-    resp = await _request(
-        "GET",
-        f"/internal/projects/{project_id}/agent/list-dir",
-        params={"slug": slug, "path": path},
-    )
-    detail = resp.get("detail")
-    return detail if isinstance(detail, str) else ""
-
-
 async def agent_grep(project_id: UUID, slug: str, *, pattern: str, path: str = "src") -> str:
     """Recursive text search under /app; returns matches (or '(no matches)')."""
     resp = await _request(
@@ -2108,16 +2054,6 @@ async def agent_build(project_id: UUID, slug: str) -> dict[str, Any]:
         f"/internal/projects/{project_id}/agent/build",
         params={"slug": slug},
         timeout=600.0,
-    )
-
-
-async def agent_exec(project_id: UUID, slug: str, cmd: str) -> dict[str, Any]:
-    """Run a shell command in the dev container (agent `bash` tool)."""
-    return await _request(
-        "POST",
-        f"/internal/projects/{project_id}/agent/exec",
-        params={"slug": slug, "cmd": cmd},
-        timeout=210.0,
     )
 
 

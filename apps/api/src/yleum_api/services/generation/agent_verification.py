@@ -486,26 +486,6 @@ async def apply_legacy_design_and_result_text(
     ids: GenerationIds,
     project_info: ProjectGenerationFacts,
 ) -> tuple[str]:
-    if not _is_edit and project_info.template != "max_miniapp":
-        try:
-            from yleum_api.services import design_dna
-
-            _gcss = await orchestrator_client.agent_read_file(
-                ids.project_id, project_info.slug, "src/app/globals.css"
-            )
-            if _gcss:
-                _newg = design_dna.inject_into_globals(_gcss, str(ids.project_id), None)
-                if _newg != _gcss:
-                    await orchestrator_client.hot_reload(
-                        ids.project_id,
-                        project_info.slug,
-                        {"src/app/globals.css": _newg},
-                    )
-                    print("[PP] design_dna injected globals.css", flush=True)
-        except Exception as _dd_exc:
-            raise_if_terminal_cell_error(_dd_exc)
-            print(f"[PP] design_dna skipped: {_dd_exc!r}", flush=True)
-
     # Honest result: a loop-guard abort (looping/exploring) that STILL
     # wrote files, whose app SERVES, AND whose typecheck is CLEAN is not a
     # failure — the work landed, the guard just tripped. Don't scare the

@@ -73,13 +73,6 @@ def test_portable_tools_describe_real_install_and_database_capabilities() -> Non
     assert "has no network" in legacy["description"]
 
 
-def test_native_agent_uses_sonnet_while_autoheal_keeps_gemini() -> None:
-    from yleum_api.services import autoheal
-
-    assert agent_native._MODEL == "claude-sonnet-5"
-    assert autoheal._HEAL_MODEL == "gemini-3.1-pro-preview-customtools"
-
-
 def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
 
@@ -279,7 +272,7 @@ def test_max_guardrail_checks_final_tree_and_rolls_back_unsafe_backend() -> None
 
     assert "for path, content in {**baseline.files, **files}.items()" in source
     assert 'path: current_files.get(path, "") for path in rollback_paths' in source
-    assert "await orchestrator_client.hot_reload(" in source
+    assert "await project_cell_handle.stage_patch(writes, deletes)" in source
     assert "files.clear()" in source
     assert "files.update(rollback_files)" in source
     assert '"unsafe_generated_backend"' in source

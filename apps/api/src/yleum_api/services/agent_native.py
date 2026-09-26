@@ -6,7 +6,7 @@ whole build end-to-end. The only "gate" is FACT-based: the ``build`` tool return
 real compiler errors as a ``tool_result`` and the model fixes them itself
 (do → check → fix), with no taste/vision judges here.
 
-Owns ONLY the loop + protocol. Reuses ``agent_builder.make_container_executor`` for
+Owns ONLY the loop + protocol. Reuses ``agent_builder.make_docs_media_executor`` for
 the actual file/container ops, and calls the gateway's native ``/v1/messages``
 adapter (``routers/messages_native.py``), which preserves the Anthropic-shaped
 tool-use contract while the gateway maps it to the selected upstream.
@@ -169,7 +169,7 @@ def _normalize_agent_path(path: str) -> str:
 # hibernate stopped a container mid-build → 40 min of doomed 500 bursts).
 _INFRA_DEAD_ABORT_AT = 3
 
-# Native tool schemas — mirror the action set of make_container_executor._execute.
+# Native tool schemas — mirror the action set the Project Cell executor serves.
 # `done` ends the loop. Kept intentionally minimal (fact tools only): the model
 # decides everything else itself, like Claude Code.
 _STR: dict[str, Any] = {"type": "string"}
