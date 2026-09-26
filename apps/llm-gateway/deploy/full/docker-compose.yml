@@ -246,7 +246,6 @@ services:
       # decision lives in the API handler (routers/messages.py), so the flag is
       # needed here; the worker reads the already-flipped template. Kill switch:
       # set to "false".
-      USE_FOLLOWUP_APPIFICATION: "true"
       CORS_ORIGINS: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       INITIAL_WALLET_BALANCE_RUB: ${INITIAL_WALLET_BALANCE_RUB:-100.0}
       ORCHESTRATOR_URL: ${ORCHESTRATOR_URL:-http://172.21.0.1:8003}
@@ -380,6 +379,7 @@ services:
       # RT-1 result-type router (landing|web_app|tool|site|code) on the FIRST
       # prompt — all DARK, default OFF = legacy keyword nets only. Flip the
       # lead-sink slice FIRST (booking landings stop escalating to /signin).
+      USE_FOLLOWUP_APPIFICATION: "true"
       USE_RESULT_TYPE_ROUTER: ${USE_RESULT_TYPE_ROUTER:-false}
       RESULT_TYPE_LANDING_LEAD_SINK: ${RESULT_TYPE_LANDING_LEAD_SINK:-false}
       RESULT_TYPE_FIRSTBUILD_APPIFY: ${RESULT_TYPE_FIRSTBUILD_APPIFY:-false}
