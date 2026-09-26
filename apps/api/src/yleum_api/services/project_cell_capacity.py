@@ -38,6 +38,20 @@ from yleum_api.services.project_cells import ACTIVE_OPERATION_STATUSES, reserve_
 _SCHEDULER_LOCK_KEY = "project-cell-capacity-scheduler"
 _WAITING_ACTION = "Ожидаю ресурсы сервера"
 _WAITING_DETAIL = "Проект сохранён и запустится автоматически, как только освободится мощность."
+
+
+def _waiting_detail(position: int) -> str:
+    """Что видит человек, пока ждёт мощности.
+
+    Общая фраза честна, но ничего не говорит о сроке. Если проект стоит за
+    другими, номер в очереди — единственное, что превращает ожидание в понятное:
+    видно, что очередь движется. Первым в очереди номер не показываем: он уже
+    занимает место, и «вы 1-й» звучало бы издевательски.
+    """
+
+    if position >= 2:
+        return f"Вы {position}-й в очереди. " + _WAITING_DETAIL
+    return _WAITING_DETAIL
 _LOCAL_ADMISSION_EVENTS: dict[UUID, asyncio.Event] = {}
 
 
@@ -60,7 +74,10 @@ def clear_capacity_admission_event(run_id: UUID) -> None:
 @dataclass(frozen=True, slots=True)
 class CapacityTurn:
     run_id: UUID
-    is_head: bool
+    # Очередь пускает не только первого: место на хосте бывает сразу на
+    # нескольких, и заставлять ждать в этом случае — это ровно то «по очереди»,
+    # от которого владелец попросил уйти.
+    may_start: bool
     position: int
     reason: str | None
     retry_after_seconds: int
@@ -101,7 +118,7 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
     if run is None or run.status != "queued_for_capacity":
         return CapacityTurn(
             run_id=run_id,
-            is_head=False,
+            may_start=False,
             position=0,
             reason=None,
             retry_after_seconds=1,
@@ -112,7 +129,7 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
     if run.status != "queued_for_capacity":
         return CapacityTurn(
             run_id=run_id,
-            is_head=False,
+            may_start=False,
             position=0,
             reason=None,
             retry_after_seconds=1,
@@ -149,9 +166,11 @@ async def claim_capacity_turn(session: AsyncSession, run_id: UUID) -> CapacityTu
         .order_by(ProjectCellOperation.created_at.desc())
         .limit(1)
     )
+    limit = max(1, int(get_settings().project_cell_parallel_admissions))
     return CapacityTurn(
         run_id=run_id,
-        is_head=position == 1,
+        # position == 0 значит «этого прогона в очереди нет» — ему ход не даём.
+        may_start=1 <= position <= limit,
         position=position,
         reason=operation.capacity_reason if operation is not None else None,
         retry_after_seconds=1,
@@ -957,6 +976,7 @@ async def _wait_for_capacity(
     last_progress: tuple[int, str | None] | None = None
     last_emitted_at = 0.0
     ensure_anchor_id = operation_id
+    refused_for_capacity = False
     while True:
         async with session_factory() as session:
             run = await session.scalar(
@@ -994,7 +1014,7 @@ async def _wait_for_capacity(
             await emit(
                 {
                     "action": _WAITING_ACTION,
-                    "detail": _WAITING_DETAIL,
+                    "detail": _waiting_detail(turn.position),
                     "status": "running",
                     "queue_position": turn.position,
                     "capacity_reason": turn.reason,
@@ -1002,15 +1022,22 @@ async def _wait_for_capacity(
             )
             last_progress = progress
             last_emitted_at = now
-        if not turn.is_head:
+        if not turn.may_start:
             await asyncio.sleep(max(1, min(turn.retry_after_seconds, 10)))
             continue
 
-        await hibernate_one_idle_workspace(
-            session_factory,
-            requesting_run_id=run_id,
-            client=client,
-        )
+        if refused_for_capacity:
+            # Усыпляем чужую ячейку ТОЛЬКО после того, как хост действительно
+            # отказал. Раньше это делал каждый, кто дошёл до головы очереди, —
+            # при одном ходоке за раз это было почти незаметно, а при нескольких
+            # одновременных мы бы гасили чужие проекты там, где место есть.
+            # Разбуженная ячейка стоит пользователю ожидания, поэтому цена
+            # лишнего усыпления не нулевая.
+            await hibernate_one_idle_workspace(
+                session_factory,
+                requesting_run_id=run_id,
+                client=client,
+            )
         if operation_status == "indeterminate":
             outcome = await recover_ensure_operation(
                 session_factory,
@@ -1021,6 +1048,7 @@ async def _wait_for_capacity(
             outcome = await execute_cell_operation(session_factory, operation_id, client)
         operation_id = outcome.operation_id
         if outcome.status == "waiting_capacity":
+            refused_for_capacity = True
             async with session_factory() as session:
                 operation = await session.get(ProjectCellOperation, operation_id)
                 delay = 1

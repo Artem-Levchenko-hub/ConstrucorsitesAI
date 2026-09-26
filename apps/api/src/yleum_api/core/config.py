@@ -1152,6 +1152,14 @@ class Settings(BaseSettings):
     # RESTORATION_ADAPTATION_ACTIVATION_SECONDS.
     restoration_adaptation_activation_seconds: int = Field(default=2400, ge=300, le=7200)
     # Separate admission budget: serialized jobs may wait longer than one run.
+    # Сколько проектов одновременно могут ПОДНИМАТЬ ячейку на одном хосте.
+    # Раньше очередь пускала строго одного: пока он поднимался, остальные ждали,
+    # даже когда на хосте было место. Владелец 26.09: «множество пользователей
+    # должны запускать генерацию одновременно, а не по очереди». Порядок очереди
+    # сохраняется — расширяется только голова. Последнее слово всё равно за
+    # оркестратором: если хост действительно занят, он вежливо откажет и проект
+    # вернётся в ожидание, не потеряв место.
+    project_cell_parallel_admissions: int = Field(default=4, ge=1, le=32)
     project_cell_capacity_wait_seconds: int = Field(default=3600, ge=30, le=7200)
     project_cell_heartbeat_seconds: int = Field(default=15, ge=1, le=300)
     project_cell_watchdog_grace_seconds: int = Field(default=20, ge=1, le=600)
