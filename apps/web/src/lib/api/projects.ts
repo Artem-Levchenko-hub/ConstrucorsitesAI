@@ -60,16 +60,3 @@ export type ProjectUpdate = {
   image_gen_enabled?: boolean;
 };
 
-export async function updateProject(
-  id: string,
-  payload: ProjectUpdate,
-): Promise<Project> {
-  if (USE_MOCKS) {
-    const current = await mockApi.getProject(id);
-    return { ...current, ...payload };
-  }
-  return apiFetch<Project>(`/api/projects/${id}`, {
-    method: "PATCH",
-    json: payload,
-  });
-}

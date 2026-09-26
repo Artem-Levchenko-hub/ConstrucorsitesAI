@@ -267,9 +267,7 @@ export function MaxWorkspaceShell({
         projectId={project.id}
         projectSlug={project.slug}
         currentSnapshotId={currentSnapshotId}
-        mode="max"
         basePath={`/max/${project.id}`}
-        embedded
       />
       </div>
       <div className="max-h-[45%] shrink-0 overflow-y-auto">

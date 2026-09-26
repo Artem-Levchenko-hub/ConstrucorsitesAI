@@ -18,29 +18,6 @@ export async function rollback(
   });
 }
 
-/**
- * Возвращает снапшот + dict путь→содержимое всех файлов в коммите.
- * Бэк читает из MinIO, см. apps/api/src/yleum_api/routers/snapshots.py:55.
- */
-export async function getSnapshotWithFiles(
-  projectId: string,
-  snapshotId: string,
-): Promise<SnapshotWithFiles> {
-  if (USE_MOCKS) {
-    const all = await mockApi.listSnapshots(projectId);
-    const snap = all.find((s) => s.id === snapshotId) ?? all[0];
-    return {
-      ...snap,
-      files: {
-        "index.html":
-          "<!doctype html><html><body><h1>Mock preview</h1><p>USE_MOCKS=true</p></body></html>",
-      },
-    };
-  }
-  return apiFetch<SnapshotWithFiles>(
-    `/api/projects/${projectId}/snapshots/${snapshotId}`,
-  );
-}
 
 export async function listProjectVersions(
   projectId: string,

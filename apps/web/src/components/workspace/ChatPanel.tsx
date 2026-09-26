@@ -68,18 +68,14 @@ type DiscoveryChoices = {
 export function ChatPanel({
   projectId,
   projectSlug,
-  mode = "default",
   basePath = `/max/${projectId}`,
-  embedded = false,
   currentSnapshotId,
   draftRef,
   adaptationRef,
 }: {
   projectId: string;
   projectSlug: string;
-  mode?: "default" | "max";
   basePath?: string;
-  embedded?: boolean;
   currentSnapshotId?: string | null;
   draftRef?: Ref<PromptInputHandle>;
   adaptationRef?: Ref<ChatPanelAdaptationHandle>;
@@ -135,7 +131,7 @@ export function ChatPanel({
         .filter((value): value is string => typeof value === "string")
         .join("\n");
       const credentialSource = [text, selectionText].filter(Boolean).join("\n");
-      if (mode !== "max" || !containsChatSecret(credentialSource)) {
+      if (!containsChatSecret(credentialSource)) {
         return submit(text, modelId, selections, opts);
       }
       if (credentialSubmitPending.current) {
@@ -210,7 +206,7 @@ export function ChatPanel({
         credentialSubmitPending.current = false;
       }
     },
-    [mode, modelId, projectId, qc, submit],
+    [modelId, projectId, qc, submit],
   );
 
   const handleSubmit = (text: string, selections: SelectedElement[]) =>
@@ -324,11 +320,10 @@ export function ChatPanel({
   const { data: currentConfig } = useQuery({
     queryKey: ["max-config", projectId],
     queryFn: () => getMaxProjectConfig(projectId),
-    enabled: mode === "max",
   });
-  const adviceSnapshotId = mode === "max" && !showSurvey
+  const adviceSnapshotId = !showSurvey
     ? getProductAdviceSnapshotId(messages ?? [], currentSnapshotId) : null;
-  const Composer = mode === "max" ? MaxChatComposer : PromptInput;
+  const Composer = MaxChatComposer;
 
   const clearSurvey = () => {
     qc.setQueryData(["onboarding-survey", projectId], null);
@@ -401,24 +396,7 @@ export function ChatPanel({
     // h-full + min-h-0 нужны чтобы в grid-cell flex-колонка получила фиксированную
     // высоту и `flex-1 + overflow-y-auto` ниже реально срабатывал, а не растягивал
     // родителя (раньше из-за двойного скролла внутри ScrollArea инпут уезжал вниз).
-    <div className={`flex h-full min-h-0 flex-col ${embedded ? "max-studio-chat max-editor-chat bg-surface-raised" : "border-r border-[#2b2d32] bg-[#121519]"}`}>
-      {!embedded && (
-        <div className="flex h-12 shrink-0 items-center justify-between border-b border-[#2b2d32] px-4">
-          <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-slate-500">
-            {mode === "max" ? "MAX-редактор" : "Чат"}
-          </span>
-          <button
-            type="button"
-            onClick={toggleChat}
-            aria-label="Свернуть чат"
-            title="Свернуть чат"
-            className="-mr-1.5 flex h-6 w-6 items-center justify-center rounded text-fg-tertiary transition-colors hover:bg-surface-overlay hover:text-fg-secondary"
-          >
-            <PanelLeftClose className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
-
+    <div className="flex h-full min-h-0 flex-col max-studio-chat max-editor-chat bg-surface-raised">
       <div
         ref={scrollRef}
         onScroll={chatScroll.onScroll}
@@ -432,25 +410,11 @@ export function ChatPanel({
         )}
 
         {!isPending && messages && messages.length === 0 && (
-          <div className={embedded ? "max-editor-empty" : "p-6 text-center space-y-2"}>
-            <h2 className="text-sm text-fg-primary">
-              {mode === "max"
-                ? "Какое приложение создадим?"
-                : "Поговорим о вашем сайте."}
-            </h2>
+          <div className="max-editor-empty">
+            <h2 className="text-sm text-fg-primary">Какое приложение создадим?</h2>
             <p className="text-xs text-fg-tertiary leading-5">
-              {mode === "max" ? (
-                <>
-                  Расскажите, для кого оно и что должен сделать пользователь.
-                  Например: «Каталог кофе с заказом к определённому времени».
-                </>
-              ) : (
-                <>
-                  Опишите, что хотите создать. Например:
-                  <br />
-                  «Сделай лендинг для пиццерии с меню и формой заказа».
-                </>
-              )}
+              Расскажите, для кого оно и что должен сделать пользователь.
+              Например: «Каталог кофе с заказом к определённому времени».
             </p>
           </div>
         )}
@@ -463,7 +427,7 @@ export function ChatPanel({
             projectId={projectId}
             onFix={handleFix}
             onSuggest={handleSuggest}
-            presentation={embedded ? "studio" : "default"}
+            presentation="studio"
           />
         ))}
 
@@ -504,17 +468,9 @@ export function ChatPanel({
           isStreaming={isStreaming}
           pendingPrompt={pendingPrompt}
           textareaRef={inputRef}
-          placeholder={
-            mode === "max"
-              ? "Опишите приложение или изменения…"
-              : undefined
-          }
-          ariaLabel={
-            mode === "max"
-              ? "Опишите изменение MAX Mini App"
-              : undefined
-          }
-          className={embedded ? "max-studio-prompt" : undefined}
+          placeholder="Опишите приложение или изменения…"
+          ariaLabel="Опишите изменение MAX Mini App"
+          className="max-studio-prompt"
         />
       </div>
 
