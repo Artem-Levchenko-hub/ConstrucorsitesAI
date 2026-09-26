@@ -195,7 +195,16 @@ class _FakeNetwork:
         self.event_log: list[str] | None = None
 
     def remove(self) -> None:
+        if self.live_endpoints():
+            # Настоящий Docker: 403 "network has active endpoints".
+            raise _docker_api_error(403, f"error while removing network {self.name}")
         self.removed = True
+
+    def live_endpoints(self) -> list[str]:
+        client = getattr(self, "client", None)
+        if client is None:
+            return []
+        return [name for name in self.connections if name in client.containers.items]
 
     def connect(self, container: Any) -> None:
         self.connections.append(str(getattr(container, "name", "")))
@@ -214,7 +223,11 @@ class _FakeNetworks:
     def get(self, name: str) -> _FakeNetwork:
         if name not in self.items:
             raise docker.errors.NotFound(name)
-        return self.items[name]
+        network = self.items[name]
+        # Сеть должна видеть контейнеры, чтобы отказать в удалении при живых
+        # подключениях — как настоящий Docker.
+        network.client = self.client
+        return network
 
     def create(
         self,
@@ -333,6 +346,11 @@ class _FakeContainer:
 
     def remove(self, force: bool = False) -> None:
         self.remove_calls.append(force)
+        if not force and self.status == "running":
+            # Настоящий Docker: 409 "You cannot remove a running container".
+            raise _docker_api_error(
+                409, f"You cannot remove a running container {self.id}"
+            )
         self.manager.items.pop(self.name, None)
         self.status = "removed"
 

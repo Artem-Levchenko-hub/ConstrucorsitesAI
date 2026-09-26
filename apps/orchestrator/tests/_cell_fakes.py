@@ -175,6 +175,14 @@ class FakeDockerBackend:
         return record
 
     async def remove_network(self, name: str) -> None:
+        attached = [item.name for item in self.containers.values() if name in item.network_names]
+        if attached:
+            # Настоящий Docker: 403 "network ... has active endpoints". Стенд без
+            # этого молча разрешает снести сеть раньше контейнеров, и неверный
+            # порядок сноса остаётся незамеченным до прода.
+            raise CellResourceError(
+                f"network {name} has active endpoints: " + " ".join(sorted(attached))
+            )
         record = self.networks.pop(name, None)
         if record is not None:
             self.removed_resources.append(record.resource_id)
