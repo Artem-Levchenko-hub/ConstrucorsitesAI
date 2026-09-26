@@ -3,6 +3,8 @@
 import { ArrowUp, Check, ChevronLeft, Minus, MoreHorizontal, Plus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
+import { LANDING_PROMPT_MAX_LENGTH, startWithPrompt } from "@/lib/landing-prompt";
+
 /**
  * Первый экран витрины: запрос владельца печатается сам, а рядом появляется
  * приложение, которым можно пользоваться прямо на странице — добавить позицию,
@@ -63,23 +65,10 @@ function useReducedMotion() {
 }
 
 function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouch: () => void; tabs: React.ReactNode }) {
-  const reduced = useReducedMotion();
   const current = scenarios[scenario];
-  const [typed, setTyped] = useState(() => (reduced ? current.prompt : ""));
   const [cart, setCart] = useState<Record<string, number>>({});
   const [slot, setSlot] = useState("12:30");
   const [joined, setJoined] = useState(false);
-
-  useEffect(() => {
-    if (reduced) return;
-    let i = 0;
-    const id = window.setInterval(() => {
-      i += 1;
-      setTyped(current.prompt.slice(0, i));
-      if (i >= current.prompt.length) window.clearInterval(id);
-    }, 22);
-    return () => window.clearInterval(id);
-  }, [reduced, current.prompt]);
 
   const add = (id: string, delta: number) => {
     onTouch();
@@ -98,19 +87,9 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
     return sum + (item ? item.price * n : 0);
   }, 0);
   const items = Object.values(cart).reduce((a, b) => a + b, 0);
-  const typing = typed.length < current.prompt.length;
 
   return (
     <>
-      <div className="ys-stage-prompt">
-        <span className="ys-stage-label">Вы пишете</span>
-        <p>
-          {typed}
-          {typing && <i className="ys-caret" aria-hidden="true" />}
-        </p>
-        <span className="ys-stage-send" aria-hidden="true"><ArrowUp size={16} /></span>
-      </div>
-
       {tabs}
 
       <div className="ys-phone" aria-live="polite">
@@ -199,6 +178,95 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
   );
 }
 
+/**
+ * Поле первого экрана — настоящее, а не витрина.
+ *
+ * Пока посетитель ничего не написал, в подсказке сама печатается задача текущего
+ * сценария: страница остаётся живой и показывает, какого рода запрос тут ждут.
+ * Как только он начинает печатать, подсказка замолкает и больше не возвращается —
+ * подменять или дописывать чужой текст недопустимо.
+ *
+ * Форма живёт ВЫШЕ демонстрации сценария: та пересоздаётся при переключении
+ * вкладок, и написанное внутри неё стиралось бы на каждом переключении.
+ *
+ * По отправке текст сохраняется у посетителя и происходит переход на регистрацию.
+ * Подхватывает его кабинет: см. `takeLandingPrompt`.
+ */
+function PromptComposer({ demo }: { demo: string }) {
+  const reduced = useReducedMotion();
+  const [value, setValue] = useState("");
+  const [shown, setShown] = useState(0);
+  const own = value.length > 0;
+
+  useEffect(() => {
+    if (own || reduced) return;
+    let i = 0;
+    const id = window.setInterval(() => {
+      i += 1;
+      // Состояние меняется только из обработчика таймера, а не синхронно внутри
+      // эффекта: синхронный вызов запускает каскад перерисовок.
+      setShown(i);
+      if (i >= demo.length) window.clearInterval(id);
+    }, 22);
+    return () => window.clearInterval(id);
+  }, [demo, own, reduced]);
+
+  // При смене вкладки счётчик остаётся от прошлой задачи, поэтому длину режем по
+  // текущей: иначе на такте между сменой и первым тиком видна обрезка чужого текста.
+  const hint = reduced ? demo : demo.slice(0, Math.min(shown, demo.length));
+
+  // Пустое поле — это не ошибка: человек просто хочет зарегистрироваться.
+  // Переход обычный, а не через маршрутизатор: витрина и кабинет — разные части
+  // приложения, а хук маршрутизатора требует смонтированного роутера и ломает
+  // статический рендер витрины в тестах и в предпросмотре.
+  const submit = () => startWithPrompt(value, (href) => { window.location.assign(href); });
+
+  const length = Array.from(value.trim()).length;
+  const tooLong = length > LANDING_PROMPT_MAX_LENGTH;
+
+  return (
+    <form
+      className="ys-stage-prompt"
+      onSubmit={(event) => { event.preventDefault(); if (!tooLong) submit(); }}
+    >
+      <label className="ys-stage-label" htmlFor="yl-hero-prompt">Вы пишете</label>
+      <textarea
+        id="yl-hero-prompt"
+        className="ys-stage-input"
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        onKeyDown={(event) => {
+          // Enter отправляет, Shift+Enter переносит строку — как в любом чате.
+          if (event.key === "Enter" && !event.shiftKey) {
+            event.preventDefault();
+            if (!tooLong) submit();
+          }
+        }}
+        placeholder={hint}
+        rows={2}
+        spellCheck={false}
+        aria-describedby={tooLong ? "yl-hero-prompt-limit" : undefined}
+        aria-invalid={tooLong}
+      />
+      {!own && !reduced && <i className="ys-caret" aria-hidden="true" />}
+      <button
+        type="submit"
+        className="ys-stage-send"
+        data-marketing="signup_click"
+        data-placement="hero_prompt"
+        aria-label={value.trim() ? "Создать приложение по этому описанию" : "Начать бесплатно"}
+      >
+        <ArrowUp size={16} />
+      </button>
+      {tooLong && (
+        <p id="yl-hero-prompt-limit" className="ys-stage-limit">
+          {length} из {LANDING_PROMPT_MAX_LENGTH} символов — сократите описание.
+        </p>
+      )}
+    </form>
+  );
+}
+
 export function HeroStage() {
   const [scenario, setScenario] = useState<Scenario>("cafe");
   const reduced = useReducedMotion();
@@ -217,6 +285,7 @@ export function HeroStage() {
 
   return (
     <div className="ys-stage" data-testid="landing-example">
+      <PromptComposer demo={scenarios[scenario].prompt} />
       <ScenarioStage
         key={scenario}
         scenario={scenario}

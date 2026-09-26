@@ -23,7 +23,7 @@ log() { printf '\n\033[1;34m[%s] %s\033[0m\n' "$(date +%H:%M:%S)" "$*"; }
 [ "$(id -u)" = 0 ] || { echo "запускать от root (sudo)"; exit 1; }
 
 install_files() {
-  install -d -m 700 /etc/max-studio "$STATE_DIR"
+  install -d -m 711 /etc/max-studio "$STATE_DIR"
   [ -f "$ENV_FILE" ] || { printf '# Оповещения сторожа доступности (max-watchdog). Заполнить и ничего не перезапускать.\n#TG_BOT_TOKEN=\n#TG_CHAT_ID=\n' > "$ENV_FILE"; chmod 600 "$ENV_FILE"; }
   cat > "$BIN" <<'EOF'
 #!/usr/bin/env bash

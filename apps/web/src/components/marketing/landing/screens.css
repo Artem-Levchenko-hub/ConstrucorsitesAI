@@ -195,10 +195,35 @@ button.ys-action { cursor: pointer; }
   color: #9a9aa3;
 }
 .ys-stage-prompt p { margin-top: 7px; min-height: 42px; font-size: 15px; line-height: 1.45; letter-spacing: -0.01em; }
-.ys-caret { display: inline-block; width: 2px; height: 16px; margin-left: 2px; background: #14141a; vertical-align: -3px; animation: ys-blink 1s step-end infinite; }
+/* Поле ввода повторяет прежний вид витрины: та же типографика, никакой рамки
+   внутри карточки — рамка у самой карточки. */
+.ys-stage-input {
+  display: block;
+  width: 100%;
+  margin-top: 7px;
+  min-height: 42px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.45;
+  letter-spacing: -0.01em;
+  resize: none;
+  outline: none;
+}
+.ys-stage-input::placeholder { color: #9a958d; }
+.ys-stage-prompt:focus-within { border-color: var(--color-brand-blue, #0062ee); }
+.ys-stage-limit { margin-top: 6px; font-size: 12px; color: #c63d35; }
+/* Каретка рисуется только рядом с подсказкой, пока человек не начал печатать:
+   у настоящего поля есть своя, и две сразу выглядели бы поломкой. */
+.ys-caret { position: absolute; left: 18px; bottom: 19px; display: inline-block; width: 2px; height: 16px; background: #14141a; animation: ys-blink 1s step-end infinite; pointer-events: none; }
 @keyframes ys-blink { 50% { opacity: 0; } }
 .ys-stage-send {
   position: absolute;
+  border: 0;
+  cursor: pointer;
   right: 14px;
   bottom: 14px;
   display: grid;

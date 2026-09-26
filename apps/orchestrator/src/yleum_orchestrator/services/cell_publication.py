@@ -1332,7 +1332,17 @@ class CellPublicationService:
                     outcome = await self._reconcile_project(path)
                 if outcome is not None:
                     outcomes.append(outcome)
-            except Exception:
+            except Exception as exc:
+                import structlog
+
+                # The reason must reach the journal: the canary spent 19 hours and 2312
+                # identical warnings in "recovery_required" with no hint of why.
+                structlog.get_logger("cell_publication").warning(
+                    "public_runtime_reconcile_failed",
+                    project_id=str(project_id),
+                    error_type=type(exc).__name__,
+                    message=str(exc)[:300],
+                )
                 outcomes.append({"project_id": str(project_id), "state": "recovery_required"})
         return outcomes
 

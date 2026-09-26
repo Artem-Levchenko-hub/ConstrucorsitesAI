@@ -248,6 +248,15 @@ class HTTPClient:
         return result
 
 
+def _revision_or_label(value: object) -> str:
+    """A revision is echoed only when it still looks like one; bodies never leak."""
+    if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{7,40}", value):
+        return value
+    if value is None:
+        return "missing"
+    return "invalid"
+
+
 def run_smoke(
     config: Configuration,
     transport: Transport,
@@ -371,6 +380,24 @@ def run_smoke(
             )
             if observed is not None:
                 observed[component] = reported if isinstance(reported, str) else None
+        # The platform and the orchestrators share one contract. Their expectations are
+        # set independently by whoever deploys, so a DECLARED divergence (distinct expected
+        # revisions) is allowed; an UNDECLARED one — equal expectations, different live
+        # revisions — is the drift this smoke exists to catch (25.09: an orchestrator
+        # restarted from a newer checkout would otherwise stay invisible).
+        if config.expected["api"] == config.expected["orchestrator"]:
+            live_api = api.get("release_sha")
+            live_orchestrator = (
+                dependencies.get("orchestrator_release_sha")
+                if isinstance(dependencies, dict)
+                else None
+            )
+            if live_api != live_orchestrator:
+                failures.append(
+                    "release.api_orchestrator_mismatch"
+                    f" api={_revision_or_label(live_api)}"
+                    f" orchestrator={_revision_or_label(live_orchestrator)}"
+                )
     mvp = probe("mvp", config.platform_url + "/mvp")
     if mvp is not None:
         require("Путь до полностью рабочего MVP".encode() in mvp, "mvp.text_missing")

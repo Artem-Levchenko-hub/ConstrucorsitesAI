@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { CircleAlert, FolderKanban, Plus, Search } from "lucide-react";
 import { useRouter } from "next/navigation";
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { connectAppIntegration, getIntegrationCatalog } from "@/lib/api/app-integrations";
 import { describeApiError } from "@/lib/api/errors";
+import { saveLandingPrompt, takeLandingPrompt } from "@/lib/landing-prompt";
 import { createProject, listProjects } from "@/lib/api/projects";
 import { saveMaxProjectConfig } from "@/lib/api/max-studio";
 import { buildMaxProjectPrompt, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
@@ -29,6 +30,31 @@ export function MaxStudio({ email }: { email: string }) {
   const [search, setSearch] = useState("");
   const [name, setName] = useState("");
   const [idea, setIdea] = useState("");
+
+  // Задача, написанная на витрине до регистрации. Человек её уже сформулировал —
+  // заставлять его повторяться после подтверждения почты нельзя, он просто уйдёт.
+  // Забираем один раз: текст предназначен ровно для одного проекта.
+  useEffect(() => {
+    const pending = takeLandingPrompt();
+    if (!pending) return;
+    // Открываем мастер следующим кадром, а не синхронно внутри эффекта:
+    // синхронный вызов запускает каскад перерисовок ещё до первой отрисовки
+    // списка проектов. Для глаза разницы нет, окно появляется сразу.
+    let applied = false;
+    const frame = window.requestAnimationFrame(() => {
+      applied = true;
+      setIdea(pending);
+      setDialogOpen(true);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      // Если открытие не успело случиться — возвращаем текст в хранилище.
+      // Иначе он исчезает навсегда: забрали, показать не успели, повторно взять
+      // неоткуда. Именно так и происходит при повторном монтировании, которым
+      // React в режиме разработки проверяет эффекты на устойчивость.
+      if (!applied) saveLandingPrompt(pending);
+    };
+  }, []);
   const [appType, setAppType] = useState<MaxAppTypeId>("loyalty");
   const [audience, setAudience] = useState("");
   const [primaryAction, setPrimaryAction] = useState("");

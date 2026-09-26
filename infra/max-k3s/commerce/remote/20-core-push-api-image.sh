@@ -23,7 +23,7 @@ docker push -q "$REF" >/dev/null
 docker logout "$REGISTRY" >/dev/null
 DIGEST=$(docker image inspect "$REF" --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep "^$REGISTRY/$REPO@" | head -1)
 [ -n "$DIGEST" ] || { echo "не удалось получить digest для $REF"; exit 1; }
-install -d -m 700 /etc/max-studio
+install -d -m 711 /etc/max-studio
 printf 'IMAGE_REF=%s\nIMAGE_TAG=%s\nRELEASE_SHA=%s\n' "$DIGEST" "$REF" "$SHA" > /etc/max-studio/billing-image.ref
 chmod 600 /etc/max-studio/billing-image.ref
 echo "IMAGE_PUSHED $DIGEST (tag $REF)"
