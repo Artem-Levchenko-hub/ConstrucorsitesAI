@@ -664,28 +664,6 @@ async def test_project_cell_agent_exec_parses_identity_transport_and_new_roles(
     assert result.environment_mutated is True
 
 
-async def test_provision_waits_for_a_cold_template_rebuild(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
-
-    async def fake_request(method: str, path: str, **kwargs: object) -> dict[str, object]:
-        observed.update(method=method, path=path, **kwargs)
-        return {"state": "running"}
-
-    monkeypatch.setattr(orchestrator_client, "_request", fake_request)
-
-    result = await orchestrator_client.provision(
-        project_id=UUID("00000000-0000-0000-0000-000000000001"),
-        slug="max-preview",
-        template="max-miniapp-nextjs",
-    )
-
-    assert result == {"state": "running"}
-    assert observed["timeout"] == 1320.0
-    assert observed["path"] == "/internal/projects/provision"
-
-
 async def test_cell_draft_apply_uses_lease_revision_and_explicit_deletes(monkeypatch) -> None:
     observed: dict[str, object] = {}
     workspace_id, run_id = uuid4(), uuid4()

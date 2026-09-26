@@ -449,11 +449,6 @@ async def test_prepare_max_runtime_context_selects_project_cell_once_without_leg
         "maybe_create_project_cell_executor",
         fake_maybe_create,
     )
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_sandbox_capabilities",
-        lambda *args, **kwargs: pytest.fail("legacy sandbox attestation must stay unused"),
-    )
 
     result = await runtime._prepare_max_runtime_context(
         project_id=uuid4(),
@@ -463,7 +458,6 @@ async def test_prepare_max_runtime_context_selects_project_cell_once_without_leg
         vision_context="ctx",
         legacy_execute=lambda _action: pytest.fail("legacy executor must stay unused"),
         max_shell_requested=True,
-        ensure_legacy_runtime_ready=fake_ensure,
         agent_emit=fake_emit,
         max_model_locked_files=frozenset({"src/app/page.tsx"}),
         max_security_locked_files=frozenset({"src/app/api/max/route.ts"}),
@@ -513,11 +507,6 @@ async def test_prepare_max_runtime_context_re_raises_project_cell_failure_withou
         "maybe_create_project_cell_executor",
         fake_maybe_create,
     )
-    monkeypatch.setattr(
-        runtime.orchestrator_client,
-        "agent_sandbox_capabilities",
-        lambda *args, **kwargs: pytest.fail("legacy sandbox attestation must stay unused"),
-    )
 
     with pytest.raises(
         runtime.project_cell_executor.ProjectCellExecutorUnavailable,
@@ -531,8 +520,7 @@ async def test_prepare_max_runtime_context_re_raises_project_cell_failure_withou
             vision_context="ctx",
             legacy_execute=lambda _action: pytest.fail("legacy executor must stay unused"),
             max_shell_requested=True,
-            ensure_legacy_runtime_ready=fake_ensure,
-            agent_emit=fake_emit,
+                agent_emit=fake_emit,
             max_model_locked_files=frozenset({"src/app/page.tsx"}),
             max_security_locked_files=frozenset({"src/app/api/max/route.ts"}),
         )

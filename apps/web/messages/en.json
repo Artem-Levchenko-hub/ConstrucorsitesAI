@@ -51,15 +51,5 @@
       "registerPending": "Creating account…",
       "consent": "By signing up you agree to the terms of service."
     }
-  },
-  "nav": {
-    "projects": "Projects",
-    "myProjects": "My projects",
-    "account": "Account",
-    "logout": "Log out",
-    "loggedInAs": "Signed in as"
-  },
-  "workspace": {
-    "remixBadge": "remix"
   }
 }

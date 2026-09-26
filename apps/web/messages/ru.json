@@ -51,15 +51,5 @@
       "registerPending": "Регистрация…",
       "consent": "Регистрируясь, вы соглашаетесь с условиями использования."
     }
-  },
-  "nav": {
-    "projects": "Проекты",
-    "myProjects": "Мои проекты",
-    "account": "Аккаунт",
-    "logout": "Выйти",
-    "loggedInAs": "Вошли как"
-  },
-  "workspace": {
-    "remixBadge": "remix"
   }
 }

@@ -345,14 +345,6 @@
     padding-bottom: 10px;
   }
 
-  .studio-grid {
-    background-image:
-      linear-gradient(rgb(159 161 177 / 0.06) 1px, transparent 1px),
-      linear-gradient(90deg, rgb(159 161 177 / 0.06) 1px, transparent 1px);
-    background-size: 32px 32px;
-    background-position: center top;
-  }
-
   .studio-glow {
     background: radial-gradient(circle at 50% 0%, rgb(3 129 250 / 0.12), transparent 42%);
   }
@@ -437,14 +429,6 @@
   }
   .scrollbar-elegant::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
   .scrollbar-elegant::-webkit-scrollbar-corner { background: transparent; }
-
-  /* Fully hidden scrollbar — for the top toolbar's horizontal overflow, which
-     scrolls on a narrow viewport but must not show a bar under the buttons. */
-  .omnia-no-scrollbar {
-    scrollbar-width: none;            /* Firefox */
-    -ms-overflow-style: none;         /* old Edge */
-  }
-  .omnia-no-scrollbar::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
   .max-studio-scroll {
     scrollbar-width: thin;
