@@ -59,6 +59,29 @@ class ReservedCapacity:
 
     @classmethod
     def from_profile(cls, profile: CellResourceProfile) -> ReservedCapacity:
+        # Рабочий объём, а не потолок: потолок бронировал хост целиком под две
+        # ячейки. Подробности и замер — в CellResourceProfile.admission_quota.
+        quota = profile.admission_quota
+        return cls(
+            cpu_cores=quota.cpu_cores,
+            memory_bytes=quota.memory_bytes,
+            disk_bytes=quota.disk_bytes,
+            inodes=quota.inodes,
+        )
+
+    @classmethod
+    def full_from_profile(cls, profile: CellResourceProfile) -> ReservedCapacity:
+        """Полный объём ячейки — для проверочных кандидатов.
+
+        Проверочный кандидат живёт минуты и всё это время ДЕЙСТВИТЕЛЬНО считает:
+        ставит зависимости, собирает, прогоняет проверки. Для него потолок и есть
+        рабочий объём, поэтому у него отдельный бюджет и отдельная мерка. Смешать
+        их нельзя: бюджет проверок сравнивается с размером одного кандидата, и
+        если уменьшить кандидата, отказ «бюджет меньше одного кандидата» перестанет
+        срабатывать там, где он спасал (на проде это уже стоило отказа каждому
+        откату на пустом хосте).
+        """
+
         quota = profile.full_quota
         return cls(
             cpu_cores=quota.cpu_cores,

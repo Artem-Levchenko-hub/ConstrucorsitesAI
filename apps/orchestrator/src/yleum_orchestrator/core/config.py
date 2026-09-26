@@ -357,6 +357,13 @@ class Settings(BaseSettings):
     # Opt-in precompiled owner core; it must support signed private preview bootstrap.
     cell_preview_core_image: str = Field(default="")
     cell_public_helper_cpu_cores: float = Field(default=0.2, ge=0.2)
+    # Рабочий объём одной ячейки в учёте допуска. Ноль = вывести из состава
+    # (машина приложения по процессору; машина, ядро и база — по памяти).
+    # Это НЕ потолок контейнеров: потолки остаются прежними, ячейка по-прежнему
+    # может разогнаться. Замер на проде показал, что потолок как бронь давал
+    # двадцатикратный запас и пускал на восьмиядерный хост только две ячейки.
+    cell_admission_cpu_cores: float = Field(default=0.0, ge=0)
+    cell_admission_memory_bytes: int = Field(default=0, ge=0)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
     # CPU budget for short-lived isolated verification candidates (restoration
     # checks). Separate from the runtime ledger; on the 13-VPS layout this is the

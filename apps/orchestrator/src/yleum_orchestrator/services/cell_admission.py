@@ -228,9 +228,13 @@ class CellAdmissionGate:
 
         from yleum_orchestrator.services.cell_reservations import ReservedCapacity
 
-        base = ReservedCapacity.from_profile(self.profile)
         if self.workload != "verification":
-            return base
+            # Долгоживущая ячейка занимает рабочий объём: почти всё время она
+            # ждёт пользователя, а не считает.
+            return ReservedCapacity.from_profile(self.profile)
+        # Проверочный кандидат считает непрерывно, и его бюджет сравнивается
+        # именно с полным объёмом одного кандидата.
+        base = ReservedCapacity.full_from_profile(self.profile)
         return replace(base, disk_bytes=min(base.disk_bytes, self.verification_disk_bytes))
 
     def check(

@@ -252,18 +252,27 @@ def test_v2_cpu_admission_uses_reserved_envelope_not_load_average(load_1m: float
         disk_path="/var/lib/docker",
     )
     gate = CellAdmissionGate(profile)
-    assert full.cpu_cores == pytest.approx(4.2)
+    # Ячейка занимает рабочий объём (машина приложения), а не свой потолок 4.2:
+    # потолок как бронь пускал на восьмиядерный хост ровно одну ячейку сверх
+    # резерва, и вторая получала «Ожидаю ресурсы сервера» без конца.
+    assert profile.full_quota.cpu_cores == pytest.approx(4.2)
+    assert full.cpu_cores == pytest.approx(2.0)
     assert gate.check(snapshot, existing_bundle=False, running_bundle=False) == AdmissionDecision(
         True, "admitted"
     )
-    # Confirmed and provisional claims both remain in the aggregate reservation.
-    # A busy host never permits a second 4.2-core cell to consume protected CPU.
+    # Средняя загрузка не решает ничего: хост занят на 32, а место есть.
+    assert gate.check(
+        snapshot, existing_bundle=False, running_bundle=False, reserved=full
+    ) == AdmissionDecision(True, "admitted")
+    # Учёт по-прежнему точен и защищает резерв хоста: 8 ядер минус резерв 2
+    # вмещают три ячейки по 2, четвёртая отклоняется.
+    three = ReservedCapacity(cpu_cores=6.0)
     for provisional in (ReservedCapacity(), full):
         assert gate.check(
             snapshot,
             existing_bundle=False,
             running_bundle=False,
-            reserved=full,
+            reserved=three,
             provisional=provisional,
         ) == AdmissionDecision(False, "insufficient_cpu")
 
@@ -271,16 +280,17 @@ def test_v2_cpu_admission_uses_reserved_envelope_not_load_average(load_1m: float
 @pytest.mark.parametrize(
     ("editor_cpu", "expected"),
     [
-        (4.2, AdmissionDecision(True, "admitted")),
-        (4.200000001, AdmissionDecision(False, "insufficient_cpu")),
-        (4.21, AdmissionDecision(False, "insufficient_cpu")),
+        (5.5, AdmissionDecision(True, "admitted")),
+        (5.500000001, AdmissionDecision(False, "insufficient_cpu")),
+        (5.51, AdmissionDecision(False, "insufficient_cpu")),
     ],
 )
 def test_publication_cpu_exact_fit_preserves_host_reserve(
     editor_cpu: float, expected: AdmissionDecision
 ) -> None:
-    # The live host fits editor 4.2 + publication 1.8 + host reserve 2 = 8.
-    # Even one genuinely excess nano-CPU must still be rejected.
+    # Хост вмещает занятые 5.5 + рабочий объём публикации 0.5 + резерв 2 = 8.
+    # Точность сохраняется: лишняя стотысячная ядра всё так же отклоняется.
+    # (Раньше публикация бронировала свой потолок 1.8, и граница была 4.2.)
     profile = replace(
         _profile(),
         profile_version="docker-owner-cell-resources-v2",

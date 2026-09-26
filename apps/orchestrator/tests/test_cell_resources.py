@@ -33,6 +33,8 @@ def _settings(**overrides: object) -> SimpleNamespace:
         "cell_helper_memory_bytes": 128 * 1024**2,
         "cell_managed_core_cpu_cores": 0.35,
         "cell_managed_core_memory_bytes": 768 * 1024**2,
+        "cell_admission_cpu_cores": 0.0,
+        "cell_admission_memory_bytes": 0,
         "cell_host_cpu_reserve_cores": 2.0,
         "cell_host_memory_reserve_bytes": 4 * 1024**3,
         "cell_required_free_disk_bytes": 20 * 1024**3,
