@@ -1,0 +1,25 @@
+/**
+ * Нарисованные изображения товаров для превью приложений.
+ *
+ * Вынесено в отдельный файл НАМЕРЕННО. В продукте действует правило: в интерфейсе
+ * не должно быть оранжевого — он спорит с синим брендом и в тёмной теме выглядит
+ * грязно. Проверка `theme-contract` следит за этим по всему исходному коду.
+ *
+ * Но кофе коричневый, а круассан золотистый — и это не элемент интерфейса, а
+ * картинка еды. Подгонять её под палитру бренда значит получить синий круассан.
+ * Поэтому исключение сделано ровно одно и ровно здесь: файл содержит ТОЛЬКО
+ * изображения предметов, ни одной кнопки, рамки или подложки. Если сюда попадёт
+ * что-то кроме градиента-картинки — исключение надо отзывать, а не расширять.
+ */
+
+/* Картинки товаров нарисованы градиентами: витрина не тянет ни одного байта со
+   стороны, а узнаваемости «тёплый кофе / золотистая выпечка / зелень» хватает. */
+.ys-thumb { display: block; height: 52px; border-radius: 8px; background: #e8e4de; }
+.ys-thumb--coffee { background: radial-gradient(circle at 50% 42%, #d9b48a 0 22%, #8c5a33 23% 58%, #6b4224 59%); }
+.ys-thumb--milk { background: radial-gradient(circle at 50% 44%, #f2e6d5 0 26%, #c79a6d 27% 60%, #a97b4e 61%); }
+.ys-thumb--bake { background: linear-gradient(145deg, #f0cf95, #c98f4a); }
+.ys-thumb--cream { background: linear-gradient(160deg, #f6efe2, #e3cfae 62%, #c9a877); }
+.ys-thumb--leaf { background: linear-gradient(150deg, #cfe3cd, #7fae7b); }
+.ys-thumb--moss { background: linear-gradient(150deg, #dbe8d4, #9dbf93); }
+.ys-thumb--sage { background: linear-gradient(150deg, #d4e2dc, #8fb3a6); }
+.ys-thumb--fern { background: linear-gradient(150deg, #e0e9cf, #a7bd82); }

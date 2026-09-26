@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
-import { db, schema } from "@/lib/db";
+import { schema, withMaxUser } from "@/lib/db";
 import { createMaxSession, MAX_SESSION_COOKIE, type MaxSessionUser } from "@/lib/max/session";
 
 const BOOTSTRAP_TTL_SECONDS = 120;
@@ -54,10 +54,12 @@ export async function GET(request: Request) {
   if (!validSignature(providedSignature, expectedSignature)) return unavailable();
 
   try {
-    await db
-      .insert(schema.maxUsers)
-      .values({ maxUserId: PREVIEW_USER.id, firstName: "" })
-      .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
+    await withMaxUser(PREVIEW_USER.id, (tx) =>
+      tx
+        .insert(schema.maxUsers)
+        .values({ maxUserId: PREVIEW_USER.id, firstName: "" })
+        .onConflictDoNothing({ target: schema.maxUsers.maxUserId }),
+    );
     const session = createMaxSession(PREVIEW_USER, {
       maxAge: PREVIEW_SESSION_MAX_AGE_SECONDS,
     });

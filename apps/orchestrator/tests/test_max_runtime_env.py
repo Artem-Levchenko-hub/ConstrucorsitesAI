@@ -23,6 +23,9 @@ def _max_template_artifact_inventory() -> dict[str, str]:
     return {
         "drizzle/0000_max_core.sql": _digest(template / "drizzle/0000_max_core.sql"),
         "drizzle/0001_business_core.sql": _digest(template / "drizzle/0001_business_core.sql"),
+        "drizzle/0002_row_level_security.sql": _digest(
+            template / "drizzle/0002_row_level_security.sql"
+        ),
         "scripts/apply-migrations.mjs": _digest(template / "scripts/apply-migrations.mjs"),
     }
 

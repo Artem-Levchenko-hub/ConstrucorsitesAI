@@ -2,7 +2,7 @@ import { and, eq, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { db, schema } from "@/lib/db";
+import { schema, withMaxUser } from "@/lib/db";
 import { getMaxUser } from "@/lib/max/session";
 
 const MAX_ACTION_PAYLOAD_BYTES = 262_144;
@@ -33,16 +33,18 @@ export async function GET(_request: Request, context: Context) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const id = await scopedId(context);
   if (!id) return notFound();
-  const [action] = await db
-    .select()
-    .from(schema.maxBusinessActions)
-    .where(
-      and(
-        eq(schema.maxBusinessActions.id, id),
-        eq(schema.maxBusinessActions.maxUserId, user.id),
-      ),
-    )
-    .limit(1);
+  const [action] = await withMaxUser(user.id, (tx) =>
+    tx
+      .select()
+      .from(schema.maxBusinessActions)
+      .where(
+        and(
+          eq(schema.maxBusinessActions.id, id),
+          eq(schema.maxBusinessActions.maxUserId, user.id),
+        ),
+      )
+      .limit(1),
+  );
   return action ? NextResponse.json({ action }) : notFound();
 }
 
@@ -63,16 +65,18 @@ export async function PATCH(request: Request, context: Context) {
   ) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
-  const [action] = await db
-    .update(schema.maxBusinessActions)
-    .set({ ...input, updatedAt: new Date() })
-    .where(
-      and(
-        eq(schema.maxBusinessActions.id, id),
-        eq(schema.maxBusinessActions.maxUserId, user.id),
-      ),
-    )
-    .returning();
+  const [action] = await withMaxUser(user.id, (tx) =>
+    tx
+      .update(schema.maxBusinessActions)
+      .set({ ...input, updatedAt: new Date() })
+      .where(
+        and(
+          eq(schema.maxBusinessActions.id, id),
+          eq(schema.maxBusinessActions.maxUserId, user.id),
+        ),
+      )
+      .returning(),
+  );
   return action ? NextResponse.json({ action }) : notFound();
 }
 
@@ -81,7 +85,7 @@ export async function DELETE(_request: Request, context: Context) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const id = await scopedId(context);
   if (!id) return notFound();
-  const deleted = await db.transaction(async (tx) => {
+  const deleted = await withMaxUser(user.id, async (tx) => {
     const [audit] = await tx
       .select({ details: schema.maxAuditLog.details })
       .from(schema.maxAuditLog)

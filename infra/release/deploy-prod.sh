@@ -133,6 +133,14 @@ fi
 say "публичный health"
 ssh max-core "curl -s https://yleum.ru/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"status\"], \"api\", d[\"release_sha\"][:8], \"orch\", d[\"dependencies\"].get(\"orchestrator_release_sha\",\"\")[:8], \"billing\", d[\"dependencies\"].get(\"billing_worker\"), {k:v for k,v in d[\"checks\"].items() if v!=\"ok\"})'; echo \"legal/config: \$(curl -s https://yleum.ru/api/legal/config | python3 -c 'import json,sys; print(json.load(sys.stdin).get(\"document_version\"))')\""
 
+# Шлюз моделей мог подняться «в деградации»: 25.09 он потерял базу при старте
+# (смена подсети в окне переименования), записал предупреждение, продолжил отвечать
+# health 200 — и десять часов каждый вызов модели оплачивался у провайдера и не
+# записывался в журнал расхода. Теперь это ловится на каждой волне, даже если сам
+# шлюз в ней не пересобирался.
+say "core: шлюз моделей не в деградации?"
+ssh max-core 'set -e; code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8101/health || true); echo "gateway health: $code"; [ "$code" = 200 ] || { echo "ШЛЮЗ НЕ ОТВЕЧАЕТ"; exit 1; }; n=$(docker logs yleum-prod-gw 2>&1 | grep -c "startup.postgres_unavailable" || true); echo "startup.postgres_unavailable в текущем контейнере: $n"; [ "$n" = 0 ] || { echo "ШЛЮЗ РАБОТАЕТ БЕЗ БАЗЫ: списания теряются, вызовы моделей оплачиваются впустую. Починка: разрешить подсеть контейнера в ufw и pg_hba хостового PostgreSQL, затем docker compose up -d --no-build --no-deps --force-recreate gateway"; exit 1; }'
+
 say "github: ожидаемые ревизии (пять + общая)"
 cd "$REPO"
 VARS=""; [ $API = 1 ] && VARS="API WORKER GENERATION_WORKER ORCHESTRATOR"; [ $WEB = 1 ] && VARS="$VARS WEB"

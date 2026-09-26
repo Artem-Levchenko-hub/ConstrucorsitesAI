@@ -5,6 +5,7 @@ import { YleumMark } from "@/components/brand/YleumMark";
 import "./landing.css";
 import "./landing/screens.css";
 import { AppScreen, ScreenCollage } from "./landing/AppScreens";
+import { Capabilities, Integrations } from "./landing/Capabilities";
 import { HeroStage } from "./landing/HeroStage";
 import { MarketingEvents } from "./MarketingEvents";
 
@@ -102,6 +103,15 @@ export function YleumLanding() {
         <div className="yl-wrap yl-hero-copy">
           <h1>Опишите словами.<br /><em className="yl-grad-text">Получите приложение.</em></h1>
           <p className="yl-lead">Внутри MAX, где ваши клиенты уже есть.</p>
+          {/* Ниши строкой: человек ищет не «платформу для бизнеса», а себя —
+              кофейню, студию, магазин. Ссылки ведут к примерам экранов. */}
+          <div className="yl-niches">
+            {["Кофейни", "Кафе и рестораны", "Салоны красоты", "Барбершопы", "Магазины", "Студии и школы", "Клубы"].map((niche) => (
+              <a className="yl-niche" href="#examples" key={niche} data-marketing="niche_click" data-placement={niche}>
+                {niche}
+              </a>
+            ))}
+          </div>
           <div className="yl-actions">
             <Signup placement="hero" />
             <span className="yl-note">Тариф Free · Без карты</span>
@@ -129,22 +139,28 @@ export function YleumLanding() {
         </div>
       </section>
 
-      {/* 3 — что уже внутри */}
+      {/* 3 — возможности показаны, а не перечислены */}
       <section id="stack" className="yl-section yl-section--tint" data-marketing-section="stack">
-        <div className="yl-wrap yl-stack">
-          <div>
-            <h2>Весь стек внутри.<br /><em className="yl-grad-text">Настраивать нечего.</em></h2>
-            <p className="yl-lead">База, вход, адрес и сертификат готовы заранее. Вы описываете бизнес, а не сервер.</p>
-            <div className="yl-shop-peek"><AppScreen kind="shop" /></div>
-          </div>
-          <ul className="yl-stack-list">
+        <div className="yl-wrap yl-head yl-head--center">
+          <h2>Всё, чем бизнес зарабатывает,<br /><em className="yl-grad-text">— внутри MAX.</em></h2>
+          <p className="yl-lead">Не список возможностей, а куски настоящих экранов: так видно, что они существуют.</p>
+        </div>
+        <Capabilities />
+        <div className="yl-wrap yl-head yl-head--center yl-head--sub">
+          <h3 className="yl-subhead">Сервисы, которые уже подключаются</h3>
+        </div>
+        <Integrations />
+        <div className="yl-wrap yl-platform">
+          <h3 className="yl-subhead">И то, что обычно настраивают неделями</h3>
+          <div className="yl-platform-grid">
             {stack.map(([title, text]) => (
-              <li key={title}>
-                <Check size={17} />
-                <div><h3>{title}</h3><p>{text}</p></div>
-              </li>
+              <div key={title}>
+                <Check size={15} />
+                <strong>{title}</strong>
+                <span>{text}</span>
+              </div>
             ))}
-          </ul>
+          </div>
         </div>
       </section>
 
@@ -170,9 +186,10 @@ export function YleumLanding() {
         </div>
         <div className="yl-wrap yl-steps">
           {[
-            ["Опишите", "Обычным сообщением, без настроек и полей"],
-            ["Проверьте", "Пройдите путь своего клиента до публикации"],
-            ["Опубликуйте", "Адрес готов для кабинета бота MAX"],
+            ["Опишите бизнес", "Обычными словами: что продаёте, какие услуги, цены и адреса"],
+            ["Yleum соберёт приложение", "Каталог, запись и оплата — без настроек и полей"],
+            ["Проверьте и поправьте", "Правки тоже пишете словами, а не ищете в настройках"],
+            ["Опубликуйте в боте MAX", "Клиентам не нужно ничего устанавливать"],
           ].map(([title, text], i) => (
             <article key={title}>
               <b>{String(i + 1).padStart(2, "0")}</b>
@@ -217,7 +234,11 @@ export function YleumLanding() {
       {/* 7 — тарифы */}
       <section id="pricing" className="yl-section yl-section--tint" data-marketing-section="pricing">
         <div className="yl-wrap yl-head yl-head--center">
-          <h2>Большая идея.<br />Бесплатный первый шаг.</h2>
+          <h2>Подписка,<br /><em className="yl-grad-text">а не смета.</em></h2>
+          <p className="yl-lead">
+            Никакой оценки работ и счёта за разработку: цена не зависит от числа
+            экранов и не растёт от того, что вы передумали на третий день.
+          </p>
         </div>
         <div className="yl-wrap yl-plans">
           <div className="yl-plan">

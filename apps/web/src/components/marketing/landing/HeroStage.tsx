@@ -94,6 +94,24 @@ function ScenarioStage({ scenario, onTouch, tabs }: { scenario: Scenario; onTouc
     <>
       {tabs}
 
+      {/* Телефон показывает сторону КЛИЕНТА, а плашки рядом — сторону владельца:
+          заказ пришёл и оплачен, приложение опубликовано. Два взгляда на один
+          продукт сразу, без единого слова объяснений. */}
+      <div className="ys-owner-note ys-owner-note--order" aria-hidden="true">
+        <span className="ys-owner-dot" />
+        <div>
+          <strong>Новый заказ · 410 ₽</strong>
+          <small>Оплачен через ЮKassa</small>
+        </div>
+      </div>
+      <div className="ys-owner-note ys-owner-note--live" aria-hidden="true">
+        <span className="ys-owner-dot ys-owner-dot--live" />
+        <div>
+          <strong>Приложение опубликовано</strong>
+          <small>В чат-боте вашей организации</small>
+        </div>
+      </div>
+
       <div className="ys-phone" aria-live="polite">
         <PhoneFrame>
         <div className="ys-screen">

@@ -98,8 +98,19 @@ describe("dark blue product theme", () => {
     expect(contrast(tokens["--color-fg-on-danger"], tokens["--color-danger"])).toBeGreaterThanOrEqual(4.5);
   });
 
+  /**
+   * Единственное исключение из запрета оранжевого — файл с нарисованными
+   * изображениями товаров на витрине. Правило защищает ИНТЕРФЕЙС: оранжевый
+   * спорит с синим брендом и грязнит тёмную тему. Но кофе коричневый, а круассан
+   * золотистый, и подгонять картинку еды под палитру значит получить синий
+   * круассан. Файл содержит только градиенты-картинки; если в него попадёт
+   * кнопка, рамка или подложка — исключение надо отзывать, а не расширять.
+   */
+  const IMAGERY_ONLY = "components/marketing/landing/imagery.css";
+
   it("contains no orange color or orange utility in production UI source", () => {
     const violations = collectFiles(SRC).flatMap((path) => {
+      if (path.endsWith(IMAGERY_ONLY)) return [];
       const source = readFileSync(path, "utf8");
       const colors = source.match(/#[0-9a-f]{6}\b/gi) ?? [];
       const orangeColors = colors.filter((color) => isOrange(color));

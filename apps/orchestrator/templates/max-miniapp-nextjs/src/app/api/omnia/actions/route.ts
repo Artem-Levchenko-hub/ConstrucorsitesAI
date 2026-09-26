@@ -2,7 +2,7 @@ import { and, desc, eq, lt, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { db, schema } from "@/lib/db";
+import { schema, withMaxUser } from "@/lib/db";
 import { getMaxUser } from "@/lib/max/session";
 
 const DEFAULT_ACTION_LIMIT = 250;
@@ -65,12 +65,14 @@ export async function GET(request: Request) {
       )!,
     );
   }
-  const rows = await db
-    .select()
-    .from(schema.maxBusinessActions)
-    .where(and(...filters))
-    .orderBy(desc(schema.maxBusinessActions.createdAt), desc(schema.maxBusinessActions.id))
-    .limit(query.data.limit + 1);
+  const rows = await withMaxUser(user.id, (tx) =>
+    tx
+      .select()
+      .from(schema.maxBusinessActions)
+      .where(and(...filters))
+      .orderBy(desc(schema.maxBusinessActions.createdAt), desc(schema.maxBusinessActions.id))
+      .limit(query.data.limit + 1),
+  );
   const hasMore = rows.length > query.data.limit;
   const actions = hasMore ? rows.slice(0, query.data.limit) : rows;
   const nextCursor =
@@ -91,7 +93,7 @@ export async function POST(request: Request) {
   if (payloadBytes > MAX_ACTION_PAYLOAD_BYTES) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
-  const result = await db.transaction(async (tx) => {
+  const result = await withMaxUser(user.id, async (tx) => {
     // A valid server-signed actor is sufficient authority to materialize its
     // FK parent. Real MAX login already creates this row; activation probes use
     // the same signed-session contract without inventing an external login.

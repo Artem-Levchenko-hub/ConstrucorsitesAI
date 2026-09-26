@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { db, schema } from "@/lib/db";
+import { schema, withMaxUser } from "@/lib/db";
 import { getMaxUser } from "@/lib/max/session";
 
 const Event = z.object({
@@ -24,10 +24,12 @@ export async function POST(request: Request) {
   if (payloadBytes > MAX_EVENT_PAYLOAD_BYTES) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
-  await db.insert(schema.maxAnalyticsEvents).values({
-    maxUserId: user.id,
-    eventName: input.eventName,
-    properties: input.properties,
-  });
+  await withMaxUser(user.id, (tx) =>
+    tx.insert(schema.maxAnalyticsEvents).values({
+      maxUserId: user.id,
+      eventName: input.eventName,
+      properties: input.properties,
+    }),
+  );
   return new NextResponse(null, { status: 204 });
 }
