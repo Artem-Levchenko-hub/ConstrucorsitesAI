@@ -111,6 +111,15 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     retry: false,
     refetchInterval: query => query.state.data && !terminal(query.state.data.state) ? 2_000 : false,
   });
+  useEffect(() => {
+    // Adaptation reuses a cancelled operation. Its detail poll has stopped,
+    // so a newer list revision must wake that same cache entry and its poll.
+    const listed = list.data?.items.find(item => item.project_id === projectId && item.id === operationId);
+    if (!listed) return;
+    qc.setQueryData<api.RestoreOperation>(["restoration", projectId, operationId], previous =>
+      previous?.project_id === projectId && previous.id === operationId && listed.revision > previous.revision
+        ? newer(previous, listed) : previous);
+  }, [list.data, operationId, projectId, qc]);
   const operation = detail.data?.project_id === projectId && detail.data.id === operationId ? detail.data : null;
   const headChanged = !!operation && ["ready", "needs_changes"].includes(operation.state)
     && operation.base_draft_snapshot_id !== currentSnapshotId;

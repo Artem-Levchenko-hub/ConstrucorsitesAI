@@ -86,6 +86,7 @@ afterEach(async () => {
   client.clear();
   container.remove();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 it("discovers the server operation on F5 without creating another preparation", async () => {
@@ -94,6 +95,52 @@ it("discovers the server operation on F5 without creating another preparation", 
   expect(controller.operation?.id).toBe("op-a");
   expect(container.textContent).toContain("Сделать текущей в редакторе");
   expect(api.prepareRestoration).not.toHaveBeenCalled(); expect(completed).not.toHaveBeenCalled();
+});
+it("resumes the same cancelled operation from a newer list revision and ignores a late cancelled detail", async () => {
+  const cancelled = { ...operation("cancelled"), revision: 6 };
+  const adapting = { ...operation("adapting"), revision: 7, phase: "generation",
+    selected_branch: "adaptive" as const, adaptation_run_id: "run-a" };
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [cancelled] });
+  vi.mocked(api.getRestoration).mockResolvedValue(cancelled);
+  vi.useFakeTimers();
+  await act(async () => root.render(<QueryClientProvider client={client}><Harness /></QueryClientProvider>));
+  await act(async () => vi.advanceTimersByTimeAsync(20));
+  expect(controller.operation?.revision).toBe(6);
+  expect(controller.active).toBe(false);
+  expect(container.textContent).toContain("Подготовка отменена");
+  const initialDetailReads = vi.mocked(api.getRestoration).mock.calls.length;
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [adapting] });
+  await act(async () => vi.advanceTimersByTimeAsync(5_000));
+  expect(controller.operation).toMatchObject({ id: "op-a", state: "adapting", revision: 7 });
+  expect(controller.active).toBe(true);
+  expect(controller.running).toBe(true);
+  expect(container.textContent).toContain("Адаптируем выбранную версию");
+  expect(container.textContent).not.toContain("Подготовка отменена");
+  // The resumed detail poll intentionally gets an older cancellation response.
+  await act(async () => vi.advanceTimersByTimeAsync(2_100));
+  expect(vi.mocked(api.getRestoration).mock.calls.length).toBeGreaterThan(initialDetailReads);
+  expect(controller.operation).toMatchObject({ id: "op-a", state: "adapting", revision: 7 });
+  expect(api.prepareRestoration).not.toHaveBeenCalled();
+  expect(api.applyRestoration).not.toHaveBeenCalled();
+  expect(adapt).not.toHaveBeenCalled();
+});
+it.each(["older", "equal", "other-project", "other-operation"])("does not replace detail from a %s list entry", async kind => {
+  const adapting = { ...operation("adapting"), revision: 7, phase: "generation" };
+  client.setQueryData(["restoration-selection", "a"], "op-a");
+  client.setQueryData(["restoration", "a", "op-a"], adapting);
+  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [adapting] });
+  vi.mocked(api.getRestoration).mockResolvedValue(adapting);
+  await render();
+  const incoming = { ...operation("cancelled"), revision: kind === "older" ? 6 : kind === "equal" ? 7 : 8,
+    ...(kind === "other-project" ? { project_id: "b" } : {}),
+    ...(kind === "other-operation" ? { id: "other-operation" } : {}) };
+  await act(async () => {
+    client.setQueryData(["restorations", "a"], { enabled: true, items: [incoming] });
+  });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 15)); });
+  expect(controller.operation).toMatchObject({ project_id: "a", id: "op-a", state: "adapting", revision: 7 });
+  expect(controller.active).toBe(true);
+  expect(adapt).not.toHaveBeenCalled();
 });
 it("reprepares an unavailable catalog only after confirmed cancellation", async () => {
   const blocked = catalogUnavailable();
