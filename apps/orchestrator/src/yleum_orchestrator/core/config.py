@@ -363,6 +363,10 @@ class Settings(BaseSettings):
     # может разогнаться. Замер на проде показал, что потолок как бронь давал
     # двадцатикратный запас и пускал на восьмиядерный хост только две ячейки.
     cell_admission_cpu_cores: float = Field(default=0.0, ge=0)
+    # Сколько бронь живёт без единого запущенного контейнера, прежде чем её
+    # отпустят. Запас нужен идущей операции: она бронирует раньше, чем поднимает
+    # контейнеры, и отбирать у неё место нельзя.
+    cell_idle_reservation_grace_seconds: int = Field(default=600, ge=60, le=86400)
     cell_admission_memory_bytes: int = Field(default=0, ge=0)
     cell_host_cpu_reserve_cores: float = Field(default=2.0, ge=0)
     # CPU budget for short-lived isolated verification candidates (restoration

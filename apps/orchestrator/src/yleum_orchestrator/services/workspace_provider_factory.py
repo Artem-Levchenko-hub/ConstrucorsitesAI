@@ -104,6 +104,7 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
             state_root / f"{state_store.root.name}-capacity-reservations"
         ),
         namespace="test" if _is_test_namespace(state_store.root) else "prod",
+        idle_reservation_grace_seconds=int(settings.cell_idle_reservation_grace_seconds),
     )
     checkpoint_manager = CellCheckpointManager(
         profile_version=profile.profile_version,
