@@ -138,6 +138,34 @@ ssh max-core "curl -s https://yleum.ru/api/health | python3 -c 'import json,sys;
 # health 200 — и десять часов каждый вызов модели оплачивался у провайдера и не
 # записывался в журнал расхода. Теперь это ловится на каждой волне, даже если сам
 # шлюз в ней не пересобирался.
+# Адреса оркестраторов в настройках платформы должны быть достижимы ИЗНУТРИ api,
+# а не только с хоста. 26.09 они указывали на шлюз старой compose-сети
+# (172.19.0.1): сеть стояла пустой, выглядела мусором, и её уборка увела адрес в
+# никуда — платформа ушла в «деградацию» с непонятным «mixed» вместо ревизии.
+# Проверка отсюда ловит любое такое расхождение на той же волне.
+say "core: оркестраторы видны из контейнера api?"
+ssh max-core 'docker exec yleum-prod-api python3 - <<PY
+import json, os, sys, urllib.request
+raw = os.environ.get("ORCHESTRATOR_HOSTS") or "[]"
+hosts = json.loads(raw) if raw.strip().startswith("[") else []
+if not hosts:
+    hosts = [{"name": "core", "url": os.environ.get("ORCHESTRATOR_URL", "")}]
+bad = []
+for h in hosts:
+    url = (h.get("url") or "").rstrip("/")
+    try:
+        with urllib.request.urlopen(url + "/health", timeout=8) as r:
+            body = json.loads(r.read().decode())
+        print("  %-10s %s %s" % (h.get("name"), url, body.get("release_sha", "")[:12]))
+    except Exception as exc:
+        bad.append("%s (%s): %s" % (h.get("name"), url, exc))
+if bad:
+    print("ОРКЕСТРАТОР НЕ ВИДЕН ИЗ API: " + "; ".join(bad))
+    print("Починка: сверить адреса в ORCHESTRATOR_HOSTS с текущей compose-сетью")
+    print("(docker network inspect full_yleum-prod -f \"{{range .IPAM.Config}}{{.Gateway}}{{end}}\")")
+    sys.exit(1)
+PY'
+
 say "core: шлюз моделей не в деградации?"
 ssh max-core 'set -e; code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8101/health || true); echo "gateway health: $code"; [ "$code" = 200 ] || { echo "ШЛЮЗ НЕ ОТВЕЧАЕТ"; exit 1; }; n=$(docker logs yleum-prod-gw 2>&1 | grep -c "startup.postgres_unavailable" || true); echo "startup.postgres_unavailable в текущем контейнере: $n"; [ "$n" = 0 ] || { echo "ШЛЮЗ РАБОТАЕТ БЕЗ БАЗЫ: списания теряются, вызовы моделей оплачиваются впустую. Починка: разрешить подсеть контейнера в ufw и pg_hba хостового PostgreSQL, затем docker compose up -d --no-build --no-deps --force-recreate gateway"; exit 1; }'
 
