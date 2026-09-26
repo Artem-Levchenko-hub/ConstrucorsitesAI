@@ -11,18 +11,7 @@
  * полсекунды, а не второй продукт внутри витрины. Всё нарисовано разметкой,
  * поэтому остаётся чётким на любом экране и не тянет ни байта со стороны.
  */
-import {
-  CalendarClock,
-  ChartColumn,
-  Check,
-  CreditCard,
-  FileSpreadsheet,
-  Handshake,
-  Package,
-  RefreshCw,
-  Truck,
-  UtensilsCrossed,
-} from "lucide-react";
+import { Check, CreditCard, RefreshCw } from "lucide-react";
 
 function Card({
   title,
@@ -148,64 +137,59 @@ export function Capabilities() {
 }
 
 /**
- * Значок у сервиса говорит, ЧТО он делает, а не как выглядит его логотип.
- *
- * Чужие логотипы мы не рисуем: товарный знак принадлежит его владельцу, и
- * похожая-но-своя картинка — это подделка знака, а не иллюстрация. Если
- * владелец получит официальные наборы логотипов, их можно будет подставить
- * сюда вместо значков, ничего больше не меняя.
- *
- * Значок при этом полезнее логотипа: строка «1С» ничего не говорит человеку,
- * который не работал с 1С, а «документы» — говорит. Одинаковая категория
- * получает одинаковый значок намеренно: так видно, что два сервиса
- * взаимозаменяемы и выбирать нужно один.
- */
-const KIND = {
-  pay: CreditCard,
-  crm: Handshake,
-  stock: Package,
-  docs: FileSpreadsheet,
-  menu: UtensilsCrossed,
-  schedule: CalendarClock,
-  delivery: Truck,
-  stats: ChartColumn,
-} as const;
-
-/**
  * Настоящие интеграции платформы. Список взят из каталога провайдеров в коде,
  * а не придуман для красоты: называть чужой сервис, которого нет, — это обещание,
  * за которое потом отвечать перед человеком, уже заплатившим за подписку.
+ *
+ * Знаки лежат у нас в `public/integrations/`, а не грузятся с чужих сайтов:
+ * страница не должна зависеть от того, работает ли сейчас сайт партнёра, и не
+ * должна сообщать ему, кто открыл нашу витрину. Откуда взят каждый файл и на
+ * каком основании — в `public/integrations/README.md`; менять знак нужно там,
+ * здесь ссылка идёт на имя файла.
+ *
+ * Последнее поле — квадратный ли знак. Логотип-надпись («ЮKassa», «Битрикс24»)
+ * и квадратная иконка («МойСклад», YCLIENTS) при одной высоте выглядят по-разному:
+ * квадрат кажется вдвое мельче надписи. Поэтому квадратным даётся высота побольше.
  */
 export const INTEGRATIONS = [
-  ["ЮKassa", "Приём оплаты", "pay"],
-  ["amoCRM", "Заявки и сделки", "crm"],
-  ["Битрикс24", "Заявки и сделки", "crm"],
-  ["МойСклад", "Товары и остатки", "stock"],
-  ["1С", "Товары, цены, документы", "docs"],
-  ["iiko", "Меню и заказы", "menu"],
-  ["r_keeper", "Меню, стоп-лист, заказы", "menu"],
-  ["YCLIENTS", "Услуги и расписание", "schedule"],
-  ["СДЭК", "Доставка и статусы", "delivery"],
-  ["Яндекс Метрика", "Статистика посещений", "stats"],
-] as const satisfies readonly (readonly [string, string, keyof typeof KIND])[];
+  ["ЮKassa", "Приём оплаты", "yookassa", false],
+  ["amoCRM", "Заявки и сделки", "amocrm", false],
+  ["Битрикс24", "Заявки и сделки", "bitrix24", false],
+  ["МойСклад", "Товары и остатки", "moysklad", true],
+  ["1С", "Товары, цены, документы", "1c", false],
+  ["iiko", "Меню и заказы", "iiko", false],
+  ["r_keeper", "Меню, стоп-лист, заказы", "rkeeper", false],
+  ["YCLIENTS", "Услуги и расписание", "yclients", true],
+  ["СДЭК", "Доставка и статусы", "cdek", false],
+  ["Яндекс Метрика", "Статистика посещений", "metrica", true],
+] as const satisfies readonly (readonly [string, string, string, boolean])[];
 
 export function Integrations() {
   return (
     <div className="yl-wrap yl-integrations">
-      {INTEGRATIONS.map(([name, note, kind]) => {
-        const Icon = KIND[kind];
-        return (
-          <div className="yl-integration" key={name}>
-            <span className={`yl-integration-mark yl-integration-mark--${kind}`} aria-hidden="true">
-              <Icon size={17} strokeWidth={2} />
-            </span>
-            <div>
-              <strong>{name}</strong>
-              <span>{note}</span>
-            </div>
+      {INTEGRATIONS.map(([name, note, file, square]) => (
+        <div className="yl-integration" key={name}>
+          {/* Знак декоративный: название сервиса стоит текстом строкой ниже,
+              и озвучивать его дважды для экранного диктора не нужно. */}
+          <span className="yl-integration-logobox" aria-hidden="true">
+            {/* Обычный img, а не next/image: это SVG размером в пару килобайт,
+                оптимизатор картинок с ним ничего не делает и только добавляет
+                прослойку. Размер знака задан стилями, так что вёрстка не прыгает. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              className={`yl-integration-logo${square ? " yl-integration-logo--square" : ""}`}
+              src={`/integrations/${file}.svg`}
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
+          </span>
+          <div>
+            <strong>{name}</strong>
+            <span>{note}</span>
           </div>
-        );
-      })}
+        </div>
+      ))}
       <p className="yl-note yl-integrations-note">
         Подключение сервиса зависит от вашего тарифа и от вашего договора с этим
         сервисом. Генерация приложения сама по себе не включает приём платежей.
