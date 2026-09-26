@@ -146,6 +146,25 @@ def test_max_migration_contract_rejects_schema_change_without_new_canonical_migr
     )
 
 
+def test_adaptation_can_align_code_schema_without_requesting_database_migration():
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
+
+    before = {"src/lib/db/schema.ts": "subject: text('subject')"}
+    after = {"src/lib/db/schema.ts": "subject: text('title')"}
+    assert max_migration_contract_errors(before, after)
+    assert max_migration_contract_errors(before, after, preserve_current_database=True) == ()
+
+
+@pytest.mark.parametrize("path", ["drizzle/0001.sql", "scripts/apply-migrations.mjs"])
+def test_adaptation_does_not_exempt_immutable_sql_or_platform_runner(path):
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
+
+    before = {path: "SELECT 1;", "src/lib/db/schema.ts": "historical"}
+    after = {path: "SELECT 2;", "src/lib/db/schema.ts": "current"}
+    errors = max_migration_contract_errors(before, after, preserve_current_database=True)
+    assert len(errors) == 1 and path in errors[0]
+
+
 def test_max_migration_contract_rejects_changes_to_platform_runner():
     from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
@@ -326,6 +345,80 @@ async def test_agent_verification_aborts_schema_only_max_candidate_before_backen
     assert raised.value.code == "unsafe_generated_backend"
     assert files == {"src/lib/db/schema.ts": baseline_files["src/lib/db/schema.ts"]}
     rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fault", [
+    None, "missing_proof", "missing_identity", "identity_error", "malformed_identity",
+    "metadata_only",
+    "project", "owner", "run", "workspace", "source", "epoch",
+])
+async def test_final_guard_allows_schema_alignment_only_for_bound_adaptation(monkeypatch, fault):
+    from yleum_api.services.orchestrator_client import RestorationAdaptationWorkspace
+
+    ids = SimpleNamespace(project_id=uuid4(), user_id=uuid4(), run_id=uuid4())
+    source, candidate = uuid4(), uuid4()
+    receipt = RestorationAdaptationWorkspace(
+        source_workspace_id=source, candidate_workspace_id=candidate,
+        operation_id=uuid4(), project_id=ids.project_id, owner_id=ids.user_id,
+        generation_run_id=ids.run_id, candidate_fencing_epoch=3,
+        source_database_digest="a" * 64, proof_digest="b" * 64,
+        capabilities={"portable_machine": True, "database_admin": "isolated_copy",
+                      "restoration_adaptation_database_copy_v1": True},
+    )
+    identity = SimpleNamespace(workspace_id=candidate, generation_run_id=ids.run_id,
+                               fencing_epoch=3)
+    handle = SimpleNamespace(
+        is_portable=lambda: True, workspace_id=candidate, control_workspace_id=source,
+        restoration_adaptation_workspace=receipt, prove_restoration_adaptation=AsyncMock(),
+        current_identity=AsyncMock(return_value=identity),
+    )
+    if fault == "missing_proof":
+        handle.prove_restoration_adaptation = None
+    elif fault == "missing_identity":
+        handle.current_identity = None
+    elif fault == "identity_error":
+        handle.current_identity.side_effect = RuntimeError("identity unavailable")
+    elif fault == "malformed_identity":
+        handle.current_identity.return_value = None
+    elif fault == "metadata_only":
+        handle.restoration_adaptation_workspace = {"preserve_current_database": True}
+    elif fault == "project":
+        ids.project_id = uuid4()
+    elif fault == "owner":
+        ids.user_id = uuid4()
+    elif fault == "run":
+        ids.run_id = uuid4()
+    elif fault == "workspace":
+        handle.workspace_id = uuid4()
+    elif fault == "source":
+        handle.control_workspace_id = uuid4()
+    elif fault == "epoch":
+        identity.fencing_epoch = 4
+    monkeypatch.setattr(agent_verification, "get_settings", lambda: SimpleNamespace(
+        agent_gate_max_attempts=0, use_agent_gate_feedback=False, use_native_agent=False,
+        use_sast_gate=False,
+    ))
+    rollback = AsyncMock()
+    monkeypatch.setattr(generation_runtime, "_apply_project_cell_preview_files", rollback)
+    baseline = {"src/lib/db/schema.ts": "subject: text('subject')"}
+    candidate_files = {"src/lib/db/schema.ts": "subject: text('title')"}
+    call = agent_verification.check_backend_and_normalize_css(
+        _active_max_locked_files=frozenset(), _agent_res=SimpleNamespace(steps=1),
+        _is_edit=True, _max_seed_files={}, baseline=SimpleNamespace(files=baseline),
+        files=candidate_files, ids=ids,
+        project_info=SimpleNamespace(template="max_miniapp", slug="fixture"),
+        runtime=SimpleNamespace(handle=handle), plan=SimpleNamespace(),
+        operations=SimpleNamespace(),
+    )
+    if fault:
+        with pytest.raises(ApiError, match="migration contract"):
+            await call
+        rollback.assert_awaited_once()
+    else:
+        await call
+        rollback.assert_not_awaited()
+        assert candidate_files["src/lib/db/schema.ts"] == "subject: text('title')"
 
 
 @pytest.mark.parametrize("stale", [{}, {"database_admin": "protected", "secure_data_crud": True}])

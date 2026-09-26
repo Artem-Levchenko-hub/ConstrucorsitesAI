@@ -350,41 +350,40 @@ it("replaces a rejected old reprepare with a fresh intent for the current operat
   }));
   expect(vi.mocked(api.prepareRestoration).mock.calls[0][1].idempotency_key).not.toBe(oldKey);
 });
-it.each(["cancelled", "reconciling"] as const)("starts adaptation only after confirmed cancellation: %s", async (state) => {
+it("passes the explicit historical intent to the cancellation-and-submit owner", async () => {
   const blocked = { ...operation("needs_changes"), can_cancel: true,
     report: { ...operation().report!, blockers: ["new_required_column:contacts.surname"] } };
   vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
   vi.mocked(api.getRestoration).mockResolvedValue(blocked);
-  vi.mocked(api.cancelRestoration).mockResolvedValue(operation(state));
   await render();
   const button = container.querySelector<HTMLButtonElement>('[data-testid="max-restoration-adapt"]');
   expect(button).not.toBeNull();
   await act(async () => button!.click());
-  expect(api.cancelRestoration).toHaveBeenCalledWith("a", "op-a");
-  if (state === "cancelled") {
-    expect(adapt).toHaveBeenCalledOnce();
-    expect(adapt.mock.calls[0][0]).toContain("Сохрани все текущие пользовательские данные");
-    expect(adapt.mock.calls[0][0]).not.toContain("op-a");
-    expect(adapt.mock.calls[0][0]).toContain("Не публикуй приложение");
-    expect(adapt.mock.calls[0][1]).toEqual({
-      operation_id: "op-a", expected_draft_snapshot_id: "s11",
-    });
-  } else expect(adapt).not.toHaveBeenCalled();
+  expect(api.cancelRestoration).not.toHaveBeenCalled();
+  expect(adapt).toHaveBeenCalledOnce();
+  expect(adapt.mock.calls[0][0]).toContain("Сохрани все текущие пользовательские данные");
+  expect(adapt.mock.calls[0][0]).not.toContain("op-a");
+  expect(adapt.mock.calls[0][0]).toContain("Не публикуй приложение");
+  expect(adapt.mock.calls[0][1]).toEqual({
+    operation_id: "op-a", expected_draft_snapshot_id: "s11",
+  });
   expect(api.prepareRestoration).not.toHaveBeenCalled();
   expect(api.applyRestoration).not.toHaveBeenCalled();
 });
-it("does not start a late adaptation request in another project's editor", async () => {
+it("does not forward duplicate clicks while the owner awaits cancellation", async () => {
   const blocked = { ...operation("needs_changes"), can_cancel: true };
   vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [blocked] });
   vi.mocked(api.getRestoration).mockResolvedValue(blocked);
-  let finish!: (value: api.RestoreOperation) => void;
-  vi.mocked(api.cancelRestoration).mockReturnValue(new Promise(resolve => { finish = resolve; }));
+  let finish!: () => void;
+  adapt.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
   await render();
-  await act(async () => container.querySelector<HTMLButtonElement>('[data-testid="max-restoration-adapt"]')!.click());
-  vi.mocked(api.listRestorations).mockResolvedValue({ enabled: true, items: [] });
-  await render("b", "b-head");
-  await act(async () => finish(operation("cancelled")));
-  expect(adapt).not.toHaveBeenCalled();
+  await act(async () => {
+    const button = container.querySelector<HTMLButtonElement>('[data-testid="max-restoration-adapt"]')!;
+    button.click(); button.click();
+  });
+  expect(adapt).toHaveBeenCalledOnce();
+  expect(api.cancelRestoration).not.toHaveBeenCalled();
+  await act(async () => finish());
 });
 it("refuses preparation while this browser has an unfinished publication", async () => {
   localStorage.setItem("omnia:max:launch:a", JSON.stringify({ version: 1, phase: "requesting",

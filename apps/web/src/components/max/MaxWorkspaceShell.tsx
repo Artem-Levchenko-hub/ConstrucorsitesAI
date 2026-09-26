@@ -12,7 +12,9 @@ import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { listProjects } from "@/lib/api/projects";
 import { listProjectVersions, listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
-import type { Project, Snapshot } from "@/lib/api/types";
+import type { Message, Project, Snapshot } from "@/lib/api/types";
+import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { readMaxLaunch } from "@/lib/max-launch-runner";
 import { getMaxJourney } from "@/lib/max-journey";
 import { upsertSnapshotNewest } from "@/lib/snapshot-history";
 import { MaxLaunchPanel } from "./MaxLaunchPanel";
@@ -35,6 +37,7 @@ export function MaxWorkspaceShell({
 }) {
   const adaptationRef = useRef<ChatPanelAdaptationHandle>(null);
   const adaptationPending = useRef(false);
+  const adaptationWait = useRef<AbortController | null>(null);
   const [adaptationSubmitting, setAdaptationSubmitting] = useState(false);
   const adaptation = useMaxAdaptation(project.id);
   const [versionSelection, setVersionSelection] = useState<{
@@ -141,11 +144,26 @@ export function MaxWorkspaceShell({
   const restoration = useMaxRestoration({
     projectId: project.id, currentSnapshotId, onCompleted: applyRestoredSnapshot,
   });
+  useEffect(() => () => {
+    // A live click never survives navigation, a different operation/HEAD, or F5.
+    adaptationWait.current?.abort();
+  }, [project.id, currentSnapshotId, restoration.operation?.id]);
 
   async function submitAdaptation(attachment: MaxAdaptationAttachment) {
     if (adaptationPending.current) return;
     adaptationPending.current = true;
     setAdaptationSubmitting(true);
+    const controller = new AbortController();
+    adaptationWait.current = controller;
+    const deadline = window.setTimeout(() => controller.abort(), 30_000);
+    const stillCurrent = () => {
+      const head = queryClient.getQueryData<Snapshot[]>(["snapshots", attachment.projectId])?.[0]?.id ?? currentSnapshotId;
+      const messages = queryClient.getQueryData<Message[]>(["messages", attachment.projectId]);
+      return !controller.signal.aborted
+        && head === attachment.reference.expected_draft_snapshot_id
+        && !isChatMessageStreaming(messages?.[messages.length - 1])
+        && !readMaxLaunch(attachment.projectId);
+    };
     try {
       // A lost cancel response or F5 can leave an intent saved before cancellation.
       // Reconcile that exact operation only on this explicit click, never on mount.
@@ -153,15 +171,34 @@ export function MaxWorkspaceShell({
         toast.error("Черновик изменился. Подготовьте восстановление выбранной версии заново.");
         return;
       }
+      if (!stillCurrent()) {
+        toast.info("Дождитесь завершения текущего запроса или публикации и повторите адаптацию.");
+        return;
+      }
       const reference = attachment.reference;
-      let operation = await getRestoration(attachment.projectId, reference.operation_id);
+      let operation = await getRestoration(attachment.projectId, reference.operation_id, controller.signal);
       const matches = () => operation.id === reference.operation_id
         && operation.project_id === attachment.projectId
         && operation.base_draft_snapshot_id === reference.expected_draft_snapshot_id;
       if (!matches()) throw new Error("Данные подготовки изменились. Подготовьте выбранную версию заново.");
+      if (!stillCurrent()) return;
       if (operation.state !== "cancelled" && operation.can_cancel) {
-        operation = await cancelRestoration(attachment.projectId, reference.operation_id);
+        operation = await cancelRestoration(attachment.projectId, reference.operation_id, controller.signal);
       }
+      while (stillCurrent() && matches() && !operation.error && operation.state === "reconciling" && operation.phase === "cancel") {
+        await new Promise<void>(resolve => {
+          const done = () => {
+            window.clearTimeout(timer);
+            controller.signal.removeEventListener("abort", done);
+            resolve();
+          };
+          const timer = window.setTimeout(done, 2_000);
+          controller.signal.addEventListener("abort", done, { once: true });
+        });
+        if (!stillCurrent()) break;
+        operation = await getRestoration(attachment.projectId, reference.operation_id, controller.signal);
+      }
+      if (!stillCurrent()) return;
       if (!matches() || operation.state !== "cancelled") {
         toast.info("Отмена подготовки ещё не подтверждена. Повторите проверку позже.");
         return;
@@ -180,6 +217,8 @@ export function MaxWorkspaceShell({
     } catch {
       toast.error("Не удалось подтвердить отмену подготовки. Запрос сохранён; повторите попытку.");
     } finally {
+      window.clearTimeout(deadline);
+      if (adaptationWait.current === controller) adaptationWait.current = null;
       adaptationPending.current = false;
       setAdaptationSubmitting(false);
     }

@@ -30,9 +30,39 @@ from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
     _require_project_cell,
 )
+from yleum_api.services.orchestrator_client import RestorationAdaptationWorkspace
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def _preserves_adaptation_database(runtime: GenerationRuntime, ids: GenerationIds) -> bool:
+    handle = runtime.handle
+    receipt = getattr(handle, "restoration_adaptation_workspace", None)
+    read_identity = getattr(handle, "current_identity", None)
+    if not (
+        handle is not None
+        and isinstance(receipt, RestorationAdaptationWorkspace)
+        and callable(getattr(handle, "prove_restoration_adaptation", None))
+        and callable(read_identity)
+        and receipt.project_id == ids.project_id
+        and receipt.owner_id == ids.user_id
+        and receipt.generation_run_id == ids.run_id
+        and receipt.candidate_workspace_id == getattr(handle, "workspace_id", None)
+        and receipt.source_workspace_id == getattr(handle, "control_workspace_id", None)
+    ):
+        return False
+    try:
+        identity = await read_identity()
+        return bool(
+            identity.workspace_id == receipt.candidate_workspace_id
+            and identity.generation_run_id == receipt.generation_run_id
+            and identity.fencing_epoch == receipt.candidate_fencing_epoch
+        )
+    except Exception:
+        # Unknown/stale identity must never exempt a schema diff. The ordinary
+        # migration guard remains active, and promotion still requires proof.
+        return False
 
 
 async def check_backend_and_normalize_css(
@@ -156,6 +186,7 @@ async def check_backend_and_normalize_css(
         _migration_errors = max_migration_contract_errors(
             _migration_baseline,
             _migration_candidate,
+            preserve_current_database=await _preserves_adaptation_database(runtime, ids),
         )
         if _migration_errors:
             await _abort_unsafe_max_backend(

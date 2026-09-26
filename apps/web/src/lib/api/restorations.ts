@@ -90,9 +90,9 @@ export function applyRestoration(projectId: string, operationId: string, payload
     method: "POST", json: payload, timeoutMs: 30_000,
   });
 }
-export function cancelRestoration(projectId: string, operationId: string) {
+export function cancelRestoration(projectId: string, operationId: string, signal?: AbortSignal) {
   return apiFetch<RestoreOperation>(`${path(projectId)}/${operationId}/cancel`, {
-    method: "POST", json: {}, timeoutMs: 30_000,
+    method: "POST", json: {}, timeoutMs: 30_000, ...(signal ? { signal } : {}),
   });
 }
 

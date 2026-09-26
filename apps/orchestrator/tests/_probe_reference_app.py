@@ -165,6 +165,13 @@ class ProbeReferenceApp:
 
         if method == "POST" and not parts:
             payload = json.loads(body or b"{}")
+            reserved = {
+                self._witness.id_column,
+                self._witness.owner_column,
+                self._witness.value_column,
+            }
+            if reserved.intersection(payload.get("values") or {}):
+                return await self._reply(send, 422, {"error": "reserved column"})
             # Ключ уже занят — возможно, чужой записью. Создавать нельзя и
             # подменять владельца нельзя: репетиция проверяет именно это.
             if self._exists(payload["id"]):

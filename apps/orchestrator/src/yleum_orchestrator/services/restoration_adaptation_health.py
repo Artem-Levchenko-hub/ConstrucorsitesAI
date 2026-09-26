@@ -6,11 +6,12 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import html
 import json
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from types import TracebackType
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -600,39 +601,56 @@ class DockerRestorationAdaptationHealthProber:
                         self._item_path(target, witness, entry.item_id),
                         headers=self._headers(context.origin, context.cross_owner_cookie),
                     )
+                    self._require_no_fixture(denied, marker)
                     if denied.status_code != 404:
                         raise CellResourceError("cross-owner business row was visible")
-                    denial_headers = self._headers(
-                        context.origin, context.cross_owner_cookie
-                    )
-                    mutation_responses = (
-                        await client.post(
-                            target.business_probe.endpoint,
-                            json={
-                                "id": entry.item_id,
-                                "entity": witness.entity,
-                                "marker": marker,
-                                "phase": "cross-owner-write",
-                                "values": witness.create_values,
-                            },
-                            headers=denial_headers,
-                        ),
-                        await client.patch(
-                            self._item_path(target, witness, entry.item_id),
-                            json={"phase": "cross-owner-write"},
-                            headers=denial_headers,
-                        ),
-                        await client.delete(
-                            self._item_path(target, witness, entry.item_id),
-                            headers=denial_headers,
-                        ),
-                    )
-                    if any(
-                        response.status_code not in {403, 404, 409}
-                        for response in mutation_responses
+                    denial_headers = self._headers(context.origin, context.cross_owner_cookie)
+                    for method, url, payload in (
+                        ("POST", target.business_probe.endpoint, {
+                            "id": entry.item_id, "entity": witness.entity,
+                            "marker": f"{request.activation_id.hex}:denied-input",
+                            "phase": "cross-owner-write", "values": witness.create_values,
+                        }),
+                        ("PATCH", self._item_path(target, witness, entry.item_id),
+                         {"phase": "cross-owner-write"}),
+                        ("DELETE", self._item_path(target, witness, entry.item_id), None),
                     ):
-                        raise CellResourceError("cross-owner business mutation was admitted")
-                    await self._require_database_item(context, witness, item)
+                        response = await client.request(
+                            method, url, json=payload, headers=denial_headers,
+                        )
+                        self._require_no_fixture(response, marker)
+                        if response.status_code not in {403, 404, 409}:
+                            raise CellResourceError("cross-owner business mutation was admitted")
+                        await self._require_database_item(context, witness, item)
+                    for filtered in (False, True):
+                        params: dict[str, str | int] = {"entity": witness.entity, "limit": 32}
+                        if filtered:
+                            params["marker"] = marker
+                        listing = await client.get(
+                            target.business_probe.endpoint,
+                            params=params,
+                            headers=denial_headers,
+                        )
+                        # A leak may omit marker/ownerId or sit outside items.
+                        self._require_no_fixture(listing, entry.item_id)
+                        if not filtered:
+                            self._require_no_fixture(listing, marker)
+                        self._require_items(
+                            listing,
+                            target=target,
+                            witness=witness,
+                            owner_id=context.cross_owner_id,
+                            require_complete=filtered,
+                        )
+                        await self._require_database_item(context, witness, item)
+                    await self._verify_owner_spoof(
+                        client,
+                        request,
+                        context,
+                        target,
+                        witness,
+                        item,
+                    )
             return self._evidence(
                 request,
                 target,
@@ -648,7 +666,192 @@ class DockerRestorationAdaptationHealthProber:
         except Exception:
             raise CellResourceError("cross-owner denial probe failed") from None
         finally:
-            await self._cleanup(request, context, target, created)
+            async with asyncio.timeout(_PROBE_CLEANUP_TIMEOUT_SECONDS):
+                for entry in created:
+                    await self._cleanup_scoped_fixture(
+                        request, context, target, entry,
+                        alternates=(
+                            replace(entry, phase="cross-owner-write"),
+                            replace(entry, marker=f"{request.activation_id.hex}:denied-input",
+                                    phase="cross-owner-write"),
+                        ),
+                    )
+
+    @staticmethod
+    def _require_no_fixture(response: httpx.Response, *private_values: str) -> None:
+        # Bodies are already bounded. Decode escapes only in RAM; never include
+        # response content or fixture identifiers in exceptions/evidence.
+        texts = [html.unescape(response.text)]
+        try:
+            texts.append(json.dumps(response.json(), ensure_ascii=False))
+        except ValueError:
+            pass
+        if any(value in text for value in private_values for text in texts):
+            raise CellResourceError("business denial response exposed a protected fixture")
+
+    async def _cleanup_scoped_fixture(
+        self,
+        request: _ProbeRequest,
+        context: _ProbeContext,
+        target: ActivationHealthTarget,
+        entry: _PendingReload,
+        *,
+        alternates: tuple[_PendingReload, ...] = (),
+    ) -> None:
+        async with asyncio.timeout(_PROBE_CLEANUP_TIMEOUT_SECONDS):
+            observed = await self._database_reader(context.backend, entry.witness, entry.item_id)
+            if observed is None:
+                return
+            if (
+                observed.get("id") != entry.item_id
+                or observed.get("ownerId") not in {context.owner_id, context.cross_owner_id}
+            ):
+                raise CellResourceError("owner spoof fixture cleanup identity changed")
+            matched = next(
+                (candidate for candidate in (entry, *alternates)
+                 if observed.get("value") == f"{candidate.marker}:{candidate.phase}"),
+                None,
+            )
+            if matched is None:
+                raise CellResourceError("owner spoof fixture cleanup value changed")
+            entry = matched
+            if observed["ownerId"] == context.cross_owner_id:
+                context = replace(
+                    context,
+                    owner_id=context.cross_owner_id,
+                    owner_cookie=context.cross_owner_cookie,
+                    cross_owner_id=context.owner_id,
+                    cross_owner_cookie=context.owner_cookie,
+                )
+            await self._cleanup(request, context, target, [entry])
+
+    async def _verify_owner_spoof(
+        self,
+        client: _BoundedHttpClient,
+        request: _ProbeRequest,
+        context: _ProbeContext,
+        target: ActivationHealthTarget,
+        witness: ActivationBusinessWitness,
+        protected_item: Mapping[str, object],
+    ) -> None:
+        reverse = replace(
+            context,
+            owner_id=context.cross_owner_id,
+            owner_cookie=context.cross_owner_cookie,
+            cross_owner_id=context.owner_id,
+            cross_owner_cookie=context.owner_cookie,
+        )
+        for direction, actor in enumerate((context, reverse)):
+            patches: list[dict[str, object]] = [{"ownerId": actor.cross_owner_id}]
+            # Arbitrary SQL column names may collide with v1 envelope fields.
+            # In that case exercise the column in values, keeping valid input.
+            if witness.owner_column not in {"ownerId", "id", "entity", "marker", "phase", "values"}:
+                patches.append({witness.owner_column: actor.cross_owner_id})
+            patches.append(
+                {
+                    "values": {
+                        **witness.create_values,
+                        witness.owner_column: actor.cross_owner_id,
+                    }
+                }
+            )
+            for index, fields in enumerate(patches):
+                purpose = f"spoof-{direction}-{index}"
+                item_id = self._fixture_id(request, witness, purpose)
+                marker = f"{request.activation_id.hex}:{purpose}:{witness.entity}"
+                entry = _PendingReload(witness, item_id, marker, "created")
+                # Recover only this deterministic fixture under either test actor.
+                await self._cleanup_scoped_fixture(request, actor, target, entry)
+                expected = {
+                    "id": item_id,
+                    "ownerId": actor.owner_id,
+                    "entity": witness.entity,
+                    "marker": marker,
+                    "phase": "created",
+                }
+                try:
+                    response = await client.post(
+                        target.business_probe.endpoint,
+                        json={
+                            "id": item_id,
+                            "entity": witness.entity,
+                            "marker": marker,
+                            "phase": "created",
+                            "values": witness.create_values,
+                            **fields,
+                        },
+                        headers=self._headers(actor.origin, actor.owner_cookie),
+                    )
+                    # Validation may echo attacker input. The protected row's
+                    # marker is different and was not submitted in this request.
+                    self._require_no_fixture(response, str(protected_item["marker"]))
+                    if response.status_code == 201:
+                        self._require_item(
+                            response,
+                            expected_status=201,
+                            target=target,
+                            witness=witness,
+                            owner_id=actor.owner_id,
+                            item_id=item_id,
+                            marker=marker,
+                            phase="created",
+                        )
+                        await self._require_database_item(actor, witness, expected)
+                    else:
+                        if response.status_code not in {400, 403, 409, 422}:
+                            raise CellResourceError("owner spoof creation was not safely handled")
+                        await self._require_database_item(actor, witness, expected, present=False)
+                        await self._create_item(
+                            client,
+                            context=actor,
+                            target=target,
+                            witness=witness,
+                            item_id=item_id,
+                            marker=marker,
+                            phase="created",
+                        )
+                        await self._require_database_item(actor, witness, expected)
+                    await self._require_database_item(context, witness, protected_item)
+                    response = await client.patch(
+                        self._item_path(target, witness, item_id),
+                        json={"phase": "created", **fields},
+                        headers=self._headers(actor.origin, actor.owner_cookie),
+                    )
+                    self._require_no_fixture(response, str(protected_item["marker"]))
+                    if response.status_code == 200:
+                        self._require_item(
+                            response,
+                            expected_status=200,
+                            target=target,
+                            witness=witness,
+                            owner_id=actor.owner_id,
+                            item_id=item_id,
+                            marker=marker,
+                            phase="created",
+                        )
+                    elif response.status_code not in {400, 403, 409, 422}:
+                        raise CellResourceError("owner spoof update was not safely handled")
+                    await self._require_database_item(actor, witness, expected)
+                    await self._require_database_item(context, witness, protected_item)
+                    # A route may ignore owner claims on its own row yet trust
+                    # a victim-owner claim when another actor PATCHes that row.
+                    claims = {
+                        key: ({**witness.create_values, witness.owner_column: actor.owner_id}
+                              if key == "values" else actor.owner_id)
+                        for key in fields
+                    }
+                    response = await client.patch(
+                        self._item_path(target, witness, item_id),
+                        json={"phase": "created", **claims},
+                        headers=self._headers(actor.origin, actor.cross_owner_cookie),
+                    )
+                    self._require_no_fixture(response, marker)
+                    if response.status_code not in {400, 403, 404, 409, 422}:
+                        raise CellResourceError("foreign owner claim was not denied")
+                    await self._require_database_item(actor, witness, expected)
+                    await self._require_database_item(context, witness, protected_item)
+                finally:
+                    await self._cleanup_scoped_fixture(request, actor, target, entry)
 
     async def verify_unauthenticated_denial(
         self,
@@ -656,15 +859,33 @@ class DockerRestorationAdaptationHealthProber:
         target: ActivationHealthTarget,
     ) -> str:
         context = self._context(request, target)
+        created: list[_PendingReload] = []
         try:
             async with self._client(context.origin, request, target) as client:
                 for witness in target.business_probe.witnesses:
-                    params: dict[str, str | int] = {
-                        "entity": witness.entity,
-                        "limit": 1,
-                    }
+                    protected_id = self._fixture_id(request, witness, "unauth-protected")
+                    marker = f"{request.activation_id.hex}:private:{witness.entity}"
+                    await self._clear_marker_items(
+                        client,
+                        context=context,
+                        target=target,
+                        witness=witness,
+                        marker=marker,
+                        allowed_ids={protected_id},
+                    )
+                    created.append(_PendingReload(witness, protected_id, marker, "created"))
+                    protected = await self._create_item(
+                        client,
+                        context=context,
+                        target=target,
+                        witness=witness,
+                        item_id=protected_id,
+                        marker=marker,
+                        phase="created",
+                    )
+                    await self._require_database_item(context, witness, protected)
                     item_id = self._fixture_id(request, witness, "unauthenticated")
-                    path = self._item_path(target, witness, item_id)
+                    path = self._item_path(target, witness, protected_id)
                     body = {
                         "id": item_id,
                         "entity": witness.entity,
@@ -672,43 +893,38 @@ class DockerRestorationAdaptationHealthProber:
                         "phase": "unauthenticated",
                         "values": witness.create_values,
                     }
-                    responses: list[httpx.Response] = []
-                    for headers in (
-                        None,
-                        self._headers(context.origin, "malformed"),
-                    ):
-                        responses.extend(
-                            [
-                                await client.get(
-                                    target.business_probe.endpoint,
-                                    params=params,
-                                    headers=headers,
-                                ),
-                                await client.post(
-                                    target.business_probe.endpoint,
-                                    json=body,
-                                    headers=headers,
-                                ),
-                                await client.get(path, headers=headers),
-                                await client.patch(
-                                    path,
-                                    json={"phase": "unauthenticated"},
-                                    headers=headers,
-                                ),
-                                await client.delete(path, headers=headers),
-                            ]
-                        )
-                    if any(response.status_code != 401 for response in responses):
-                        raise CellResourceError(
-                            "unauthenticated business access was not denied"
-                        )
-                    absent = await self._database_reader(
-                        context.backend, witness, item_id
-                    )
-                    if absent is not None:
-                        raise CellResourceError(
-                            "unauthenticated business mutation reached the database"
-                        )
+                    list_params: dict[str, str | int] = {"entity": witness.entity, "limit": 1}
+                    for headers in (None, self._headers(context.origin, "malformed")):
+                        for method, url, payload, params in (
+                            (
+                                "GET",
+                                target.business_probe.endpoint,
+                                None,
+                                list_params,
+                            ),
+                            ("POST", target.business_probe.endpoint, body, None),
+                            ("GET", path, None, None),
+                            ("PATCH", path, {"phase": "unauthenticated"}, None),
+                            ("DELETE", path, None, None),
+                        ):
+                            response = await client.request(
+                                method,
+                                url,
+                                json=payload,
+                                params=params,
+                                headers=headers,
+                            )
+                            self._require_no_fixture(response, marker)
+                            if response.status_code != 401:
+                                raise CellResourceError(
+                                    "unauthenticated business access was not denied"
+                                )
+                            await self._require_database_item(context, witness, protected)
+                            absent = await self._database_reader(context.backend, witness, item_id)
+                            if absent is not None:
+                                raise CellResourceError(
+                                    "unauthenticated business mutation reached the database"
+                                )
             return self._evidence(
                 request,
                 target,
@@ -720,7 +936,10 @@ class DockerRestorationAdaptationHealthProber:
         except Exception:
             raise CellResourceError("unauthenticated denial probe failed") from None
         finally:
-            self._suite_deadlines.pop(request.activation_id, None)
+            try:
+                await self._cleanup(request, context, target, created)
+            finally:
+                self._suite_deadlines.pop(request.activation_id, None)
 
     def _context(
         self,

@@ -296,9 +296,9 @@ def _adaptation_work_plan(
     if not lines:
         return ""
     lines.append(
-        "Allowed schema changes: additive only (new nullable columns, new tables, new "
-        "indexes). Never drop or rename an existing column, never run a historical "
-        "migration, never rewrite existing rows."
+        "Adapt code and schema declarations to the existing physical schema. "
+        "Do not add migrations or change the physical schema during this restoration. "
+        "Never run a historical migration or rewrite existing rows."
     )
     block = (
         "\n\nADAPTATION WORK PLAN (server-computed from controller evidence; verify against "
@@ -690,8 +690,11 @@ async def append_adaptation_context(
             "rows, newer columns and field meanings. Never run historical migrations or overwrite "
             "the current database. Use the accepted compatibility report to resolve the actual "
             "blockers; it is historical evidence, so recheck the CURRENT data contract. "
-            "Prefer adapting application code; any necessary schema additions must be additive "
-            "migrations that preserve original values and relationships. "
+            "Adapt application code and schema declarations to the existing physical schema. "
+            "Do not add migrations or change the physical schema during this restoration: "
+            "the preservation proof requires the current schema and all original values "
+            "and relationships to remain unchanged. A code declaration change alone does "
+            "not require a SQL migration in this controller-confirmed adaptation workspace. "
             "Never guess missing business values or reinterpret units/statuses. "
             "The preservation contract is immutable. Use database tools only against a "
             "controller-confirmed isolated copy; absence of that capability blocks data-changing "

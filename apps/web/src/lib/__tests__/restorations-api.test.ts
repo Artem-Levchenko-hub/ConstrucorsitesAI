@@ -31,3 +31,10 @@ it("cancels the selected operation explicitly", async () => {
     method: "POST", json: {}, timeoutMs: 30_000,
   });
 });
+it("passes the live-click abort signal to cancellation transport", async () => {
+  const signal = new AbortController().signal;
+  await cancelRestoration("project", "operation", signal);
+  expect(apiFetch).toHaveBeenCalledExactlyOnceWith("/api/projects/project/restorations/operation/cancel", {
+    method: "POST", json: {}, timeoutMs: 30_000, signal,
+  });
+});

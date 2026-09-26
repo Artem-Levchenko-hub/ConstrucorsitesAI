@@ -69,7 +69,7 @@ def test_the_plan_names_the_conflict_the_lost_route_and_where_to_start() -> None
     # A file that mentions nothing conflicting is not busywork for the agent.
     assert "src/app/about/page.tsx" not in plan
     assert "Новое обязательное поле" in plan
-    assert "additive only" in plan
+    assert "Do not add migrations or change the physical schema" in plan
 
 
 def test_a_passed_check_is_not_presented_as_work() -> None:

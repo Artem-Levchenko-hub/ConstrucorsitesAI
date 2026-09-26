@@ -1099,6 +1099,35 @@ async def test_adaptation_exposes_candidate_identity_and_post_agent_proof(
     assert harness.adaptation_cleanup_calls == []
 
 
+@pytest.mark.parametrize("adaptation", [False, True])
+async def test_schema_alignment_build_is_allowed_only_in_controller_adaptation(
+    monkeypatch, db_session, test_engine, adaptation,
+):
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine,
+        restoration_adaptation=adaptation,
+        snapshot_files={
+            ".omnia/cell.json": '{"version":1}',
+            "src/lib/db/schema.ts": "subject: text('subject')",
+        },
+        capabilities={"portable_machine": True, "database_admin": "full"},
+    )
+    await harness.handle.execute(Action("write_file", {
+        "path": "src/lib/db/schema.ts", "content": "subject: text('title')",
+    }))
+    try:
+        result = await harness.handle.execute(Action("build", {}))
+        assert result["ok"] is adaptation
+        if adaptation:
+            assert harness.exec_calls
+            assert harness.handle.prove_restoration_adaptation is not None
+        else:
+            assert "MAX migration contract" in result["detail"]
+            assert harness.exec_calls == []
+    finally:
+        await harness.handle.release()
+
+
 async def test_failed_adaptation_candidate_diff_is_cleaned_without_source_write(
     monkeypatch,
     db_session,

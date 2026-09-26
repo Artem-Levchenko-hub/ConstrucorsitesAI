@@ -1277,7 +1277,13 @@ async def maybe_create_project_cell_executor(
                 # работы агента. Иначе недопустимая миграция успевает примениться,
                 # запуск падает позже, версия не публикуется — и остаётся
                 # незаверсионированный след в схеме, который находят последним.
-                _contract = max_migration_contract_errors(baseline_files, workspace_files)
+                _contract = max_migration_contract_errors(
+                    baseline_files,
+                    workspace_files,
+                    # This receipt is created only after the controller has
+                    # established the isolated candidate and verified its lease.
+                    preserve_current_database=adaptation_workspace is not None,
+                )
                 if _contract:
                     return {
                         "ok": False,

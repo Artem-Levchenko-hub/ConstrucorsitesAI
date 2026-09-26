@@ -92,7 +92,7 @@ beforeEach(() => {
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
 });
-afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); });
+afterEach(async () => { await act(async () => root.unmount()); client.clear(); container.remove(); vi.useRealTimers(); });
 
 it("one click cancels preparation then submits the historical reference without touching the typed draft", async () => {
   await render();
@@ -103,7 +103,7 @@ it("one click cancels preparation then submits the historical reference without 
   });
   expect(api.submit).not.toHaveBeenCalled();
   await click("Адаптировать и восстановить");
-  expect(api.cancel).toHaveBeenCalledExactlyOnceWith("a", "operation");
+  expect(api.cancel).toHaveBeenCalledExactlyOnceWith("a", "operation", expect.any(AbortSignal));
   expect(api.submit).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Верни экраны"), "topmix-v1", [], {
     restorationAdaptation: reference, idempotencyKey: "restoration-adapt:operation", skipClarify: true,
   });
@@ -117,6 +117,123 @@ it("uncertain cancellation never sends a model request", async () => {
   await render(); await click("Адаптировать и восстановить");
   expect(api.submit).not.toHaveBeenCalled();
   expect(JSON.parse(localStorage.getItem(key)!).phase).toBe("cancelling");
+});
+
+it("the live click waits for canonical cancellation then submits once without a second click", async () => {
+  api.cancel.mockImplementation(async () => {
+    currentOperation = { ...blocked, state: "reconciling", phase: "cancel", revision: 2, can_cancel: false };
+    return currentOperation;
+  });
+  await render();
+  vi.useFakeTimers();
+  await act(async () => button("Адаптировать и восстановить").click());
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  expect(api.submit).not.toHaveBeenCalled();
+  currentOperation = { ...blocked, state: "cancelled", revision: 3, can_cancel: false };
+  await act(async () => vi.advanceTimersByTimeAsync(2_000));
+  expect(api.submit).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Верни экраны"), "topmix-v1", [], {
+    restorationAdaptation: reference, idempotencyKey: "restoration-adapt:operation", skipClarify: true,
+  });
+  expect(api.cancel).toHaveBeenCalledExactlyOnceWith("a", "operation", expect.any(AbortSignal));
+  expect(localStorage.getItem(key)).toBeNull();
+});
+
+it("bounds a live cancellation wait and leaves explicit retry available without late submission", async () => {
+  api.cancel.mockImplementation(async () => {
+    currentOperation = { ...blocked, state: "reconciling", phase: "cancel", revision: 2, can_cancel: false };
+    return currentOperation;
+  });
+  await render(); vi.useFakeTimers();
+  await act(async () => button("Адаптировать и восстановить").click());
+  expect(button("Повторить запуск адаптации").disabled).toBe(true);
+  await act(async () => vi.advanceTimersByTimeAsync(31_000));
+  // Includes the existing controller's independent status polling, not just
+  // the explicit-click continuation. Neither lane may poll without a bound here.
+  expect(api.detail.mock.calls.length).toBeLessThanOrEqual(34);
+  expect(button("Повторить запуск адаптации").disabled).toBe(false);
+  expect(api.submit).not.toHaveBeenCalled();
+  expect(api.cancel).toHaveBeenCalledTimes(1);
+  expect(localStorage.getItem(key)).not.toBeNull();
+  currentOperation = { ...blocked, state: "cancelled", revision: 3, can_cancel: false };
+  await act(async () => vi.advanceTimersByTimeAsync(30_000));
+  expect(api.submit).not.toHaveBeenCalled();
+});
+
+it("the single deadline also aborts a pending cancel POST after a slow initial status read", async () => {
+  await render(); vi.useFakeTimers();
+  api.detail.mockImplementation(async (_project, _operation, signal?: AbortSignal) => {
+    if (signal) await new Promise(resolve => setTimeout(resolve, 14_000));
+    return currentOperation;
+  });
+  api.cancel.mockImplementation((_project, _operation, signal?: AbortSignal) => new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => reject(new Error("request aborted")), { once: true });
+  }));
+  await act(async () => button("Адаптировать и восстановить").click());
+  await act(async () => vi.advanceTimersByTimeAsync(14_000));
+  expect(api.cancel).toHaveBeenCalledTimes(1);
+  expect(button("Повторить запуск адаптации").disabled).toBe(true);
+  await act(async () => vi.advanceTimersByTimeAsync(16_000));
+  expect(button("Повторить запуск адаптации").disabled).toBe(false);
+  expect(api.submit).not.toHaveBeenCalled();
+  expect(localStorage.getItem(key)).not.toBeNull();
+});
+
+it.each(["head", "project", "operation", "unmount", "generation", "publication"])(
+  "does not continue asynchronous cancellation after %s changes", async change => {
+    api.cancel.mockImplementation(async () => {
+      currentOperation = { ...blocked, state: "reconciling", phase: "cancel", revision: 2, can_cancel: false };
+      return currentOperation;
+    });
+    await render(); vi.useFakeTimers();
+    await act(async () => button("Адаптировать и восстановить").click());
+    if (change === "head") {
+      await act(async () => client.setQueryData(["snapshots", "a"], [{ id: "different-head", project_id: "a" }]));
+    } else if (change === "project") {
+      api.list.mockResolvedValue({ enabled: true, items: [] });
+      api.snapshots.mockResolvedValue([{ id: "head-b", project_id: "b" }]);
+      await act(async () => root.render(<QueryClientProvider client={client}>
+        <MaxWorkspaceShell project={{ ...project, id: "b", current_snapshot_id: "head-b" }} email="" />
+      </QueryClientProvider>));
+    } else if (change === "operation") {
+      currentOperation = { ...blocked, id: "different-operation" };
+      await act(async () => {
+        client.setQueryData(["restoration-selection", "a"], currentOperation.id);
+        client.setQueryData(["restoration", "a", currentOperation.id], currentOperation);
+      });
+    } else if (change === "unmount") {
+      await act(async () => root.unmount()); client.clear(); root = createRoot(container);
+    } else if (change === "generation") {
+      await act(async () => client.setQueryData(["messages", "a"], [{
+        id: "active", role: "assistant", content: "", generation_status: "running", tokens_out: null,
+      } as unknown as Message]));
+    } else {
+      localStorage.setItem("omnia:max:launch:a", JSON.stringify({
+        version: 1, phase: "requesting", idempotencyKey: "publish", runId: null, paused: false, deadlineAt: Date.now() + 60_000,
+      }));
+    }
+    currentOperation = { ...blocked, state: "cancelled", revision: 3, can_cancel: false };
+    await act(async () => vi.advanceTimersByTimeAsync(4_000));
+    expect(api.submit).not.toHaveBeenCalled();
+    expect(localStorage.getItem(key)).not.toBeNull();
+  },
+);
+
+it.each(["error", "failed", "wrong-binding"])("keeps the saved intent when cancellation confirmation is %s", async outcome => {
+  api.cancel.mockImplementation(async () => {
+    currentOperation = { ...blocked, state: "reconciling", phase: "cancel", revision: 2, can_cancel: false };
+    return currentOperation;
+  });
+  await render(); vi.useFakeTimers();
+  await act(async () => button("Адаптировать и восстановить").click());
+  api.detail.mockImplementation(async () => {
+    if (outcome === "error") throw new Error("status unavailable");
+    return { ...blocked, state: outcome === "failed" ? "failed" : "cancelled",
+      base_draft_snapshot_id: outcome === "wrong-binding" ? "different-head" : "head" };
+  });
+  await act(async () => vi.advanceTimersByTimeAsync(4_000));
+  expect(api.submit).not.toHaveBeenCalled();
+  expect(button("Повторить запуск адаптации").disabled).toBe(false);
+  expect(localStorage.getItem(key)).not.toBeNull();
 });
 
 it("saves intent before cancellation and recovers after F5 only when the user explicitly retries", async () => {
@@ -152,7 +269,7 @@ it("saved intent explicitly retries an unfinished cancellable preparation before
   await render();
   expect(api.cancel).not.toHaveBeenCalled(); expect(api.submit).not.toHaveBeenCalled();
   await click("Повторить запуск адаптации");
-  expect(api.cancel).toHaveBeenCalledExactlyOnceWith("a", "operation");
+  expect(api.cancel).toHaveBeenCalledExactlyOnceWith("a", "operation", expect.any(AbortSignal));
   expect(api.submit).toHaveBeenCalledTimes(1);
   expect(api.cancel.mock.invocationCallOrder[0]).toBeLessThan(api.submit.mock.invocationCallOrder[0]);
 });

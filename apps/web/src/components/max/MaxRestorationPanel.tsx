@@ -184,7 +184,9 @@ export function MaxRestorationPanel({ restoration: r, onPrepareAdapt, onAdapt }:
                 expected_draft_snapshot_id: baseSnapshotId,
               };
               if (onPrepareAdapt && !onPrepareAdapt(prompt, reference)) return;
-              if (await r.cancel() && scope.current === ticket) await onAdapt(prompt, reference);
+              // The explicit-click owner waits for asynchronous cancellation;
+              // a nonterminal cancel response must not discard this live intent.
+              if (scope.current === ticket) await onAdapt(prompt, reference);
             } finally {
               adaptationPending.current = false;
               setAdapting(false);

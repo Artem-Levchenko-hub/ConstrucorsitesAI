@@ -290,12 +290,17 @@ def _normalized_source(
 def max_migration_contract_errors(
     before: Mapping[str, str],
     after: Mapping[str, str],
+    *,
+    preserve_current_database: bool = False,
 ) -> tuple[str, ...]:
     """Return fail-closed MAX migration violations for one candidate diff.
 
     The finalization caller supplies the accepted baseline and complete candidate
     source maps.  This function is intentionally pure so generation can reject an
     unsafe candidate before it is promoted or described as compatible.
+    Controller-bound restoration adaptation may align code declarations to an
+    existing schema. Its separate isolated-copy proof still forbids changes to
+    physical schema or data; no migration/runner protections are exempted here.
     """
 
     normalized_before, before_errors = _normalized_source(before, label="baseline")
@@ -376,7 +381,7 @@ def max_migration_contract_errors(
                     )
     if _CANONICAL_RUNNER in changed:
         errors.append(f"{_CANONICAL_RUNNER} is platform-owned and must not be changed")
-    if _SCHEMA_PATH in changed and not new_canonical:
+    if _SCHEMA_PATH in changed and not new_canonical and not preserve_current_database:
         errors.append(f"{_SCHEMA_PATH} changed without a new canonical drizzle/*.sql migration")
     return tuple(errors)
 

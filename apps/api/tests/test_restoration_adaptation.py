@@ -14,6 +14,15 @@ from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.message import RestorationAdaptationReference
 
 
+def test_adaptation_work_plan_does_not_authorize_physical_schema_changes():
+    from yleum_api.services.restoration_adaptation import _adaptation_work_plan
+
+    plan = _adaptation_work_plan({"blockers": ["qa_notes.subject is absent"]}, None, {})
+    assert "Adapt code and schema declarations" in plan
+    assert "Do not add migrations or change the physical schema" in plan
+    assert "Allowed schema changes: additive" not in plan
+
+
 def test_restoration_probe_source_contract_accepts_real_qa_tasks_shape() -> None:
     from yleum_api.services.restoration_adaptation import restoration_probe_source_gap
 
