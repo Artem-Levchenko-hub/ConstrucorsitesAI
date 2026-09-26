@@ -73,6 +73,13 @@ _HTTP_TIMEOUT_S = 300.0
 # _CALL_RETRY_WINDOW_S), and a wall-clock ceiling so a provider that accepts the
 # connection and then hangs cannot eat the whole generation deadline on one step.
 _CALL_RETRIES = 7
+# Ключ, который в этом прогоне уже отвечал 200, отказом 401 себя не опровергает:
+# 26.09.2026 прогон 5fdae5f1 получил отказ через 23 секунды после 33-го успешного
+# вызова, 25.09 прогон 0a058f14 — через 4 секунды после 64-го. Оба раза платформа
+# объявляла ключ отклонённым и выбрасывала всю работу. Такой отказ переспрашиваем.
+_AUTH_RETRIES_AFTER_SUCCESS = 2
+_AUTH_RETRY_DELAY_S = 5.0
+_RUNS_WITH_A_LIVE_KEY: set[str] = set()
 _CALL_RETRY_WINDOW_S = 210.0
 # The first verified MAX production loop completed a five-screen product inside
 # one 40-turn transcript. Keep that headroom so callers do not need a second
@@ -776,6 +783,7 @@ async def _call_messages(
     if user_id:
         payload["user"] = user_id
     last: Exception | None = None
+    auth_attempt = 0
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     for attempt in range(_CALL_RETRIES):
@@ -818,10 +826,25 @@ async def _call_messages(
             # FAST with a human cause instead of grinding 8 backoff retries and
             # surfacing an opaque "соединение потеряно" 3+ minutes later.
             if r.status_code in {401, 403}:
-                raise RuntimeError(
-                    "PROVIDER_AUTH_FAILED: провайдер модели отклонил ключ доступа; "
-                    "проверьте блокировку и разрешения ключа."
+                proven = bool(run_id) and str(run_id) in _RUNS_WITH_A_LIVE_KEY
+                refusal = RuntimeError(
+                    "PROVIDER_AUTH_FAILED: провайдер модели отклонил ключ доступа"
+                    + (
+                        "; в этом запуске ключ до отказа работал, так что дело скорее "
+                        "в провайдере, чем в самом ключе — повторите запрос."
+                        if proven
+                        else "; проверьте блокировку и разрешения ключа."
+                    )
                 )
+                if proven and auth_attempt < _AUTH_RETRIES_AFTER_SUCCESS:
+                    # Этот ключ только что работал, значит «отклонён» — не про него.
+                    # Если общие попытки кончатся раньше, наружу должен уйти именно
+                    # этот текст, а не служебная отметка о повторе.
+                    auth_attempt += 1
+                    last = refusal
+                    await asyncio.sleep(_AUTH_RETRY_DELAY_S * auth_attempt)
+                    continue
+                raise refusal
             if r.status_code == 402:
                 raise RuntimeError(
                     "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
@@ -835,6 +858,11 @@ async def _call_messages(
                 body = r.json()
                 if not isinstance(body, dict):
                     raise RuntimeError("messages API returned a non-object payload")
+                if run_id:
+                    # Набор живёт в долгом процессе воркера — держим его маленьким.
+                    if len(_RUNS_WITH_A_LIVE_KEY) > 512:
+                        _RUNS_WITH_A_LIVE_KEY.clear()
+                    _RUNS_WITH_A_LIVE_KEY.add(str(run_id))
                 return body
         except httpx.HTTPError as exc:
             # The provider flakes in SUSTAINED bursts. Live on 2026-09-22 a plain
