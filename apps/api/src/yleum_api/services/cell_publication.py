@@ -350,7 +350,7 @@ async def submit_publication(
 ) -> dict[str, Any]:
     if workspace is None:
         _unproven("workspace_missing")
-    if project.template != "max_miniapp" or project.deploy_target_id is not None:
+    if project.template != "max_miniapp":
         raise ApiError("conflict", "Project Cell публикуется на изолированном хостинге Yleum", 409)
     await project_cell_runtime._try_preview_project_lock(session, project.id)
     await session.refresh(project)

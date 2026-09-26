@@ -22,10 +22,11 @@ uv run alembic upgrade head
 uv run uvicorn yleum_api.main:app --reload --port 8000
 ```
 
-Воркер preview-рендера в отдельном терминале:
+Фоновый процесс платформы (сердцебиение, подписки, уборка, досведение восстановлений)
+в отдельном терминале:
 
 ```bash
-uv run rq worker omnia-previews
+uv run python -m yleum_api.workers.run
 ```
 
 ## Env
@@ -48,7 +49,7 @@ uv run rq worker omnia-previews
 
 ```bash
 uv run uvicorn yleum_api.main:app --reload --port 8000
-uv run rq worker omnia-previews
+uv run python -m yleum_api.workers.run
 uv run alembic revision --autogenerate -m "msg"
 uv run alembic upgrade head
 uv run pytest -q

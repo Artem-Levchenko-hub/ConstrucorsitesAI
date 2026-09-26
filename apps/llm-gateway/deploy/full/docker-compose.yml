@@ -270,10 +270,6 @@ services:
       RESTORATION_ADAPTATION_ACTIVATION_SECONDS: ${RESTORATION_ADAPTATION_ACTIVATION_SECONDS:-2400}
       PROJECT_CELL_HEARTBEAT_SECONDS: ${PROJECT_CELL_HEARTBEAT_SECONDS:-15}
       PROJECT_CELL_WATCHDOG_GRACE_SECONDS: ${PROJECT_CELL_WATCHDOG_GRACE_SECONDS:-20}
-      GITHUB_CLIENT_ID: ${GITHUB_CLIENT_ID:-}
-      GITHUB_CLIENT_SECRET: ${GITHUB_CLIENT_SECRET:-}
-      GITHUB_CALLBACK_URL: ${GITHUB_CALLBACK_URL:-}
-      GITHUB_OAUTH_SCOPE: ${GITHUB_OAUTH_SCOPE:-repo}
       WEB_BASE_URL: ${WEB_BASE_URL:-https://constructor.lead-generator.ru}
       INTEGRATION_OAUTH_CALLBACK_BASE_URL: ${INTEGRATION_OAUTH_CALLBACK_BASE_URL:-https://constructor.lead-generator.ru/api/integrations/oauth}
       INTEGRATION_YOOKASSA_CLIENT_ID: ${INTEGRATION_YOOKASSA_CLIENT_ID:-}
@@ -335,36 +331,26 @@ services:
       # Phase 11 — freeform generation + acceptance gate (all OFF by default;
       # flip in .env to roll out, catalog/IR stays the safe fallback).
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
-      USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
-      USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
-      USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
       # Native tool-use agent: one Gemini Custom Tools pass end-to-end with
       # structured tools and fact gates. Flip in .env.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
-      USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
       # Image-gen kill switch — set false on prod while the gpt-image upstream is
       # dead, so builds don't stall on per-image timeouts (image_resolver strips
       # data-omnia-gen tags fast and the CSS/mesh fallback shows instead).
       USE_IMAGE_GEN: ${USE_IMAGE_GEN:-true}
-      USE_HERO_MEDIA_MVP: ${USE_HERO_MEDIA_MVP:-false}
-      HERO_MEDIA_STUB_MODE: ${HERO_MEDIA_STUB_MODE:-false}
       IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-pro}
-      ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
-      ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
       # SCORE-ONLY (owner 2026-06-02): ship the rich freeform page + publish the
       # vision verdict, but NEVER discard it for the worse catalog fallback. The
       # catalog path emits no data-omnia-gen images, so the fallback shipped
       # image-less template pages. WITHOUT this passthrough line the .env value is
       # ignored (compose only injects keys listed here) and score-only never armed.
-      ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
       # Repair spend floor (2026-06-07, cost): a repair re-roll runs ONLY when
       # the page is genuinely deficient (structural/responsive fail, "broken"
       # vision verdict, or vision score < this). Borderline pages (score in
       # [floor, min_score)) ship attempt-0 — kills the ~37%-of-build reflexive
       # repair that fired on ~100% of builds. Set =7 to restore old behaviour.
-      ACCEPTANCE_REPAIR_FLOOR: ${ACCEPTANCE_REPAIR_FLOOR:-5}
       # PIPELINE DEBUG (owner 2026-06-03, temporary forensics): when DUMP=true,
       # write each pass's RAW output (system prompt, art-director brief, writer
       # HTML, vision verdict) to PIPELINE_DEBUG_DIR/<project>/<message>/ so we can
@@ -373,8 +359,6 @@ services:
       PIPELINE_DEBUG_DUMP: ${PIPELINE_DEBUG_DUMP:-false}
       PIPELINE_DEBUG_DIR: ${PIPELINE_DEBUG_DIR:-/tmp/omnia-pp}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
-      USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
-      ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
       FREEFORM_TRAFFIC_PCT: ${FREEFORM_TRAFFIC_PCT:-100}
       # RT-1 result-type router (landing|web_app|tool|site|code) on the FIRST
       # prompt — all DARK, default OFF = legacy keyword nets only. Flip the
@@ -384,34 +368,8 @@ services:
       RESULT_TYPE_LANDING_LEAD_SINK: ${RESULT_TYPE_LANDING_LEAD_SINK:-false}
       RESULT_TYPE_FIRSTBUILD_APPIFY: ${RESULT_TYPE_FIRSTBUILD_APPIFY:-false}
       RESULT_TYPE_CLARIFY_QUESTION: ${RESULT_TYPE_CLARIFY_QUESTION:-false}
-      # Taste barrier (область T) — vision verdict re-gates passed + generic→repair.
-      # DARK; flip VISION_BLOCK only together with TASTE_REPAIR_ON_GENERIC + PASSES>=1.
-      ACCEPTANCE_VISION_BLOCK_ENABLED: ${ACCEPTANCE_VISION_BLOCK_ENABLED:-false}
-      ACCEPTANCE_TASTE_REPAIR_ON_GENERIC: ${ACCEPTANCE_TASTE_REPAIR_ON_GENERIC:-false}
-      ACCEPTANCE_TASTE_REPAIR_PASSES: ${ACCEPTANCE_TASTE_REPAIR_PASSES:-0}
-      # Area D (anti-sameness) — composition-gate retune + diversity metric +
-      # softened catalog fallback. Demote the deviation-punishing checks to advisory
-      # (still surface, never block/repair) so diverse layouts stop being funnelled
-      # into one silhouette; ORIGINALITY_SHADOW logs the cross-project dHash distance
-      # without blocking; GATE_REPAIR_PASSES budgets a freeform repair-with-feedback
-      # re-roll before the catalog fallback. All default = today's hard floor.
-      GATE_HIERARCHY_ADVISORY_CHECKS: ${GATE_HIERARCHY_ADVISORY_CHECKS:-}
-      GATE_TASTE_ADVISORY_CHECKS: ${GATE_TASTE_ADVISORY_CHECKS:-}
-      GATE_TASTE_MIN_SCORE: ${GATE_TASTE_MIN_SCORE:-4}
-      GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
-      ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
-      ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
-      # App self-repair loop (verify→fix). 0 = OFF (card-only, today);
-      # N>0 = probe live container for a real compile/runtime error → app_doctor
-      # Gemini fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
-      APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
-      # Feature scaffolding for container apps: "add a section/form/entity" gets the
-      # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
-      # connected feature (not a half-built page). 0/false = OFF (today).
-      USE_FEATURE_SCAFFOLD: ${USE_FEATURE_SCAFFOLD:-false}
-      # Agentic builder (Phase 0): container first-builds run a real
-      # plan→act→observe→verify agent loop (file tools + typecheck) instead of
-      # one-shot generation. false = today's pipeline (byte-identical).
+      # Agentic builder: сборка идёт агентным циклом план→действие→проверка.
+      # Единственный сборщик с этапа 4а — выключать нечем и незачем.
       USE_AGENTIC_BUILDER: ${USE_AGENTIC_BUILDER:-true}
       # Versioned, project-scoped memory is the production default. Current repo
       # state remains authoritative and every rendered memory block is bounded.
@@ -436,11 +394,6 @@ services:
       # canonical public preview host from inside docker (e.g.
       # "MAP *.preview.lead-generator.ru 172.21.0.1" → host nginx bridge gateway).
       GATE_PREVIEW_RESOLVER_RULES: ${GATE_PREVIEW_RESOLVER_RULES:-}
-      # Reference ceiling ratchet (область R) — continuous richness-score floor vs
-      # the curated enterprise corpus. DARK; needs ACCEPTANCE_GAUNTLET_REFERENCE_GATE on too.
-      ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
-      REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
-      REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
     ports:
       - "127.0.0.1:${API_HOST_PORT:-8200}:8000"
     healthcheck:
@@ -568,36 +521,26 @@ services:
       FORCE_MODEL: ${FORCE_MODEL:-}
       # Phase 11 — freeform generation + acceptance gate (all OFF by default).
       USE_FREEFORM_RENDER: ${USE_FREEFORM_RENDER:-false}
-      USE_ACCEPTANCE_GATE: ${USE_ACCEPTANCE_GATE:-false}
-      USE_VISION_AUDIT: ${USE_VISION_AUDIT:-false}
-      USE_DESIGN_JUDGE: ${USE_DESIGN_JUDGE:-false}
       # Native tool-use agent: one Gemini Custom Tools pass end-to-end with
       # structured tools and fact gates. Flip in .env.
       USE_NATIVE_AGENT: ${USE_NATIVE_AGENT:-0}
       # In-app Windows installer build (PyInstaller/Wine → NSIS Setup.exe). Default
       # off; the api+worker both need it so the gated endpoint + RQ job activate.
-      USE_EXE_BUILD: ${USE_EXE_BUILD:-false}
       # Image-gen kill switch — set false on prod while the gpt-image upstream is
       # dead, so builds don't stall on per-image timeouts (image_resolver strips
       # data-omnia-gen tags fast and the CSS/mesh fallback shows instead).
       USE_IMAGE_GEN: ${USE_IMAGE_GEN:-true}
-      USE_HERO_MEDIA_MVP: ${USE_HERO_MEDIA_MVP:-false}
-      HERO_MEDIA_STUB_MODE: ${HERO_MEDIA_STUB_MODE:-false}
       IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-img-flux/flux-2-pro}
-      ACCEPTANCE_MAX_RETRIES: ${ACCEPTANCE_MAX_RETRIES:-2}
-      ACCEPTANCE_MIN_SCORE: ${ACCEPTANCE_MIN_SCORE:-7}
       # SCORE-ONLY (owner 2026-06-02): ship the rich freeform page + publish the
       # vision verdict, but NEVER discard it for the worse catalog fallback. The
       # catalog path emits no data-omnia-gen images, so the fallback shipped
       # image-less template pages. WITHOUT this passthrough line the .env value is
       # ignored (compose only injects keys listed here) and score-only never armed.
-      ACCEPTANCE_SCORE_ONLY: ${ACCEPTANCE_SCORE_ONLY:-false}
       # Repair spend floor (2026-06-07, cost): a repair re-roll runs ONLY when
       # the page is genuinely deficient (structural/responsive fail, "broken"
       # vision verdict, or vision score < this). Borderline pages (score in
       # [floor, min_score)) ship attempt-0 — kills the ~37%-of-build reflexive
       # repair that fired on ~100% of builds. Set =7 to restore old behaviour.
-      ACCEPTANCE_REPAIR_FLOOR: ${ACCEPTANCE_REPAIR_FLOOR:-5}
       # PIPELINE DEBUG (owner 2026-06-03, temporary forensics): when DUMP=true,
       # write each pass's RAW output (system prompt, art-director brief, writer
       # HTML, vision verdict) to PIPELINE_DEBUG_DIR/<project>/<message>/ so we can
@@ -606,45 +549,28 @@ services:
       PIPELINE_DEBUG_DUMP: ${PIPELINE_DEBUG_DUMP:-false}
       PIPELINE_DEBUG_DIR: ${PIPELINE_DEBUG_DIR:-/tmp/omnia-pp}
       # Sprint 4/5 — anti-generic originality + gradual freeform rollout %.
-      USE_ORIGINALITY: ${USE_ORIGINALITY:-false}
-      ORIGINALITY_MAX_DISTANCE: ${ORIGINALITY_MAX_DISTANCE:-10}
       FREEFORM_TRAFFIC_PCT: ${FREEFORM_TRAFFIC_PCT:-100}
       # V1.6 16/5 — composition gate (taste+hierarchy) on the LIVE entity
       # container. Runs in the worker (on omnia-runtime). Default OFF until the
       # legs are calibrated for real entity apps (16/5b) — see config.py.
-      ACCEPTANCE_ENTITY_COMPOSITION_GATE: ${ACCEPTANCE_ENTITY_COMPOSITION_GATE:-false}
       # Area C — authenticated CABINET gate. When ON the worker logs into the
       # generated app with a seeded operator and scores the real /dashboard + CRUD
       # (full rendered set + @390) instead of the public storefront `/`. DARK;
       # needs the orchestrator's OMNIA_GATE_SEED=1 so a login-able account exists.
-      GATE_AUTHENTICATED_CABINET: ${GATE_AUTHENTICATED_CABINET:-false}
-      GATE_SEED_EMAIL: ${GATE_SEED_EMAIL:-gate@omnia.local}
-      GATE_CABINET_STATES_ADVISORY: ${GATE_CABINET_STATES_ADVISORY:-true}
       # b2: host-resolver rule so the gate browser reaches a generated app's public
       # preview host (canonical Auth.js origin) via the host nginx. Empty = authed
       # path off. E.g. "MAP *.preview.lead-generator.ru 172.21.0.1".
       GATE_PREVIEW_RESOLVER_RULES: ${GATE_PREVIEW_RESOLVER_RULES:-}
       # Reference ceiling ratchet (R) — also read on the worker gauntlet path.
-      ACCEPTANCE_GAUNTLET_REFERENCE_GATE: ${ACCEPTANCE_GAUNTLET_REFERENCE_GATE:-false}
-      REFERENCE_CEILING_ENFORCED: ${REFERENCE_CEILING_ENFORCED:-false}
-      REFERENCE_CEILING_TOLERANCE: ${REFERENCE_CEILING_TOLERANCE:-1}
       # Area D (anti-sameness) — composition-gate retune + diversity metric +
       # softened catalog fallback. Also read on the worker gauntlet path (entity
       # composition legs + the diversity metric). All default = today's hard floor.
-      GATE_HIERARCHY_ADVISORY_CHECKS: ${GATE_HIERARCHY_ADVISORY_CHECKS:-}
-      GATE_TASTE_ADVISORY_CHECKS: ${GATE_TASTE_ADVISORY_CHECKS:-}
-      GATE_TASTE_MIN_SCORE: ${GATE_TASTE_MIN_SCORE:-4}
-      GATE_HIERARCHY_MIN_SCORE: ${GATE_HIERARCHY_MIN_SCORE:-2}
-      ORIGINALITY_SHADOW: ${ORIGINALITY_SHADOW:-false}
-      ACCEPTANCE_GATE_REPAIR_PASSES: ${ACCEPTANCE_GATE_REPAIR_PASSES:-0}
       # App self-repair loop (verify→fix). 0 = OFF (card-only, today);
       # N>0 = probe live container for a real compile/runtime error → app_doctor
       # Gemini fixes → hot-reload → re-probe, up to N, then follow-up snapshot.
-      APP_SELF_REPAIR_PASSES: ${APP_SELF_REPAIR_PASSES:-0}
       # Feature scaffolding for container apps: "add a section/form/entity" gets the
       # entity-JSON + CrudResource + nav-wiring contract so DeepSeek ships a complete,
       # connected feature (not a half-built page). 0/false = OFF (today).
-      USE_FEATURE_SCAFFOLD: ${USE_FEATURE_SCAFFOLD:-false}
       # Agentic builder (Phase 0): container first-builds run a real
       # plan→act→observe→verify agent loop (file tools + typecheck) instead of
       # one-shot generation. false = today's pipeline (byte-identical).

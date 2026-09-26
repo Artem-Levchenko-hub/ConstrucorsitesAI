@@ -57,7 +57,7 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
               <dt>Мест в команде</dt>
               <dd>{limit(plan.entitlements.team_seats)}</dd>
             </div>
-            {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"], ["custom_domains", "Своих доменов"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
+            {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
               <dt>{label}</dt>
               <dd>{limit(plan.entitlements[key])}</dd>
             </div>)}

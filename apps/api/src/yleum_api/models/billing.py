@@ -41,7 +41,6 @@ ENTITLEMENT_LIMIT_KEYS: Final[tuple[str, ...]] = (
     "static_publish_slots",
     "always_on_slots",
     "team_seats",
-    "custom_domains",
 )
 ENTITLEMENT_FLAG_KEYS: Final[tuple[str, ...]] = ("integrations",)
 
@@ -59,7 +58,6 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "static_publish_slots": 0,
             "always_on_slots": 0,
             "team_seats": 1,
-            "custom_domains": 0,
             "integrations": False,
             "preview_idle_minutes": 15,
         },
@@ -79,7 +77,6 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "static_publish_slots": None,
             "always_on_slots": 0,
             "team_seats": 1,
-            "custom_domains": 0,
             "integrations": True,
             "preview_idle_minutes": 15,
         },
@@ -99,7 +96,6 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "static_publish_slots": 3,
             "always_on_slots": 0,
             "team_seats": 1,
-            "custom_domains": 1,
             "integrations": True,
             "preview_idle_minutes": 60,
         },
@@ -119,7 +115,6 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "static_publish_slots": 10,
             "always_on_slots": 1,
             "team_seats": 5,
-            "custom_domains": 10,
             "integrations": True,
             "preview_idle_minutes": 0,
         },

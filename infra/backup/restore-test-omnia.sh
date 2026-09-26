@@ -12,6 +12,11 @@ CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
 ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 pick_ctr() { local n; for n in "$@"; do docker inspect "$n" >/dev/null 2>&1 && { echo "$n"; return; }; done; echo "$1"; }
 PLATFORM_CTR="${PLATFORM_CTR:-$(pick_ctr yleum-prod-postgres omnia-prod-postgres)}"
+# ВНИМАНИЕ: это НЕ «ещё не переименовано». На проде база платформы живёт на
+# хостовом PostgreSQL (режим host), и роль там берётся из строки подключения —
+# с 26.09 это `yleum`. Значение ниже используется ТОЛЬКО в режиме container, то
+# есть на пути отката к остановленному контейнеру с базой, где роли `yleum`
+# никогда не существовало. Поменять его на `yleum` значит сломать откат.
 PLATFORM_USER="${PLATFORM_USER:-omnia}"
 PLATFORM_DB="${PLATFORM_DB:-omnia}"
 # Same switch as backup-omnia.sh: `container` restores the scratch DB inside

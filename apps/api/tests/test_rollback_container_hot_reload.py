@@ -95,7 +95,6 @@ def _patch_common(monkeypatch, hot_calls, *, hot_reload_raises=False):
         return {"written": len(files)}
 
     monkeypatch.setattr(restore_mod.orchestrator_client, "hot_reload", _hot_reload)
-    monkeypatch.setattr(rollback_mod, "enqueue_preview", lambda sid: None)
     monkeypatch.setattr(rollback_mod, "record_restored_version", AsyncMock())
 
     async def _publish(*a, **k):
@@ -225,7 +224,6 @@ def test_rollback_deletes_files_absent_from_reverted_tree(monkeypatch):
         return {"written": len(files)}
 
     monkeypatch.setattr(restore_mod.orchestrator_client, "hot_reload", _hot_reload)
-    monkeypatch.setattr(rollback_mod, "enqueue_preview", lambda sid: None)
     monkeypatch.setattr(rollback_mod, "record_restored_version", AsyncMock())
 
     async def _publish(*a, **k):

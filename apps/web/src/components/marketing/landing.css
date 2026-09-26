@@ -432,9 +432,45 @@
 
 /* ── интеграции: настоящие имена вместо слова «интеграции» ───────────────── */
 .yl-integrations { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.yl-integration { padding: 14px 16px; border-radius: 14px; border: 1px solid var(--yl-line, #e6e3df); background: #fff; }
+/* Значок стоит НАД названием, а не слева от него. Карточка узкая (около 190
+   пикселей), и значок сбоку съедал у текста четверть ширины: «Товары, цены,
+   документы» ломалось на три строки, и ряды разъезжались по высоте. */
+.yl-integration {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px 16px 15px;
+  border-radius: 14px;
+  border: 1px solid var(--yl-line, #e6e3df);
+  background: #fff;
+}
+.yl-integration > div { min-width: 0; }
 .yl-integration strong { display: block; font-size: 15px; letter-spacing: -0.01em; }
-.yl-integration span { display: block; margin-top: 3px; font-size: 13px; color: var(--yl-ink-2, #55555f); }
+.yl-integration > div > span { display: block; margin-top: 3px; font-size: 13px; color: var(--yl-ink-2, #55555f); }
+
+/* Значок говорит, ЧТО делает сервис. Чужие логотипы здесь не рисуем: товарный
+   знак принадлежит его владельцу, а похожая-но-своя картинка — это подделка
+   знака, а не иллюстрация. Цвет закреплён за КАТЕГОРИЕЙ, а не за компанией:
+   два сервиса одной категории выглядят одинаково, и сразу видно, что выбирать
+   нужно один из них. */
+.yl-integration-mark {
+  display: grid;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: 10px;
+  background: #eef2f7;
+  color: #55555f;
+}
+.yl-integration-mark--pay { background: #e7f0ff; color: #1359c6; }
+.yl-integration-mark--crm { background: #ecebfe; color: #4f46e5; }
+.yl-integration-mark--stock { background: #e6f3ee; color: #12795a; }
+.yl-integration-mark--docs { background: #eceef3; color: #4a5264; }
+.yl-integration-mark--menu { background: #e9f2e6; color: #3d7a3f; }
+.yl-integration-mark--schedule { background: #f0eafc; color: #6d43c4; }
+.yl-integration-mark--delivery { background: #e4f2f6; color: #0f6f87; }
+.yl-integration-mark--stats { background: #e7f0ff; color: #1359c6; }
 .yl-integrations-note { grid-column: 1 / -1; margin-top: 4px; }
 
 /* ── ниши: человек должен найти себя за две секунды ──────────────────────── */

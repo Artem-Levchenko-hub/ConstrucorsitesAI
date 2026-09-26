@@ -11,7 +11,18 @@
  * полсекунды, а не второй продукт внутри витрины. Всё нарисовано разметкой,
  * поэтому остаётся чётким на любом экране и не тянет ни байта со стороны.
  */
-import { Check, CreditCard, RefreshCw } from "lucide-react";
+import {
+  CalendarClock,
+  ChartColumn,
+  Check,
+  CreditCard,
+  FileSpreadsheet,
+  Handshake,
+  Package,
+  RefreshCw,
+  Truck,
+  UtensilsCrossed,
+} from "lucide-react";
 
 function Card({
   title,
@@ -137,32 +148,64 @@ export function Capabilities() {
 }
 
 /**
+ * Значок у сервиса говорит, ЧТО он делает, а не как выглядит его логотип.
+ *
+ * Чужие логотипы мы не рисуем: товарный знак принадлежит его владельцу, и
+ * похожая-но-своя картинка — это подделка знака, а не иллюстрация. Если
+ * владелец получит официальные наборы логотипов, их можно будет подставить
+ * сюда вместо значков, ничего больше не меняя.
+ *
+ * Значок при этом полезнее логотипа: строка «1С» ничего не говорит человеку,
+ * который не работал с 1С, а «документы» — говорит. Одинаковая категория
+ * получает одинаковый значок намеренно: так видно, что два сервиса
+ * взаимозаменяемы и выбирать нужно один.
+ */
+const KIND = {
+  pay: CreditCard,
+  crm: Handshake,
+  stock: Package,
+  docs: FileSpreadsheet,
+  menu: UtensilsCrossed,
+  schedule: CalendarClock,
+  delivery: Truck,
+  stats: ChartColumn,
+} as const;
+
+/**
  * Настоящие интеграции платформы. Список взят из каталога провайдеров в коде,
  * а не придуман для красоты: называть чужой сервис, которого нет, — это обещание,
  * за которое потом отвечать перед человеком, уже заплатившим за подписку.
  */
 export const INTEGRATIONS = [
-  ["ЮKassa", "Приём оплаты"],
-  ["amoCRM", "Заявки и сделки"],
-  ["Битрикс24", "Заявки и сделки"],
-  ["МойСклад", "Товары и остатки"],
-  ["1С", "Товары, цены, документы"],
-  ["iiko", "Меню и заказы"],
-  ["r_keeper", "Меню, стоп-лист, заказы"],
-  ["YCLIENTS", "Услуги и расписание"],
-  ["СДЭК", "Доставка и статусы"],
-  ["Яндекс Метрика", "Статистика посещений"],
-] as const;
+  ["ЮKassa", "Приём оплаты", "pay"],
+  ["amoCRM", "Заявки и сделки", "crm"],
+  ["Битрикс24", "Заявки и сделки", "crm"],
+  ["МойСклад", "Товары и остатки", "stock"],
+  ["1С", "Товары, цены, документы", "docs"],
+  ["iiko", "Меню и заказы", "menu"],
+  ["r_keeper", "Меню, стоп-лист, заказы", "menu"],
+  ["YCLIENTS", "Услуги и расписание", "schedule"],
+  ["СДЭК", "Доставка и статусы", "delivery"],
+  ["Яндекс Метрика", "Статистика посещений", "stats"],
+] as const satisfies readonly (readonly [string, string, keyof typeof KIND])[];
 
 export function Integrations() {
   return (
     <div className="yl-wrap yl-integrations">
-      {INTEGRATIONS.map(([name, note]) => (
-        <div className="yl-integration" key={name}>
-          <strong>{name}</strong>
-          <span>{note}</span>
-        </div>
-      ))}
+      {INTEGRATIONS.map(([name, note, kind]) => {
+        const Icon = KIND[kind];
+        return (
+          <div className="yl-integration" key={name}>
+            <span className={`yl-integration-mark yl-integration-mark--${kind}`} aria-hidden="true">
+              <Icon size={17} strokeWidth={2} />
+            </span>
+            <div>
+              <strong>{name}</strong>
+              <span>{note}</span>
+            </div>
+          </div>
+        );
+      })}
       <p className="yl-note yl-integrations-note">
         Подключение сервиса зависит от вашего тарифа и от вашего договора с этим
         сервисом. Генерация приложения сама по себе не включает приём платежей.

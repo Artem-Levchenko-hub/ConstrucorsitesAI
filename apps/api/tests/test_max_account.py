@@ -30,7 +30,6 @@ MAX_REGISTRATION = {
 
 def _stub_project_creation(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(repo_svc, "init_repo", lambda *_args: "a" * 40)
-    monkeypatch.setattr(projects_router, "enqueue_preview", lambda *_args: None)
 
     async def no_publish(*_args, **_kwargs) -> None:
         return None
