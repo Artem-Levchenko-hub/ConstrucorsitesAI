@@ -17,7 +17,6 @@ const ENTITLEMENT_NAMES: Record<string, { one: string; many: string }> = {
   static_publish_slots: { one: "опубликованное приложение", many: "опубликованных приложений" },
   always_on_slots: { one: "постоянно работающее приложение", many: "постоянно работающих приложений" },
   team_seats: { one: "место в команде", many: "мест в команде" },
-  custom_domains: { one: "свой домен", many: "своих доменов" },
   integrations: { one: "интеграция", many: "интеграций" },
 };
 

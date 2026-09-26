@@ -39,7 +39,6 @@ from yleum_api.models.billing import (
     Subscription,
 )
 from yleum_api.models.billing_usage_event import BillingUsageEvent
-from yleum_api.models.custom_domain import CustomDomain
 from yleum_api.models.project import Project
 
 log = structlog.get_logger(__name__)
@@ -51,7 +50,6 @@ ENTITLEMENT_LABELS: dict[str, str] = {
     "static_publish_slots": "Опубликованных приложений",
     "always_on_slots": "Постоянно работающих приложений",
     "team_seats": "Мест в команде",
-    "custom_domains": "Своих доменов",
     "integrations": "Интеграции",
 }
 
@@ -170,15 +168,6 @@ async def count_always_on_projects(session: AsyncSession, user_id: UUID) -> int:
     )
 
 
-async def count_custom_domains(session: AsyncSession, user_id: UUID) -> int:
-    return await _count(
-        session,
-        select(func.count(CustomDomain.id))
-        .join(Project, Project.id == CustomDomain.project_id)
-        .where(Project.owner_id == user_id),
-    )
-
-
 async def count_integrations(session: AsyncSession, user_id: UUID) -> int:
     return await _count(
         session,
@@ -200,7 +189,6 @@ async def entitlement_usages(
         "always_on_slots": await count_always_on_projects(session, user_id),
         # Every billing account is personal since migration 0069.
         "team_seats": 1,
-        "custom_domains": await count_custom_domains(session, user_id),
         "integrations": await count_integrations(session, user_id),
     }
     usages = [

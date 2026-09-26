@@ -128,7 +128,6 @@ class ProjectUpdate(BaseModel):
     # него; передать null, чтобы вернуться на наш хостинг. Чтобы отличить
     # «явный null» от «поле не прислали», PATCH-хендлер смотрит model_fields_set,
     # а не значение — поэтому default тут None безопасен.
-    deploy_target_id: UUID | None = None
 
 
 class ProjectPublic(BaseModel):
@@ -153,7 +152,6 @@ class ProjectPublic(BaseModel):
     forked_from_name: str | None = None
     forked_from_slug: str | None = None
     # BYO-VPS: цель деплоя проекта. None = наш хостинг (по умолчанию).
-    deploy_target_id: UUID | None = None
     current_snapshot_id: UUID | None
     # Thumbnail of the current snapshot (its rendered preview PNG), or None until
     # the first preview render lands. Not a mapped column — the projects router

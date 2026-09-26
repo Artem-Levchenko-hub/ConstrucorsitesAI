@@ -674,7 +674,7 @@ class PromptAcceptance:
                 else None
             )
         else:
-            ask_choices: list[str] = []
+            ask_choices = []
             allow_custom = True
             multi_select = False
             question_index = None
