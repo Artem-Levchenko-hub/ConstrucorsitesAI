@@ -604,6 +604,13 @@ async def test_schema_only_empty_prepare_is_exact_ready_and_uses_no_compatibilit
     assert result["report"]["database_state"] == "empty"
     assert result["binding"]["version"] == 3
     assert result["binding"]["database_strategy"] == "replace_verified_empty"
+    assert result["report"]["changes"][1] == (
+        "Записей приложения нет. При восстановлении база будет заменена новой, "
+        "подготовленной под выбранную версию."
+    )
+    assert result["report"]["retained_data"][0] == (
+        "Действующая публикация не меняется. Обновить её можно отдельно."
+    )
     assert events.index("historical-contract-derived") < events.index(
         "candidate-catalog-observed"
     )
@@ -620,6 +627,22 @@ async def test_schema_only_empty_prepare_is_exact_ready_and_uses_no_compatibilit
         "--config=drizzle.config.ts",
         "--force",
     ]
+
+
+@pytest.mark.parametrize("database_state", ["empty", "present", "unknown"])
+def test_preserve_current_report_describes_data_without_promising_same_database(
+    database_state,
+):
+    from yleum_orchestrator.services.code_restoration_engine import preparation_report
+
+    report = preparation_report(observed_database_state=database_state)
+
+    assert report["changes"][1] == (
+        "Текущие данные приложения сохраняются; выбранная версия будет работать с ними."
+    )
+    assert report["retained_data"][0] == (
+        "Действующая публикация не меняется. Обновить её можно отдельно."
+    )
 
 
 async def test_direct_sql_r0_records_only_executed_sql_after_physical_schema_check(

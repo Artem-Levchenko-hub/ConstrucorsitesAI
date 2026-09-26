@@ -737,6 +737,7 @@ def preparation_report(
     checks: list[CompatibilityCheck] | None = None,
     capabilities: CapabilityDiff | None = None,
     observed_contract: DataContract | None = None,
+    database_strategy: Literal["preserve_current", "replace_verified_empty"] = "preserve_current",
 ) -> dict[str, Any]:
     blocked = blockers or []
     if inventory is not None:
@@ -750,11 +751,17 @@ def preparation_report(
         "database_state": observed_database_state,
         "changes": [
             "Код выбранной версии собирается с её сохранёнными зависимостями.",
-            "Приложение работает с текущей базой проекта без переноса старых данных.",
+            (
+                "Записей приложения нет. При восстановлении база будет заменена новой, "
+                "подготовленной под выбранную версию."
+                if database_strategy == "replace_verified_empty"
+                else "Текущие данные приложения сохраняются; "
+                "выбранная версия будет работать с ними."
+            ),
             *([] if blocked else ["Исторический код подготовлен без запуска AI-агента."]),
         ],
         "retained_data": [
-            "Текущая база и действующая публикация не заменяются.",
+            "Действующая публикация не меняется. Обновить её можно отдельно.",
             *_inventory_lines(inventory),
             *["Поле сохраняется в базе: " + name for name in retained or []],
         ],
@@ -2095,6 +2102,11 @@ class CodeRestorationEngine:
                         checks=checks,
                         capabilities=capabilities,
                         observed_contract=current_contract,
+                        database_strategy=(
+                            "replace_verified_empty"
+                            if empty_witness is not None
+                            else "preserve_current"
+                        ),
                     ),
                     "request_digest": request.digest(),
                     "workspace_revision": current_revision,

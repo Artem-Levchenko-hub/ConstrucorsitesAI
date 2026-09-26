@@ -336,6 +336,7 @@ describe("MAX live preview recovery", () => {
     act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed, buildMessage("running", "next")]));
     renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
     expect(container.textContent).not.toContain("Первая сборка не завершена");
+    getRuntime.mockResolvedValue(runtime());
     act(() => {
       queryClient.setQueryData(["messages", PROJECT.id], [failed, buildMessage("completed", "next")]);
       queryClient.setQueryData(["runtime", PROJECT.id], runtime());
@@ -569,6 +570,100 @@ describe("MAX live preview recovery", () => {
     expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
   });
 
+  it.each([false, true])("wakes a new snapshot after release with a cached running runtime (park races fetch: %s)", async (race) => {
+    const events: string[] = [];
+    let next = false;
+    let parked = false;
+    let raced = false;
+    const nextSession = deferred<MaxPreviewSession>();
+    getRuntime.mockImplementation(async () => {
+      if (next) events.push(parked ? "get:stopped" : "get:running");
+      return runtime(parked ? "stopped" : "running");
+    });
+    startRuntime.mockImplementation(async () => {
+      events.push("start");
+      parked = false;
+      return runtime();
+    });
+    syncMaxManagedKit.mockImplementation(async () => managedKit(next ? "snapshot-2" : "snapshot-1"));
+    createMaxPreviewSession.mockImplementation(async () => {
+      if (!next) return session("https://preview-1.example");
+      if (race && !raced) { parked = true; raced = true; }
+      if (parked) {
+        events.push("session:409");
+        throw new ApiError(409, { code: "orchestrator_rejected", message: "Orchestrator rejected request: draft runtime is not running" });
+      }
+      events.push("session:200");
+      return nextSession.promise;
+    });
+    renderPreview("snapshot-1");
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("[data-testid='max-live-iframe']"));
+    act(() => frame.dispatchEvent(new Event("load")));
+    next = true;
+    parked = !race;
+    renderPreview("snapshot-2");
+    await waitForValue(() => events.includes("session:200"));
+    expect(frame.getAttribute("src")).toBe("https://preview-1.example");
+    expect(events).toEqual(race
+      ? ["get:running", "session:409", "get:stopped", "start", "session:200"]
+      : ["get:stopped", "start", "session:200"]);
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    nextSession.resolve(session("https://preview-2.example"));
+    await waitForValue(() => container.querySelector<HTMLIFrameElement>(
+      "[data-testid='max-live-iframe']",
+    )?.getAttribute("src") === "https://preview-2.example");
+  });
+
+  it("bounds an explicit parked-runtime recovery and never loops owner starts", async () => {
+    let reads = 0;
+    getRuntime.mockImplementation(async () => runtime(++reads <= 2 ? "running" : "stopped"));
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockRejectedValue(new ApiError(409, {
+      code: "orchestrator_rejected", message: "Orchestrator rejected request: draft runtime is not running",
+    }));
+    renderPreview("snapshot-1");
+    await waitForValue(() => container.textContent?.includes("Превью пока недоступно"));
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 1_700)); });
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not wake an active generation when the new snapshot runtime is provisioning", async () => {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1");
+    await waitForValue(() => container.querySelector("[data-testid='max-live-iframe']"));
+    getRuntime.mockResolvedValue(runtime("provisioning"));
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-2"));
+    renderPreview("snapshot-2", { versions: [buildVersion("running")] });
+    await waitForValue(() => queryClient.getQueryData<RuntimeStatus>(["runtime", PROJECT.id])?.state === "provisioning");
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not multiply an exhausted wake retry budget through session query retries", async () => {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1");
+    const frame = await waitForValue(() => container.querySelector("[data-testid='max-live-iframe']"));
+    act(() => frame.dispatchEvent(new Event("load")));
+    vi.useFakeTimers();
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    startRuntime.mockRejectedValue(new ApiError(503, {
+      code: "orchestrator_unavailable", message: "preparing",
+    }));
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-2"));
+    renderPreview("snapshot-2");
+    for (let index = 0; index < 45; index += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    }
+    expect(startRuntime).toHaveBeenCalledTimes(21);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Новая версия не открылась");
+  });
+
   it("refreshes preview from the header and restarts a retained draft without dropping the iframe", async () => {
     const nextSession = deferred<MaxPreviewSession>();
     getRuntime
@@ -663,7 +758,10 @@ describe("MAX live preview recovery", () => {
     getRuntime.mockResolvedValue(runtime("stopped"));
     startRuntime.mockRejectedValueOnce(new ApiError(503, {
       code: "orchestrator_unavailable", message: "preparing",
-    })).mockResolvedValueOnce(runtime());
+    })).mockImplementationOnce(async () => {
+      getRuntime.mockResolvedValue(runtime());
+      return runtime();
+    });
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     createMaxPreviewSession.mockResolvedValue(session("https://recovered.example"));
     renderPreview("snapshot-1");

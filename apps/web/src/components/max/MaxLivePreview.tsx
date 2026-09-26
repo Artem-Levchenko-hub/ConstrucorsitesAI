@@ -53,9 +53,16 @@ const previewRetryDelay = (attempt: number) =>
   Math.min(PREVIEW_RETRY_DELAY_MS * 2 ** attempt, 10_000);
 
 class PreviewPreparationStoppedError extends Error {}
+class PreviewRecoveryExhaustedError extends Error {}
+
+function isParkedPreviewError(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 &&
+    error.code === "orchestrator_rejected" &&
+    error.message === "Orchestrator rejected request: draft runtime is not running";
+}
 
 function isTransientPreviewError(error: unknown): boolean {
-  if (error instanceof PreviewPreparationStoppedError) return false;
+  if (error instanceof PreviewPreparationStoppedError || error instanceof PreviewRecoveryExhaustedError) return false;
   if (!(error instanceof ApiError)) return true;
   if (error.status === 0 || error.status === 409 || error.status >= 500) {
     return true;
@@ -220,6 +227,53 @@ export function MaxLivePreview({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
+  const loadPreviewSession = async () => {
+    const activity = previewActivity.current;
+    const assertCurrent = () => {
+      if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
+    };
+    const refreshRuntime = async () => {
+      assertCurrent();
+      let current = await getRuntime(project.id);
+      assertCurrent();
+      if (["stopped", "paused", "failed"].includes(current.state)) {
+        started.current = true;
+        try {
+          current = await start.mutateAsync(activity);
+        } catch (error) {
+          // The mutation owns the wake retry budget. A session-query retry
+          // must not begin another full series after that budget is exhausted.
+          throw new PreviewRecoveryExhaustedError(
+            error instanceof Error ? error.message : "Не удалось запустить превью.",
+          );
+        }
+        assertCurrent();
+      }
+      queryClient.setQueryData(["runtime", project.id], current);
+      if (current.state !== "running") {
+        throw new ApiError(409, { code: "conflict", message: "MAX preview ещё готовится" });
+      }
+    };
+    // A new snapshot does not invalidate the shared runtime cache. Release
+    // parks the product/database pair even if its old gateway still runs.
+    await refreshRuntime();
+    try {
+      return await createMaxPreviewSession(project.id);
+    } catch (error) {
+      if (!isParkedPreviewError(error)) throw error;
+      // Release may park the pair after that fresh GET. Recover this precise
+      // conflict once; ownership/auth failures never enter the wake path.
+      await refreshRuntime();
+      try {
+        return await createMaxPreviewSession(project.id);
+      } catch (retryError) {
+        if (isParkedPreviewError(retryError)) {
+          throw new PreviewRecoveryExhaustedError("Превью пока не запустилось. Повторите проверку.");
+        }
+        throw retryError;
+      }
+    }
+  };
   const previewSession = useQuery({
     queryKey: [
       "max-preview-session",
@@ -228,7 +282,7 @@ export function MaxLivePreview({
       runtime.data?.container_name ?? null,
       managedKit.data?.synced_snapshot_id ?? null,
     ],
-    queryFn: () => createMaxPreviewSession(project.id),
+    queryFn: loadPreviewSession,
     enabled: !previewDisabled && runtimeRunning && managedKit.isSuccess,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
@@ -275,7 +329,7 @@ export function MaxLivePreview({
           activeRuntime?.container_name ?? null,
           managedKitResult.data.synced_snapshot_id ?? null,
         ],
-        queryFn: () => createMaxPreviewSession(project.id),
+        queryFn: loadPreviewSession,
         retry: (failureCount, error) =>
           failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
         retryDelay: previewRetryDelay,
