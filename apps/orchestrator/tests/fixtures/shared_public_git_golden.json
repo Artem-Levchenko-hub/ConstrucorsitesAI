@@ -75,6 +75,12 @@
         "bytes": 3261,
         "sha256": "20327c96c5ed999c4dbf5deb31c523a40750dd3210083fd2136034249955b67e"
       },
+      "drizzle/0002_row_level_security.sql": {
+        "mode": "100644",
+        "git_blob": "988cd99a452abf3b90b6055908684dc40207dbcd",
+        "bytes": 5858,
+        "sha256": "d1e0f3f5bd2028224ee96682e3cd72b3a4e9d64477235b06b97b792cf41c605b"
+      },
       "next-env.d.ts": {
         "mode": "100644",
         "git_blob": "830fb594ca2970a827555c28a253b097367e08d8",
@@ -137,9 +143,9 @@
       },
       "src/app/api/max/session/route.ts": {
         "mode": "100644",
-        "git_blob": "9cb8925917c74b31521e7f42d51e1176b501bc8d",
-        "bytes": 3170,
-        "sha256": "35500f784da6e981e4edb30a736d77b397715fabc6e5f61ce404a91b78899449"
+        "git_blob": "0ca78f11ac55cd5d186938da14f289e7196b2177",
+        "bytes": 3227,
+        "sha256": "ad26ddd3f1dc138b9ba435d84270310e302cb38ed8fb73ad0a07ad976c8e1f3d"
       },
       "src/app/api/max/webhook/route.ts": {
         "mode": "100644",
@@ -149,15 +155,15 @@
       },
       "src/app/api/omnia/actions/[id]/route.ts": {
         "mode": "100644",
-        "git_blob": "0135f4f9bcadb2f882612235eecb6bb99eb0ca8c",
-        "bytes": 5181,
-        "sha256": "a2302bb870847d7ce583f2607badc60feee36c2221b1e7d3f6b64a7b0eb72eda"
+        "git_blob": "892bb27b68a32e0c57d1cbba781fcd0723f1c988",
+        "bytes": 5308,
+        "sha256": "d3512db2bda647c401aa9c05307c9b7022b87d7ca6eb7635fb3f442bba5dd10d"
       },
       "src/app/api/omnia/actions/route.ts": {
         "mode": "100644",
-        "git_blob": "1edaad525c4af9f67168fd3ad5d19ef4e102bd8d",
-        "bytes": 4486,
-        "sha256": "7921a537151d3830beb434beabd0c0013eab4ed66dcc81b3e3d77520bc5cf252"
+        "git_blob": "1dc1c85968f72e7a45f1ab016ae3a65a3a77fcc6",
+        "bytes": 4549,
+        "sha256": "5a546c0d550db3b4c5c177477ade5d9d894261170c8ab3d8183cca341ce1179e"
       },
       "src/app/api/omnia/config/route.ts": {
         "mode": "100644",
@@ -167,15 +173,15 @@
       },
       "src/app/api/omnia/consents/route.ts": {
         "mode": "100644",
-        "git_blob": "3923d30d81256305c8f514ccb4ca24b9c476768a",
-        "bytes": 3089,
-        "sha256": "a3931521575068ca59b97ccd2437eb06d6e47042768ba8b2dde2b010d180a715"
+        "git_blob": "1c87c47f681c51f65cf4cbebf3efe1036a864400",
+        "bytes": 3190,
+        "sha256": "8231cbfbe1b1e23d5170d4304e3b7c9df985bbbe92835dbd496ea903c4f21a55"
       },
       "src/app/api/omnia/events/route.ts": {
         "mode": "100644",
-        "git_blob": "f6821a8975093d1ef1adc05388808c84c984ffeb",
-        "bytes": 1112,
-        "sha256": "f7552dff0fe398f913775de000eb9d0a48794cb942c0e500e4a681c8d7bf53f3"
+        "git_blob": "590b4fce17ce726a9a81e7fe360257acfe5a4c21",
+        "bytes": 1167,
+        "sha256": "28b7c7c84d10335b7f7bee5ba4726c362b24da2b5c7d050d39bd1e8b3de7341a"
       },
       "src/app/api/omnia/health/route.ts": {
         "mode": "100644",
@@ -191,9 +197,9 @@
       },
       "src/app/api/omnia/preview-session/route.ts": {
         "mode": "100644",
-        "git_blob": "96b6feca7d3d93b68933478d2a01c13652b17c1b",
-        "bytes": 3149,
-        "sha256": "84f99e1a6b3760a2f95ca0868608a0c2e0a6b23cf796e7639a6c39ef225acc9b"
+        "git_blob": "1315617f19045c074244159c9fefae9f53efc51e",
+        "bytes": 3214,
+        "sha256": "2b0413098b44e778c2d317d46895b7d4b5e9452a3a819dd733e8de32148ff507"
       },
       "src/app/globals.css": {
         "mode": "100644",
@@ -239,9 +245,9 @@
       },
       "src/lib/db/index.ts": {
         "mode": "100644",
-        "git_blob": "a9a83c18e451f664c595b744ff96af0604980f4f",
-        "bytes": 387,
-        "sha256": "26bfefc35c08fd9df7a62edfc80d570b913087a8588372719101e2b86ae110d5"
+        "git_blob": "5182a6c3d44c31e20b5b8ebf5d015b2851098f64",
+        "bytes": 2344,
+        "sha256": "a923499353b9acfbd5b06cbff992d125158191c74ba3b74da0f773c26b74ce31"
       },
       "src/lib/db/schema.ts": {
         "mode": "100644",

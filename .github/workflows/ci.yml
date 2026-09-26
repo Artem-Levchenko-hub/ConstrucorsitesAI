@@ -234,6 +234,9 @@ jobs:
     timeout-minutes: 25
     env:
       RESTORATION_TEST_DATABASE_URL: postgresql://postgres:ci-restoration-only@127.0.0.1:5432/restoration_policy_test
+      # Проверка политик уровня строк в шаблоне MAX: она создаёт свою схему со
+      # своей ролью-владельцем и убирает их за собой, поэтому делит базу с проверкой откатов.
+      TEMPLATE_RLS_TEST_DATABASE_URL: postgresql://postgres:ci-restoration-only@127.0.0.1:5432/restoration_policy_test
     services:
       postgres:
         image: postgres:16

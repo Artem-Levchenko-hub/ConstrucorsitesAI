@@ -2,7 +2,7 @@ import { and, desc, eq, lt, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
-import { db, schema } from "@/lib/db";
+import { schema, withMaxUser } from "@/lib/db";
 import { getMaxUser } from "@/lib/max/session";
 
 const Consent = z.object({
@@ -58,12 +58,14 @@ export async function GET(request: Request) {
       )!,
     );
   }
-  const rows = await db
-    .select()
-    .from(schema.maxConsents)
-    .where(and(...filters))
-    .orderBy(desc(schema.maxConsents.createdAt), desc(schema.maxConsents.id))
-    .limit(query.data.limit + 1);
+  const rows = await withMaxUser(user.id, (tx) =>
+    tx
+      .select()
+      .from(schema.maxConsents)
+      .where(and(...filters))
+      .orderBy(desc(schema.maxConsents.createdAt), desc(schema.maxConsents.id))
+      .limit(query.data.limit + 1),
+  );
   const hasMore = rows.length > query.data.limit;
   const consents = hasMore ? rows.slice(0, query.data.limit) : rows;
   const nextCursor =
@@ -80,9 +82,11 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid consent" }, { status: 400 });
   }
-  const [consent] = await db
-    .insert(schema.maxConsents)
-    .values({ maxUserId: user.id, ...input })
-    .returning();
+  const [consent] = await withMaxUser(user.id, (tx) =>
+    tx
+      .insert(schema.maxConsents)
+      .values({ maxUserId: user.id, ...input })
+      .returning(),
+  );
   return NextResponse.json({ consent }, { status: 201 });
 }

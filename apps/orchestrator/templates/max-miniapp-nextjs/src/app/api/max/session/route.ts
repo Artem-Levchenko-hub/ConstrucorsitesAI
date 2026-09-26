@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 
-import { db, schema } from "@/lib/db";
+import { schema, withMaxUser } from "@/lib/db";
 import {
   createMaxSession,
   getMaxUser,
@@ -65,10 +65,12 @@ export async function POST(request: Request) {
     // Materialise the FK parent only. The profile MAX sends with the launch is
     // never stored; `first_name` stays empty because the starter schema still
     // declares the column NOT NULL for apps created before this rule.
-    await db
-      .insert(schema.maxUsers)
-      .values({ maxUserId: user.id, firstName: "" })
-      .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
+    await withMaxUser(user.id, (tx) =>
+      tx
+        .insert(schema.maxUsers)
+        .values({ maxUserId: user.id, firstName: "" })
+        .onConflictDoNothing({ target: schema.maxUsers.maxUserId }),
+    );
     const session = createMaxSession(user);
     const response = NextResponse.json({ user, startParam: launch.startParam });
     response.cookies.set(MAX_SESSION_COOKIE, session.value, {

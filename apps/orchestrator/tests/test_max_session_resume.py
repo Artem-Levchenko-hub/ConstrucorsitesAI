@@ -19,6 +19,11 @@ class NextResponse extends Response {
 // Drizzle's insert chain: values() returns a builder; onConflictDoNothing() runs it.
 const db={query:{maxUsers:{findFirst:async()=>null}},
  insert:()=>({values:()=>({onConflictDoNothing:async()=>{writes++;}})})};
+// Маршрут пишет строку пользователя только через обёртку с личностью: она
+// открывает транзакцию и ставит app.max_user_id, по которому работают политики
+// уровня строк. Заглушка запоминает личность, чтобы забытая обёртка была видна.
+let scopedIdentity=null;
+async function withMaxUser(maxUserId,run){scopedIdentity=maxUserId;return run(db);}
 function load(file){
  if(cache[file])return cache[file];
  const ctx={exports:{},Buffer,URLSearchParams,Date,console:{warn(){},error(){}},
@@ -27,7 +32,7 @@ function load(file){
   if(name==='node:crypto')return crypto;
   if(name==='next/server')return {NextResponse};
   if(name==='drizzle-orm')return {eq:()=>true};
-  if(name==='@/lib/db')return {db,schema:{maxUsers:{maxUserId:'id'}}};
+  if(name==='@/lib/db')return {db,schema:{maxUsers:{maxUserId:'id'}},withMaxUser};
   if(name==='next/headers')return {
    cookies:async()=>{if(input.infrastructure)throw Error('secret-internal-error');
                     return {get:()=>cookie?{value:cookie}:undefined};},
