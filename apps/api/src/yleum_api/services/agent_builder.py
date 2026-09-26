@@ -1085,68 +1085,6 @@ def load_stack_skills(orch_template: str | None) -> str | None:
         return None
 
 
-# ── Locked-primitive contract card (harness-hardening) ──────────────────────
-#
-# The nextjs-realtime template ships a frozen set of "FIXED template file"
-# primitives the generated app must IMPORT (never rewrite): the realtime hub,
-# channel helpers, session/auth, the drizzle schema row types, and the
-# `useChannel` hook. Telling a weak model to "read these files and check the
-# signatures yourself" failed live — it skipped the reads and hallucinated names
-# (`getChannels`), shapes (its own `Channel` type), and arity (`useChannel()`),
-# then looped on the resulting TS2305/TS2322/TS2554 errors. Handing it the exact
-# signatures up front (deep module: narrow, precise interface > discovery) kills
-# those error classes deterministically.
-#
-# This card is verbatim-true to the template files; a drift-guard test
-# (test_primitive_contract.py) re-reads them and fails if a promised export is
-# renamed/removed, so the card can never silently lie.
-_REALTIME_PRIMITIVES_CONTRACT = """\
-ПРИМИТИВЫ СУБСТРАТА — готовые модули с ТОЧНЫМИ сигнатурами (переиспользуй по умолчанию; \
-можешь и ПРАВИТЬ эти файлы, если чинишь баг или добавляешь фичу — гейт перепроверит доставку + 403). Импортируй ИМЕННО так, НЕ \
-выдумывай имена/типы/аргументы и НЕ объявляй свои копии этих типов:
-
-// @/lib/db/schema — типы строк (Drizzle $inferSelect). ИМПОРТИРУЙ их, НЕ объявляй свои.
-type Channel = { id: string; kind: string; title: string | null; createdBy: string | null; createdAt: Date };
-type Message = { id: string; channelId: string; userId: string; type: string; body: string; createdAt: Date };
-type User    = { id: string; email: string; name: string | null; image: string | null; role: string; passwordHash: string | null; createdAt: Date };
-
-// @/lib/channels — серверные хелперы (вызывай из server component / route handler)
-listUserChannels(userId: string): Promise<Channel[]>               // беседы юзера
-createChannel(userId: string, title: string): Promise<Channel>     // создать беседу (автор = первый член)
-isMember(channelId: string, userId: string): Promise<boolean>
-addMemberByEmail(channelId: string, email: string): Promise<string | null>  // id добавленного или null
-getHistory(channelId: string, limit?: number): Promise<RealtimeEvent<Message>[]>  // история как realtime-события
-
-// @/lib/session — текущий юзер (server-only)
-const APP_HOME: string;                                            // "/chat"
-getCurrentUser(): Promise<CurrentUser | null>                      // null если гость, НЕ бросает
-requireUser(opts?: { role?: "admin" | "user"; next?: string }): Promise<CurrentUser>  // редирект на /signin если гость
-type CurrentUser = { id: string; email: string; name?: string | null; image?: string | null; role: string };
-
-// @/lib/auth — регистрация / выход (Auth.js)
-hashPassword(plain: string): Promise<string>                       // bcrypt-хеш для users.passwordHash
-roleForNewUser(): Promise<"admin" | "user">                        // первый аккаунт = admin
-signIn, signOut, auth                                              // хелперы Auth.js
-// Регистрация: вставь в users { email, passwordHash: await hashPassword(pw), role: await roleForNewUser() }, затем signIn.
-
-// @/components/realtime/use-channel — ЖИВОЙ канал (ТОЛЬКО в "use client" компоненте)
-useChannel(channel: string, opts?: { initial?: RealtimeEvent[]; onEvent?: (e: RealtimeEvent) => void }):
-  { messages: RealtimeEvent[]; presence: PresenceState[]; status: "connecting" | "open" | "closed"; send: (type: string, data: unknown) => Promise<void> }
-// channel — строка `conversation:<channel.id>`. Отправить сообщение: send("message", { body: text }).
-// Текст сообщения в UI рендери из event.data.body (event.data — строка таблицы messages).
-
-// @/components/realtime/use-channel-history — история канала (ТОЛЬКО в "use client"), envelope-safe
-useChannelHistory(channelId: string): { initial: RealtimeEvent[] | null; error: boolean }
-// initial=null пока грузится; сам разворачивает { data } и гардит undefined-id; сидируй им useChannel({ initial }).
-
-// @/components/realtime/invite-member — ФИКС-контрол «добавить участника» (ТОЛЬКО в "use client")
-<InviteMember channelId={string} />   // email-инвайт + ростер; ВСЕГДА рендери в виде канала, НЕ переписывай свой
-
-// @/lib/realtime/types
-type RealtimeEvent<T = unknown> = { id: number; channel: string; type: string; data: T; userId: string | null; ts: number };
-type PresenceState = { userId: string; since: number };
-"""
-
 #: Export names this card PROMISES per locked module — the drift guard asserts each
 #: still exists in the live template file. Update both together if the card changes.
 REALTIME_CONTRACT_EXPORTS: dict[str, tuple[str, ...]] = {
@@ -1165,13 +1103,6 @@ REALTIME_CONTRACT_EXPORTS: dict[str, tuple[str, ...]] = {
     "src/components/realtime/invite-member.tsx": ("InviteMember",),
     "src/lib/realtime/types.ts": ("RealtimeEvent", "PresenceState"),
 }
-
-
-def realtime_primitives_contract() -> str:
-    """Exact `.d.ts`-style signatures of the locked nextjs-realtime primitives, so
-    the agent imports the real API instead of hallucinating it and looping. Static
-    (the primitives are FIXED template files); kept honest by a drift-guard test."""
-    return _REALTIME_PRIMITIVES_CONTRACT
 
 
 # ── Production executor (talks to the orchestrator) ─────────────────────────

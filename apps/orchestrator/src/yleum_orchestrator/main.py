@@ -23,8 +23,6 @@ from yleum_orchestrator.core.errors import (
 )
 from yleum_orchestrator.core.sentry import init_sentry
 from yleum_orchestrator.routers import (
-    build_exe,
-    byo,
     cell_publication,
     code_restorations,
     health,
@@ -141,8 +139,6 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(runtime.router)
     app.include_router(ingress.router)
-    app.include_router(build_exe.router)
-    app.include_router(byo.router)
     app.include_router(workspace.router)
     app.include_router(cell_publication.router)
     app.include_router(publication_artifacts.router)

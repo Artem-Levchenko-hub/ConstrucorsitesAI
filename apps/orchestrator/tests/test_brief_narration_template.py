@@ -21,9 +21,6 @@ import pytest
 from yleum_orchestrator.core.template_materialization import materialize_template
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
-_ENTITIES = _TEMPLATES / "nextjs-entities"
-_DRIZZLE = _TEMPLATES / "nextjs-postgres-drizzle"
-_REALTIME = _TEMPLATES / "nextjs-realtime"
 _MAX = _TEMPLATES / "max-miniapp-nextjs"
 _SCRIPT_REL = "public/omnia-brief-narration.js"
 
@@ -32,7 +29,7 @@ _SCRIPT_REL = "public/omnia-brief-narration.js"
 def standalone_templates(tmp_path_factory):
     root = tmp_path_factory.mktemp("public-contract")
     with pytest.MonkeyPatch.context() as patch:
-        for key in ("_ENTITIES", "_DRIZZLE", "_REALTIME", "_MAX"):
+        for key in ("_MAX",):
             source = globals()[key]
             destination = root / source.name
             materialize_template(source, destination)
@@ -40,17 +37,10 @@ def standalone_templates(tmp_path_factory):
         yield
 
 
-def test_brief_narration_copies_stay_in_sync() -> None:
-    """Both Next.js container templates ship a byte-identical script (R-04 DRY)."""
-    canonical = (_ENTITIES / _SCRIPT_REL).read_bytes()
-    for template in (_DRIZZLE, _REALTIME, _MAX):
-        assert (template / _SCRIPT_REL).read_bytes() == canonical
-
-
 
 def test_brief_narration_contract() -> None:
     """The script enforces the load-bearing invariants of the lever."""
-    src = (_ENTITIES / _SCRIPT_REL).read_text(encoding="utf-8")
+    src = (_MAX / _SCRIPT_REL).read_text(encoding="utf-8")
     # 1) Consumes the brief from BOTH transports: postMessage + baked global.
     assert 'd.type !== "omnia:brief"' in src
     assert "window.__omniaBrief" in src
@@ -84,7 +74,7 @@ def test_brief_narration_contract() -> None:
 
 def test_brief_narration_wired_into_both_layouts() -> None:
     """Each flagship layout loads the script (else the file ships dead)."""
-    for tpl in (_ENTITIES, _DRIZZLE, _REALTIME, _MAX):
+    for tpl in (_MAX,):
         layout = (tpl / "src/app/layout.tsx").read_text(encoding="utf-8")
         assert 'src="/omnia-brief-narration.js"' in layout, (
             f"{tpl.name}/src/app/layout.tsx must <Script src> the brief narration."

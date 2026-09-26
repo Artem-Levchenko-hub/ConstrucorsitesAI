@@ -29,24 +29,16 @@ from yleum_api.schemas.message import (
     PromptResponse,
 )
 from yleum_api.services.billing_accounts import resolve_billing_account
-from yleum_api.services.chip_pixel_gate import spec_from_discovery
+from yleum_api.services.build_spec import spec_from_discovery
 from yleum_api.services.discovery import BUILD as DISCOVERY_BUILD
 from yleum_api.services.discovery import (
     DiscoveryResult,
     _infer_code_from_text,
-    _infer_run_intent,
-    _infer_run_intent_maybe,
-    _is_run_decline,
     run_discovery,
     wants_build_now,
     zero_question_build,
 )
-from yleum_api.services.generation.lightweight_turns import (
-    _INSTALL_CARD_TEXT,
-    _RUN_ASK_TEXT,
-    _RUN_DECLINE_REPLY,
-    _failed_build_explanation,
-)
+from yleum_api.services.generation.lightweight_turns import _failed_build_explanation
 from yleum_api.services.generation.onboarding import (
     _batch_discovery_turn,
     _build_onboarding_survey,
@@ -94,9 +86,6 @@ class PromptAcceptance:
     failed_build_reply: str | None
     is_free: bool
     selected_dump: list[dict[str, Any]] | None
-    run_intent: bool
-    run_decline: bool
-    run_ask: bool
     settings: Settings
     discovery_result: DiscoveryResult | None
     async_onboarding: bool
@@ -333,33 +322,6 @@ class PromptAcceptance:
         # keying off `current_snapshot_id is None` mislabels EVERY first real prompt
         # as a follow-up and drops it to the cheap path. Treat "current snapshot is
         # the starter" (no prompt_text) as the first build instead.
-        # Run/install intent (owner 2026-06-19): on a FOLLOW-UP, "как запустить / хочу
-        # запустить / установщик / дай поиграть" → DON'T build; hand back a one-click
-        # installer-download card (the .zip already ships a run.bat launcher), so the
-        # user goes from ask → installer in one click. Gated to a project that already
-        # has something built. Consumed in the turn-routing branch below.
-        # A MAX Mini App has no installer — it is launched inside MAX — so there the
-        # same words are an ordinary request for the builder.
-        _has_built = (
-            not self.is_first_build
-            and self.project.current_snapshot_id is not None
-            and self.project.template != "max_miniapp"
-        )
-        self.run_intent = _has_built and _infer_run_intent(self.payload.prompt)
-        # «Спрашивай, если сомневаешься» (owner 2026-06-19): plausible-but-uncertain run
-        # intent → ASK "собрать установщик?" with yes/no chips instead of guessing.
-        # A decline ("нет, доработать") gets a short "what to change?" reply, not a
-        # garbage build. Strong intent above always wins.
-        self.run_decline = (
-            _has_built and not self.run_intent and _is_run_decline(self.payload.prompt)
-        )
-        self.run_ask = (
-            _has_built
-            and not self.run_intent
-            and not self.run_decline
-            and _infer_run_intent_maybe(self.payload.prompt)
-        )
-
         # Onboarding-survey palette pick (owner 2026-06-19): the popup submits the
         # chosen design preset here so the build uses it directly. Validated against
         # the known catalog (an unknown id is ignored); persisted with the project
@@ -572,9 +534,6 @@ class PromptAcceptance:
                 or self.discovery_ask
                 or self.async_onboarding
                 or self.do_clarify
-                or self.run_intent
-                or self.run_ask
-                or self.run_decline
             )
             else ("build" if self.orchestrate else "edit")
         )
@@ -641,34 +600,6 @@ class PromptAcceptance:
                 self.payload.prompt,
                 run_id=self.generation_run.id,
                 language=self.project.language,
-            )
-        elif self.run_intent:
-            # Run/install intent (owner 2026-06-19): no build — stream a one-click
-            # installer-download card. The user clicks «Скачать установщик», gets the
-            # .zip (with run.bat), double-clicks → installed + running.
-            _spawn_text_turn(
-                self.project_id,
-                self.assistant_msg.id,
-                _INSTALL_CARD_TEXT,
-                run_id=self.generation_run.id,
-            )
-        elif self.run_decline:
-            # Declined the installer offer → don't build from a bare "нет"; ask what
-            # to change so the next turn is a real edit.
-            _spawn_text_turn(
-                self.project_id,
-                self.assistant_msg.id,
-                _RUN_DECLINE_REPLY,
-                run_id=self.generation_run.id,
-            )
-        elif self.run_ask:
-            # Uncertain run intent → ASK "собрать установщик?" (yes/no chips set on the
-            # response below); no build this turn.
-            _spawn_text_turn(
-                self.project_id,
-                self.assistant_msg.id,
-                _RUN_ASK_TEXT,
-                run_id=self.generation_run.id,
             )
         else:
             store_generation_dispatch(
@@ -743,12 +674,7 @@ class PromptAcceptance:
                 else None
             )
         else:
-            # Uncertain run-intent question (owner 2026-06-19): tappable yes/no chips.
-            # «Да…» re-enters as strong run-intent → installer card; «Нет…» is caught
-            # as a decline → "what to change?" reply.
-            ask_choices = (
-                ["Да, собрать установщик", "Нет, доработать проект"] if self.run_ask else []
-            )
+            ask_choices = []
             allow_custom = True
             multi_select = False
             question_index = None

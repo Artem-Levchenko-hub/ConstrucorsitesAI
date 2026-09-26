@@ -16,40 +16,25 @@ Routes follow `docs/01-api-contract.md` § "V2: Runtime + Deploy".
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Any, NoReturn
+from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yleum_api.core.config import get_settings
-from yleum_api.core.crypto import decrypt_strong
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
-from yleum_api.models.custom_domain import CustomDomain
-from yleum_api.models.deploy_target import DeployTarget
-from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.project import Project
-from yleum_api.models.snapshot import Snapshot
-from yleum_api.schemas.project import CONTAINER_BROWSER_TEMPLATES as _CONTAINER_NEXT
-from yleum_api.schemas.project import orchestrator_template
 from yleum_api.schemas.runtime import (
     DeployRequest,
     DeployStatus,
-    RuntimeKeepAliveRequest,
-    RuntimeLogs,
     RuntimeStatus,
-    RuntimeStopRequest,
 )
-from yleum_api.services import autoheal as autoheal_svc
-from yleum_api.services import entitlements, orchestrator_client, project_cell_runtime
-from yleum_api.services import repo as repo_svc
+from yleum_api.services import orchestrator_client, project_cell_runtime
 from yleum_api.services.billing_accounts import resolve_billing_account
-from yleum_api.services.deploy_attestation import blocking_required, resolve_deploy_proof
 
 log = structlog.get_logger(__name__)
 
@@ -96,16 +81,6 @@ async def _billing_plan_for_user(
     return account, plan
 
 
-async def _billing_account_user_ids(
-    session: AsyncSession,
-    account: BillingAccount,
-) -> list[UUID]:
-    del session  # every account is personal; the signature stays for callers
-    if account.personal_user_id is not None:
-        return [account.personal_user_id]
-    return []
-
-
 def _to_runtime_status(payload: dict[str, Any]) -> RuntimeStatus:
     """Project a (possibly larger) orchestrator response into the public shape."""
     return RuntimeStatus(
@@ -150,6 +125,21 @@ def _to_deploy_status(payload: dict[str, Any]) -> DeployStatus:
 # --- Runtime ----------------------------------------------------------
 
 
+def _raise_no_cell() -> NoReturn:
+    """A project without a cell has no runtime to talk to since the site builder left.
+
+    Every project is a MAX app in its own Project Cell; the legacy dev-container
+    runtime went with the builder. A row that somehow has no cell gets an honest
+    refusal instead of a call into a runtime that no longer exists.
+    """
+    raise ApiError(
+        "runtime_unavailable",
+        "У проекта нет своей ячейки — среда приложения недоступна. "
+        "Создайте приложение заново.",
+        status.HTTP_409_CONFLICT,
+    )
+
+
 @router.get("/{project_id}/runtime", response_model=RuntimeStatus)
 async def get_runtime(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
@@ -160,18 +150,9 @@ async def get_runtime(
         project,
         owner=current_user,
     )
-    if cell_status is not None:
-        return cell_status
-    payload = await orchestrator_client.get_status(project_id)
-    if not project.keep_alive_enabled and payload.get("keep_alive"):
-        # Postgres is canonical. This also heals a stale orchestrator marker
-        # after a downgrade or an interrupted disable request.
-        try:
-            await orchestrator_client.set_keep_alive(project_id, enabled=False)
-        except Exception:
-            log.warning("runtime.keep_alive_reconcile_failed", project_id=str(project_id))
-        payload["keep_alive"] = False
-    return _to_runtime_status(payload)
+    if cell_status is None:
+        _raise_no_cell()
+    return cell_status
 
 
 @router.post("/{project_id}/runtime/start", response_model=RuntimeStatus)
@@ -191,228 +172,9 @@ async def start_runtime(
         project,
         owner=current_user,
     )
-    if cell_status is not None:
-        return cell_status
-    _, plan = await _billing_plan_for_user(session, current_user.id)
-    # Map api-side `template` to the orchestrator's actual template dir.
-    # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
-    # image — they ship as plain HTML via /p/<slug>. We default those to
-    # `nextjs-postgres-drizzle` so a V1 user who hits "Start" can still
-    # opt into a full backend (lazy upgrade) without re-creating the project.
-    orch_template = orchestrator_template(project.template) or "nextjs-postgres-drizzle"
-    payload = await orchestrator_client.provision(
-        project_id=project_id,
-        slug=project.slug,
-        template=orch_template,
-        tier=plan.code if plan.code in {"free", "pro", "business"} else "free",
-    )
-
-    # E3 — "always works, never the silent starter". provision is idempotent and
-    # leaves an *existing* container's files untouched, but a recreated one boots
-    # from the baked template (the "Новый проект на Yleum" starter). If this
-    # project has a generated snapshot, re-push its files so the user always sees
-    # their app, not the starter. Fail-soft: a resync hiccup must not turn a
-    # successful start into an error — git/MinIO stay canonical and the user can
-    # hit "Запустить" again.
-    if project.template in _CONTAINER_NEXT and project.current_snapshot_id:
-        await _resync_latest_snapshot(session, project)
-
-    # Auto-heal on open (owner 2026-07-16): if the just-opened app has a RED build,
-    # repair it in the background — same fix as «Починить», no click. Fire-and-
-    # forget + fail-soft + flag-gated + Redis-debounced (see services.autoheal), so
-    # it never delays the start response and never fires unprompted when disabled.
-    if project.template in _CONTAINER_NEXT:
-
-        async def _autoheal_bg() -> None:
-            try:
-                _h = await autoheal_svc.maybe_autoheal_on_open(
-                    project_id, project.slug, template=project.template,
-                )
-                print(f"[AUTOHEAL] {project.slug}: {_h}", flush=True)
-            except Exception as _ah_exc:
-                print(f"[AUTOHEAL] skipped: {_ah_exc!r}", flush=True)
-
-        _ah_task = asyncio.create_task(_autoheal_bg())
-        _ah_task.add_done_callback(lambda _t: None)
-
-    return _to_runtime_status(payload)
-
-
-async def _resync_latest_snapshot(session: SessionDep, project: Project) -> None:
-    """Re-push the latest snapshot's files into the (possibly freshly recreated)
-    dev container via orchestrator hot-reload, so an opened project shows its own
-    code rather than the baked template starter. Best-effort; never raises."""
-    try:
-        snap = await session.get(Snapshot, project.current_snapshot_id)
-        if snap is None:
-            return
-        files = await asyncio.to_thread(repo_svc.read_files, project.id, snap.commit_sha)
-        if not files:
-            return
-        result = await orchestrator_client.hot_reload(
-            project_id=project.id,
-            slug=project.slug,
-            files=files,
-        )
-        log.info(
-            "runtime.start_resync",
-            project_id=str(project.id),
-            files=len(files),
-            written=result.get("written"),
-        )
-    except Exception as exc:
-        log.warning(
-            "runtime.start_resync_failed",
-            project_id=str(project.id),
-            err=str(exc),
-        )
-
-
-@router.get("/{project_id}/runtime/logs", response_model=RuntimeLogs)
-async def get_runtime_logs(
-    project_id: UUID,
-    session: SessionDep,
-    current_user: CurrentUserDep,
-    tail: int = 200,
-    kind: str = "dev",
-) -> RuntimeLogs:
-    """Tail recent container stdout/stderr (capped at 5000 lines).
-
-    Proxies to orchestrator's `/internal/projects/<id>/logs`. UI polls this
-    every 3 s for a live feed; the orchestrator currently returns a flat
-    snapshot rather than a stream because docker_client's API is sync and
-    spinning up a follow-mode WebSocket here was deemed YAGNI for MVP.
-    Missing container → empty `logs` with 200 (UI shows "No logs yet").
-    """
-    project = await _project_owned_by(session, project_id, current_user.id)
-    selection = await project_cell_runtime.resolve_project_cell_public_selection(
-        session,
-        project,
-        owner=current_user,
-    )
-    if selection.selected:
-        project_cell_runtime.raise_project_cell_public_action_unavailable()
-    if tail < 1:
-        tail = 1
-    elif tail > 5000:
-        tail = 5000
-    if kind == "prod" and project.deploy_target_id is not None:
-        target = await session.get(DeployTarget, project.deploy_target_id)
-        if (
-            target is None
-            or target.verify_status != "ok"
-            or not target.known_host_key
-            or not target.resolved_ip
-        ):
-            raise ApiError(
-                "deploy_target_not_verified",
-                "Нельзя прочитать логи: VPS требует повторной проверки.",
-                status.HTTP_409_CONFLICT,
-            )
-        payload = await orchestrator_client.get_remote_logs(
-            project_id,
-            {
-                "host": target.ssh_host,
-                "port": target.ssh_port,
-                "user": target.ssh_user,
-                "auth_type": target.ssh_auth_type,
-                "secret": decrypt_strong(target.ssh_secret_enc),
-                "known_host_key": target.known_host_key,
-                "resolved_ip": target.resolved_ip,
-            },
-            tail=tail,
-        )
-        payload.setdefault("tail", tail)
-        payload.setdefault("container_name", None)
-    else:
-        payload = await orchestrator_client.get_logs(project_id, tail=tail, kind=kind)
-    return RuntimeLogs(
-        container_name=payload.get("container_name"),
-        tail=int(payload.get("tail", tail)),
-        logs=str(payload.get("logs", "")),
-    )
-
-
-@router.post("/{project_id}/runtime/stop", response_model=RuntimeStatus)
-async def stop_runtime(
-    project_id: UUID,
-    body: RuntimeStopRequest | None,
-    session: SessionDep,
-    current_user: CurrentUserDep,
-) -> RuntimeStatus:
-    project = await _project_owned_by(session, project_id, current_user.id)
-    selection = await project_cell_runtime.resolve_project_cell_public_selection(
-        session,
-        project,
-        owner=current_user,
-    )
-    if selection.selected:
-        project_cell_runtime.raise_project_cell_public_action_unavailable()
-    pause = body.pause if body is not None else True
-    payload = await orchestrator_client.stop(project_id, pause=pause)
-    return _to_runtime_status(payload)
-
-
-@router.post("/{project_id}/runtime/keep-alive", response_model=RuntimeStatus)
-async def set_runtime_keep_alive(
-    project_id: UUID,
-    body: RuntimeKeepAliveRequest,
-    session: SessionDep,
-    current_user: CurrentUserDep,
-) -> RuntimeStatus:
-    """Keep the dev runtime hot across inactivity and orchestrator restarts."""
-    project = await _project_owned_by(session, project_id, current_user.id)
-    selection = await project_cell_runtime.resolve_project_cell_public_selection(
-        session,
-        project,
-        owner=current_user,
-    )
-    if selection.selected:
-        project_cell_runtime.raise_project_cell_public_action_unavailable()
-    if body.enabled:
-        account, plan = await _billing_plan_for_user(
-            session,
-            current_user.id,
-            for_update_account=True,
-        )
-        configured_slots = plan.entitlements.get("always_on_slots")
-        always_on_slots = configured_slots if isinstance(configured_slots, int) else 0
-        if always_on_slots < 1:
-            raise ApiError(
-                "subscription_entitlement_required",
-                "Постоянно запущенный runtime доступен на тарифе Business",
-                status.HTTP_402_PAYMENT_REQUIRED,
-            )
-        account_user_ids = await _billing_account_user_ids(session, account)
-        active_slots = (
-            await session.execute(
-                select(Project.id).where(
-                    Project.owner_id.in_(account_user_ids),
-                    Project.keep_alive_enabled.is_(True),
-                    Project.id != project_id,
-                )
-            )
-        ).scalars().all()
-        if len(active_slots) >= always_on_slots:
-            raise ApiError(
-                "subscription_entitlement_required",
-                "Все постоянные runtime-слоты тарифа уже заняты",
-                status.HTTP_409_CONFLICT,
-            )
-        # Provision or wake first. Only persist the promise after a successful
-        # start, so the UI never says "always running" for a runtime that could
-        # not be created.
-        runtime = await start_runtime(project_id, session, current_user)
-        await orchestrator_client.set_keep_alive(project_id, enabled=True)
-        project.keep_alive_enabled = True
-        await session.commit()
-        return runtime.model_copy(update={"keep_alive": True, "hibernate_after_seconds": None})
-
-    await orchestrator_client.set_keep_alive(project_id, enabled=False)
-    project.keep_alive_enabled = False
-    await session.commit()
-    payload = await orchestrator_client.get_status(project_id)
-    return _to_runtime_status(payload)
+    if cell_status is None:
+        _raise_no_cell()
+    return cell_status
 
 
 # --- Deploy -----------------------------------------------------------
@@ -440,115 +202,7 @@ async def trigger_deploy(
             idempotency_key=body.idempotency_key if body else None,
         )
         return _to_deploy_status(payload)
-    sha = body.commit_sha if body is not None else None
-    idempotency_key = body.idempotency_key if body is not None else None
-    # BYO-VPS: если у проекта выбран свой сервер — грузим цель, расшифровываем
-    # креды и передаём оркестратору, чтобы он развернул образ на машине юзера.
-    # None = наш хостинг (текущее поведение).
-    target: dict[str, Any] | None = None
-    domains: list[str] | None = None
-    runtime_env: dict[str, str] | None = None
-    if project.template == "max_miniapp":
-        max_integration = (
-            await session.execute(
-                select(MaxIntegration).where(MaxIntegration.project_id == project_id)
-            )
-        ).scalar_one_or_none()
-        if max_integration is not None:
-            runtime_env = {
-                "MAX_BOT_TOKEN": decrypt_strong(max_integration.bot_token_enc),
-                "MAX_WEBHOOK_SECRET": decrypt_strong(max_integration.webhook_secret_enc),
-                "MAX_API_BASE_URL": "https://platform-api2.max.ru",
-            }
-    if project.deploy_target_id is not None:
-        dt = await session.get(DeployTarget, project.deploy_target_id)
-        if dt is not None:
-            if dt.verify_status != "ok" or not dt.known_host_key or not dt.resolved_ip:
-                raise ApiError(
-                    "deploy_target_not_verified",
-                    "Выбранный VPS не прошёл защищённую проверку. Проверьте его заново.",
-                    status.HTTP_409_CONFLICT,
-                )
-            target = {
-                "host": dt.ssh_host,
-                "port": dt.ssh_port,
-                "user": dt.ssh_user,
-                "auth_type": dt.ssh_auth_type,
-                "secret": decrypt_strong(dt.ssh_secret_enc),
-                "known_host_key": dt.known_host_key,
-                "resolved_ip": dt.resolved_ip,
-                "label": dt.label,
-                "id": str(dt.id),
-            }
-            # Домены проекта — агент настроит их на VPS юзера (edge + авто-SSL).
-            rows = (
-                (
-                    await session.execute(
-                        select(CustomDomain.host).where(
-                            CustomDomain.project_id == project_id,
-                            CustomDomain.dns_status == "ok",
-                        )
-                    )
-                )
-                .scalars()
-                .all()
-            )
-            domains = list(rows) or None
-    # Production release proof is fail-closed: the exact commit must have a
-    # passing, digest-valid attestation. Dev can keep the gate advisory.
-    settings = get_settings()
-    gate_blocking = blocking_required(settings)
-    if settings.use_deploy_attestation_gate or gate_blocking:
-        try:
-            proof = await resolve_deploy_proof(session, project, sha)
-            print(
-                f"[DEPLOY-GATE] project={project_id} sha={proof.commit_sha} "
-                f"proven={proof.passed} reason={proof.reason} digest={proof.digest}",
-                flush=True,
-            )
-            if gate_blocking and not proof.passed:
-                raise ApiError(
-                    "deploy_not_proven",
-                    "Деплой заблокирован: текущая сборка не имеет действительной "
-                    "проверки безопасности. Пересобери проект и повтори публикацию.",
-                    status.HTTP_409_CONFLICT,
-                    details={"reason": proof.reason},
-                )
-        except ApiError:
-            raise
-        except Exception as exc:
-            log.exception("deploy.attestation_lookup_failed", project_id=str(project_id))
-            if gate_blocking:
-                raise ApiError(
-                    "deploy_not_proven",
-                    "Деплой временно заблокирован: проверку безопасности нельзя подтвердить.",
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    details={"reason": "proof_unavailable"},
-                ) from exc
-    # Same plan publish-slot rule as the Project Cell path (402 when full).
-    await entitlements.assert_can_publish(session, project)
-    publication_key = idempotency_key or uuid4().hex
-    payload = await orchestrator_client.deploy(
-        project_id,
-        commit_sha=sha,
-        target=target,
-        domains=domains,
-        runtime_env=runtime_env,
-        idempotency_key=publication_key,
-    )
-    try:
-        await entitlements.record_publication(
-            session,
-            project,
-            idempotency_key=publication_key,
-            backend="byo_vps" if target is not None else "legacy_deploy",
-            commit_sha=sha,
-        )
-        await session.commit()
-    except Exception:
-        log.exception("deploy.journal_failed", project_id=str(project_id))
-        await session.rollback()
-    return _to_deploy_status(payload)
+    _raise_no_cell()
 
 
 @router.get("/{project_id}/deploy", response_model=DeployStatus)
@@ -561,65 +215,8 @@ async def get_last_deploy(
     controller is an error, not a successful status. Snapshot identity is
     preserved so readiness can identify the exact published version.
     """
-    project = await _project_owned_by(session, project_id, current_user.id)
-    payload = await orchestrator_client.get_deploy(project_id)
-    current_target = str(project.deploy_target_id) if project.deploy_target_id else None
-    deploy_matches_target = payload.get("target_id") == current_target
-    if (
-        payload.get("phase") == "done"
-        and deploy_matches_target
-        and project.previous_deploy_target_id is not None
-    ):
-        previous = await session.get(DeployTarget, project.previous_deploy_target_id)
-        if previous is not None and previous.known_host_key and previous.resolved_ip:
-            await orchestrator_client.teardown_remote_project(
-                project.id,
-                {
-                    "host": previous.ssh_host,
-                    "port": previous.ssh_port,
-                    "user": previous.ssh_user,
-                    "auth_type": previous.ssh_auth_type,
-                    "secret": decrypt_strong(previous.ssh_secret_enc),
-                    "known_host_key": previous.known_host_key,
-                    "resolved_ip": previous.resolved_ip,
-                },
-            )
-        project.previous_deploy_target_id = None
-        await session.commit()
-    if (
-        payload.get("phase") == "done"
-        and deploy_matches_target
-        and project.deploy_target_id is not None
-    ):
-        domains = (
-            (
-                await session.execute(
-                    select(CustomDomain).where(
-                        CustomDomain.project_id == project_id,
-                        CustomDomain.dns_status == "ok",
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        changed = False
-        for domain in domains:
-            if domain.cert_status not in {"active", "issuing"}:
-                domain.cert_status = "issuing"
-                domain.last_detail = "Caddy на VPS выпускает HTTPS-сертификат."
-                changed = True
-        if changed:
-            await session.commit()
-    return _to_deploy_status(payload)
-
-
-@router.post("/{project_id}/deploy/cancel", response_model=DeployStatus)
-async def cancel_deploy(
-    project_id: UUID, session: SessionDep, current_user: CurrentUserDep
-) -> DeployStatus:
     await _project_owned_by(session, project_id, current_user.id)
-    payload = await orchestrator_client.cancel_deploy(project_id)
+    payload = await orchestrator_client.get_deploy(project_id)
     return _to_deploy_status(payload)
 
 
@@ -627,6 +224,7 @@ async def cancel_deploy(
 async def deploy_history(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> list[DeployStatus]:
+    """Publication history of the project's cell — the dashboard's «История публикаций»."""
     await _project_owned_by(session, project_id, current_user.id)
     payloads = await orchestrator_client.get_deploy_history(project_id)
     return [_to_deploy_status(payload) for payload in payloads]

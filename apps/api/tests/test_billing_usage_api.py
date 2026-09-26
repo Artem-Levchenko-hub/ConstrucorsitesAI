@@ -266,7 +266,6 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
         "static_publish_slots",
         "always_on_slots",
         "team_seats",
-        "custom_domains",
         "integrations",
     ]
 

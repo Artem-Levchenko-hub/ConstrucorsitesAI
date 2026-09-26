@@ -17,7 +17,6 @@ from yleum_api.main import app
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.user import User
-from yleum_api.routers import projects as projects_router
 from yleum_api.services import repo as repo_svc
 
 pytestmark = pytest.mark.asyncio
@@ -61,8 +60,6 @@ async def _register(client: httpx.AsyncClient, email: str = "owner@example.com")
 
 
 async def test_registered_user_creates_a_max_project(client, db_session, git, monkeypatch):
-    previews: list[object] = []
-    monkeypatch.setattr(projects_router, "enqueue_preview", previews.append)
     await _register(client)
 
     response = await client.post(
@@ -76,7 +73,6 @@ async def test_registered_user_creates_a_max_project(client, db_session, git, mo
     snapshot = (await db_session.execute(select(Snapshot))).scalar_one()
     assert body["current_snapshot_id"] == str(snapshot.id)
     assert (snapshot.prompt_text, snapshot.parent_id, snapshot.commit_sha) == (None, None, "a" * 40)
-    assert previews == [snapshot.id]
     ((_project_id, template_dir, template),) = git
     assert template == "max_miniapp" and str(template_dir).endswith("templates/max_miniapp")
 

@@ -140,27 +140,54 @@ export function Capabilities() {
  * Настоящие интеграции платформы. Список взят из каталога провайдеров в коде,
  * а не придуман для красоты: называть чужой сервис, которого нет, — это обещание,
  * за которое потом отвечать перед человеком, уже заплатившим за подписку.
+ *
+ * Знаки лежат у нас в `public/integrations/`, а не грузятся с чужих сайтов:
+ * страница не должна зависеть от того, работает ли сейчас сайт партнёра, и не
+ * должна сообщать ему, кто открыл нашу витрину. Откуда взят каждый файл и на
+ * каком основании — в `public/integrations/README.md`; менять знак нужно там,
+ * здесь ссылка идёт на имя файла.
+ *
+ * Последнее поле — квадратный ли знак. Логотип-надпись («ЮKassa», «Битрикс24»)
+ * и квадратная иконка («МойСклад», YCLIENTS) при одной высоте выглядят по-разному:
+ * квадрат кажется вдвое мельче надписи. Поэтому квадратным даётся высота побольше.
  */
 export const INTEGRATIONS = [
-  ["ЮKassa", "Приём оплаты"],
-  ["amoCRM", "Заявки и сделки"],
-  ["Битрикс24", "Заявки и сделки"],
-  ["МойСклад", "Товары и остатки"],
-  ["1С", "Товары, цены, документы"],
-  ["iiko", "Меню и заказы"],
-  ["r_keeper", "Меню, стоп-лист, заказы"],
-  ["YCLIENTS", "Услуги и расписание"],
-  ["СДЭК", "Доставка и статусы"],
-  ["Яндекс Метрика", "Статистика посещений"],
-] as const;
+  ["ЮKassa", "Приём оплаты", "yookassa", false],
+  ["amoCRM", "Заявки и сделки", "amocrm", false],
+  ["Битрикс24", "Заявки и сделки", "bitrix24", false],
+  ["МойСклад", "Товары и остатки", "moysklad", true],
+  ["1С", "Товары, цены, документы", "1c", false],
+  ["iiko", "Меню и заказы", "iiko", false],
+  ["r_keeper", "Меню, стоп-лист, заказы", "rkeeper", false],
+  ["YCLIENTS", "Услуги и расписание", "yclients", true],
+  ["СДЭК", "Доставка и статусы", "cdek", false],
+  ["Яндекс Метрика", "Статистика посещений", "metrica", true],
+] as const satisfies readonly (readonly [string, string, string, boolean])[];
 
 export function Integrations() {
   return (
     <div className="yl-wrap yl-integrations">
-      {INTEGRATIONS.map(([name, note]) => (
+      {INTEGRATIONS.map(([name, note, file, square]) => (
         <div className="yl-integration" key={name}>
-          <strong>{name}</strong>
-          <span>{note}</span>
+          {/* Знак декоративный: название сервиса стоит текстом строкой ниже,
+              и озвучивать его дважды для экранного диктора не нужно. */}
+          <span className="yl-integration-logobox" aria-hidden="true">
+            {/* Обычный img, а не next/image: это SVG размером в пару килобайт,
+                оптимизатор картинок с ним ничего не делает и только добавляет
+                прослойку. Размер знака задан стилями, так что вёрстка не прыгает. */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              className={`yl-integration-logo${square ? " yl-integration-logo--square" : ""}`}
+              src={`/integrations/${file}.svg`}
+              alt=""
+              loading="lazy"
+              decoding="async"
+            />
+          </span>
+          <div>
+            <strong>{name}</strong>
+            <span>{note}</span>
+          </div>
         </div>
       ))}
       <p className="yl-note yl-integrations-note">

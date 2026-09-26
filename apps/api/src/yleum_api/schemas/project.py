@@ -52,14 +52,8 @@ Template = Literal[
 # `templates/<name>/` source dir). Single source of truth — runtime.py
 # imports this rather than hardcoding.
 _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
-    "fullstack": "nextjs-postgres-drizzle",
-    "nextjs_entities": "nextjs-entities",
-    "spa": "vite-react-spa",
-    "tgbot": "telegram-bot-aiogram",
-    "api": "fastapi-postgres",
-    # G001 — real-time stack: Next.js 15 + SSE/Redis pub-sub hub + membership ACL
-    # + presence (messengers, live-chat CRMs). Template dir: templates/nextjs-realtime.
-    "realtime": "nextjs-realtime",
+    # The seven stacks of the site builder left with their template dirs; the MAX
+    # app is the only thing the orchestrator can provision now.
     "max_miniapp": "max-miniapp-nextjs",
 }
 
@@ -128,7 +122,6 @@ class ProjectUpdate(BaseModel):
     # него; передать null, чтобы вернуться на наш хостинг. Чтобы отличить
     # «явный null» от «поле не прислали», PATCH-хендлер смотрит model_fields_set,
     # а не значение — поэтому default тут None безопасен.
-    deploy_target_id: UUID | None = None
 
 
 class ProjectPublic(BaseModel):
@@ -153,7 +146,6 @@ class ProjectPublic(BaseModel):
     forked_from_name: str | None = None
     forked_from_slug: str | None = None
     # BYO-VPS: цель деплоя проекта. None = наш хостинг (по умолчанию).
-    deploy_target_id: UUID | None = None
     current_snapshot_id: UUID | None
     # Thumbnail of the current snapshot (its rendered preview PNG), or None until
     # the first preview render lands. Not a mapped column — the projects router

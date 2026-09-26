@@ -1,14 +1,1 @@
-{
-  "nextjs-entities/README.md": {
-    "sha256": "d8c521ae8b06ad3d47eea5e321ad5278441b44c2288657ad120f974e9ceb65e0",
-    "mode": "100644"
-  },
-  "nextjs-postgres-drizzle/README.md": {
-    "sha256": "0dae262ef4369827d7feb2944ed43444ce562ddec5b371889b8224c2231ca53d",
-    "mode": "100644"
-  },
-  "nextjs-realtime/README.md": {
-    "sha256": "a07ee14447df85ecad0629eb74fc00bd88e620fd612cdf12772550ee11f3cda0",
-    "mode": "100644"
-  }
-}
+{}

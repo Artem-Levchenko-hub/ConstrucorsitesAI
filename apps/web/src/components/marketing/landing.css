@@ -432,9 +432,37 @@
 
 /* ── интеграции: настоящие имена вместо слова «интеграции» ───────────────── */
 .yl-integrations { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
-.yl-integration { padding: 14px 16px; border-radius: 14px; border: 1px solid var(--yl-line, #e6e3df); background: #fff; }
+/* Значок стоит НАД названием, а не слева от него. Карточка узкая (около 190
+   пикселей), и значок сбоку съедал у текста четверть ширины: «Товары, цены,
+   документы» ломалось на три строки, и ряды разъезжались по высоте. */
+.yl-integration {
+  display: grid;
+  gap: 10px;
+  align-content: start;
+  padding: 14px 16px 15px;
+  border-radius: 14px;
+  border: 1px solid var(--yl-line, #e6e3df);
+  background: #fff;
+}
+.yl-integration > div { min-width: 0; }
 .yl-integration strong { display: block; font-size: 15px; letter-spacing: -0.01em; }
-.yl-integration span { display: block; margin-top: 3px; font-size: 13px; color: var(--yl-ink-2, #55555f); }
+.yl-integration > div > span { display: block; margin-top: 3px; font-size: 13px; color: var(--yl-ink-2, #55555f); }
+
+/* Настоящий знак сервиса. Файлы лежат у нас в public/integrations, источник и
+   основание по каждому — в README рядом с ними.
+
+   Высота фиксируется, а ширина свободна: у знаков разные пропорции, и ровняет
+   их по-человечески именно общая высота строки, а не общая ширина коробки.
+   Квадратным знакам высота больше: при одинаковой высоте квадрат рядом с
+   логотипом-надписью кажется вдвое мельче. */
+/* Коробка под знак всегда одной высоты, а знак внутри — своей. Без коробки
+   карточки разъезжались на 6 пикселей: квадратный знак выше надписи. */
+.yl-integration-logobox { display: flex; align-items: center; height: 28px; }
+.yl-integration-logo { max-height: 22px; max-width: 100%; width: auto; }
+/* Квадратным задаётся ТОЧНАЯ сторона, а не потолок: знак Метрики нарисован в
+   16 пикселях, и по потолку он так и остался бы 16 — вдвое мельче соседей. */
+.yl-integration-logo--square { max-height: none; height: 28px; width: 28px; }
+
 .yl-integrations-note { grid-column: 1 / -1; margin-top: 4px; }
 
 /* ── ниши: человек должен найти себя за две секунды ──────────────────────── */

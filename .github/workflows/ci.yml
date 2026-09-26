@@ -142,7 +142,7 @@ jobs:
         run: >-
           uv run pytest -q
           tests/test_max_project_kit.py
-      - name: Run static template materialization and consumer contracts
+      - name: Run template materialization and consumer contracts
         working-directory: apps/api
         run: >-
           uv run --frozen pytest -q
@@ -151,18 +151,6 @@ jobs:
           tests/test_project_export.py
           tests/test_template_registration.py
           tests/test_template_mapping.py
-      - name: Verify templates from an installed wheel outside the checkout
-        working-directory: apps/api
-        run: |
-          uv build --wheel --out-dir "$RUNNER_TEMP/omnia-task5-wheel"
-          uv pip install --python .venv/bin/python --no-deps \
-            --target "$RUNNER_TEMP/omnia-task5-installed" "$RUNNER_TEMP/omnia-task5-wheel/"*.whl
-          cd "$RUNNER_TEMP"
-          PYTHONPATH="$RUNNER_TEMP/omnia-task5-installed" \
-            "$GITHUB_WORKSPACE/apps/api/.venv/bin/python" \
-            "$GITHUB_WORKSPACE/apps/api/scripts/verify_template_package.py" \
-            "$GITHUB_WORKSPACE/apps/api/tests/fixtures/static_templates_810f0fbb.json" \
-            --package-root "$RUNNER_TEMP/omnia-task5-installed"
 
   # The complete API suite, split into three shards by file so it runs in parallel with the
   # gate instead of after it (16 of the gate's 24 minutes were this one step). Each shard
@@ -356,16 +344,6 @@ jobs:
             0) echo "::error::the production domain is inlined into the web client bundle (files listed above)"; exit 1 ;;
             *) echo "::error::client bundle scan did not run (exit $status)"; exit 1 ;;
           esac
-      - name: Verify packaged API templates without source mounts or network
-        run: |
-          docker run --rm --network none --read-only --cap-drop ALL \
-            --security-opt no-new-privileges:true --pids-limit 128 --memory 512m \
-            --tmpfs /tmp:rw,nosuid,nodev,size=128m --workdir /tmp \
-            --env PYTHONDONTWRITEBYTECODE=1 \
-            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/api/scripts/verify_template_package.py,dst=/smoke/verify.py,readonly" \
-            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/api/tests/fixtures/static_templates_810f0fbb.json,dst=/smoke/golden.json,readonly" \
-            --entrypoint /app/.venv/bin/python omnia-api:prod \
-            /smoke/verify.py /smoke/golden.json --package-root /app/src
       - name: Verify shared public assets through the baked API export
         run: |
           docker run --rm --network none --read-only --cap-drop ALL \

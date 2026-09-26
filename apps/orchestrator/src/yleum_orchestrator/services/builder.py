@@ -19,12 +19,10 @@ than crashing the orchestrator.
 from __future__ import annotations
 
 import asyncio
-import os
 import shutil
 import tempfile
 import time
 from pathlib import Path
-from urllib.parse import parse_qs, unquote, urlparse
 from uuid import UUID
 
 import structlog
@@ -211,8 +209,7 @@ async def start_deploy(
     if rec.phase not in ("building", "queued"):
         return rec
     # Optimistic public URL — deterministic, shown before the build completes.
-    # For a remote target we don't know the URL until the container is up.
-    rec.prod_url = None if target else nginx_writer.prod_url(resolved_slug)
+    rec.prod_url = nginx_writer.prod_url(resolved_slug)
 
     task = asyncio.create_task(
         _run(
@@ -252,169 +249,6 @@ async def cancel_deploy(project_id: str) -> deploy_state.DeployRecord | None:
         finished_at=deploy_state.now_iso(),
     )
     return deploy_state.get(project_id)
-
-
-def _remote_port(slug: str) -> int:
-    """Детерминированный host-порт на чужой машине из slug (30000–49999).
-
-    Без Date/random (они недоступны и ломают воспроизводимость): стабильный
-    хеш slug. Достаточно, чтобы разные проекты не толкались на одном порту.
-    """
-    h = 0
-    for ch in slug:
-        h = (h * 131 + ord(ch)) & 0xFFFFFFFF
-    return 30000 + (h % 20000)
-
-
-async def _deploy_remote(
-    project_id: str,
-    slug: str,
-    tag: str,
-    target: dict[str, object],
-    domains: list[str] | None = None,
-    run_id: str = "",
-    template: str = _DEFAULT_TEMPLATE,
-    runtime_env: dict[str, str] | None = None,
-) -> None:
-    """Развернуть уже собранный образ `tag` на чужом VPS (BYO-VPS).
-
-    Если у проекта подключён домен — приложение открывается по https://<домен>
-    (edge/Caddy на машине юзера выпускает SSL сам); иначе — по http://host:port.
-    """
-    from yleum_orchestrator.services import remote_deploy
-
-    host_port = _remote_port(slug)
-    needs_database = get_stack(template).needs_database
-    db_dump: str | None = None
-    db_schema: str | None = None
-    if needs_database:
-        db_dump, db_schema = await _export_project_database(project_id)
-        deploy_state.append_log(project_id, "Подготовлена миграция данных проекта")
-    auth_secret = _load_or_create_auth_secret_safe(project_id)
-    app_url = f"https://{domains[0]}" if domains else f"http://{target['host']}:{host_port}"
-    env = {
-        "NODE_ENV": "production",
-        "PORT": "3000",
-        "HOSTNAME": "0.0.0.0",
-        "OMNIA_PROJECT_ID": project_id,
-        "OMNIA_PLATFORM_API_URL": platform_api_url(),
-        "AUTH_SECRET": auth_secret,
-        "AUTH_URL": app_url,
-        "AUTH_TRUST_HOST": "true",
-        **(runtime_env or {}),
-    }
-    result = await remote_deploy.deploy_to_target(
-        creds=target,
-        image_tag=tag,
-        project_id=project_id,
-        run_id=run_id,
-        slug=slug,
-        host_port=host_port,
-        container_port=3000,
-        env=env,
-        domains=domains,
-        needs_database=needs_database,
-        db_dump=db_dump,
-        db_schema=db_schema,
-        progress=lambda message: deploy_state.append_log(project_id, message),
-    )
-    if result.get("ok"):
-        deploy_state.update(
-            project_id,
-            phase="done",
-            prod_url=result.get("url"),
-            detail=str(result.get("detail") or ""),
-            finished_at=deploy_state.now_iso(),
-        )
-        log.info("deploy.remote_done", project_id=project_id, url=result.get("url"))
-        await publish_project_event(
-            project_id,
-            "deploy.done",
-            {
-                "phase": "done",
-                "slug": slug,
-                "prod_url": result.get("url"),
-                "image_tag": tag,
-                "detail": result.get("detail"),
-            },
-        )
-    else:
-        deploy_state.update(
-            project_id,
-            phase="failed",
-            error=str(result.get("detail")),
-            finished_at=deploy_state.now_iso(),
-        )
-        await publish_project_event(
-            project_id,
-            "deploy.failed",
-            {"phase": "failed", "slug": slug, "error": result.get("detail")},
-        )
-
-
-def _load_or_create_auth_secret_safe(project_id: str) -> str:
-    from yleum_orchestrator.services.provisioner import _load_or_create_auth_secret
-
-    return _load_or_create_auth_secret(project_id)
-
-
-async def _export_project_database(project_id: str) -> tuple[str, str]:
-    """Create a SQL snapshot with a client matching the managed database major."""
-    from yleum_orchestrator.services.remote_deploy import POSTGRES_IMAGE
-
-    dsn = _resolve_runtime_dsn(project_id)
-    if dsn == _DB_PLACEHOLDER:
-        raise RuntimeError("У проекта нет доступной базы данных для переноса.")
-    project_url = urlparse(dsn)
-    admin_url = urlparse(
-        get_settings().database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
-    )
-    options = parse_qs(project_url.query).get("options", [""])[0]
-    marker = "search_path="
-    schema = unquote(options).split(marker, 1)[-1].split(",", 1)[0].strip()
-    if not schema or not schema.replace("_", "").isalnum():
-        raise RuntimeError("Не удалось определить схему базы проекта.")
-    process = await asyncio.create_subprocess_exec(
-        "docker",
-        "run",
-        "--rm",
-        "--network",
-        "host",
-        "-e",
-        "PGHOST",
-        "-e",
-        "PGPORT",
-        "-e",
-        "PGUSER",
-        "-e",
-        "PGPASSWORD",
-        "-e",
-        "PGDATABASE",
-        POSTGRES_IMAGE,
-        "pg_dump",
-        "--no-owner",
-        "--no-acl",
-        "--schema",
-        schema,
-        "--format",
-        "plain",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env={
-            "PATH": os.environ.get("PATH", ""),
-            "PGHOST": admin_url.hostname or "127.0.0.1",
-            "PGPORT": str(admin_url.port or 5432),
-            "PGUSER": project_url.username or "",
-            "PGPASSWORD": unquote(project_url.password or ""),
-            "PGDATABASE": project_url.path.lstrip("/"),
-        },
-    )
-    stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=180)
-    if process.returncode != 0:
-        raise RuntimeError(
-            "Не удалось перенести данные проекта: " + stderr.decode("utf-8", "replace")[-300:]
-        )
-    return stdout.decode("utf-8", "replace"), schema
 
 
 async def _run(
@@ -536,28 +370,6 @@ async def _run(
             {"phase": "swapping", "slug": slug, "image_tag": tag},
         )
 
-        # BYO-VPS: если у проекта выбран свой сервер — переносим готовый образ
-        # туда и запускаем на его машине (не на нашем хосте). Локальный путь
-        # (шаги 4–7) при этом не выполняется — поведение нашего хостинга не
-        # меняется, ветка живёт только когда target задан явно.
-        if target is not None:
-            deploy_state.update(project_id, phase="pushing")
-            deploy_state.append_log(project_id, "Передаём образ на выбранный VPS")
-            await publish_project_event(
-                project_id, "deploy.progress", {"phase": "pushing", "slug": slug}
-            )
-            await _deploy_remote(
-                project_id,
-                slug,
-                tag,
-                target,
-                domains,
-                run_id,
-                template,
-                runtime_env,
-            )
-            return
-
         # 4. Run the new prod container, replacing any previous one.
         prod_name = f"omnia-app-{slug}"
         prod_port = await get_prod_port_allocator().acquire(UUID(project_id))
@@ -676,8 +488,6 @@ async def _run(
             {"phase": "failed", "slug": slug, "error": msg},
         )
     finally:
-        if target is not None:
-            target.clear()
         if runtime_env is not None:
             runtime_env.clear()
         shutil.rmtree(build_dir, ignore_errors=True)

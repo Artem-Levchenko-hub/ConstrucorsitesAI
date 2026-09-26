@@ -116,14 +116,6 @@ class Settings(BaseSettings):
     orchestrator_hosts: str = Field(default="")
     default_orchestrator: str = Field(default="core", pattern=r"^[a-z][a-z0-9-]{0,31}$")
 
-    # GitHub OAuth — "Push to GitHub": user authorizes once, we store a per-user
-    # access token (Fernet-encrypted at rest, key derived from jwt_secret) and push
-    # the project's files into a repo on their account. Register an OAuth App at
-    # github.com/settings/developers; client id/secret come from env (never committed).
-    github_client_id: str | None = Field(default=None)
-    github_client_secret: SecretStr | None = Field(default=None)
-    github_callback_url: str = Field(default="http://localhost:8000/api/github/callback")
-    github_oauth_scope: str = Field(default="repo")
     web_base_url: str = Field(default="http://localhost:3000")
 
     # Вход через VK ID (OAuth 2.1 + PKCE) и Яндекс ID (OAuth 2.0) —
@@ -352,45 +344,7 @@ class Settings(BaseSettings):
     # cheap images this MUST be bounded or a "video on every section" prompt could
     # burn thousands per build (review 2026-07-17). Env: VIDEO_GEN_MAX_UNIQUE.
     video_gen_max_unique: int = Field(default=3)
-    # Hero-media MVP (2026-07-28): a dedicated flow for one generated first
-    # screen that decides between static/product-demo/motion/video/cinematic
-    # instead of treating video as the default. Off by default so the feature
-    # can land additive and stay dark in production until the planner + queue +
-    # asset pipeline are proven.
-    use_hero_media_mvp: bool = Field(default=False)
-    hero_media_max_assets: int = Field(default=6)
-    # Local/live E2E harness: replaces multimodal planning + vendor media calls
-    # with a deterministic in-process stub, while still exercising the real API,
-    # DB rows, worker queue, WS invalidation, preview and snapshot-apply path.
-    # Keep false outside explicit local tests so product behaviour never silently
-    # drifts from real providers.
-    hero_media_stub_mode: bool = Field(default=False)
 
-    # Live image drop-in (2026-06-06) — emit a per-image `image.resolved` WS
-    # event as each generated picture finishes, so the streaming preview can
-    # swap it into its frame in real time (the "фотки въезжают в рамки" effect)
-    # instead of all images appearing at once on the final snapshot. Purely
-    # additive (extra events); OFF kills the live signal, images still land on
-    # the committed snapshot. Env: USE_LIVE_IMAGE_EVENTS.
-    use_live_image_events: bool = Field(default=True)
-
-    # Visual enricher — post-process pass that injected decorative layers
-    # (mesh / blob / SVG dot-grid / diagonal-lines / waves) into every bare
-    # <section>. Built as a Haiku-era crutch against "flat AI sites", but it
-    # cycled the variants mechanically across ALL sections, so the output read
-    # as generative AI-slop (owner 2026-05-31: «откуда полоски/точки … ужасно»).
-    # Owner-call: off completely. OFF by default so a lost prod-.env line cannot
-    # silently revive the patterns; set USE_VISUAL_ENRICHER=true to re-enable.
-    use_visual_enricher: bool = Field(default=False)
-
-    # Signature-moment floor (2026-06-05) — post-process SAFETY NET that
-    # guarantees every static build carries ONE "expensive" scroll moment
-    # (.pin-stage / .compare / .omnia-draw / .scroll-clip-reveal). The
-    # art-director is contracted to add one; this injects a single content-free
-    # .omnia-draw line-art divider ONLY when the page has none. Surgical and
-    # palette-agnostic (unlike the disabled per-section enricher above) → ON by
-    # default. Kill per-env with USE_SIGNATURE_FLOOR=false.
-    use_signature_floor: bool = Field(default=True)
 
     # Phase M — per-role model override. Empty = use ROLE_MODEL_MAP (topmix-v1)
     # below. CSV of `role=model_id` pairs, e.g.
@@ -432,18 +386,6 @@ class Settings(BaseSettings):
     #                          "broken / generic / beautiful" verdict (needs
     #                          gateway multimodal support; best-effort, fail-soft)
     use_freeform_render: bool = Field(default=True)
-    use_acceptance_gate: bool = Field(default=True)
-    use_vision_audit: bool = Field(default=True)
-    # Design judge (2026-06-05) — premium / on-button Awwwards critic. Runs ONE
-    # vision-critic pass + at most ONE repair re-roll (cost-bounded — owner
-    # directive: judge must NOT loop many times), then ship. When on, forces the
-    # vision pass and lets the DESIGN verdict drive exactly one re-roll even in
-    # score-only mode. ON by default (owner 2026-06-05: judge EVERY build — the
-    # 1-iteration cap keeps cost bounded). Prereq fixed here: capture now waits
-    # for images to paint (preview.py) so the judge sees real photos, not the
-    # gray placeholders that made the PRIOR vision judge useless. Kill per-env:
-    # USE_DESIGN_JUDGE=false.
-    use_design_judge: bool = Field(default=True)
 
     # Build Plan + Coverage gate (owner directive 2026-06-30 «эскиз перед стройкой,
     # не на зелёном минимуме»). `use_build_plan` runs a planner pass (role
@@ -509,14 +451,6 @@ class Settings(BaseSettings):
     # scoping). Advisory by default; flip on to BLOCK ship on a raw-DB escape.
     use_backend_guardrail: bool = Field(default=False)
 
-    # Multi-role enforcement gate (G007) — the entities-engine role-matrix check
-    # (readRoles/writeRoles on /api/entities/<E>). NOTE: only the pure
-    # `evaluate_matrix` core exists — there is NO live driver and NO call site, so
-    # this flag is currently a NO-OP regardless of value. On the real-backend
-    # (drizzle) path the same goal (a wrong user is denied) is covered by the
-    # runtime isolation_gate. Wire a live `run_role_gate` (or drop the flag) before
-    # relying on it. Kept True for the eventual entities driver.
-    use_role_gate: bool = Field(default=True)
 
     # Transport-surface security gate (G005) — WIRED on the agentic path (realtime +
     # drizzle) via security_gate.run_security_gate through the blocking heal loop.
@@ -545,14 +479,6 @@ class Settings(BaseSettings):
     # proven"; DB-persist + deploy-gating land in a follow-up. Env: USE_BUILD_ATTESTATION.
     use_build_attestation: bool = Field(default=True)
 
-    # Deploy-attestation gate (fresh-plan Step 3 — "deploy ↔ proven"). At deploy the
-    # api looks up the exact build's saved attestation and verifies its digest.
-    # Dev stays advisory by default; production is always fail-closed even if an
-    # operator accidentally sets DEPLOY_ATTESTATION_BLOCKING=false. Projects built
-    # before digest inputs were persisted must be rebuilt before their next deploy.
-    # Env: USE_DEPLOY_ATTESTATION_GATE / DEPLOY_ATTESTATION_BLOCKING.
-    use_deploy_attestation_gate: bool = Field(default=True)
-    deploy_attestation_blocking: bool = Field(default=False)
 
     # Wallet self-top-up (MVP stub) — POST /api/wallet/topup credits the caller's
     # OWN wallet by a user-supplied amount with NO payment. Fine for closed beta
@@ -672,245 +598,8 @@ class Settings(BaseSettings):
     # post hot-reload. OFF → original italic-text notices, no compile probe
     # (instant rollback, R-10). Env: USE_ERROR_CARDS=false.
     use_error_cards: bool = Field(default=True)
-    # Max self-repair re-rolls before the gate gives up (and freeform falls
-    # back to catalog). Each retry is one extra LLM call — keep small.
-    acceptance_max_retries: int = Field(default=2)
-    # Vision score (0..10) at or above which a page passes the gate.
-    acceptance_min_score: int = Field(default=7)
-    # SCORE-ONLY mode (owner 2026-06-02): run the gate to COMPUTE + publish the
-    # vision verdict (visibility), but SHIP the freeform first attempt regardless
-    # — no repair re-rolls, no catalog fallback. Repairs via the coder don't
-    # escape "generic", and the catalog fallback ships a WORSE template than the
-    # rich freeform page; this keeps the freeform page + the score, and makes
-    # builds fast. Flip ACCEPTANCE_SCORE_ONLY=true to enable.
-    acceptance_score_only: bool = Field(default=False)
-    # Repair spend floor (2026-06-07, cost): with the design judge on, the gate
-    # used to fire a full second writer pass whenever attempt-0 wasn't "passed"
-    # (vision score < acceptance_min_score=7). The Awwwards critic rarely scores
-    # ≥7 first try, so that ~37%-of-build repair ran on ~100% of builds — and the
-    # best-so-far guard often reverted it anyway (pure waste, measured on prod).
-    # Now the repair is spent ONLY on a GENUINELY deficient page: a hard
-    # structural/responsive defect, a "broken" vision verdict, or a vision score
-    # BELOW this floor. A merely-not-perfect page (struct+resp OK, score in
-    # [floor, min_score)) ships as attempt-0 — first-pass quality is raised by a
-    # sharper brief, not a reflexive re-roll. Set = acceptance_min_score (7) to
-    # restore the old always-repair-on-borderline behaviour.
-    acceptance_repair_floor: int = Field(default=5)
-    # ── Taste barrier (область T) — re-arm the vision verdict as a FLAGGED gate ──
-    # Since V1.6 the vision verdict (broken/generic/beautiful) is pure ADVISORY:
-    # `acceptance.evaluate` drops `min_score` (`_ = min_score`) and computes
-    # `passed` without it. The deterministic composition floor (taste/hierarchy)
-    # catches "ugly by the numbers", but a page that is "not ugly, just generic"
-    # (vision verdict=generic, score 5–6, struct+resp OK) clears everything and
-    # ships. When True, the vision verdict gates `passed` AGAIN — but only when
-    # vision REALLY ran (a skip/ABSTAIN has no score and never blocks, R-10): a page
-    # blocks iff `verdict in {broken, generic}` OR `score < acceptance_min_score`.
-    # Default OFF = byte-identical to today (vision stays advisory). Flip
-    # ACCEPTANCE_VISION_BLOCK_ENABLED=true to make taste a real ship barrier.
-    acceptance_vision_block_enabled: bool = Field(default=False)
-    # Promote a "generic" vision verdict (not only "broken") to REPAIR-WORTHY in
-    # the Loop A self-repair gate (messages.py): a merely-generic page earns one
-    # re-roll with the vision issues as concrete feedback, so "not ugly but
-    # generic" regenerates instead of shipping. Only fires when vision really ran.
-    # Default OFF = today's behaviour (only broken / score<repair_floor re-rolls).
-    acceptance_taste_repair_on_generic: bool = Field(default=True)
-    # Taste-specific repair budget — how many extra Loop A re-rolls the taste
-    # barrier may spend. Decoupled from the global `auto_regenerate_enabled`
-    # (owner: never auto-regenerate the whole page) so the taste path can be
-    # calibrated in isolation. ONLY raises `_max_acc` when
-    # `acceptance_taste_repair_on_generic` is also ON. Default 0 = no taste
-    # re-roll (today's behaviour); 1 = exactly one generic→repair pass.
-    acceptance_taste_repair_passes: int = Field(default=0)
-    # Phase 1 / Area D — soften the catalog fallback (anti-sameness, DARK). Today,
-    # with `auto_regenerate_enabled` OFF, a freeform page that fails the gauntlet
-    # gets ZERO repair re-rolls and drops STRAIGHT to the single catalog template —
-    # so the harder the floors bite, the more diverse-but-rejected pages collapse to
-    # the SAME fallback look. This budgets N freeform repair re-rolls with the
-    # gate's own failed-class feedback BEFORE the catalog fallback fires, so the
-    # rich (diverse) freeform page gets a chance to FIX the specific issue instead
-    # of being wholesale-replaced by the template. Decoupled from
-    # `auto_regenerate_enabled` (same discipline as `acceptance_taste_repair_passes`)
-    # so it can be calibrated in isolation; the repair is a TARGETED feedback re-roll,
-    # not a blind full-page regeneration. Default 0 = today's behaviour (no extra
-    # re-roll; straight to catalog). Recommended flip: 1. Env: ACCEPTANCE_GATE_REPAIR_PASSES.
-    acceptance_gate_repair_passes: int = Field(default=0)
-    # OWNER 2026-06-14 — AUTOMATIC FULL-PAGE REGENERATION OFF (default False).
-    # The owner saw a build auto-"перегенерирую с рабочими ссылками" mid-session
-    # and ruled: NEVER auto-regenerate the whole page — only deterministic
-    # inline/targeted edits. When False, both auto re-roll paths are suppressed:
-    # (1) the dead-link LLM re-roll (the inline href fixer still runs — that's a
-    # targeted edit, kept), and (2) the acceptance-gate repair re-roll (the gate
-    # still EVALUATES and publishes its advisory verdict, but never re-rolls —
-    # `_max_acc` is forced to 0). Flip to True only to restore auto-repair.
-    auto_regenerate_enabled: bool = Field(default=False)
-    # V1.6 keystone — the acceptance gauntlet (`accept_gauntlet.run`) is the ship
-    # decision: `evaluate()` blocks on its findings and the vision verdict is
-    # demoted to advisory. The DETERMINISTIC defect-registry leg always blocks
-    # (cheap, pure, the known-defect ratchet — dead-auth-link, dark-theme-loss,
-    # bad lucide imports, …). The RENDERED legs (wow-dom / perf-a11y / chip-pixel)
-    # each spin up a headless browser, so on the product-default freeform path
-    # they are OFF by default — flip ACCEPTANCE_GAUNTLET_RENDER_GATES=true to add
-    # their teeth to the hot path. The standalone CLI / niche-E2E always runs the
-    # full fan-out (it audits a live container URL, no per-attempt cost).
-    acceptance_gauntlet_render_gates: bool = Field(default=True)
-    # V1.6 14/5 — DECOUPLE the composition floor from the touch leg. Taste +
-    # hierarchy (the COMPOSITION_LEGS) score awwwards richness at DESKTOP width and
-    # have NO 44px-touch false-positive, so they are the ALWAYS-ON hard ship-block
-    # on the product path — separate from the wow-dom touch leg (44px), which stays
-    # behind `acceptance_gauntlet_render_gates` until calibration 11/5. Before this
-    # flag the whole render-half was gated by one switch (default OFF), so the
-    # pillar-1 awwwards promise was asserted on ZERO shipping requests. Default ON.
-    acceptance_gauntlet_composition_gates: bool = Field(default=True)
-    # V2.5.2 — chip-pixel = HARD ship-block (causality bridge). The chip-pixel leg
-    # asserts request↔render fidelity from the user's persisted onboarding answers
-    # (`projects.discovery_spec`, V2.5.0/V2.5.1). It has NO 44px-touch false-positive
-    # and is INERT when there is no spec (asserts nothing → passes), so it runs
-    # ALWAYS-ON — decoupled from `acceptance_gauntlet_render_gates` (which keeps the
-    # wow-dom touch leg behind calibration 11/5). `evaluate()` switches it on only
-    # when a non-empty spec exists, so a chip→pixel mismatch (dark+violet requested,
-    # light+red rendered) hard-fails the ship path; projects without onboarding
-    # answers are byte-identical to before (no extra render). Default ON; flip
-    # ACCEPTANCE_GAUNTLET_FIDELITY_GATE=false to disable if a false-positive surfaces.
-    acceptance_gauntlet_fidelity_gate: bool = Field(default=True)
-    # V3.3 — the money-free COMPOSITION FLOOR (`compose=` dial). A pure source-scan
-    # (no render, no model) that hard-fails a catastrophically flat freeform
-    # `index.html` — one uniform type size, no section rhythm, no hero — BEFORE any
-    # paid render or the advisory vision pass. The floors are catastrophe-only, so a
-    # real enterprise generation never trips them, and the scan is INERT (a passing
-    # no-op) on a set with no standalone HTML page (entity/fullstack stacks, judged
-    # by the rendered taste/hierarchy legs). It runs ALWAYS-ON on the hot path —
-    # decoupled from `acceptance_gauntlet_render_gates`. Default ON; flip
-    # ACCEPTANCE_GAUNTLET_COMPOSE_GATE=false to disable if a false-positive surfaces.
-    acceptance_gauntlet_compose_gate: bool = Field(default=True)
-    # V1.13b — the pillar-1 CEILING leg (`REFERENCE_LEGS`). Where the composition
-    # legs assert a FLOOR ("no defect class present"), this asserts a CEILING: a
-    # generation must MEET OR BEAT a curated enterprise corpus on the five richness
-    # axes the taste/hierarchy gates already score (R-04, no new metric). It is
-    # decoupled from `acceptance_gauntlet_render_gates` via the `reference=` dial
-    # and ABSTAINS (never hard-fails) when the corpus is empty or a page does not
-    # render (R-10). The wiring + deterministic/live-chromium teeth are money-free
-    # and shipped now.
-    #
-    # FLIP-RUNBOOK (V1.13c — the PAID owner corpus-run, made falsifiable). Do NOT
-    # flip this to True by eye. The flip is permitted iff `scripts/
-    # reference_flip_milestone.py --mode gate` exits 0, which proves all three:
-    #   1. CANDIDATES CLEAR — N>=1 fresh generations (no model change, no manual
-    #      edits) each MEET-OR-BEAT every curated corpus niche.
-    #   2. ADVERSARY BELOW (teeth) — the known-mediocre baseline regresses on >= 2
-    #      of the five richness axes against EVERY niche (`prove_reference_ceiling`).
-    #   3. CORPUS PRESENT — the frozen reference corpus is non-empty.
-    # Owner: generate the candidates, run `--mode gate`, then flip + commit the
-    # `--out` report. CI runs `--mode guard` (via test_reference_flip_milestone):
-    # this flag ON without a recorded passing milestone turns the suite RED. Mirror
-    # of `acceptance_gauntlet_render_gates` / 16/5e. Default OFF.
-    acceptance_gauntlet_reference_gate: bool = Field(default=False)
-    # V1.13d — the CEILING RATCHET strength. The reference leg today compares only
-    # the BOOLEAN per-axis verdicts (axis passed / failed), so once a generation
-    # independently clears the taste/hierarchy floor it "meets or beats" every
-    # curated reference trivially (True >= True) — the corpus adds no teeth beyond
-    # the always-on composition floor. Flip this ON to enforce the real ceiling: a
-    # generation must score within `reference_ceiling_tolerance` points of the
-    # reference's OWN combined richness score (taste 0–5 + hierarchy 0–3), not just
-    # match its boolean axes. OFF (default) → byte-identical boolean floor (current
-    # behaviour). It is fail-soft: the score floor applies ONLY when BOTH pages
-    # rendered AND the reference itself is rich (cleared its boolean floor); any
-    # render miss or a thin reference ABSTAINS (R-10), so a flaky corpus render can
-    # never sink an otherwise-good page. Independent of the `reference_gate` dial
-    # (that decides WHETHER the leg runs; this decides HOW STRICT it is when it does).
-    reference_ceiling_enforced: bool = Field(default=False)
-    # Points a generation may fall below the reference's own richness before the
-    # ceiling ratchet fails it (only consulted when `reference_ceiling_enforced`).
-    # 0 = strict meet-or-beat; 1 (default) forgives one soft regression so a single
-    # axis dip on a genuinely strong page is not a false block.
-    reference_ceiling_tolerance: int = Field(default=1)
-    # V1.17 — the catalog-realism ratchet (`CATALOG_LEGS`). The eight money-free
-    # RULE-10 demo-seeder fixes (niche titles, price-bands, real images,
-    # title↔category, title↔description, category synonyms, future dates, niche
-    # emails) each shipped with a unit test, but the only gate over the seeder's
-    # output, `data_gate`, measures MIN_ROWS>=6 — non-emptiness, never realism, so a
-    # NEW niche could silently regress any class. This leg scores the rendered
-    # catalog DOM across those realism axes (mirroring taste_gate's
-    # JS-extract→Python-score shape, R-04). It is ADVISORY (a non-blocking
-    # quality-card): it surfaces a 0–5 score + the fired axes in the gauntlet table /
-    # subscore but NEVER blocks ship, and it ABSTAINS on a render miss / WAIVES a
-    # non-catalog page (R-10), so wiring it is safe everywhere. Default OFF on the
-    # hot path — it adds one headless render per generation, so the owner flips it on
-    # (or the paid-run manifest folds it in) once the niche heuristics have earned
-    # trust; the CLI folds it in already.
-    acceptance_gauntlet_catalog_gate: bool = Field(default=False)
-    # V1.6 16/5 — ENTITY/FULLSTACK hot-path. Entity apps skip acceptance.evaluate
-    # (container-backed), so the composition floor never touched the dominant
-    # pillar-1 class. This wires the live-URL path: after a clean hot-reload +
-    # compile-settle, a worker job fans the COMPOSITION_LEGS over the LIVE
-    # container (omnia-dev-<slug>:3000, container-to-container, no public egress)
-    # and surfaces a hard_failed as a quality card.
-    #
-    # Default OFF (calibration-gated, same discipline as render-gates 14/5/0/5):
-    # the FIRST live run against the canonical good entity app (sushi) hard-failed
-    # taste — `font-pairing≥2` rejects single-family designs and the Next DEV
-    # overlay (`__nextjs-Geist`) pollutes the DOM. A hot-path hard-gate would flood
-    # false-positive cards on good apps. The mechanism is proven (renders, scores,
-    # discriminates with precise classes); flip ON once the legs are calibrated for
-    # real entity apps (strip dev-overlay nodes + taste single-family tolerance) —
-    # carried as 16/5b. CLI / niche-E2E always run the legs regardless.
-    acceptance_entity_composition_gate: bool = Field(default=False)
 
-    # ── Phase 1 / Area D — composition-gate retune (anti-sameness, DARK) ───
-    # Why: the ALWAYS-ON composition floor (taste 4/5 + hierarchy 2/3) mechanically
-    # rewards ONE silhouette — a single towering hero, ONE dominant focal element,
-    # a hero image, NO equal 3-card rows. Flat/swiss/modular/multi-focal/poster
-    # layouts hard-fail, so diverse-but-valid generations are funnelled back to the
-    # one "safe enterprise landing" (and a freeform fail then drops to the single
-    # catalog template). These knobs let the owner DEMOTE the deviation-punishing
-    # checks to advisory (they still surface in the gauntlet card, but no longer
-    # block ship or feed repair) WITHOUT touching the real quality floor, which is
-    # correctness/a11y (contrast/WCAG/dead-link/44px) + the catastrophe compose
-    # floor — none of which these touch. Applied in `accept_gauntlet` at the
-    # composition-leg verdict, so EVERY ship path (freeform + entity + CLI) honours
-    # them uniformly; the pure taste/hierarchy rubrics are unchanged.
-    #
-    # ALL DEFAULTS = today's behaviour (byte-identical). Recommended flip values are
-    # noted per flag; the owner enables them on the stand when ready (DARK rollout).
-    #
-    # Comma-list of HIERARCHY check ids to treat as ADVISORY (surface, never block).
-    # Known ids: "type-dominance", "focal-dominance", "asymmetry". When non-empty
-    # the hierarchy floor becomes "every NON-advisory (blocking) check passes" (the
-    # 2/3 score model is bypassed). Recommended: "focal-dominance,asymmetry" — keep
-    # only `type-dominance` as the floor, so modular grids / symmetric posters /
-    # multi-focal layouts stop being rejected. Empty (default) → 2/3 score model.
-    gate_hierarchy_advisory_checks: str = Field(default="")
-    # Comma-list of TASTE check ids to treat as ADVISORY (surface, never block).
-    # Known ids: "font-pairing", "type-scale", "hierarchy", "layout-variety",
-    # "hero-imagery". When non-empty the taste floor becomes "every NON-advisory
-    # check passes" (the score model below is bypassed). Recommended: "hero-imagery"
-    # — stop forcing every page to carry a big hero image. Empty (default) → score
-    # model with `gate_taste_min_score`.
-    gate_taste_advisory_checks: str = Field(default="")
-    # TASTE score floor (0..5) when no taste advisory checks are set. Default 4 =
-    # `taste_gate.MIN_SCORE` (today). Recommended flip: 3 — loosen the single-shape
-    # demand without dropping the floor to the bootstrap baseline.
-    gate_taste_min_score: int = Field(default=4)
-    # HIERARCHY score floor (0..3) when no hierarchy advisory checks are set.
-    # Default 2 = `hierarchy_gate.MIN_SCORE` (today). Kept for symmetry; prefer the
-    # advisory-checks knob above (more targeted than a blunt score drop).
-    gate_hierarchy_min_score: int = Field(default=2)
 
-    # ── Area C (authenticated cabinet gate) — DARK, default OFF ───────────
-    # When ON the live-app gate LOGS IN to the generated app with a seeded
-    # operator account and scores the real CABINET (/dashboard + CRUD) instead
-    # of the public storefront `/`. It then fans the FULL rendered set
-    # (first_paint, perf_a11y, wow_dom, data, taste, hierarchy) at desktop AND
-    # @390, and verifies empty-state/onboarding/skeleton hygiene. OFF = current
-    # behaviour byte-identical (taste+hierarchy on `/`, no login). Requires the
-    # orchestrator's OMNIA_GATE_SEED=1 so a login-able seed account exists.
-    gate_authenticated_cabinet: bool = Field(default=True)
-    # Login email for the gate's seed operator account (matches the orchestrator
-    # seed). Fixed local address — it can never receive mail, only sign in.
-    gate_seed_email: str = Field(default="gate@omnia.local")
-    # ADVISORY at first: the cabinet empty-state/onboarding/skeleton gate
-    # surfaces a quality card but never blocks ship until calibrated (same
-    # discipline as acceptance_gauntlet_catalog_gate).
-    gate_cabinet_states_advisory: bool = Field(default=True)
     # Area C (b2) — Chromium host-resolver rule so the gate's headless browser can
     # reach a generated app's PUBLIC preview host (its canonical Auth.js AUTH_URL,
     # where secure cookies work) from inside the worker network. The worker can only
@@ -922,31 +611,6 @@ class Settings(BaseSettings):
     # "MAP *.preview.lead-generator.ru 172.21.0.1". Env: GATE_PREVIEW_RESOLVER_RULES.
     gate_preview_resolver_rules: str = Field(default="")
 
-    # ── Phase 11 — Sprint 4 (anti-generic) + Sprint 5 (rollout) ───────────
-    # Originality: fingerprint each accepted freeform page and penalise the
-    # next one that comes out near-identical to a DIFFERENT project's page
-    # (the "every AI site looks the same" failure). Default ON (anti-generic) —
-    # only active for freeform pages; catalog pages are intentionally alike.
-    # OFF (owner 2026-06-03): like vision it fingerprints the acceptance-capture
-    # screenshot — unreliable when remote images haven't painted — and in
-    # score-only mode only labels, never blocks. Dead weight; killed with vision.
-    use_originality: bool = Field(default=False)
-    # Phase 1 / Area D — originality SHADOW metric (anti-sameness instrumentation).
-    # `use_originality` (above) makes a near-duplicate BLOCK ship + feed repair —
-    # which, with auto-regenerate off, just drops the page to the uglier catalog
-    # fallback (owner kept it OFF). Shadow mode is the safe observability path: it
-    # fingerprints the accepted page, MEASURES the nearest cross-project dHash
-    # distance, LOGS it as a diversity metric, and REMEMBERS it in the pool —
-    # but NEVER blocks ship and NEVER feeds repair. This quantifies how alike the
-    # generated sites are, so each diversity phase (D→C→A→B+E) can be measured.
-    # Independent of `use_originality`; default OFF = no extra work, no log. Flip
-    # ORIGINALITY_SHADOW=true to start collecting the metric. Fail-soft (R-10).
-    originality_shadow: bool = Field(default=False)
-    # Hamming distance (0..64 over a 64-bit dHash) at/below which two pages are
-    # "too similar". Lower = stricter. ~10 catches near-duplicates without
-    # flagging merely same-vibe pages. Also the threshold the shadow metric logs
-    # against (to flag near-duplicates without blocking).
-    originality_max_distance: int = Field(default=10)
     # Gradual rollout: freeform applies to this % of projects (deterministic
     # bucket by project_id). 100 = everyone (when USE_FREEFORM_RENDER is on);
     # the rest fall back to catalog/IR. Lets ops ramp 10→50→100 via .env.
@@ -963,79 +627,6 @@ class Settings(BaseSettings):
     # for instant rollback to the prior single-shot freeform path (R-10).
     use_art_director_freeform: bool = Field(default=True)
 
-    # Extend the SAME Art-Director → Writer 2-pass to container-backed APP
-    # stacks that have a dedicated .tsx writer variant (currently
-    # `nextjs_entities`, see art_director_writer._APP_TEMPLATES). Without this,
-    # entity/app builds fall through to a bare single-shot .tsx pass — no design
-    # brief, no authoritative theme tokens (hardcoded colours leak), no
-    # `omnia:brief` event (the live narration / swatches stay blank). On = the
-    # flagship enterprise apps get the same art-direction the freeform landings
-    # already get. Kill switch for instant rollback to the single-shot path.
-    use_art_director_entities: bool = Field(default=True)
-
-    # Brief-lean Art-Director prompt (infra cost — 2026-06-16). The 2-pass build
-    # sends the SAME ~14K-token system prompt to BOTH passes, but pass 1 (the
-    # Art-Director) only writes a PROSE brief — it never emits code, so the
-    # heaviest blocks (the shadcn app kit _ENTITIES_UI ~650 lines, the landing
-    # section kit ~340, stack contracts, the <file> response format, the
-    # self-check) are dead weight on its input. On = pass 1 gets a trimmed system
-    # (design-thinking blocks only); pass 2 (the writer) keeps the FULL prompt, so
-    # final code quality is unchanged. Kill switch for instant rollback to the
-    # shared-full-prompt behaviour.
-    use_lean_art_director_prompt: bool = Field(default=True)
-
-    # ── Surgical edit mode (owner directive 2026-06-06) ───────────────────
-    # After the first build, a follow-up that changes ONE thing (a selected
-    # element, a recolour, a text swap, "add an intro section") is routed by the
-    # triage to a single cheap model that emits a SURGICAL <edit> patch and is
-    # forbidden — by a lean edit-only prompt AND by skipping the full-build
-    # guards (palette/contrast/signature-floor/acceptance) — from touching the
-    # rest of the page. Fixes the owner's two complaints: a small edit no longer
-    # spins up the Art-Director→Writer premium pipeline (cost), and no longer
-    # re-rolls the palette / regenerates other sections ("всё потерялось").
-    # No reader since the one-shot pipeline left with the site builder: a cheap
-    # follow-up is always an agent edit turn. Kept until the settings clean-up.
-    use_surgical_edit: bool = Field(default=True)
-
-    # Container-app edit rewrite fallback (2026-06-21). When a surgical <edit>
-    # can't land on a React/Next container app (no index.html → the static
-    # rewrite fallbacks never fire), rewrite the TARGETED file(s) full-file via
-    # the reliable writer model, guarded by a content-preservation ratio. Fixes
-    # the owner's "сайт сломан → починить через чат не выходит, просто перестаёт
-    # что-то делать": a failed <edit> on an entity/fullstack/spa app no longer
-    # dead-ends. Kill per-env: USE_CONTAINER_EDIT_REWRITE=false.
-    use_container_edit_rewrite: bool = Field(default=True)
-
-    # ── App self-repair loop (Claude-Code «verify → fix», DARK) ───────────
-    # After a container app (Next/entities/spa) hot-reloads generated files, the
-    # dev server may fail to COMPILE or 5xx at RUNTIME. Today we only SURFACE that
-    # as a chat card (`_probe_compile_errors`) and stop — the user is left with a
-    # broken app and «добавь фичу» that didn't actually land. When > 0, the server
-    # instead runs a BOUNDED self-repair loop: probe the real compile/runtime error
-    # from the live container, feed it + the failing file to the `app_doctor` model
-    # role (DeepSeek), hot-reload the fix, re-probe — up to N passes — then commit
-    # the repaired files as a follow-up snapshot so the fix survives a rebuild. This
-    # is the Claude-Code reliability step that lets DeepSeek actually ADD working
-    # functionality, not just emit code that may not compile. Bounded + fail-soft
-    # (R-10): any orchestrator/model hiccup falls back to surfacing the card (the
-    # old behaviour). Default 0 = OFF (byte-identical to today). Recommended flip:
-    # 2. Env: APP_SELF_REPAIR_PASSES.
-    app_self_repair_passes: int = Field(default=0)
-
-    # ── Feature scaffolding for container apps (give-it-functionality, DARK) ──
-    # A follow-up like «добавь раздел бронирований / форму записи / каталог» on a
-    # container app (Next/entities) routes to the surgical EDIT path (bias-to-edit,
-    # by design). That path can create a page file, but it is NOT told the
-    # entity-JSON contract or to WIRE the new route into the nav — so a data-backed
-    # feature ships calling `entities.X.list()` with no `entities/X.json` (runtime
-    # "unknown entity") or as an unreachable page ("добавил, но не видно"). When ON,
-    # an "add functionality" edit on a container app gets a SCAFFOLD block in its
-    # prompt: the exact entities/<Name>.json schema, the <CrudResource> route under
-    # (app)/dashboard, and the mandatory nav-wiring edit — so DeepSeek creates a
-    # COMPLETE, connected feature. Pairs with the self-repair loop (new files that
-    # don't compile get auto-healed). Default OFF = byte-identical (no extra prompt
-    # block). Recommended flip: true. Env: USE_FEATURE_SCAFFOLD.
-    use_feature_scaffold: bool = Field(default=True)
 
     # Real-backend default (2026-06-27, owner: «мне ентитиз не нужны, нужен реальный
     # бэкенд»). When ON, a `web_app` result-type (accounts + saved data) routes to
@@ -1063,16 +654,6 @@ class Settings(BaseSettings):
     # restores the legacy design-mood-only path immediately.
     use_design_intelligence_plugin: bool = Field(default=True)
 
-    # Locked-primitive CONTRACT card (2026-06-27, harness-hardening). On a realtime
-    # build the seed used to tell the agent «read the fixed files and check the
-    # signatures yourself» — a weak model skips the reads and HALLUCINATES names /
-    # shapes / arity (live: `getChannels` vs `listUserChannels` → TS2305; own
-    # `Channel` type vs `@/lib/db/schema` → TS2322; `useChannel()` no-arg → TS2554),
-    # then loops on the type errors. When ON we instead HAND the agent the exact
-    # `.d.ts`-style signatures of the locked primitives up front (deep-module: a
-    # narrow, exact interface beats "go discover it"), killing those error classes
-    # deterministically. Default ON; flip USE_PRIMITIVE_CONTRACT=0 to revert.
-    use_primitive_contract: bool = Field(default=True)
 
     # Ship-green-on-abort (2026-06-27, harness-hardening). A loop-guard abort
     # (cycle / repeat / explore / budget) used to ALWAYS return done=False →
@@ -1119,6 +700,17 @@ class Settings(BaseSettings):
     project_cell_general_availability_enabled: bool = Field(default=False)
     project_cell_canary_emails: str = Field(default="")
     use_generation_worker: bool = Field(default=False)
+    # Сколько сборок воркер ведёт одновременно. Это ГЛАВНЫЙ предел числа
+    # пользователей, которые могут запустить генерацию в одну минуту: мощности
+    # ячеек с 26.09 хватает на 14 на площадку, а воркер пускал ровно 8 — и это
+    # число было вписано в код, то есть менялось только пересборкой.
+    #
+    # Поднимать его стоит по замеру, а не на глаз: на восьмиядерном хосте восемь
+    # сборок — это уже примерно по ядру на сборку, дальше они начнут отнимать
+    # процессор друг у друга и каждая станет медленнее. Насыщение видно в
+    # сердцебиении воркера (поля active и limit) — когда active подолгу равен
+    # limit, предел действительно мешает, и тогда его можно двигать.
+    generation_worker_max_concurrent: int = Field(default=8, ge=1, le=64)
     use_max_finalization_coordinator: bool = Field(default=False)
     use_project_cell_activity_watchdog: bool = Field(default=False)
     use_generation_event_replay: bool = Field(default=False)
@@ -1166,7 +758,6 @@ class Settings(BaseSettings):
     project_cell_capacity_wait_seconds: int = Field(default=3600, ge=30, le=7200)
     project_cell_heartbeat_seconds: int = Field(default=15, ge=1, le=300)
     project_cell_watchdog_grace_seconds: int = Field(default=20, ge=1, le=600)
-    project_cell_operation_timeout_seconds: int = Field(default=180, ge=1, le=3600)
     project_cell_preview_host_suffix: str = Field(
         default="preview.lead-generator.ru",
         pattern=r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$",
@@ -1269,13 +860,6 @@ class Settings(BaseSettings):
     # that were really committed. Kill per-env: USE_CLEAN_CHAT_CONTENT=false.
     use_clean_chat_content: bool = Field(default=True)
 
-    # Hero background visibility (owner directive 2026-06-06) — on every fresh
-    # BUILD, guarantee the main screen shows its photo/graphic background instead
-    # of a flat dark wash. The writer often buries the hero's full-bleed image
-    # under a /70-/90 black overlay; this post-process deterministically lightens
-    # that overlay + dims the WebGL shader so the on-theme image/graphic is
-    # actually seen. Kill per-env: USE_HERO_BG_VISIBLE=false.
-    use_hero_bg_visible: bool = Field(default=True)
 
     # ── Testing escape hatch — remove ALL generation gating ───────────────
     # When true: every generation is treated as free (is_free=True), so the
@@ -1285,17 +869,6 @@ class Settings(BaseSettings):
     # generation. Flip UNLIMITED_GENERATIONS=false to restore normal billing.
     unlimited_generations: bool = Field(default=False)
 
-    # ── Exe-build (Windows installer, Task 6) ─────────────────────────────
-    # POST /api/projects/{id}/build-exe — packages a Python project into a
-    # Windows .exe + NSIS Setup installer via the orchestrator's /build-exe
-    # route. Off by default (the omnia-exe-builder image is an optional
-    # sidecar; flip on once it is present in docker-compose). Kill switch:
-    # USE_EXE_BUILD=false.
-    use_exe_build: bool = Field(default=True)
-    # Hard-limit on the Setup.exe size (MB) the worker will accept before
-    # refusing to upload. Prevents a runaway PyInstaller from exhausting
-    # MinIO quota. Env: EXE_BUILD_MAX_MB.
-    exe_build_max_mb: int = Field(default=150)
 
     @property
     def cors_origins_list(self) -> list[str]:

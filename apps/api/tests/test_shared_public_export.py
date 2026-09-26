@@ -51,7 +51,7 @@ def test_missing_shared_asset_is_not_silently_omitted(tmp_path, monkeypatch):
         project_export.build_runnable_export("max-miniapp-nextjs", {})
 
 
-@pytest.mark.parametrize("name", ["max-miniapp-nextjs", "nextjs-entities"])
+@pytest.mark.parametrize("name", ["max-miniapp-nextjs"])
 def test_generic_complete_template_with_matching_name_keeps_its_own_files(tmp_path, name):
     template = tmp_path / name
     template.mkdir()
@@ -109,10 +109,10 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         timeout=30,
     )
     assert result.returncode == 0, result.stdout + result.stderr
-    assert result.stdout.count("complete export hashes and generated override passed") == 4
+    assert result.stdout.count("complete export hashes and generated override passed") == 1
 
 
-@pytest.mark.parametrize("template", ["nextjs-entities", "nextjs-postgres-drizzle"])
+@pytest.mark.parametrize("template", ["max-miniapp-nextjs"])
 def test_generated_file_and_empty_source_override_survive_export(template):
     # A shared-source path: the generated file must beat the template's own copy.
     generated_path = "src/app/omnia-brief.ts"
@@ -130,7 +130,7 @@ def test_generated_file_and_empty_source_override_survive_export(template):
 
 @pytest.mark.parametrize("relative", ["src/../escape.ts", "/escape.ts", "src\\escape.ts"])
 def test_api_rejects_unsafe_shared_source_path(tmp_path, monkeypatch, relative):
-    template = tmp_path / "nextjs-entities"
+    template = tmp_path / "max-miniapp-nextjs"
     template.mkdir()
     shared = tmp_path / "shared-public"
     shared.mkdir()
@@ -150,7 +150,7 @@ def test_api_rejects_unsafe_shared_source_path(tmp_path, monkeypatch, relative):
 
 @pytest.mark.parametrize("kind", ["ancestor", "leaf", "root", "missing"])
 def test_api_rejects_unavailable_or_linked_canonical_sources(tmp_path, monkeypatch, kind):
-    template = tmp_path / "nextjs-entities"
+    template = tmp_path / "max-miniapp-nextjs"
     template.mkdir()
     shared = tmp_path / "shared-public"
     canonical = shared / "source/src/lib/utils.ts"

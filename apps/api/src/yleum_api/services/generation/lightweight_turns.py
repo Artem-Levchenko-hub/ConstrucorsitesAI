@@ -74,25 +74,6 @@ async def _run_text_turn(project_id: UUID, assistant_message_id: UUID, text: str
     )
 
 
-_INSTALL_CARD_TEXT = (
-    "Готово — собрал установщик. Нажми кнопку ниже: скачается архив проекта. "
-    "Если это программа (Python/Node), внутри лежит **run.bat** — распакуй и сделай "
-    "двойной клик по нему (на Mac — run.command): он сам поставит зависимости и "
-    "запустит. Если это сайт — открой его кнопкой «Открыть» сверху.\n\n"
-    "<install-bundle></install-bundle>"
-)
-
-
-_RUN_ASK_TEXT = (
-    "Похоже, ты хочешь запустить проект у себя на компьютере. Собрать установщик "
-    "(архив с run.bat — распаковал, двойной клик, и оно само поставится и "
-    "запустится)? Или продолжим дорабатывать проект?"
-)
-
-
-_RUN_DECLINE_REPLY = "Понял, установщик не собираю. Напиши, что доработать или добавить — сделаю."
-
-
 def _failed_build_explanation(run: GenerationRun) -> str:
     """User-safe factual explanation; never invokes the code-generation agent."""
 

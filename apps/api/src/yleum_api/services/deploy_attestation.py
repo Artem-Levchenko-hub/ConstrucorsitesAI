@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yleum_api.core.config import Settings
 from yleum_api.models.attestation import Attestation
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellWorkspace
@@ -33,11 +32,6 @@ class DeployProof:
     reason: str
     commit_sha: str | None = None
     digest: str | None = None
-
-
-def blocking_required(settings: Settings) -> bool:
-    """Production cannot disable the release proof through a bad env toggle."""
-    return settings.env.lower() in {"prod", "production"} or settings.deploy_attestation_blocking
 
 
 def _digest_is_valid(attestation: Attestation) -> bool:

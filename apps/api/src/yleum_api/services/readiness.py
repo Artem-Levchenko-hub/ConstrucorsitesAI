@@ -37,6 +37,27 @@ def parse_worker_heartbeat(raw: bytes | str | None) -> tuple[bool, str]:
     return True, normalize_release_sha(release_sha if isinstance(release_sha, str) else None)
 
 
+def parse_worker_load(raw: bytes | str | None) -> str:
+    """Загрузка воркера сборок в виде «идёт/разрешено», например «3/8».
+
+    Старое сердцебиение этих полей не содержит, поэтому отсутствие — обычное
+    дело, а не поломка: отвечаем «unknown» и ничего не ломаем.
+    """
+
+    if not raw:
+        return "unknown"
+    try:
+        value = json.loads(raw.decode() if isinstance(raw, bytes) else raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return "unknown"
+    if not isinstance(value, dict):
+        return "unknown"
+    active, limit = value.get("active"), value.get("limit")
+    if not isinstance(active, int) or not isinstance(limit, int):
+        return "unknown"
+    return f"{active}/{limit}"
+
+
 def heartbeat_payload() -> str:
     return json.dumps(
         {
@@ -171,12 +192,13 @@ async def probe_readiness() -> ReadinessReport:
         _preview_storage_ok(),
     )
     generation_ok, generation_release = True, "unknown"
+    generation_load = "unknown"
     if get_settings().use_generation_worker:
         try:
             async with asyncio.timeout(_PROBE_TIMEOUT_SECONDS):
-                generation_ok, generation_release = parse_worker_heartbeat(
-                    await get_redis().get("omnia:health:generation-worker")
-                )
+                raw_generation = await get_redis().get("omnia:health:generation-worker")
+            generation_ok, generation_release = parse_worker_heartbeat(raw_generation)
+            generation_load = parse_worker_load(raw_generation)
         except Exception:
             generation_ok = False
     # The billing tick (renewals, open-order reconciliation) beats under its own
@@ -206,7 +228,14 @@ async def probe_readiness() -> ReadinessReport:
         },
         dependencies={
             **(
-                {"generation_worker_release_sha": generation_release}
+                {
+                    "generation_worker_release_sha": generation_release,
+                    # «3/8» — сколько сборок идёт и сколько разрешено. Это ответ
+                    # на вопрос «предел одновременных сборок мешает или нет»:
+                    # пока второе число заметно больше первого, поднимать его
+                    # незачем, а равенство подолгу означает, что упёрлись.
+                    "generation_worker_load": generation_load,
+                }
                 if get_settings().use_generation_worker
                 else {}
             ),

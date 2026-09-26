@@ -11,7 +11,7 @@ from yleum_api.services import agent_builder, agent_native
 
 @pytest.mark.parametrize(
     "template",
-    ["bare-nextjs", "nextjs-postgres-drizzle", "nextjs-entities", "max-miniapp-nextjs"],
+    ["bare-nextjs", "max-miniapp-nextjs"],
 )
 def test_stack_prompt_does_not_reintroduce_visual_action(template: str) -> None:
     guide = agent_builder.load_stack_system_prompt(template)

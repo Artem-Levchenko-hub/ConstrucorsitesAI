@@ -13,7 +13,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from yleum_api.core import config, db
 from yleum_api.models.generation_event import GenerationEvent
@@ -203,9 +203,6 @@ async def flow_factory(test_engine, monkeypatch):
             "use_native_agent",
             "use_edit_auto_repair",
             "use_agent_gate_feedback",
-            "use_visual_enricher",
-            "use_acceptance_gate",
-            "use_signature_floor",
             "use_image_gen",
             "use_video_gen",
             "use_max_finalization_coordinator",
@@ -251,21 +248,6 @@ async def flow_factory(test_engine, monkeypatch):
         async def forbidden_http(*_args, **_kwargs):
             pytest.fail("whole-flow fixture attempted external HTTP")
 
-        def enqueue(snapshot_id):
-            assert isinstance(snapshot_id, UUID)
-
-            async def check_committed_rows():
-                # enqueue_preview is called via to_thread. Its independent loop
-                # must own a fresh pool, not reuse the test loop's asyncpg pool.
-                engine = create_async_engine(flow.engine.url)
-                try:
-                    await flow.assert_publication_visible(engine, snapshot_id, "enqueue_preview")
-                finally:
-                    await engine.dispose()
-
-            asyncio.run(check_committed_rows())
-            flow.trace.append("enqueue_preview")
-
         monkeypatch.setattr(httpx.AsyncClient, "send", forbidden_http)
         monkeypatch.setattr(agent_pipeline, "publish_event", publish)
         monkeypatch.setattr(agent_publication, "publish_event", publish)
@@ -277,7 +259,6 @@ async def flow_factory(test_engine, monkeypatch):
         monkeypatch.setattr(agent_pipeline, "clear_stream_state", clear)
         monkeypatch.setattr(supervisor, "clear_generation_cancel", noop)
         monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", wait_cancel)
-        monkeypatch.setattr(agent_publication, "enqueue_preview", enqueue)
         return flow
 
     return make
@@ -362,7 +343,7 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
     assert run.status == ("cancelled" if cancel else "failed")
     assert run.finished_at is not None and message.tokens_out == 0
     assert len(durable_events) == 1 and durable_events[0].payload["tool"] == "project_cell"
-    assert "snapshot.created" not in flow.trace and "enqueue_preview" not in flow.trace
+    assert "snapshot.created" not in flow.trace
     assert "llm.done" not in flow.trace
     assert flow.trace.count("generation.cancelled") == int(cancel)
     assert flow.trace.count("llm.error") == int(not cancel)
@@ -599,18 +580,16 @@ async def test_real_agent_publication_or_rollback_reaches_terminal_state(
         assert runtime_files == {"README.md": "Preserve this source"}
         assert "последняя рабочая версия" in message.content
         assert durable_events[-1].payload["tool"] == "rollback"
-        assert "enqueue_preview" not in flow.trace
     else:
         assert run.status == "completed" and run.error is None
         assert owner.free_generations_used == 4 and len(snapshots) == 2
         snapshot = next(row for row in snapshots if row.id != flow.parent_id)
         assert project.current_snapshot_id == message.snapshot_id == snapshot.id
         assert repo.read_files(flow.project_id, snapshot.commit_sha) == changed
-        assert flow.visible_publications == ["enqueue_preview", "snapshot.created"]
+        assert flow.visible_publications == ["snapshot.created"]
         assert message.content == "Calculation implemented." and message.tokens_out == 0
         assert (
             flow.trace.index("provider")
-            < flow.trace.index("enqueue_preview")
             < flow.trace.index("snapshot.created")
             < flow.trace.index("llm.done")
         )
@@ -688,7 +667,7 @@ async def test_identical_exact_edit_fails_without_snapshot_or_version(
         "Не удалось применить правку: итоговый код не изменился. "
         "Повтори запрос или уточни, что именно нужно изменить."
     )
-    assert "snapshot.created" not in flow.trace and "enqueue_preview" not in flow.trace
+    assert "snapshot.created" not in flow.trace
     assert error_cards == []
     assert repo.read_files(flow.project_id, flow.parent_sha) == baseline_files
 
@@ -784,7 +763,7 @@ async def test_real_native_candidate_red_restored_green_stays_failed(flow_factor
     assert flow.trace.index("restored_build") < flow.trace.index("llm.done")
     assert flow.trace.count("llm.done") == 1
     assert not flow.visible_publications
-    assert "snapshot.created" not in flow.trace and "enqueue_preview" not in flow.trace
+    assert "snapshot.created" not in flow.trace
     assert repo.read_files(flow.project_id, flow.parent_sha) == runtime_files
 
 
@@ -1060,7 +1039,7 @@ async def test_real_nonmax_selected_cell_owns_executor_and_final_probes(flow_fac
         "src/app/page.tsx": page,
     }
     assert message.content == "Calculation implemented."
-    assert flow.visible_publications == ["enqueue_preview", "snapshot.created"]
+    assert flow.visible_publications == ["snapshot.created"]
     assert len([kind for kind, _ in flow.events if kind == "llm.done"]) == 1
     assert any(event.payload["tool"] == "project_cell" for event in events)
 

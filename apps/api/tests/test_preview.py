@@ -1,17 +1,11 @@
-"""Tests for the preview-render worker's live container-URL resolution."""
+"""Live-URL resolution for the legacy dev container, and the capture settle."""
 
 from __future__ import annotations
 
 from uuid import uuid4
 
 from yleum_api.services import dev_container
-from yleum_api.services.generation import lifecycle
 from yleum_api.workers import preview
-
-
-def test_preview_alias_points_at_shared_resolver() -> None:
-    """R-04 single source: the preview job's resolver IS dev_container's."""
-    assert preview._resolve_live_url is dev_container.resolve_live_url
 
 
 async def test_resolve_live_url_running_returns_internal_url(monkeypatch) -> None:
@@ -75,12 +69,6 @@ async def test_resolve_live_url_appends_route(monkeypatch) -> None:
     assert await dev_container.resolve_live_url(uuid4()) == ("http://omnia-dev-crm-abc:3000")
 
 
-def test_container_next_matches_messages_router() -> None:
-    """Keep the worker's container-template list in sync with the router's."""
-
-    assert preview.CONTAINER_NEXT == lifecycle.CONTAINER_NEXT
-
-
 class _FakePage:
     """Minimal stand-in capturing wait_for_load_state calls."""
 
@@ -114,39 +102,3 @@ async def test_await_container_ready_swallows_timeout() -> None:
 # resolved <img src="{public_minio}/..."> photos never paint inside chromium →
 # image-less thumbnail / design-judge view even when the deployed page is fine.
 # Fix repoints the in-memory render copy to the internal MinIO endpoint.
-
-
-def test_rewrite_minio_public_to_internal(monkeypatch) -> None:
-    """A resolved public MinIO <img src> is repointed to internal minio:9000."""
-    settings = preview.get_settings()
-    monkeypatch.setattr(settings, "minio_public_url", "https://constructor.lead-generator.ru/minio")
-    monkeypatch.setattr(settings, "minio_endpoint", "minio:9000")
-    monkeypatch.setattr(settings, "minio_secure", False)
-    html = (
-        '<img src="https://constructor.lead-generator.ru/minio/omnia-images/'
-        'proj/abc.png" class="absolute inset-0">'
-    )
-    out = preview._rewrite_minio_to_internal(html)
-    assert "http://minio:9000/omnia-images/proj/abc.png" in out
-    # The public host must not survive in the render copy (it's unreachable here).
-    assert "constructor.lead-generator.ru" not in out
-
-
-def test_rewrite_minio_noop_without_images(monkeypatch) -> None:
-    """A page with no MinIO images is returned untouched (pure str.replace)."""
-    settings = preview.get_settings()
-    monkeypatch.setattr(settings, "minio_public_url", "https://constructor.lead-generator.ru/minio")
-    monkeypatch.setattr(settings, "minio_endpoint", "minio:9000")
-    monkeypatch.setattr(settings, "minio_secure", False)
-    html = '<section class="omnia-shader"><h1>Привет</h1></section>'
-    assert preview._rewrite_minio_to_internal(html) == html
-
-
-def test_rewrite_minio_noop_when_already_internal(monkeypatch) -> None:
-    """Local dev (public URL == internal) must not rewrite onto itself."""
-    settings = preview.get_settings()
-    monkeypatch.setattr(settings, "minio_public_url", "http://minio:9000")
-    monkeypatch.setattr(settings, "minio_endpoint", "minio:9000")
-    monkeypatch.setattr(settings, "minio_secure", False)
-    html = '<img src="http://minio:9000/omnia-images/p/x.png">'
-    assert preview._rewrite_minio_to_internal(html) == html

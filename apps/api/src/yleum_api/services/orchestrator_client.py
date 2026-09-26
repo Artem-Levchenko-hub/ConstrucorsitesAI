@@ -1948,11 +1948,6 @@ async def project_cell_apply_business_config(
     return applied
 
 
-async def wake(project_id: UUID) -> dict[str, Any]:
-    """POST /internal/projects/wake — start (or unpause) a previously provisioned project."""
-    return await _request("POST", "/internal/projects/wake", json={"project_id": str(project_id)})
-
-
 async def provision(
     *,
     project_id: UUID,
@@ -1986,15 +1981,6 @@ async def provision(
     )
 
 
-async def stop(project_id: UUID, *, pause: bool = True) -> dict[str, Any]:
-    """POST /internal/projects/stop — pause or full stop of dev container."""
-    return await _request(
-        "POST",
-        "/internal/projects/stop",
-        json={"project_id": str(project_id), "pause": pause},
-    )
-
-
 async def set_keep_alive(project_id: UUID, *, enabled: bool) -> dict[str, Any]:
     """Persist whether the project's dev runtime may be auto-hibernated."""
     return await _request(
@@ -2002,96 +1988,6 @@ async def set_keep_alive(project_id: UUID, *, enabled: bool) -> dict[str, Any]:
         "/internal/projects/keep-alive",
         json={"project_id": str(project_id), "enabled": enabled},
     )
-
-
-async def deploy(
-    project_id: UUID,
-    *,
-    commit_sha: str | None = None,
-    target: dict[str, Any] | None = None,
-    domains: list[str] | None = None,
-    runtime_env: dict[str, str] | None = None,
-    idempotency_key: str | None = None,
-) -> dict[str, Any]:
-    """POST /internal/projects/deploy — build prod image + swap traffic.
-
-    `target` (BYO-VPS) несёт расшифрованные SSH-креды чужого VPS: когда задан,
-    оркестратор разворачивает образ на машине пользователя, а не у нас.
-    `domains` — подключённые домены проекта: агент поднимет для них edge (авто-
-    HTTPS) на машине пользователя.
-    """
-    payload: dict[str, Any] = {"project_id": str(project_id)}
-    if commit_sha:
-        payload["commit_sha"] = commit_sha
-    if target:
-        payload["target"] = target
-    if domains:
-        payload["domains"] = domains
-    if runtime_env:
-        payload["runtime_env"] = runtime_env
-    if idempotency_key:
-        payload["idempotency_key"] = idempotency_key
-    return await _request("POST", "/internal/projects/deploy", json=payload)
-
-
-async def verify_deploy_target(target: dict[str, Any]) -> dict[str, Any]:
-    """POST /internal/deploy-targets/verify — SSH-коннект к чужому VPS + проверка docker.
-
-    `target` несёт РАСШИФРОВАННЫЕ креды (host/port/user/auth_type/secret) — канал
-    за X-Internal-Token, на одной машине это localhost. Возвращает
-    `{ok, detail, docker_ok, docker_version, host_key}`.
-    """
-    return await _request("POST", "/internal/deploy-targets/verify", json=target, timeout=45.0)
-
-
-async def teardown_remote_project(project_id: UUID, target: dict[str, Any]) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/internal/deploy-targets/teardown",
-        json={"project_id": str(project_id), **target},
-        timeout=150.0,
-    )
-
-
-async def get_remote_logs(
-    project_id: UUID, target: dict[str, Any], *, tail: int = 200
-) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/internal/deploy-targets/logs",
-        params={"tail": tail},
-        json={"project_id": str(project_id), **target},
-        timeout=45.0,
-    )
-
-
-async def sync_remote_routes(
-    project_id: UUID,
-    slug: str,
-    target: dict[str, Any],
-    domains: list[str],
-) -> dict[str, Any]:
-    return await _request(
-        "POST",
-        "/internal/deploy-targets/routes",
-        json={
-            "project_id": str(project_id),
-            "slug": slug,
-            "domains": domains,
-            **target,
-        },
-        timeout=60.0,
-    )
-
-
-async def publish_custom_domain(payload: dict[str, Any]) -> dict[str, Any]:
-    """POST /internal/domains/publish — nginx-vhost для чужого host + выпуск SSL.
-
-    payload: {host, project_id, slug}. Оркестратор пишет vhost host → контейнер
-    проекта и выпускает Let's Encrypt (HTTP-01). Возвращает
-    `{ok, cert_status, detail}`. Таймаут высокий — acme может идти долго.
-    """
-    return await _request("POST", "/internal/domains/publish", json=payload, timeout=120.0)
 
 
 async def publish_project_cell(project_id: UUID, payload: dict[str, Any]) -> dict[str, Any]:
@@ -2131,10 +2027,6 @@ async def get_deploy_history(project_id: UUID) -> list[dict[str, Any]]:
     if not isinstance(result, list):
         raise OrchestratorUnavailable("Orchestrator returned invalid deploy history")
     return cast(list[dict[str, Any]], result)
-
-
-async def cancel_deploy(project_id: UUID) -> dict[str, Any]:
-    return await _request("POST", f"/internal/projects/{project_id}/deploy/cancel")
 
 
 async def destroy(project_id: UUID, slug: str) -> dict[str, Any]:
@@ -2200,25 +2092,6 @@ async def runtime_status(
         f"/internal/projects/{project_id}/runtime-status",
         params=params,
     )
-
-
-async def read_container_file(project_id: UUID, slug: str, path: str) -> str | None:
-    """GET /internal/projects/{id}/read-file — read a whitelisted fixed file
-    (e.g. ``src/app/globals.css``) straight from the running dev container.
-
-    The project git repo only tracks AI-generated files; the template's fixed
-    files live solely in the container image. Returns the file content, or
-    ``None`` if it isn't present / the container is down (caller falls back).
-    """
-    resp = await _request(
-        "GET",
-        f"/internal/projects/{project_id}/read-file",
-        params={"slug": slug, "path": path},
-    )
-    if not resp.get("found"):
-        return None
-    content = resp.get("content")
-    return content if isinstance(content, str) else None
 
 
 # ── Agentic builder tools (Phase 0) ─────────────────────────────────────────

@@ -23,11 +23,9 @@ GOLDEN = json.loads((Path(__file__).parent / "fixtures/shared_public_git_golden.
 README_OVERRIDES = json.loads(
     (Path(__file__).parent / "fixtures/shared_public_readme_overrides.json").read_text()
 )
-assert set(README_OVERRIDES) == {
-    "nextjs-entities/README.md",
-    "nextjs-postgres-drizzle/README.md",
-    "nextjs-realtime/README.md",
-}
+# The site builder's three Next templates left and took their README overrides
+# with them; the MAX template ships the file the golden hash already pins.
+assert README_OVERRIDES == {}
 
 
 def assert_golden(name: str, root: Path) -> None:
@@ -156,7 +154,7 @@ async def test_shared_only_edit_rebuilds_complete_context_once(
 async def test_failed_build_keeps_existing_fallback_and_cleans_context(
     sparse_collection, tmp_path, monkeypatch, failure
 ):
-    source = sparse_collection / "nextjs-entities"
+    source = sparse_collection / "max-miniapp-nextjs"
     contexts = []
     monkeypatch.setattr(docker_client, "_image_created_epoch", lambda _: None)
     monkeypatch.setattr(
@@ -320,7 +318,7 @@ async def test_concurrent_provisions_build_shared_context_only_once(
     tmp_path,
     monkeypatch,
 ):
-    source = sparse_collection / "nextjs-realtime"
+    source = sparse_collection / "max-miniapp-nextjs"
     created = [None]
     contexts = []
     monkeypatch.setattr(docker_client, "_image_created_epoch", lambda _: created[0])
@@ -429,7 +427,9 @@ def test_shell_builds_materialized_contexts_and_cleans_after_failure(
     expected_code = (17 if script_kind == "smoke" else 1) if failure else 0
     assert result.returncode == expected_code, result.stdout + result.stderr
     contexts = log.read_text(encoding="utf-8").splitlines()
-    assert len(contexts) == (4 if script_kind == "bulk" else 1)
+    # One image per template dir that ships a Dockerfile.dev — the MAX app and the
+    # bare box are what is left of the eight the site builder shipped.
+    assert len(contexts) == 1
     # On Windows, Git Bash's /tmp is not the Python temp root. Ask the same shell.
     for context in contexts:
         assert subprocess.run([bash, "-c", 'test ! -e "$1"', "--", context]).returncode == 0

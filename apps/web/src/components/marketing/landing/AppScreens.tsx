@@ -12,9 +12,10 @@
  * что у настоящего: заметная плашка сверху, строка категорий, сетка карточек с
  * картинкой и ценой и закреплённая внизу полоса с главным действием.
  *
- * Картинки товаров нарисованы градиентами, а не взяты файлами: витрина не должна
- * тянуть ни одного байта со стороны, а узнаваемости «тёплый кофе / золотистая
- * выпечка / зелёное растение» для превью достаточно.
+ * Товары нарисованы вектором (`ProductArt`), а не взяты картинками: витрина не
+ * тянет ни байта со стороны, рисунок остаётся чётким на любом экране, и — главное
+ * — предмет узнаётся. Градиентное пятно читалось как заглушка и обесценивало всё
+ * вокруг себя, даже когда остальной экран был честным.
  */
 import {
   Check,
@@ -25,6 +26,8 @@ import {
   Search,
   Users,
 } from "lucide-react";
+
+import { ProductArt, type ArtKind } from "./ProductArt";
 
 export type ScreenKind =
   | "cafe"
@@ -66,7 +69,7 @@ export function ScreenChrome({
 }
 
 /** Заметная плашка сверху: то, ради чего клиент открыл приложение сейчас. */
-function Promo({ kicker, title, pill, tone }: { kicker: string; title: string; pill?: string; tone: string }) {
+export function Promo({ kicker, title, pill, tone }: { kicker: string; title: string; pill?: string; tone: string }) {
   return (
     <div className={`ys-promo ys-promo--${tone}`}>
       <div>
@@ -79,7 +82,7 @@ function Promo({ kicker, title, pill, tone }: { kicker: string; title: string; p
 }
 
 /** Строка категорий — первое, чем человек пользуется в каталоге. */
-function Chips({ items }: { items: readonly string[] }) {
+export function Chips({ items }: { items: readonly string[] }) {
   return (
     <div className="ys-chips">
       {items.map((label, i) => (
@@ -91,13 +94,13 @@ function Chips({ items }: { items: readonly string[] }) {
   );
 }
 
-/** Сетка карточек с картинкой, ценой и кнопкой добавления. */
-function Tiles({ items }: { items: readonly (readonly [string, string, string, string])[] }) {
+/** Сетка карточек с нарисованным товаром, ценой и кнопкой добавления. */
+function Tiles({ items }: { items: readonly (readonly [string, string, string, ArtKind])[] }) {
   return (
     <div className="ys-grid">
-      {items.map(([title, note, price, tone]) => (
+      {items.map(([title, note, price, art]) => (
         <div className="ys-tile" key={title}>
-          <span className={`ys-thumb ys-thumb--${tone}`} />
+          <ProductArt kind={art} />
           <strong>{title}</strong>
           <small>{note}</small>
           <div>
@@ -110,11 +113,38 @@ function Tiles({ items }: { items: readonly (readonly [string, string, string, s
   );
 }
 
+/** Строка «часто берут»: тот же товар, но списком — так экран не превращается в одну сетку. */
+function PickRow({ art, title, note, price }: { art: ArtKind; title: string; note: string; price: string }) {
+  return (
+    <div className="ys-row ys-row--art">
+      <ProductArt kind={art} />
+      <div className="ys-row-text">
+        <strong>{title}</strong>
+        <small>{note}</small>
+      </div>
+      <b>{price}</b>
+    </div>
+  );
+}
+
+/** Полоска-итог внизу раздела: бонусы, статус, голосование. */
+export function Strip({ title, note, value }: { title: string; note: string; value: string }) {
+  return (
+    <div className="ys-strip">
+      <div>
+        <strong>{title}</strong>
+        <small>{note}</small>
+      </div>
+      <b>{value}</b>
+    </div>
+  );
+}
+
 const CAFE_MENU = [
-  ["Капучино", "250 мл", "240 ₽", "coffee"],
-  ["Флэт уайт", "200 мл", "260 ₽", "milk"],
-  ["Круассан", "с миндалём", "190 ₽", "bake"],
-  ["Чизкейк", "кусок", "290 ₽", "cream"],
+  ["Капучино", "250 мл", "240 ₽", "cappuccino"],
+  ["Флэт уайт", "200 мл", "260 ₽", "flatwhite"],
+  ["Круассан", "с миндалём", "190 ₽", "croissant"],
+  ["Чизкейк", "кусок", "290 ₽", "cheesecake"],
 ] as const;
 
 /** Каталог с ценами — самый частый первый сценарий. */
@@ -133,6 +163,10 @@ export function CafeScreen() {
       <Promo kicker="Заберите без очереди" title="Будет готово к 8:40" pill="15 мин" tone="cafe" />
       <Chips items={["Кофе", "Выпечка", "Десерты", "Чай"]} />
       <Tiles items={CAFE_MENU} />
+      <p className="ys-kicker">Часто берут вместе</p>
+      <PickRow art="croissant" title="Круассан с миндалём" note="Из печи в 7:30" price="190 ₽" />
+      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="Кусок 120 г" price="290 ₽" />
+      <Strip title="Бонусная карта" note="Шестой кофе в подарок" value="4 из 6" />
     </ScreenChrome>
   );
 }
@@ -157,6 +191,10 @@ export function CafeAfterScreen() {
       </div>
       <Chips items={["Кофе", "Выпечка", "Десерты", "Чай"]} />
       <Tiles items={CAFE_MENU} />
+      <p className="ys-kicker">Часто берут вместе</p>
+      <PickRow art="croissant" title="Круассан с миндалём" note="Из печи в 7:30" price="190 ₽" />
+      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="Кусок 120 г" price="290 ₽" />
+      <Strip title="Бонусная карта" note="Шестой кофе в подарок" value="4 из 6" />
     </ScreenChrome>
   );
 }
@@ -205,6 +243,11 @@ export function SalonScreen() {
         <Clock size={12} />
         Подтверждение придёт в MAX
       </p>
+      <p className="ys-kicker">Другие услуги</p>
+      <div className="ys-line"><span>Окрашивание · 2 ч</span><strong>3 500 ₽</strong></div>
+      <div className="ys-line"><span>Укладка · 40 мин</span><strong>1 200 ₽</strong></div>
+      <div className="ys-line"><span>Уход для волос · 30 мин</span><strong>900 ₽</strong></div>
+      <Strip title="Анна Соколова" note="Мастер · 6 лет в студии" value="4,9" />
     </ScreenChrome>
   );
 }
@@ -234,6 +277,11 @@ export function ClubScreen() {
         <li>Выберем книгу на следующий месяц</li>
         <li>Разыграем два бумажных издания</li>
       </ul>
+      <p className="ys-kicker">Прошлые встречи</p>
+      <div className="ys-line"><span>«Мартин Иден»</span><strong>6 сентября</strong></div>
+      <div className="ys-line"><span>«Три товарища»</span><strong>23 августа</strong></div>
+      <div className="ys-line"><span>«Вино из одуванчиков»</span><strong>9 августа</strong></div>
+      <Strip title="Книга на октябрь" note="Голосование открыто до 28 сентября" value="5 книг" />
     </ScreenChrome>
   );
 }
@@ -255,12 +303,16 @@ export function ShopScreen() {
       <Chips items={["Новое", "Неприхотливые", "Крупные", "Кашпо"]} />
       <Tiles
         items={[
-          ["Монстера", "в кашпо 17 см", "1 400 ₽", "leaf"],
-          ["Фикус", "высота 60 см", "980 ₽", "moss"],
-          ["Замиокулькас", "в кашпо 15 см", "1 150 ₽", "sage"],
-          ["Калатея", "высота 40 см", "890 ₽", "fern"],
+          ["Монстера", "в кашпо 17 см", "1 400 ₽", "monstera"],
+          ["Фикус", "высота 60 см", "980 ₽", "ficus"],
+          ["Замиокулькас", "в кашпо 15 см", "1 150 ₽", "zamioculcas"],
+          ["Калатея", "высота 40 см", "890 ₽", "calathea"],
         ]}
       />
+      <p className="ys-kicker">Часто покупают вместе</p>
+      <PickRow art="ficus" title="Фикус Бенджамина" note="Высота 60 см · неприхотлив" price="980 ₽" />
+      <PickRow art="zamioculcas" title="Замиокулькас" note="В кашпо 15 см · осталось 3" price="1 150 ₽" />
+      <Strip title="Карта покупателя" note="5% возвращается бонусами" value="640 ₽" />
     </ScreenChrome>
   );
 }
@@ -298,6 +350,10 @@ export function StatusScreen() {
         <MapPin size={12} />
         ул. Садовая, 12 · к 10:30
       </p>
+      <Strip title="Оплачено" note="Картой через ЮKassa · 26 сентября" value="430 ₽" />
+      <p className="ys-kicker">Повторить прошлый заказ</p>
+      <PickRow art="flatwhite" title="Флэт уайт" note="Брали 24 сентября" price="260 ₽" />
+      <PickRow art="cheesecake" title="Чизкейк нью-йорк" note="Брали 21 сентября" price="290 ₽" />
     </ScreenChrome>
   );
 }
@@ -325,6 +381,11 @@ export function LoyaltyScreen() {
         <span>Сгорит 30 сентября</span>
         <strong>120</strong>
       </div>
+      <p className="ys-kicker">История</p>
+      <div className="ys-line"><span>Начислено · 24 сентября</span><strong>+24</strong></div>
+      <div className="ys-line"><span>Списано · 19 сентября</span><strong>−200</strong></div>
+      <div className="ys-line"><span>Начислено · 17 сентября</span><strong>+41</strong></div>
+      <Strip title="Приведите друга" note="Вам и ему — по 200 бонусов" value="200" />
     </ScreenChrome>
   );
 }

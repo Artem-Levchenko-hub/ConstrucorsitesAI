@@ -18,13 +18,7 @@ _TEMPLATES_DIR = Path(__file__).resolve().parents[1] / "templates"
 
 _SHIPPED = (
     "bare-nextjs",
-    "nextjs-entities",
-    "nextjs-postgres-drizzle",
-    "nextjs-realtime",
     "max-miniapp-nextjs",
-    "vite-react-spa",
-    "fastapi-postgres",
-    "telegram-bot-aiogram",
 )
 
 
@@ -67,23 +61,12 @@ def test_bare_stack_is_the_only_stack_without_a_production_recipe() -> None:
     assert unsupported == {"bare-nextjs"}
 
 
-@pytest.mark.parametrize(
-    "name",
-    (
-        "nextjs-entities",
-        "nextjs-postgres-drizzle",
-        "nextjs-realtime",
-        "max-miniapp-nextjs",
-        "fastapi-postgres",
-        "telegram-bot-aiogram",
-    ),
-)
-def test_database_stacks_are_declared_in_the_registry(name: str) -> None:
-    assert get_stack(name).needs_database is True
+def test_the_max_stack_is_declared_as_needing_a_database() -> None:
+    assert get_stack("max-miniapp-nextjs").needs_database is True
 
 
-def test_spa_does_not_provision_an_unused_database() -> None:
-    assert get_stack("vite-react-spa").needs_database is False
+def test_the_bare_box_provisions_no_database() -> None:
+    assert get_stack("bare-nextjs").needs_database is False
 
 
 def test_unregistered_name_is_synthesized_identically() -> None:
@@ -100,4 +83,4 @@ def test_unregistered_name_is_synthesized_identically() -> None:
 def test_registry_lookup_returns_the_declared_singleton() -> None:
     # get_stack must return the registered instance for known names, not a fresh copy,
     # so call-sites share one source of truth.
-    assert get_stack("nextjs-entities") is STACKS["nextjs-entities"]
+    assert get_stack("max-miniapp-nextjs") is STACKS["max-miniapp-nextjs"]

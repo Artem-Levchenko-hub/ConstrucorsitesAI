@@ -19,11 +19,8 @@ import pytest
 from yleum_orchestrator.core.template_materialization import materialize_template
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
-_ENTITIES = _TEMPLATES / "nextjs-entities"
-_DRIZZLE = _TEMPLATES / "nextjs-postgres-drizzle"
 # nextjs-realtime (messengers) originally shipped without any omnia public
 # scripts → select-mode / manual editor / remix CTA were dead. Pinned here too.
-_REALTIME = _TEMPLATES / "nextjs-realtime"
 _MAX = _TEMPLATES / "max-miniapp-nextjs"
 _CTA_REL = "public/omnia-remix-cta.js"
 
@@ -32,7 +29,7 @@ _CTA_REL = "public/omnia-remix-cta.js"
 def standalone_templates(tmp_path_factory):
     root = tmp_path_factory.mktemp("public-contract")
     with pytest.MonkeyPatch.context() as patch:
-        for key in ("_ENTITIES", "_DRIZZLE", "_REALTIME", "_MAX"):
+        for key in ("_MAX",):
             source = globals()[key]
             destination = root / source.name
             materialize_template(source, destination)
@@ -40,19 +37,9 @@ def standalone_templates(tmp_path_factory):
         yield
 
 
-def test_remix_cta_copies_stay_in_sync() -> None:
-    """Every Next.js container template ships a byte-identical CTA (R-04 DRY)."""
-    canonical = (_ENTITIES / _CTA_REL).read_bytes()
-    for tpl in (_DRIZZLE, _REALTIME, _MAX):
-        assert (tpl / _CTA_REL).read_bytes() == canonical, (
-            f"omnia-remix-cta.js drifted between nextjs-entities and {tpl.name} — "
-            "keep the copies byte-identical (copy the nextjs-entities one over it)."
-        )
-
-
 def test_remix_cta_contract() -> None:
     """The CTA enforces the four load-bearing invariants of the render leg."""
-    src = (_ENTITIES / _CTA_REL).read_text(encoding="utf-8")
+    src = (_MAX / _CTA_REL).read_text(encoding="utf-8")
     # 1) Top-level-only: hidden inside the owner-workspace iframe.
     assert "window.self === window.top" in src
     # 2) Cross-origin entry is the GET /p/<slug>/remix endpoint (NOT the
@@ -82,7 +69,7 @@ def test_remix_cta_contract() -> None:
 
 def test_remix_cta_wired_into_both_layouts() -> None:
     """Each flagship layout loads the CTA script (else the file ships dead)."""
-    for tpl in (_ENTITIES, _DRIZZLE, _REALTIME, _MAX):
+    for tpl in (_MAX,):
         layout = (tpl / "src/app/layout.tsx").read_text(encoding="utf-8")
         assert 'src="/omnia-remix-cta.js"' in layout, (
             f"{tpl.name}/src/app/layout.tsx must <Script src> the remix CTA."
@@ -99,7 +86,7 @@ def test_watermark_seed_contract() -> None:
     click, replays the design-birth reveal and offers a "make your own" CTA. It
     must keep the same top-level + origin gates (no broken link on dev hosts),
     its brand copy, and its wiring to the narration replay hook."""
-    src = (_ENTITIES / _CTA_REL).read_text(encoding="utf-8")
+    src = (_MAX / _CTA_REL).read_text(encoding="utf-8")
     # Mounted from the same module, after the pill, so one load-bearing script
     # owns every viral corner affordance.
     assert "function mountWatermark()" in src
@@ -123,7 +110,7 @@ def test_narration_exposes_replay_hook() -> None:
     """Both container narration copies expose the replay hook the watermark calls
     (keeps the badge's "посмотреть, как он родился" button alive)."""
     rel = "public/omnia-brief-narration.js"
-    for tpl in (_ENTITIES, _DRIZZLE, _REALTIME, _MAX):
+    for tpl in (_MAX,):
         src = (tpl / rel).read_text(encoding="utf-8")
         assert "window.__omniaReplayBrief = function" in src, (
             f"{tpl.name}/{rel} must expose window.__omniaReplayBrief."

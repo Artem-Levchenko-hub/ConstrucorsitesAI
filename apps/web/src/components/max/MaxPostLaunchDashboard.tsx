@@ -4,7 +4,6 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Check, CircleAlert, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
-import { RuntimeButton } from "@/components/workspace/RuntimeButton";
 import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
 import { getMaxReadiness } from "@/lib/api/max-studio";
@@ -103,7 +102,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
       <section className="max-dashboard-system" aria-labelledby="max-system-heading">
         <header><div><h2 id="max-system-heading">Состояние и подключения</h2><p>Данные среды разработки и связи с MAX</p></div><Button variant="outline" onClick={refreshStatus} disabled={runtime.isFetching || integration.isFetching || readiness.isFetching || deploy.isFetching}><RefreshCw className="size-4" />Обновить</Button></header>
         <div className="max-dashboard-system-row"><div><h3>Рабочая среда редактора</h3><p>В ней открывается живое превью, пока вы правите приложение. На опубликованную версию у пользователей она не влияет.</p></div>
-          <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">{MAX_UNKNOWN_LABEL}</p> : runtime.isPending ? <p>Проверяем…</p> : <><p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p><RuntimeButton projectId={projectId} display="compact" /></>}</div>
+          <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">{MAX_UNKNOWN_LABEL}</p> : runtime.isPending ? <p>Проверяем…</p> : <p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p>}</div>
         </div>
         <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}?panel=max`}>Настроить MAX</Link></Button></div>
         <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3><p>Через неё MAX сообщает приложению о событиях: новых пользователях, нажатиях, сообщениях боту</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? MAX_UNKNOWN_LABEL : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>

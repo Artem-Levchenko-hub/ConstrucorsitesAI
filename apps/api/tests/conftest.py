@@ -74,13 +74,6 @@ def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     async def discard_event(*_args: object, **_kwargs: object) -> None:
         return None
 
-    for module, attribute in (
-        (projects, "enqueue_preview"),
-        (rollback, "enqueue_preview"),
-        (agent_publication, "enqueue_preview"),
-    ):
-        monkeypatch.setattr(module, attribute, discard_background_job)
-
     for module in (
         projects,
         rollback,

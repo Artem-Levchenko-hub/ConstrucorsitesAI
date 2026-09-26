@@ -93,46 +93,6 @@ async def test_capture_live_url_report_records_bootstrap_timeout(
     assert report.summary() == "bootstrap: signed preview bootstrap timed out"
 
 
-@pytest.mark.asyncio
-async def test_capture_diagnostics_redacts_signed_urls_and_keeps_stage_errors(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    listeners: dict[str, object] = {}
-
-    def on(event: str, callback: object) -> None:
-        listeners[event] = callback
-
-    async def goto(url: str, **_kwargs: object) -> None:
-        response = SimpleNamespace(
-            status=401,
-            request=SimpleNamespace(method="GET"),
-            url=url,
-        )
-        callback = listeners.get("response")
-        assert callback is not None
-        callback(response)
-        raise RuntimeError(f"Timeout while opening {url}")
-
-    page = SimpleNamespace(
-        on=on,
-        goto=AsyncMock(side_effect=goto),
-        close=AsyncMock(return_value=None),
-    )
-    fake_playwright, _browser = _fake_playwright(page)
-    monkeypatch.setattr(preview, "async_playwright", fake_playwright)
-
-    diag = await preview.capture_diagnostics(
-        "https://preview.example/profile",
-        bootstrap_url="https://preview.example/api/omnia/preview-session?expires=1&signature=secret",
-    )
-
-    assert diag["failed_requests"] == [
-        "401 GET https://preview.example/api/omnia/preview-session?[REDACTED]"
-    ]
-    assert diag["stage_errors"] == ["bootstrap: signed preview bootstrap timed out"]
-    assert "signature=secret" not in "\n".join(diag["failed_requests"] + diag["stage_errors"])
-
-
 def test_capture_error_redacts_url_credentials() -> None:
     message = preview._redact_text(
         "failed https://fake-user:fake-password@preview.example/path?signature=fake#secret"

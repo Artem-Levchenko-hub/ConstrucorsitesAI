@@ -161,36 +161,6 @@ async def test_max_hot_reload_rejects_platform_runner_replacement(
     writer.assert_not_awaited()
 
 
-async def test_non_max_schema_hot_reload_keeps_existing_drizzle_push_behavior(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
-) -> None:
-    real_runner = (
-        Path(__file__).parents[1]
-        / "templates"
-        / "nextjs-postgres-drizzle"
-        / "scripts"
-        / "apply-migrations.mjs"
-    )
-    runner = tmp_path / "scripts" / "apply-migrations.mjs"
-    runner.parent.mkdir(parents=True)
-    runner.write_text(real_runner.read_text(encoding="utf-8"), encoding="utf-8")
-    _, execute = _patch_external_runtime(
-        monkeypatch,
-        tmp_path,
-        template="nextjs-postgres-drizzle",
-    )
-
-    result = await runtime._hot_reload_locked(
-        _payload({"src/lib/db/schema.ts": "export const changed = true;"}),
-        "ordinary-fullstack",
-    )
-
-    assert result["drizzle_exit_code"] == "0"
-    assert execute.await_args.kwargs["cmd"] == [
-        "npx", "--yes", "drizzle-kit", "push", "--config=drizzle.config.ts",
-    ]
-
-
 async def test_max_metadata_requires_platform_runner_before_any_write(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:

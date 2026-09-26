@@ -95,7 +95,8 @@ def test_guarded_endpoints_reference_the_entitlement_service() -> None:
     assert "assert_can_create_project" in inspect.getsource(projects.create_project)
     assert "assert_can_publish" in inspect.getsource(cell_publication.submit_publication)
     assert "record_publication" in inspect.getsource(cell_publication.submit_publication)
-    assert "assert_can_publish" in inspect.getsource(runtime.trigger_deploy)
+    # Publication now runs only through the cell; the router hands it straight over.
+    assert "submit_publication" in inspect.getsource(runtime.trigger_deploy)
     for handler in (
         app_integrations.connect_integration,
         app_integrations.bind_existing_integration,

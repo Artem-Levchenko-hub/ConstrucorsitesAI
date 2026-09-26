@@ -1,8 +1,15 @@
-"""Frozen Linux/Git scaffold bytes, captured before the Task 5 refactor."""
+"""Scaffold materialization and the kit route, without the frozen static trees.
+
+The four static scaffolds (blank / landing / portfolio / blog) and the fullstack
+one left with the site builder together with their golden byte fixture: a MAX
+project has no api-side scaffold at all — `init_repo` is handed a directory that
+does not exist and must produce an empty first commit. What stayed is the shared
+kit the cell preview serves over `/api/kit/<file>`, and the export/rollback path
+the owner uses to download a project.
+"""
 
 import hashlib
 import io
-import json
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -15,67 +22,60 @@ from fastapi import FastAPI
 from yleum_api.services import repo
 from yleum_api.services.template_materialization import materialize_template
 
-TEMPLATES = Path(__file__).parents[1] / "src/yleum_api/templates"
-GOLDEN = json.loads(
-    (Path(__file__).parent / "fixtures/static_templates_810f0fbb.json").read_text()
-)["templates"]
+SHARED_ASSETS = Path(__file__).parents[1] / "src/yleum_api/templates/shared-assets"
 
 
-@pytest.mark.parametrize("name", list(GOLDEN))
-def test_real_initial_commit_matches_frozen_tree(name: str) -> None:
-    project_id = uuid4()
-    commit = repo.init_repo(project_id, TEMPLATES / name, name)
-    files = repo.read_files(project_id, commit)
-    actual = {
-        path: hashlib.sha256(content.encode("utf-8")).hexdigest()
-        for path, content in files.items()
-    }
-    assert actual == {path: entry["sha256"] for path, entry in GOLDEN[name].items()}
-    with repo._open_workdir(project_id, must_exist=True) as workdir:
-        import pygit2
-
-        repository = pygit2.Repository(str(workdir))
-        tree = repository[commit].tree
-        for path, entry in GOLDEN[name].items():
-            assert f"{tree[path].filemode:o}" == entry["mode"]
+def _scaffold(root: Path) -> Path:
+    """A throwaway scaffold with the shape `init_repo` accepts."""
+    source = root / "scaffold"
+    (source / "assets").mkdir(parents=True)
+    (source / "index.html").write_text("<h1>Стартовая страница</h1>\n", encoding="utf-8")
+    (source / "assets/style.css").write_text("body { margin: 0 }\n", encoding="utf-8")
+    return source
 
 
 def test_missing_scaffold_still_creates_empty_commit(tmp_path: Path) -> None:
+    """The MAX path: no api-side template dir, so the first commit is empty."""
     project_id = uuid4()
-    commit = repo.init_repo(project_id, tmp_path / "missing", "missing")
+    commit = repo.init_repo(project_id, tmp_path / "missing", "max_miniapp")
     assert repo.read_files(project_id, commit) == {}
 
 
-def test_external_blank_scaffold_and_dotfile_are_not_augmented(tmp_path: Path) -> None:
-    source = tmp_path / "blank"
+def test_external_scaffold_and_dotfile_are_not_augmented(tmp_path: Path) -> None:
+    source = tmp_path / "custom"
     source.mkdir()
     (source / ".user-config").write_text("custom")
     project_id = uuid4()
-    commit = repo.init_repo(project_id, source, "blank")
+    commit = repo.init_repo(project_id, source, "custom")
     assert repo.read_files(project_id, commit) == {".user-config": "custom"}
 
 
 @pytest.mark.parametrize("already_exists", [False, True])
-@pytest.mark.parametrize("name", ["blank", "landing", "portfolio", "blog"])
-def test_materialization_creates_standalone_frozen_tree(
-    tmp_path: Path, name: str, already_exists: bool,
-) -> None:
+def test_materialization_creates_a_standalone_tree(tmp_path: Path, already_exists: bool) -> None:
+    source = _scaffold(tmp_path)
     destination = tmp_path / "project"
     if already_exists:
         destination.mkdir()
-    materialize_template(TEMPLATES / name, destination)
-    files = [path for path in destination.rglob("*") if path.is_file()]
+
+    materialize_template(source, destination)
+
     assert all(not path.is_symlink() for path in destination.rglob("*"))
     assert {
-        path.relative_to(destination).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in files
-    } == {path: entry["sha256"] for path, entry in GOLDEN[name].items()}
+        path.relative_to(destination).as_posix(): path.read_bytes()
+        for path in destination.rglob("*")
+        if path.is_file()
+    } == {
+        path.relative_to(source).as_posix(): path.read_bytes()
+        for path in source.rglob("*")
+        if path.is_file()
+    }
 
 
-@pytest.mark.parametrize("existing_path", [".user-config", "assets/omnia-kit.css", "index.html"])
+@pytest.mark.parametrize("existing_path", [".user-config", "assets/style.css", "index.html"])
 def test_populated_destination_is_rejected_without_partial_writes(
     tmp_path: Path, existing_path: str,
 ) -> None:
+    source = _scaffold(tmp_path)
     destination = tmp_path / "project"
     existing = destination / existing_path
     existing.parent.mkdir(parents=True)
@@ -84,7 +84,7 @@ def test_populated_destination_is_rejected_without_partial_writes(
     before = sorted(path.relative_to(destination).as_posix() for path in destination.rglob("*"))
 
     with pytest.raises(ValueError, match="destination must be empty"):
-        materialize_template(TEMPLATES / "blank", destination)
+        materialize_template(source, destination)
 
     assert sorted(
         path.relative_to(destination).as_posix() for path in destination.rglob("*")
@@ -92,7 +92,8 @@ def test_populated_destination_is_rejected_without_partial_writes(
     assert existing.read_bytes() == user_bytes
 
 
-async def test_kit_http_contract_uses_frozen_bytes() -> None:
+async def test_kit_http_contract_serves_the_shipped_bytes() -> None:
+    """`/api/kit/<file>` is what a cell's draft preview proxies the inspector from."""
     from yleum_api.core.errors import ApiError, api_error_handler
     from yleum_api.routers.public import kit_router
 
@@ -109,18 +110,21 @@ async def test_kit_http_contract_uses_frozen_bytes() -> None:
         ):
             response = await client.get(f"/api/kit/{name}")
             assert response.status_code == 200
-            assert hashlib.sha256(response.content).hexdigest() == GOLDEN["blank"][
-                f"assets/{name}"
-            ]["sha256"]
+            shipped = (SHARED_ASSETS / name).read_bytes()
+            assert hashlib.sha256(response.content).hexdigest() == hashlib.sha256(
+                shipped
+            ).hexdigest()
             assert response.headers["content-type"] == mime
             assert response.headers["cache-control"] == "public, max-age=3600"
             assert response.headers["access-control-allow-origin"] == "*"
+        inspector = await client.get("/api/kit/omnia-inspector.js")
+        assert inspector.status_code == 200
         missing = await client.get("/api/kit/not-a-kit-file.js")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "not_found"
 
 
-async def test_committed_custom_kit_survives_http_export_and_rollback() -> None:
+async def test_committed_files_survive_http_export_and_rollback(tmp_path: Path) -> None:
     """Real Git and HTTP ZIP; only identity/metadata and object storage are fixtures."""
     from yleum_api.core.db import get_session
     from yleum_api.core.deps import get_current_user
@@ -129,17 +133,17 @@ async def test_committed_custom_kit_survives_http_export_and_rollback() -> None:
     from yleum_api.routers.projects import router
 
     project_id, owner_id, snapshot_id = uuid4(), uuid4(), uuid4()
-    initial = repo.init_repo(project_id, TEMPLATES / "blank", "blank")
+    source = _scaffold(tmp_path)
+    initial = repo.init_repo(project_id, source, "max_miniapp")
+    starter = repo.read_files(project_id, initial)
     custom = {
-        "assets/omnia-kit.css": "/* owner CSS */\nbody { color: red; }\n",
-        "assets/omnia-kit.js": "window.ownerVersion = 'custom';\n",
-        "assets/anime.min.js": "window.anime = 'owner version';\n",
+        "index.html": "<h1>Правка владельца</h1>\n",
         ".owner-config": "persist this custom file\n",
     }
-    edited = repo.commit_files(project_id, custom, "Owner kit edits", parent_sha=initial)
+    edited = repo.commit_files(project_id, custom, "Owner edits", parent_sha=initial)
     project = SimpleNamespace(
         id=project_id, owner_id=owner_id, current_snapshot_id=snapshot_id,
-        slug="owner-static", template="blank",
+        slug="owner-app", template="max_miniapp",
     )
     snapshot = SimpleNamespace(commit_sha=edited)
 
@@ -169,14 +173,15 @@ async def test_committed_custom_kit_survives_http_export_and_rollback() -> None:
         edited_export = await exported_files()
         for path, content in custom.items():
             assert edited_export[path] == content.encode("utf-8")
-        assert set(edited_export) == set(GOLDEN["blank"]) | {".owner-config"}
+        # A MAX export also carries the orchestrator's app template, so the
+        # owner's files are a subset, not the whole archive.
+        assert set(starter) | {".owner-config"} <= set(edited_export)
 
         snapshot.commit_sha = repo.checkout(project_id, initial)
         restored = await exported_files()
-        assert {path: hashlib.sha256(value).hexdigest() for path, value in restored.items()} == {
-            path: entry["sha256"] for path, entry in GOLDEN["blank"].items()
-        }
-        # Restoring old output neither rewrites history nor loses the user's newer kit.
+        assert ".owner-config" not in restored
+        assert {path: restored[path].decode("utf-8") for path in starter} == starter
+        # Restoring old output neither rewrites history nor loses the newer edits.
         preserved = repo.read_files(project_id, edited)
         assert all(preserved[path] == value for path, value in custom.items())
         snapshot.commit_sha = repo.checkout(project_id, edited)

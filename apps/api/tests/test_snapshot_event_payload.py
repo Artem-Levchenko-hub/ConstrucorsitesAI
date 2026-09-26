@@ -102,7 +102,6 @@ def events(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     published = AsyncMock()
     for module in (projects, rollback):
         monkeypatch.setattr(module, "publish_event", published)
-        monkeypatch.setattr(module, "enqueue_preview", Mock())
     return published
 
 
