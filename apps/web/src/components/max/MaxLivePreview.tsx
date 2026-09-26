@@ -422,7 +422,7 @@ export function MaxLivePreview({
         </div>
         <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
           {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[10px] text-fg-secondary">
-            <span className={`size-1.5 rounded-full ${connected ? "bg-[#248a4b]" : "bg-[#828491]"}`} title={connected ? "Подключено" : "Запускается"} />
+            <span className={`size-1.5 rounded-full ${connected ? "bg-success" : "bg-fg-tertiary"}`} title={connected ? "Подключено" : "Запускается"} />
             <span className="sr-only">{connected ? "Подключено" : "Запускается"}</span>
           </span>}
           {!viewingHistorical && (
@@ -556,7 +556,7 @@ export function MaxLivePreview({
                       {!previewUrl && preparing && (
                         <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-border-default bg-surface-raised/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-fg-primary">
-                            <Loader2 className="size-3 animate-spin text-[#0381fa]" />
+                            <Loader2 className="size-3 animate-spin text-accent" />
                             {preparationLabel}
                           </p>
                           <p className="mt-1 text-[9px] text-fg-tertiary">
@@ -565,7 +565,7 @@ export function MaxLivePreview({
                         </div>
                       )}
                       {!previewUrl && showPreviewError && (
-                        <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-[#c63d35]/25 bg-surface-raised/95 px-3 py-2 text-left shadow-sm backdrop-blur">
+                        <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-danger/25 bg-surface-raised/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-fg-primary">
                             <CircleAlert className="size-3 text-danger-fg" />
                             Новая версия не открылась
@@ -584,11 +584,11 @@ export function MaxLivePreview({
                   ) : (
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-raised px-10 text-center">
                       {awaitingFirstBuild ? (
-                        <Sparkles className="size-7 text-[#0381fa]" />
+                        <Sparkles className="size-7 text-accent" />
                       ) : preparing ? (
-                        <Loader2 className="size-7 animate-spin text-[#0381fa]" />
+                        <Loader2 className="size-7 animate-spin text-accent" />
                       ) : (
-                        <Play className="size-7 text-[#0381fa]" />
+                        <Play className="size-7 text-accent" />
                       )}
                       <p className="mt-5 text-[15px] font-medium text-fg-primary">
                         {awaitingFirstBuild
@@ -608,7 +608,7 @@ export function MaxLivePreview({
                         <ol className="mt-5 w-full space-y-2 text-left">
                           {preparationSteps.map((step) => (
                             <li key={step.label} className="flex items-center gap-2 text-[10px] text-fg-secondary">
-                              <span className={`grid size-4 place-items-center rounded-full border ${step.done ? "border-[#248a4b] bg-[#248a4b]/10 text-success-fg" : "border-border-default text-fg-tertiary"}`}>
+                              <span className={`grid size-4 place-items-center rounded-full border ${step.done ? "border-success bg-success/10 text-success-fg" : "border-border-default text-fg-tertiary"}`}>
                                 {step.done ? <Check className="size-2.5" /> : <span className="size-1 rounded-full bg-current" />}
                               </span>
                               {step.label}

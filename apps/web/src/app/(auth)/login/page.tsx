@@ -38,7 +38,7 @@ export default async function LoginPage({
       }
     >
       {oauthMessage && (
-        <p role="alert" className="rounded-[8px] bg-[#c63d35]/10 px-4 py-3 text-sm text-danger-fg">
+        <p role="alert" className="rounded-[8px] bg-danger/10 px-4 py-3 text-sm text-danger-fg">
           {oauthMessage}
         </p>
       )}

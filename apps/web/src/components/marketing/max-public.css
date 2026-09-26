@@ -98,12 +98,12 @@
 .max-docs [class*="text-white/"] { color: var(--color-fg-secondary) !important; }
 .max-docs [class*="text-[#9fa1b1]"],
 .max-docs [class*="text-[#828491]"] { color: var(--color-fg-secondary) !important; }
-.max-docs [class*="text-[#0381fa]"],
+.max-docs [class*="text-accent"],
 .max-docs [class*="text-[#6a95fa]"] { color: var(--color-accent-secondary) !important; }
 .max-docs [class*="border-white/"] { border-color: var(--color-border-default) !important; }
 .max-docs [class*="divide-white/"] > :not(:last-child) { border-color: var(--color-border-default) !important; }
 .max-docs [class*="bg-white/"] { background: var(--color-surface) !important; }
-.max-docs [class*="bg-[#0381fa]"] { background: var(--color-accent) !important; color: var(--color-fg-on-accent) !important; }
+.max-docs [class*="bg-accent"] { background: var(--color-accent) !important; color: var(--color-fg-on-accent) !important; }
 .max-docs .omnia-card { border-color: var(--color-border-default); background: var(--color-surface); }
 .max-docs .omnia-button-primary { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-fg-on-accent); }
 .max-docs .omnia-button-secondary { border-color: var(--color-border-strong); background: var(--color-surface); color: var(--color-fg-primary); }

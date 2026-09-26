@@ -81,7 +81,7 @@ export default function MaxQuickStartPage() {
             <Link href="/max/guide" className="hidden min-h-11 items-center px-3 text-xs text-[#9fa1b1] hover:text-white sm:inline-flex">
               Полное руководство
             </Link>
-            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-[#0381fa] px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
+            <Link href="/login?next=/max" className="inline-flex min-h-11 items-center rounded-[8px] bg-accent px-4 text-xs font-semibold text-[#121519] hover:bg-[#6a95fa]">
               Открыть Yleum
             </Link>
           </div>
@@ -90,7 +90,7 @@ export default function MaxQuickStartPage() {
 
       <section className="border-b border-[#2b2d32] bg-[#121519] text-white">
         <div className="mx-auto max-w-[1120px] px-5 py-14 sm:px-8 sm:py-20">
-          <p className="omnia-kicker text-[#0381fa]">Быстрый старт</p>
+          <p className="omnia-kicker text-accent">Быстрый старт</p>
           <h1 className="mt-4 max-w-[760px] text-[42px] font-semibold leading-[1.04] tracking-[-.05em] sm:text-[62px]">
             От идеи до запуска за шесть этапов
           </h1>
@@ -108,7 +108,7 @@ export default function MaxQuickStartPage() {
             return (
               <li key={step.number} className="rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5 sm:p-7">
                 <div className="flex items-center justify-between gap-4">
-                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#2b2d32] text-[#0381fa]">
+                  <span className="grid size-10 place-items-center rounded-[8px] bg-[#2b2d32] text-accent">
                     <Icon className="size-4" />
                   </span>
                   <span className="font-mono text-xs text-[#828491]">{step.number} / 06</span>

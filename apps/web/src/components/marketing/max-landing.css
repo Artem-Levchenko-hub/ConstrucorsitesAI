@@ -45,7 +45,7 @@
 .ml-schedule-art span { font-size: 7px; }.ml-schedule-art strong,.ml-community-art strong { font-size: 16px; line-height: 1.25; }.ml-community-art { background: #e6eafd; color: #384f91; }
 .ml-demo figcaption { text-align: center; color: #64728b; font-size: 9px; line-height: 1.5; margin-top: 19px; }
 .ml-value-strip { display: grid; grid-template-columns: repeat(4,1fr); padding-block: 24px; border-block: 1px solid #e2e7ef; gap: 16px; }
-.ml-value-strip span { display: flex; gap: 9px; align-items: center; font-size: 13px; color: #526078; }.ml-value-strip svg { width: 16px; color: #237747; }
+.ml-value-strip span { display: flex; gap: 9px; align-items: center; font-size: 13px; color: #526078; }.ml-value-strip svg { width: 16px; color: var(--color-success-fg); }
 .ml-section { padding-block: 88px; }
 .ml-section-head h2 { margin-top: 18px; font-size: clamp(32px,3.3vw,46px); line-height: 1.13; font-weight: 620; letter-spacing: -.04em; }
 .ml-section-head > p:not(.ml-eyebrow) { max-width: 550px; margin-top: 22px; font-size: 16px; line-height: 1.7; color: #526078; }

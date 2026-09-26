@@ -51,7 +51,7 @@
 .max-editor-project-trigger strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 600; }
 .max-editor-project-trigger small { display: block; margin-top: 2px; color: #627087; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .max-editor-header-actions { flex-shrink: 0; gap: 8px; }
-.max-editor-header-actions > button, .max-editor-header-actions > a { min-height: 40px; border-radius: 8px; font-size: 13px; }
+.max-editor-header-actions > button, .max-editor-header-actions > a { min-height: 44px; border-radius: 6px; font-size: 13px; }
 .max-editor-header-actions .max-editor-publish { background: #0062ee; color: #fff; padding-inline: 18px; }
 .max-editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(440px, 40%); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
 .max-editor-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
@@ -72,7 +72,7 @@
 .max-editor-nav-link:hover { background: #f1f4f9; }
 .max-editor-nav-link[aria-current=page] { background: #edf3ff; color: #0050c8; }
 .max-editor-account { margin-top: 24px; border-top: 1px solid #e2e7ef; padding-top: 16px; }
-.max-editor-tools-dialog { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 101; width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; border-radius: 12px; background: #fff; padding-bottom: 20px; box-shadow: 0 20px 80px rgb(21 32 51 / .15); }
+.max-editor-tools-dialog { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); z-index: 101; width: min(440px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; border-radius: 10px; background: #fff; padding-bottom: 20px; box-shadow: 0 20px 80px rgb(21 32 51 / .15); }
 .max-editor-tools-dialog > p { color: #627087; padding: 16px 20px 0; }
 .max-editor-tools { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 20px; }
 .max-editor-tools [data-testid=max-usage-breakdown] { width: 100%; }
@@ -83,22 +83,22 @@
 .max-editor-empty p { max-width: 440px; color: #526079; line-height: 1.65; }
 [data-max-editor] .max-studio-chat { background: #f7f8fb; }
 [data-max-editor] .max-studio-prompt { padding: 18px 28px 24px; background: #f7f8fb; border-top: 0; }
-[data-max-editor] .max-studio-prompt > .rounded-lg { background: #fff; border-color: #b8c8e2; box-shadow: 0 2px 8px rgb(25 35 53 / .03); border-radius: 12px; }
+[data-max-editor] .max-studio-prompt > .rounded-lg { background: #fff; border-color: #b8c8e2; box-shadow: 0 2px 8px rgb(25 35 53 / .03); border-radius: 10px; }
 [data-max-editor] .max-studio-prompt > .rounded-lg:focus-within { border-color: #0062ee; box-shadow: 0 0 0 3px rgb(0 98 238 / .12); }
 [data-max-editor].max-editor-version-dialog { background: #fff; }
 [data-max-editor] .max-studio-prompt textarea { min-height: 78px; padding: 16px; font-size: 15px; }
-[data-max-editor] .max-studio-prompt button { border-radius: 8px; min-height: 40px; }
+[data-max-editor] .max-studio-prompt button { border-radius: 6px; min-height: 44px; }
 [data-max-editor] [data-chat-role] { padding: 14px 28px; }
 [data-max-editor] [data-chat-role] .max-editor-message-body { padding: 2px 0 12px; }
-[data-max-editor] [data-chat-role=user] .max-editor-message-body { padding: 12px 16px; border-radius: 8px; background: #edf3ff; }
+[data-max-editor] [data-chat-role=user] .max-editor-message-body { padding: 12px 16px; border-radius: 6px; background: #edf3ff; }
 .max-version-rail { display: flex; flex-direction: column; width: 104px; height: 100%; min-height: 0; flex-shrink: 0; border-right: 1px solid var(--color-border-subtle); }
 .max-version-rail-heading { padding: 0 12px 10px; color: var(--color-fg-secondary); font-size: 12px; font-weight: 600; }
 .max-version-rail-scroll { min-height: 0; flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 3px 8px 8px; scrollbar-gutter: stable; }
 .max-version-items { display: flex; flex-direction: column; gap: 10px; }
-.max-version-item { display: block; width: 100%; padding: 4px; border: 1px solid transparent; border-radius: 7px; color: var(--color-fg-secondary); background: transparent; cursor: pointer; transition: background-color .15s ease-out, border-color .15s ease-out; }
+.max-version-item { display: block; width: 100%; padding: 4px; border: 1px solid transparent; border-radius: 6px; color: var(--color-fg-secondary); background: transparent; cursor: pointer; transition: background-color .15s ease-out, border-color .15s ease-out; }
 .max-version-item:hover { background: var(--color-surface-overlay); }
 .max-version-item[aria-pressed=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); color: var(--color-accent); }
-.max-version-item img { display: block; width: 100%; height: 76px; object-fit: cover; object-position: top; border-radius: 3px; border: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); }
+.max-version-item img { display: block; width: 100%; height: 76px; object-fit: cover; object-position: top; border-radius: 6px; border: 1px solid var(--color-border-subtle); background: var(--color-surface-raised); }
 .max-version-item-label { display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 5px 2px 1px; font-size: 12px; font-weight: 600; }
 .max-version-rail-empty { padding: 8px 4px; color: var(--color-fg-secondary); font-size: 11px; line-height: 1.5; }
 .max-version-older { width: 100%; height: auto; min-height: 36px; margin-top: 12px; padding: 6px 2px; font-size: 11px; }
@@ -131,7 +131,7 @@
 [data-max-editor] [data-testid=max-preview-header] button { min-height: 36px; border-radius: 6px; }
 [data-max-editor] [data-testid=max-preview-header] .omnia-kicker { font-size: 12px; text-transform: none; letter-spacing: 0; }
 [data-max-editor] .max-editor-advice { margin: 8px 28px 16px; }
-[data-max-editor] .max-editor-advice > summary { display: inline-flex; min-height: 40px; align-items: center; padding: 8px 14px; border: 1px solid #c5cede; border-radius: 8px; background: #fff; color: #244f9d; cursor: pointer; font-size: 13px; }
+[data-max-editor] .max-editor-advice > summary { display: inline-flex; min-height: 44px; align-items: center; padding: 8px 14px; border: 1px solid #c5cede; border-radius: 6px; background: #fff; color: #244f9d; cursor: pointer; font-size: 13px; }
 @keyframes max-editor-enter { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 1023px) {
   .max-editor-workspace { grid-template-columns: minmax(0, 1fr); }

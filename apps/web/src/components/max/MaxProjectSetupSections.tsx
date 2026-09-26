@@ -106,7 +106,7 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
     <Group title="Оформление" description="Можно оставить текущий стиль. Дополнительные цвета не нужны для публикации.">
       <div className="max-setup-field">
         <Label htmlFor="max-config-colors">Цвета бренда</Label>
-        <Input id="max-config-colors" value={current.brand_colors} placeholder="#0381fa, #121519"
+        <Input id="max-config-colors" value={current.brand_colors} placeholder="Например: #1F6F4A, тёплый бежевый"
           onChange={event => onChange({ ...current, brand_colors: event.target.value })} />
       </div>
       <div className="max-setup-field">

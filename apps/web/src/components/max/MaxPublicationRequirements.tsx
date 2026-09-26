@@ -32,6 +32,9 @@ export const PUBLICATION_REQUIREMENTS = [
   },
 ] as const;
 
+/** Требование → этап маршрута, к которому оно относится. */
+const STAGE_OF: Record<string, string> = { build: "build", legal: "app", bot: "bot" };
+
 /** «Остался 1 шаг», «Осталось 2 шага» — счёт словами, а не голой цифрой. */
 function stepsLeft(count: number): string {
   const tail = count % 100 >= 11 && count % 100 <= 14 ? 0 : count % 10;
@@ -40,10 +43,12 @@ function stepsLeft(count: number): string {
   return `осталось ${count} шагов`;
 }
 
-export function MaxPublicationRequirements({ projectId, items, status }: {
+export function MaxPublicationRequirements({ projectId, items, status, promotedId = null }: {
   projectId: string;
   items: MaxReadiness["items"];
   status: "ready" | "loading" | "error";
+  /** Шаг, который уже вынесен кнопкой выше: в маршруте он без второй кнопки. */
+  promotedId?: string | null;
 }) {
   const ready = status === "ready";
   const remaining = ready
@@ -81,11 +86,13 @@ export function MaxPublicationRequirements({ projectId, items, status }: {
         const item = ready ? items.find(entry => entry.id === requirement.id) : undefined;
         const state = !item ? "unknown" : item.done ? "done" : "missing";
         const Icon = requirement.icon;
-        return <li key={requirement.id} data-requirement={requirement.id} data-state={state}>
+        const promoted = promotedId !== null && STAGE_OF[requirement.id] === promotedId;
+        return <li key={requirement.id} data-requirement={requirement.id} data-state={state} data-promoted={promoted || undefined}>
           <span className="max-requirement-icon" aria-hidden="true">{item?.done ? <Check /> : <Icon />}</span>
           <div><h4>{requirement.title}</h4><p>{requirement.description}</p></div>
           {state === "done" ? <span className="max-requirement-status">Готово</span>
             : state === "unknown" ? <span className="max-requirement-status">{status === "loading" ? "Проверяем…" : "Не проверено"}</span>
+            : promoted ? <span className="max-requirement-status max-requirement-now">Делаем сейчас</span>
             : <Link className="max-requirement-action" href={getMaxJourneyItemHref(projectId, requirement.id)}>{requirement.action}<ArrowRight aria-hidden="true" /></Link>}
         </li>;
       })}

@@ -21,23 +21,27 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
     retry: false,
   });
   const current = usage.data?.run_cost_rub ?? 0;
+  const total = usage.data?.total_cost_rub ?? 0;
+  // Полоса во всю ширину ради «0,00 ₽» занимала место у того, что нужно во
+  // время сборки. Пока тратить нечего — блока нет.
+  if (!usage.isLoading && !usage.isError && current === 0 && total === 0) return null;
 
   return (
     <details className="group relative" data-testid="max-usage-breakdown">
-      <summary className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[8px] border border-border-default bg-surface-raised px-2.5 text-[10px] font-semibold text-fg-secondary hover:bg-surface-base [&::-webkit-details-marker]:hidden">
-        <Coins className="size-3.5 text-[#0381fa]" />
+      <summary className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[6px] border border-border-default bg-surface-raised px-2.5 text-[11px] font-semibold text-fg-secondary hover:bg-surface-base [&::-webkit-details-marker]:hidden">
+        <Coins className="size-3.5 text-accent" />
         <span className="hidden sm:inline">Расход</span>
         <span>{usage.isLoading ? "…" : `${rub(current)} ₽`}</span>
       </summary>
-      <section className="absolute right-0 top-11 z-[80] w-[340px] max-w-[calc(100vw-24px)] rounded-[12px] border border-border-default bg-surface-raised p-4 shadow-[0_24px_70px_rgba(23,23,22,.16)]">
+      <section className="absolute right-0 top-11 z-[80] w-[340px] max-w-[calc(100vw-24px)] rounded-[10px] border border-border-default bg-surface-raised p-4 shadow-[0_24px_70px_rgba(23,23,22,.16)]">
         <div className="flex items-start justify-between gap-4 border-b border-border-default pb-3">
           <div>
             <p className="omnia-kicker text-fg-tertiary">Текущая сборка</p>
             <p className="mt-1 text-xl font-semibold tracking-[-.03em]">{rub(current)} ₽</p>
           </div>
-          <div className="text-right text-[10px] text-fg-tertiary">
+          <div className="text-right text-[11px] text-fg-tertiary">
             <p>За всё время</p>
-            <p className="mt-1 font-semibold text-fg-secondary">{rub(usage.data?.total_cost_rub ?? 0)} ₽</p>
+            <p className="mt-1 font-semibold text-fg-secondary">{rub(total)} ₽</p>
           </div>
         </div>
 
@@ -46,15 +50,15 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
         ) : (
           <div className="mt-3 space-y-2">
             {(usage.data?.stages ?? []).map((stage) => (
-              <div key={stage.id} className="rounded-[9px] border border-border-default bg-surface-raised p-3">
+              <div key={stage.id} className="rounded-[10px] border border-border-default bg-surface-raised p-3">
                 <div className="flex items-center justify-between gap-3">
                   <span className="flex min-w-0 items-center gap-2 text-xs font-medium">
-                    {stage.id === "template" ? <Check className="size-3.5 text-success-fg" /> : <Coins className="size-3.5 text-[#0381fa]" />}
+                    {stage.id === "template" ? <Check className="size-3.5 text-success-fg" /> : <Coins className="size-3.5 text-accent" />}
                     <span className="truncate">{stage.label}</span>
                   </span>
                   <strong className="shrink-0 text-xs">{rub(stage.cost_rub)} ₽</strong>
                 </div>
-                <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[9px] text-fg-tertiary">
+                <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-fg-tertiary">
                   <span>{stage.calls ? `${stage.calls} выз.` : "без модели"}</span>
                   {stage.cache_read_tokens > 0 && <span>из кеша {stage.cache_read_tokens.toLocaleString("ru-RU")}</span>}
                   {stage.retries > 0 && <span className="inline-flex items-center gap-1"><RotateCcw className="size-2.5" /> повторов {stage.retries}</span>}
@@ -63,7 +67,7 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
             ))}
           </div>
         )}
-        <p className="mt-3 text-[9px] leading-4 text-fg-tertiary">Данные берутся из фактического gateway-ledger и обновляются во время работы.</p>
+        <p className="mt-3 text-[11px] leading-4 text-fg-tertiary">Данные берутся из фактического gateway-ledger и обновляются во время работы.</p>
       </section>
     </details>
   );

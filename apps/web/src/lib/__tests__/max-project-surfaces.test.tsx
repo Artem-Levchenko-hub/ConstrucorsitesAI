@@ -66,7 +66,11 @@ it("shows publication blockers without expanding details and links each unfinish
   // Шаг после публикации живёт в том же маршруте, приглушённым: он не
   // требование, но владелец должен знать, что его ждёт.
   expect(requirements!.querySelectorAll('[data-requirement]')).toHaveLength(4);
-  expect(requirements!.querySelector('[data-requirement="legal"] a')?.getAttribute("href")).toBe("/max/project-surfaces?data=policies");
+  // Текущий шаг уже вынесен кнопкой выше — в маршруте он подписан «Делаем
+  // сейчас», а не повторяет ту же кнопку второй раз.
+  expect(requirements!.querySelector('[data-requirement="legal"][data-promoted]')).not.toBeNull();
+  expect(requirements!.querySelector('[data-requirement="legal"] a')).toBeNull();
+  expect(requirements!.textContent).toContain("Делаем сейчас");
   expect(requirements!.querySelector('[data-requirement="bot"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");
   expect(requirements!.querySelector('[data-requirement="max_url"]')?.getAttribute("data-state")).toBe("later");
   expect(requirements!.querySelector('[data-requirement="max_url"] a')?.getAttribute("href")).toBe("/max/project-surfaces?panel=max");

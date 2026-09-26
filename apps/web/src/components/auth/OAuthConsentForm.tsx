@@ -102,7 +102,7 @@ export function OAuthConsentForm({
       </div>
 
       {state.error && (
-        <p role="alert" className="rounded-[8px] bg-[#c63d35]/10 px-4 py-3 text-sm text-danger-fg">
+        <p role="alert" className="rounded-[8px] bg-danger/10 px-4 py-3 text-sm text-danger-fg">
           {state.error}
         </p>
       )}

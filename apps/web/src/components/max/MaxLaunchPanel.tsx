@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, X } from "lucide-react";
+import { Bot, ChevronRight, CircleAlert, Copy, ExternalLink, Loader2, Plug, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
@@ -87,9 +87,6 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
     <aside data-product-shell data-max-studio data-testid="max-launch-panel" className={`max-launch-panel max-studio-launch${standalone ? " max-studio-launch-standalone" : ""}`}>
       {!standalone && <header className="max-launch-dialog-heading"><div><p className="max-project-eyebrow">{project.name}</p><h2>Запуск в MAX</h2></div><button type="button" onClick={onClose ?? toggleTimeline} aria-label="Свернуть панель запуска" className="max-project-back"><X className="size-5" /></button></header>}
       <div className="max-launch-panel-scroll max-studio-launch-body">
-        <div className="max-launch-readiness"><span>Готовность к публикации</span><strong>{readiness.isError ? MAX_UNKNOWN_LABEL : available ? `Готово ${requiredDone} из ${PUBLICATION_REQUIREMENTS.length}` : "Проверяем…"}</strong>
-          {!readiness.isError && <progress data-testid="max-launch-progress" aria-label="Готовность к публикации" value={available ? requiredDone / PUBLICATION_REQUIREMENTS.length * 100 : 0} max={100} />}
-        </div>
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
@@ -117,12 +114,12 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
           {productionUrl && <div className="max-launch-address"><a data-testid="max-launch-app-url" href={productionUrl} target="_blank" rel="noreferrer">{productionUrl}</a><Button variant="ghost" size="icon" aria-label="Скопировать адрес приложения" onClick={() => void copyUrl()}><Copy className="size-4" /></Button></div>}
           {published && !items.find(item => item.id === "max_url")?.done && <div className="max-launch-notice"><p>Добавьте адрес в кнопку приложения в MAX Partner, затем подтвердите его в настройках.</p><a href="https://business.max.ru/" target="_blank" rel="noreferrer" onClick={openMaxCabinet} data-testid="max-open-business-cabinet">Открыть кабинет MAX ↗</a><Link href={`/max/${project.id}?panel=max`}>Подтвердить адрес</Link></div>}
         </section>
-        <MaxPublicationRequirements projectId={project.id} items={items} status={readiness.isError ? "error" : available ? "ready" : "loading"} />
+        <MaxPublicationRequirements projectId={project.id} items={items} status={readiness.isError ? "error" : available ? "ready" : "loading"} promotedId={published || busyDeploy ? null : currentStage?.id ?? null} />
         <section aria-label="Другие разделы проекта" data-testid="max-launch-actions" className="max-launch-options">
-          <header><h3>Сервисы</h3><p>Необязательно для запуска</p></header>
+          <header><h3>Необязательное</h3><p>Для запуска не требуется</p></header>
           <div className="max-launch-option"><Plug className="size-4" /><div><h4>Подключить сервисы</h4><p>Платежи, CRM и аналитика</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=services`}>Выбрать сервисы</Link></Button></div>
+          <div className="max-launch-option"><Bot className="size-4" /><div><h4>Настройки подключения MAX</h4><p>Замена токена, повторная проверка связи</p></div><Button asChild variant="outline" size="sm"><Link href={`/max/${project.id}?panel=max`}>Открыть</Link></Button></div>
         </section>
-        <div className="max-launch-configuration"><Button asChild variant="outline"><Link href={`/max/${project.id}?panel=max`}>Подключение MAX</Link></Button></div>
         {busyDeploy && (deploy.data?.logs.length ?? 0) > 0 && <details className="max-launch-checks"><summary>Подробности публикации</summary><pre className="max-launch-logs">{deploy.data!.logs.slice(-12).join("\n")}</pre></details>}
       </div>
     </aside>

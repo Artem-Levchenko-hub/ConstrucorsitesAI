@@ -1,6 +1,6 @@
 .max-chat-composer { position: relative; }
 .max-chat-composer .max-chat-advice-trigger {
-  min-height: 40px; gap: 7px; padding-inline: 12px; color: var(--color-accent);
+  min-height: 44px; gap: 7px; padding-inline: 12px; color: var(--color-accent);
   border-color: var(--color-border-default); background: var(--color-surface-raised);
   transition: background-color 160ms ease-out, border-color 160ms ease-out;
 }
@@ -11,7 +11,7 @@
   position: absolute; z-index: 30; bottom: calc(100% - 8px); left: 28px; right: 28px;
   display: flex; flex-direction: column; max-height: min(480px, 55dvh);
   border: 1px solid var(--color-border-default); border-top: 3px solid var(--color-accent);
-  border-radius: 12px; background: var(--color-surface-raised); color: var(--color-fg-primary);
+  border-radius: 10px; background: var(--color-surface-raised); color: var(--color-fg-primary);
   box-shadow: 0 12px 32px rgb(20 36 65 / .12); overflow: hidden;
   animation: max-chat-panel-enter 180ms ease-out;
 }
@@ -36,7 +36,7 @@
 .max-chat-thinking span:nth-child(2) { animation-delay: .15s; }
 .max-chat-thinking span:nth-child(3) { animation-delay: .3s; }
 .max-chat-advice-skeleton { display: grid; gap: 10px; margin-top: 20px; }
-.max-chat-advice-skeleton span { height: 9px; border-radius: 3px; background: var(--color-surface-overlay); animation: max-chat-skeleton 1.5s ease-in-out infinite; }
+.max-chat-advice-skeleton span { height: 9px; border-radius: 6px; background: var(--color-surface-overlay); animation: max-chat-skeleton 1.5s ease-in-out infinite; }
 .max-chat-advice-skeleton span:nth-child(2) { width: 86%; }
 .max-chat-advice-skeleton span:nth-child(3) { width: 65%; }
 [data-max-editor] .max-studio-chat.max-editor-chat { background: var(--color-surface-raised); }
@@ -48,20 +48,20 @@
 [data-max-editor] [data-chat-role] + [data-chat-role=assistant] { padding-top: 4px; }
 [data-max-editor] .max-editor-message-body { color: var(--color-fg-primary); line-height: 1.7; }
 [data-max-editor] .max-editor-message-body > .text-fg-secondary { color: var(--color-fg-primary); }
-[data-max-editor] .max-studio-chat [data-chat-role=user] .max-editor-message-body { border-left: 2px solid var(--color-accent); background: var(--color-accent-subtle); border-radius: 0 8px 8px 0; }
+[data-max-editor] .max-studio-chat [data-chat-role=user] .max-editor-message-body { border-left: 2px solid var(--color-accent); background: var(--color-accent-subtle); border-radius: 0 10px 10px 0; }
 .max-chat-latest {
   position: absolute; bottom: 100%; left: 0; right: 0; z-index: 10;
   display: flex; justify-content: center; padding: 6px 16px;
   background: transparent; pointer-events: none;
 }
 .max-chat-latest > button { pointer-events: auto; }
-[data-max-editor] .max-chat-technical-details { border: 1px solid var(--color-border-default); border-radius: 7px; margin-block: 10px; font-size: 13px; }
+[data-max-editor] .max-chat-technical-details { border: 1px solid var(--color-border-default); border-radius: 6px; margin-block: 10px; font-size: 13px; }
 [data-max-editor] .max-chat-technical-details summary { padding: 10px 12px; cursor: pointer; font-weight: 500; color: var(--color-fg-secondary); }
 [data-max-editor] .max-chat-technical-details[open] summary { border-bottom: 1px solid var(--color-border-subtle); margin-bottom: 10px; }
 [data-max-editor] .max-chat-technical-details > :not(summary) { padding: 0 12px 12px; }
 [data-max-editor] .max-chat-technical-details summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-[data-max-editor] [data-agent-transcript] { border-radius: 8px; background: var(--color-surface-base); margin-block: 6px 12px; }
-[data-max-editor] [data-agent-transcript] > button { min-height: 42px; padding: 10px 12px; }
+[data-max-editor] [data-agent-transcript] { border-radius: 6px; background: var(--color-surface-base); margin-block: 6px 12px; }
+[data-max-editor] [data-agent-transcript] > button { min-height: 44px; padding: 10px 12px; }
 [data-max-editor] [data-agent-transcript=working] { border-left: 3px solid var(--color-accent); }
 @keyframes max-chat-panel-enter { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes max-chat-dot { 0%, 70%, 100% { opacity: .4; transform: translateY(0); } 35% { opacity: 1; transform: translateY(-3px); } }

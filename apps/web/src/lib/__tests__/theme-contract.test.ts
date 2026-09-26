@@ -161,3 +161,42 @@ describe("light MAX editor theme", () => {
     expect(background).toBe("#fff");
   });
 });
+
+/**
+ * Один акцент, один зелёный, один красный.
+ *
+ * Аудит 26.09 насчитал в кабинете три синих (#0062ee, #0381fa, #285af0),
+ * три зелёных и два красных для одного и того же смысла — интерфейс выглядел
+ * собранным из кусков. Цвет задаётся токеном темы, а не литералом в компоненте:
+ * тогда светлая и тёмная тема получают верные значения сами.
+ */
+describe("единая палитра продукта", () => {
+  /** Литералы старых состояний, которые заменены токенами. */
+  const RETIRED = ["#0381fa", "#285af0", "#248a4b", "#237747", "#c63d35", "#30a56d"];
+  /** Определения токенов и запасные картинки — единственные законные места. */
+  const TOKEN_FILES = [
+    "app/globals.css",
+    "components/max/max-studio.css",
+    "components/max/max-editor.css",
+    "components/marketing/landing/imagery.css",
+    "components/marketing/landing/screens.css",
+    "app/opengraph-image.tsx",
+  ];
+
+  it("не держит отменённые цвета в компонентах кабинета", () => {
+    const violations = collectFiles(SRC).flatMap((path) => {
+      const relative = path.slice(SRC.length + 1);
+      if (TOKEN_FILES.some((allowed) => relative === allowed)) return [];
+      if (relative.startsWith("lib/__tests__/")) return [];
+      // Внутренние инструменты команды живут своей жизнью и владельцу не видны.
+      if (relative.startsWith("components/task-board/") || relative.startsWith("components/account/")) return [];
+      if (relative.startsWith("app/mvp/") || relative.startsWith("app/changelog/")) return [];
+      const source = readFileSync(path, "utf8");
+      return RETIRED.filter((color) => source.toLowerCase().includes(color)).map(
+        (color) => `${relative}: ${color}`,
+      );
+    });
+
+    expect(violations).toEqual([]);
+  });
+});

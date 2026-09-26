@@ -138,17 +138,17 @@ function CalloutLayer({ callouts }: { callouts: Callout[] }) {
       {geometry.map(({ number, target, from, to }) => (
         <div key={number} aria-hidden="true">
           <span
-            className="pointer-events-none absolute z-30 grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-[#0381fa] text-[11px] font-bold text-[#121519] shadow-[0_5px_14px_rgba(0,0,0,.28)]"
+            className="pointer-events-none absolute z-30 grid size-7 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-white bg-accent text-[11px] font-bold text-[#121519] shadow-[0_5px_14px_rgba(0,0,0,.28)]"
             style={{ left: from[0], top: from[1] }}
           >
             {number}
           </span>
           <span
             data-guide-callout-for={target}
-            className="pointer-events-none absolute z-30 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-[#0381fa] bg-white/95"
+            className="pointer-events-none absolute z-30 grid size-5 -translate-x-1/2 -translate-y-1/2 place-items-center rounded-full border-2 border-accent bg-white/95"
             style={{ left: to[0], top: to[1] }}
           >
-            <span className="size-1.5 rounded-full bg-[#0381fa]" />
+            <span className="size-1.5 rounded-full bg-accent" />
           </span>
         </div>
       ))}
@@ -169,13 +169,13 @@ function ScreenshotFrame({
     <figure className="overflow-hidden rounded-[14px] border border-[#2b2d32] bg-[#191b20] shadow-[0_22px_70px_rgba(23,23,22,.10)]">
       <figcaption className="flex items-center justify-between gap-4 border-b border-[#2b2d32] bg-[#191b20] px-4 py-3 sm:px-5">
         <div className="min-w-0">
-          <p className="font-mono text-[9px] uppercase tracking-[.16em] text-[#0381fa]">Пример интерфейса · {label}</p>
+          <p className="font-mono text-[9px] uppercase tracking-[.16em] text-accent">Пример интерфейса · {label}</p>
           <p className="mt-1 truncate text-xs font-semibold text-white">{title}</p>
         </div>
         <div className="flex gap-1.5" aria-hidden="true">
-          <span className="size-2 rounded-full bg-[#c63d35]" />
+          <span className="size-2 rounded-full bg-danger" />
           <span className="size-2 rounded-full bg-[#6a95fa]" />
-          <span className="size-2 rounded-full bg-[#248a4b]" />
+          <span className="size-2 rounded-full bg-success" />
         </div>
       </figcaption>
       <div className="relative min-h-[330px] w-full overflow-hidden bg-[#121519] sm:aspect-[1000/560] sm:min-h-0">
@@ -207,7 +207,7 @@ function Sidebar({ active }: { active: string }) {
             key={item}
             className={`flex items-center gap-2 rounded-md px-2 py-2 text-[8px] ${active === item ? "bg-[#2b2d32] font-semibold text-white" : "text-[#828491]"}`}
           >
-            <Icon className={`size-3 ${active === item ? "text-[#0381fa]" : ""}`} />
+            <Icon className={`size-3 ${active === item ? "text-accent" : ""}`} />
             {item}
           </div>
         ))}
@@ -224,39 +224,39 @@ export function ProjectCreationVisual() {
         <div className="min-w-0 flex-1">
           <div className="flex h-[13%] items-center justify-between border-b border-[#2b2d32] bg-[#191b20] px-[4%]">
             <span className="font-mono text-[8px] uppercase tracking-[.18em] text-[#828491]">Yleum</span>
-            <button data-guide-target="project-new" className="flex items-center gap-1.5 rounded-md bg-[#0381fa] px-3 py-2 text-[8px] font-semibold text-[#121519]">
+            <button data-guide-target="project-new" className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-[8px] font-semibold text-[#121519]">
               <span className="text-xs leading-none">+</span> Создать приложение
             </button>
           </div>
           <div className="p-[5%]">
-            <p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#0381fa]">Рабочее пространство</p>
+            <p className="font-mono text-[7px] uppercase tracking-[.17em] text-accent">Рабочее пространство</p>
             <h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">Мои приложения</h3>
             <div className="mt-[5%] grid grid-cols-2 gap-[3%]">
               <div className="overflow-hidden rounded-lg border border-[#2b2d32] bg-[#191b20]">
                 <div className="grid aspect-[16/8] place-items-center bg-[#2b2d32]">
                   <div className="w-[22%] rounded-md border-[3px] border-[#25272b] bg-[#191b20] p-1.5">
-                    <div className="h-4 rounded bg-[#0381fa]" />
+                    <div className="h-4 rounded bg-accent" />
                     <div className="mt-1 h-1 rounded bg-[#2b2d32]" />
                   </div>
                 </div>
                 <div className="p-[5%] text-[9px] font-semibold">Кофе рядом</div>
               </div>
               <button className="grid place-items-center rounded-lg border border-dashed border-[#2b2d32] bg-[#191b20] text-center">
-                <span className="text-[9px] font-semibold"><span className="mx-auto mb-2 grid size-7 place-items-center rounded-md border border-[#2b2d32] text-[#0381fa]">+</span>Создать приложение</span>
+                <span className="text-[9px] font-semibold"><span className="mx-auto mb-2 grid size-7 place-items-center rounded-md border border-[#2b2d32] text-accent">+</span>Создать приложение</span>
               </button>
             </div>
           </div>
         </div>
         <div className="absolute bottom-[5%] right-[4%] top-[9%] z-[5] w-[48%] rounded-xl border border-[#2b2d32] bg-[#191b20] shadow-[0_18px_50px_rgba(23,23,22,.2)]">
           <div className="border-b border-[#2b2d32] p-[5%]">
-            <p className="font-mono text-[7px] uppercase tracking-[.16em] text-[#0381fa]">Новое приложение · Шаг 2 из 4</p>
+            <p className="font-mono text-[7px] uppercase tracking-[.16em] text-accent">Новое приложение · Шаг 2 из 4</p>
             <h4 className="mt-1 text-[15px] font-semibold">Для кого приложение?</h4>
           </div>
           <div className="space-y-[4%] p-[5%] text-[8px]">
             <label className="block font-medium">Аудитория<div className="mt-1.5 rounded-md border border-[#2b2d32] bg-[#191b20] px-2 py-2 text-[#9fa1b1]">Постоянные гости кофейни</div></label>
             <label className="block font-medium">Главное действие<div data-guide-target="project-description" className="mt-1.5 rounded-md border border-[#2b2d32] bg-[#191b20] p-2 font-normal text-[#9fa1b1]">Обменять баллы на награду</div></label>
             <p className="rounded-md bg-[#121519] p-2 text-[#828491]">Ответы сохраняются при переходе назад и вперёд.</p>
-            <div className="flex items-center justify-between"><button className="rounded-md border border-[#2b2d32] px-3 py-2 font-semibold">Назад</button><button data-guide-target="project-create" className="flex items-center gap-1.5 rounded-md bg-[#0381fa] px-3 py-2 font-semibold text-[#121519]">Далее <ArrowRight className="size-3" /></button></div>
+            <div className="flex items-center justify-between"><button className="rounded-md border border-[#2b2d32] px-3 py-2 font-semibold">Назад</button><button data-guide-target="project-create" className="flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 font-semibold text-[#121519]">Далее <ArrowRight className="size-3" /></button></div>
           </div>
         </div>
       </div>
@@ -277,7 +277,7 @@ export function BuilderVisual() {
         <div className="flex min-w-0 flex-1 flex-col bg-[#191b20]">
           <div className="flex h-[13%] items-center justify-between border-b border-[#2b2d32] px-[3%]">
             <div><p className="text-[10px] font-semibold">Кофе рядом</p><p className="mt-1 text-[7px] text-success-fg">● Сохранено на сервере</p></div>
-            <button data-guide-target="builder-publish" className="rounded-md bg-[#0381fa] px-3 py-2 text-[8px] font-semibold text-[#121519]">Опубликовать</button>
+            <button data-guide-target="builder-publish" className="rounded-md bg-accent px-3 py-2 text-[8px] font-semibold text-[#121519]">Опубликовать</button>
           </div>
           <div className="flex min-h-0 flex-1">
             <div className="relative w-[58%] border-r border-[#2b2d32] p-[4%]">
@@ -288,7 +288,7 @@ export function BuilderVisual() {
               </div>
               <div className="absolute inset-x-[5%] bottom-[5%] rounded-lg border border-[#2b2d32] bg-[#191b20] p-2.5">
                 <p className="text-[8px] text-[#828491]">Например: добавь экран наград и кнопку обмена баллов…</p>
-                <div className="mt-3 flex justify-end"><span data-guide-target="builder-send" className="rounded-md bg-[#0381fa] px-3 py-1.5 text-[7px] font-semibold text-[#121519]">Отправить</span></div>
+                <div className="mt-3 flex justify-end"><span data-guide-target="builder-send" className="rounded-md bg-accent px-3 py-1.5 text-[7px] font-semibold text-[#121519]">Отправить</span></div>
               </div>
             </div>
             <div className="relative flex-1 bg-[#121519] p-[4%]">
@@ -296,7 +296,7 @@ export function BuilderVisual() {
               <div data-guide-target="builder-preview" className="mx-auto mt-[5%] h-[75%] w-[58%] rounded-[24px] border-[6px] border-[#25272b] bg-[#191b20] p-2 shadow-xl">
                 <div className="rounded-xl bg-[#1c1e23] p-3 text-white">
                   <p className="text-[6px] text-white/60">Кофе рядом</p><p className="mt-1 text-[13px] font-semibold">1 250 баллов</p>
-                  <div className="mt-3 h-1 rounded bg-white/20"><div className="h-full w-3/5 rounded bg-[#0381fa]" /></div>
+                  <div className="mt-3 h-1 rounded bg-white/20"><div className="h-full w-3/5 rounded bg-accent" /></div>
                 </div>
                 <div className="mt-2 space-y-1.5">
                   {["Заказать кофе", "Мои награды", "История"].map((item) => <div key={item} className="flex items-center rounded-md border border-[#25272b] p-2 text-[7px] font-semibold"><span className="mr-2 size-4 rounded bg-[#2b2d32]" />{item}<ChevronRight className="ml-auto size-2.5 text-[#828491]" /></div>)}
@@ -321,7 +321,7 @@ export function IntegrationVisual() {
       <div className="flex h-full text-white">
         <Sidebar active="Интеграции" />
         <div className="min-w-0 flex-1 p-[4%]">
-          <p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#0381fa]">Подключения</p>
+          <p className="font-mono text-[7px] uppercase tracking-[.17em] text-accent">Подключения</p>
           <h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">Интеграции приложения</h3>
           <p className="mt-1 text-[8px] text-[#828491]">Секреты хранятся зашифрованно и не попадают в код проекта.</p>
           <div className="mt-[5%] grid grid-cols-2 gap-[3%]">
@@ -333,19 +333,19 @@ export function IntegrationVisual() {
             ].map(([title, copy, Icon, action, hot]) => {
               const ItemIcon = Icon as typeof Bot;
               return (
-                <div key={String(title)} className={`rounded-lg border bg-[#191b20] p-[5%] ${hot ? "border-[#0381fa]/60 shadow-[0_8px_24px_rgba(79,129,247,.12)]" : "border-[#2b2d32]"}`}>
-                  <div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-[#0381fa]" /></span><span className="rounded-full bg-[#121519] px-2 py-1 text-[6px] text-[#828491]">{title === "ИИ" ? "Не включено" : "Не подключено"}</span></div>
+                <div key={String(title)} className={`rounded-lg border bg-[#191b20] p-[5%] ${hot ? "border-accent/60 shadow-[0_8px_24px_rgba(79,129,247,.12)]" : "border-[#2b2d32]"}`}>
+                  <div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-accent" /></span><span className="rounded-full bg-[#121519] px-2 py-1 text-[6px] text-[#828491]">{title === "ИИ" ? "Не включено" : "Не подключено"}</span></div>
                   <p className="mt-[7%] text-[10px] font-semibold">{String(title)}</p><p className="mt-1 text-[7px] text-[#828491]">{String(copy)}</p>
-                  <button data-guide-target={hot ? "integration-connect" : undefined} className={`mt-[7%] rounded-md px-3 py-1.5 text-[7px] font-semibold ${hot ? "bg-[#0381fa] text-[#121519]" : "border border-[#2b2d32]"}`}>{String(action)}</button>
+                  <button data-guide-target={hot ? "integration-connect" : undefined} className={`mt-[7%] rounded-md px-3 py-1.5 text-[7px] font-semibold ${hot ? "bg-accent text-[#121519]" : "border border-[#2b2d32]"}`}>{String(action)}</button>
                 </div>
               );
             })}
           </div>
           <div className="absolute bottom-[7%] right-[5%] w-[38%] rounded-lg border border-[#2b2d32] bg-[#191b20] p-[3%] shadow-xl">
-            <div className="flex items-center gap-2"><Plug className="size-4 text-[#0381fa]" /><p className="text-[10px] font-semibold">Подключить провайдера</p></div>
+            <div className="flex items-center gap-2"><Plug className="size-4 text-accent" /><p className="text-[10px] font-semibold">Подключить провайдера</p></div>
             <p className="mt-2 text-[7px] leading-3 text-[#828491]">Используйте защищённую форму только для нужного приложению сервиса.</p>
             <div data-guide-target="integration-token" className="mt-2 rounded-md border border-[#2b2d32] px-2 py-2 font-mono text-[7px] text-[#828491]">Введите API-ключ</div>
-            <button className="mt-2 rounded-md bg-[#0381fa] px-3 py-1.5 text-[7px] font-semibold text-[#121519]">Проверить и сохранить</button>
+            <button className="mt-2 rounded-md bg-accent px-3 py-1.5 text-[7px] font-semibold text-[#121519]">Проверить и сохранить</button>
           </div>
         </div>
       </div>
@@ -372,24 +372,24 @@ export function LaunchVisual() {
         <Sidebar active="Публикация" />
         <div className="flex min-w-0 flex-1 bg-[#121519]">
           <div className="min-w-0 flex-1 p-[5%]">
-            <p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#0381fa]">Release</p>
+            <p className="font-mono text-[7px] uppercase tracking-[.17em] text-accent">Release</p>
             <h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">Публикация в MAX</h3>
             <div className="mt-[6%] rounded-lg border border-[#2b2d32] bg-[#191b20] p-[5%]">
-              <div className="flex items-center justify-between"><div><p className="text-[9px] font-semibold">Production</p><p className="mt-1 text-[7px] text-[#828491]">Постоянный HTTPS-адрес и проверка контейнера</p></div><Cloud className="size-5 text-[#0381fa]" /></div>
+              <div className="flex items-center justify-between"><div><p className="text-[9px] font-semibold">Production</p><p className="mt-1 text-[7px] text-[#828491]">Постоянный HTTPS-адрес и проверка контейнера</p></div><Cloud className="size-5 text-accent" /></div>
               <div className="mt-[5%] grid grid-cols-3 gap-2 text-[7px]">
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Версия</p><p className="mt-1 font-semibold">v.12</p></div>
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Health</p><p className="mt-1 font-semibold">готов</p></div>
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">URL</p><p className="mt-1 font-semibold">после deploy</p></div>
               </div>
-              <button data-guide-target="launch-publish" className="mt-[6%] flex items-center gap-1.5 rounded-md bg-[#0381fa] px-3 py-2 text-[8px] font-semibold text-[#121519]"><Rocket className="size-3" />Опубликовать</button>
+              <button data-guide-target="launch-publish" className="mt-[6%] flex items-center gap-1.5 rounded-md bg-accent px-3 py-2 text-[8px] font-semibold text-[#121519]"><Rocket className="size-3" />Опубликовать</button>
             </div>
           </div>
           <aside className="w-[36%] border-l border-[#2b2d32] bg-[#191b20] p-[4%]">
             <div className="flex items-center justify-between"><p className="text-[11px] font-semibold">Запуск в MAX</p><span className="text-[9px] font-semibold">67%</span></div>
-            <div className="mt-2 h-1.5 rounded-full bg-[#25272b]"><div className="h-full w-2/3 rounded-full bg-[#0381fa]" /></div>
-            <div className="mt-[7%] border-l-2 border-[#0381fa] pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#828491]">Шаг 5 из 6</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#828491]">Получите постоянный HTTPS-адрес.</p></div>
+            <div className="mt-2 h-1.5 rounded-full bg-[#25272b]"><div className="h-full w-2/3 rounded-full bg-accent" /></div>
+            <div className="mt-[7%] border-l-2 border-accent pl-3"><p className="font-mono text-[6px] uppercase tracking-[.14em] text-[#828491]">Шаг 5 из 6</p><p className="mt-1 text-[9px] font-semibold">Опубликуйте приложение</p><p className="mt-1 text-[7px] leading-3 text-[#828491]">Получите постоянный HTTPS-адрес.</p></div>
             <div className="mt-[7%] space-y-1 border-y border-[#25272b] py-2">
-              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 4 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 4 ? "bg-[#0381fa]/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-[#248a4b]/40 bg-[#248a4b]/10 text-success-fg" : index === 4 ? "border-[#0381fa] bg-[#0381fa] text-[#121519]" : "border-[#2b2d32] text-[#828491]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
+              {steps.map(([step, done], index) => <div key={step} data-guide-target={index === 4 ? "launch-current-step" : undefined} className={`flex items-center gap-2 rounded-md px-2 py-1.5 text-[7px] ${index === 4 ? "bg-accent/8 font-semibold" : ""}`}><span className={`grid size-4 place-items-center rounded-full border ${done ? "border-success/40 bg-success/10 text-success-fg" : index === 4 ? "border-accent bg-accent text-[#121519]" : "border-[#2b2d32] text-[#828491]"}`}>{done ? <Check className="size-2.5" /> : index + 1}</span>{step}</div>)}
             </div>
             <div className="mt-[7%] grid grid-cols-2 gap-1.5"><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Приложение</button><button className="rounded-md border border-[#2b2d32] px-2 py-2 text-[7px]">Запуск в MAX</button></div>
           </aside>
@@ -408,19 +408,19 @@ export function PartnerVisual() {
     <ScreenshotFrame label="Снимок 05" title="MAX для партнёров → Расширенные настройки">
       <div className="flex h-full bg-[#121519] text-white">
         <div className="hidden w-[22%] border-r border-[#2b2d32] bg-[#191b20] p-[3%] sm:block">
-          <div className="flex items-center gap-2 text-[11px] font-semibold"><span className="grid size-6 place-items-center rounded-full bg-[#0381fa] text-[#121519]">M</span>MAX для бизнеса</div>
+          <div className="flex items-center gap-2 text-[11px] font-semibold"><span className="grid size-6 place-items-center rounded-full bg-accent text-[#121519]">M</span>MAX для бизнеса</div>
           <div className="mt-[24%] space-y-1 text-[8px] text-[#9fa1b1]">
             <p className="rounded-md px-2 py-2">Профиль</p><p className="rounded-md bg-[#2b2d32] px-2 py-2 font-semibold text-white">Чат-боты</p><p className="rounded-md px-2 py-2">Мини-приложения</p>
           </div>
         </div>
         <div className="min-w-0 flex-1 p-[5%]">
-          <div className="flex items-center justify-between"><div><p className="text-[8px] text-[#9fa1b1]">Чат-боты / Кофе рядом</p><h3 className="mt-1 text-[18px] font-semibold">Расширенные настройки</h3></div><span className="rounded-full bg-[#248a4b]/10 px-2.5 py-1 text-[7px] font-semibold text-success-fg">Бот создан</span></div>
+          <div className="flex items-center justify-between"><div><p className="text-[8px] text-[#9fa1b1]">Чат-боты / Кофе рядом</p><h3 className="mt-1 text-[18px] font-semibold">Расширенные настройки</h3></div><span className="rounded-full bg-success/10 px-2.5 py-1 text-[7px] font-semibold text-success-fg">Бот создан</span></div>
           <div className="mt-[5%] rounded-xl border border-[#2b2d32] bg-[#191b20] p-[5%] shadow-[0_8px_30px_rgba(0,0,0,.22)]">
-            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Подключение мини-приложения</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Для обычного запуска нужен только production URL из Yleum. Токен не требуется.</p></div><span className="rounded-full bg-[#0381fa]/10 px-2.5 py-1 text-[7px] font-semibold text-[#6a95fa]">Шаг 6 из 6</span></div>
+            <div className="flex items-center justify-between"><div><p className="text-[10px] font-semibold">Подключение мини-приложения</p><p className="mt-1 text-[7px] text-[#9fa1b1]">Для обычного запуска нужен только production URL из Yleum. Токен не требуется.</p></div><span className="rounded-full bg-accent/10 px-2.5 py-1 text-[7px] font-semibold text-[#6a95fa]">Шаг 6 из 6</span></div>
             <label className="block text-[10px] font-semibold">Ссылка на мини-приложение</label>
-            <div className="mt-2 flex gap-2"><div data-guide-target="partner-url" className="min-w-0 flex-1 truncate rounded-md border-2 border-[#0381fa] bg-[#121519] px-3 py-2 font-mono text-[7px]">https://app-42.apps.yleum.ru</div><button className="rounded-md border border-[#2b2d32] px-3 text-[7px]">Проверить</button></div>
-            <div className="mt-[4%]"><p className="text-[9px] font-semibold">Кнопка запуска</p><div className="mt-2 flex gap-2 text-[7px]"><button className="rounded-full border-2 border-[#0381fa] bg-[#1c1e23] px-3 py-1.5 font-semibold text-[#6a95fa]">Открыть</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Старт</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Играть</button></div></div>
-            <div className="mt-[5%] flex justify-end"><button data-guide-target="partner-save" className="rounded-md bg-[#0381fa] px-4 py-2 text-[8px] font-semibold text-[#121519]">Сохранить</button></div>
+            <div className="mt-2 flex gap-2"><div data-guide-target="partner-url" className="min-w-0 flex-1 truncate rounded-md border-2 border-accent bg-[#121519] px-3 py-2 font-mono text-[7px]">https://app-42.apps.yleum.ru</div><button className="rounded-md border border-[#2b2d32] px-3 text-[7px]">Проверить</button></div>
+            <div className="mt-[4%]"><p className="text-[9px] font-semibold">Кнопка запуска</p><div className="mt-2 flex gap-2 text-[7px]"><button className="rounded-full border-2 border-accent bg-[#1c1e23] px-3 py-1.5 font-semibold text-[#6a95fa]">Открыть</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Старт</button><button className="rounded-full border border-[#2b2d32] px-3 py-1.5">Играть</button></div></div>
+            <div className="mt-[5%] flex justify-end"><button data-guide-target="partner-save" className="rounded-md bg-accent px-4 py-2 text-[8px] font-semibold text-[#121519]">Сохранить</button></div>
           </div>
         </div>
       </div>
@@ -438,7 +438,7 @@ export function DashboardVisual() {
       <div className="flex h-full text-white">
         <Sidebar active="Публикация" />
         <div className="min-w-0 flex-1 p-[4%]">
-          <div className="flex items-end justify-between"><div><p className="font-mono text-[7px] uppercase tracking-[.17em] text-[#0381fa]">Production</p><h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">После запуска</h3></div><a data-guide-target="dashboard-open" className="flex items-center gap-1 text-[8px] font-semibold text-[#6a95fa]">Открыть приложение <ExternalLink className="size-3" /></a></div>
+          <div className="flex items-end justify-between"><div><p className="font-mono text-[7px] uppercase tracking-[.17em] text-accent">Production</p><h3 className="mt-2 text-[20px] font-semibold tracking-[-.04em]">После запуска</h3></div><a data-guide-target="dashboard-open" className="flex items-center gap-1 text-[8px] font-semibold text-[#6a95fa]">Открыть приложение <ExternalLink className="size-3" /></a></div>
           <div className="mt-[5%] grid grid-cols-4 gap-[2%]">
             {[
               [Cloud, "Контейнер", "Работает", true],
@@ -447,15 +447,15 @@ export function DashboardVisual() {
               [Link2, "Открытие", "Работает", true],
             ].map(([Icon, title, copy, ok]) => {
               const ItemIcon = Icon as typeof Cloud;
-              return <div key={String(title)} className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[8%]"><div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-[#0381fa]" /></span>{ok ? <Check className="size-3.5 text-success-fg" /> : <CircleAlert className="size-3.5 text-[#6a95fa]" />}</div><p className="mt-[14%] text-[8px] font-semibold">{String(title)}</p><p className="mt-1 text-[7px] text-[#828491]">{String(copy)}</p></div>;
+              return <div key={String(title)} className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[8%]"><div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-accent" /></span>{ok ? <Check className="size-3.5 text-success-fg" /> : <CircleAlert className="size-3.5 text-[#6a95fa]" />}</div><p className="mt-[14%] text-[8px] font-semibold">{String(title)}</p><p className="mt-1 text-[7px] text-[#828491]">{String(copy)}</p></div>;
             })}
           </div>
           <div className="mt-[4%] grid grid-cols-[1.25fr_.75fr] gap-[3%]">
             <div className="overflow-hidden rounded-lg border border-[#2b2d32] bg-[#191b20]">
               <div className="flex items-center justify-between border-b border-[#2b2d32] p-[4%]"><div><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Versions</p><p className="mt-1 text-[10px] font-semibold">История публикаций</p></div><button className="rounded-md border border-[#2b2d32] px-2 py-1 text-[7px]">Обновить</button></div>
-              {["v.12 · Production build", "v.11 · Обновление каталога", "v.10 · Первая публикация"].map((item, index) => <div key={item} data-guide-target={index === 0 ? "dashboard-version" : undefined} className="flex items-center gap-3 border-b border-[#25272b] p-[3%] text-[7px]"><span className="grid size-6 place-items-center rounded-full bg-[#248a4b]/10 text-success-fg"><Check className="size-3" /></span><span className="font-semibold">{item}</span><span className="ml-auto text-[#828491]">{index === 0 ? "сейчас" : `${index} дн.`}</span><span className="font-semibold text-success-fg">done</span></div>)}
+              {["v.12 · Production build", "v.11 · Обновление каталога", "v.10 · Первая публикация"].map((item, index) => <div key={item} data-guide-target={index === 0 ? "dashboard-version" : undefined} className="flex items-center gap-3 border-b border-[#25272b] p-[3%] text-[7px]"><span className="grid size-6 place-items-center rounded-full bg-success/10 text-success-fg"><Check className="size-3" /></span><span className="font-semibold">{item}</span><span className="ml-auto text-[#828491]">{index === 0 ? "сейчас" : `${index} дн.`}</span><span className="font-semibold text-success-fg">done</span></div>)}
             </div>
-            <div className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[7%]"><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Эксплуатация</p><p className="mt-2 text-[10px] font-semibold">Без разработчика</p><div className="mt-[10%] space-y-3 text-[7px] text-[#9fa1b1]"><p className="flex gap-2"><ShieldCheck className="size-3 shrink-0 text-[#0381fa]" />Health-check после релиза</p><p className="flex gap-2"><Cloud className="size-3 shrink-0 text-[#0381fa]" />Всегда активный контейнер</p><p className="flex gap-2"><ArrowRight className="size-3 shrink-0 text-[#0381fa]" />Версии и откат</p></div></div>
+            <div className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[7%]"><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Эксплуатация</p><p className="mt-2 text-[10px] font-semibold">Без разработчика</p><div className="mt-[10%] space-y-3 text-[7px] text-[#9fa1b1]"><p className="flex gap-2"><ShieldCheck className="size-3 shrink-0 text-accent" />Health-check после релиза</p><p className="flex gap-2"><Cloud className="size-3 shrink-0 text-accent" />Всегда активный контейнер</p><p className="flex gap-2"><ArrowRight className="size-3 shrink-0 text-accent" />Версии и откат</p></div></div>
           </div>
         </div>
       </div>
@@ -480,7 +480,7 @@ export function GoldenPathVisual() {
     <div className="grid gap-3 md:grid-cols-6">
       {nodes.map(([number, title, copy, Icon], index) => (
         <div key={title} className="relative rounded-[12px] border border-[#2b2d32] bg-[#191b20] p-5">
-          <div className="flex items-center justify-between"><span className="font-mono text-[9px] text-[#0381fa]">{number}</span><Icon className="size-4 text-[#0381fa]" /></div>
+          <div className="flex items-center justify-between"><span className="font-mono text-[9px] text-accent">{number}</span><Icon className="size-4 text-accent" /></div>
           <p className="mt-8 text-sm font-semibold">{title}</p><p className="mt-1 text-xs leading-5 text-[#828491]">{copy}</p>
           {index < nodes.length - 1 && <span className="absolute -right-2 top-1/2 z-10 hidden size-4 -translate-y-1/2 place-items-center rounded-full bg-[#121519] text-white md:grid"><ChevronRight className="size-3" /></span>}
         </div>

@@ -48,9 +48,10 @@ it("shows the current substage, server elapsed and transferred bytes without inv
   expect(text).toContain("26 с");
   expect(text).toContain("передано 1,2 ГБ");
   expect(text).not.toContain("%");
-  // Readiness ("3 из 3") stays a separate statement about prerequisites.
-  expect(container.querySelector('[data-testid="max-launch-progress"]')).not.toBeNull();
-  expect(container.textContent).toContain("Готово 3 из 3");
+  // Готовность считается один раз — в маршруте до публикации. Второй счётчик
+  // с собственной полосой наверху панели убран: одно число, один индикатор.
+  expect(container.querySelector('[data-testid="max-launch-progress"]')).toBeNull();
+  expect(container.textContent).toContain("Всё готово к публикации");
   expect(api.launch).not.toHaveBeenCalled();
 });
 

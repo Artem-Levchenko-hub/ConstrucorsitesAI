@@ -53,7 +53,7 @@
 .max-projects-heading h1 + p { color: var(--color-fg-secondary); line-height: 1.6; }
 .max-projects-heading > button { flex-shrink: 0; }
 .max-projects-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.max-projects-search { display: flex; align-items: center; gap: 10px; width: 360px; max-width: 100%; min-width: 0; padding: 0 12px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 7px; color: var(--color-fg-secondary); }
+.max-projects-search { display: flex; align-items: center; gap: 10px; width: 360px; max-width: 100%; min-width: 0; padding: 0 12px; background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 6px; color: var(--color-fg-secondary); }
 .max-projects-search:focus-within { border-color: var(--color-accent); box-shadow: 0 0 0 3px rgb(0 98 238 / .12); }
 .max-projects-search input { border: 0; border-radius: 0; padding: 0; min-height: 44px; box-shadow: none; outline: none; background: transparent; }
 .max-projects-search input:focus-visible { box-shadow: none; outline: none; }
@@ -68,7 +68,7 @@
 .max-project-editor-link:focus-visible::after { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 .max-project-actions > a, .max-project-actions > button { position: relative; z-index: 2; }
 .max-project-identity { display: flex; align-items: flex-start; gap: 14px; min-width: 0; }
-.max-project-monogram, .max-project-thumbnail { display: grid; flex-shrink: 0; width: 40px; height: 40px; border-radius: 8px; }
+.max-project-monogram, .max-project-thumbnail { display: grid; flex-shrink: 0; width: 40px; height: 40px; border-radius: 6px; }
 .max-project-monogram { place-items: center; background: var(--color-accent-subtle); color: var(--color-accent); font-size: 19px; }
 .max-project-thumbnail { border: 1px solid var(--color-border-default); background: var(--color-surface-3); object-fit: cover; object-position: top; }
 .max-project-identity h2 { font-size: 17px; font-weight: 600; overflow-wrap: anywhere; }
@@ -92,12 +92,12 @@
 .max-project-status--failed { color: #b42318; }
 .max-project-status--pending { color: #526079; }
 .max-project-actions { display: flex; align-items: center; gap: 8px; min-width: 0; }
-.max-project-next { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 1; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 7px; color: var(--color-accent-secondary); font-size: 13px; font-weight: 500; }
+.max-project-next { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex: 1; min-height: 44px; padding: 10px 12px; border: 1px solid var(--color-border-strong); border-radius: 6px; color: var(--color-accent-secondary); font-size: 13px; font-weight: 500; }
 .max-project-next:hover { background: var(--color-accent-subtle); border-color: var(--color-accent); }
 .max-projects-empty { padding: 64px 24px; background: var(--color-surface); border: 1px solid var(--color-border-default); border-radius: 10px; text-align: center; }
 .max-projects-empty h2 { margin: 16px 0 12px; font-size: 24px; font-weight: 600; }
 .max-projects-empty p { max-width: 450px; margin: 0 auto 24px; line-height: 1.65; color: var(--color-fg-secondary); }
-[data-max-studio].max-project-wizard { display: flex; flex-direction: column; gap: 0; max-width: 700px; max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; border-radius: 12px; background: var(--color-surface); }
+[data-max-studio].max-project-wizard { display: flex; flex-direction: column; gap: 0; max-width: 700px; max-height: calc(100dvh - 32px); padding: 0; overflow: hidden; border-radius: 10px; background: var(--color-surface); }
 .max-wizard-heading { flex-shrink: 0; padding: 24px 60px 0 24px; }
 .max-wizard-progress { display: block; width: 100%; height: 3px; margin-top: 20px; appearance: none; border: 0; background: var(--color-border-subtle); }
 .max-wizard-progress::-webkit-progress-bar { background: var(--color-border-subtle); }
@@ -106,16 +106,16 @@
 .max-wizard-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px; }
 .max-wizard-body > * + * { margin-top: 24px; }
 .max-wizard-body input { min-height: 44px; }
-.max-wizard-option { min-height: 44px; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 8px; text-align: left; }
+.max-wizard-option { min-height: 44px; padding: 12px; border: 1px solid var(--color-border-default); border-radius: 6px; text-align: left; }
 .max-wizard-option:hover { border-color: var(--color-border-strong); }
 .max-wizard-option[aria-pressed=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); }
 .max-wizard-option--style { display: block; }
 .max-wizard-note { margin-top: 6px; color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; }
-.max-feature-chip { display: flex; align-items: stretch; gap: 2px; min-width: 0; border: 1px solid var(--color-border-default); border-radius: 8px; background: var(--color-surface); }
+.max-feature-chip { display: flex; align-items: stretch; gap: 2px; min-width: 0; border: 1px solid var(--color-border-default); border-radius: 6px; background: var(--color-surface); }
 .max-feature-chip:hover { border-color: var(--color-border-strong); }
 .max-feature-chip[data-selected=true] { border-color: var(--color-accent); background: var(--color-accent-subtle); }
 .max-feature-chip__toggle { display: flex; align-items: flex-start; gap: 9px; flex: 1; min-width: 0; padding: 11px 4px 11px 11px; text-align: left; }
-.max-feature-chip__check { display: grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; flex-shrink: 0; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-surface); color: var(--color-accent); }
+.max-feature-chip__check { display: grid; place-items: center; width: 16px; height: 16px; margin-top: 1px; flex-shrink: 0; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-surface); color: var(--color-accent); }
 .max-feature-chip[data-selected=true] .max-feature-chip__check { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-fg-on-accent); }
 .max-feature-chip__copy { min-width: 0; }
 .max-feature-chip__label { display: block; color: var(--color-fg-primary); font-size: 13px; font-weight: 500; line-height: 1.35; }

@@ -96,7 +96,7 @@ export function ChatMessage({
             : "bg-surface-overlay border border-border-default",
           studio && "h-8 w-8 border-0",
           studio && isUser && "bg-accent-subtle text-accent",
-          studio && !isUser && "bg-surface-overlay text-[#0381fa]",
+          studio && !isUser && "bg-surface-overlay text-accent",
         )}
       >
         {isUser ? (

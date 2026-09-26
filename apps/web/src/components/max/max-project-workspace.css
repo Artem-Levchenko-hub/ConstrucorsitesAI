@@ -5,9 +5,9 @@
 .max-project-brand-mark { width: 20px; height: 20px; }
 .max-project-brand span { font-weight: 400; }
 .max-project-header-name { min-width: 0; padding-left: 18px; border-left: 1px solid var(--color-border-default); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
-.max-project-back { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--color-border-default); border-radius: 7px; flex-shrink: 0; }
+.max-project-back { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 1px solid var(--color-border-default); border-radius: 6px; flex-shrink: 0; }
 .max-project-back:hover { background: var(--color-surface-2); }
-.max-project-launch { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 40px; padding: 8px 16px; border-radius: 7px; background: var(--color-accent); color: var(--color-fg-on-accent); font-size: 13px; font-weight: 500; }
+.max-project-launch { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 8px 16px; border-radius: 6px; background: var(--color-accent); color: var(--color-fg-on-accent); font-size: 13px; font-weight: 500; }
 .max-project-navigation { flex-shrink: 0; overflow-x: auto; background: var(--color-surface); border-bottom: 1px solid var(--color-border-default); }
 .max-project-navigation nav { max-width: 1184px; margin: auto; padding: 8px 28px; }
 .max-project-navigation [aria-current=page] { color: var(--color-accent-secondary); background: var(--color-accent-subtle); }
@@ -17,9 +17,9 @@
 .max-project-eyebrow { color: var(--color-fg-secondary); font-size: 11px; font-weight: 600; letter-spacing: .075em; text-transform: uppercase; }
 .max-project-page-heading h1 { margin: 7px 0 10px; font-size: clamp(26px, 3vw, 34px); font-weight: 600; letter-spacing: -.035em; line-height: 1.2; }
 .max-project-lead { max-width: 700px; color: var(--color-fg-secondary); font-size: 14px; line-height: 1.65; }
-.max-project-help { display: flex; align-items: center; gap: 7px; min-height: 40px; color: var(--color-fg-secondary); font-size: 12px; flex-shrink: 0; }
+.max-project-help { display: flex; align-items: center; gap: 7px; min-height: 44px; color: var(--color-fg-secondary); font-size: 12px; flex-shrink: 0; }
 .max-publish-workspace { max-width: 760px; margin: 0 auto; }
-[data-max-studio].max-studio-launch-dialog { position: fixed; top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 32px); height: auto; overflow: hidden; border: 1px solid var(--color-border-default); border-radius: 12px; background: var(--color-surface); box-shadow: 0 24px 100px rgb(20 32 50 / .22); }
+[data-max-studio].max-studio-launch-dialog { position: fixed; top: 50%; left: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%); width: min(680px, calc(100% - 32px)); max-height: calc(100dvh - 32px); height: auto; overflow: hidden; border: 1px solid var(--color-border-default); border-radius: 10px; background: var(--color-surface); box-shadow: 0 24px 100px rgb(20 32 50 / .22); }
 .max-studio-launch { display: flex; flex-direction: column; width: 100%; min-height: 0; max-height: calc(100dvh - 32px); color: var(--color-fg-primary); background: var(--color-surface); }
 .max-launch-dialog-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 24px; border-bottom: 1px solid var(--color-border-default); flex-shrink: 0; }
 .max-launch-dialog-heading h2 { margin-top: 4px; font-size: 20px; font-weight: 600; letter-spacing: -.02em; }
@@ -28,7 +28,7 @@
 .max-studio-launch-standalone .max-studio-launch-body { overflow: visible; }
 .max-launch-readiness { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; font-size: 12px; color: var(--color-fg-secondary); }
 .max-launch-readiness strong { color: var(--color-fg-primary); font-weight: 500; }
-.max-launch-readiness progress { width: 100%; height: 4px; appearance: none; border: 0; border-radius: 4px; overflow: hidden; background: var(--color-border-subtle); }
+.max-launch-readiness progress { width: 100%; height: 4px; appearance: none; border: 0; border-radius: 6px; overflow: hidden; background: var(--color-border-subtle); }
 .max-launch-readiness progress::-webkit-progress-bar { background: var(--color-border-subtle); }
 .max-launch-readiness progress::-webkit-progress-value { background: var(--color-accent); }
 .max-launch-readiness progress::-moz-progress-bar { background: var(--color-accent); }
@@ -37,11 +37,11 @@
 .max-launch-focus > p { margin-top: 10px; color: var(--color-fg-secondary); font-size: 13px; line-height: 1.65; }
 .max-launch-primary-action { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 20px; }
 .max-launch-primary-action > div { width: auto; flex: 1; }
-.max-launch-primary-action button, .max-launch-primary-action a { min-height: 42px; border-radius: 7px; }
-.max-launch-address { display: flex; align-items: center; gap: 8px; margin-top: 16px; border: 1px solid var(--color-border-default); padding: 4px 6px 4px 12px; border-radius: 7px; }
+.max-launch-primary-action button, .max-launch-primary-action a { min-height: 44px; border-radius: 6px; }
+.max-launch-address { display: flex; align-items: center; gap: 8px; margin-top: 16px; border: 1px solid var(--color-border-default); padding: 4px 6px 4px 12px; border-radius: 6px; }
 .max-launch-address > a { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-accent-secondary); }
-.max-launch-notice { padding: 12px 14px; border-radius: 7px; background: var(--color-accent-subtle); color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; margin-top: 16px; }
-.max-launch-notice a { display: inline-flex; align-items: center; min-height: 40px; margin-right: 16px; color: var(--color-accent-secondary); }
+.max-launch-notice { padding: 12px 14px; border-radius: 6px; background: var(--color-accent-subtle); color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; margin-top: 16px; }
+.max-launch-notice a { display: inline-flex; align-items: center; min-height: 44px; margin-right: 16px; color: var(--color-accent-secondary); }
 .max-launch-checks { border-block: 1px solid var(--color-border-default); font-size: 12px; }
 .max-launch-checks summary { cursor: pointer; padding: 15px 0; font-weight: 500; }
 .max-launch-checks summary > span { float: right; color: var(--color-accent-secondary); }
@@ -57,7 +57,7 @@
 .max-publication-requirements p { margin-top: 4px; color: var(--color-fg-secondary); font-size: 12px; line-height: 1.6; }
 .max-requirement-icon { color: var(--color-accent-secondary); }
 .max-requirement-icon svg { width: 20px; height: 20px; }
-.max-publication-requirements [data-state=done] .max-requirement-icon, .max-requirement-status { color: #237747; }
+.max-publication-requirements [data-state=done] .max-requirement-icon, .max-requirement-status { color: var(--color-success-fg); }
 .max-publication-requirements [data-state=unknown] :is(.max-requirement-icon, .max-requirement-status) { color: var(--color-fg-secondary); }
 .max-requirement-status { font-size: 12px; font-weight: 550; }
 .max-requirement-action { display: inline-flex; justify-content: center; align-items: center; gap: 6px; min-height: 36px; padding: 7px 10px; border: 1px solid var(--color-border-strong); border-radius: 6px; color: var(--color-accent-secondary); font-size: 12px; font-weight: 550; }
@@ -70,6 +70,8 @@
 .max-requirement-progress > span { width: 22px; height: 4px; border-radius: 999px; background: var(--color-surface-3); }
 .max-requirement-progress > span[data-done=true] { background: var(--color-accent); }
 .max-publication-requirements [data-state=later] { opacity: .68; }
+.max-requirement-now { color: var(--color-accent-secondary); }
+.max-publication-requirements [data-promoted] .max-requirement-icon { color: var(--color-accent); }
 .max-publication-requirements [data-state=later] .max-requirement-icon { color: var(--color-fg-tertiary); }
 /* Дисклеймер перестал быть самым длинным текстом на экране: он раскрывается. */
 .max-publication-optional { margin-top: 18px; padding: 12px 16px; background: #f5f7fa; border-left: 3px solid #c4d0e5; }
@@ -83,9 +85,9 @@
 .max-launch-option > div { flex: 1; }
 .max-launch-option h4 { font-size: 13px; font-weight: 500; }
 .max-launch-option p { font-size: 11px; margin-top: 4px; color: var(--color-fg-secondary); }
-.max-launch-option a { min-height: 38px; border-radius: 7px; font-size: 12px; }
+.max-launch-option a { min-height: 38px; border-radius: 6px; font-size: 12px; }
 .max-launch-configuration { display: flex; gap: 8px; margin-top: 18px; }
-.max-launch-configuration > button { flex: 1; border-radius: 7px; }
+.max-launch-configuration > button { flex: 1; border-radius: 6px; }
 .max-launch-logs { max-height: 180px; overflow: auto; background: var(--color-surface-2); padding: 12px; font-size: 11px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .max-settings-section { padding-block: 22px; }
 .max-settings-dialog [role=tablist] button[aria-selected=true] { border-color: var(--color-accent); color: var(--color-accent-secondary); background: var(--color-accent-subtle); }
@@ -100,7 +102,7 @@
 .max-dashboard-project h2 { margin: 24px 0 12px; font-size: 27px; line-height: 1.3; font-weight: 600; overflow-wrap: anywhere; letter-spacing: -.025em; }
 .max-dashboard-url { display: flex; gap: 8px; align-items: center; color: var(--color-accent-secondary); font-size: 13px; overflow-wrap: anywhere; }
 .max-dashboard-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
-.max-dashboard-actions > a { min-height: 42px; border-radius: 7px; }
+.max-dashboard-actions > a { min-height: 44px; border-radius: 6px; }
 .max-dashboard-settings-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 26px; padding-top: 18px; border-top: 1px solid var(--color-border-default); font-size: 12px; color: var(--color-fg-secondary); }
 .max-dashboard-release { padding: 22px 0; }
 .max-dashboard-release h2, .max-dashboard-system h2, .max-dashboard-history h2 { font-size: 17px; font-weight: 600; }
