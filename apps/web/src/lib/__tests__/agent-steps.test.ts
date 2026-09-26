@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CAPACITY_WAITING_COPY } from "@/lib/agent-transcript";
 import type { AgentStep } from "@/lib/api/types";
 import {
+  collapseAgentSteps,
   mergeAgentStepsBySequence,
   restorePersistedAgentSteps,
 } from "@/lib/agent-steps";
@@ -127,5 +128,73 @@ describe("повторяющееся ожидание мощности", () => {
     const merged = mergeAgentStepsBySequence([], [step(1), step(2), step(3)]);
 
     expect(merged).toHaveLength(3);
+  });
+});
+
+describe("лента без дублей: повтор действия — одна строка", () => {
+  const row = (seq: number, action: string, path = "", detail = ""): AgentStep => ({
+    eventId: `c${seq}`,
+    runId: "22222222-2222-2222-2222-222222222222",
+    seq,
+    step: seq,
+    kind: "step",
+    action,
+    path,
+    detail,
+  });
+
+  it("считает повторы вместо того, чтобы множить строки", () => {
+    const collapsed = collapseAgentSteps([
+      row(1, CAPACITY_WAITING_COPY.title, "", "Вы 5-й в очереди"),
+      row(2, CAPACITY_WAITING_COPY.title, "", "Вы 3-й в очереди"),
+      row(3, CAPACITY_WAITING_COPY.title, "", "Вы 1-й в очереди"),
+    ]);
+
+    expect(collapsed).toHaveLength(1);
+    expect(collapsed[0].repeats).toBe(3);
+    // В строке остаётся самое свежее содержимое: позиция в очереди меняется.
+    expect(collapsed[0].step.detail).toBe("Вы 1-й в очереди");
+  });
+
+  it("схлопывает любое повторяющееся действие, не только ожидание", () => {
+    const collapsed = collapseAgentSteps([
+      row(1, "Читаю", "src/app/page.tsx"),
+      row(2, "Читаю", "src/app/page.tsx"),
+      row(3, "Проверяю сборку"),
+    ]);
+
+    expect(collapsed.map(item => [item.step.action, item.repeats])).toEqual([
+      ["Читаю", 2],
+      ["Проверяю сборку", 1],
+    ]);
+  });
+
+  it("одинаковое действие над разными файлами остаётся разными строками", () => {
+    const collapsed = collapseAgentSteps([
+      row(1, "Пишу", "src/app/page.tsx"),
+      row(2, "Пишу", "src/app/orders/page.tsx"),
+    ]);
+
+    expect(collapsed).toHaveLength(2);
+  });
+
+  it("возврат к прежнему действию после другой работы — это новая строка", () => {
+    const collapsed = collapseAgentSteps([
+      row(1, "Проверяю сборку"),
+      row(2, "Правлю", "src/app/page.tsx"),
+      row(3, "Проверяю сборку"),
+    ]);
+
+    expect(collapsed.map(item => item.step.seq)).toEqual([1, 2, 3]);
+  });
+
+  it("ключ строки не меняется, пока действие повторяется", () => {
+    const first = collapseAgentSteps([row(1, "Читаю", "src/app/page.tsx")]);
+    const second = collapseAgentSteps([
+      row(1, "Читаю", "src/app/page.tsx"),
+      row(2, "Читаю", "src/app/page.tsx"),
+    ]);
+
+    expect(second[0].key).toBe(first[0].key);
   });
 });

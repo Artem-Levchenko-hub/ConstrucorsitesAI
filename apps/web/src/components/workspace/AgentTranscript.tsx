@@ -20,9 +20,15 @@ import {
   Sparkles,
   Film,
   CircleAlert,
+  BookOpen,
+  Hourglass,
+  Lightbulb,
+  ShieldCheck,
 } from "lucide-react";
 import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
+import { collapseAgentSteps } from "@/lib/agent-steps";
+import { humanPath, stepCopy, type StepIconName, type StepTone } from "@/lib/agent-step-copy";
 import { CAPACITY_WAITING_COPY, agentTranscriptTitle } from "@/lib/agent-transcript";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
@@ -81,6 +87,41 @@ function stepLabel(s: AgentStep): string {
   if (s.kind !== "step") return s.action;
   return ACTION_LABEL[s.action] ?? s.action;
 }
+
+// Разряд шага → цвет строки. Владельцу важно различать «агент думает»,
+// «агент пишет», «агент проверяет» и «что-то не вышло» одним взглядом.
+// Значок строки подбирается по смыслу действия, а не по имени инструмента:
+// владелец узнаёт браузер, щит и песочные часы быстрее, чем слово runtime_check.
+const STEP_ICON: Record<StepIconName, typeof FileCode2> = {
+  explore: FolderTree,
+  read: FileCode2,
+  search: Search,
+  docs: BookOpen,
+  write: FileCode2,
+  edit: PencilLine,
+  media: Film,
+  terminal: Terminal,
+  build: Hammer,
+  logs: ScrollText,
+  browser: Globe,
+  shield: ShieldCheck,
+  wait: Hourglass,
+  retry: RefreshCw,
+  rethink: Lightbulb,
+  boost: Zap,
+  done: CheckCircle2,
+};
+
+const TONE_CLASS: Record<StepTone, string> = {
+  think: "text-fg-tertiary",
+  work: "text-fg-secondary",
+  check: "text-blue-400",
+  // Янтарный в продукте запрещён (theme-contract): ожидание узнаётся по
+  // песочным часам и пульсации, а не по «предупреждающему» цвету.
+  wait: "text-fg-tertiary",
+  done: "text-accent",
+  fail: "text-red-400",
+};
 
 /**
  * Live "what the agent is doing" transcript — the Claude-Code feel. Reads the
@@ -157,6 +198,9 @@ export function AgentTranscript({
   });
 
   const visibleSteps = steps ?? [];
+  // Одинаковое действие подряд — одна строка со счётчиком повторов: десять
+  // строк «Ожидаю ресурсы сервера» читаются как поломка, а не как ожидание.
+  const rows = collapseAgentSteps(visibleSteps);
   if (!projectId || (visibleSteps.length === 0 && !capacityWaiting)) return null;
   const incomplete =
     !streaming &&
@@ -201,7 +245,7 @@ export function AgentTranscript({
             </span>
           )}
           <span>
-            {visibleSteps.length > 0 ? `${visibleSteps.length} шаг. · детали` : "детали"}
+            {rows.length > 0 ? `${rows.length} шаг. · детали` : "детали"}
           </span>
         </span>
       </button>
@@ -221,9 +265,11 @@ export function AgentTranscript({
               </p>
             )}
             <ol className="space-y-0.5 p-1.5">
-              {visibleSteps.map((s, i) => {
-                const Icon = stepIcon(s);
-                const last = i === visibleSteps.length - 1;
+              {rows.map((row, i) => {
+                const s = row.step;
+                const copy = stepCopy(s);
+                const Icon = STEP_ICON[copy.icon] ?? stepIcon(s);
+                const last = i === rows.length - 1;
                 const live =
                   streaming &&
                   last &&
@@ -232,66 +278,74 @@ export function AgentTranscript({
                 const failed = s.ok === false;
                 const detail = (s.detail ?? "").trim();
                 const canDrill = detail.length > 0;
-                const isOpen = !!openSteps[i];
+                const isOpen = !!openSteps[row.index];
+                const place = humanPath(s.path);
                 return (
                   <motion.li
-                    key={s.eventId ?? i}
+                    key={row.key}
                     initial={{ opacity: 0, x: -4 }}
                     animate={{ opacity: 1, x: 0 }}
                     transition={{ duration: 0.18, ease: EASE_OUT }}
-                    // Full action + path on hover — the path is truncated in the
-                    // row, so the native tooltip surfaces the whole thing (works
-                    // for every step, incl. non-drillable ones with a disabled btn).
-                    title={stepLabel(s) + (s.path ? " " + s.path : "")}
+                    // Полный путь к файлу — в подсказке: в строке он только
+                    // мешает, а при разборе проблемы нужен целиком.
+                    title={stepLabel(s) + (s.path ? " · " + s.path : "")}
                   >
                     <button
                       type="button"
                       disabled={!canDrill}
                       onClick={() =>
-                        setOpenSteps((m) => ({ ...m, [i]: !m[i] }))
+                        setOpenSteps((m) => ({ ...m, [row.index]: !m[row.index] }))
                       }
                       className={cn(
-                        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                        "flex w-full items-start gap-2 rounded-md px-2 py-1 text-left transition-colors",
                         canDrill && "cursor-pointer hover:bg-surface-overlay/60",
+                        live && "motion-safe:animate-[agent-step-pulse_1.6s_ease-in-out_infinite]",
                       )}
+                      data-live={live ? "true" : undefined}
+                      data-repeats={row.repeats > 1 ? row.repeats : undefined}
                     >
                       {canDrill ? (
                         <ChevronRight
                           className={cn(
-                            "h-3 w-3 shrink-0 text-fg-tertiary transition-transform",
+                            "mt-0.5 h-3 w-3 shrink-0 text-fg-tertiary transition-transform",
                             isOpen && "rotate-90",
                           )}
                         />
                       ) : (
                         <span className="w-3 shrink-0" />
                       )}
-                      <Icon
-                        className={cn(
-                          "h-3.5 w-3.5 shrink-0",
-                          failed
-                            ? "text-red-400"
-                            : s.kind !== "step"
-                              ? "text-blue-400"
-                              : s.action === "done"
-                                ? "text-accent"
-                                : "text-fg-secondary",
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "shrink-0 text-[12px]",
-                          failed ? "text-red-400" : "text-fg-secondary",
-                        )}
-                      >
-                        {stepLabel(s)}
-                      </span>
-                      {s.path && (
-                        <span className="truncate font-mono text-[11px] text-fg-tertiary">
-                          {s.path}
+                      <Icon className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", TONE_CLASS[copy.tone])} />
+                      <span className="min-w-0 flex-1">
+                        <span className="flex min-w-0 items-center gap-1.5">
+                          <span
+                            className={cn(
+                              "truncate text-[12px]",
+                              failed ? "text-red-400" : "text-fg-secondary",
+                            )}
+                          >
+                            {copy.title}
+                          </span>
+                          {place && (
+                            <span className="truncate text-[11px] text-fg-tertiary">
+                              · {place}
+                            </span>
+                          )}
+                          {row.repeats > 1 && (
+                            <span className="shrink-0 rounded-full bg-surface-overlay px-1.5 text-[10px] font-medium tabular-nums text-fg-tertiary">
+                              ×{row.repeats}
+                            </span>
+                          )}
                         </span>
-                      )}
+                        {/* Объяснение показываем у текущего шага: в истории оно
+                            превратилось бы в стену текста. */}
+                        {live && (
+                          <span className="mt-0.5 block text-[11px] leading-4 text-fg-tertiary">
+                            {copy.hint}
+                          </span>
+                        )}
+                      </span>
                       {live && (
-                        <Loader2 className="ml-auto h-3 w-3 shrink-0 animate-spin text-accent" />
+                        <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-accent" />
                       )}
                     </button>
                     <AnimatePresence initial={false}>
@@ -303,6 +357,11 @@ export function AgentTranscript({
                           transition={{ duration: 0.18, ease: EASE_OUT }}
                           className="overflow-hidden"
                         >
+                          {s.path && (
+                            <p className="mx-2 mt-1 truncate font-mono text-[10px] text-fg-tertiary">
+                              {s.path}
+                            </p>
+                          )}
                           <pre
                             className={cn(
                               "scrollbar-elegant mx-2 my-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-base/70 p-2 font-mono text-[11px] leading-relaxed",

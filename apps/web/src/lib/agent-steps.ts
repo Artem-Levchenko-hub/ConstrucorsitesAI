@@ -86,3 +86,52 @@ export function restorePersistedAgentSteps(
   );
   return sequenced ? mergeAgentStepsBySequence(current, persisted) : current;
 }
+
+/** Подряд идущие одинаковые шаги, слитые в одну строку со счётчиком повторов. */
+export type CollapsedAgentStep = {
+  step: AgentStep;
+  /** Сколько одинаковых шагов подряд слилось в эту строку (1 — обычный шаг). */
+  repeats: number;
+  /** Устойчивый ключ строки для React: пережимает добавление новых повторов. */
+  key: string;
+  /** Индекс последнего исходного шага — по нему открывается его содержимое. */
+  index: number;
+};
+
+function visibleIdentity(step: AgentStep): string {
+  return JSON.stringify([step.kind, step.action, step.path ?? "", step.tool ?? ""]);
+}
+
+/**
+ * Одинаковое действие подряд — это ОДНА строка, а не десять.
+ *
+ * Владелец 26.09 показал ленту, где ожидание мощности стояло десятью
+ * одинаковыми строками: такое читается как поломка, а не как «идёт работа».
+ * Правило общее для всех действий, а не только для ожидания: агент может
+ * подряд перечитывать один и тот же файл или повторять проверку, и каждый
+ * такой повтор — не новость, а продолжение того же самого.
+ *
+ * Схлопываем только ПОДРЯД идущие повторы: то же действие после другой работы
+ * — это уже новый этап, и его видно отдельной строкой. Внутри строки остаётся
+ * последний шаг: в нём самое свежее содержимое (например, актуальная позиция в
+ * очереди), а счётчик показывает, сколько раз действие повторилось.
+ */
+export function collapseAgentSteps(steps: AgentStep[] = []): CollapsedAgentStep[] {
+  const rows: CollapsedAgentStep[] = [];
+  steps.forEach((step, index) => {
+    const previous = rows.at(-1);
+    if (previous && visibleIdentity(previous.step) === visibleIdentity(step)) {
+      previous.repeats += 1;
+      previous.step = step;
+      previous.index = index;
+      return;
+    }
+    rows.push({
+      step,
+      repeats: 1,
+      key: step.eventId ?? `${step.runId ?? "local"}:${step.seq ?? index}`,
+      index,
+    });
+  });
+  return rows;
+}
