@@ -12,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.max_project_config import MaxProjectConfig
@@ -93,9 +93,9 @@ def test_catalog_item_refuses_a_photo_address_that_is_not_https() -> None:
         MaxContentItem(id="x", title="X", image_url="http://example.ru/a.png")
 
 
-def test_kit_v23_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
+def test_kit_v24_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 23
+    assert MAX_MANAGED_KIT_VERSION == 24
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     # v22: no managed server file reads or persists the MAX visitor profile.
@@ -131,10 +131,7 @@ def test_kit_v23_retires_encrypted_crud_and_stores_only_the_max_user_id() -> Non
     for files in (managed, starter):
         assert not MAX_RETIRED_MANAGED_FILES & set(files)
         assert "secureCollection" not in "".join(files.values())
-    assert (
-        ".onConflictDoNothing({ target: schema.maxUsers.maxUserId })"
-        in starter["src/lib/max/session.ts"]
-    )
+    assert "schema.maxUsers" not in starter["src/lib/max/session.ts"]
     assert not MAX_RETIRED_MANAGED_FILES & MAX_SECURITY_LOCKED_FILES
     update = render_max_managed_kit_update(_config(), project_id)
     assert {path: update[path] for path in MAX_RETIRED_MANAGED_FILES} == dict.fromkeys(
@@ -650,15 +647,24 @@ const crypto = require('node:crypto');
 const assert = require('node:assert/strict');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 let incoming = new Headers();
-const persisted = [];
-const schema = {maxUsers: {maxUserId: 'max_user_id'}};
-const db = {insert: table => ({values: value => ({onConflictDoNothing: async options => {
-  persisted.push({table, value, options});
-}})})};
+const queries = [];
+let materialize = false;
+let queryError = false;
+let insertError = false;
+const pool = {query: async (sql, values) => {
+ queries.push({sql, values});
+ if (queryError) throw Error('catalog unavailable');
+ if (values) {
+  if (insertError) throw Error('parent insert failed');
+  assert.equal(values.length, 1);
+  return {rows: []};
+ }
+ return {rows: [{materialize}]};
+}};
 const exportsFor = {
  'node:crypto': {createHmac: crypto.createHmac, timingSafeEqual: crypto.timingSafeEqual},
  'next/headers': {headers: async () => incoming, cookies: async () => ({get: () => undefined})},
- '@/lib/db': {db, schema},
+ '@/lib/db': {pool},
  '@/lib/max/validate-init-data': {validateMaxInitData: () => {
   throw Error('unexpected MAX token validation')
  }}
@@ -674,31 +680,57 @@ const exportsFor = {
   }, {context});
  });
  await mod.evaluate();
- const trusted = {'x-omnia-user-id':'owner-123','x-omnia-project-id':input.project,
+ const trusted = {'x-omnia-user-id':'123456789','x-omnia-project-id':input.project,
                   'x-omnia-session-epoch':'7'};
- incoming = new Headers(trusted);
- const user = await mod.namespace.getMaxUser();
- if (input.portable) {
-  assert.equal(user.id, 'owner-123');
-  assert.equal(persisted.length, 1);
-  assert.equal(persisted[0].table, schema.maxUsers);
-  assert.equal(persisted[0].value.maxUserId, 'owner-123');
-  assert.equal(persisted[0].value.firstName, '');
-  assert.equal(Object.keys(persisted[0].value).length, 2);
-  assert.equal(persisted[0].options.target, schema.maxUsers.maxUserId);
+ // No local parent table or FK: no materialization, even with stale schema exports.
+ for (const id of ['123456789', 'preview', '9c03106f-b0af-4981-b0d1-641e7f6a51b1']) {
+  incoming = new Headers({...trusted, 'x-omnia-user-id': id});
+  const user = await mod.namespace.getMaxUser();
+  if (input.portable) {
+   assert.equal(user.id, id); // Preserve the gateway subject; never map it to a local row PK.
+   assert.equal(JSON.stringify(user), JSON.stringify({id}));
+   assert.equal((await mod.namespace.requireMaxUser()).id, id);
+  }
+  else assert.equal(user, null); // Legacy routes must never trust client-supplied identity.
  }
- else assert.equal(user, null); // Legacy routes must never trust client-supplied identity.
+ assert.equal(queries.filter(q => q.values).length, 0);
+ if (input.portable) {
+  for (const id of ['123456789', 'preview', '9c03106f-b0af-4981-b0d1-641e7f6a51b1']) {
+   materialize = true;
+   incoming = new Headers({...trusted, 'x-omnia-user-id': id});
+   assert.equal((await mod.namespace.getMaxUser()).id, id);
+   assert.equal(JSON.stringify(queries.at(-1).values), JSON.stringify([id]));
+  }
+  const inserts = queries.filter(q => q.values).length;
+  materialize = false; // A changed schema decision must not be cached.
+  assert.equal((await mod.namespace.getMaxUser()).id, incoming.get('x-omnia-user-id'));
+  assert.equal(queries.filter(q => q.values).length, inserts);
+  queryError = true;
+  await assert.rejects(mod.namespace.getMaxUser(), /catalog unavailable/);
+  queryError = false;
+  materialize = true;
+  insertError = true;
+  await assert.rejects(mod.namespace.getMaxUser(), /parent insert failed/);
+  insertError = false;
+ }
+ const callsBeforeInvalidHeaders = queries.length;
  for (const changes of [
-  {'x-omnia-user-id':''}, {'x-omnia-project-id':'another-project'},
+  {'x-omnia-user-id':''}, {'x-omnia-user-id':'   '}, {'x-omnia-project-id':'another-project'},
   {'x-omnia-session-epoch':''}, {'x-omnia-session-epoch':'invalid'},
-  {'x-omnia-session-epoch':'-1'}
+  {'x-omnia-session-epoch':'-1'}, {'x-omnia-session-epoch':'1.5'}
  ]) {
   incoming = new Headers({...trusted, ...changes});
+  assert.equal(await mod.namespace.getMaxUser(), null);
+  await assert.rejects(mod.namespace.requireMaxUser(), /MAX authentication required/);
+ }
+ for (const field of Object.keys(trusted)) {
+  incoming = new Headers(trusted);
+  incoming.delete(field);
   assert.equal(await mod.namespace.getMaxUser(), null);
  }
  incoming = new Headers();
  assert.equal(await mod.namespace.getMaxUser(), null);
- assert.equal(persisted.length, input.portable ? 1 : 0);
+ assert.equal(queries.length, callsBeforeInvalidHeaders);
 })().catch(error => {console.error(error); process.exitCode = 1});
 """
     result = run(
@@ -709,6 +741,93 @@ const exportsFor = {
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize(
+    ("parent", "child"),
+    [
+        (False, ""),
+        (True, ""),
+        (True, "CREATE TABLE public.session_test_child "
+         "(subject text REFERENCES public.max_users(max_user_id))"),
+        (True, "CREATE SCHEMA session_test; CREATE TABLE session_test.child "
+         "(subject text REFERENCES public.max_users(max_user_id))"),
+        (True, "CREATE TABLE public.session_test_child "
+         "(subject uuid REFERENCES public.max_users(id))"),
+        (True, "ALTER TABLE public.max_users ADD UNIQUE (max_user_id, first_name); "
+         "CREATE TABLE public.session_test_child (subject text, name text, "
+         "FOREIGN KEY (subject, name) REFERENCES public.max_users(max_user_id, first_name))"),
+        (True, "ALTER TABLE public.max_users ALTER COLUMN first_name DROP NOT NULL"),
+        (True, "CREATE TABLE public.session_test_child "
+         "(subject text REFERENCES public.max_users(max_user_id), "
+         "other_subject uuid REFERENCES public.max_users(id))"),
+        (False, "CREATE SCHEMA session_test; "
+         "CREATE TABLE session_test.max_users (max_user_id text UNIQUE); "
+         "CREATE TABLE session_test.child "
+         "(subject text REFERENCES session_test.max_users(max_user_id))"),
+    ],
+)
+async def test_portable_session_legacy_catalog_uses_actual_postgres(
+    db_session, parent: bool, child: str
+) -> None:
+    """DDL is transaction-scoped in the isolated test DB; never commit these tables."""
+    await db_session.execute(text("SELECT pg_advisory_xact_lock(7620240926)"))
+    assert (
+        await db_session.execute(text("SELECT to_regclass('public.max_users')"))
+    ).scalar_one() is None
+    assert (
+        await db_session.execute(text("SELECT to_regnamespace('session_test')"))
+    ).scalar_one() is None
+    if parent:
+        await db_session.execute(
+            text(
+                "CREATE TABLE public.max_users (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), "
+                "max_user_id text NOT NULL UNIQUE, first_name text NOT NULL)"
+            )
+        )
+    for statement in child.split(";"):
+        if statement.strip():
+            await db_session.execute(text(statement))
+    decision = (
+        await db_session.execute(text(max_project_kit_svc._PORTABLE_MAX_IDENTITY_CATALOG_SQL))
+    ).scalar_one()
+    assert decision is parent
+    if decision:
+        await db_session.execute(
+            text("INSERT INTO public.max_users(max_user_id,first_name) VALUES ('preview','kept')")
+        )
+        for subject in ("123456789", "preview", str(uuid4())):
+            for _ in range(2):
+                await db_session.execute(
+                    text(
+                        max_project_kit_svc._PORTABLE_MAX_IDENTITY_INSERT_SQL.replace("$1", ":id")
+                    ),
+                    {"id": subject},
+                )
+            if "CREATE TABLE public.session_test_child" in child:
+                if "(subject uuid " in child:
+                    sql = "INSERT INTO public.session_test_child(subject) SELECT id "
+                elif "FOREIGN KEY" in child:
+                    sql = "INSERT INTO public.session_test_child(subject, name) "
+                    sql += "SELECT max_user_id, first_name "
+                else:
+                    sql = "INSERT INTO public.session_test_child(subject) SELECT max_user_id "
+                await db_session.execute(
+                    text(sql + "FROM public.max_users WHERE max_user_id = :id"), {"id": subject}
+                )
+            elif "CREATE TABLE session_test.child" in child:
+                await db_session.execute(
+                    text("INSERT INTO session_test.child(subject) VALUES (:id)"), {"id": subject}
+                )
+        count = (
+            await db_session.execute(text("SELECT count(*) FROM public.max_users"))
+        ).scalar_one()
+        assert count == 3
+        assert (
+            await db_session.execute(
+                text("SELECT first_name FROM public.max_users WHERE max_user_id = 'preview'")
+            )
+        ).scalar_one() == "kept"
 
 
 def test_portable_starter_requires_project_identity() -> None:

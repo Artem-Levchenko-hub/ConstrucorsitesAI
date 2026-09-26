@@ -15,7 +15,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 23
+MAX_MANAGED_KIT_VERSION = 24
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
 # platform-owned paths. v20 materializes trusted gateway subjects in the
 # isolated product DB before business tables can enforce max_users FKs. v21
@@ -23,6 +23,8 @@ MAX_MANAGED_KIT_VERSION = 23
 # v22 stops reading and storing the MAX visitor profile (sessions carry the MAX
 # user id only) and drops requisites from the app's documents: the operator is a
 # display name, the policy may be the owner's own link (152-ФЗ ст. 5).
+# v24 materializes a portable legacy identity only when its physical parent exists;
+# independently managed project schemas need no local MAX core tables.
 MAX_RETIRED_MANAGED_FILES = frozenset(
     {
         "src/app/api/omnia/data/[...path]/route.ts",
@@ -430,18 +432,26 @@ def include_portable_manifest(
     return files
 
 
+_PORTABLE_MAX_IDENTITY_CATALOG_SQL = (
+    "SELECT pg_catalog.to_regclass('public.max_users') IS NOT NULL AS materialize"
+)
+_PORTABLE_MAX_IDENTITY_INSERT_SQL = (
+    "INSERT INTO public.max_users (max_user_id, first_name) VALUES ($1, '') "
+    "ON CONFLICT (max_user_id) DO NOTHING"
+)
+
+
 def render_portable_max_session(project_id: UUID | str) -> str:
     """Adapt product auth to the secretless, gateway-authenticated runtime.
 
-    The trusted core owns the browser session, while portable product tables use
-    their isolated project database. Materialize the authenticated subject there
-    before product routes can insert rows with a ``max_users`` foreign key.
+    The trusted core owns MAX identity. Older product schemas may reference a
+    local parent; preserve that behavior only when the physical relation exists.
     """
     source = _template_file("src/lib/max/session.ts")
     source = source.replace(
         'import { cookies, headers } from "next/headers";\n',
         'import { cookies, headers } from "next/headers";\n\n'
-        'import { db, schema } from "@/lib/db";\n',
+        'import { pool } from "@/lib/db";\n',
         1,
     )
     start = source.index("export async function getMaxUser()")
@@ -456,14 +466,21 @@ def render_portable_max_session(project_id: UUID | str) -> str:
   if (!id?.trim() || projectId !== __PROJECT_ID__ || !epoch || !/^[0-9]+$/.test(epoch)) {
     return null;
   }
-  await db
-    .insert(schema.maxUsers)
-    .values({ maxUserId: id, firstName: "" })
-    .onConflictDoNothing({ target: schema.maxUsers.maxUserId });
+  // A schema.ts export does not prove that a legacy parent exists. Do not cache:
+  // project migrations can change the physical schema while this process is alive.
+  const result = await pool.query(__IDENTITY_CATALOG_SQL__);
+  const materialize = result.rows[0]?.materialize;
+  if (materialize === true) {
+    await pool.query(__IDENTITY_INSERT_SQL__, [id]);
+  } else if (materialize !== false) {
+    throw new Error("MAX identity catalog result is invalid");
+  }
   return { id };
 }
 
-""".replace("__PROJECT_ID__", json.dumps(str(project_id)))
+""".replace("__PROJECT_ID__", json.dumps(str(project_id))).replace(
+        "__IDENTITY_CATALOG_SQL__", json.dumps(_PORTABLE_MAX_IDENTITY_CATALOG_SQL)
+    ).replace("__IDENTITY_INSERT_SQL__", json.dumps(_PORTABLE_MAX_IDENTITY_INSERT_SQL))
     return source[:start] + helper + source[end:]
 
 
