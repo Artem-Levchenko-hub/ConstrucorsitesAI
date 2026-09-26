@@ -280,3 +280,34 @@ async def test_answering_a_missing_row_with_403_breaks_the_owner_leg_first(rehea
         await run()
 
     assert failure.value.leg == "signed_owner_mutation"
+
+
+async def test_a_failure_before_the_six_legs_still_names_itself(rehearsal, monkeypatch) -> None:
+    """Подготовка репетиции — тоже место, где можно упасть, и оно было немым.
+
+    26.09, прогон 81e14026: агент впервые прошёл манифест и дошёл до репетиции,
+    а она вернула общий `probe_rehearsal_failed` без шага. Причина в том, что
+    шесть шагов обёрнуты в имя, а ПОДГОТОВКА перед ними — нет: там свои четыре
+    фразы (личность кандидата изменилась, тома изменились, адрес превью негоден,
+    подписывать сессии нечем), и все приходят одним словом.
+
+    Здесь закреплено, что и эта фраза доживает до отчёта — тем же узким полем,
+    которым едет правило манифеста.
+    """
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+    from yleum_orchestrator.services import restoration_adaptation_health as health
+
+    run, _db, _app = rehearsal
+    monkeypatch.setattr(
+        health.DockerRestorationAdaptationHealthProber,
+        "_candidate_context",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            CellResourceError("candidate probe signer is unavailable")
+        ),
+    )
+
+    with pytest.raises(CellResourceError) as failure:
+        await run()
+
+    assert not isinstance(failure.value, ProbeRehearsalFailure)
+    assert str(failure.value) == "candidate probe signer is unavailable"

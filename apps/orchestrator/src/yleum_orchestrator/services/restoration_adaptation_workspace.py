@@ -1643,9 +1643,17 @@ class DockerAdaptationWorkspaceEngine:
                     # Нога, на которой споткнулись, — единственное, что делает
                     # этот отказ пригодным для починки. Незнакомый сбой остаётся
                     # под общим кодом, а не выдумывает ногу.
+                    leg = getattr(exc, "leg", "")
                     rehearsal_reason = REHEARSAL_REASON_BY_LEG.get(
-                        getattr(exc, "leg", ""), "probe_rehearsal_failed"
+                        leg, "probe_rehearsal_failed"
                     )
+                    if not leg:
+                        # Упали ДО шести шагов — в подготовке репетиции. У неё свои
+                        # внятные фразы (личность кандидата изменилась, тома
+                        # изменились, адрес превью негоден, подписывать сессии
+                        # нечем), и без них отказ снова становится одним словом.
+                        # Живой прогон 81e14026 (26.09) упёрся ровно сюда.
+                        rehearsal_detail = _rule_name(exc)
             candidate_after_rehearsal = await observe(
                 candidate,
                 observed_on="candidate_copy",
@@ -1707,7 +1715,13 @@ class DockerAdaptationWorkspaceEngine:
             state=state,
             reason_code=reason,
             # Правило доезжает только вместе со своей причиной.
-            reason_detail=rehearsal_detail if reason == "probe_manifest_invalid" else None,
+            # Подробность доезжает и у манифеста, и у сорвавшейся подготовки
+            # репетиции: в обоих случаях это фраза разработчика, а не данные.
+            reason_detail=(
+                rehearsal_detail
+                if reason in {"probe_manifest_invalid", "probe_rehearsal_failed"}
+                else None
+            ),
             source_workspace_revision=latest_revision,
             candidate_workspace_revision=candidate_revision,
             candidate_proof_key=proof.candidate_proof_key,
