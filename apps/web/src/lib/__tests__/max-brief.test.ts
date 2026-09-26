@@ -54,3 +54,20 @@ it("rejects an oversized brief instead of sending a partial request", () => {
 it("checks the assembled request including optional fields", () => {
   expect(() => buildMaxProjectPrompt({ ...longBrief, audience: "я".repeat(30_000) })).toThrow();
 });
+
+it("does not contradict an explicit request for empty lists with mandatory demo data", () => {
+  const idea = "Список заметок. Пустой список, без демоданных. Новые записи создаёт пользователь.";
+  const prompt = buildMaxProjectPrompt({ ...longBrief, idea });
+
+  expect(prompt).toContain(idea);
+  expect(prompt).not.toContain("реальные русские тексты и демонстрационные данные");
+  expect(prompt).toContain("Начальные данные добавляй только по явному запросу пользователя");
+});
+
+it("preserves an explicit seed-data request instead of banning initial data", () => {
+  const idea = "Каталог книг. Добавь три демонстрационные записи: Альфа, Бета и Гамма.";
+  const prompt = buildMaxProjectPrompt({ ...longBrief, idea });
+
+  expect(prompt).toContain(idea);
+  expect(prompt).toContain("Начальные данные добавляй только по явному запросу пользователя");
+});
