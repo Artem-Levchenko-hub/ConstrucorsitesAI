@@ -134,27 +134,10 @@ async def test_provision_container(monkeypatch: pytest.MonkeyPatch) -> None:
         return {"state": "running"}
 
     monkeypatch.setattr(orchestrator_client, "provision", _fake_provision)
-    ok = await stack_routing.ensure_provisioned(uuid4(), "slug", "nextjs_entities")
+    ok = await stack_routing.ensure_provisioned(uuid4(), "slug", "max_miniapp")
     assert ok is True
-    assert seen["template"] == "nextjs-entities"  # mapped to orchestrator dir name
+    assert seen["template"] == "max-miniapp-nextjs"  # mapped to orchestrator dir name
     assert seen["timeout"] == 30.0
-
-
-async def test_provision_spa_container(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Phase 7.2 — the spa stack provisions the vite-react-spa image."""
-    seen: dict[str, object] = {}
-
-    async def _fake_provision(  # type: ignore[no-untyped-def]
-        *, project_id, slug, template, tier, timeout  # noqa: ASYNC109
-    ):
-        seen["template"] = template
-        seen["timeout"] = timeout
-        return {"state": "running"}
-
-    monkeypatch.setattr(orchestrator_client, "provision", _fake_provision)
-    ok = await stack_routing.ensure_provisioned(uuid4(), "slug", "spa")
-    assert ok is True
-    assert seen["template"] == "vite-react-spa"  # mapped to orchestrator dir name
 
 
 async def test_provision_failsoft(monkeypatch: pytest.MonkeyPatch) -> None:

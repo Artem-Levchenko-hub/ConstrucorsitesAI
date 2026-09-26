@@ -2,19 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from yleum_orchestrator.services import builder
 
 _TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
 
 
-@pytest.mark.parametrize(
-    "template",
-    ("max-miniapp-nextjs", "nextjs-postgres-drizzle"),
-)
-def test_migration_runner_keeps_foreign_keys_in_project_schema(template: str) -> None:
-    source = (_TEMPLATES / template / "scripts" / "apply-migrations.mjs").read_text(
+def test_migration_runner_keeps_foreign_keys_in_project_schema() -> None:
+    source = (_TEMPLATES / "max-miniapp-nextjs" / "scripts" / "apply-migrations.mjs").read_text(
         encoding="utf-8"
     )
 

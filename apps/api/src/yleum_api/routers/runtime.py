@@ -192,12 +192,11 @@ async def start_runtime(
     if cell_status is not None:
         return cell_status
     _, plan = await _billing_plan_for_user(session, current_user.id)
-    # Map api-side `template` to the orchestrator's actual template dir.
-    # Static V1 templates (blank/landing/portfolio/blog) have no orchestrator
-    # image — they ship as plain HTML via /p/<slug>. We default those to
-    # `nextjs-postgres-drizzle` so a V1 user who hits "Start" can still
-    # opt into a full backend (lazy upgrade) without re-creating the project.
-    orch_template = orchestrator_template(project.template) or "nextjs-postgres-drizzle"
+    # Map api-side `template` to the orchestrator's actual template dir. Only the
+    # MAX app has one now; a row of the separated site builder has no image to
+    # provision, so the fallback is the app template rather than a stack that no
+    # longer ships.
+    orch_template = orchestrator_template(project.template) or "max-miniapp-nextjs"
     payload = await orchestrator_client.provision(
         project_id=project_id,
         slug=project.slug,

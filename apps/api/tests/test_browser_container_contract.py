@@ -87,10 +87,11 @@ async def test_runtime_actual_start_keeps_resync_autoheal_facet(template, monkey
     if expected:
         heal.assert_awaited_once_with(project.id, project.slug, template=template)
     assert read.call_count == reload.await_count == heal.await_count == expected
+    # Every separated template falls back to the only image that still ships.
     expected_template = {
-        "api": "fastapi-postgres",
-        "tgbot": "telegram-bot-aiogram",
-        "code": "nextjs-postgres-drizzle",
+        "api": "max-miniapp-nextjs",
+        "tgbot": "max-miniapp-nextjs",
+        "code": "max-miniapp-nextjs",
     }
     if template in expected_template:
         # Exclusion from browser resync does not mean exclusion from provisioning.

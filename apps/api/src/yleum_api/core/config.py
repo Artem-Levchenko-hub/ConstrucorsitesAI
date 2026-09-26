@@ -662,16 +662,6 @@ class Settings(BaseSettings):
     # restores the legacy design-mood-only path immediately.
     use_design_intelligence_plugin: bool = Field(default=True)
 
-    # Locked-primitive CONTRACT card (2026-06-27, harness-hardening). On a realtime
-    # build the seed used to tell the agent «read the fixed files and check the
-    # signatures yourself» — a weak model skips the reads and HALLUCINATES names /
-    # shapes / arity (live: `getChannels` vs `listUserChannels` → TS2305; own
-    # `Channel` type vs `@/lib/db/schema` → TS2322; `useChannel()` no-arg → TS2554),
-    # then loops on the type errors. When ON we instead HAND the agent the exact
-    # `.d.ts`-style signatures of the locked primitives up front (deep-module: a
-    # narrow, exact interface beats "go discover it"), killing those error classes
-    # deterministically. Default ON; flip USE_PRIMITIVE_CONTRACT=0 to revert.
-    use_primitive_contract: bool = Field(default=True)
 
     # Ship-green-on-abort (2026-06-27, harness-hardening). A loop-guard abort
     # (cycle / repeat / explore / budget) used to ALWAYS return done=False →

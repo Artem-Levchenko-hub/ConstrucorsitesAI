@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 from pathlib import Path
 
 import pytest
@@ -125,23 +124,6 @@ def _assert_src_imports_declared(template: Path) -> None:
 def test_guard_sees_some_templates() -> None:
     # Self-check: the parametrize discovered real templates (a glob typo that
     # silently matched nothing would make the guard above vacuously pass).
-    assert len(_next_templates()) >= 3
-
-
-def test_dependency_guard_reads_shared_sources_when_raw_template_is_sparse(tmp_path, monkeypatch):
-    root = tmp_path / "templates"
-    template = root / "nextjs-entities"
-    shutil.copytree(
-        _TEMPLATES_DIR / template.name,
-        template,
-        ignore=shutil.ignore_patterns("node_modules", ".next", ".git", "__pycache__"),
-    )
-    shutil.copytree(_TEMPLATES_DIR / "shared-public", root / "shared-public")
-    package = template / "package.json"
-    data = json.loads(package.read_text())
-    del data["dependencies"]["@radix-ui/react-dropdown-menu"]
-    package.write_text(json.dumps(data))
-    assert not (template / "src/components/ui/dropdown-menu.tsx").exists()
-    monkeypatch.setattr(template_materialization, "TEMPLATES", root)
-    with pytest.raises(AssertionError, match="@radix-ui/react-dropdown-menu"):
-        test_every_src_import_is_declared(template)
+    # One Next template is left — the MAX app; the site builder's stacks went
+    # with it, and the bare box ships no src/ tree.
+    assert len(_next_templates()) >= 1

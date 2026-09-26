@@ -699,14 +699,6 @@ def test_build_system_prompt_appends_skills():
     assert "GUIDE" in p and ab.LOOP_PROTOCOL in p
 
 
-def test_load_stack_skills_reads_real_drizzle_skills():
-    """The committed .omnia/skills for the default skeleton load + concatenate."""
-    block = ab.load_stack_skills("nextjs-postgres-drizzle")
-    assert block is not None
-    low = block.lower()
-    assert "security" in low and "a11y" in low and "perf" in low
-
-
 def test_load_stack_skills_reads_exact_max_ui_contract():
     block = ab.load_stack_skills("max-miniapp-nextjs")
 

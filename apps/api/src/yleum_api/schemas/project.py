@@ -52,14 +52,8 @@ Template = Literal[
 # `templates/<name>/` source dir). Single source of truth — runtime.py
 # imports this rather than hardcoding.
 _ORCHESTRATOR_TEMPLATE_BY_API: dict[str, str] = {
-    "fullstack": "nextjs-postgres-drizzle",
-    "nextjs_entities": "nextjs-entities",
-    "spa": "vite-react-spa",
-    "tgbot": "telegram-bot-aiogram",
-    "api": "fastapi-postgres",
-    # G001 — real-time stack: Next.js 15 + SSE/Redis pub-sub hub + membership ACL
-    # + presence (messengers, live-chat CRMs). Template dir: templates/nextjs-realtime.
-    "realtime": "nextjs-realtime",
+    # The seven stacks of the site builder left with their template dirs; the MAX
+    # app is the only thing the orchestrator can provision now.
     "max_miniapp": "max-miniapp-nextjs",
 }
 
