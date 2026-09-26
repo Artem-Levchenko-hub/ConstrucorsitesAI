@@ -45,8 +45,6 @@ from yleum_orchestrator.core.docker_client import (
     exec_cmd,
     find_project_container,
     run_sandbox_command,
-    stop_container,
-    wake_container,
     write_files,
 )
 from yleum_orchestrator.core.docker_client import (
@@ -54,33 +52,24 @@ from yleum_orchestrator.core.docker_client import (
 )
 from yleum_orchestrator.core.env import rebrand_env
 from yleum_orchestrator.core.errors import OrchestratorError
-from yleum_orchestrator.core.event_publisher import publish_project_event
 from yleum_orchestrator.core.internal_auth import (
     verify_internal_token as _verify_token,
 )
 from yleum_orchestrator.schemas.runtime import (
     AgentSandboxExecRequest,
     CompileStatusResponse,
-    DeployRequest,
     DeployResponse,
     HotReloadRequest,
     KeepAliveRequest,
     KeepAliveResponse,
     LogsResponse,
     MaxPreviewSessionResponse,
-    ProvisionRequest,
-    ProvisionResponse,
     RuntimeStatusResponse,
     StatusResponse,
-    StopRequest,
-    WakeRequest,
-    WakeResponse,
 )
 from yleum_orchestrator.services import (
-    builder,
     demo_seed_writer,
     dep_doctor,
-    deploy_state,
     nginx_writer,
 )
 from yleum_orchestrator.services.compile_status import parse_next_compile_error
@@ -95,9 +84,6 @@ from yleum_orchestrator.services.port_allocator import (
 )
 from yleum_orchestrator.services.provisioner import (
     load_existing_auth_secret,
-)
-from yleum_orchestrator.services.provisioner import (
-    provision as provision_svc,
 )
 from yleum_orchestrator.services.runtime_probe import probe_runtime_error
 from yleum_orchestrator.services.warm import warm_routes
@@ -1047,21 +1033,6 @@ def _diff_workspace_files(before: dict[str, str], after: dict[str, str]) -> dict
     return changed
 
 
-@router.post("/provision", response_model=ProvisionResponse)
-async def provision(
-    payload: ProvisionRequest,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> ProvisionResponse:
-    """Clone template, allocate port, start dev container, return dev URL.
-
-    PoC scope (today): port + template copy + container start. Sprint A1 will
-    extend with Postgres schema, nginx site, per-project network, health-poll.
-    """
-    _verify_token(x_internal_token)
-    async with _project_workspace_lock(str(payload.project_id)):
-        return await provision_svc(payload)
-
-
 @router.post("/{project_id}/max-preview-session", response_model=MaxPreviewSessionResponse)
 async def create_max_preview_session(
     project_id: UUID,
@@ -1127,77 +1098,6 @@ async def create_max_preview_session(
     )
 
 
-@router.post("/wake", response_model=WakeResponse)
-async def wake(
-    payload: WakeRequest,
-    slug: str | None = None,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> WakeResponse:
-    """Resume a hibernated container. `paused` → unpause (~1-3 s, Pro tier).
-    `exited` → docker start (~30-60 s cold, Free tier). Already-running is a
-    no-op that returns ready=0.
-
-    Resets the project's hibernate idle timer so the next sweep (60 s later)
-    doesn't pause the container right back. Without this, a user clicking
-    "wake" during an active session could see the preview die mid-edit when
-    the sweeper read a stale `last_activity` from before the wake. The
-    `slug` query param is an optional fallback for callers that don't yet
-    label-resolve (same pattern as /stop and /status).
-    """
-    _verify_token(x_internal_token)
-
-    name = await find_project_container(str(payload.project_id), kind="dev")
-    if name is None and slug:
-        name = f"omnia-dev-{slug}"
-    if name is None:
-        raise OrchestratorError(
-            code="not_found",
-            message="no dev container for this project — provision first",
-            status_code=404,
-        )
-
-    info = await docker_container_status(name)
-    state = info["state"]
-
-    if state == "running":
-        await record_activity(str(payload.project_id))
-        return WakeResponse(
-            project_id=payload.project_id,
-            state="running",
-            ready_in_seconds=0,
-        )
-
-    await wake_container(name)
-    await record_activity(str(payload.project_id))
-
-    # paused → unpause is near-instant; cold start ~30-60 s for Next.js dev
-    # mode (first compile). Caller polls /status for the real readiness.
-    ready = 2 if state == "paused" else 45
-
-    # Live UI: the wake button doesn't need a poll-loop anymore — frontend's
-    # runtime.started handler flips the cache on this event. ready_in_seconds
-    # still lets the caller render an estimated wait.
-    derived_slug = name.removeprefix("omnia-dev-")
-    await publish_project_event(
-        str(payload.project_id),
-        "runtime.started",
-        {
-            "runtime": {
-                "project_id": str(payload.project_id),
-                "state": "running",
-                "container_name": name,
-                "dev_url": (nginx_writer.dev_url(derived_slug) if derived_slug else None),
-            },
-        },
-    )
-
-    return WakeResponse(
-        project_id=payload.project_id,
-        state="running",
-        ready_in_seconds=ready,
-    )
-
-
 @router.post("/{project_id}/heartbeat")
 async def heartbeat(
     project_id: str,
@@ -1225,52 +1125,6 @@ async def keep_alive(
     _verify_token(x_internal_token)
     await set_keep_alive(str(payload.project_id), payload.enabled)
     return KeepAliveResponse(project_id=payload.project_id, enabled=payload.enabled)
-
-
-@router.post("/stop", response_model=WakeResponse)
-async def stop(
-    payload: StopRequest,
-    slug: str | None = None,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> WakeResponse:
-    """Force-hibernate via docker pause/stop.
-
-    Resolves the container by the `omnia.project_id` label; `slug` is an
-    optional fallback kept for backward-compat. This is the pause-never-stops
-    fix: apps/api never sent the `slug` query param, so the old required-slug
-    signature returned 422 and the container kept running.
-    """
-    _verify_token(x_internal_token)
-    name = await find_project_container(str(payload.project_id), kind="dev")
-    if name is None and slug:
-        name = f"omnia-dev-{slug}"
-    if name is None:
-        # Nothing to stop — already gone. Idempotent.
-        return WakeResponse(project_id=payload.project_id, state="stopped", ready_in_seconds=0)
-    await stop_container(name, pause=payload.pause)
-    new_state = "paused" if payload.pause else "stopped"
-
-    # Live UI: api → ws_hub forwards this to the project's WebSocket clients,
-    # which flip ["runtime", projectId] cache so the workspace's "Запустить"
-    # button reappears and the iframe gracefully swaps to the startup panel
-    # instead of staring at a dead live URL.
-    await publish_project_event(
-        str(payload.project_id),
-        "runtime.stopped",
-        {
-            "runtime": {
-                "project_id": str(payload.project_id),
-                "state": new_state,
-                "container_name": name,
-            },
-        },
-    )
-
-    return WakeResponse(
-        project_id=payload.project_id,
-        state=new_state,
-        ready_in_seconds=0,
-    )
 
 
 @router.post("/hot-reload")
@@ -1807,41 +1661,6 @@ async def agent_exec_sandbox(
     }
 
 
-@router.get("/{project_id}/read-file")
-async def read_file(
-    project_id: str,
-    slug: str,
-    path: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> dict[str, object]:
-    """Read a single whitelisted file from the running dev container.
-
-    Only the fixed ``globals.css`` is exposed (see ``_READABLE_FILES``). Returns
-    ``{found, content}``; a missing file / stopped container yields
-    ``found=False`` rather than an error, so the caller can fall back cleanly.
-    """
-    _verify_token(x_internal_token)
-    if path not in _READABLE_FILES:
-        raise OrchestratorError(
-            code="validation_failed",
-            message=f"path not readable: {path}",
-            status_code=403,
-        )
-    container_name = f"omnia-dev-{slug}"
-    try:
-        # Read the whole file: globals.css (~10 KB) exceeds exec_cmd's default
-        # 8 KB log cap, which would truncate it mid-rule and break the CSS build.
-        # 1 MB ceiling stays bounded (whitelist holds only small fixed files).
-        result = await exec_cmd(
-            container_name, cmd=["cat", path], workdir="/app", max_output=1_000_000
-        )
-    except OrchestratorError:
-        # Container not running / not found — let the caller fall back.
-        return {"found": False, "content": ""}
-    found = result["exit_code"] == "0"
-    return {"found": found, "content": result["stdout"] if found else ""}
-
-
 # ── Agentic builder tools (Phase 0) ─────────────────────────────────────────
 # Internal-token-gated capability surface the api-side agent loop calls to act
 # on the live dev container: read any /app file, list, grep, and run a real
@@ -2151,66 +1970,6 @@ async def agent_exec(
     }
 
 
-def _deploy_record_to_response(rec: deploy_state.DeployRecord) -> DeployResponse:
-    from uuid import UUID
-
-    return DeployResponse(
-        project_id=UUID(rec.project_id),
-        run_id=rec.run_id,
-        phase=rec.phase,
-        prod_url=rec.prod_url,
-        image_tag=rec.image_tag,
-        error=rec.error,
-        detail=rec.detail,
-        target_label=rec.target_label,
-        target_id=rec.target_id,
-        can_cancel=rec.can_cancel,
-        logs=rec.logs,
-        started_at=rec.started_at,
-        finished_at=rec.finished_at,
-    )
-
-
-@router.post("/deploy", response_model=DeployResponse)
-async def deploy(
-    payload: DeployRequest,
-    slug: str | None = None,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> DeployResponse:
-    """Build a prod image from the LIVE dev container, run it, swap nginx.
-
-    Async: returns immediately with phase=building and the deterministic prod
-    URL; progress is tracked server-side and read via GET .../deploy. `slug` is
-    optional — the dev container is resolved by the `omnia.project_id` label.
-    """
-    _verify_token(x_internal_token)
-    target = payload.target.model_dump() if payload.target else None
-    rec = await builder.start_deploy(
-        str(payload.project_id),
-        slug,
-        target,
-        payload.domains,
-        payload.idempotency_key,
-        payload.runtime_env,
-    )
-    return _deploy_record_to_response(rec)
-
-
-@router.post("/{project_id}/deploy/cancel", response_model=DeployResponse)
-async def cancel_deploy(
-    project_id: str,
-    x_internal_token: Annotated[str | None, Header()] = None,
-) -> DeployResponse:
-    """Cancel the active build/transfer and keep the previous version live."""
-    _verify_token(x_internal_token)
-    from uuid import UUID
-
-    rec = await builder.cancel_deploy(project_id)
-    if rec is None:
-        return DeployResponse(project_id=UUID(project_id), phase="cancelled")
-    return _deploy_record_to_response(rec)
-
-
 @router.get("/{project_id}/deploy", response_model=DeployResponse)
 async def get_deploy(
     project_id: str,
@@ -2225,10 +1984,9 @@ async def get_deploy(
     public = get_cell_publication_service().get(UUID(project_id))
     if public is not None:
         return public
-    rec = deploy_state.get(project_id)
-    if rec is None:
-        return DeployResponse(project_id=UUID(project_id), phase="idle")
-    return _deploy_record_to_response(rec)
+    # No publication yet. The legacy deploy journal went with the site builder,
+    # so an app that has never been published is simply idle.
+    return DeployResponse(project_id=UUID(project_id), phase="idle")
 
 
 @router.get("/{project_id}/deploy/history", response_model=list[DeployResponse])
@@ -2241,12 +1999,7 @@ async def get_deploy_history(
 
     from yleum_orchestrator.services.cell_publication import get_cell_publication_service
 
-    public = get_cell_publication_service().history(UUID(project_id))
-    if public:
-        return public
-    return [
-        _deploy_record_to_response(record) for record in reversed(deploy_state.history(project_id))
-    ]
+    return get_cell_publication_service().history(UUID(project_id))
 
 
 @router.get("/{project_id}/status", response_model=StatusResponse)

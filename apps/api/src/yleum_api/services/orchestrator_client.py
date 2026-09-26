@@ -2131,15 +2131,6 @@ async def agent_exec_sandbox(project_id: UUID, slug: str, cmd: str) -> dict[str,
     )
 
 
-async def agent_sandbox_capabilities(project_id: UUID, slug: str) -> dict[str, Any]:
-    """Return the orchestrator's fail-closed attestation for the shell lane."""
-    return await _request(
-        "GET",
-        f"/internal/projects/{project_id}/agent/sandbox-capabilities",
-        params={"slug": slug},
-    )
-
-
 async def warm_routes(project_id: UUID, slug: str) -> dict[str, Any]:
     """POST /internal/projects/{id}/warm — force-compile the dev app's static
     routes so a demo opens WARM pages instead of eating a cold Turbopack compile

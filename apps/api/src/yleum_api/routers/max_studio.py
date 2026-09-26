@@ -4,12 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
-from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Request, Response, status
-from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
 from yleum_api.core.deps import CurrentUserDep, SessionDep
@@ -24,7 +22,6 @@ from yleum_api.models.usage import Usage
 from yleum_api.schemas.max_studio import (
     MaxContentImagePublic,
     MaxPreviewSessionPublic,
-    MaxPreviewSessionUpstream,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
     MaxReadinessItem,
@@ -106,48 +103,6 @@ async def _refresh_release_proof(session: SessionDep, project: Project) -> None:
             project_id=str(project.id),
             exc_info=True,
         )
-
-
-def _preview_session_public(project: Project, payload: object) -> MaxPreviewSessionPublic:
-    """Accept only signed preview URLs for this project's dev hostname."""
-    try:
-        session = MaxPreviewSessionUpstream.model_validate(payload)
-        parsed = urlparse(session.bootstrap_url)
-        hostname = parsed.hostname or ""
-    except (ValidationError, ValueError) as exc:
-        raise orchestrator_client.OrchestratorUnavailable(
-            "Orchestrator returned an invalid MAX preview session"
-        ) from exc
-
-    expected_prefix = f"{project.slug}-dev."
-    query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
-    query_keys = [key for key, _value in query_pairs]
-    query = dict(query_pairs)
-    expires = query.get("expires", "")
-    signature = query.get("signature", "")
-    valid_url = (
-        session.project_id == project.id
-        and parsed.scheme == "https"
-        and hostname.startswith(expected_prefix)
-        and len(hostname) > len(expected_prefix)
-        and parsed.username is None
-        and parsed.password is None
-        and parsed.port is None
-        and not parsed.fragment
-        and parsed.path == "/api/omnia/preview-session"
-        and len(query_keys) == 2
-        and set(query_keys) == {"expires", "signature"}
-        and 10 <= len(expires) <= 12
-        and expires.isascii()
-        and expires.isdigit()
-        and len(signature) == 43
-        and all(char.isalnum() or char in "-_" for char in signature)
-    )
-    if not valid_url:
-        raise orchestrator_client.OrchestratorUnavailable(
-            "Orchestrator returned an invalid MAX preview session"
-        )
-    return MaxPreviewSessionPublic(url=session.bootstrap_url, expires_at=session.expires_at)
 
 
 @router.post(
@@ -236,13 +191,18 @@ async def create_max_preview_session(
         owner=current_user,
     )
     response.headers["Cache-Control"] = "no-store"
-    if cell_preview is not None:
-        return MaxPreviewSessionPublic(
-            url=cell_preview.bootstrap_url,
-            expires_at=_coerce_preview_expiry(cell_preview.expires_at),
+    if cell_preview is None:
+        # The preview lives in the project's cell; the legacy dev-container
+        # preview left with the site builder.
+        raise ApiError(
+            "runtime_unavailable",
+            "У проекта нет своей ячейки — превью недоступно.",
+            status.HTTP_409_CONFLICT,
         )
-    payload = await orchestrator_client.create_max_preview_session(project.id)
-    return _preview_session_public(project, payload)
+    return MaxPreviewSessionPublic(
+        url=cell_preview.bootstrap_url,
+        expires_at=_coerce_preview_expiry(cell_preview.expires_at),
+    )
 
 
 @router.patch(

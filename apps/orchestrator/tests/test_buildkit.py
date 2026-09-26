@@ -16,7 +16,6 @@ import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock
 
 import pytest
 from pydantic import ValidationError
@@ -24,7 +23,7 @@ from pydantic import ValidationError
 from yleum_orchestrator.core import docker_client
 from yleum_orchestrator.core.config import Settings
 from yleum_orchestrator.core.errors import OrchestratorError
-from yleum_orchestrator.services import builder, buildkit
+from yleum_orchestrator.services import buildkit
 
 IMAGE_ID = "sha256:" + "a" * 64
 DIGEST = "sha256:" + "b" * 64
@@ -518,39 +517,6 @@ async def test_build_and_push_reports_push_failure_and_kills_on_timeout(
 
 
 # ------------------------------------------------------- dispatch + config
-
-
-async def test_builder_dispatches_to_buildkit_only_when_configured(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    via_buildkit = AsyncMock(return_value=IMAGE_ID)
-    via_docker = AsyncMock(return_value=IMAGE_ID)
-    monkeypatch.setattr(builder.buildkit, "build_image", via_buildkit)
-    monkeypatch.setattr(builder.docker_client, "build_image", via_docker)
-
-    monkeypatch.setattr(
-        builder,
-        "get_settings",
-        lambda: SimpleNamespace(
-            build_backend="buildkit",
-            buildkit_socket=SOCKET,
-            buildctl_binary="/usr/local/bin/buildctl",
-        ),
-    )
-    assert await builder._build_prod_image("/tmp/ctx", "Dockerfile.prod", "t:1") == IMAGE_ID
-    via_buildkit.assert_awaited_once_with(
-        "/tmp/ctx",
-        "Dockerfile.prod",
-        "t:1",
-        socket_path=SOCKET,
-        buildctl="/usr/local/bin/buildctl",
-    )
-    via_docker.assert_not_awaited()
-
-    monkeypatch.setattr(builder, "get_settings", lambda: SimpleNamespace(build_backend="docker"))
-    assert await builder._build_prod_image("/tmp/ctx", "Dockerfile.prod", "t:2") == IMAGE_ID
-    via_docker.assert_awaited_once_with("/tmp/ctx", "Dockerfile.prod", "t:2")
-    assert via_buildkit.await_count == 1
 
 
 def _settings(**overrides: object) -> Settings:

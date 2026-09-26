@@ -233,7 +233,6 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "MAX_SECURITY_LOCKED_FILES" in source
     assert "MAX_MODEL_LOCKED_FILES" in source
     assert "Direct DB access is forbidden in MAX product files." in source
-    assert "agent_sandbox_capabilities" in source
     assert "base_workspace_revision" in source
     assert "pnpm_lockfile" in source
     assert "unsafe_max_backend_paths" in source

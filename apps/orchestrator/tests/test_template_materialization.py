@@ -10,7 +10,6 @@ import sys
 import threading
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
 
 import pytest
 
@@ -224,93 +223,6 @@ async def test_cancellation_keeps_build_context_until_worker_exits(
             break
         await asyncio.sleep(0.01)
     assert not contexts[0].exists()
-
-
-@pytest.mark.parametrize("name", GOLDEN["templates"])
-async def test_real_production_builder_materializes_before_live_public_overlay(
-    name, tmp_path, monkeypatch
-):
-    from yleum_orchestrator.core.config import get_settings
-    from yleum_orchestrator.services import builder
-
-    class BuildBoundary(BaseException):
-        pass
-
-    # The builder reads Settings before the build (build backend selection), so
-    # the real pipeline needs a valid environment even though the build itself
-    # is cut off at the boundary below.
-    monkeypatch.setenv(
-        "DATABASE_URL",
-        "postgresql://omnia_root:rootpw@localhost:5433/omnia_users",
-    )
-    monkeypatch.setenv("INTERNAL_TOKEN", "test-token-test-token-test-token")
-    get_settings.cache_clear()  # type: ignore[attr-defined]
-
-    contexts = []
-    monkeypatch.setattr(builder, "publish_project_event", AsyncMock())
-    monkeypatch.setattr(builder.deploy_state, "update", lambda *a, **k: None)
-    monkeypatch.setattr(builder.deploy_state, "append_log", lambda *a, **k: None)
-    monkeypatch.setattr(
-        builder.docker_client, "container_image_template", AsyncMock(return_value=name)
-    )
-    monkeypatch.setattr(builder.docker_client, "unpause_container", AsyncMock())
-
-    async def copy_live(_container, source, destination):
-        if source == "/app/src" and name != "max-miniapp-nextjs":
-            await asyncio.to_thread(Path(destination, "src/lib/utils.ts").write_bytes, b"")
-            if name != "nextjs-realtime":
-                await asyncio.to_thread(
-                    Path(destination, "src/app/omnia-brief.ts").write_bytes, b"// live brief\n",
-                )
-        if source == "/app/public":
-            await asyncio.to_thread(
-                Path(destination, "public/omnia-inspector.js").write_bytes,
-                b"// customized\n",
-            )
-
-    monkeypatch.setattr(builder.docker_client, "copy_path_from_container", copy_live)
-
-    async def copy_live_inventory(_container, source, _destination):
-        if name != "max-miniapp-nextjs":
-            return None
-        if source == "/app/drizzle":
-            return {
-                path.relative_to(TEMPLATES / name).as_posix(): hashlib.sha256(
-                    path.read_bytes()
-                ).hexdigest()
-                for path in (TEMPLATES / name / "drizzle").glob("*.sql")
-            }
-        if source == "/app/scripts":
-            return {}
-        return None
-
-    monkeypatch.setattr(
-        builder.docker_client,
-        "copy_path_from_container_with_inventory",
-        copy_live_inventory,
-    )
-
-    async def build(context_dir, dockerfile, _tag):
-        context = Path(context_dir)
-        contexts.append(context)
-        if name != "max-miniapp-nextjs":
-            assert (context / "src/lib/utils.ts").read_bytes() == b""
-            if name != "nextjs-realtime":
-                assert (context / "src/app/omnia-brief.ts").read_bytes() == b"// live brief\n"
-        assert (context / "public/omnia-inspector.js").read_bytes() == b"// customized\n"
-        for asset in ["omnia-brief-narration.js", "omnia-remix-cta.js"]:
-            data = (context / "public" / asset).read_bytes().replace(b"\r\n", b"\n")
-            assert (
-                hashlib.sha256(data).hexdigest()
-                == GOLDEN["templates"][name][f"public/{asset}"]["sha256"]
-            )
-        assert (context / dockerfile).read_bytes() == (TEMPLATES / name / dockerfile).read_bytes()
-        raise BuildBoundary()
-
-    monkeypatch.setattr(builder.docker_client, "build_image", build)
-    with pytest.raises(BuildBoundary):
-        await builder._run("qa-project", "qa-shared-public", "qa-dev")
-    assert len(contexts) == 1 and not contexts[0].exists()
 
 
 async def test_concurrent_provisions_build_shared_context_only_once(
