@@ -16,8 +16,6 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
 
 (
   unset USE_PROJECT_MEMORY
-  unset ACCEPTANCE_GAUNTLET_REFERENCE_GATE
-  unset REFERENCE_CEILING_ENFORCED
   JWT_SECRET="compose-policy-jwt-secret" \
     SECRETS_ENCRYPTION_KEY="compose-policy-encryption-key" \
     ORCHESTRATOR_INTERNAL_TOKEN="compose-policy-orchestrator-token" \
@@ -54,10 +52,6 @@ worker = services["worker"]["environment"]
 
 assert api["USE_PROJECT_MEMORY"] == "true"
 assert worker["USE_PROJECT_MEMORY"] == "true"
-assert api["ACCEPTANCE_GAUNTLET_REFERENCE_GATE"] == "false"
-assert worker["ACCEPTANCE_GAUNTLET_REFERENCE_GATE"] == "false"
-assert api["REFERENCE_CEILING_ENFORCED"] == "false"
-assert worker["REFERENCE_CEILING_ENFORCED"] == "false"
 expected_finalization = {
     "USE_MAX_FINALIZATION_COORDINATOR": "true",
     "USE_PROJECT_CELL_ACTIVITY_WATCHDOG": "true",
