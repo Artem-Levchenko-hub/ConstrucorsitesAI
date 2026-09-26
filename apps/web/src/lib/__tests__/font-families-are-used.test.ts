@@ -49,7 +49,7 @@ describe("шрифты", () => {
 
     expect(layout).not.toContain("next/font/google");
     // Файлы должны браться из репозитория — относительным путём, а не по сети.
-    expect(fontsCss()).toContain('url("./fonts/');
+    expect(fontsCss()).toContain('url("/fonts/');
     expect(fontsCss()).not.toContain("https://");
   });
 
@@ -66,9 +66,30 @@ describe("шрифты", () => {
   it("у каждого семейства есть и латиница, и кириллица", () => {
     const css = fontsCss();
     for (const family of ["inter", "onest", "jetbrains-mono"]) {
-      expect(css, `${family}: нет латиницы`).toContain(`./fonts/${family}-latin.woff2`);
-      expect(css, `${family}: нет кириллицы`).toContain(`./fonts/${family}-cyrillic.woff2`);
+      expect(css, `${family}: нет латиницы`).toContain(`/fonts/${family}-latin-v1.woff2`);
+      expect(css, `${family}: нет кириллицы`).toContain(`/fonts/${family}-cyrillic-v1.woff2`);
     }
+  });
+
+  it("предзагружаются только те файлы, которые объявлены в стилях", () => {
+    // Расхождение здесь не видно глазами: страница работает, просто скачивает
+    // файл дважды — предзагруженный и настоящий. Поэтому сверяем списки.
+    const preload = readFileSync(join(root, "app/font-preload.ts"), "utf8");
+    const preloaded = [...preload.matchAll(/"(\/fonts\/[a-z0-9-]+\.woff2)"/g)].map((m) => m[1]);
+    const declared = [...fontsCss().matchAll(/url\("(\/fonts\/[a-z0-9-]+\.woff2)"\)/g)].map((m) => m[1]);
+
+    expect(preloaded.length).toBeGreaterThan(0);
+    const missing = preloaded.filter((href) => !declared.includes(href));
+    expect(missing, `предзагружаются, но не объявлены в стилях: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("предзагружается только первый экран, а не всё подряд", () => {
+    // Предзагрузить всё — значит отнять канал у того, что нужно прямо сейчас.
+    const preload = readFileSync(join(root, "app/font-preload.ts"), "utf8");
+    const preloaded = [...preload.matchAll(/"(\/fonts\/[a-z0-9-]+\.woff2)"/g)].map((m) => m[1]);
+    const declared = [...fontsCss().matchAll(/url\("(\/fonts\/[a-z0-9-]+\.woff2)"\)/g)].map((m) => m[1]);
+
+    expect(preloaded.length).toBeLessThan(declared.length);
   });
 
   it("проверка смотрит на настоящие файлы стилей, а не на пустоту", () => {
