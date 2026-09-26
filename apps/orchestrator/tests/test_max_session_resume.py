@@ -27,7 +27,7 @@ async function withMaxUser(maxUserId,run){scopedIdentity=maxUserId;return run(db
 function load(file){
  if(cache[file])return cache[file];
  const ctx={exports:{},Buffer,URLSearchParams,Date,console:{warn(){},error(){}},
- process:{env:{MAX_BOT_TOKEN:'synthetic-bot',MAX_SESSION_SECRET:'synthetic-session'}},
+ process:{env:{MAX_BOT_TOKEN:'synthetic-bot',MAX_SESSION_SECRET:'synthetic-session',...input.env}},
  require:name=>{
   if(name==='node:crypto')return crypto;
   if(name==='next/server')return {NextResponse};
@@ -93,6 +93,32 @@ def test_signed_cookie_session_resumes_without_database_write():
     assert result["cache"] == "no-store"
     assert result["writes"] == 0
     assert result["cookieSets"] == 0
+
+
+def test_signed_owner_preview_resumes_without_writes_or_cookie_renewal():
+    result = session_request(user="preview", env={"OMNIA_OWNER_PREVIEW": "1"})
+    assert result["status"] == 200
+    assert result["body"] == {
+        "user": {"id": "preview", "firstName": "QA", "lastName": None,
+                 "username": None, "languageCode": None, "photoUrl": None},
+        "mode": "preview",
+    }
+    assert result["cache"] == "no-store"
+    assert result["writes"] == result["cookieSets"] == 0
+
+
+@pytest.mark.parametrize("options", [
+    {"env": {"OMNIA_OWNER_PREVIEW": "1", "OMNIA_PUBLIC_APP_ORIGIN": "https://public.test"}},
+    {"env": {"NODE_ENV": "development"}},
+    {"env": {"OMNIA_OWNER_PREVIEW": "1"}, "corrupt": True},
+    {"env": {"OMNIA_OWNER_PREVIEW": "1"}, "expired": True},
+    {"env": {"OMNIA_OWNER_PREVIEW": "1"}, "user": None},
+])
+def test_owner_preview_resume_denies_public_unsigned_and_expired(options):
+    result = session_request(**{"user": "preview", **options})
+    assert result["status"] == 401
+    assert "user" not in result["body"]
+    assert result["writes"] == result["cookieSets"] == 0
 
 
 @pytest.mark.parametrize(

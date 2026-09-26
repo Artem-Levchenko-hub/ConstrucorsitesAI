@@ -13,17 +13,21 @@ import {
   validateMaxInitData,
 } from "@/lib/max/validate-init-data";
 
-/** Resume only an authenticated MAX identity; never renew or write a user on GET. */
+/** Resume a verified identity; never renew or write a user on GET. */
 export async function GET() {
   const headers = { "Cache-Control": "no-store" };
   try {
     const user = await getMaxUser();
-    if (!user || typeof user.id !== "string" || !/^[1-9][0-9]{0,19}$/.test(user.id)) {
+    const ownerPreview = user?.id === "preview" &&
+      process.env.OMNIA_OWNER_PREVIEW === "1" && !process.env.OMNIA_PUBLIC_APP_ORIGIN;
+    if (!user || (!ownerPreview && (
+      typeof user.id !== "string" || !/^[1-9][0-9]{0,19}$/.test(user.id)
+    ))) {
       return NextResponse.json(
         { error: "MAX authentication required" }, { status: 401, headers },
       );
     }
-    return NextResponse.json({ user }, { headers });
+    return NextResponse.json({ user, ...(ownerPreview ? { mode: "preview" } : {}) }, { headers });
   } catch {
     return NextResponse.json(
       { error: "Temporary session failure" }, { status: 503, headers },

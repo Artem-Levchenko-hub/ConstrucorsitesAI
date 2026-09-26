@@ -96,10 +96,32 @@ describe("canonical MAX provider session recovery", () => {
     expect(container.querySelector("[data-product]")).toBeNull();
     expect(container.querySelector('[role="alert"]')).not.toBeNull();
   });
-  it("preserves the existing local preview path without probing public auth", async () => {
-    const fetch = vi.fn();
-    await render(fetch, "", "localhost");
-    expect(container.querySelector("[data-product]")?.textContent).toContain("preview:");
-    expect(fetch).not.toHaveBeenCalled();
+  it("resumes the server-verified owner preview on the current dev2 host", async () => {
+    let finish!: (value: unknown) => void;
+    const fetch = vi.fn().mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    await render(fetch, "", "qa-dev.dev2.yleum.ru");
+    expect(container.querySelector("[data-product]")).toBeNull();
+    await act(async () => finish({ ok: true, status: 200, json: async () => ({
+      user: { id: "preview" }, mode: "preview",
+    }) }));
+    expect(container.querySelector("[data-product]")?.textContent).toBe("preview:");
+    expect(fetch).toHaveBeenCalledWith("/api/max/session", { method: "GET", credentials: "include", cache: "no-store" });
+  });
+  it.each(["localhost", "127.0.0.1", "qa-dev.preview.example.com", "qa-dev.dev2.yleum.ru"])("never grants preview access based on hostname %s", async hostname => {
+    const fetch = vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({}) });
+    await render(fetch, "", hostname);
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it("rejects preview payloads on failed responses", async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: false, status: 401, json: async () => ({ user: { id: "preview" }, mode: "preview" }) });
+    await render(fetch, "", "qa-dev.dev2.yleum.ru");
+    expect(container.querySelector("[data-product]")).toBeNull();
+  });
+  it("never substitutes preview identity for an actual MAX launch", async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ user: { id: "preview" }, mode: "preview" }) });
+    await render(fetch, "signed-launch");
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(fetch.mock.calls.map(call => call[1].method)).toEqual(["POST"]);
   });
 });

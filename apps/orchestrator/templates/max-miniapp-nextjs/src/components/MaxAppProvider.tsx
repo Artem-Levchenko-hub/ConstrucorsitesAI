@@ -67,8 +67,6 @@ function installAuthenticatedFetch(initData: string) {
   }) as typeof window.fetch;
 }
 
-const previewUser: MaxSessionUser = { id: "preview" };
-
 export function useMaxApp() {
   return useContext(MaxContext);
 }
@@ -162,18 +160,9 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
     setState({ mode: "loading", user: null, error: null });
     const webApp = getMaxWebApp();
     if (!webApp?.initData) {
-      const host = window.location.hostname;
-      const isPreview =
-        host === "localhost" ||
-        host === "127.0.0.1" ||
-        host.includes("-dev.preview.");
       // A reload may retain its signed cookie while the MAX bridge has no
       // launch data. Clear any previous in-memory launch header before resume.
       activeInitData = "";
-      if (isPreview) {
-        setState({ mode: "preview", user: previewUser, error: null });
-        return;
-      }
     } else {
       configureMaxShell(webApp);
       // Some iOS MAX WebViews do not persist Set-Cookie from a fetch response.
@@ -199,9 +188,11 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
       const body = (await response.json().catch(() => ({}))) as {
         user?: MaxSessionUser;
         code?: string;
+        mode?: string;
       };
+      const ownerPreview = !webApp?.initData && body.mode === "preview" && body.user?.id === "preview";
       const validUser = body.user && (
-        Boolean(webApp?.initData) ||
+        ownerPreview ||
         (typeof body.user.id === "string" && /^[1-9][0-9]{0,19}$/.test(body.user.id))
       );
       if (!response.ok || !body.user || !validUser) {
@@ -219,7 +210,7 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         }
         throw new Error("Не удалось завершить безопасный вход. Попробуйте ещё раз.");
       }
-      setState({ mode: "max", user: body.user, error: null });
+      setState({ mode: ownerPreview ? "preview" : "max", user: body.user, error: null });
     } catch (error) {
       setState({
         mode: "error",

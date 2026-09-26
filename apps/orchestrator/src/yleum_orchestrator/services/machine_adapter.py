@@ -707,23 +707,25 @@ class MachineAdapter:
             # Bound V8 from the container, not the host's available memory.
             heap_mib = max(64, min(384, self._max_core_memory_bytes() // (2 * 1024**2)))
             public_options = f"--max-old-space-size={heap_mib}"
-            if core is not None:
-                config = core.attrs.get("Config", {})
-                env = dict(item.split("=", 1) for item in config.get("Env", []) if "=" in item)
-                if (env.get("NODE_OPTIONS") != public_options
+        if core is not None:
+            config = core.attrs.get("Config", {})
+            env = dict(item.split("=", 1) for item in config.get("Env", []) if "=" in item)
+            if ((compiled_core and (
+                    env.get("NODE_OPTIONS") != public_options
                         or config.get("Cmd") != list(_PUBLIC_CORE_COMMAND)
                         or core.attrs.get("Image") != image_tag
                         # Retire cores created with the removed encrypted-data key mount.
-                        or "omnia.max-core.data-key" in (config.get("Labels") or {})
-                        or (not public_mode and (
-                            env.get("OMNIA_OWNER_PREVIEW") != "1"
-                            or env.get("AUTH_SECRET") != secret
-                            or env.get("OMNIA_PROJECT_ID") != str(state.project_id)
-                        ))):
-                    # Runtime-only upgrade. Keep auth secret, product and all DB
-                    # containers/volumes; this is not a resource-profile change.
-                    core.remove(force=True)
-                    core = None
+                        or "omnia.max-core.data-key" in (config.get("Labels") or {})))
+                    or (not public_mode and (
+                        env.get("OMNIA_OWNER_PREVIEW") != "1"
+                        or env.get("OMNIA_PUBLIC_APP_ORIGIN")
+                        or env.get("AUTH_SECRET") != secret
+                        or env.get("OMNIA_PROJECT_ID") != str(state.project_id)
+                    ))):
+                # Runtime-only upgrade, including retained legacy preview cores.
+                # Keep auth secret, product and all DB containers/volumes.
+                core.remove(force=True)
+                core = None
         if core is None:
             credentials = self.manager.credential_store.load_or_create(state.workspace_id)
             core = client.containers.create(
@@ -749,7 +751,7 @@ class MachineAdapter:
                     **(runtime_env or {}),
                     **({"NODE_OPTIONS": public_options, "NODE_ENV": "production",
                         "HOSTNAME": "0.0.0.0", "PORT": "3000"} if compiled_core else {}),
-                    **({"OMNIA_OWNER_PREVIEW": "1"} if compiled_core and not public_mode else {}),
+                    **({"OMNIA_OWNER_PREVIEW": "1"} if not public_mode else {}),
                 },
                 mem_limit=self._max_core_memory_bytes(),
                 memswap_limit=self._max_core_memory_bytes(),
@@ -1000,7 +1002,11 @@ class MachineAdapter:
             preview_image = getattr(self.settings, "cell_preview_core_image", "")
             if preview_image:
                 preview_image = backend.client.images.get(preview_image).id
+            env = dict(item.split("=", 1)
+                       for item in core.attrs.get("Config", {}).get("Env", []) if "=" in item)
             if (core.status != "running"
+                    or env.get("OMNIA_OWNER_PREVIEW") != "1"
+                    or env.get("OMNIA_PUBLIC_APP_ORIGIN")
                     or (preview_image and core.attrs.get("Image") != preview_image)):
                 return "stopped", address
         return gateway.status, address

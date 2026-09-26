@@ -112,6 +112,110 @@ def test_public_core_migrates_runtime_once_preserving_signing_key_and_data(
         assert created[0]["environment"]["OMNIA_OWNER_PREVIEW"] == "1"
         assert "MAX_BOT_TOKEN" not in created[0]["environment"]
         assert "OMNIA_PUBLIC_APP_ORIGIN" not in created[0]["environment"]
+    else:
+        assert "OMNIA_OWNER_PREVIEW" not in created[0]["environment"]
+
+
+def test_new_legacy_private_core_explicitly_enables_owner_preview(tmp_path):
+    manager = SimpleNamespace(
+        state_store=SimpleNamespace(root=tmp_path),
+        profile=SimpleNamespace(is_v2=True, managed_core_memory_bytes=768 * 1024**2,
+                                managed_core_cpu_cores=0.2),
+        credential_store=SimpleNamespace(load_or_create=lambda _: SimpleNamespace(
+            postgres_password="disposable-test-password")),
+    )
+    adapter = MachineAdapter(manager, SimpleNamespace())
+    state = SimpleNamespace(
+        workspace_id=uuid4(), project_id=uuid4(), resource_names=SimpleNamespace(
+            internal_network="private-network", postgres_container="qa-pg",
+            redis_container="qa-redis"),
+    )
+    created = []
+
+    class Created(Exception):
+        pass
+
+    def create(_image, **kwargs):
+        created.append(kwargs)
+        raise Created
+
+    backend = SimpleNamespace(
+        stem="qa", client=SimpleNamespace(containers=SimpleNamespace(create=create)),
+        _lookup=lambda *_: None, labels=lambda kind: {"kind": kind},
+    )
+    with pytest.raises(Created):
+        adapter._start_boundary(state, None, backend, 1)
+    assert created[0]["environment"]["OMNIA_OWNER_PREVIEW"] == "1"
+    assert "OMNIA_PUBLIC_APP_ORIGIN" not in created[0]["environment"]
+
+
+@pytest.mark.parametrize("matching", [False, True])
+def test_retained_legacy_owner_core_repairs_once_without_touching_product_data(
+    tmp_path, monkeypatch, matching,
+):
+    from yleum_orchestrator.services import machine_business_config
+
+    manager = SimpleNamespace(
+        state_store=SimpleNamespace(root=tmp_path),
+        profile=SimpleNamespace(is_v2=True, managed_core_memory_bytes=768 * 1024**2,
+                                managed_core_cpu_cores=0.2),
+        credential_store=SimpleNamespace(load_or_create=lambda _: SimpleNamespace(
+            postgres_password="disposable-test-password")),
+    )
+    adapter = MachineAdapter(manager, SimpleNamespace(cell_preview_core_image=""))
+    state = SimpleNamespace(
+        workspace_id=uuid4(), project_id=uuid4(), resource_names=SimpleNamespace(
+            internal_network="private-network", postgres_container="qa-project-postgres",
+            redis_container="qa-redis"),
+    )
+    secret = adapter.secret(state.workspace_id)
+    network = {"private-network": {"IPAddress": "127.0.0.1"}}
+    containers = {name: SimpleNamespace(status="running", reload=lambda: None,
+                    attrs={"NetworkSettings": {"Networks": network}})
+                  for name in ("qa-dev", "qa-project-postgres", "qa-gateway")}
+    unchanged = dict(containers)
+    removed, created = [], []
+
+    def core(env):
+        def remove(**_):
+            removed.append(containers.pop("qa-max-core"))
+        return SimpleNamespace(status="running", reload=lambda: None, remove=remove,
+            attrs={"Config": {"Env": [f"{k}={v}" for k, v in env.items()]},
+                   "NetworkSettings": {"Networks": network}})
+
+    original = core({"AUTH_SECRET": secret, "OMNIA_PROJECT_ID": str(state.project_id),
+                     **({"OMNIA_OWNER_PREVIEW": "1"} if matching else {})})
+    containers["qa-max-core"] = original
+
+    def create(_image, **kwargs):
+        created.append(kwargs)
+        containers["qa-max-core"] = core(kwargs["environment"])
+        return containers["qa-max-core"]
+
+    backend = SimpleNamespace(stem="qa", internal_network="private-network",
+        client=SimpleNamespace(containers=SimpleNamespace(create=create)),
+        _lookup=lambda _, name, _kind: containers.get(name), labels=lambda kind: {"kind": kind},
+        _network=lambda *_a, **_kw: SimpleNamespace(connect=lambda _: None))
+    monkeypatch.setattr(adapter, "exists", lambda _: True)
+    monkeypatch.setattr(adapter, "parts", lambda _: (None, backend))
+
+    class OverlayReached(Exception):
+        pass
+
+    monkeypatch.setattr(machine_business_config, "apply_public_core_overlay",
+                        lambda _: (_ for _ in ()).throw(OverlayReached()))
+    assert adapter.preview(state)[0] == ("running" if matching else "stopped")
+    for _ in range(2):
+        with pytest.raises(OverlayReached):
+            adapter._start_boundary(state, None, backend, 1)
+        assert adapter.preview(state)[0] == "running"
+    assert len(created) == (0 if matching else 1)
+    assert removed == ([] if matching else [original])
+    assert all(containers[name] is resource for name, resource in unchanged.items())
+    assert adapter.secret(state.workspace_id) == secret
+    if created:
+        assert created[0]["environment"]["AUTH_SECRET"] == secret
+        assert created[0]["environment"]["OMNIA_PROJECT_ID"] == str(state.project_id)
 
 
 @pytest.mark.parametrize("image_ref, protocol", [("", "1"), ("untrusted:latest", "1"),
@@ -155,9 +259,12 @@ def test_draft_core_receives_current_trusted_routes_before_serving(tmp_path, mon
 
     manager = SimpleNamespace(state_store=SimpleNamespace(root=tmp_path))
     adapter = MachineAdapter(manager, SimpleNamespace())
-    state = SimpleNamespace(workspace_id=uuid4(), resource_names=SimpleNamespace(
-        internal_network="draft-network"))
+    state = SimpleNamespace(workspace_id=uuid4(), project_id=uuid4(),
+                            resource_names=SimpleNamespace(internal_network="draft-network"))
     core = SimpleNamespace(status="running", reload=lambda: None, attrs={
+        "Config": {"Env": ["OMNIA_OWNER_PREVIEW=1",
+                           "AUTH_SECRET=" + adapter.secret(state.workspace_id),
+                           "OMNIA_PROJECT_ID=" + str(state.project_id)]},
         "NetworkSettings": {"Networks": {"draft-network": {"IPAddress": "127.0.0.1"}}}})
     backend = SimpleNamespace(client=SimpleNamespace(containers=None), stem="draft",
                               _lookup=lambda *_: core)
@@ -189,7 +296,8 @@ def test_preview_recovers_missing_stopped_or_outdated_core(
     })
     core = None if core_state == "absent" else SimpleNamespace(
         status="exited" if core_state == "exited" else "running", reload=lambda: None,
-        attrs={"Image": image_id if core_state != "outdated" else "sha256:" + "b" * 64},
+        attrs={"Image": image_id if core_state != "outdated" else "sha256:" + "b" * 64,
+               "Config": {"Env": ["OMNIA_OWNER_PREVIEW=1"]}},
     )
     backend = SimpleNamespace(
         client=SimpleNamespace(containers=None, images=SimpleNamespace(
