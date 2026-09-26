@@ -217,50 +217,84 @@ def _requested_entities(
     return requested
 
 
-def _validate_witness(witness: ActivationBusinessWitness, table: DataTable) -> None:
+def correct_witness_hint(table: DataTable) -> str:
+    """Как выглядит годный свидетель для этой таблицы — словами, без догадок.
+
+    Таблица платформе известна целиком, поэтому отказ может не только перечислить
+    претензии, но и сразу показать верный ответ. Шестнадцать живых прогонов за
+    сутки приносили по одному факту каждый именно потому, что этого не делалось.
+    """
+
     columns = {column.name: column for column in table.columns}
-    # Девять разных бед раньше приходили одним именем, и агент тратил на
-    # угадывание целый круг починки с пересборкой (прогон c32cdde8, 25.09).
-    # Таблица тут известна целиком, поэтому каждую беду называем своим именем и,
-    # где это помогает, сразу говорим верное значение.
+    reserved = {table.primary_key[0] if table.primary_key else "", table.owner_column or ""}
+    value = next(
+        (
+            column.name
+            for column in table.columns
+            if column.name not in reserved
+            and any(token in column.type.casefold() for token in _TEXT_TYPES)
+        ),
+        "",
+    )
+    required = [
+        column.name
+        for column in table.columns
+        if not column.nullable
+        and column.name not in (reserved | {value})
+        and not technical_default(column)
+    ]
+    parts = [
+        "correct witness for " + table.name,
+        "id " + (table.primary_key[0] if table.primary_key else "none"),
+        "owner " + (table.owner_column or "none"),
+    ]
+    if value:
+        parts.append("value " + value)
+    if required:
+        parts.append("create_values " + " ".join(required))
+    return " ".join(parts)
+
+
+def _witness_complaints(
+    witness: ActivationBusinessWitness, table: DataTable
+) -> list[str]:
+    """Все претензии к свидетелю разом, а не первая попавшаяся.
+
+    Проверка останавливалась на первом нарушении, поэтому прогон на проде —
+    пятьдесят минут и живые деньги — приносил ровно один факт. Прогон 4a154055
+    показал это прямо: две попытки, два разных правила. Таблица известна целиком,
+    значит и сказать можно всё сразу.
+    """
+
+    columns = {column.name: column for column in table.columns}
+    complaints: list[str] = []
     if table.name in _MANAGED_TABLES or table.read_only:
-        raise CellIdentityConflict("adaptation business witness table is not writable")
+        return ["table is not writable"]
     if table.owner_reference is not None or table.owner_column is None:
-        raise CellIdentityConflict("adaptation business witness table has no direct owner column")
+        return ["table has no direct owner column"]
     if table.owner_column != witness.owner_column:
-        raise CellIdentityConflict(
-            "adaptation business witness owner column must be " + table.owner_column
-        )
+        complaints.append("owner column must be " + table.owner_column)
     if table.primary_key != [witness.id_column]:
-        key = " ".join(table.primary_key) or "none"
-        raise CellIdentityConflict(
-            "adaptation business witness id column must be the primary key " + key
+        complaints.append(
+            "id column must be the primary key " + (" ".join(table.primary_key) or "none")
         )
-    if "uuid" not in columns[witness.id_column].type.casefold():
-        raise CellIdentityConflict("adaptation business witness id column is not a uuid")
+    elif "uuid" not in columns[witness.id_column].type.casefold():
+        complaints.append("id column is not a uuid")
     if witness.value_column not in columns:
-        raise CellIdentityConflict(
-            "adaptation business witness value column does not exist " + witness.value_column
-        )
+        complaints.append("value column does not exist " + witness.value_column)
+    elif not any(
+        token in columns[witness.value_column].type.casefold() for token in _TEXT_TYPES
+    ):
+        complaints.append("value is not text")
     if len({witness.id_column, witness.owner_column, witness.value_column}) != 3:
-        raise CellIdentityConflict("adaptation business witness columns are not distinct")
-    if not any(token in columns[witness.value_column].type.casefold() for token in _TEXT_TYPES):
-        raise CellIdentityConflict("adaptation business witness value is not text")
-    reserved = {
-        witness.id_column,
-        witness.owner_column,
-        witness.value_column,
-    }
+        complaints.append("columns are not distinct")
+    reserved = {witness.id_column, witness.owner_column, witness.value_column}
     if reserved & witness.create_values.keys():
-        raise CellIdentityConflict("adaptation business witness overrides protected columns")
-    if any(name not in columns for name in witness.create_values):
-        raise CellIdentityConflict("adaptation business witness value column is unavailable")
+        complaints.append("create_values overrides protected columns")
+    unknown = [name for name in witness.create_values if name not in columns]
+    if unknown:
+        complaints.append("create_values name does not exist " + " ".join(sorted(unknown)))
     supplied = reserved | witness.create_values.keys()
-    # Недостающие колонки известны ровно здесь, поэтому здесь их и называем.
-    # Живой прогон 4a154055: агент открывал их по одной, каждая ценой полного
-    # круга с копией проекта (~13 минут), и прогон кончился по сроку раньше,
-    # чем перебрал все. Имя колонки — это схема, а не данные владельца, и оно
-    # уже и так звучит в отчёте для него.
     missing = [
         column.name
         for column in table.columns
@@ -269,6 +303,17 @@ def _validate_witness(witness: ActivationBusinessWitness, table: DataTable) -> N
         and not technical_default(column)
     ]
     if missing:
-        raise CellIdentityConflict(
-            "adaptation business witness misses a required value " + " ".join(missing)
-        )
+        complaints.append("misses a required value " + " ".join(missing))
+    return complaints
+
+
+def _validate_witness(witness: ActivationBusinessWitness, table: DataTable) -> None:
+    complaints = _witness_complaints(witness, table)
+    if not complaints:
+        return
+    raise CellIdentityConflict(
+        "adaptation business witness "
+        + "; ".join(complaints)
+        + "; "
+        + correct_witness_hint(table)
+    )

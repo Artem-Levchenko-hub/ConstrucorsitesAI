@@ -86,7 +86,9 @@ def test_a_wrong_key_says_what_the_key_is() -> None:
     message = _fails_with(contract, _witness(id_column="code"))
 
     assert "primary key" in message
-    assert message.rstrip().endswith("id"), f"верный ключ не назван: {message}"
+    # Верный ключ назван — и в претензии, и в образце годного свидетеля,
+    # который теперь идёт тем же сообщением.
+    assert "primary key id" in message, f"верный ключ не назван: {message}"
 
 
 def test_a_missing_value_column_is_named_as_such() -> None:

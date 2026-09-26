@@ -92,7 +92,7 @@ def test_a_proof_without_the_rule_is_still_valid() -> None:
         "Клиент Иванов +79990000001",  # значение из базы владельца
         "adaptation failed: leads.note = 'секрет'",
         "ADAPTATION BUSINESS WITNESS",
-        "a" * 121,
+        "a" * 401,  # поле выросло, но границу по длине по-прежнему держит
         "витрина",
     ],
 )

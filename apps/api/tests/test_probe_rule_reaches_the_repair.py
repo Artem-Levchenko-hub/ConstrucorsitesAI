@@ -123,7 +123,7 @@ def test_real_rule_names_pass_the_shape_check(rule: str) -> None:
         "Клиент Иванов +79990000001",
         "leads.note = 'секрет'",
         "ADAPTATION BUSINESS WITNESS",
-        "a" * 121,
+        "a" * 401,  # поле выросло под полный ответ, но границу держит
     ],
 )
 def test_nothing_but_a_rule_name_gets_through(smuggled: str) -> None:

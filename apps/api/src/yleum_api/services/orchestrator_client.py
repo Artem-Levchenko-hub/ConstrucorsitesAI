@@ -34,7 +34,7 @@ log = structlog.get_logger(__name__)
 _REQUEST_DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 # Имя нарушенного правила приходит от оркестратора: фраза разработчика,
 # только строчные латинские слова. Всё остальное — повод отвергнуть ответ.
-_PROBE_RULE_NAME = re.compile(r"^[a-z][a-z0-9_ ]{0,119}$")
+_PROBE_RULE_NAME = re.compile(r"^[a-z][a-z0-9_; ]{0,399}$")
 _CHECKPOINT_REF_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,95}$")
 _PROJECT_CELL_CONTROL_KINDS = frozenset(
     {"wake", "pause", "stop", "destroy", "restore", "reconcile", "release"}
