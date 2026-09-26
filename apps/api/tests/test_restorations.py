@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 
 from yleum_api.services import repo
+from yleum_api.services.max_project_kit import render_portable_max_session
 
 
 def source_binding(**changes):
@@ -690,7 +691,7 @@ async def test_db_restoration_prepares_without_head_change_then_applies_once(db_
     )
     assert restored_files["page.txt"] == "old"
     assert restored_files["empty.txt"] == ""
-    assert "onConflictDoNothing" in restored_files["src/lib/max/session.ts"]
+    assert restored_files["src/lib/max/session.ts"] == render_portable_max_session(project.id)
     assert str(project.id) in restored_files["src/lib/max/session.ts"]
     replay = await service.apply_restoration(
         db_session, project.id, owner.id, operation.id, applied_request, runtime
@@ -758,7 +759,7 @@ async def test_db_restoration_overlays_complete_current_max_kit_when_configured(
     restored_files = repo.read_files(project.id, row.planned_commit_sha)
 
     assert restored_files["page.txt"] == "old"
-    assert "onConflictDoNothing" in restored_files["src/lib/max/session.ts"]
+    assert restored_files["src/lib/max/session.ts"] == render_portable_max_session(project.id)
     assert "Restored current platform" in restored_files["src/lib/omnia/max-config.ts"]
     assert runtime.prepares == 1
 
