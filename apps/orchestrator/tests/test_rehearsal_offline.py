@@ -108,7 +108,15 @@ def _probe(witness: ActivationBusinessWitness) -> ActivationBusinessProbe:
 @pytest.fixture
 def rehearsal(pg, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
     """Собрать репетицию так, чтобы она била по эталонной точке, а не по контейнеру."""
+    from yleum_orchestrator.core import config
     from yleum_orchestrator.services import restoration_adaptation_health as health
+
+    # Стенд не должен зависеть от окружения машины: локально нужные переменные
+    # обычно уже выставлены, в CI их нет — и тогда «локально зелено, в CI красно».
+    # Поэтому настройки задаются здесь же и кэш сбрасывается до и после.
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://probe@127.0.0.1:1/probe")
+    monkeypatch.setenv("INTERNAL_TOKEN", "offline-rehearsal-harness-token")
+    config.get_settings.cache_clear()
 
     pg.run(_SCHEMA)
     witness = _witness()
@@ -191,7 +199,10 @@ def rehearsal(pg, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
             candidate_source_manifest_digest="m" * 64,
         )
 
-    return run, pg, app
+    yield run, pg, app
+
+    # Настройки собраны из подменённого окружения — не оставляем их соседям.
+    config.get_settings.cache_clear()
 
 
 async def test_the_reference_implementation_passes_every_leg(rehearsal) -> None:
