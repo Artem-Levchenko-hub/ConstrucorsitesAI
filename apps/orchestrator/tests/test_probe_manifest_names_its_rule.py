@@ -244,3 +244,49 @@ def test_the_platform_accepts_the_new_field() -> None:
     ).read_text(encoding="utf-8")
 
     assert '"reason_detail"' in client, "платформа не знает поля — ответ будет отвергнут"
+
+
+async def test_a_failure_before_the_legs_carries_its_own_sentence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Подготовка репетиции тоже умеет ломаться — и это было безымянно.
+
+    26.09, прогон 81e14026: агент впервые прошёл манифест (подсказка сработала) и
+    дошёл до репетиции, а она вернула общий `probe_rehearsal_failed` без единого
+    уточнения. Шесть шагов репетиции обёрнуты в имя, а подготовка перед ними —
+    нет: там свои фразы (личность кандидата изменилась, тома изменились, адрес
+    превью негоден, подписывать сессии нечем), и все приходят одним словом.
+
+    Фразы эти — текст разработчика, не данные владельца, и в узкое поле причины
+    помещаются. Значит должны доезжать, как доезжает правило манифеста.
+    """
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    class _Rehearser:
+        async def rehearse_candidate(self, **_kwargs):
+            raise CellResourceError("candidate probe signer is unavailable")
+
+    engine, request, proof = _prove_fixture(monkeypatch, _Rehearser())
+
+    result = await engine.prove(request, proof)
+
+    assert result.reason_code == "probe_rehearsal_failed"
+    assert result.reason_detail == "candidate probe signer is unavailable"
+
+
+async def test_an_unrecognisable_rehearsal_failure_stays_silent_rather_than_guessing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Если фраза не похожа на текст разработчика — лучше промолчать, чем вынести наружу."""
+    from yleum_orchestrator.core.cell_resources import CellResourceError
+
+    class _Rehearser:
+        async def rehearse_candidate(self, **_kwargs):
+            raise CellResourceError("Клиент Иванов +79990000001")
+
+    engine, request, proof = _prove_fixture(monkeypatch, _Rehearser())
+
+    result = await engine.prove(request, proof)
+
+    assert result.reason_code == "probe_rehearsal_failed"
+    assert result.reason_detail is None
