@@ -64,7 +64,6 @@ async def _ask(
         force_model=None,
         use_progressive_discovery=False,
         use_clarify_interview=False,
-        use_auto_stack_routing=False,
         use_followup_appification=False,
         use_result_type_router=False,
         use_generation_worker=False,

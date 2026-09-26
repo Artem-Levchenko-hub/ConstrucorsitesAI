@@ -399,7 +399,6 @@ async def test_prompt_endpoint_replays_same_submit_without_second_spawn(
             force_model=None,
             use_progressive_discovery=False,
             use_clarify_interview=False,
-            use_auto_stack_routing=False,
             use_followup_appification=False,
             use_result_type_router=False,
         )
@@ -494,7 +493,6 @@ async def test_failed_first_build_explanation_does_not_spawn_another_build(
         force_model=None,
         use_progressive_discovery=False,
         use_clarify_interview=False,
-        use_auto_stack_routing=False,
         use_followup_appification=False,
         use_result_type_router=False,
     )
@@ -1113,7 +1111,6 @@ async def test_config_application_rejects_stale_data_before_dispatch(
             unlimited_generations=True,
             use_progressive_discovery=False,
             use_clarify_interview=False,
-            use_auto_stack_routing=False,
             use_followup_appification=False,
             use_result_type_router=False,
         )

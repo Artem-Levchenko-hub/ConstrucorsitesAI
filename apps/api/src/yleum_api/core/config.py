@@ -640,8 +640,12 @@ class Settings(BaseSettings):
     # `result_type`) with the existing keyword nets as a deterministic safety-net.
     # Master switch: OFF → the first-build stack decision is byte-identical to
     # today (only the legacy _infer_* nets run). Kill: USE_RESULT_TYPE_ROUTER=false.
-    use_followup_appification: bool = Field(default=True)
     use_result_type_router: bool = Field(default=True)
+    # Правило триажа «просьба доделать до полноценного приложения»: читается в
+    # decide_intent. Переключение шаблона, которое когда-то шло следом, снято
+    # вместе с остальным старым конструктором — осталось только влияние на выбор
+    # намерения, поэтому настройка живёт отдельно от ушедших с ней соседей.
+    use_followup_appification: bool = Field(default=True)
     # Sub-slice (independently flippable): a `landing` result-type with a conversion
     # word («запись/бронь/оформить заказ») builds as a PUBLIC lead-capture landing
     # (spa + POST /p/<slug>/lead) instead of being force-escalated to an auth-gated
