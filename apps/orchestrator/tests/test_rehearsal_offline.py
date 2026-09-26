@@ -211,3 +211,51 @@ async def test_the_rehearsal_leaves_the_table_as_it_found_it(rehearsal) -> None:
     await run()
 
     assert _text(pg.run("SELECT count(*) FROM public.leads;")).strip() == before
+
+
+async def test_a_taken_key_answered_with_a_server_error_names_the_cross_owner_leg(
+    rehearsal,
+) -> None:
+    """Самая вероятная ошибка агента: не предусмотреть занятый ключ.
+
+    Репетиция от имени чужого пытается создать запись с уже существующим ключом.
+    Приложение, которое просто вставляет строку, упадёт на нарушении уникальности
+    и ответит ошибкой сервера — а репетиция ждёт осознанный отказ. Здесь
+    закреплено, какой именно шаг назовёт отказ, чтобы по живому прогону это
+    читалось сразу.
+    """
+    run, _pg, app = rehearsal
+    app._exists = lambda _item_id: False  # приложение «забыло» про занятый ключ
+
+    with pytest.raises(ProbeRehearsalFailure) as failure:
+        await run()
+
+    assert failure.value.leg == "cross_owner_denial"
+
+
+async def test_answering_a_missing_row_with_403_breaks_the_owner_leg_first(rehearsal) -> None:
+    """Вторая вероятная ошибка: отвечать «нет доступа» там, где надо «не найдено».
+
+    Я ожидал, что это упрётся в отказ чужому, а стенд показал точнее: ломается
+    РАНЬШЕ, на собственной ноге владельца. Причина в том, что репетиция после
+    удаления перечитывает запись и требует именно «не найдено» — то есть код
+    ответа проверяется не только на чужом доступе.
+
+    Разница не косметическая: «нет доступа» подтверждает существование записи,
+    то есть выдаёт факт чужих данных самим ответом. Здесь закреплено, на каком
+    шаге это всплывёт, чтобы по живому прогону читалось сразу.
+    """
+    run, _pg, app = rehearsal
+    original_reply = app._reply
+
+    async def reply(send, status, payload):
+        if status == 404 and payload.get("error") == "not found":
+            status = 403
+        return await original_reply(send, status, payload)
+
+    app._reply = reply
+
+    with pytest.raises(ProbeRehearsalFailure) as failure:
+        await run()
+
+    assert failure.value.leg == "signed_owner_mutation"
