@@ -293,9 +293,9 @@
       },
       "src/lib/omnia/max-config.ts": {
         "mode": "100644",
-        "git_blob": "7ea7ea1920a9bea09e2895d249b2784a7a11055e",
-        "bytes": 1983,
-        "sha256": "65d11ff3853661ad3a02a41ac4350c780f51cd236f05fd399a4f6cfbff43b1b9"
+        "git_blob": "4f7c040847335c89da6c8f4d005a7a6782c1bfa5",
+        "bytes": 2105,
+        "sha256": "f085cd5fa58f4dc55c721c1a871ef3c61e54a42f02bdf9c918b816a796de3fca"
       },
       "tests/starter.test.mjs": {
         "mode": "100644",

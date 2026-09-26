@@ -11,6 +11,7 @@ from subprocess import run
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 from sqlalchemy import func, select
 
 from yleum_api.models.generation_run import GenerationRun
@@ -49,8 +50,12 @@ def _config() -> MaxProjectConfigPayload:
             MaxContentItem(
                 id="flat-white",
                 title="Флэт уайт",
+                category="Кофе",
                 description="Двойной эспрессо",
                 price="290 ₽",
+                availability="on_request",
+                options=["250 мл", "400 мл", " 250 мл ", ""],
+                image_url="https://yleum.ru/minio/omnia-images/max-content/demo/flat-white.webp",
                 action_label="Заказать",
             )
         ],
@@ -64,9 +69,33 @@ def test_max_config_normalises_features() -> None:
     assert _config().features == ["Каталог", "Баллы"]
 
 
-def test_kit_v22_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
+def test_catalog_item_describes_a_real_position_for_the_generated_screens() -> None:
+    """Раздел, фото, наличие и варианты доезжают до кода приложения.
+
+    Без них карточка каталога в сгенерированном приложении — строка текста, а
+    владельцу нечем описать реальный товар. Варианты чистятся от дублей и пустых
+    значений здесь, а не в браузере: конфигурацию пишет и агент восстановления.
+    """
+    item = _config().content[0]
+    assert item.options == ["250 мл", "400 мл"]
+    source = render_max_managed_files(_config(), uuid4())["src/lib/omnia/max-config.ts"]
+    for field in ("category", "availability", "options", "image_url"):
+        assert f"  {field}:" in source, field
+    assert '"availability": "on_request"' in source
+    assert "max-content/demo/flat-white.webp" in source
+    directive = max_project_kit_svc.MAX_MODEL_DIRECTIVE
+    assert "`out_of_stock` must not" in directive
+    assert "Never invent a photo, a price or a size the owner" in directive
+
+
+def test_catalog_item_refuses_a_photo_address_that_is_not_https() -> None:
+    with pytest.raises(ValidationError):
+        MaxContentItem(id="x", title="X", image_url="http://example.ru/a.png")
+
+
+def test_kit_v23_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 22
+    assert MAX_MANAGED_KIT_VERSION == 23
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     # v22: no managed server file reads or persists the MAX visitor profile.
@@ -746,8 +775,6 @@ def test_long_brief_survives_config_and_prompt_validation() -> None:
 
 
 def test_brief_limits_reject_instead_of_truncating() -> None:
-    from pydantic import ValidationError
-
     from yleum_api.schemas.message import PromptRequest
 
     with pytest.raises(ValidationError):

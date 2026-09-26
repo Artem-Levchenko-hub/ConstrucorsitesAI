@@ -8,12 +8,13 @@ from urllib.parse import parse_qsl, urlparse
 from uuid import UUID
 
 import structlog
-from fastapi import APIRouter, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import ValidationError
 from sqlalchemy import func, select, text
 
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
+from yleum_api.core.ratelimit import rate_limit_max_content_image
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.max_project_config import MaxProjectConfig
@@ -21,6 +22,7 @@ from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.usage import Usage
 from yleum_api.schemas.max_studio import (
+    MaxContentImagePublic,
     MaxPreviewSessionPublic,
     MaxPreviewSessionUpstream,
     MaxProjectConfigPayload,
@@ -31,7 +33,7 @@ from yleum_api.schemas.max_studio import (
     MaxUsagePublic,
     MaxUsageStagePublic,
 )
-from yleum_api.services import orchestrator_client, project_cell_runtime
+from yleum_api.services import max_content_images, orchestrator_client, project_cell_runtime
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.deploy_attestation import ensure_current_release_proof
 from yleum_api.services.generation_runs import ACTIVE_GENERATION_STATUSES
@@ -146,6 +148,58 @@ def _preview_session_public(project: Project, payload: object) -> MaxPreviewSess
             "Orchestrator returned an invalid MAX preview session"
         )
     return MaxPreviewSessionPublic(url=session.bootstrap_url, expires_at=session.expires_at)
+
+
+@router.post(
+    "/{project_id}/max/content-image",
+    response_model=MaxContentImagePublic,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(rate_limit_max_content_image)],
+)
+async def upload_max_content_image(
+    project_id: UUID,
+    request: Request,
+    session: SessionDep,
+    current_user: CurrentUserDep,
+) -> MaxContentImagePublic:
+    """Store one catalog photo and hand back the URL to save in the item.
+
+    The upload does not touch the project configuration: the owner still has to
+    save the Content tab, so a picture chosen and then abandoned changes nothing
+    about the app. Raw bytes, no multipart — the API intentionally runs without
+    python-multipart.
+    """
+    await _owned_max_project(session, project_id, current_user.id)
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type not in max_content_images.CONTENT_IMAGE_TYPES:
+        raise ApiError(
+            "bad_request",
+            "Подойдёт JPG, PNG, WebP или GIF",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > max_content_images.MAX_CONTENT_IMAGE_BYTES:
+            raise ApiError(
+                "too_large",
+                "Файл больше 8 МБ — уменьшите изображение",
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            )
+    if not body:
+        raise ApiError("bad_request", "Пустой файл", status.HTTP_400_BAD_REQUEST)
+    try:
+        url = await asyncio.to_thread(
+            max_content_images.store_content_image, str(project_id), bytes(body), content_type
+        )
+    except max_content_images.ContentImageError as exc:
+        log.warning("max_content_image_upload_failed", project_id=str(project_id))
+        raise ApiError(
+            "upload_failed",
+            "Хранилище изображений недоступно. Повторите попытку",
+            status.HTTP_502_BAD_GATEWAY,
+        ) from exc
+    return MaxContentImagePublic(url=url)
 
 
 @router.get("/{project_id}/max/config", response_model=MaxProjectConfigPublic)

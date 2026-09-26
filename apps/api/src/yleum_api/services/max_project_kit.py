@@ -15,7 +15,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 22
+MAX_MANAGED_KIT_VERSION = 23
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
 # platform-owned paths. v20 materializes trusted gateway subjects in the
 # isolated product DB before business tables can enforce max_users FKs. v21
@@ -79,8 +79,16 @@ def _json(config: MaxProjectConfigPayload) -> str:
 _CONFIG_TYPES = """export type YleumMaxContentItem = {
   id: string;
   title: string;
+  /** Раздел каталога, заданный владельцем («Женское», «Стрижки»); "" — без раздела. */
+  category: string;
   description: string;
   price: string;
+  /** Наличие позиции: в наличии, под заказ, нет в наличии. */
+  availability: "in_stock" | "on_request" | "out_of_stock";
+  /** Варианты выбора: размеры, объёмы, длительности; пустой массив — выбора нет. */
+  options: string[];
+  /** Публичный https-адрес фотографии или "" — тогда показывайте запасной блок. */
+  image_url: string;
   action_label: string;
   active: boolean;
 };
@@ -367,7 +375,13 @@ Read `src/lib/omnia/max-config.ts` to understand that saved brief. In product
 screens load owner-editable names, descriptions, actions and catalogs with
 `getYleumAppConfig()` from `@/lib/omnia/integration-client`, on mount and when the
 app regains focus. Render only active content items, keep their stable ids and
-handle loading, empty and failed reads honestly. Do not copy this mutable data
+handle loading, empty and failed reads honestly. A content item carries
+`category`, `image_url`, `price`, `availability` and `options`: group the catalog
+by the non-empty categories, show the photo when `image_url` is set and a neutral
+placeholder when it is not, label availability honestly (`out_of_stock` must not
+look orderable), and let the user pick one of `options` before the main action
+when the array is non-empty. Never invent a photo, a price or a size the owner
+did not enter. Do not copy this mutable data
 into constants or invent catalog entries. Keep runtime business configuration
 separate from user-owned actions. Saved feature/style/policy choices are a brief
 to implement, not proof that a payment, consent or marketing flow exists.

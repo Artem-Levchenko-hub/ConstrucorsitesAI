@@ -1,13 +1,14 @@
 "use client";
 
-import { useId, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Check, PackageOpen, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { MaxProjectConfigPayload } from "@/lib/api/types";
+import type { MaxContentItem, MaxProjectConfigPayload } from "@/lib/api/types";
 import { MAX_BRIEF_LENGTH } from "@/lib/max-brief";
+import { MaxContentItemFields } from "./MaxContentItemEditor";
 
 export type SetupSection = "details" | "content" | "owner" | "policies";
 
@@ -29,14 +30,30 @@ function Intro({ title, children, publication = false }: { title: string; childr
   return <div className="max-setup-intro"><span className="max-setup-purpose" data-publication={publication}>{publication ? "Есть обязательные пункты для публикации" : "Можно заполнить позже"}</span><h3>{title}</h3><p>{children}</p></div>;
 }
 
-export function MaxProjectSetupSections({ section, current, onChange }: {
+/** Новая позиция: только название-заглушка, остальное владелец дозаполняет. */
+function blankContentItem(): MaxContentItem {
+  return {
+    id: `item-${Date.now()}`,
+    title: "",
+    category: "",
+    description: "",
+    price: "",
+    availability: "in_stock",
+    options: [],
+    image_url: "",
+    action_label: "Открыть",
+    active: true,
+  };
+}
+
+export function MaxProjectSetupSections({ section, projectId, current, onChange }: {
   section: SetupSection;
+  projectId: string;
   current: MaxProjectConfigPayload;
   onChange: (value: MaxProjectConfigPayload) => void;
 }) {
-  const contentId = useId();
   const summaryLength = Array.from(current.summary.trim()).length;
-  const updateContent = (index: number, patch: Partial<MaxProjectConfigPayload["content"][number]>) => {
+  const updateContent = (index: number, patch: Partial<MaxContentItem>) => {
     const content = [...current.content];
     content[index] = { ...content[index], ...patch };
     onChange({ ...current, content });
@@ -101,58 +118,52 @@ export function MaxProjectSetupSections({ section, current, onChange }: {
     </Group>
   </section>;
 
-  if (section === "content") return <section className="max-setup-section">
-    <div className="max-setup-content-heading">
-      <Intro title="Каталог и контент">Товары, услуги, события или уроки. Сохранение добавляет их в данные; «Применить к приложению» свяжет каталог с экранами.</Intro>
-      <Button size="sm" className="max-setup-add" onClick={() => onChange({ ...current, content: [...current.content, {
-        id: `item-${Date.now()}`, title: "Новый элемент", description: "", price: "", action_label: "Открыть", active: true,
-      }] })}><Plus aria-hidden="true" className="h-4 w-4" />Добавить элемент</Button>
-    </div>
-    {current.content.length === 0 ? <div className="max-setup-empty">
-      <PackageOpen aria-hidden="true" />
-      <h4>Пока нет элементов</h4>
-      <p>Добавьте первый товар, услугу или урок. Если каталог не нужен, этот раздел можно оставить пустым.</p>
-    </div> : <div className="max-setup-content-list">
-      <p className="max-setup-hint">Элементов: {current.content.length} · Видимость каждого можно настроить отдельно.</p>
-      {current.content.map((item, index) => <fieldset key={item.id} className="max-setup-content-item">
-        <legend>Элемент {index + 1}</legend>
-        <div className="max-setup-item-toolbar">
-          <button type="button" role="switch" aria-checked={item.active} aria-label={`Показывать элемент ${index + 1}`}
-            className="max-setup-visibility" onClick={() => updateContent(index, { active: !item.active })}>
-            <span className="max-setup-switch-track" aria-hidden="true"><span /></span>
-            {item.active ? "Показан в приложении" : "Скрыт из приложения"}
-          </button>
-          <button type="button" className="max-setup-delete" aria-label={`Удалить ${item.title}`}
-            onClick={() => onChange({ ...current, content: current.content.filter((_, itemIndex) => itemIndex !== index) })}>
-            <Trash2 className="h-4 w-4" aria-hidden="true" /><span>Удалить</span>
-          </button>
-        </div>
-        <div className="max-setup-grid">
-          <div className="max-setup-field">
-            <Label htmlFor={`${contentId}-title-${index}`}>Название</Label>
-            <Input id={`${contentId}-title-${index}`} aria-label={`Название элемента ${index + 1}`} value={item.title}
-              onChange={event => updateContent(index, { title: event.target.value })} />
+  if (section === "content") {
+    const shown = current.content.filter(item => item.active).length;
+    const sections = [...new Set(current.content.map(item => item.category.trim()).filter(Boolean))];
+    return <section className="max-setup-section">
+      <div className="max-setup-content-heading">
+        <Intro title="Каталог и контент">Товары, услуги, сеансы или уроки — то, что пользователь увидит списком и сможет открыть. Заполнять необязательно: без каталога приложение тоже работает.</Intro>
+        <Button size="sm" className="max-setup-add" onClick={() => onChange({ ...current, content: [...current.content, blankContentItem()] })}>
+          <Plus aria-hidden="true" className="h-4 w-4" />Добавить позицию
+        </Button>
+      </div>
+
+      <ol className="max-content-steps">
+        <li><span aria-hidden="true">1</span><span><b>«Сохранить и проверить»</b> — позиции уезжают в приложение как данные. ИИ не запускается, баланс не расходуется.</span></li>
+        <li><span aria-hidden="true">2</span><span><b>«Применить к приложению»</b> — разовая доработка: ИИ выводит каталог на экраны и учит их читать эти данные. Расходует баланс.</span></li>
+        <li><span aria-hidden="true">3</span><span>После этого правки позиций видны в приложении <b>без новой сборки</b> — достаточно сохранить.</span></li>
+      </ol>
+
+      {current.content.length === 0 ? <div className="max-setup-empty">
+        <PackageOpen aria-hidden="true" />
+        <h4>Пока нет позиций</h4>
+        <p>Добавьте первый товар, услугу или урок: фото, название, раздел, цену, наличие и варианты. Если каталог не нужен, оставьте раздел пустым.</p>
+      </div> : <div className="max-setup-content-list">
+        <p className="max-setup-hint">
+          Позиций: {current.content.length} · показываем в приложении: {shown}
+          {sections.length > 0 && ` · разделов: ${sections.length} (${sections.join(", ")})`}
+        </p>
+        {current.content.map((item, index) => <fieldset key={item.id} className="max-setup-content-item">
+          <legend>{item.title.trim() || `Позиция ${index + 1}`}</legend>
+          <div className="max-setup-item-toolbar">
+            <button type="button" role="switch" aria-checked={item.active} aria-label={`Показывать элемент ${index + 1}`}
+              className="max-setup-visibility" onClick={() => updateContent(index, { active: !item.active })}>
+              <span className="max-setup-switch-track" aria-hidden="true"><span /></span>
+              {item.active ? "Показан в приложении" : "Скрыт из приложения"}
+            </button>
+            <button type="button" className="max-setup-delete" aria-label={`Удалить ${item.title || `позицию ${index + 1}`}`}
+              onClick={() => onChange({ ...current, content: current.content.filter((_, itemIndex) => itemIndex !== index) })}>
+              <Trash2 className="h-4 w-4" aria-hidden="true" /><span>Удалить</span>
+            </button>
           </div>
-          <div className="max-setup-field">
-            <Label htmlFor={`${contentId}-price-${index}`}>Цена или подпись</Label>
-            <Input id={`${contentId}-price-${index}`} aria-label={`Цена или подпись элемента ${index + 1}`} value={item.price} maxLength={80}
-              placeholder="Например, 250 ₽" onChange={event => updateContent(index, { price: event.target.value })} />
-          </div>
-          <div className="max-setup-field max-setup-wide">
-            <Label htmlFor={`${contentId}-description-${index}`}>Описание</Label>
-            <Textarea id={`${contentId}-description-${index}`} aria-label={`Описание элемента ${index + 1}`} className="max-setup-short-textarea"
-              value={item.description} placeholder="Что важно знать об этом элементе?" onChange={event => updateContent(index, { description: event.target.value })} />
-          </div>
-          <div className="max-setup-field">
-            <Label htmlFor={`${contentId}-action-${index}`}>Текст кнопки</Label>
-            <Input id={`${contentId}-action-${index}`} aria-label={`Текст кнопки элемента ${index + 1}`} value={item.action_label}
-              maxLength={40} placeholder="Открыть" onChange={event => updateContent(index, { action_label: event.target.value })} />
-          </div>
-        </div>
-      </fieldset>)}
-    </div>}
-    <p className="max-setup-footnote">После подключения каталога к экрану приложение сможет читать обновления из этих настроек.</p>
-  </section>;
+          <MaxContentItemFields projectId={projectId} index={index} item={item}
+            onPatch={patch => updateContent(index, patch)} />
+        </fieldset>)}
+      </div>}
+      <p className="max-setup-footnote">Цену, наличие и состав каталога приложение перечитывает при каждом открытии экрана. Если приложение собиралось раньше, чем у позиций появились фото и разделы, на экранах они покажутся после следующего «Применить к приложению».</p>
+    </section>;
+  }
 
   if (section === "owner") return <section className="max-setup-section">
     <Intro title="Документы приложения">Yleum не запрашивает реквизиты: бизнес за ботом проверяет сам MAX. Здесь только то, что увидят пользователи в документах и поддержке приложения — всё необязательно.</Intro>

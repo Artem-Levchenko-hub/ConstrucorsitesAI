@@ -112,8 +112,14 @@ it("groups product and appearance fields and gives content controls visible asso
     await act(async () => document.querySelectorAll<HTMLButtonElement>('[role="tab"]')[1].click());
     await act(async () => [...document.querySelectorAll<HTMLButtonElement>('[role="tabpanel"] button')].find(b => b.textContent?.includes("Добавить"))!.click());
     const inputs = [...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('[role="tabpanel"] input, [role="tabpanel"] textarea')];
-    expect(inputs).toHaveLength(4);
-    for (const input of inputs) {
+    // Фото выбирается скрытым input[type=file] через видимую кнопку: у него
+    // aria-label, а не <label>. Остальные поля позиции подписаны видимо.
+    const fileInputs = inputs.filter(input => input instanceof HTMLInputElement && input.type === "file");
+    expect(fileInputs).toHaveLength(1);
+    expect(fileInputs[0].getAttribute("aria-label")).toBeTruthy();
+    const labelled = inputs.filter(input => !fileInputs.includes(input as HTMLInputElement));
+    expect(labelled).toHaveLength(7);
+    for (const input of labelled) {
       expect(input.labels?.length).toBeGreaterThan(0);
       expect(input.labels?.[0].textContent?.trim()).toBeTruthy();
     }
@@ -308,7 +314,7 @@ it("saves content before showing an explicit, version-bound AI application actio
     await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
     await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
     await click("Контент");
-    await click("Добавить элемент");
+    await click("Добавить позицию");
     await click("Сохранить и применить");
     expect(mocks.send).not.toHaveBeenCalled();
     expect(mocks.push).not.toHaveBeenCalled();

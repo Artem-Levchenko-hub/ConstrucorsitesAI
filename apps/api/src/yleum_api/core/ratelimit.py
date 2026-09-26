@@ -142,9 +142,23 @@ async def rate_limit_task_board(request: Request) -> None:
         )
 
 
+async def rate_limit_max_content_image(request: Request) -> None:
+    """A catalog photo is the only owner-supplied binary in Studio."""
+    settings = get_settings()
+    if not settings.rate_limit_enabled:
+        return
+    if not _limiter.hit(parse("40/hour"), f"max-content-image:{_rate_key(request)}"):
+        raise ApiError(
+            "rate_limited",
+            "Слишком много загрузок подряд. Подождите и повторите",
+            status.HTTP_429_TOO_MANY_REQUESTS,
+        )
+
+
 __all__ = [
     "rate_limit_auth",
     "rate_limit_email",
+    "rate_limit_max_content_image",
     "rate_limit_prompt",
     "rate_limit_task_board",
 ]

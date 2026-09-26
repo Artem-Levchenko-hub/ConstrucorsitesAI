@@ -615,14 +615,24 @@ export type IntegrationCatalog = {
   };
 };
 
+/** Позиция каталога: товар, услуга, сеанс или урок. Кроме названия всё необязательно. */
 export type MaxContentItem = {
   id: string;
   title: string;
+  /** Раздел каталога («Женское», «Стрижки»); "" — без раздела. */
+  category: string;
   description: string;
   price: string;
+  availability: MaxContentAvailability;
+  /** Варианты выбора: размеры, объёмы, длительности. */
+  options: string[];
+  /** Публичный https-адрес фото (загружается через /max/content-image) или "". */
+  image_url: string;
   action_label: string;
   active: boolean;
 };
+
+export type MaxContentAvailability = "in_stock" | "on_request" | "out_of_stock";
 
 export type MaxProjectConfigPayload = {
   app_name: string;

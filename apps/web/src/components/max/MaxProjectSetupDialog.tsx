@@ -242,7 +242,7 @@ export function MaxProjectSetupDialog({
                 aria-labelledby={`${tabsId}-${section}`}
                 data-testid="max-settings-scroll-region"
               >
-                <MaxProjectSetupSections key={section} section={section} current={current} onChange={setDraft} />
+                <MaxProjectSetupSections key={section} section={section} projectId={projectId} current={current} onChange={setDraft} />
               </div>
 
               <div

@@ -1,4 +1,4 @@
-import { apiFetch } from "./client";
+import { apiFetch, postBlob } from "./client";
 import type {
   MaxProjectConfig,
   MaxProjectConfigPayload,
@@ -22,6 +22,16 @@ export function saveMaxProjectConfig(
     method: "PUT",
     json: config,
     timeoutMs: 180_000,
+  });
+}
+
+/** Загрузить фото позиции каталога и получить его публичный адрес. */
+export function uploadMaxContentImage(
+  projectId: Uuid,
+  file: File,
+): Promise<{ url: string }> {
+  return postBlob<{ url: string }>(`${path(projectId)}/content-image`, file, {
+    timeoutMs: 60_000,
   });
 }
 

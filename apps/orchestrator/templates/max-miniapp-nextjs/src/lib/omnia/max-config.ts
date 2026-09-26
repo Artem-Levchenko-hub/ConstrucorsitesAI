@@ -2,8 +2,12 @@
 export type YleumMaxContentItem = {
   id: string;
   title: string;
+  category: string;
   description: string;
   price: string;
+  availability: "in_stock" | "on_request" | "out_of_stock";
+  options: string[];
+  image_url: string;
   action_label: string;
   active: boolean;
 };

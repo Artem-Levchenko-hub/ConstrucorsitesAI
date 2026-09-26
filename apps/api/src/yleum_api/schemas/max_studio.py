@@ -8,12 +8,45 @@ from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 
 class MaxContentItem(BaseModel):
+    """One catalog position: a product, service, session or lesson.
+
+    Only ``title`` is required. The rest describes the position the way a real
+    storefront does — section, photo, price, availability and the variants a
+    buyer picks (sizes, volumes, durations) — so the generated screens have
+    something to render besides a line of text. Every field added after the
+    first release carries a default: configurations saved earlier stay valid.
+    """
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
     id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     title: str = Field(min_length=1, max_length=120)
+    category: str = Field(default="", max_length=80)
     description: str = Field(default="", max_length=600)
     price: str = Field(default="", max_length=80)
+    availability: Literal["in_stock", "on_request", "out_of_stock"] = "in_stock"
+    options: list[str] = Field(default_factory=list, max_length=24)
+    image_url: str = Field(default="", max_length=500)
     action_label: str = Field(default="Открыть", min_length=1, max_length=40)
     active: bool = True
+
+    @field_validator("options")
+    @classmethod
+    def clean_options(cls, value: list[str]) -> list[str]:
+        result: list[str] = []
+        for option in value:
+            clean = option.strip()[:40]
+            if clean and clean not in result:
+                result.append(clean)
+        return result
+
+    @field_validator("image_url")
+    @classmethod
+    def https_image_url(cls, value: str) -> str:
+        clean = value.strip()
+        if clean and not clean.startswith("https://"):
+            raise ValueError("image_url must be an https:// address")
+        return clean
 
 
 class MaxOperator(BaseModel):
@@ -97,6 +130,12 @@ class MaxProjectConfigPublic(BaseModel):
     synced_snapshot_id: UUID | None = None
     updated_at: datetime | None = None
     application_mode: Literal["source", "runtime"] = "source"
+
+
+class MaxContentImagePublic(BaseModel):
+    """Public URL of an uploaded catalog photo, ready to store in an item."""
+
+    url: str
 
 
 class MaxUrlAttachedPayload(BaseModel):
