@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, Bot, Check, Copy, ExternalLink, KeyRound, Loader2, Rocket, Smartphone } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -199,6 +200,13 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
             : <Button variant="ghost" className="max-connect-disconnect-button" disabled={busy} onClick={() => { resetMaintenance(); setDisconnectRequested(true); }}>Отключить MAX</Button>}
         </div>
       </details>}
+      {/* Раздел «Интеграции» уехал из навигации внутрь подключений: для
+          владельца бот и прочие сервисы — одно дело, но путь к ним должен
+          остаться на виду. */}
+      <p className="max-connect-hint">
+        Платежи, CRM и аналитику подключают отдельно:{" "}
+        <Link href={`/max/${projectId}?panel=services`}>другие сервисы</Link>.
+      </p>
     </div>
   );
 }

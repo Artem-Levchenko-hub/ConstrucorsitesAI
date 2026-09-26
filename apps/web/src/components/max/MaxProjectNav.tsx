@@ -2,11 +2,9 @@
 
 import { useQuery } from "@tanstack/react-query";
 import {
-  BarChart3,
   Bot,
   Check,
   FileCheck2,
-  Plug,
   Rocket,
   Smartphone,
 } from "lucide-react";
@@ -24,40 +22,50 @@ export type MaxProjectNavKey =
   | "publish"
   | "dashboard";
 
+/**
+ * Четыре пункта вместо шести.
+ *
+ * «MAX» — это название мессенджера, а не раздел; «После запуска» — момент
+ * времени, а не место. Владелец не понимал, где искать адрес приложения и куда
+ * вставлять токен бота. Пункты названы делом и объединены по делу: бот и прочие
+ * подключения — одно, подготовка запуска и адрес после него — другое. Старые
+ * ключи разделов сохранены: страницы и ссылки на них продолжают работать.
+ */
 const navigation: Array<{
   key: MaxProjectNavKey;
+  /** Ключи разделов, которые подсвечивают этот пункт. */
+  keys: MaxProjectNavKey[];
   label: string;
   suffix: string;
+  /** Куда ведёт пункт, когда приложение уже опубликовано. */
+  publishedSuffix?: string;
   icon: typeof Smartphone;
   stageId?: MaxJourneyStageId;
 }> = [
-  { key: "editor", label: "Редактор", suffix: "", icon: Smartphone, stageId: "build" },
+  { key: "editor", keys: ["editor"], label: "Сборка", suffix: "", icon: Smartphone, stageId: "build" },
   {
     key: "app",
+    keys: ["app"],
     label: "Данные приложения",
     suffix: "?data=details",
     icon: FileCheck2,
   },
-  { key: "integrations", label: "Интеграции", suffix: "?panel=services", icon: Plug },
   {
     key: "bot",
-    label: "MAX",
+    keys: ["bot", "integrations"],
+    label: "Бот и подключения",
     suffix: "?panel=max",
     icon: Bot,
     stageId: "bot",
   },
   {
     key: "publish",
-    label: "Публикация",
+    keys: ["publish", "dashboard"],
+    label: "Запуск и адрес",
     suffix: "?panel=publish",
+    publishedSuffix: "/dashboard",
     icon: Rocket,
     stageId: "publish",
-  },
-  {
-    key: "dashboard",
-    label: "После запуска",
-    suffix: "/dashboard",
-    icon: BarChart3,
   },
 ];
 
@@ -78,17 +86,22 @@ export function MaxProjectNav({
     retry: false,
   });
   const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
+  // После публикации «Запуск» перестаёт быть подготовкой и становится адресом
+  // и историей — ведём туда, где владелец их и ищет.
+  const published = readiness.isSuccess && journey.currentStage === undefined;
+  const hrefFor = (item: (typeof navigation)[number]) =>
+    `/max/${projectId}${published && item.publishedSuffix ? item.publishedSuffix : item.suffix}`;
 
   if (variant === "mobile") {
     return (
       <nav className="flex min-w-max gap-1 px-3 py-2" aria-label="Разделы проекта MAX">
         {navigation.map((item) => {
-          const selected = item.key === active;
+          const selected = item.keys.includes(active);
           const Icon = item.icon;
           return (
             <Link
               key={item.key}
-              href={`/max/${projectId}${item.suffix}`}
+              href={hrefFor(item)}
               aria-current={selected ? "page" : undefined}
               className={cn(
                 "inline-flex h-10 items-center gap-2 rounded-[8px] px-3 text-xs",
@@ -129,7 +142,7 @@ export function MaxProjectNav({
 
       <nav className="space-y-1" aria-label="Разделы проекта MAX">
         {navigation.map((item) => {
-          const selected = item.key === active;
+          const selected = item.keys.includes(active);
           const stage = item.stageId
             ? journey.stages.find((candidate) => candidate.id === item.stageId)
             : undefined;
@@ -138,7 +151,7 @@ export function MaxProjectNav({
           return (
             <Link
               key={item.key}
-              href={`/max/${projectId}${item.suffix}`}
+              href={hrefFor(item)}
               aria-current={selected ? "page" : undefined}
               className={cn(
                 "flex h-11 items-center gap-3 rounded-[8px] px-3 text-xs transition-colors",
