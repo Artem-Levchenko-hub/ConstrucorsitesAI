@@ -179,6 +179,13 @@ def rehearsal(pg, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
             "active_generation_fencing_epoch": 1,
         },
     )()
+    def _fresh_backend():
+        # Настоящий parts() собирает новый объект доступа на каждый вызов —
+        # подложка обязана вести себя так же, иначе стенд проверяет не то.
+        return type(
+            "B", (), {"workspace_volume": "code-vol", "project_postgres_volume": "db-vol"}
+        )()
+
     manager = type(
         "M",
         (),
@@ -186,7 +193,10 @@ def rehearsal(pg, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
             "machine_runtime": type(
                 "R",
                 (),
-                {"parts": lambda _s, _st: (object(), backend), "secret": lambda _s, _w: _SECRET},
+                {
+                    "parts": lambda _s, _st: (object(), _fresh_backend()),
+                    "secret": lambda _s, _w: _SECRET,
+                },
             )()
         },
     )()
@@ -311,3 +321,25 @@ async def test_a_failure_before_the_six_legs_still_names_itself(rehearsal, monke
 
     assert not isinstance(failure.value, ProbeRehearsalFailure)
     assert str(failure.value) == "candidate probe signer is unavailable"
+
+
+async def test_a_freshly_derived_backend_does_not_look_like_a_stranger(
+    rehearsal, monkeypatch
+) -> None:
+    """Подготовка репетиции сравнивала ТОЖДЕСТВО объекта, а не то, чем он является.
+
+    Живой `parts()` собирает новый объект доступа к машине на КАЖДЫЙ вызов. Тот,
+    кто зовёт репетицию, получил свой объект раньше; подготовка внутри вызывает
+    `parts()` ещё раз и сравнивает результат через `is not`. Два равноценных
+    объекта — это всегда «не тот же самый», поэтому подготовка отвергала
+    кандидата ВСЕГДА, а наружу уходило общее «репетиция провалилась».
+
+    Отсюда и картина живых прогонов: шесть шагов репетиции не выполнялись ни
+    разу, хотя код для них есть и работает — стенд это показывает.
+
+    Здесь подложка ведёт себя как настоящий `parts()`: отдаёт каждый раз новый,
+    но равноценный объект. Репетиция обязана это принять.
+    """
+    run, _db, _app = rehearsal
+
+    assert isinstance(await run(), str)
