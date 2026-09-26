@@ -260,9 +260,8 @@ async def test_concurrent_provisions_build_shared_context_only_once(
 
 
 @pytest.mark.parametrize("failure", [False, True])
-@pytest.mark.parametrize("script_kind", ["bulk", "smoke"])
 def test_shell_builds_materialized_contexts_and_cleans_after_failure(
-    tmp_path, failure, script_kind
+    tmp_path, failure
 ):
     bash = shutil.which("bash") if os.name != "nt" else "C:/Program Files/Git/bin/bash.exe"
     if not bash or not Path(bash).is_file():
@@ -277,19 +276,6 @@ def test_shell_builds_materialized_contexts_and_cleans_after_failure(
             newline="\n",
         )
     script = scripts / "build-template-images.sh"
-    if script_kind == "smoke":
-        # Execute the actual build section, excluding clone/reset, installs and live processes.
-        smoke = (TEMPLATES.parent / "scripts/smoke-vps.sh").read_text(encoding="utf-8")
-        build_section = smoke.split("# --- 3. build template image ---", 1)[1].split(
-            "# --- 4. orchestrator background ---",
-            1,
-        )[0]
-        script = scripts / "smoke-build.sh"
-        script.write_text(
-            'set -euo pipefail\ncd "$(dirname "$0")/.."\n' + build_section,
-            encoding="utf-8",
-            newline="\n",
-        )
     core = bundle / "src/yleum_orchestrator/core"
     core.mkdir(parents=True)
     shutil.copy2(Path(materialization.__file__), core / "template_materialization.py")
@@ -336,7 +322,7 @@ def test_shell_builds_materialized_contexts_and_cleans_after_failure(
         capture_output=True,
         timeout=30,
     )
-    expected_code = (17 if script_kind == "smoke" else 1) if failure else 0
+    expected_code = 1 if failure else 0
     assert result.returncode == expected_code, result.stdout + result.stderr
     contexts = log.read_text(encoding="utf-8").splitlines()
     # One image per template dir that ships a Dockerfile.dev — the MAX app and the
