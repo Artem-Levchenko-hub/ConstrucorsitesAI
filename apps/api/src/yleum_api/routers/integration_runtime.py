@@ -686,7 +686,10 @@ async def create_runtime_order(
     try:
         async with httpx.AsyncClient(
             timeout=20,
-            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/json;charset=utf-8",
+            },
         ) as client:
             prepared: PreparedOrder | None = None
 
@@ -758,7 +761,14 @@ async def get_runtime_catalog(
     try:
         async with httpx.AsyncClient(
             timeout=20,
-            headers={"Accept": "application/json", "User-Agent": "Omnia-MAX-Runtime/1.0"},
+            headers={
+                "Accept": (
+                    "application/json;charset=utf-8"
+                    if connection.provider == "moysklad"
+                    else "application/json"
+                ),
+                "User-Agent": "Omnia-MAX-Runtime/1.0",
+            },
         ) as client:
             if connection.provider == "moysklad":
                 response = await client.get(

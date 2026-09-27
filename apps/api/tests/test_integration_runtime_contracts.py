@@ -21,11 +21,11 @@ async def connect(client, db_session, monkeypatch, provider="yookassa"):
         return "Synthetic test account"
 
     monkeypatch.setattr(integration_providers, "verify_provider", verified)
-    values = (
-        {"shop_id": "123", "secret_key": "test-only-secret"}
-        if provider == "yookassa"
-        else {"webhook_url": "https://test.bitrix24.ru/rest/1/test-only-secret/"}
-    )
+    values = {
+        "yookassa": {"shop_id": "123", "secret_key": "test-only-secret"},
+        "bitrix24": {"webhook_url": "https://test.bitrix24.ru/rest/1/test-only-secret/"},
+        "moysklad": {"token": "test-only-moysklad-token"},
+    }[provider]
     response = await client.put(
         f"/api/projects/{project}/app-integrations/{provider}", json={"values": values}
     )
@@ -54,6 +54,25 @@ def upstream(monkeypatch, handler):
 
 def headers(user=42):
     return {"X-MAX-Init-Data": _max_init_data("test-max-token", user)}
+
+
+@pytest.mark.asyncio
+async def test_moysklad_catalog_uses_accepted_provider_header(client, db_session, monkeypatch):
+    project = await connect(client, db_session, monkeypatch, "moysklad")
+    observed = []
+
+    def provider(request):
+        observed.append(request)
+        if request.headers.get("accept") != "application/json;charset=utf-8":
+            return httpx.Response(400, json={"errors": [{"error": "Unsupported Accept"}]})
+        return httpx.Response(200, json={"rows": []})
+
+    upstream(monkeypatch, provider)
+    response = await client.get(f"/api/runtime/projects/{project}/catalog", headers=headers())
+
+    assert response.status_code == 200
+    assert response.json() == {"provider": "moysklad", "items": []}
+    assert len(observed) == 1
 
 
 @pytest.mark.asyncio

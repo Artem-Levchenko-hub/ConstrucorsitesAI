@@ -203,4 +203,15 @@ describe("Integration Hub implementation handoff", () => {
     await act(async () => retry!.click());
     expect(boundary.verify).toHaveBeenCalledWith("project-1", "yookassa");
   });
+  it("offers current stock and order capabilities in the MoySklad implementation brief", async () => {
+    await render(
+      [{ ...connection, provider: "moysklad" }],
+      [{ ...provider, key: "moysklad", name: "МойСклад", category: "inventory" }],
+    );
+    await click("Добавить в приложение");
+    const brief = document.querySelector<HTMLTextAreaElement>("textarea")!.value;
+    expect(brief).toContain("остатки");
+    expect(brief).toContain("заказа покупателя");
+    expect(brief).not.toContain("пока недоступны");
+  });
 });
