@@ -254,11 +254,16 @@ def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
     pg = _by(objects, "StatefulSet", "project-postgres")
     init = pg["spec"]["template"]["spec"]["initContainers"]
 
-    assert len(init) == 1
+    assert len(init) == 2
     script = init[0]["command"][2]
     assert kp.SEED_MARKER in script  # durable: never re-seed live business data
     assert "chown -R 70:70 /seed" in script
     assert init[0]["env"][0]["valueFrom"]["secretKeyRef"]["name"] == "seed-links"
+    hba = init[1]
+    assert hba["name"] == "project-postgres-hba"
+    assert hba["securityContext"]["runAsUser"] == 70
+    assert "host postgres postgres samenet scram-sha-256" in hba["command"][2]
+    assert "host all all 0.0.0.0/0" not in hba["command"][2]
     assert (
         pg["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"] == "5Gi"
     )
@@ -278,10 +283,10 @@ def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
     warm = kp.build_objects(
         _spec(seed_volumes=(kp.SeedVolume("/workspace", "http://10.10.0.1:8003/x", False, 1),))
     )
-    assert (
-        _by(warm, "StatefulSet", "project-postgres")["spec"]["template"]["spec"]["initContainers"]
-        == []
-    )
+    warm_init = _by(warm, "StatefulSet", "project-postgres")["spec"]["template"]["spec"][
+        "initContainers"
+    ]
+    assert [item["name"] for item in warm_init] == ["project-postgres-hba"]
 
 
 def test_network_is_default_deny_with_explicit_paths() -> None:

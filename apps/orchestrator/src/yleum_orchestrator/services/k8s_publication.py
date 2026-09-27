@@ -470,6 +470,32 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         if pg_seed is not None and pg_seed.artifact_url is not None
         else []
     )
+    # A seeded preview database keeps its original pg_hba.conf. Its localhost-only
+    # rules reject the published app pod even though the namespace NetworkPolicy
+    # permits only that app to reach project-postgres. A fresh initdb writes its
+    # own host rule, so leave an unseeded directory untouched.
+    pg_init.append(
+        {
+            "name": "project-postgres-hba",
+            "image": spec.postgres_image,
+            "command": [
+                "sh",
+                "-ec",
+                'hba="$PGDATA/pg_hba.conf"; '
+                'rule="host postgres postgres samenet scram-sha-256"; '
+                'if [ -f "$hba" ] && ! grep -Fqx "$rule" "$hba"; then '
+                'printf "\\n%s\\n" "$rule" >> "$hba"; fi',
+            ],
+            "env": [{"name": "PGDATA", "value": PROJECT_POSTGRES_DATA}],
+            "volumeMounts": [{"name": "data", "mountPath": PROJECT_POSTGRES_DATA}],
+            "securityContext": {
+                "runAsUser": _POSTGRES_UID,
+                "runAsGroup": _POSTGRES_UID,
+                "allowPrivilegeEscalation": False,
+                "capabilities": {"drop": ["ALL"]},
+            },
+        }
+    )
     objects.append(
         _postgres_statefulset(
             spec, "project-postgres", spec.project_postgres_storage, "app-config", pg_init
