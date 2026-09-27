@@ -34,6 +34,9 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     YANDEX_ID_CLIENT_ID="compose-policy-yandex-id" \
     YANDEX_ID_CLIENT_SECRET="compose-policy-yandex-secret" \
     VK_ID_CLIENT_ID="compose-policy-vk-id" \
+    INTEGRATION_MOYSKLAD_APP_ID="00000000-0000-0000-0000-000000000001" \
+    INTEGRATION_MOYSKLAD_APP_UID="compose-policy-moysklad" \
+    INTEGRATION_MOYSKLAD_SECRET_KEY="compose-policy-moysklad-secret" \
     OAUTH_LOGIN_REDIRECT_BASE_URL="https://compose-policy.example" \
     docker compose --env-file "${blank_env}" -f "${compose_file}" config --format json
 ) >"${rendered}"
@@ -102,16 +105,26 @@ oauth_login = {
 for key, value in oauth_login.items():
     assert api[key] == value, key
     assert generation_worker.get(key, "") == "", key
+assert api["INTEGRATION_MOYSKLAD_APP_UID"] == "compose-policy-moysklad"
+assert api["INTEGRATION_MOYSKLAD_SECRET_KEY"] == "compose-policy-moysklad-secret"
+assert generation_worker.get("INTEGRATION_MOYSKLAD_SECRET_KEY", "") == ""
 for name, service in services.items():
     if name == "api":
         continue
     environment = service.get("environment", {})
-    for key in ("YANDEX_ID_CLIENT_SECRET", "VK_ID_CLIENT_SECRET"):
+    for key in (
+        "YANDEX_ID_CLIENT_SECRET",
+        "VK_ID_CLIENT_SECRET",
+        "INTEGRATION_MOYSKLAD_SECRET_KEY",
+    ):
         assert not environment.get(key), f"{name} carries {key}"
 PY
 grep -qx 'YANDEX_ID_CLIENT_ID=' "${env_example}"
 grep -qx 'YANDEX_ID_CLIENT_SECRET=' "${env_example}"
 grep -qx 'OAUTH_LOGIN_REDIRECT_BASE_URL=' "${env_example}"
+grep -qx 'INTEGRATION_MOYSKLAD_APP_ID=' "${env_example}"
+grep -qx 'INTEGRATION_MOYSKLAD_APP_UID=' "${env_example}"
+grep -qx 'INTEGRATION_MOYSKLAD_SECRET_KEY=' "${env_example}"
 
 grep -qx 'USE_PROJECT_MEMORY=true' "${env_example}"
 grep -qx 'USE_MAX_FINALIZATION_COORDINATOR=false' "${env_example}"
