@@ -411,6 +411,7 @@ async def verify_provider(
                     "https://api.moysklad.ru/api/remap/1.2/context/companysettings",
                     headers={
                         **headers,
+                        "Accept": "application/json;charset=utf-8",
                         "Authorization": f"Bearer {secret_values['token']}",
                     },
                 )
