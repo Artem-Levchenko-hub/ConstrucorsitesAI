@@ -584,7 +584,7 @@ def test_core_runtime_secret_rejects_broken_symlink(tmp_path: Path) -> None:
     runtime = cell_state_module.CoreRuntimeCredentialStore(tmp_path / "core-runtime")
     workspace_id = uuid4()
     path = runtime.root / f"{workspace_id}.json"
-    path.parent.mkdir(parents=True)
+    path.parent.mkdir(parents=True, mode=0o700)
     try:
         path.symlink_to(tmp_path / "missing")
     except (NotImplementedError, OSError):
