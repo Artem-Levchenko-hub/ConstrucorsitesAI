@@ -313,9 +313,20 @@ p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
 (()=>{
   const id=Math.floor(Math.random()*2147483647);
   const s=document.getElementById('status');
+  let attempts=0;
+  const request=()=>{
+    if(attempts++>=10){
+      s.textContent='МойСклад не ответил. Переоткройте решение.';
+      clearInterval(retry);
+      return;
+    }
+    window.parent.postMessage({name:'UserContextRequest',messageId:id},
+                              'https://online.moysklad.ru');
+  };
   const h=async e=>{
     if(e.origin!=='https://online.moysklad.ru'||e.source!==window.parent)return;
     if(e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
+    clearInterval(retry);
     window.removeEventListener('message',h);
     try{
       const r=await fetch('/api/integrations/moysklad/context',{
@@ -330,13 +341,8 @@ p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
     }catch{s.textContent='Не удалось подтвердить аккаунт. Переоткройте решение.'}
   };
   window.addEventListener('message',h);
-  window.parent.postMessage({name:'UserContextRequest',messageId:id},
-                            'https://online.moysklad.ru');
-  setTimeout(()=>{
-    if(document.getElementById('result').hidden){
-      s.textContent='МойСклад не ответил. Переоткройте решение.';
-    }
-  },12000);
+  const retry=setInterval(request,1000);
+  request();
 })();
 </script></html>""".replace("NONCE", nonce)
     return HTMLResponse(
