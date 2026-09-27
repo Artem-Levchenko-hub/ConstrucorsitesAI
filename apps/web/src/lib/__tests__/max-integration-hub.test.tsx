@@ -194,4 +194,13 @@ describe("Integration Hub implementation handoff", () => {
     await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Проверить ЮKassa"]')!.click());
     expect(boundary.success).toHaveBeenCalledWith("Доступ к сервису подтверждён");
   });
+  it("lets a previously failed connection retry verification without replacing credentials", async () => {
+    await render([{ ...connection, status: "error", binding_status: "error" }]);
+    expect(button("Подключить")).toBeUndefined();
+    const retry = document.querySelector<HTMLButtonElement>('[aria-label="Проверить ЮKassa"]');
+    expect(retry).not.toBeNull();
+    boundary.verify.mockResolvedValue(connection);
+    await act(async () => retry!.click());
+    expect(boundary.verify).toHaveBeenCalledWith("project-1", "yookassa");
+  });
 });

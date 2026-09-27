@@ -554,6 +554,11 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                           <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-tertiary hover:bg-danger/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
                         </>
+                      ) : connection?.status === "error" ? (
+                        <>
+                          <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={verify.isPending} onClick={() => verify.mutate(provider.key)} aria-label={`Проверить ${provider.name}`}>Проверить снова</Button>
+                          <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Переподключить</Button>
+                        </>
                       ) : reusable ? (
                         <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => bind.mutate(provider.key)}>Использовать</Button>
                       ) : provider.available ? (
