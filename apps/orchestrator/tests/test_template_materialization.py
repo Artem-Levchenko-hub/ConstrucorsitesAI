@@ -22,9 +22,12 @@ GOLDEN = json.loads((Path(__file__).parent / "fixtures/shared_public_git_golden.
 README_OVERRIDES = json.loads(
     (Path(__file__).parent / "fixtures/shared_public_readme_overrides.json").read_text()
 )
-# The site builder's three Next templates left and took their README overrides
-# with them; the MAX template ships the file the golden hash already pins.
-assert README_OVERRIDES == {}
+# The frozen Git tree remains the baseline; deliberate MAX integration changes
+# are pinned as explicit overrides instead of rewriting historical hashes.
+assert set(README_OVERRIDES) == {
+    "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts",
+    "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
+}
 
 
 def assert_golden(name: str, root: Path) -> None:
