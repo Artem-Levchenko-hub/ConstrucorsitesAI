@@ -26,6 +26,37 @@ export function connectAppIntegration(
   });
 }
 
+export function claimMoyskladIntegration(
+  projectId: Uuid,
+  code: string,
+): Promise<{ status: "connected" | "vendor_sync_pending" }> {
+  return apiFetch(`${path(projectId)}/moysklad/claim`, {
+    method: "POST",
+    json: { code },
+    timeoutMs: 20_000,
+  });
+}
+
+export type MoyskladOption = { id: string; name: string };
+
+export function getMoyskladOptions(projectId: Uuid): Promise<{
+  organizations: MoyskladOption[];
+  stores: MoyskladOption[];
+}> {
+  return apiFetch(`${path(projectId)}/moysklad/options`);
+}
+
+export function saveMoyskladSettings(
+  projectId: Uuid,
+  organizationId: string,
+  storeId: string,
+): Promise<{ status: "saved" }> {
+  return apiFetch(`${path(projectId)}/moysklad/settings`, {
+    method: "PUT",
+    json: { organization_id: organizationId, store_id: storeId },
+  });
+}
+
 export function verifyAppIntegration(
   projectId: Uuid,
   provider: string,

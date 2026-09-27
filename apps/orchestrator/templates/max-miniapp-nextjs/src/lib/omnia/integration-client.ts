@@ -21,7 +21,7 @@ export class YleumIntegrationError extends Error {
 }
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "orders" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -55,7 +55,7 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-async function invokeWrite<T>(path: "leads" | "payments", input: Record<string, unknown>): Promise<T> {
+async function invokeWrite<T>(path: "leads" | "payments" | "orders", input: Record<string, unknown>): Promise<T> {
   if (input.idempotency_key) return invoke<T>(path, input);
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
     JSON.stringify(canonical(input)),
@@ -135,10 +135,20 @@ export function getYleumCatalog(): Promise<{
     price: number | null;
     currency: string;
     available: boolean | null;
+    available_quantity: number | null;
     image_url: string | null;
   }>;
 }> {
   return invoke("catalog");
+}
+
+export function createYleumOrder(input: {
+  idempotency_key?: string;
+  buyer_name: string;
+  phone?: string;
+  lines: Array<{ product_id: string; quantity: number }>;
+}): Promise<{ provider: "moysklad"; id: string }> {
+  return invokeWrite("orders", input);
 }
 
 export async function createMaxAction(
@@ -236,5 +246,6 @@ export const createOmniaPayment = createYleumPayment;
 export const getOmniaPayment = getYleumPayment;
 export const createOmniaLead = createYleumLead;
 export const getOmniaCatalog = getYleumCatalog;
+export const createOmniaOrder = createYleumOrder;
 export const requestOmniaAI = requestYleumAI;
 export const trackOmniaGoal = trackYleumGoal;

@@ -15,7 +15,7 @@ from uuid import UUID
 import httpx
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Header, Request, status
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.crypto import decrypt_strong
@@ -35,6 +35,8 @@ from yleum_api.schemas.integration_runtime import (
     RuntimeIntegrationStatus,
     RuntimeLeadPublic,
     RuntimeLeadRequest,
+    RuntimeOrderPublic,
+    RuntimeOrderRequest,
     RuntimePaymentPublic,
     RuntimePaymentRequest,
     RuntimePaymentStatusRequest,
@@ -103,9 +105,7 @@ async def _runtime_context(
     session: SessionDep, project_id: UUID, init_data: str, request: Request
 ) -> RuntimeContext:
     max_integration = (
-        await session.execute(
-            select(MaxIntegration).where(MaxIntegration.project_id == project_id)
-        )
+        await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
     ).scalar_one_or_none()
     if max_integration is None:
         raise ApiError(
@@ -120,8 +120,12 @@ async def _runtime_context(
             if request.url.query:
                 raise ValueError("unsigned integration query")
             max_user_id = verify_integration_assertion(
-                assertion, token, project_id=project_id,
-                method=request.method, path=request.url.path, body=await request.body(),
+                assertion,
+                token,
+                project_id=project_id,
+                method=request.method,
+                path=request.url.path,
+                body=await request.body(),
             )
         else:
             max_user_id = _validate_init_data(init_data, token)
@@ -134,9 +138,7 @@ async def _runtime_context(
     return RuntimeContext(project_id=project_id, max_user_id=max_user_id)
 
 
-async def _connections(
-    session: SessionDep, project_id: UUID
-) -> dict[str, AccountIntegration]:
+async def _connections(session: SessionDep, project_id: UUID) -> dict[str, AccountIntegration]:
     rows = (
         await session.execute(
             select(AccountIntegration)
@@ -155,9 +157,7 @@ async def _connections(
     return {row.provider: row for row in rows}
 
 
-async def _secrets(
-    session: SessionDep, connection: AccountIntegration
-) -> dict[str, str]:
+async def _secrets(session: SessionDep, connection: AccountIntegration) -> dict[str, str]:
     from yleum_api.services.integration_credentials import load_credentials
 
     return await load_credentials(session, connection)
@@ -230,9 +230,7 @@ async def _enforce_runtime_ai_limits(project_id: UUID, max_user_id: int) -> None
         keys = [key for key, _limit, _ttl in buckets]
         args = [str(value) for _key, limit, ttl in buckets for value in (limit, ttl)]
         eval_command = cast(Any, redis.eval)
-        exceeded_bucket = int(
-            await eval_command(_RUNTIME_AI_LIMIT_SCRIPT, len(keys), *keys, *args)
-        )
+        exceeded_bucket = int(await eval_command(_RUNTIME_AI_LIMIT_SCRIPT, len(keys), *keys, *args))
         if exceeded_bucket:
             raise ApiError(
                 "rate_limited",
@@ -405,8 +403,7 @@ async def create_runtime_payment(
         # YooKassa scopes keys to the merchant; reconnecting must not create a new payment.
         "Idempotence-Key": hashlib.sha256(
             (
-                f"omnia:payment:v1:{project_id}:"
-                f"{context.max_user_id}:{payload.idempotency_key}"
+                f"omnia:payment:v1:{project_id}:{context.max_user_id}:{payload.idempotency_key}"
             ).encode()
         ).hexdigest(),
         "User-Agent": "Omnia-MAX-Runtime/1.0",
@@ -442,9 +439,7 @@ async def create_runtime_payment(
             request_kwargs: dict[str, Any] = {"headers": headers, "json": body}
             if auth is not None:
                 request_kwargs["auth"] = auth
-            response = await client.post(
-                "https://api.yookassa.ru/v3/payments", **request_kwargs
-            )
+            response = await client.post("https://api.yookassa.ru/v3/payments", **request_kwargs)
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise ApiError(
             "integration_provider_unavailable",
@@ -544,16 +539,24 @@ async def create_runtime_lead(
         # provide a stable operation key. No platform retry occurs on this path.
         return await _send_runtime_lead(connection, credentials, context, payload)
     result = await execute_once(
-        session, project_id=project_id, integration_id=connection.id, provider=connection.provider,
-        max_user_id=context.max_user_id, kind="lead", client_key=payload.idempotency_key,
-        payload=payload.model_dump(exclude={"idempotency_key"}), send=send,
+        session,
+        project_id=project_id,
+        integration_id=connection.id,
+        provider=connection.provider,
+        max_user_id=context.max_user_id,
+        kind="lead",
+        client_key=payload.idempotency_key,
+        payload=payload.model_dump(exclude={"idempotency_key"}),
+        send=send,
     )
     return RuntimeLeadPublic.model_validate(result)
 
 
 async def _send_runtime_lead(
-    connection: AccountIntegration, credentials: dict[str, str],
-    context: RuntimeContext, payload: RuntimeLeadRequest,
+    connection: AccountIntegration,
+    credentials: dict[str, str],
+    context: RuntimeContext,
+    payload: RuntimeLeadRequest,
 ) -> RuntimeLeadPublic:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -571,15 +574,12 @@ async def _send_runtime_lead(
                 if payload.email:
                     fields["EMAIL"] = [{"VALUE": payload.email, "VALUE_TYPE": "WORK"}]
                 if credentials.get("webhook_url"):
-                    url = (
-                        credentials["webhook_url"].rstrip("/")
-                        + "/crm.lead.add.json"
-                    )
+                    url = credentials["webhook_url"].rstrip("/") + "/crm.lead.add.json"
                     response = await client.post(url, json={"fields": fields})
                 else:
-                    endpoint = str(
-                        connection.public_config.get("client_endpoint") or ""
-                    ).rstrip("/")
+                    endpoint = str(connection.public_config.get("client_endpoint") or "").rstrip(
+                        "/"
+                    )
                     response = await client.post(
                         f"{endpoint}/crm.lead.add.json",
                         json={
@@ -652,6 +652,92 @@ async def _send_runtime_lead(
         ) from exc
 
 
+@router.post("/{project_id}/orders", response_model=RuntimeOrderPublic)
+async def create_runtime_order(
+    project_id: UUID,
+    payload: RuntimeOrderRequest,
+    session: SessionDep,
+    request: Request,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
+) -> RuntimeOrderPublic:
+    context = await _runtime_context(session, project_id, x_max_init_data, request)
+    connection = (await _connections(session, project_id)).get("moysklad")
+    if connection is None:
+        raise ApiError(
+            "integration_not_found",
+            "Подключите МойСклад к этому приложению",
+            status.HTTP_409_CONFLICT,
+        )
+    credentials = await _secrets(session, connection)
+    token = credentials.get("token")
+    if not token:
+        raise ApiError(
+            "integration_configuration_invalid",
+            "Переподключите МойСклад",
+            status.HTTP_409_CONFLICT,
+        )
+    from yleum_api.services.integration_moysklad_orders import (
+        PreparedOrder,
+        prepare_customer_order,
+        submit_customer_order,
+    )
+    from yleum_api.services.integration_operations import execute_once
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=20,
+            headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+        ) as client:
+            prepared: PreparedOrder | None = None
+
+            async def preflight() -> None:
+                nonlocal prepared
+                prepared = await prepare_customer_order(
+                    client,
+                    project_id=project_id,
+                    max_user_id=context.max_user_id,
+                    client_key=payload.idempotency_key,
+                    buyer_name=payload.buyer_name,
+                    phone=payload.phone,
+                    lines=[(line.product_id, line.quantity) for line in payload.lines],
+                    organization_id=connection.public_config.get("organization_id"),
+                    store_id=connection.public_config.get("store_id"),
+                )
+
+            async def send() -> dict[str, str]:
+                assert prepared is not None
+                buyer_lock = int.from_bytes(
+                    hashlib.sha256(
+                        f"moysklad:{project_id}:{context.max_user_id}".encode()
+                    ).digest()[:8],
+                    signed=True,
+                )
+                await session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": buyer_lock}
+                )
+                return await submit_customer_order(client, prepared)
+
+            result = await execute_once(
+                session,
+                project_id=project_id,
+                integration_id=connection.id,
+                provider="moysklad",
+                max_user_id=context.max_user_id,
+                kind="customer_order",
+                client_key=payload.idempotency_key,
+                payload=payload.model_dump(mode="json"),
+                send=send,
+                prepare=preflight,
+            )
+    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+        raise ApiError(
+            "integration_provider_unavailable",
+            "МойСклад временно недоступен",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        ) from exc
+    return RuntimeOrderPublic.model_validate(result)
+
+
 @router.get("/{project_id}/catalog", response_model=RuntimeCatalogPublic)
 async def get_runtime_catalog(
     project_id: UUID,
@@ -684,9 +770,42 @@ async def get_runtime_catalog(
                 )
                 if response.status_code >= 300:
                     raise _provider_failure("МойСклад", response)
-                from yleum_api.services.integration_catalog import moysklad_items
+                from yleum_api.services.integration_catalog import (
+                    moysklad_items,
+                    moysklad_quantities,
+                )
 
-                items = moysklad_items(response_object(response))
+                catalog = response_object(response)
+                rows = catalog.get("rows")
+                if not isinstance(rows, list):
+                    raise invalid_response()
+                identifiers = []
+                for row in rows:
+                    if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+                        raise invalid_response()
+                    identifiers.append(str(UUID(row["id"])))
+                quantities: dict[str, float] = {}
+                stock_store_id = connection.public_config.get("store_id")
+                for offset in range(0, len(identifiers), 50):
+                    stock_filter = "assortmentId=" + ",".join(identifiers[offset : offset + 50])
+                    if stock_store_id:
+                        stock_filter += ";storeId=" + str(stock_store_id)
+                    stock_response = await client.get(
+                        "https://api.moysklad.ru/api/remap/1.2/report/stock/all/current",
+                        params={
+                            "stockType": "freeStock",
+                            "include": "zeroLines",
+                            "filter": stock_filter,
+                        },
+                        headers={"Authorization": f"Bearer {credentials.get('token', '')}"},
+                    )
+                    if stock_response.status_code >= 300:
+                        raise _provider_failure("МойСклад", stock_response)
+                    for identifier, quantity in moysklad_quantities(stock_response.json()).items():
+                        if identifier not in identifiers or identifier in quantities:
+                            raise invalid_response()
+                        quantities[identifier] = quantity
+                items = moysklad_items(catalog, quantities)
                 return RuntimeCatalogPublic(provider="moysklad", items=items)
 
             token_response = await client.post(

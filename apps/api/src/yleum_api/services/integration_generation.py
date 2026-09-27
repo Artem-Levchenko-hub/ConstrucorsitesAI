@@ -23,8 +23,11 @@ _METHODS = {
         "lead/contact, not an arbitrary CRM operation."
     ),
     "moysklad": (
-        "getYleumCatalog(). Reads catalog/prices; do not claim stock "
-        "synchronization or order creation."
+        "getYleumCatalog() reads catalog, prices and current stock; a null "
+        "available_quantity means stock is unknown, not available. "
+        "createYleumOrder({buyer_name, phone?, lines: [{product_id, quantity}], "
+        "idempotency_key?}) submits a customer order. Do not claim fulfillment "
+        "or payment merely from order creation."
     ),
     "iiko": (
         "getYleumCatalog(). Reads menu only; do not claim restaurant order "
@@ -88,7 +91,7 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
                 "not create provider routes or request keys in chat."
             ),
             (
-                "For payment/lead submission keep one idempotency_key per user intent "
+                "For payment/lead/order submission keep one idempotency_key per user intent "
                 "across retries; disable the submit button while pending. An unknown "
                 "operation result requires reconciliation, not a new key."
             ),

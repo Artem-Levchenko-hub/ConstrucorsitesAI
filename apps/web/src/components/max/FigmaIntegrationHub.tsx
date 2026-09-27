@@ -41,9 +41,12 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   applyIntegrationPack,
   bindAppIntegration,
+  claimMoyskladIntegration,
   connectAppIntegration,
   disconnectAppIntegration,
   getIntegrationCatalog,
+  getMoyskladOptions,
+  saveMoyskladSettings,
   startIntegrationOAuth,
   setPlatformAiEnabled,
   verifyAppIntegration,
@@ -122,6 +125,9 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<IntegrationProvider | null>(null);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [moyskladCode, setMoyskladCode] = useState("");
+  const [moyskladOrganization, setMoyskladOrganization] = useState("");
+  const [moyskladStore, setMoyskladStore] = useState("");
   const queryKey = ["app-integrations", projectId];
   const catalog = useQuery({
     queryKey,
@@ -137,6 +143,13 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     () => new Map((catalog.data?.connections ?? []).map((item) => [item.provider, item])),
     [catalog.data?.connections],
   );
+  const moyskladConnection = connections.get("moysklad");
+  const moyskladOptions = useQuery({
+    queryKey: ["moysklad-options", projectId],
+    queryFn: () => getMoyskladOptions(projectId),
+    enabled: selected?.key === "moysklad" && moyskladConnection?.status === "active",
+    retry: false,
+  });
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
     return (catalog.data?.providers ?? []).filter(
@@ -166,6 +179,31 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       toast.success("Доступ к сервису подтверждён");
     },
     onError: (error) => toast.error("Проверка не пройдена", { description: message(error) }),
+  });
+  const claimMoysklad = useMutation({
+    mutationFn: (code: string) => claimMoyskladIntegration(projectId, code),
+    onSuccess: ({ status }) => {
+      void qc.invalidateQueries({ queryKey });
+      void sync();
+      if (status === "connected") {
+        setSelected(null);
+        setMoyskladCode("");
+        toast.success("МойСклад подключён к проекту");
+      } else {
+        toast.warning("Склад подключён в Yleum, подтверждение в МойСклад задержалось", {
+          description: "Повторите этот код позднее. Если он истечёт, откройте решение в МойСклад снова.",
+        });
+      }
+    },
+    onError: (error) => toast.error("Не удалось подключить МойСклад", { description: message(error) }),
+  });
+  const saveMoysklad = useMutation({
+    mutationFn: () => saveMoyskladSettings(projectId, moyskladOrganization, moyskladStore),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey });
+      toast.success("Организация и склад для заказов сохранены");
+    },
+    onError: (error) => toast.error("Не удалось сохранить настройки склада", { description: message(error) }),
   });
   const bind = useMutation({
     mutationFn: (provider: string) => bindAppIntegration(projectId, provider),
@@ -255,7 +293,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       onExit?.();
     },
   });
-  const busy = connect.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
+  const busy = connect.isPending || claimMoysklad.isPending || saveMoysklad.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onBusyChange?.(false); }, [onBusyChange]);
 
@@ -263,6 +301,11 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     if (provider.connection_mode === "platform") return;
     const connection = connections.get(provider.key);
     setSelected(provider);
+    setMoyskladCode("");
+    if (provider.key === "moysklad") {
+      setMoyskladOrganization(String(connection?.public_config.organization_id ?? ""));
+      setMoyskladStore(String(connection?.public_config.store_id ?? ""));
+    }
     setValues(
       Object.fromEntries(
         provider.fields.map((field) => [field.key, field.secret ? "" : connection?.public_config[field.key] ?? ""]),
@@ -341,6 +384,36 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
         </div>
       </header>
       <div className="min-h-0 flex-1 space-y-5 overflow-y-auto overscroll-contain p-5 sm:p-6">
+        {selected.key === "moysklad" && (
+          <div className="space-y-3 rounded-[10px] border border-accent/30 bg-accent/[.06] p-4">
+            <h3 className="text-sm font-semibold">Подключить свой аккаунт МойСклад</h3>
+            <p className="text-xs leading-5 text-fg-secondary">Администратор склада устанавливает решение Yleum в каталоге МойСклад, открывает его и получает одноразовый код. Пароль и токен сюда вводить не нужно.</p>
+            <Label htmlFor="moysklad-pairing-code">Код из решения Yleum в МойСклад</Label>
+            <Input id="moysklad-pairing-code" value={moyskladCode} autoComplete="off" onChange={(event) => setMoyskladCode(event.target.value.trim())} placeholder="Вставьте одноразовый код" className="h-11 border-border-default bg-surface" />
+            <Button disabled={moyskladCode.length < 20 || claimMoysklad.isPending} onClick={() => claimMoysklad.mutate(moyskladCode)} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{claimMoysklad.isPending && <Loader2 className="size-4 animate-spin" />}Подключить склад</Button>
+          </div>
+        )}
+        {selected.key === "moysklad" && moyskladConnection?.status === "active" && (
+          <div className="space-y-3 rounded-[10px] border border-border-default p-4">
+            <h3 className="text-sm font-semibold">Организация и склад для заказов</h3>
+            <p className="text-xs text-fg-secondary">Выберите, от имени какой организации принимать заказы и с какого склада проверять остатки.</p>
+            {moyskladOptions.isPending && <p className="text-sm text-fg-secondary">Загружаем список…</p>}
+            {moyskladOptions.isError && <p role="alert" className="text-sm text-danger-fg">Не удалось получить список. Проверьте подключение МойСклад.</p>}
+            {moyskladOptions.data && <>
+              <Label htmlFor="moysklad-organization">Организация</Label>
+              <select id="moysklad-organization" value={moyskladOrganization} onChange={(event) => setMoyskladOrganization(event.target.value)} className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm">
+                <option value="">Выберите организацию</option>
+                {moyskladOptions.data.organizations.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <Label htmlFor="moysklad-store">Склад</Label>
+              <select id="moysklad-store" value={moyskladStore} onChange={(event) => setMoyskladStore(event.target.value)} className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm">
+                <option value="">Выберите склад</option>
+                {moyskladOptions.data.stores.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <Button disabled={!moyskladOrganization || !moyskladStore || saveMoysklad.isPending} onClick={() => saveMoysklad.mutate()} className="min-h-11">Сохранить для заказов</Button>
+            </>}
+          </div>
+        )}
         {selected.oauth_available && (
           <div className="rounded-[10px] border border-accent/30 bg-accent/[.06] p-4">
             <h3 className="text-sm font-semibold">Рекомендуется: вход через {selected.name}</h3>
@@ -348,6 +421,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
             <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
           </div>
         )}
+        {selected.key === "moysklad" && <p className="text-xs text-fg-tertiary">Если решение недоступно, можно подключить собственный API-токен вручную:</p>}
         {selected.fields.map((field) => (
           <div key={field.key} className="space-y-2">
             <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>

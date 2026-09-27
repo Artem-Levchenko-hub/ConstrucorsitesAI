@@ -20,7 +20,7 @@ export async function POST(request: NextRequest, context: Context) {
   const { path } = await context.params;
   const operation = path.join("/");
   if (
-    !["status", "payments", "payment-status", "leads", "catalog", "ai"].includes(
+    !["status", "payments", "payment-status", "leads", "catalog", "orders", "ai"].includes(
       operation,
     )
   ) {

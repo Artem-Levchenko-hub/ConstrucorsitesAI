@@ -23,6 +23,10 @@ def unknown_operation() -> ApiError:
     )
 
 
+class SafePreDispatchError(ApiError):
+    """The provider failed before the first possible external write."""
+
+
 async def execute_once(
     session: AsyncSession,
     *,
@@ -34,6 +38,7 @@ async def execute_once(
     client_key: str,
     payload: dict[str, Any],
     send: Callable[[], Awaitable[dict[str, Any]]],
+    prepare: Callable[[], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
@@ -45,6 +50,32 @@ async def execute_once(
         kind=kind,
         client_key=client_key,
     )
+
+    async def replay(row: IntegrationOperation) -> dict[str, Any]:
+        if row.request_digest != digest:
+            raise ApiError(
+                "integration_operation_conflict",
+                "Этот ключ отправки уже использован для другой заявки.",
+                409,
+            )
+        if row.status == "succeeded":
+            return dict(row.result)
+        if row.status == "rejected":
+            raise ApiError(
+                "integration_request_rejected",
+                "Сервис отклонил эту заявку. Исправьте данные перед новой отправкой.",
+                422,
+            )
+        raise unknown_operation()
+
+    if prepare is not None:
+        previous = (
+            await session.scalars(select(IntegrationOperation).filter_by(**values))
+        ).one_or_none()
+        if previous is not None:
+            return await replay(previous)
+        # A read-only provider failure here leaves no dispatch receipt to poison retries.
+        await prepare()
     identifier = await session.scalar(
         insert(IntegrationOperation)
         .values(
@@ -62,26 +93,17 @@ async def execute_once(
     await session.commit()
     if identifier is None:
         row = (await session.scalars(select(IntegrationOperation).filter_by(**values))).one()
-        if row.request_digest != digest:
-            raise ApiError(
-                "integration_operation_conflict",
-                "Этот ключ отправки уже использован для другой заявки.",
-                409,
-            )
-        if row.status == "succeeded":
-            return dict(row.result)
-        if row.status == "rejected":
-            raise ApiError(
-                "integration_request_rejected",
-                "Сервис отклонил эту заявку. Исправьте данные перед новой отправкой.",
-                422,
-            )
-        raise unknown_operation()
+        return await replay(row)
     claimed = await session.get(IntegrationOperation, identifier)
     assert claimed is not None
     row = claimed
     try:
         result = await send()
+    except SafePreDispatchError:
+        # No provider write was possible: discard our receipt so the same key can retry.
+        await session.delete(row)
+        await session.commit()
+        raise
     except ApiError as exc:
         row.status = "rejected" if exc.code == "integration_request_rejected" else "unknown"
         row.finished_at = datetime.now(UTC)

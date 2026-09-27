@@ -3,6 +3,7 @@
 import json
 from decimal import Decimal
 from typing import Any
+from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
@@ -60,12 +61,30 @@ class RuntimeCatalogItem(BaseModel):
     price: float | None = None
     currency: str = "RUB"
     available: bool | None = None
+    available_quantity: float | None = None
     image_url: str | None = None
 
 
 class RuntimeCatalogPublic(BaseModel):
     provider: str
     items: list[RuntimeCatalogItem]
+
+
+class RuntimeOrderLine(BaseModel):
+    product_id: UUID
+    quantity: Decimal = Field(gt=0, le=1_000, decimal_places=3)
+
+
+class RuntimeOrderRequest(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=128)
+    buyer_name: str = Field(min_length=1, max_length=200)
+    phone: str | None = Field(default=None, max_length=64)
+    lines: list[RuntimeOrderLine] = Field(min_length=1, max_length=50)
+
+
+class RuntimeOrderPublic(BaseModel):
+    provider: str
+    id: str
 
 
 class RuntimeAIRequest(BaseModel):

@@ -145,8 +145,8 @@ PROVIDERS: tuple[IntegrationProvider, ...] = (
         key="moysklad",
         name="МойСклад",
         category="inventory",
-        description='Доступно: Товары, Цены.',
-        capabilities=('Товары', 'Цены'),
+        description='Доступно: товары, цены, остатки и заказы покупателей.',
+        capabilities=('Товары', 'Цены', 'Остатки', 'Заказы покупателей'),
         fields=(
             IntegrationField(
                 "token",

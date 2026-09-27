@@ -205,6 +205,10 @@ class Settings(BaseSettings):
     integration_bitrix24_client_secret: SecretStr | None = Field(default=None)
     integration_amocrm_client_id: str | None = Field(default=None)
     integration_amocrm_client_secret: SecretStr | None = Field(default=None)
+    # Issued by the MoySklad developer cabinet for this specific solution.
+    integration_moysklad_app_id: str | None = Field(default=None)
+    integration_moysklad_app_uid: str | None = Field(default=None)
+    integration_moysklad_secret_key: SecretStr | None = Field(default=None)
 
     @property
     def admin_emails_set(self) -> set[str]:

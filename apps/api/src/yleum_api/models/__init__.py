@@ -32,6 +32,7 @@ from yleum_api.models.lead import Lead
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.message import Message
+from yleum_api.models.moysklad import MoyskladInstallation, MoyskladVendorReceipt
 from yleum_api.models.oauth_login import OAuthLoginState, UserIdentity
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
@@ -82,6 +83,8 @@ __all__ = [
     "MaxIntegration",
     "MaxProjectConfig",
     "Message",
+    "MoyskladInstallation",
+    "MoyskladVendorReceipt",
     "OAuthLoginState",
     "Payment",
     "Project",

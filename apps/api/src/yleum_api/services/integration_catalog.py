@@ -2,6 +2,7 @@
 
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import UUID
 
 from yleum_api.schemas.integration_runtime import RuntimeCatalogItem
 from yleum_api.services.integration_responses import invalid_response
@@ -33,20 +34,44 @@ def _id(row: dict[str, Any]) -> str:
     return identifier
 
 
-def moysklad_items(payload: dict[str, Any]) -> list[RuntimeCatalogItem]:
+def moysklad_quantities(payload: Any) -> dict[str, float]:
+    """Normalize physical stock less reservations from the fast stock report."""
+    if not isinstance(payload, list):
+        raise invalid_response()
+    quantities: dict[str, float] = {}
+    for row in payload:
+        if not isinstance(row, dict) or not isinstance(row.get("assortmentId"), str):
+            raise invalid_response()
+        try:
+            identifier = str(UUID(row["assortmentId"]))
+            value = Decimal(str(row["freeStock"]))
+        except (ValueError, KeyError, TypeError, InvalidOperation) as exc:
+            raise invalid_response() from exc
+        if not value.is_finite() or identifier in quantities:
+            raise invalid_response()
+        quantities[identifier] = float(value)
+    return quantities
+
+
+def moysklad_items(
+    payload: dict[str, Any], quantities: dict[str, float] | None = None
+) -> list[RuntimeCatalogItem]:
     items = []
     for row in _rows(payload, "rows"):
         prices = row.get("salePrices", [])
         if not isinstance(prices, list) or any(not isinstance(p, dict) for p in prices):
             raise invalid_response()
+        identifier = _id(row)
+        quantity = quantities.get(identifier) if quantities is not None else None
         items.append(
             RuntimeCatalogItem(
-                id=_id(row),
+                id=identifier,
                 name=str(row.get("name") or "Товар"),
                 description=str(row.get("description") or ""),
                 price=_price(prices[0].get("value") if prices else None, 100),
-                # /entity/product is catalog data, not a stock report.
-                available=None,
+                # A missing row may mean that stock has not yet been calculated.
+                available=quantity > 0 if quantity is not None else None,
+                available_quantity=quantity,
             )
         )
     return items
