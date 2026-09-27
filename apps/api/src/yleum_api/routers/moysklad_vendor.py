@@ -313,22 +313,13 @@ p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
 (()=>{
   const id=Math.floor(Math.random()*2147483647);
   const s=document.getElementById('status');
-  let attempts=0;
-  const request=()=>{
-    if(attempts++>=10){
-      s.textContent='МойСклад не ответил. Переоткройте решение.';
-      clearInterval(retry);
-      return;
-    }
-    window.parent.postMessage({name:'UserContextRequest',messageId:id},
-                              'https://online.moysklad.ru');
-  };
   const h=async e=>{
-    if(e.origin!=='https://online.moysklad.ru'||e.source!==window.parent)return;
+    // Host responses may come from a different MoySklad window; the official
+    // widget SDK correlates by messageId and validates the token on the server.
     if(e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
-    clearInterval(retry);
     window.removeEventListener('message',h);
     try{
+      if(typeof e.data.token!=='string'||!e.data.token)throw Error();
       const r=await fetch('/api/integrations/moysklad/context',{
         method:'POST',headers:{'Content-Type':'application/json'},
         body:JSON.stringify({token:e.data.token}),credentials:'omit'
@@ -337,12 +328,17 @@ p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
       if(!r.ok)throw Error();
       document.getElementById('code').textContent=v.code;
       document.getElementById('result').hidden=false;
-      s.textContent='Аккаунт подтверждён.';
+      s.textContent='Аккаунт «'+v.account_name+'» подтверждён.';
     }catch{s.textContent='Не удалось подтвердить аккаунт. Переоткройте решение.'}
   };
   window.addEventListener('message',h);
-  const retry=setInterval(request,1000);
-  request();
+  window.parent.postMessage({name:'UserContextRequest',messageId:id},
+                            'https://online.moysklad.ru');
+  setTimeout(()=>{
+    if(document.getElementById('result').hidden){
+      s.textContent='МойСклад не ответил. Переоткройте решение.';
+    }
+  },12000);
 })();
 </script></html>""".replace("NONCE", nonce)
     return HTMLResponse(
