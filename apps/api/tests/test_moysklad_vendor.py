@@ -100,6 +100,20 @@ def test_suspend_keeps_owner_for_resume_but_uninstall_forgets_owner() -> None:
     assert installation.token_enc is None
 
 
+def test_install_accepts_provider_resource_url_with_trailing_slash() -> None:
+    payload = {
+        "access": [
+            {
+                "resource": "https://api.moysklad.ru/api/remap/1.2/",
+                "access_token": "warehouse-private-token",
+            }
+        ]
+    }
+    assert moysklad_vendor._access_token(payload) == "warehouse-private-token"
+    payload["access"][0]["resource"] = "https://other.example/api/remap/1.2/"
+    assert moysklad_vendor._access_token(payload) is None
+
+
 def test_warehouse_selection_routes_are_registered(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://test:test@localhost:5432/test")
     monkeypatch.setenv("JWT_SECRET", "test-only-jwt-secret-with-at-least-32-characters")

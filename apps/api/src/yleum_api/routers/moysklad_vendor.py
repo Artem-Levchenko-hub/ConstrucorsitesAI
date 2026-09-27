@@ -110,7 +110,7 @@ def _access_token(body: dict[str, object]) -> str | None:
     entries = body.get("access")
     if isinstance(entries, list):
         for entry in entries:
-            if isinstance(entry, dict) and entry.get("resource") == RESOURCE:
+            if isinstance(entry, dict) and entry.get("resource") in {RESOURCE, f"{RESOURCE}/"}:
                 token = entry.get("access_token")
                 if isinstance(token, str) and 8 <= len(token) <= 4096:
                     return token
