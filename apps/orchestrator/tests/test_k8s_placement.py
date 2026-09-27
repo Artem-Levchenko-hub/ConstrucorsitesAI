@@ -262,6 +262,7 @@ def test_build_spec_takes_the_ingress_tls_mode_from_settings(tmp_path: Path) -> 
             "public_host": "kanareika-c31c55.apps.yleum.ru",
             "app_image": "registry.yleum.ru/max-app/x:1",
             "core_image": "registry.yleum.ru/platform/max-public-core:c",
+            "core_role_protocol": "1",
             "guard_image": "registry.yleum.ru/platform/project-machine-guard:d",
         },
     }
@@ -275,6 +276,7 @@ def test_build_spec_takes_the_ingress_tls_mode_from_settings(tmp_path: Path) -> 
             boundary_secret="s3cret",
             project_postgres_password="pg-app",
             core_postgres_password="pg-core",
+            core_runtime_password="synthetic-runtime-password-for-tests",
         )
 
     assert spec_for("cert-manager").tls_mode == "cert-manager"
@@ -336,6 +338,7 @@ class FakeDocker:
     class _Image:
         def __init__(self, outer: FakeDocker, image_id: str) -> None:
             self.id = image_id
+            self.labels = {"omnia.max-core.protocol": "1", "omnia.max-core.db-role-protocol": "1"}
             self.outer = outer
             self.attrs = {"Config": {"Labels": {"omnia.resource_kind": "environment"}, "Env": None}}
 
@@ -384,6 +387,7 @@ def test_push_release_images_publishes_app_core_and_guard_under_stable_tags(
     assert images == {
         "app_image": f"registry.yleum.ru/max-app/{PROJECT}:11111111-222",
         "core_image": "registry.yleum.ru/platform/max-public-core:" + "c" * 12,
+        "core_role_protocol": "1",
         "guard_image": "registry.yleum.ru/platform/project-machine-guard:" + "d" * 12,
     }
     assert all(
@@ -396,6 +400,7 @@ def test_push_release_images_publishes_app_core_and_guard_under_stable_tags(
 
 class FakeRuntime:
     def __init__(self, *, present: bool = False, schema: str = SCHEMA) -> None:
+        self.api = SimpleNamespace(get=lambda *_: None)
         self.published: list[kp.PublicationSpec] = []
         self.destroyed: list[UUID] = []
         self.retired: list[UUID] = []
@@ -462,7 +467,9 @@ def _request(**overrides: Any) -> CellDeployRequest:
 
 class FakeAdapter:
     def __init__(self, root: Path) -> None:
+        from yleum_orchestrator.services.cell_state import CoreRuntimeCredentialStore
         self.root = root
+        self.core_runtime_credentials = CoreRuntimeCredentialStore(root / "runtime")
 
     def secret(self, workspace_id: UUID) -> str:
         return "boundary-" + str(workspace_id)[:8]
@@ -471,6 +478,7 @@ class FakeAdapter:
 class FakeManager:
     def __init__(self, root: Path) -> None:
         self.machine_runtime = FakeAdapter(root)
+        self.docker = SimpleNamespace(_client_obj=lambda: FakeDocker())
         self.credential_store = SimpleNamespace(
             load_or_create=lambda _id: SimpleNamespace(postgres_password="core-pw")
         )
@@ -884,3 +892,35 @@ async def test_refresh_reapplies_the_live_release_with_current_configuration(
     assert refreshed.business_config == {"operator": {"legal_name": "ООО Лютик"}}
     assert refreshed.release_id == run_id
     assert all(seed.artifact_url is None for seed in refreshed.seed_volumes)
+
+
+@pytest.mark.parametrize("case", [
+    "missing-sidecar", "missing-secret", "wrong-secret", "invalid-secret",
+])
+async def test_existing_core_secret_drift_fails_before_auth_or_cluster_apply(
+    tmp_path, monkeypatch, case,
+):
+    import base64
+    runtime = FakeRuntime()
+    service = _service(tmp_path, runtime)
+    request = _request()
+    _journal(service, request)
+    release = await _prepared(service, request, tmp_path, str(uuid4()), monkeypatch=monkeypatch)
+    manager = service._manager(request.workspace_id)
+    if case != "missing-sidecar":
+        manager.machine_runtime.core_runtime_credentials.load_or_create(
+            service.production_identity(request))
+    deployment = {"spec": {"template": {"metadata": {"annotations": {
+        "omnia.max-core.db-role-protocol": "1"}}}}}
+    def get(_api, kind, *_args):
+        if kind == "Deployment":
+            return deployment
+        if case == "missing-secret":
+            return None
+        return {"data": {"DATABASE_URL": "!!" if case == "invalid-secret" else
+                         base64.b64encode(b"synthetic-wrong").decode()}}
+    runtime.api.get = get
+    monkeypatch.setattr(service.placement, "auth_secret", lambda *_: pytest.fail("auth changed"))
+    with pytest.raises(CellResourceError, match="credential"):
+        await service._kubernetes_spec(request, release, present=True)
+    assert runtime.published == []

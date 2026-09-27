@@ -54,6 +54,7 @@ def _spec(**overrides: Any) -> kp.PublicationSpec:
         business_config={"operator": {"legal_name": "ООО Ромашка"}},
         project_postgres_password="pg-app",
         core_postgres_password="pg-core",
+        core_runtime_password="synthetic-runtime-password-for-tests",
         seed_volumes=(
             kp.SeedVolume(
                 kp.PROJECT_POSTGRES_DATA,
@@ -169,7 +170,7 @@ def test_core_runs_compiled_command_with_business_config_and_runtime_env() -> No
         "key": "AUTH_SECRET",
     }
     assert env["DATABASE_URL"]["valueFrom"]["secretKeyRef"] == {
-        "name": "core-config",
+        "name": "core-runtime",
         "key": "DATABASE_URL",
     }
     mount = next(m for m in core["volumeMounts"] if m["name"] == "business-config")
@@ -386,9 +387,9 @@ def test_publish_applies_everything_then_waits_data_before_app_before_probing() 
     assert [o["kind"] for o in api.applied][:2] == ["Namespace", "Secret"]
     assert api.waited == [
         ("StatefulSet", "core-postgres"),
-        ("StatefulSet", "project-postgres"),
         ("Deployment", "redis"),
         ("Deployment", "core"),
+        ("StatefulSet", "project-postgres"),
         ("Deployment", "app"),
         ("Deployment", "boundary"),
     ]
@@ -663,9 +664,11 @@ def _pod_specs(objects: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
 
 def test_runtime_class_sandboxes_user_code_but_not_the_databases() -> None:
     sandboxed = _pod_specs(kp.build_objects(_spec(runtime_class="gvisor")))
-    assert {
-        name for name, pod in sandboxed.items() if pod.get("runtimeClassName") == "gvisor"
-    } == {"Deployment/app", "Deployment/boundary", "Deployment/core"}
+    assert {name for name, pod in sandboxed.items() if pod.get("runtimeClassName") == "gvisor"} == {
+        "Deployment/app",
+        "Deployment/boundary",
+        "Deployment/core",
+    }
     assert all(
         "runtimeClassName" not in pod
         for name, pod in sandboxed.items()
@@ -675,3 +678,67 @@ def test_runtime_class_sandboxes_user_code_but_not_the_databases() -> None:
     # clusters without gVisor.
     default_pods = _pod_specs(kp.build_objects(_spec())).values()
     assert all("runtimeClassName" not in pod for pod in default_pods)
+
+
+def test_core_bootstrap_failure_preserves_app_boundary_and_ingress(monkeypatch):
+    api = FakeApi()
+
+    def wait(kind, name, *_args):
+        if name == "core":
+            raise kp.PublicationPlacementError("bootstrap failed")
+
+    monkeypatch.setattr(api, "wait_ready", wait)
+    with pytest.raises(kp.PublicationPlacementError, match="bootstrap"):
+        kp.KubernetesPublishedRuntime(api).publish(_spec())
+    assert not any(
+        o["kind"] != "NetworkPolicy"
+        and o["metadata"]["name"]
+        in {
+            "app",
+            "app-config",
+            "app-manifest",
+            "boundary",
+            "boundary-config",
+            "boundary-server",
+            "public",
+            "project-postgres",
+        }
+        for o in api.applied
+    )
+    workload = _by(api.applied, "Deployment", "core")
+    assert workload["spec"]["strategy"]["rollingUpdate"] == {"maxUnavailable": 0, "maxSurge": 1}
+    pod = workload["spec"]["template"]["spec"]
+    init = pod["initContainers"][0]
+    server = pod["containers"][0]
+    assert init["command"] == ["timeout", "70", "node", "scripts/bootstrap-database.mjs"]
+    assert server["command"] == ["node", "server.js"]
+    assert {x["name"] for x in init["env"]} == {"DATABASE_URL", "CORE_RUNTIME_PASSWORD"}
+    assert not {"CORE_RUNTIME_PASSWORD", "POSTGRES_PASSWORD", "PGPASSWORD"} & {
+        x["name"] for x in server["env"]
+    }
+    assert pod["volumes"][0]["secret"]["items"] == [
+        {"key": "omnia-business-config.json", "path": "omnia-business-config.json"}
+    ]
+
+
+@pytest.mark.parametrize("key", ["DATABASE_URL", "CORE_RUNTIME_PASSWORD", "PGUSER"])
+def test_core_runtime_rejects_reserved_credentials_before_apply(key):
+    api = FakeApi()
+    with pytest.raises(kp.PublicationPlacementError, match="reserved"):
+        kp.KubernetesPublishedRuntime(api).publish(_spec(runtime_env={key: "ignored"}))
+    assert api.applied == []
+
+
+@pytest.mark.parametrize("kind,replicas,expected", [
+    ("Deployment", 2, False), ("Deployment", 1, True), ("StatefulSet", 2, True),
+])
+def test_rollout_gate_cannot_count_old_ready_pod_with_new_unready_pod(kind, replicas, expected):
+    api = object.__new__(kp.KubernetesClusterApi)
+    api.get = lambda *_: {"metadata": {"generation": 2}, "spec": {"replicas": 1},
+        "status": {"observedGeneration": 2, "replicas": replicas,
+                   "readyReplicas": 1, "updatedReplicas": 1}}
+    if expected:
+        api.wait_ready(kind, "core", "isolated", 0)
+    else:
+        with pytest.raises(kp.PublicationPlacementError, match="did not become ready"):
+            api.wait_ready(kind, "core", "isolated", 0)

@@ -691,6 +691,14 @@ def test_verify_restores_every_dump_into_its_own_scratch_server(
     assert _verify(out, verifier) == 0
     assert verifier.matching("exec", "pg_restore"), "custom-format dumps restore with pg_restore"
     assert verifier.matching("exec", "psql", "-f"), "pg_dumpall output restores with psql -f"
+    roles = [call for call in verifier.calls if any(
+        "CREATE ROLE omnia_core_runtime" in argument for argument in call)]
+    assert len(roles) == 1  # only the one running core has a custom-format dump
+    assert "NOLOGIN NOSUPERUSER NOBYPASSRLS" in roles[0][-1]
+    target = roles[0][2]
+    restored = next(call for call in verifier.matching("exec", "pg_restore") if target in call)
+    assert verifier.calls.index(roles[0]) < verifier.calls.index(restored)
+    assert "--no-acl" not in restored and "--no-owner" not in restored
     created = [call[-1] for call in verifier.matching("volume", "create")]
     removed = [call[-1] for call in verifier.matching("volume", "rm")]
     assert created and sorted(created) == sorted(removed)

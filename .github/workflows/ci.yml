@@ -275,6 +275,37 @@ jobs:
           docker pull "$OMNIA_P01_HELPER_IMAGE"
           uv run pytest -q -s tests/test_live_postgres_volume_probe.py
 
+      - name: Verify trusted core database privileges on PostgreSQL 16
+        working-directory: apps/orchestrator
+        env:
+          DATABASE_URL: postgresql://postgres:ci-restoration-only@127.0.0.1:5432/core_role_test
+          CORE_RUNTIME_PASSWORD: ci-only-disposable-core-runtime
+          OMNIA_DISPOSABLE_CORE_TEST: "1"
+        run: |
+          # A separate database prevents grant/default-ACL tests touching the
+          # restoration fixtures. The job-owned PostgreSQL service is disposable.
+          uv run --frozen python - <<'PY'
+          import asyncio, os
+          import asyncpg
+          async def create_database():
+              connection = await asyncpg.connect(os.environ['RESTORATION_TEST_DATABASE_URL'])
+              try:
+                  await connection.execute('CREATE DATABASE core_role_test')
+              finally:
+                  await connection.close()
+          asyncio.run(create_database())
+          PY
+          corepack enable
+          corepack prepare pnpm@9.15.0 --activate
+          test "$(pnpm --version)" = "9.15.0"
+          test_root=$(mktemp -d)
+          cp templates/max-miniapp-nextjs/package.json templates/max-miniapp-nextjs/pnpm-lock.yaml "$test_root/"
+          cp -R templates/max-miniapp-nextjs/drizzle templates/max-miniapp-nextjs/scripts "$test_root/"
+          cp scripts/public-max-core/bootstrap-database.mjs scripts/public-max-core/database-role.test.mjs "$test_root/scripts/"
+          cd "$test_root"
+          pnpm install --frozen-lockfile --prod --ignore-scripts
+          node scripts/database-role.test.mjs
+
   web:
     runs-on: ubuntu-latest
     timeout-minutes: 20

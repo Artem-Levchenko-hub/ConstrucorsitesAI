@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import io
 import tarfile
@@ -472,11 +473,23 @@ class CellCheckpointManager:
             _extract_archive(artifacts["agent-home.tar"]),
         )
         password = await self._postgres_password(workspace_id)
+        if self.machine_runtime is not None:
+            await asyncio.to_thread(
+                self.machine_runtime.bootstrap_core_database,
+                self._require_state(workspace_id), postgres_container_name,
+                role_only=True, maintenance=True,
+            )
         await self.docker.postgres_restore(
             postgres_container_name,
             artifacts["postgres.dump"],
             password,
         )
+        if self.machine_runtime is not None:
+            await asyncio.to_thread(
+                self.machine_runtime.bootstrap_core_database,
+                self._require_state(workspace_id), postgres_container_name,
+                maintenance=True,
+            )
         if await self.docker.postgres_smoke_query(postgres_container_name, password) is False:
             raise CellRestoreFailed("postgres smoke query failed")
         await self.docker.clear_volume(names.redis_volume)

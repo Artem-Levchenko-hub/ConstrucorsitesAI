@@ -378,7 +378,7 @@ def test_gateway_starts_with_a_full_core_and_settles_at_the_steady_quota():
 
     assert module._GATEWAY_BOOST_QUOTA == module._GATEWAY_CPU_PERIOD  # one core
     assert module._GATEWAY_STEADY_QUOTA * 20 == module._GATEWAY_CPU_PERIOD  # 5%
-    source = inspect.getsource(module.MachineAdapter._start_boundary)
+    source = inspect.getsource(module.MachineAdapter._start_boundary_impl)
     created = source.index("cpu_quota=_GATEWAY_BOOST_QUOTA")
     ready = source.index('"/__omnia/identity", expected=401, timeout=30)', created)
     lowered = source.index("cpu_quota=_GATEWAY_STEADY_QUOTA", ready)

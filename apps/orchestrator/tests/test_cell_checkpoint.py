@@ -152,7 +152,8 @@ async def test_portable_checkpoint_payload_is_sealed_and_restored_with_same_revi
     await manager.ensure(spec, _mutation("a", 1))
     payload = b'{"reference":"immutable-environment-A"}'
     runtime = SimpleNamespace(
-        checkpoint_payload=AsyncMock(return_value=payload), restore_payload=AsyncMock()
+        checkpoint_payload=AsyncMock(return_value=payload), restore_payload=AsyncMock(),
+        bootstrap_core_database=lambda *_args, **_kw: None,
     )
     checkpoints.machine_runtime = runtime
     sealed = await checkpoints.create(spec.workspace_id, "portable-A", _mutation("b", 2))
@@ -174,6 +175,7 @@ async def test_explicit_restore_of_failed_quiesce_uses_verified_target_not_faile
     await manager.pause_services(spec.workspace_id, _mutation("c", 3))
     runtime = SimpleNamespace(
         recovery_required=lambda state: True,
+        bootstrap_core_database=lambda *_args, **_kw: None,
         checkpoint_payload=AsyncMock(side_effect=AssertionError("never certify failed quiescence")),
         restore_payload=AsyncMock(),
     )
@@ -724,3 +726,35 @@ async def test_checkpoint_restore_preserves_zero_byte_files(tmp_path: Path) -> N
     assert "extra.txt" not in workspace_files
     assert agent_home_files["blank.txt"] == b""
     assert "other.txt" not in agent_home_files
+
+
+async def test_acl_restore_creates_runtime_role_before_dump_and_reconciles_after(
+    tmp_path, monkeypatch,
+):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.services.cell_checkpoint import _archive_bytes
+
+    manager, checkpoints, docker = _make_fixture(tmp_path)
+    spec = _spec(uuid4())
+    await manager.ensure(spec, _mutation("a", 1))
+    names = _names(manager, spec.workspace_id)
+    events = []
+    def bootstrap(state, postgres_name, **options):
+        assert state.workspace_id == spec.workspace_id and postgres_name == "maintenance-pg"
+        assert options["maintenance"] is True
+        events.append("role" if options.get("role_only") else "grants")
+    async def restore(*_): events.append("restore_acl")
+    async def smoke(*_):
+        events.append("smoke")
+        return True
+    checkpoints.machine_runtime = SimpleNamespace(bootstrap_core_database=bootstrap,
+                                                  restore_payload=AsyncMock())
+    monkeypatch.setattr(docker, "postgres_restore", restore)
+    monkeypatch.setattr(docker, "postgres_smoke_query", smoke)
+    await checkpoints._apply_restore(workspace_id=spec.workspace_id, names=names,
+        postgres_container_name="maintenance-pg", artifacts={
+            "workspace.tar": _archive_bytes({}), "agent-home.tar": _archive_bytes({}),
+            "postgres.dump": b"synthetic", "machine.json": b"{}",
+        })
+    assert events == ["role", "restore_acl", "grants", "smoke"]

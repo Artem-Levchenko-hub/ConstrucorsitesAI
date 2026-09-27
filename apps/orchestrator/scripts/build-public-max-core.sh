@@ -19,4 +19,5 @@ docker build --pull=false --network=none --build-arg "BASE_IMAGE=$base_tag" \
   -t "$output_tag" -f scripts/public-max-core/Dockerfile .
 test "$(docker image inspect "$base_tag" --format '{{.Id}}')" = "$base_id"
 test "$(docker image inspect "$output_tag" --format '{{index .Config.Labels "omnia.max-core.protocol"}}')" = 1
+test "$(docker image inspect "$output_tag" --format '{{index .Config.Labels "omnia.max-core.db-role-protocol"}}')" = 1
 docker image inspect "$output_tag" --format '{{.Id}}'

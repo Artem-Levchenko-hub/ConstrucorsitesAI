@@ -1205,7 +1205,9 @@ printf '%s\n' 'empty'
                 ),
             ]
         if kind == "postgres-maintenance":
-            return ["postgres", "-c", "listen_addresses="]
+            # Network remains `none`; the trusted role-bootstrap container can
+            # join only this exact namespace and authenticate over its loopback.
+            return ["postgres", "-c", "listen_addresses=127.0.0.1"]
         if kind == "draft-runtime":
             return [
                 "sh",

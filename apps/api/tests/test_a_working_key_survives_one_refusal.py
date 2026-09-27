@@ -1,22 +1,8 @@
-"""Ключ, который только что работал, не должен объявляться отклонённым.
+"""Bound auth retries without inferring a cause from earlier success.
 
-26.09.2026, прод, прогон 5fdae5f1 (адаптивный откат). Прогон отработал
-сорок шесть минут, сделал 33 успешных обращения к модели, и через 23 секунды
-после последнего успеха получил от провайдера 401. Платформа объявила ключ
-отклонённым и выбросила всю работу. Накануне то же самое: прогон 0a058f14 —
-64 успешных обращения, отказ через 4 секунды после последнего.
-
-Рядом с отказом стоял комментарий: «повтор тут не поможет, поэтому падаем
-быстро». Для по-настоящему запрещённого ключа это верно (прогон e4799d09: ни
-одного успешного обращения, ключ действительно не работал). Но ключ, который
-секунду назад отвечал 200, отказом себя не опровергает — так ведёт себя
-провайдер, а не ключ.
-
-Поэтому различаем не код ответа, а то, работал ли ключ В ЭТОМ ЗАПУСКЕ:
-— работал → переспрашиваем несколько раз, и текст отказа честно говорит, что
-  дело скорее в провайдере;
-— не работал ни разу → падаем быстро, как и раньше, и отправляем владельца
-  проверять ключ.
+An unexplained refusal after success in the same run permits bounded retries.
+An explicit key block or a first-call auth refusal stops immediately.
+The user receives the provider's sanitized explanation and actionable guidance.
 """
 
 from __future__ import annotations
@@ -83,8 +69,8 @@ async def test_a_key_that_never_worked_still_fails_fast() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_stops_asking_and_says_who_is_to_blame() -> None:
-    """Если провайдер отказывает подряд — сдаёмся, но не обвиняем ключ зря."""
+async def test_repeated_refusal_stops_with_factual_guidance() -> None:
+    """Earlier success does not establish why access is now refused."""
     attempts: list[int] = []
 
     def reply(_request: httpx.Request) -> httpx.Response:
@@ -100,8 +86,9 @@ async def test_the_refusal_stops_asking_and_says_who_is_to_blame() -> None:
 
     message = str(failure.value)
     assert message.startswith("PROVIDER_AUTH_FAILED")
-    assert "дело скорее" in message and "в провайдере" in message
-    assert "проверьте блокировку" not in message, "владельца зря послали проверять ключ"
+    assert "ключ раньше работал" in message
+    assert "Проверьте статус и разрешения ключа" in message
+    assert "дело скорее" not in message
     # Первый вызов + сам отказ + оговоренные переспросы: молотилки быть не должно.
     assert len(attempts) <= 2 + agent_native._AUTH_RETRIES_AFTER_SUCCESS, len(attempts)
 
@@ -178,3 +165,34 @@ async def test_anything_key_shaped_never_leaves_the_platform() -> None:
     message = str(failure.value)
     assert "abcdef0123456789" not in message, message
     assert "Invalid key" in message, "вместе с ключом вырезали и объяснение"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+@pytest.mark.parametrize("previous_success", [False, True])
+@pytest.mark.asyncio
+async def test_explicit_key_block_stops_without_retry_even_after_success(
+    status: int, previous_success: bool,
+) -> None:
+    attempts: list[int] = []
+    complaint = "Authentication Error, Key is blocked. Update via /key/unblock if admin."
+
+    def reply(_request: httpx.Request) -> httpx.Response:
+        attempts.append(1)
+        if previous_success and len(attempts) == 1:
+            return httpx.Response(200, json=_OK)
+        if status == 401:
+            return httpx.Response(status, json={"error": {"message": complaint}})
+        return httpx.Response(status, text=complaint)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        if previous_success:
+            await agent_native._call_messages(client, _URL, [], "s", run_id="run-blocked")
+        with pytest.raises(RuntimeError) as failure:
+            await agent_native._call_messages(client, _URL, [], "s", run_id="run-blocked")
+
+    message = str(failure.value)
+    assert len(attempts) == 1 + int(previous_success)
+    assert message.startswith("PROVIDER_AUTH_FAILED")
+    assert "Разблокируйте" in message
+    assert "повторите запрос" not in message
+    assert "Key is blocked" in message

@@ -12,6 +12,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field, replace
+from enum import Enum
 from types import TracebackType
 from typing import Any, Protocol
 from urllib.parse import urlsplit
@@ -43,6 +44,50 @@ DatabaseWitnessReader = Callable[
 ]
 
 
+class OwnerReadStage(Enum):
+    HTTP_STATUS = "http_status"
+    JSON_SHAPE = "json_shape"
+    CONTRACT_DIGEST = "contract_digest"
+    ITEM_SHAPE = "item_shape"
+    OWNER_SCOPE = "owner_scope"
+    ENTITY_SCOPE = "entity_scope"
+    ITEM_ID = "item_id"
+    DB_QUERY = "db_query"
+    DB_TIMEOUT = "db_timeout"
+    DB_MISSING = "db_missing"
+    DB_MISMATCH = "db_mismatch"
+    TRANSPORT = "transport"
+    TIMEOUT = "timeout"
+    DEADLINE = "deadline"
+    RESPONSE_SIZE = "response_size"
+    UNKNOWN = "unknown"
+
+
+class OwnerReadFailure(CellResourceError):
+    """Only trusted branch identifiers and an observed HTTP status may leave the probe."""
+
+    def __init__(self, stage: OwnerReadStage, *, status: int | None = None) -> None:
+        if not isinstance(stage, OwnerReadStage) or (
+            stage is OwnerReadStage.HTTP_STATUS
+            and (type(status) is not int or not 100 <= status <= 599)
+        ) or (stage is not OwnerReadStage.HTTP_STATUS and status is not None):
+            raise ValueError("invalid owner read diagnostic")
+        self.stage = stage
+        self.status = status
+        super().__init__(self.reason_detail)
+
+    @property
+    def reason_detail(self) -> str:
+        suffix = f"_{self.status}" if self.status is not None else ""
+        return f"owner_read_{self.stage.value}{suffix}"
+
+
+class _HealthResponseFailure(CellResourceError):
+    def __init__(self, stage: OwnerReadStage, message: str) -> None:
+        self.stage = stage
+        super().__init__(message)
+
+
 class ProbeRehearsalFailure(CellResourceError):
     """Репетиция проверки упала на конкретной ноге, и нога названа.
 
@@ -52,9 +97,16 @@ class ProbeRehearsalFailure(CellResourceError):
     шесть разных бед.
     """
 
-    def __init__(self, message: str, *, leg: str) -> None:
+    def __init__(
+        self, message: str, *, leg: str, owner_read_failure: OwnerReadFailure | None = None
+    ) -> None:
         super().__init__(message)
         self.leg = leg
+        self.owner_read_failure = (
+            owner_read_failure
+            if leg == "signed_owner_read" and isinstance(owner_read_failure, OwnerReadFailure)
+            else None
+        )
 
 
 # Нога репетиции → код причины для отчёта. Список закрытый: в отказ попадает
@@ -160,7 +212,9 @@ class _BoundedHttpClient:
     ) -> httpx.Response:
         remaining = self._deadline - asyncio.get_running_loop().time()
         if remaining <= 0:
-            raise CellResourceError("activation health probe deadline exceeded")
+            raise _HealthResponseFailure(
+                OwnerReadStage.DEADLINE, "activation health probe deadline exceeded"
+            )
         try:
             async with asyncio.timeout(remaining):
                 async with self._client.stream(
@@ -174,7 +228,10 @@ class _BoundedHttpClient:
                     async for chunk in response.aiter_bytes():
                         body.extend(chunk)
                         if len(body) > self._max_bytes:
-                            raise CellResourceError("activation health response is too large")
+                            raise _HealthResponseFailure(
+                                OwnerReadStage.RESPONSE_SIZE,
+                                "activation health response is too large",
+                            )
                     return httpx.Response(
                         response.status_code,
                         headers=response.headers,
@@ -182,7 +239,9 @@ class _BoundedHttpClient:
                         request=response.request,
                     )
         except TimeoutError:
-            raise CellResourceError("activation health probe deadline exceeded") from None
+            raise _HealthResponseFailure(
+                OwnerReadStage.DEADLINE, "activation health probe deadline exceeded"
+            ) from None
 
     async def get(
         self,
@@ -332,7 +391,11 @@ class DockerRestorationAdaptationHealthProber:
                 except CellResourceError as exc:
                     # Имя шага доживает до отчёта; текст остаётся во внутреннем
                     # исключении и наружу по-прежнему не идёт.
-                    raise ProbeRehearsalFailure(str(exc), leg=leg) from exc
+                    raise ProbeRehearsalFailure(
+                        str(exc),
+                        leg=leg,
+                        owner_read_failure=exc if isinstance(exc, OwnerReadFailure) else None,
+                    ) from exc
             return canonical_digest({"binding": binding, "evidence": evidence})
         finally:
             self._context_overrides.pop(activation_id, None)
@@ -384,9 +447,12 @@ class DockerRestorationAdaptationHealthProber:
                         target=target,
                         witness=witness,
                         owner_id=context.owner_id,
+                        owner_read_diagnostics=True,
                     )
                     for item in items:
-                        await self._require_database_item(context, witness, item)
+                        await self._require_database_item(
+                            context, witness, item, owner_read_diagnostics=True
+                        )
                     observed[witness.entity] = len(items)
             return self._evidence(
                 request,
@@ -394,10 +460,16 @@ class DockerRestorationAdaptationHealthProber:
                 "signed_owner_read",
                 {"status": 200, "entity_counts": observed},
             )
-        except CellResourceError:
+        except OwnerReadFailure:
             raise
+        except _HealthResponseFailure as exc:
+            raise OwnerReadFailure(exc.stage) from None
+        except httpx.TimeoutException:
+            raise OwnerReadFailure(OwnerReadStage.TIMEOUT) from None
+        except httpx.TransportError:
+            raise OwnerReadFailure(OwnerReadStage.TRANSPORT) from None
         except Exception:
-            raise CellResourceError("signed owner read probe failed") from None
+            raise OwnerReadFailure(OwnerReadStage.UNKNOWN) from None
 
     async def verify_signed_owner_create_update_delete(
         self,
@@ -1324,9 +1396,20 @@ class DockerRestorationAdaptationHealthProber:
         witness: ActivationBusinessWitness,
         owner_id: str,
         require_complete: bool = False,
+        owner_read_diagnostics: bool = False,
     ) -> list[dict[str, object]]:
+        def refuse(stage: OwnerReadStage, message: str) -> CellResourceError:
+            return OwnerReadFailure(stage) if owner_read_diagnostics else CellResourceError(message)
+
+        if owner_read_diagnostics and response.status_code != 200:
+            raise OwnerReadFailure(OwnerReadStage.HTTP_STATUS, status=response.status_code)
         payload = self._json(response, target)
         items = payload.get("items")
+        if owner_read_diagnostics:
+            if payload.get("probeContractDigest") != target.business_probe.contract_digest:
+                raise OwnerReadFailure(OwnerReadStage.CONTRACT_DIGEST)
+            if not isinstance(items, list):
+                raise OwnerReadFailure(OwnerReadStage.ITEM_SHAPE)
         if (
             response.status_code != 200
             or payload.get("probeContractDigest")
@@ -1337,13 +1420,18 @@ class DockerRestorationAdaptationHealthProber:
             raise CellResourceError("signed owner business list is unavailable")
         result: list[dict[str, object]] = []
         for item in items:
-            if (
-                not isinstance(item, dict)
-                or item.get("ownerId") != owner_id
-                or item.get("entity") != witness.entity
-            ):
-                raise CellResourceError("signed owner business scope changed")
-            self._item_id(item)
+            if not isinstance(item, dict):
+                raise refuse(OwnerReadStage.ITEM_SHAPE, "signed owner business scope changed")
+            if item.get("ownerId") != owner_id:
+                raise refuse(OwnerReadStage.OWNER_SCOPE, "signed owner business scope changed")
+            if item.get("entity") != witness.entity:
+                raise refuse(OwnerReadStage.ENTITY_SCOPE, "signed owner business scope changed")
+            try:
+                self._item_id(item)
+            except CellResourceError:
+                if owner_read_diagnostics:
+                    raise OwnerReadFailure(OwnerReadStage.ITEM_ID) from None
+                raise
             result.append(item)
         return result
 
@@ -1399,15 +1487,30 @@ class DockerRestorationAdaptationHealthProber:
         item: Mapping[str, object],
         *,
         present: bool = True,
+        owner_read_diagnostics: bool = False,
     ) -> None:
         item_id = self._item_id(dict(item))
-        observed = await self._database_reader(context.backend, witness, item_id)
+        try:
+            observed = await self._database_reader(context.backend, witness, item_id)
+        except TimeoutError:
+            if owner_read_diagnostics:
+                raise OwnerReadFailure(OwnerReadStage.DB_TIMEOUT) from None
+            raise
+        except Exception:
+            if owner_read_diagnostics:
+                raise OwnerReadFailure(OwnerReadStage.DB_QUERY) from None
+            raise
         if not present:
             if observed is not None:
                 raise CellResourceError("activation business row delete was not persistent")
             return
         marker = item.get("marker")
         phase = item.get("phase")
+        if owner_read_diagnostics:
+            if not isinstance(marker, str) or not isinstance(phase, str):
+                raise OwnerReadFailure(OwnerReadStage.ITEM_SHAPE)
+            if observed is None:
+                raise OwnerReadFailure(OwnerReadStage.DB_MISSING)
         if (
             not isinstance(marker, str)
             or not isinstance(phase, str)
@@ -1418,6 +1521,8 @@ class DockerRestorationAdaptationHealthProber:
                 "value": f"{marker}:{phase}",
             }
         ):
+            if owner_read_diagnostics:
+                raise OwnerReadFailure(OwnerReadStage.DB_MISMATCH)
             raise CellResourceError("target business response has no live database witness")
 
     @staticmethod
@@ -1486,13 +1591,19 @@ WHERE target.{id_column}::text = bound.id;
         response: httpx.Response, target: ActivationHealthTarget
     ) -> dict[str, Any]:
         if len(response.content) > target.business_probe.max_payload_bytes:
-            raise CellResourceError("activation health response is too large")
+            raise _HealthResponseFailure(
+                OwnerReadStage.RESPONSE_SIZE, "activation health response is too large"
+            )
         try:
             value = response.json()
         except (json.JSONDecodeError, UnicodeDecodeError):
-            raise CellResourceError("activation health response is invalid") from None
+            raise _HealthResponseFailure(
+                OwnerReadStage.JSON_SHAPE, "activation health response is invalid"
+            ) from None
         if not isinstance(value, dict):
-            raise CellResourceError("activation health response is invalid")
+            raise _HealthResponseFailure(
+                OwnerReadStage.JSON_SHAPE, "activation health response is invalid"
+            )
         return value
 
     @staticmethod

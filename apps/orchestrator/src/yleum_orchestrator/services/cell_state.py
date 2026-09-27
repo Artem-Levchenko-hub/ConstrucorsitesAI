@@ -7,6 +7,7 @@ import os
 import secrets
 import stat
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
@@ -925,6 +926,54 @@ class CellStateStore:
         if state is None:
             raise RuntimeError(f"workspace state missing: {workspace_id}")
         return state
+
+
+@dataclass(frozen=True)
+class CoreRuntimeCredentials:
+    runtime_password: str
+
+
+class CoreRuntimeCredentialStore:
+    """Independent login secret; never rotates the PostgreSQL/admin credential."""
+
+    def __init__(self, root: str | Path) -> None:
+        self.root = Path(root)
+
+    def load_or_create(self, workspace_id: UUID) -> CoreRuntimeCredentials:
+        _ensure_secure_dir(self.root, create=True)
+        path = self.root / f"{workspace_id}.json"
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        _require_regular_file_path(path, missing_ok=True)
+        try:
+            fd = os.open(path, flags, _FILE_MODE)
+        except FileExistsError:
+            # A concurrent creator owns the file until fsync. Retry only its
+            # incomplete JSON, never permission, symlink or identity failures.
+            for attempt in range(201):
+                try:
+                    payload = _read_plain_json_file(path)
+                    break
+                except RuntimeError as exc:
+                    if not isinstance(exc.__cause__, json.JSONDecodeError) or attempt == 200:
+                        raise
+                    time.sleep(0.01)
+            password = payload.get("runtime_password")
+            if not isinstance(password, str) or not password:
+                raise RuntimeError("invalid core runtime credential file") from None
+            return CoreRuntimeCredentials(runtime_password=password)
+        password = secrets.token_urlsafe(32)
+        try:
+            _validate_regular_fd(fd, expected_mode=_FILE_MODE)
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump({"runtime_password": password}, handle, separators=(",", ":"))
+                handle.flush()
+                os.fsync(handle.fileno())
+            _fsync_directory(self.root)
+        except Exception:
+            path.unlink(missing_ok=True)
+            raise
+        return CoreRuntimeCredentials(runtime_password=password)
 
 
 class CellCredentialStore:

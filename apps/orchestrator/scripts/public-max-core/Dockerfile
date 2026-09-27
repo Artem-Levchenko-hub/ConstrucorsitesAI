@@ -5,6 +5,7 @@ FROM ${BASE_IMAGE} AS build
 WORKDIR /app
 COPY --chown=node:node templates/max-miniapp-nextjs/src ./src
 COPY --chown=node:node templates/max-miniapp-nextjs/scripts ./scripts
+COPY --chown=node:node scripts/public-max-core/bootstrap-database.mjs ./scripts/bootstrap-database.mjs
 COPY --chown=node:node templates/max-miniapp-nextjs/drizzle ./drizzle
 COPY --chown=node:node templates/max-miniapp-nextjs/next.config.ts ./next.config.ts
 COPY --chown=node:node scripts/public-max-core/prepare.mjs ./prepare-managed-core.mjs
@@ -21,6 +22,7 @@ FROM ${BASE_IMAGE} AS runtime
 WORKDIR /app
 LABEL omnia.max-core.protocol="1"
 LABEL omnia.max-core.preview-protocol="1"
+LABEL omnia.max-core.db-role-protocol="1"
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV HOSTNAME=0.0.0.0
@@ -31,4 +33,4 @@ COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/drizzle ./drizzle
 USER node
 EXPOSE 3000
-CMD ["sh", "-ec", "timeout 45 node scripts/apply-migrations.mjs\nexec node server.js"]
+CMD ["node", "server.js"]

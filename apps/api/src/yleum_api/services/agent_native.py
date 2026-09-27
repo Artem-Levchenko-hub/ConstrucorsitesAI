@@ -73,10 +73,8 @@ _HTTP_TIMEOUT_S = 300.0
 # _CALL_RETRY_WINDOW_S), and a wall-clock ceiling so a provider that accepts the
 # connection and then hangs cannot eat the whole generation deadline on one step.
 _CALL_RETRIES = 7
-# Ключ, который в этом прогоне уже отвечал 200, отказом 401 себя не опровергает:
-# 26.09.2026 прогон 5fdae5f1 получил отказ через 23 секунды после 33-го успешного
-# вызова, 25.09 прогон 0a058f14 — через 4 секунды после 64-го. Оба раза платформа
-# объявляла ключ отклонённым и выбрасывала всю работу. Такой отказ переспрашиваем.
+# Retry an unexplained auth refusal only after success in this run.
+# An explicit key block overrides that history: earlier access can be revoked.
 _AUTH_RETRIES_AFTER_SUCCESS = 2
 _AUTH_RETRY_DELAY_S = 5.0
 _RUNS_WITH_A_LIVE_KEY: set[str] = set()
@@ -849,20 +847,26 @@ async def _call_messages(
             if r.status_code in {401, 403}:
                 proven = bool(run_id) and str(run_id) in _RUNS_WITH_A_LIVE_KEY
                 complaint = _provider_complaint(r)
+                blocked = "key is blocked" in complaint.casefold()
+                if blocked:
+                    guidance = (
+                        "; провайдер сообщил о блокировке ключа. "
+                        "Разблокируйте его у провайдера перед новым запуском."
+                    )
+                elif proven:
+                    guidance = (
+                        "; в этом запуске ключ раньше работал, но сейчас провайдер "
+                        "отказывает в доступе. Проверьте статус и разрешения ключа."
+                    )
+                else:
+                    guidance = "; проверьте блокировку и разрешения ключа."
                 refusal = RuntimeError(
                     "PROVIDER_AUTH_FAILED: провайдер модели отклонил ключ доступа"
-                    + (
-                        "; в этом запуске ключ до отказа работал, так что дело скорее "
-                        "в провайдере, чем в самом ключе — повторите запрос."
-                        if proven
-                        else "; проверьте блокировку и разрешения ключа."
-                    )
+                    + guidance
                     + (f" Ответ провайдера: {complaint}" if complaint else "")
                 )
-                if proven and auth_attempt < _AUTH_RETRIES_AFTER_SUCCESS:
-                    # Этот ключ только что работал, значит «отклонён» — не про него.
-                    # Если общие попытки кончатся раньше, наружу должен уйти именно
-                    # этот текст, а не служебная отметка о повторе.
+                if proven and not blocked and auth_attempt < _AUTH_RETRIES_AFTER_SUCCESS:
+                    # Keep the auth cause if the shared retry budget ends first.
                     auth_attempt += 1
                     last = refusal
                     await asyncio.sleep(_AUTH_RETRY_DELAY_S * auth_attempt)

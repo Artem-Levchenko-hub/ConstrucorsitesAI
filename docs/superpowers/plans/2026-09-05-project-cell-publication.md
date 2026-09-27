@@ -90,10 +90,12 @@ environment files, generated projects and unrelated repository content. The
 build-only overlay changes legal/config reads, not signature/session/API logic.
 
 `CELL_PUBLIC_CORE_IMAGE` must identify a local immutable image carrying
-`omnia.max-core.protocol=1`. `MachineAdapter._start_boundary` checks its presence
-and protocol before any auth rotation or old-core removal. Only the public core
-runs migrations then `node server.js`, with bounded V8 and the SAME Docker CPU/RAM
-quota. Private preview and agent dependency/database access are unchanged. Image
+`omnia.max-core.protocol=1` and `omnia.max-core.db-role-protocol=1`.
+`MachineAdapter._start_boundary` checks the image and existing runtime credential
+before any auth rotation. A separate short-lived admin helper runs migrations;
+the public core runs only `node server.js` with a restricted database role,
+bounded V8 and the same Docker CPU/RAM quota. Owner preview uses the same role
+separation; the coding agent's own database access remains unchanged. Image
 or command changes replace the core once, preserving the signing key, generated
 product and all databases. Authentication can pause during that short replacement.
 
@@ -115,7 +117,15 @@ image ID, set `CELL_PUBLIC_CORE_IMAGE` to its resulting immutable ID in the
 orchestrator environment, then activate the canonical full deployment. Keep the
 previous environment/image for rollback. Never retag the agent's template image.
 
-`scripts/smoke_public_core_startup.py` is the focused regression canary. Use the
+The following describes the historical pre-role canary; it is not acceptance
+evidence for the restricted runtime. Current role/HTTP acceptance uses
+`scripts/public-max-core/database-role.test.mjs`,
+`scripts/public-max-core/database-role-restore.test.mjs` and
+`scripts/public-max-core/core-role-http.test.mjs` with the reviewed disposable
+release launcher. Follow the current credential and rollback rules in
+`docs/operations/project-cell-main-stack.md`.
+
+Historically, `scripts/smoke_public_core_startup.py` was the focused canary, using
 deployed immutable core/PostgreSQL/guard image IDs and a private `--qa-parent`.
 It creates only labelled temporary resources on an internal network, with its
 own tmpfs PostgreSQL and disposable bot secret. It exercises the real adapter,

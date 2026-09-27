@@ -133,11 +133,12 @@ IDs. Do not claim delivery until that loop is complete.
 ### Precompiled owner preview core
 
 Build the trusted image with `scripts/build-public-max-core.sh` from the pinned
-kit. Set `CELL_PREVIEW_CORE_IMAGE` to the resulting immutable image ID in the
-host orchestrator environment. It must advertise both `omnia.max-core.protocol=1`
-and `omnia.max-core.preview-protocol=1`. An empty setting retains the legacy draft
-core for rollout control. The agent's image, application sources and databases
-are not replaced by this setting.
+kit. Set both `CELL_PREVIEW_CORE_IMAGE` and `CELL_PUBLIC_CORE_IMAGE` to its immutable
+image ID in each host orchestrator environment. The image must advertise
+`omnia.max-core.protocol=1`, `omnia.max-core.preview-protocol=1` and
+`omnia.max-core.db-role-protocol=1`, with server-only `node server.js` startup.
+An empty or legacy image pin fails closed; it is no longer a draft fallback.
+These settings do not replace the agent's image, generated sources or databases.
 
 The trusted owner core runs `server.js` with bounded heap and
 `OMNIA_OWNER_PREVIEW=1`. Its bootstrap still requires an unexpired project HMAC.
@@ -153,8 +154,37 @@ issuance remains unchanged.
 
 Verify a real signed owner bootstrap and page load, unsigned/expired rejection,
 public bootstrap rejection, metadata readback and cold/warm timings before rollout.
-Rollback clears `CELL_PREVIEW_CORE_IMAGE`; an already-running compiled core remains
-until the next normal teardown/recreation. Keep the previous pinned image available.
+Keep the previous immutable image and both exact environment entries for rollback.
+Do not clear a pin. A runtime-only rollback requires a role-protocol-compatible
+image; reverting to a pre-role image also requires its matching controller release.
+Reconcile each running core through the locked lifecycle path and verify its
+actual image, database role and authenticated user flow. Merely changing a pin
+does not upgrade an existing container. Preserve all database volumes and secrets.
+
+### Trusted core database credentials
+
+Only the short-lived bootstrap process receives the existing admin database
+credential. It applies trusted migrations and validates grants and row policies;
+the long-lived HTTP server uses `omnia_core_runtime`, without superuser,
+`BYPASSRLS`, database/role creation or role membership. Generated-app PostgreSQL
+credentials and the coding agent's schema-editing capabilities remain separate.
+
+The runtime password is stored under
+`STATE_ROOT/project-machines/core-runtime-credentials/<workspace-id>.json` and is
+included in the state archive. A missing or mismatched credential for an existing
+restricted core fails closed before changing its login or public authentication.
+Do not delete this file to force regeneration; use explicit stopped recovery.
+Docker stages and checks the new core before replacing the gateway. Kubernetes
+uses a separate runtime Secret and an admin init-container; failed core readiness
+prevents the subsequent app/boundary/ingress phase. These checks do not promise
+zero interruption during a gateway replacement or authentication rotation.
+
+Operational checkpoint restore provisions the runtime role before ACL-preserving
+`pg_restore`, then reconciles its password and grants. The nightly scratch verifier
+creates a restricted `NOLOGIN` role for custom core dumps only: this checks the
+backup's ACLs without claiming runtime authentication. Do not remove ACLs from a
+dump to make restore appear successful. Validate actual maintenance transport,
+fresh-cluster restore and HTTP isolation in addition to unit tests.
 
 ### Repeated generation preparation
 

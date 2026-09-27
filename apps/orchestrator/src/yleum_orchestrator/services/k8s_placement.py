@@ -111,10 +111,10 @@ class KubernetesPlacement:
         release_id: str,
     ) -> dict[str, str]:
         """Blocking: make the app, core and guard images pullable by the cluster."""
+        core = self.push_core_image(docker_client)
         ensure_release_image(docker_client, reference.image_id, archive, provenance=provenance)
         registry = self.settings.image_registry.rstrip("/")
         auth = self.registry_auth()
-        core_ref = self.settings.cell_public_core_image
         guard_ref = self.settings.cell_machine_guard_image
         return {
             "app_image": push_image(
@@ -124,13 +124,7 @@ class KubernetesPlacement:
                 release_id[:12],
                 auth=auth,
             ),
-            "core_image": push_image(
-                docker_client,
-                core_ref,
-                f"{registry}/platform/max-public-core",
-                _short(core_ref),
-                auth=auth,
-            ),
+            **core,
             "guard_image": push_image(
                 docker_client,
                 guard_ref,
@@ -138,6 +132,26 @@ class KubernetesPlacement:
                 _short(guard_ref),
                 auth=auth,
             ),
+        }
+
+    def push_core_image(self, docker_client: Any) -> dict[str, str]:
+        """Trusted core is upgraded independently of sealed user code/data."""
+        from yleum_orchestrator.services.docker_machine_backend import _PIN
+
+        reference = self.settings.cell_public_core_image
+        if not _PIN.fullmatch(reference):
+            raise CellResourceError("pinned compiled MAX core image required")
+        image = docker_client.images.get(reference)
+        if (image.labels.get("omnia.max-core.protocol") != "1"
+                or image.labels.get("omnia.max-core.db-role-protocol") != "1"):
+            raise CellResourceError("compiled MAX core lacks runtime role protocol")
+        return {
+            "core_image": push_image(
+                docker_client, image.id,
+                f"{self.settings.image_registry.rstrip('/')}/platform/max-public-core",
+                _short(image.id), auth=self.registry_auth(),
+            ),
+            "core_role_protocol": "1",
         }
 
     # ---------------------------------------------------------- seed plan
@@ -249,10 +263,13 @@ class KubernetesPlacement:
         boundary_secret: str,
         project_postgres_password: str,
         core_postgres_password: str,
+        core_runtime_password: str,
     ) -> PublicationSpec:
         from yleum_orchestrator.services.machine_business_config import boundary_source
 
         placement = release["placement"]
+        if placement.get("core_role_protocol") != "1":
+            raise CellResourceError("trusted core release requires runtime role image upgrade")
         artifacts = urlsplit(self.settings.artifact_base_url)
         if not artifacts.hostname:
             raise CellResourceError("artifact base URL must name the orchestrator host")
@@ -275,6 +292,7 @@ class KubernetesPlacement:
             business_config=dict(request.business_config),
             project_postgres_password=project_postgres_password,
             core_postgres_password=core_postgres_password,
+            core_runtime_password=core_runtime_password,
             seed_volumes=seeds,
             app_cpu_cores=float(self.settings.k8s_app_cpu_cores),
             app_memory_bytes=int(self.settings.k8s_app_memory_bytes),

@@ -44,11 +44,7 @@ FIELD_MANAGER = "omnia-orchestrator"
 PROJECT_POSTGRES_DATA = "/var/lib/postgresql/data"
 BOUNDARY_PORT = 3000
 CORE_PORT = 3000
-_PUBLIC_CORE_COMMAND = (
-    "sh",
-    "-ec",
-    "timeout 45 node scripts/apply-migrations.mjs\nexec node server.js",
-)
+_PUBLIC_CORE_COMMAND = ("node", "server.js")
 # Alpine postgres images run the server as uid 70; the seed init container restores
 # the warm data directory as root and hands it over before postgres starts.
 _POSTGRES_UID = 70
@@ -106,6 +102,7 @@ class PublicationSpec:
     business_config: dict[str, Any]
     project_postgres_password: str
     core_postgres_password: str
+    core_runtime_password: str
     seed_volumes: tuple[SeedVolume, ...] = ()
     app_env: dict[str, str] = field(default_factory=dict)
     app_cpu_cores: float = 0.5
@@ -327,6 +324,22 @@ for p in procs.values():
 
 def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
     """Every Kubernetes object of one published app, in apply order."""
+    if set(spec.runtime_env).intersection(
+        {
+            "DATABASE_URL",
+            "CORE_RUNTIME_PASSWORD",
+            "POSTGRES_PASSWORD",
+            "PGPASSWORD",
+            "PGUSER",
+            "PGHOST",
+            "PGDATABASE",
+            "PGPORT",
+            "PGOPTIONS",
+        }
+    ):
+        raise PublicationPlacementError("reserved core database runtime configuration")
+    if len(spec.core_runtime_password) < 24:
+        raise PublicationPlacementError("core runtime credential required")
     ns = spec.namespace
     manifest = spec.manifest
     order = list(manifest.service_order())
@@ -398,6 +411,18 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                 + quote(spec.core_postgres_password, safe="")
                 + "@core-postgres:5432/postgres",
                 "POSTGRES_PASSWORD": spec.core_postgres_password,
+            },
+        },
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": "core-runtime", "namespace": ns, "labels": _labels(spec, "core")},
+            "type": "Opaque",
+            "stringData": {
+                "CORE_RUNTIME_PASSWORD": spec.core_runtime_password,
+                "DATABASE_URL": "postgresql://omnia_core_runtime:"
+                + quote(spec.core_runtime_password, safe="")
+                + "@core-postgres:5432/postgres",
             },
         },
         {
@@ -512,20 +537,69 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
             "metadata": {"name": "core", "namespace": ns, "labels": _labels(spec, "core")},
             "spec": {
                 "replicas": 1,
-                "strategy": {"type": "Recreate"},
+                "strategy": {
+                    "type": "RollingUpdate",
+                    "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1},
+                },
                 "selector": {"matchLabels": _selector(spec, "core")},
                 "template": {
                     "metadata": {
                         "labels": _labels(spec, "core"),
                         "annotations": {
+                            "omnia.max-core.db-role-protocol": "1",
                             "omnia.config-digest": _digest(
-                                spec.business_config, spec.runtime_env, spec.boundary_secret
-                            )
+                                spec.business_config,
+                                spec.runtime_env,
+                                spec.boundary_secret,
+                                spec.core_runtime_password,
+                            ),
                         },
                     },
                     "spec": {
                         **_sandbox(spec),
                         "securityContext": {"runAsUser": 1000, "runAsGroup": 1000, "fsGroup": 1000},
+                        "initContainers": [
+                            {
+                                "name": "core-database-bootstrap",
+                                "image": spec.core_image,
+                                "command": [
+                                    "timeout",
+                                    "70",
+                                    "node",
+                                    "scripts/bootstrap-database.mjs",
+                                ],
+                                "workingDir": "/app",
+                                "env": [
+                                    {
+                                        "name": "DATABASE_URL",
+                                        "valueFrom": {
+                                            "secretKeyRef": {
+                                                "name": "core-config",
+                                                "key": "DATABASE_URL",
+                                            }
+                                        },
+                                    },
+                                    {
+                                        "name": "CORE_RUNTIME_PASSWORD",
+                                        "valueFrom": {
+                                            "secretKeyRef": {
+                                                "name": "core-runtime",
+                                                "key": "CORE_RUNTIME_PASSWORD",
+                                            }
+                                        },
+                                    },
+                                ],
+                                "resources": {
+                                    "requests": {"cpu": "100m", "memory": "64Mi"},
+                                    "limits": {"cpu": "500m", "memory": "256Mi"},
+                                },
+                                "securityContext": {
+                                    "allowPrivilegeEscalation": False,
+                                    "readOnlyRootFilesystem": True,
+                                    "capabilities": {"drop": ["ALL"]},
+                                },
+                            }
+                        ],
                         "containers": [
                             {
                                 "name": "core",
@@ -547,7 +621,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                         "name": "DATABASE_URL",
                                         "valueFrom": {
                                             "secretKeyRef": {
-                                                "name": "core-config",
+                                                "name": "core-runtime",
                                                 "key": "DATABASE_URL",
                                             }
                                         },
@@ -1174,7 +1248,15 @@ class KubernetesClusterApi:
             generation = int((current.get("metadata") or {}).get("generation") or 0)
             ready = int(status.get("readyReplicas") or 0)
             updated = int(status.get("updatedReplicas") or 0)
-            if observed >= generation and ready >= wanted and updated >= wanted:
+            # With maxSurge=1 an old healthy pod can supply readyReplicas while
+            # the replacement is stuck in its migration init container. Wait
+            # until no old replicas remain before switching app/boundary traffic.
+            rollout_complete = (
+                kind != "Deployment"
+                or int(status.get("replicas") or 0) == updated == wanted
+            )
+            if (observed >= generation and ready >= wanted and updated >= wanted
+                    and rollout_complete):
                 return
             if time.monotonic() >= deadline:
                 raise PublicationPlacementError(
@@ -1361,17 +1443,32 @@ class KubernetesPublishedRuntime:
     def publish(self, spec: PublicationSpec) -> PlacementResult:
         if spec.tls_mode == "wildcard":
             self._require_wildcard_certificate(spec)
-        for obj in build_objects(spec):
-            self.api.apply(obj)
+        objects = build_objects(spec)
+        core_names = {"core-config", "core-runtime", "core-postgres", "redis", "core"}
+
+        def core_phase(obj: dict[str, Any]) -> bool:
+            return (
+                obj["kind"] in {"Namespace", "NetworkPolicy"}
+                or obj["metadata"]["name"] in core_names
+            )
+
+        for obj in objects:
+            if core_phase(obj):
+                self.api.apply(obj)
         ns = spec.namespace
         for kind, name in (
             ("StatefulSet", "core-postgres"),
-            ("StatefulSet", "project-postgres"),
             ("Deployment", "redis"),
+            ("Deployment", "core"),
         ):
             self.api.wait_ready(kind, name, ns, self.ready_timeout)
+        # A failed admin bootstrap/role check leaves the previous app/boundary/
+        # ingress untouched. RollingUpdate keeps its healthy old core available.
+        for obj in objects:
+            if not core_phase(obj):
+                self.api.apply(obj)
         for kind, name in (
-            ("Deployment", "core"),
+            ("StatefulSet", "project-postgres"),
             ("Deployment", "app"),
             ("Deployment", "boundary"),
         ):
@@ -1431,6 +1528,7 @@ class KubernetesPublishedRuntime:
             ("apps/v1", "StatefulSet", "project-postgres"),
             ("v1", "Secret", "boundary-config"),
             ("v1", "Secret", "core-config"),
+            ("v1", "Secret", "core-runtime"),
             ("v1", "ConfigMap", "boundary-server"),
             ("v1", "ConfigMap", "app-manifest"),
         ):

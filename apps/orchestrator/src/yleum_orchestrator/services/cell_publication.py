@@ -7,6 +7,8 @@ Secrets are stored only in controller-private files and excluded from status/his
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import re
@@ -17,6 +19,7 @@ from dataclasses import asdict, fields, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from yleum_orchestrator.core.cell_resources import (
@@ -1497,7 +1500,7 @@ class CellPublicationService:
         self._write(request.project_id, saved)
         return release
 
-    def _kubernetes_spec(
+    async def _kubernetes_spec(
         self, request: CellDeployRequest, release: dict[str, Any], *, present: bool
     ) -> Any:
         placement = self._kubernetes()
@@ -1507,6 +1510,37 @@ class CellPublicationService:
         if adapter is None:
             raise CellResourceError("portable machine provider unavailable")
         production_id = self.production_identity(request)
+        # Platform upgrades do not replace the sealed project image or data.
+        core = await machine_effect(placement.push_core_image, manager.docker._client_obj())
+        release["placement"] = {**release["placement"], **core}
+        store = adapter.core_runtime_credentials
+        existing = await machine_effect(
+            placement.runtime.api.get, "apps/v1", "Deployment", "core",
+            placement.namespace(request.project_id),
+        )
+        annotations = ((existing or {}).get("spec", {}).get("template", {})
+                       .get("metadata", {}).get("annotations", {}))
+        if (annotations.get("omnia.max-core.db-role-protocol") == "1"
+                and not (store.root / f"{production_id}.json").is_file()):
+            raise CellResourceError(
+                "existing core runtime credential missing; explicit recovery required"
+            )
+        runtime_password = store.load_or_create(production_id).runtime_password
+        if annotations.get("omnia.max-core.db-role-protocol") == "1":
+            secret = await machine_effect(
+                placement.runtime.api.get, "v1", "Secret", "core-runtime",
+                placement.namespace(request.project_id),
+            )
+            try:
+                encoded = (secret or {}).get("data", {}).get("DATABASE_URL", "")
+                current_dsn = base64.b64decode(encoded, validate=True).decode("utf-8")
+            except (ValueError, TypeError, binascii.Error):
+                raise CellResourceError("existing core runtime credential invalid") from None
+            expected_dsn = "postgresql://omnia_core_runtime:" + quote(
+                runtime_password, safe=""
+            ) + "@core-postgres:5432/postgres"
+            if current_dsn != expected_dsn:
+                raise CellResourceError("existing core runtime credential mismatch")
         return placement.build_spec(
             request,
             release,
@@ -1518,6 +1552,7 @@ class CellPublicationService:
             core_postgres_password=manager.credential_store.load_or_create(
                 production_id
             ).postgres_password,
+            core_runtime_password=runtime_password,
         )
 
     async def _probe_public(self, url: str, *, timeout_seconds: float) -> None:
@@ -1557,7 +1592,7 @@ class CellPublicationService:
         saved["activation_pending"] = release["release_id"]
         self._write(project_id, saved)
         try:
-            spec = self._kubernetes_spec(request, release, present=False)
+            spec = await self._kubernetes_spec(request, release, present=False)
             trace.stage("start_app")
             await machine_effect(runtime.publish, spec)
             trace.stage("verify_runtime")
@@ -1636,7 +1671,9 @@ class CellPublicationService:
                 self.root / str(request.project_id) / "requests" / f"{old['release_id']}.json"
             ).read_text(encoding="utf-8")
         )
-        await machine_effect(runtime.publish, self._kubernetes_spec(old_request, old, present=True))
+        await machine_effect(
+            runtime.publish, await self._kubernetes_spec(old_request, old, present=True)
+        )
 
     async def _refresh_kubernetes(self, project_id: UUID) -> None:
         saved = self._read(project_id)
@@ -1653,8 +1690,9 @@ class CellPublicationService:
         with machine_budget(240):
             await machine_effect(
                 self._kubernetes().runtime.publish,
-                self._kubernetes_spec(request, release, present=True),
+                await self._kubernetes_spec(request, release, present=True),
             )
+        self._write(project_id, saved)
 
     async def _serving_kubernetes(self, request: CellDeployRequest, active: dict[str, Any]) -> bool:
         adapter = self._kubernetes()
@@ -1708,7 +1746,7 @@ class CellPublicationService:
                     (path.parent / "requests" / f"{release['release_id']}.json").read_text()
                 )
                 await machine_effect(
-                    runtime.publish, self._kubernetes_spec(request, release, present=True)
+                    runtime.publish, await self._kubernetes_spec(request, release, present=True)
                 )
                 await machine_effect(
                     runtime.prune_release_volumes, project_id, release["release_id"]

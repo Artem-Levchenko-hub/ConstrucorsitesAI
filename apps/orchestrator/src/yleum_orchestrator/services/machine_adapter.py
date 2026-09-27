@@ -11,6 +11,7 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
+from urllib.parse import quote
 from uuid import UUID, uuid4, uuid5
 
 import docker  # type: ignore[import-untyped]
@@ -20,10 +21,11 @@ from yleum_orchestrator.core.cell_resources import (
     CellIdentityConflict,
     CellResourceError,
     LifecycleMutation,
+    identity_labels,
 )
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.stack_registry import get_stack
-from yleum_orchestrator.services.cell_state import CellCredentialStore
+from yleum_orchestrator.services.cell_state import CellCredentialStore, CoreRuntimeCredentialStore
 from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from yleum_orchestrator.services.machine_environment import (
@@ -59,11 +61,12 @@ _PROJECT_POSTGRES_TARGET_CPU_CORES = 0.15
 _GATEWAY_CPU_PERIOD = 100_000
 _GATEWAY_BOOST_QUOTA = 100_000
 _GATEWAY_STEADY_QUOTA = 5_000
-_PUBLIC_CORE_COMMAND = (
-    "sh", "-ec",
-    "timeout 45 node scripts/apply-migrations.mjs\n"
-    "exec node server.js",
-)
+_PUBLIC_CORE_COMMAND = ("node", "server.js")
+_CORE_ROLE_PROTOCOL = "omnia.max-core.db-role-protocol"
+_CORE_RESERVED_ENV = frozenset({
+    "DATABASE_URL", "CORE_RUNTIME_PASSWORD", "POSTGRES_PASSWORD", "PGPASSWORD",
+    "PGUSER", "PGHOST", "PGDATABASE", "PGPORT", "PGOPTIONS",
+})
 
 
 class MachineAdapter:
@@ -74,6 +77,83 @@ class MachineAdapter:
     @property
     def root(self) -> Path:
         return Path(self.manager.state_store.root).parent / "project-machines"
+
+    @property
+    def core_runtime_credentials(self) -> CoreRuntimeCredentialStore:
+        return CoreRuntimeCredentialStore(self.root / "core-runtime-credentials")
+
+    def _core_image(self, client: Any, *, public_mode: bool = False) -> str:
+        from yleum_orchestrator.services.docker_machine_backend import _PIN
+
+        reference = getattr(self.settings, "cell_public_core_image" if public_mode
+                            else "cell_preview_core_image", "")
+        if not _PIN.fullmatch(reference):
+            raise CellResourceError("pinned compiled MAX core image is required")
+        image = client.images.get(reference)
+        if (image.labels.get("omnia.max-core.protocol") != "1"
+                or image.labels.get(_CORE_ROLE_PROTOCOL) != "1"
+                or (not public_mode
+                    and image.labels.get("omnia.max-core.preview-protocol") != "1")):
+            raise CellResourceError("compiled MAX core image lacks required runtime protocols")
+        return str(image.id)
+
+    def bootstrap_core_database(
+        self, state: Any, postgres_name: str, *, role_only: bool = False,
+        maintenance: bool = False, public_mode: bool = False,
+    ) -> None:
+        """Short-lived admin process; shares only the exact owned PG network namespace."""
+        client = self.manager.docker._client_obj()
+        image = self._core_image(client, public_mode=public_mode)
+        postgres = client.containers.get(postgres_name)
+        postgres.reload()
+        expected = identity_labels(state, "postgres-maintenance" if maintenance else "postgres")
+        labels = postgres.attrs.get("Config", {}).get("Labels") or {}
+        if (postgres.status != "running"
+                or any(labels.get(key) != value for key, value in expected.items())):
+            raise CellIdentityConflict("trusted core database identity mismatch")
+        credential = self.core_runtime_credentials.load_or_create(state.workspace_id)
+        admin = self.manager.credential_store.load_or_create(state.workspace_id)
+        helper_name = "omnia-core-bootstrap-" + uuid4().hex
+        helper_labels = {**expected, "omnia.resource_kind": "core-database-bootstrap"}
+        helper = None
+        try:
+            helper = client.containers.create(
+                image, ["timeout", "70", "node", "scripts/bootstrap-database.mjs",
+                        *(["--role-only"] if role_only else [])],
+                name=helper_name, labels=helper_labels, detach=True,
+                network_mode="container:" + postgres.id,
+                user="node", working_dir="/app", cap_drop=["ALL"], privileged=False,
+                security_opt=["no-new-privileges:true"], read_only=True,
+                mem_limit=256 * 1024**2, memswap_limit=256 * 1024**2,
+                nano_cpus=500_000_000, pids_limit=64,
+                environment={
+                    "DATABASE_URL": "postgresql://postgres:"
+                    + quote(admin.postgres_password, safe="") + "@127.0.0.1:5432/postgres",
+                    "CORE_RUNTIME_PASSWORD": credential.runtime_password,
+                },
+            )
+            helper.start()
+            if helper.wait(timeout=80).get("StatusCode") != 0:
+                raise CellResourceError("trusted core database bootstrap failed")
+        except Exception:
+            # Docker errors may echo environment/driver messages; never propagate them.
+            raise CellResourceError("trusted core database bootstrap failed") from None
+        finally:
+            if helper is None:
+                try:
+                    helper = client.containers.get(helper_name)
+                except docker.errors.NotFound:
+                    pass
+                except Exception:
+                    raise CellResourceError("trusted core bootstrap cleanup unverified") from None
+            if helper is not None:
+                actual = helper.attrs.get("Config", {}).get("Labels") or {}
+                if any(actual.get(key) != value for key, value in helper_labels.items()):
+                    raise CellIdentityConflict("core bootstrap cleanup identity mismatch")
+                try:
+                    helper.remove(force=True)
+                except Exception:
+                    raise CellResourceError("trusted core bootstrap cleanup failed") from None
 
     def capabilities(self) -> dict[str, object]:
         return {
@@ -728,6 +808,35 @@ class MachineAdapter:
         *, public_mode: bool = False, runtime_env: dict[str, str] | None = None,
         business_config_override: dict[str, Any] | None = None, observer: Any = None,
     ) -> None:
+        transition: dict[str, Any] = {}
+        try:
+            self._start_boundary_impl(
+                state, manifest, backend, epoch, public_mode=public_mode,
+                runtime_env=runtime_env, business_config_override=business_config_override,
+                observer=observer, transition=transition,
+            )
+        except BaseException:
+            # Until gateway replacement begins, the original serving core and
+            # gateway remain usable, even if bootstrap/config/auth checks fail.
+            if not transition.get("switch_started"):
+                candidate = transition.get("candidate")
+                if candidate is not None:
+                    candidate.remove(force=True)
+                if transition.get("renamed_old"):
+                    transition["old"].rename(backend.stem + "-max-core")
+            raise
+        else:
+            retired = backend._lookup(backend.client.containers,
+                                      backend.stem + "-max-core-retired", "managed-max-core")
+            if retired is not None:
+                retired.remove(force=True)
+
+    def _start_boundary_impl(
+        self, state: Any, manifest: MachineManifest, backend: DockerMachineBackend, epoch: int,
+        *, public_mode: bool, runtime_env: dict[str, str] | None,
+        business_config_override: dict[str, Any] | None, observer: Any,
+        transition: dict[str, Any],
+    ) -> None:
         # P13: the publication trace sees each readiness step of the trusted
         # boundary (core, configuration readback, auth probes, gateway) instead
         # of one opaque "verify_runtime"; a None observer changes nothing.
@@ -738,26 +847,37 @@ class MachineAdapter:
         stage("verify_core")
         client = backend.client
         names = state.resource_names
-        image_tag = get_stack("max-miniapp-nextjs").image_tag
-        preview_image = getattr(self.settings, "cell_preview_core_image", "")
-        compiled_core = public_mode or bool(preview_image)
-        if compiled_core:
-            from yleum_orchestrator.services.docker_machine_backend import _PIN
-
-            image_tag = (getattr(self.settings, "cell_public_core_image", "")
-                         if public_mode else preview_image)
-            if not _PIN.fullmatch(image_tag):
-                raise CellResourceError("pinned compiled public MAX core image is required")
-            image = client.images.get(image_tag)
-            if image.labels.get("omnia.max-core.protocol") != "1":
-                raise CellResourceError("compiled public MAX core image protocol mismatch")
-            if not public_mode and image.labels.get("omnia.max-core.preview-protocol") != "1":
-                raise CellResourceError("compiled MAX core image lacks owner preview protocol")
-            image_tag = image.id
-            # Validate image before any auth rotation or old-core removal.
+        if _CORE_RESERVED_ENV.intersection(runtime_env or {}):
+            raise CellResourceError("runtime configuration contains reserved database credentials")
+        image_tag = self._core_image(client, public_mode=public_mode)
+        compiled_core = True
+        core_name = backend.stem + "-max-core"
+        core = backend._lookup(client.containers, core_name, "managed-max-core")
+        store = self.core_runtime_credentials
+        if (core is not None
+                and (core.attrs.get("Config", {}).get("Labels") or {}).get(_CORE_ROLE_PROTOCOL)
+                == "1"
+                and not (store.root / f"{state.workspace_id}.json").is_file()):
+            raise CellResourceError(
+                "existing core runtime credential missing; explicit recovery required"
+            )
+        runtime_credential = store.load_or_create(state.workspace_id)
+        runtime_dsn = "postgresql://omnia_core_runtime:" + quote(
+            runtime_credential.runtime_password, safe=""
+        ) + f"@{names.postgres_container}:5432/postgres"
+        if (core is not None
+                and (core.attrs.get("Config", {}).get("Labels") or {}).get(_CORE_ROLE_PROTOCOL)
+                == "1"):
+            env = dict(item.split("=", 1) for item in core.attrs["Config"].get("Env", [])
+                       if "=" in item)
+            if env.get("DATABASE_URL") != runtime_dsn:
+                raise CellResourceError(
+                    "core runtime credential mismatch; explicit recovery required"
+                )
+        # Public auth rotation may retire the old boundary. Credential validation
+        # must precede it, otherwise a missing sidecar could silently rotate DB login.
         secret = (self._public_auth_secret(state, backend, runtime_env or {})
                   if public_mode else self.secret(state.workspace_id))
-        core_name = backend.stem + "-max-core"
         core = backend._lookup(client.containers, core_name, "managed-max-core")
         public_options = ""
         if compiled_core:
@@ -772,6 +892,9 @@ class MachineAdapter:
                     env.get("NODE_OPTIONS") != public_options
                         or config.get("Cmd") != list(_PUBLIC_CORE_COMMAND)
                         or core.attrs.get("Image") != image_tag
+                        or env.get("DATABASE_URL") != runtime_dsn
+                        or any(key in env for key in _CORE_RESERVED_ENV - {"DATABASE_URL"})
+                        or (config.get("Labels") or {}).get(_CORE_ROLE_PROTOCOL) != "1"
                         # Retire cores created with the removed encrypted-data key mount.
                         or "omnia.max-core.data-key" in (config.get("Labels") or {})))
                     or (not public_mode and (
@@ -782,15 +905,19 @@ class MachineAdapter:
                     ))):
                 # Runtime-only upgrade, including retained legacy preview cores.
                 # Keep auth secret, product and all DB containers/volumes.
-                core.remove(force=True)
+                transition["old"] = core
                 core = None
         if core is None:
-            credentials = self.manager.credential_store.load_or_create(state.workspace_id)
+            self.bootstrap_core_database(state, names.postgres_container, public_mode=public_mode)
+            candidate_name = backend.stem + "-max-core-candidate"
+            stale = backend._lookup(client.containers, candidate_name, "managed-max-core")
+            if stale is not None:
+                stale.remove(force=True)
             core = client.containers.create(
                 image_tag,
                 **({"command": list(_PUBLIC_CORE_COMMAND)} if compiled_core else {}),
-                name=core_name,
-                labels={**backend.labels("managed-max-core"),
+                name=candidate_name,
+                labels={**backend.labels("managed-max-core"), _CORE_ROLE_PROTOCOL: "1",
                         **({"omnia.max-core.protocol": "1"} if compiled_core else {})},
                 detach=True,
                 network=names.internal_network,
@@ -803,10 +930,9 @@ class MachineAdapter:
                     "NODE_ENV": "development",
                     "AUTH_SECRET": secret,
                     "OMNIA_PROJECT_ID": str(state.project_id),
-                    "DATABASE_URL": f"postgresql://postgres:{credentials.postgres_password}"
-                    f"@{names.postgres_container}:5432/postgres",
                     "REDIS_URL": f"redis://{names.redis_container}:6379/0",
                     **(runtime_env or {}),
+                    "DATABASE_URL": runtime_dsn,
                     **({"NODE_OPTIONS": public_options, "NODE_ENV": "production",
                         "HOSTNAME": "0.0.0.0", "PORT": "3000"} if compiled_core else {}),
                     **({"OMNIA_OWNER_PREVIEW": "1"} if not public_mode else {}),
@@ -816,6 +942,7 @@ class MachineAdapter:
                 nano_cpus=int(self._max_core_cpu_cores() * 1_000_000_000),
                 pids_limit=256,
             )
+            transition["candidate"] = core
             # Only the immutable managed core can call its fixed platform API.
             # Generated project code still has the namespace DROP guard.
             backend._network(backend.stem + "-public", internal=False).connect(core)
@@ -867,6 +994,15 @@ class MachineAdapter:
                 attempt_timeout=30,
             )
         stage("gateway")
+        if transition.get("candidate") is not None:
+            retired_name = backend.stem + "-max-core-retired"
+            retired = backend._lookup(client.containers, retired_name, "managed-max-core")
+            if retired is not None:
+                retired.remove(force=True)
+            if transition.get("old") is not None:
+                transition["old"].rename(retired_name)
+                transition["renamed_old"] = True
+            core.rename(core_name)
         gateway_name = backend.stem + "-gateway"
         config = {
             "secret": secret, "project_id": str(state.project_id), "epoch": epoch,
@@ -913,6 +1049,7 @@ class MachineAdapter:
                     write_controller_json(runtime_stamp, {})
                 else:
                     return
+        transition["switch_started"] = True
         if old is not None:
             old.remove(force=True)
         gateway = client.containers.create(

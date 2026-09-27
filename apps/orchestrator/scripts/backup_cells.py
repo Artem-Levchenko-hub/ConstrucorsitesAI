@@ -1319,6 +1319,12 @@ def _verify_entry(backup: CellBackup, backup_dir: Path, entry: Mapping[str, Any]
         return {**base, "status": "failed", "detail": backup.redactor.scrub(str(error))}
 
 
+_SCRATCH_CORE_ROLE_SQL = (
+    "CREATE ROLE omnia_core_runtime NOLOGIN NOSUPERUSER NOBYPASSRLS "
+    "NOCREATEDB NOCREATEROLE NOREPLICATION NOINHERIT"
+)
+
+
 def _restore_entry(
     backup: CellBackup,
     path: Path,
@@ -1340,8 +1346,19 @@ def _restore_entry(
         server = backup.start_scratch_server(pool, scratch_volume)
         if isinstance(server, DumpOutcome):
             return {"status": "failed", "detail": server.detail}
+        dump_format = _dump_format(path, entry)
+        if kind == "core" and dump_format == "custom":
+            # pg_dump preserves ACL references but not cluster roles. This is
+            # only a fresh isolated verifier, not a login/bootstrap assertion.
+            role = backup.runner.run(
+                ["exec", server, "psql", "-X", "-v", "ON_ERROR_STOP=1",
+                 *backup.scratch_connection(), "-c", _SCRATCH_CORE_ROLE_SQL],
+                timeout=_QUERY_TIMEOUT,
+            )
+            if not role.ok:
+                return {"status": "failed", "detail": "scratch core ACL role creation failed"}
         restored = backup.runner.run(
-            ["exec", "--interactive", server, *_restore_command(_dump_format(path, entry))],
+            ["exec", "--interactive", server, *_restore_command(dump_format)],
             timeout=_DUMP_TIMEOUT,
             stdin_path=path,
         )

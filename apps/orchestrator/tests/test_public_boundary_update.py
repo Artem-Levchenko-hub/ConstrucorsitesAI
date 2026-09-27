@@ -27,13 +27,18 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     )
     state = SimpleNamespace(
         workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(),
-        resource_names=SimpleNamespace(internal_network="isolated-public-test"),
+        resource_names=SimpleNamespace(internal_network="isolated-public-test",
+                                       postgres_container="qa-pg"),
     )
     network = {"isolated-public-test": {"IPAddress": "127.0.0.1"}}
+    password = adapter.core_runtime_credentials.load_or_create(state.workspace_id).runtime_password
     core = SimpleNamespace(
         status="running", reload=lambda: None,
         attrs={"NetworkSettings": {"Networks": network}, "Image": image_id,
-               "Config": {"Env": ["NODE_OPTIONS=--max-old-space-size=384",
+               "Config": {"Labels": {"omnia.max-core.db-role-protocol": "1"},
+                          "Env": ["DATABASE_URL=postgresql://omnia_core_runtime:"
+                                  + password + "@qa-pg:5432/postgres",
+                                  "NODE_OPTIONS=--max-old-space-size=384",
                                   "OMNIA_OWNER_PREVIEW=1", "AUTH_SECRET=same-test-secret",
                                   "OMNIA_PROJECT_ID=" + str(state.project_id)],
                           "Cmd": list(_PUBLIC_CORE_COMMAND)}},
@@ -105,7 +110,8 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     client = SimpleNamespace(
         images=SimpleNamespace(get=lambda _: SimpleNamespace(
             id=image_id, labels={"omnia.max-core.protocol": "1",
-                                 "omnia.max-core.preview-protocol": "1"})),
+                                 "omnia.max-core.preview-protocol": "1",
+                                 "omnia.max-core.db-role-protocol": "1"})),
         containers=SimpleNamespace(create=create),
         api=SimpleNamespace(
             exec_create=lambda *_args, **_kwargs: {"Id": "upload"},

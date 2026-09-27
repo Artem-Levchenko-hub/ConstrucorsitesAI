@@ -1637,6 +1637,7 @@ class DockerAdaptationWorkspaceEngine:
                 except CellResourceError as exc:
                     from yleum_orchestrator.services.restoration_adaptation_health import (
                         REHEARSAL_REASON_BY_LEG,
+                        ProbeRehearsalFailure,
                     )
 
                     rehearsal_failed = True
@@ -1647,6 +1648,12 @@ class DockerAdaptationWorkspaceEngine:
                     rehearsal_reason = REHEARSAL_REASON_BY_LEG.get(
                         leg, "probe_rehearsal_failed"
                     )
+                    if (
+                        isinstance(exc, ProbeRehearsalFailure)
+                        and leg == "signed_owner_read"
+                        and exc.owner_read_failure is not None
+                    ):
+                        rehearsal_detail = exc.owner_read_failure.reason_detail
                     if not leg:
                         # Упали ДО шести шагов — в подготовке репетиции. У неё свои
                         # внятные фразы (личность кандидата изменилась, тома
@@ -1719,7 +1726,11 @@ class DockerAdaptationWorkspaceEngine:
             # репетиции: в обоих случаях это фраза разработчика, а не данные.
             reason_detail=(
                 rehearsal_detail
-                if reason in {"probe_manifest_invalid", "probe_rehearsal_failed"}
+                if reason in {
+                    "probe_manifest_invalid",
+                    "probe_rehearsal_failed",
+                    "probe_owner_read_failed",
+                }
                 else None
             ),
             source_workspace_revision=latest_revision,

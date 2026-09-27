@@ -563,6 +563,36 @@ def test_credentials_round_trip_is_stable(tmp_path: Path) -> None:
     assert payload["postgres_password"] == first.postgres_password
 
 
+def test_core_runtime_secret_is_stable_separate_and_race_safe(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    workspace_id = uuid4()
+    admin = CellCredentialStore(tmp_path / "credentials")
+    admin_password = admin.load_or_create(workspace_id).postgres_password
+    admin_path = admin.root / f"{workspace_id}.json"
+    before = admin_path.read_bytes()
+    runtime = cell_state_module.CoreRuntimeCredentialStore(admin.root / "core-runtime")
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        values = list(pool.map(lambda _: runtime.load_or_create(workspace_id), range(16)))
+    assert len(set(values)) == 1
+    assert values[0] != admin_password
+    assert admin_path.read_bytes() == before
+    assert runtime.load_or_create(workspace_id) == values[0]
+
+
+def test_core_runtime_secret_rejects_broken_symlink(tmp_path: Path) -> None:
+    runtime = cell_state_module.CoreRuntimeCredentialStore(tmp_path / "core-runtime")
+    workspace_id = uuid4()
+    path = runtime.root / f"{workspace_id}.json"
+    path.parent.mkdir(parents=True)
+    try:
+        path.symlink_to(tmp_path / "missing")
+    except (NotImplementedError, OSError):
+        pytest.skip("symlinks unsupported")
+    with pytest.raises(RuntimeError, match="symlink"):
+        runtime.load_or_create(workspace_id)
+
+
 def test_credential_broken_symlink_leaf_is_rejected(tmp_path: Path) -> None:
     credentials = CellCredentialStore(tmp_path / "credentials")
     workspace_id = uuid4()

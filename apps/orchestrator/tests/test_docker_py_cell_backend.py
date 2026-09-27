@@ -1521,3 +1521,14 @@ async def test_run_workspace_command_preserves_git_and_drops_secret_sync_files()
         ".env": b"host-secret",
         "app.txt": b"after",
     }
+
+
+async def test_maintenance_postgres_allows_only_namespace_loopback_bootstrap():
+    client = _FakeClient()
+    client.volumes.items["pg-vol"] = _FakeVolume("pg-vol", _labels("postgres"))
+    await _backend(client).create_container(_maintenance_spec("owned-maintenance"))
+    created = client.containers.create_calls[0]
+    assert created["command"] == ["postgres", "-c", "listen_addresses=127.0.0.1"]
+    assert created["kwargs"]["network"] == "none"
+    assert created["kwargs"]["ports"] == {}
+    assert created["kwargs"]["cap_drop"] == ["ALL"]
