@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Protocol
@@ -61,12 +62,16 @@ class EnvironmentBackend(Protocol):
 
 class MachineEnvironmentStore:
     def __init__(
-        self, root: Path, workspace_id: UUID, backend: EnvironmentBackend, *, max_bytes: int
+        self, root: Path, workspace_id: UUID, backend: EnvironmentBackend, *, max_bytes: int,
+        min_free_disk_bytes: int = 10 * 1024**3,
     ) -> None:
+        if min_free_disk_bytes < 0:
+            raise ValueError("min_free_disk_bytes cannot be negative")
         self.root = root / str(workspace_id)
         self.workspace_id = workspace_id
         self.backend = backend
         self.max_bytes = max_bytes
+        self.min_free_disk_bytes = min_free_disk_bytes
         # P01: optional stage/byte progress sink (PublicationTrace); never required.
         self.observer: Any = None
 
@@ -122,6 +127,10 @@ class MachineEnvironmentStore:
             raise EnvironmentIntegrityError("invalid artifact reference")
         return self.root / reference
 
+    def _check_disk_reserve(self, required_bytes: int = 0) -> None:
+        if shutil.disk_usage(self.root).free < self.min_free_disk_bytes + required_bytes:
+            raise EnvironmentIntegrityError("host archive free-space reserve exhausted")
+
     def _save(self, chunks: Iterable[bytes], remaining: int) -> tuple[str, str, int]:
         _ensure_secure_dir(self.root, create=True)
         reference = f"{uuid4().hex}.tar"
@@ -136,6 +145,7 @@ class MachineEnvironmentStore:
                     size += len(chunk)
                     if size > remaining:
                         raise EnvironmentIntegrityError("environment artifact exceeds disk budget")
+                    self._check_disk_reserve(len(chunk))
                     handle.write(chunk)
                     digest.update(chunk)
                     if self.observer is not None:
@@ -164,45 +174,64 @@ class MachineEnvironmentStore:
             raise EnvironmentIntegrityError("capture manifest digest mismatch")
         if previous is not None and previous.workspace_id != self.workspace_id:
             raise EnvironmentIntegrityError("environment workspace identity mismatch")
+        _ensure_secure_dir(self.root, create=True)
+        # Refuse before quiescing a healthy app; also check every write because
+        # other workspaces share this filesystem and can consume space concurrently.
+        self._check_disk_reserve()
         self.backend.prepare_capture()
         machine_remaining_seconds(1)
         self.backend.stop()
         machine_remaining_seconds(1)
-        self._stage("capture_rootfs")
-        if previous is not None and self._reusable_image(previous, base_image=base_image):
-            image_id = previous.image_id
-            reference, digest, size = previous.artifact_ref, previous.sha256, previous.size
-        else:
-            image_id, chunks = self.backend.export_image()
-            reference, digest, size = self._save(chunks, self.max_bytes)
-        self._stage("capture_volumes")
-        remaining = self.max_bytes - size
-        volume_refs = []
-        for name in volumes:
-            machine_remaining_seconds(1)
-            artifact, checksum, volume_size = self._save(
-                self.backend.export_volume(name), remaining
-            )
-            remaining -= volume_size
-            volume_refs.append(
-                VolumeEnvironmentRef(
-                    name=name,
-                    artifact_ref=artifact,
-                    sha256=checksum,
-                    size=volume_size,
+        created: list[str] = []
+        try:
+            self._stage("capture_rootfs")
+            if previous is not None and self._reusable_image(previous, base_image=base_image):
+                image_id = previous.image_id
+                reference, digest, size = previous.artifact_ref, previous.sha256, previous.size
+            else:
+                image_id, chunks = self.backend.export_image()
+                reference, digest, size = self._save(chunks, self.max_bytes)
+                created.append(reference)
+            self._stage("capture_volumes")
+            remaining = self.max_bytes - size
+            volume_refs = []
+            for name in volumes:
+                machine_remaining_seconds(1)
+                artifact, checksum, volume_size = self._save(
+                    self.backend.export_volume(name), remaining
                 )
+                created.append(artifact)
+                remaining -= volume_size
+                volume_refs.append(
+                    VolumeEnvironmentRef(
+                        name=name,
+                        artifact_ref=artifact,
+                        sha256=checksum,
+                        size=volume_size,
+                    )
+                )
+            return MachineEnvironmentRef(
+                workspace_id=self.workspace_id,
+                image_id=image_id,
+                artifact_ref=reference,
+                sha256=digest,
+                size=size,
+                base_image=base_image,
+                manifest_digest=manifest_digest,
+                volumes=tuple(volume_refs),
+                manifest=manifest,
             )
-        return MachineEnvironmentRef(
-            workspace_id=self.workspace_id,
-            image_id=image_id,
-            artifact_ref=reference,
-            sha256=digest,
-            size=size,
-            base_image=base_image,
-            manifest_digest=manifest_digest,
-            volumes=tuple(volume_refs),
-            manifest=manifest,
-        )
+        except BaseException as error:
+            # A failed capture publishes no reference. Remove only its fresh
+            # files; shared/reused rootfs and every prior checkpoint stay intact.
+            for artifact in created:
+                path = self.artifact_path(artifact)
+                for fresh in (path, self._marker_path(path)):
+                    try:
+                        fresh.unlink(missing_ok=True)
+                    except OSError:
+                        error.add_note("failed capture left an orphan archive for the collector")
+            raise
 
     def _reusable_image(self, previous: MachineEnvironmentRef, *, base_image: str) -> bool:
         # Only the immutable rootfs is shared. Every volume below is captured

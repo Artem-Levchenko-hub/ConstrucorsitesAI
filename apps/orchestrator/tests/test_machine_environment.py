@@ -87,6 +87,65 @@ def test_environment_and_volumes_survive_full_recreation(tmp_path):
     assert not backend.running
 
 
+def test_failed_later_capture_removes_all_new_archives_but_keeps_previous(tmp_path):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    options = dict(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+                   volumes=("repo", "home"))
+    previous = store.capture(**options)
+    retained = {p.name: p.read_bytes() for p in store.root.iterdir()}
+
+    def export(name):
+        if name == "home":
+            raise RuntimeError("second volume export failed")
+        return iter([backend.volumes[name]])
+
+    backend.export_volume = export
+    with pytest.raises(RuntimeError, match="second volume export failed"):
+        store.capture(**options, previous=previous)
+    assert {p.name: p.read_bytes() for p in store.root.iterdir()} == retained
+
+
+def test_failed_fresh_capture_does_not_leave_successful_rootfs_or_volume(tmp_path):
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    backend.volumes["home"] = b"x" * 4096
+    with pytest.raises(api.EnvironmentIntegrityError, match="budget"):
+        store.capture(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+                      volumes=("repo", "home"))
+    assert list(store.root.iterdir()) == []
+
+
+def test_host_free_space_refusal_precedes_quiesce_and_stop(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    api = module()
+    backend = ArchiveBackend()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda _: SimpleNamespace(free=1))
+    with pytest.raises(api.EnvironmentIntegrityError, match="free-space reserve"):
+        store.capture(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
+                      volumes=("repo",))
+    assert backend.running
+    assert backend.events == []
+    assert list(store.root.iterdir()) == []
+
+
+def test_streaming_archive_never_consumes_the_host_reserve(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    api = module()
+    store = api.MachineEnvironmentStore(tmp_path, uuid4(), ArchiveBackend(), max_bytes=4096,
+                                      min_free_disk_bytes=100)
+    free = iter((104, 102))
+    monkeypatch.setattr(api.shutil, "disk_usage", lambda _: SimpleNamespace(free=next(free)))
+    with pytest.raises(api.EnvironmentIntegrityError, match="free-space reserve"):
+        store._save(iter((b"abcd", b"efgh")), 4096)
+    assert list(store.root.iterdir()) == []
+
+
 def test_streaming_capture_stops_at_parent_deadline_without_publishing_artifact(
     tmp_path, monkeypatch
 ):
