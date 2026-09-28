@@ -294,6 +294,12 @@ def _is_continue_request(prompt: str) -> bool:
     return any(k in t for k in _CONTINUE_KEYWORDS)
 
 
+def _is_retry_request(prompt: str) -> bool:
+    """Recognize a standalone retry, never an explicit new or amended task."""
+    text = " ".join((prompt or "").casefold().replace("ё", "е").split())
+    return re.fullmatch(r"(?:попробуй еще ра[зх]|try again)[.!?]*", text) is not None
+
+
 def _recover_max_resume_prompt(candidates: Sequence[str]) -> str | None:
     """Return the latest real brief behind one or more failed MAX resumes.
 

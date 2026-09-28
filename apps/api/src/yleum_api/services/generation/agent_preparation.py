@@ -7,12 +7,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
+from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.project import orchestrator_template
 from yleum_api.services import agent_builder
 from yleum_api.services.generation.agent_messages import (
     _is_continue_request,
+    _is_retry_request,
     _recover_max_resume_prompt,
 )
 from yleum_api.services.generation.contracts import (
@@ -26,6 +28,50 @@ from yleum_api.services.generation.contracts import (
 from yleum_api.services.generation.runtime import _build_agent_seed_parts
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def _recover_failed_retry_prompt(session: AsyncSession, ids: GenerationIds) -> str | None:
+    """Resolve only the adjacent failed build/edit chain belonging to this user."""
+    current = await session.get(GenerationRun, ids.run_id)
+    if (
+        current is None
+        or current.project_id != ids.project_id
+        or current.user_id != ids.user_id
+        or current.user_message_id != ids.user_message_id
+    ):
+        return None
+    previous = await session.scalars(
+        select(GenerationRun)
+        .where(
+            GenerationRun.project_id == ids.project_id,
+            GenerationRun.user_id == ids.user_id,
+            GenerationRun.id != ids.run_id,
+            GenerationRun.created_at <= current.created_at,
+        )
+        .order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc())
+        .limit(20)
+    )
+    for run in previous:
+        # Do not skip a completed task, a chat response, or an unfinished run
+        # to resurrect an older failure. Equal timestamps have no safe order.
+        if (
+            run.created_at == current.created_at
+            or run.status not in {"failed", "cancelled"}
+            or run.response_mode not in {"build", "edit"}
+            or run.user_message_id is None
+        ):
+            return None
+        message = await session.get(Message, run.user_message_id)
+        if (
+            message is None
+            or message.project_id != ids.project_id
+            or message.role != "user"
+            or not message.content.strip()
+        ):
+            return None
+        if not _is_retry_request(message.content):
+            return message.content
+    return None
 
 
 async def classify_agent_turn(
@@ -42,6 +88,10 @@ async def classify_agent_turn(
     _is_edit = (not orchestrate) and not _is_continue
     _max_has_generated_snapshot = False
     async with factory() as _max_history_session:
+        if _is_retry_request(prompt_text):
+            recovered = await _recover_failed_retry_prompt(_max_history_session, ids)
+            if recovered is not None:
+                prompt_text = recovered
         _max_has_generated_snapshot = bool(
             await _max_history_session.scalar(
                 select(func.count(Snapshot.id)).where(
