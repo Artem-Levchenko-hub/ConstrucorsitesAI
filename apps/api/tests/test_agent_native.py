@@ -73,6 +73,16 @@ def test_portable_tools_describe_real_install_and_database_capabilities() -> Non
     assert "has no network" in legacy["description"]
 
 
+def test_provider_docs_rejects_platform_names_in_tool_contract() -> None:
+    from yleum_api.services.integration_providers import PROVIDER_MAP
+
+    tool = next(tool for tool in agent_native._TOOLS if tool["name"] == "provider_docs")
+    allowed = tool["input_schema"]["properties"]["provider"]["enum"]
+    assert set(allowed) == set(PROVIDER_MAP)
+    assert {"omnia", "yleum"}.isdisjoint(allowed)
+    assert "src/lib/omnia/integration-client.ts" in tool["description"]
+
+
 def test_max_native_prompt_disables_incompatible_generic_proof_tools() -> None:
     prompt = agent_native.native_system_prompt("MAX PLATFORM CORE CONTRACT\nBuild the app")
 
@@ -1378,6 +1388,119 @@ async def test_native_completion_check_rejects_thin_done_and_keeps_building(
     assert res.summary == "complete"
     assert set(res.files) == {"src/app/page.tsx", "src/components/Feature.tsx"}
     assert "Need a real feature component" in str(res.transcript)
+
+
+@pytest.mark.asyncio
+async def test_edit_turn_rejects_unchanged_done_and_applies_requested_change(monkeypatch):
+    from uuid import uuid4
+
+    from yleum_api.core.config import get_settings
+    from yleum_api.services.generation import agent_generation
+    from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+
+    settings = get_settings().model_copy(update={"use_native_agent": True})
+    monkeypatch.setattr(agent_generation, "get_settings", lambda: settings)
+    initial = {"src/app/page.tsx": "working catalog", "src/lib/cart.ts": "old limit"}
+    workspace = dict(initial)
+    turns = iter([
+        _turn(("build", {})),
+        _turn(("done", {"summary": "unchanged"})),
+        _turn(("write_file", {"path": "src/lib/cart.ts", "content": "stock limit"})),
+        _turn(("build", {})),
+        _turn(("done", {"summary": "applied"})),
+    ])
+
+    async def call(*args, **kwargs):
+        return next(turns)
+
+    async def execute(action):
+        if action.name == "write_file":
+            workspace[action.path] = action.args["content"]
+        return {"ok": True, "content": workspace.get(action.path, ""), "detail": "clean"}
+
+    async def export():
+        return {path: value for path, value in workspace.items() if initial.get(path) != value}
+
+    monkeypatch.setattr(agent_native, "_call_messages", call)
+    result, failure = await agent_generation.execute_agent_turn(
+        _agent_res=None, _is_edit=True, _max_has_generated_snapshot=True,
+        _max_seed_files={}, _max_shell_enabled=True,
+        baseline=SourceBaseline(uuid4(), "baseline", initial),
+        ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+        project_info=SimpleNamespace(template="max_miniapp"), prompt_text="Fix stock limit",
+        runtime=SimpleNamespace(
+            handle=SimpleNamespace(is_portable=lambda: True, export_files=export),
+            coordinator=None,
+        ),
+        plan=SimpleNamespace(stack_guide="", skills=None, user="Fix stock limit", steps=8),
+        operations=SimpleNamespace(execute=execute, emit=None),
+    )
+    assert failure is None
+    assert result.done and result.summary == "applied"
+    assert result.files["src/lib/cart.ts"] == "stock limit"
+    assert workspace["src/app/page.tsx"] == initial["src/app/page.tsx"]
+    assert "Not done yet" in str(result.transcript)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_edit,prompt,deleting", [
+    (True, "Проверь текущую реализацию, ничего не меняй", False),
+    (True, "Сделай анализ текущего кода, ничего не меняй", False),
+    (False, "продолжи", False),
+    (True, "Delete the empty obsolete file", True),
+])
+async def test_existing_turn_preserves_inspection_continuation_and_empty_deletion(
+    monkeypatch, is_edit, prompt, deleting
+):
+    from uuid import uuid4
+
+    from yleum_api.core.config import get_settings
+    from yleum_api.services import max_generation_contract
+    from yleum_api.services.generation import agent_generation
+    from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+
+    settings = get_settings().model_copy(update={"use_native_agent": True})
+    monkeypatch.setattr(agent_generation, "get_settings", lambda: settings)
+    # Existing-product shape acceptance is independent of the edit/write gate.
+    monkeypatch.setattr(max_generation_contract, "max_completion_gap", lambda *a, **kw: None)
+    baseline = {"src/app/page.tsx": "working page", "obsolete.txt": ""}
+    patch = {}
+    turns = iter([
+        *([_turn(("bash", {"cmd": "rm obsolete.txt"}))] if deleting else []),
+        _turn(("build", {})),
+        _turn(("done", {"summary": "checked"})),
+    ])
+
+    async def call(*args, **kwargs):
+        return next(turns)
+
+    async def execute(action):
+        if action.name == "bash":
+            patch["obsolete.txt"] = ""
+            return {"ok": True, "detail": "clean", "files": dict(patch)}
+        return {"ok": True, "detail": "clean"}
+
+    async def export():
+        return dict(patch)
+
+    monkeypatch.setattr(agent_native, "_call_messages", call)
+    result, failure = await agent_generation.execute_agent_turn(
+        _agent_res=None, _is_edit=is_edit, _max_has_generated_snapshot=True,
+        _max_seed_files={}, _max_shell_enabled=True,
+        baseline=SourceBaseline(uuid4(), "baseline", baseline),
+        ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+        project_info=SimpleNamespace(template="max_miniapp"), prompt_text=prompt,
+        runtime=SimpleNamespace(
+            handle=SimpleNamespace(is_portable=lambda: True, export_files=export),
+            coordinator=None,
+        ),
+        plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=5),
+        operations=SimpleNamespace(execute=execute, emit=None),
+    )
+    assert failure is None
+    assert result.done and result.summary == "checked"
+    assert result.files == ({"obsolete.txt": ""} if deleting else {})
+    assert "Apply the requested code change" not in str(result.transcript)
 
 
 @pytest.mark.asyncio

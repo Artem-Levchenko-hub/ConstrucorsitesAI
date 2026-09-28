@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Mapping
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from typing import Any
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
@@ -85,11 +87,74 @@ async def execute_agent_turn(
 
             _completion_check = _max_completion_check
 
+        # Existing-project follow-ups also include inspection and continuation.
+        # Only an explicit leading change command earns a write requirement.
+        _change_requested = re.match(
+            r"^\s*(?:пожалуйста[,\s]+)?(?:добавь|исправь|измени|поменяй|замени|"
+            r"удали|убери|реализуй|fix|add|change|replace|remove|"
+            r"delete|implement|update)\b",
+            prompt_text,
+            flags=re.IGNORECASE,
+        ) is not None
+        _read_only_requested = re.search(
+            r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
+            r"(?:do\s+not|don't)\s+(?:change|modify|edit)\s+(?:anything|files|code)",
+            prompt_text,
+            flags=re.IGNORECASE,
+        ) is not None
+        _change_requested = _change_requested and not _read_only_requested
+        _native_execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
+        if (_is_edit or _max_has_generated_snapshot) and _change_requested and runtime.handle:
+            from yleum_api.services.generation.agent_finalization import (
+                validate_edit_source_change,
+            )
+
+            _product_completion_check = _completion_check
+            _edit_patch: dict[str, str] = {}
+
+            async def _execute_edit_action(action: agent_builder.Action) -> dict[str, Any]:
+                nonlocal _edit_patch
+                result = await operations.execute(action)
+                assert runtime.handle is not None
+                # Export is the executor's in-memory diff, including deletion
+                # tombstones; model-reported cumulative files are not that diff.
+                _edit_patch = await runtime.handle.export_files()
+                return result
+
+            def _edit_completion_check(
+                written: Mapping[str, str], evidence: Mapping[str, int]
+            ) -> str | None:
+                # Reject premature done inside the same provider turn, while
+                # the agent can still apply the requested change. Passing the
+                # existing tree below also prevents edits from being treated
+                # as a first build that must rewrite the product entry page.
+                verdict = validate_edit_source_change(
+                    requires_source_change=True,
+                    baseline_files=baseline.files,
+                    candidate_files=_edit_patch,
+                    exact_tree=False,
+                    message="",
+                )
+                if not _edit_patch or verdict.failure is not None:
+                    return (
+                        "The requested edit has not changed the source tree. "
+                        "Apply the requested code change in this workspace, "
+                        "preserve working features, then build and call done."
+                    )
+                if _product_completion_check is not None:
+                    return _product_completion_check(written, evidence)
+                return None
+
+            _completion_check = _edit_completion_check
+            _native_execute = _execute_edit_action
+        else:
+            _native_execute = operations.execute
+
         _native_max_segments = get_settings().agent_max_segments if not _is_edit else 1
         _agent_res = await agent_native.run_native_build(
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
             task=plan.user,
-            execute=operations.execute,
+            execute=_native_execute,
             user_id=str(ids.user_id),
             project_id=str(ids.project_id),
             run_id=str(ids.run_id),
@@ -101,6 +166,7 @@ async def execute_agent_turn(
             max_segments=_native_max_segments,
             allow_max_bash=_max_shell_enabled,
             portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
+            initial_files=baseline.files if _is_edit or _max_has_generated_snapshot else None,
         )
     elif _agent_res is None:
         _agent_res = await agent_builder.run_agent_build(

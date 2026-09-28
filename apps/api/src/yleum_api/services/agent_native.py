@@ -28,6 +28,7 @@ import structlog
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
+from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 log = structlog.get_logger(__name__)
@@ -218,8 +219,10 @@ _TOOLS: list[dict[str, Any]] = [
         "provider_docs",
         "Read current public documentation from a provider's SERVER-ALLOWLISTED "
         "official HTTPS host. No credential is ever sent. Use this before wiring "
-        "a requested external provider; never guess its API.",
-        {"provider": _STR, "query": _STR},
+        "a requested external provider; never guess its API. Yleum/Omnia are the "
+        "platform, not provider keys. For managed integrations read the local "
+        "src/lib/omnia/integration-client.ts SDK instead of guessing platform docs.",
+        {"provider": {"type": "string", "enum": sorted(PROVIDER_MAP)}, "query": _STR},
         ["provider", "query"],
     ),
     _tool(

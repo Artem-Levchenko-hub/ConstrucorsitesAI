@@ -491,6 +491,7 @@ async def run_agent_generation(
         verification_failed=_agent_verification_failed,
         finalization_complete=_max_finalization_proof is not None,
     )
+    _terminal_error: str | None = None
     if _product_failure is not None and (
         _source_change.failure is not None or get_settings().use_native_agent
     ):
@@ -500,6 +501,14 @@ async def run_agent_generation(
         async with factory() as session:
             await record_generation_product_failure(session, ids.run_id, _product_failure)
             await session.commit()
+        # The public terminal event must agree with the durable verdict. Only
+        # the source-change guard supplies trusted user text; other stage
+        # summaries may contain provider diagnostics and must not be exposed.
+        _terminal_error = (
+            accumulated
+            if _source_change.failure is not None
+            else "Не удалось завершить изменения. Повтори запрос или уточни, что нужно изменить."
+        )
 
     # Universal release proof. The specialised realtime/isolation gates
     # above cover only two stacks; every container build (including MAX)
@@ -578,15 +587,22 @@ async def run_agent_generation(
             fixable=True,
         )
 
-    await publish_event(
-        ids.project_id,
-        "llm.done",
-        {
-            "message_id": str(ids.assistant_message_id),
-            "tokens_in": None,
-            "tokens_out": None,
-            "cost_rub": None,
-        },
-    )
+    if _terminal_error is not None:
+        await publish_event(
+            ids.project_id,
+            "llm.error",
+            {"message_id": str(ids.assistant_message_id), "error": _terminal_error},
+        )
+    else:
+        await publish_event(
+            ids.project_id,
+            "llm.done",
+            {
+                "message_id": str(ids.assistant_message_id),
+                "tokens_in": None,
+                "tokens_out": None,
+                "cost_rub": None,
+            },
+        )
     await clear_stream_state(ids.project_id, ids.assistant_message_id)
     return
