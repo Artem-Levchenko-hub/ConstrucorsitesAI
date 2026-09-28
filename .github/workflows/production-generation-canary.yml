@@ -65,6 +65,8 @@ jobs:
       - name: Run disposable build, preview, and edit canary
         working-directory: apps/api
         env:
+          PRODUCTION_CANARY_BASE_URL: https://yleum.ru
+          PRODUCTION_CANARY_PREVIEW_HOST_SUFFIXES: .dev.yleum.ru,.dev2.yleum.ru
           PRODUCTION_CANARY_EMAIL: ${{ secrets.PRODUCTION_CANARY_EMAIL }}
           PRODUCTION_CANARY_PASSWORD: ${{ secrets.PRODUCTION_CANARY_PASSWORD }}
           PRODUCTION_EXPECTED_WEB_RELEASE_SHA: ${{ vars.PRODUCTION_EXPECTED_WEB_RELEASE_SHA }}

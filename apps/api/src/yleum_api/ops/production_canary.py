@@ -138,7 +138,7 @@ BUILD_PROMPT = (
     "Создай компактное MAX Mini App для списка ежедневных дел: заголовок "
     "«Мой день», три демонстрационные задачи и заметная кнопка «Добавить задачу»."
 )
-EDIT_PROMPT = "Точечно измени заголовок на «Мой продуктивный день» и сохрани остальной интерфейс."
+EDIT_PROMPT = "Измени заголовок на «Мой продуктивный день» и сохрани остальной интерфейс."
 
 
 _PREVIEW_SIGNATURE_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")
@@ -244,6 +244,7 @@ class CanaryConfig:
     preview_host_suffix: str
     overall_timeout_seconds: int
     poll_seconds: float
+    preview_host_suffixes: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls) -> CanaryConfig:
@@ -285,6 +286,15 @@ class CanaryConfig:
                 ".preview.lead-generator.ru",
             )
         )
+        configured_suffixes = os.getenv("PRODUCTION_CANARY_PREVIEW_HOST_SUFFIXES")
+        preview_host_suffixes = (
+            tuple(
+                validate_preview_host_suffix(suffix.strip())
+                for suffix in configured_suffixes.split(",")
+            )
+            if configured_suffixes is not None
+            else ()
+        )
         return cls(
             base_url=base_url.rstrip("/"),
             email=os.environ["PRODUCTION_CANARY_EMAIL"],
@@ -293,6 +303,7 @@ class CanaryConfig:
             preview_host_suffix=preview_host_suffix,
             overall_timeout_seconds=overall_timeout_seconds,
             poll_seconds=poll_seconds,
+            preview_host_suffixes=preview_host_suffixes,
         )
 
 
@@ -815,10 +826,16 @@ class ProductionCanary:
         return snapshot_id
 
     def _verify_preview(self, bootstrap_url: str) -> None:
-        try:
-            parsed = validate_preview_url(bootstrap_url, self.config.preview_host_suffix)
-        except CanaryFailure as exc:
-            raise self._fail(str(exc), code="preview_failed") from exc
+        # An explicit allowlist replaces the legacy single-host fallback. Each
+        # entry retains the strict host, scheme and signed-session validation.
+        for suffix in self.config.preview_host_suffixes or (self.config.preview_host_suffix,):
+            try:
+                parsed = validate_preview_url(bootstrap_url, suffix)
+                break
+            except CanaryFailure:
+                continue
+        else:
+            raise self._fail("preview session URL is invalid", code="preview_failed")
         try:
             bootstrap = self._client.get(
                 bootstrap_url,
