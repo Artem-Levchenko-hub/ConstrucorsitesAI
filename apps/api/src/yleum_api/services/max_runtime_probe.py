@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -21,6 +22,7 @@ _TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 # Cell drafts compile their authenticated routes on first access. The real
 # isolated Next.js cold start exceeded 20s; retain a finite startup budget.
 _CELL_STARTUP_TIMEOUT = httpx.Timeout(120.0, connect=5.0)
+_CONNECT_ATTEMPTS = 3
 
 
 @dataclass(frozen=True)
@@ -259,11 +261,40 @@ async def _probe_signed_runtime(
     parsed = urlsplit(bootstrap_url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     product_detail = ""
+    request_stage = "identity_anonymous"
+    request_attempts = 0
+
+    async def get(
+        client: httpx.AsyncClient,
+        url: str,
+        *,
+        stage: str,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        nonlocal request_stage, request_attempts
+        request_stage = stage
+        for attempt in range(1, _CONNECT_ATTEMPTS + 1):
+            request_attempts = attempt
+            try:
+                return await client.get(url, headers=headers)
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if attempt == _CONNECT_ATTEMPTS:
+                    raise
+                # Only a transport failure is retryable. HTTP responses, including
+                # failed authentication and identity checks, are assessed once.
+                await asyncio.sleep(0.2 * attempt)
+        raise AssertionError("unreachable")
+
     try:
         async with httpx.AsyncClient(timeout=request_timeout, follow_redirects=False) as client:
             if portable_project_id is not None:
                 for headers in ({}, {"Cookie": "__Host-max_session=invalid.invalid"}):
-                    rejected = await client.get(f"{origin}/__omnia/identity", headers=headers)
+                    rejected = await get(
+                        client,
+                        f"{origin}/__omnia/identity",
+                        stage="identity_anonymous",
+                        headers=headers,
+                    )
                     if rejected.status_code != 401:
                         return MaxRuntimeProbe(
                             False,
@@ -272,7 +303,7 @@ async def _probe_signed_runtime(
                             else "portable boundary rejection check failed "
                             f"(HTTP {rejected.status_code}; expected 401)",
                         )
-            bootstrap = await client.get(bootstrap_url)
+            bootstrap = await get(client, bootstrap_url, stage="bootstrap")
             if bootstrap.status_code not in {200, 301, 302, 303, 307, 308}:
                 return MaxRuntimeProbe(
                     False,
@@ -299,7 +330,7 @@ async def _probe_signed_runtime(
             failures: list[str] = []
             success_path: str | None = None
             for product_path in paths:
-                route = await client.get(f"{origin}{product_path}")
+                route = await get(client, f"{origin}{product_path}", stage="product")
                 # A redirect to a managed endpoint is not product evidence.
                 valid_status = (
                     200 <= route.status_code < 300
@@ -322,7 +353,9 @@ async def _probe_signed_runtime(
                 )
             if success_path != paths[0]:
                 product_detail = f" via {success_path}"
-            protected = await client.get(f"{origin}/api/omnia/actions?limit=1")
+            protected = await get(
+                client, f"{origin}/api/omnia/actions?limit=1", stage="actions"
+            )
             if protected.status_code != 200:
                 return MaxRuntimeProbe(
                     False,
@@ -335,7 +368,9 @@ async def _probe_signed_runtime(
             if not isinstance(body, dict) or not isinstance(body.get("actions"), list):
                 return MaxRuntimeProbe(False, "protected MAX data response is malformed")
             if portable_project_id is not None:
-                identity = await client.get(f"{origin}/__omnia/identity")
+                identity = await get(
+                    client, f"{origin}/__omnia/identity", stage="identity_signed"
+                )
                 try:
                     identity_body = identity.json()
                 except ValueError:
@@ -350,7 +385,11 @@ async def _probe_signed_runtime(
                 ):
                     return MaxRuntimeProbe(False, "portable boundary identity proof failed")
     except httpx.HTTPError as exc:
-        return MaxRuntimeProbe(False, f"MAX data-plane request failed: {type(exc).__name__}")
+        return MaxRuntimeProbe(
+            False,
+            "MAX data-plane request failed: "
+            f"{type(exc).__name__} (stage={request_stage}; attempts={request_attempts})",
+        )
 
     return MaxRuntimeProbe(
         True,

@@ -171,6 +171,125 @@ def _install_transport(
 
 
 @pytest.mark.asyncio
+async def test_portable_probe_retries_one_connection_failure_without_skipping_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
+
+    observed: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed.append(request.url.path)
+        if len(observed) == 1:
+            raise httpx.ConnectError("private-transport-detail", request=request)
+        if request.url.path == "/__omnia/identity":
+            if request.headers.get("cookie") != "__Host-max_session=valid":
+                return httpx.Response(401)
+            return httpx.Response(
+                200, json={"project_id": str(PROJECT_ID), "user_id": "preview", "epoch": 7}
+            )
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(
+                307,
+                headers={"Location": "/", "Set-Cookie": "__Host-max_session=valid; Path=/; Secure"},
+            )
+        if request.url.path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        return httpx.Response(200)
+
+    _install_transport(monkeypatch, handler)
+    origin = f"https://cell-{PROJECT_ID.hex[:12]}-dev.preview.lead-generator.ru"
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        ProjectCellPreviewSession(
+            PROJECT_ID, origin, BOOTSTRAP.replace(ORIGIN, origin), "2030-01-01T00:00:00Z"
+        ),
+        portable_project_id=PROJECT_ID,
+        expected_epoch=7,
+        proof_key="a" * 64,
+    )
+
+    assert result.ok is True
+    assert result.artifact_digest is not None
+    assert observed.count("/__omnia/identity") == 4
+    assert observed.count("/api/omnia/actions") == 1
+
+
+@pytest.mark.asyncio
+async def test_portable_probe_bounds_connection_retries_and_redacts_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        raise httpx.ConnectError("private-transport-detail", request=request)
+
+    _install_transport(monkeypatch, handler)
+    origin = f"https://cell-{PROJECT_ID.hex[:12]}-dev.preview.lead-generator.ru"
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        ProjectCellPreviewSession(
+            PROJECT_ID, origin, BOOTSTRAP.replace(ORIGIN, origin), "2030-01-01T00:00:00Z"
+        ),
+        portable_project_id=PROJECT_ID,
+        expected_epoch=7,
+    )
+
+    assert result.ok is False
+    assert calls == 3
+    assert "ConnectError (stage=identity_anonymous; attempts=3)" in result.detail
+    assert "private-transport-detail" not in result.detail
+    assert origin not in result.detail
+
+
+@pytest.mark.asyncio
+async def test_portable_probe_retries_late_connect_timeout_but_keeps_signed_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
+
+    actions_calls = 0
+    identity_calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal actions_calls, identity_calls
+        if request.url.path == "/__omnia/identity":
+            identity_calls += 1
+            if request.headers.get("cookie") != "__Host-max_session=valid":
+                return httpx.Response(401)
+            return httpx.Response(
+                200, json={"project_id": str(PROJECT_ID), "user_id": "preview", "epoch": 7}
+            )
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(
+                307,
+                headers={"Location": "/", "Set-Cookie": "__Host-max_session=valid; Path=/; Secure"},
+            )
+        if request.url.path == "/api/omnia/actions":
+            actions_calls += 1
+            if actions_calls == 1:
+                raise httpx.ConnectTimeout("private-transport-detail", request=request)
+            return httpx.Response(200, json={"actions": []})
+        return httpx.Response(200)
+
+    _install_transport(monkeypatch, handler)
+    origin = f"https://cell-{PROJECT_ID.hex[:12]}-dev.preview.lead-generator.ru"
+    result = await max_runtime_probe.probe_max_cell_runtime(
+        ProjectCellPreviewSession(
+            PROJECT_ID, origin, BOOTSTRAP.replace(ORIGIN, origin), "2030-01-01T00:00:00Z"
+        ),
+        portable_project_id=PROJECT_ID,
+        expected_epoch=7,
+    )
+
+    assert result.ok is True
+    assert actions_calls == 2
+    assert identity_calls == 3
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("route_status", "location"),
     [(200, "/"), (500, "/"), (200, "https://attacker.example/")],
