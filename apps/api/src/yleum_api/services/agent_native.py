@@ -1034,6 +1034,7 @@ async def _run_native_segment(
     invalidated_proofs: set[str] = set()
     checkpoint_at: float | None = None
     incomplete_responses = 0
+    unverified_response_problem: str | None = None
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
@@ -1064,11 +1065,43 @@ async def _run_native_segment(
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic; flagged MAX transfers proof to finalization."""
-        if incomplete_responses and last_build_ok is not True:
+        fast_check_green = False
+        if coordinated_max and unverified_response_problem == "output_limit":
+            # Preserve the provider cause across step/reserve exhaustion. The
+            # rejected batch contributed no actions, but prior applied source
+            # can still be checked locally within the finalization reserve.
+            reason = "output_limit"
+            if written:
+                try:
+                    checked = await execute(Action("build", {}, ""))
+                except Exception as exc:
+                    raise_if_terminal_cell_error(exc)
+                    # Deadline/check failures must not promote a candidate or
+                    # expose exception/provider internals in the user summary.
+                    checked = {"ok": False}
+                if checked.get("environment_mutated"):
+                    _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                fast_check_green = bool(checked.get("ok"))
+                if fast_check_green:
+                    successful_tools["build"] = successful_tools.get("build", 0) + 1
+                    proof_after_write.add("build")
+                if emit:
+                    await emit("agent.step", {
+                        "step": steps, "action": "build", "path": "",
+                        "detail": _step_detail("build", Action("build", {}, ""), checked),
+                        "ok": fast_check_green, "reason": "output_limit",
+                    })
+        if incomplete_responses and last_build_ok is not True and not fast_check_green:
             return AgentResult(
-                done=False, summary="Неполный ответ модели не был исправлен и проверен. "
-                "Сохранён предыдущий результат.", files=written, steps=steps,
-                transcript=convo, stop_reason="error", evidence=_evidence(),
+                done=False, summary=(
+                    "Модель достигла лимита ответа. Текущий кандидат не прошёл обязательную "
+                    "проверку; сохранён предыдущий результат."
+                    if reason == "output_limit" else
+                    "Неполный ответ модели не был исправлен и проверен. "
+                    "Сохранён предыдущий результат."
+                ), files=written, steps=steps, transcript=convo,
+                stop_reason="output_limit" if reason == "output_limit" else "error",
+                evidence=_evidence(),
             )
         if max_runtime and get_settings().use_max_finalization_coordinator:
             from yleum_api.services.max_generation_contract import (
@@ -1096,6 +1129,7 @@ async def _run_native_segment(
                 evidence=_evidence(),
                 needs_finalization=source_complete,
                 proof_checkpoint=NativeProofCheckpoint(
+                    fast_check_green=fast_check_green,
                     source_complete=source_complete,
                     acceptance_started=source_complete,
                 ),
@@ -1221,6 +1255,7 @@ async def _run_native_segment(
                 wrote_since_build = False
                 _invalidate_proofs("build")
                 if last_build_ok:
+                    unverified_response_problem = None
                     proof_after_write.add("build")
                     successful_tools["build"] = successful_tools.get("build", 0) + 1
                 detail = _step_detail("build", Action("build", {}, ""), checked)
@@ -1328,6 +1363,7 @@ async def _run_native_segment(
                 # prefix of a truncated batch is not an authorized complete plan.
                 # Never replay earlier successful calls or echo broken/raw JSON.
                 incomplete_responses += 1
+                unverified_response_problem = response_problem
                 # A rejected verification/done response cannot reuse an earlier
                 # green checkpoint as completion of the requested change.
                 last_build_ok = None
@@ -1364,6 +1400,10 @@ async def _run_native_segment(
                         "recovery_attempt": incomplete_responses,
                     })
                 if incomplete_responses > 2:
+                    if coordinated_max and response_problem == "output_limit":
+                        return await _finish_without_provider(
+                            steps=step + 1, reason="output_limit", detail=feedback,
+                        )
                     return AgentResult(
                         done=False, summary="Модель повторно вернула неполные команды. "
                         "Изменения из этих ответов не выполнялись; сохранён предыдущий результат.",
@@ -1582,6 +1622,8 @@ async def _run_native_segment(
                 elif name == "build":
                     last_build_ok = bool(obs.get("ok"))
                     wrote_since_build = False
+                    if last_build_ok:
+                        unverified_response_problem = None
                 if obs.get("ok"):
                     successful_tools[name] = successful_tools.get(name, 0) + 1
                     if name in {"build", "runtime_check", "probe", "verify_isolation"}:
@@ -1714,7 +1756,8 @@ NativeSegmentRunner = Callable[
 ]
 
 _CONTINUATION_TERMINAL_REASONS = frozenset(
-    {"error", "infra_error", "provider_error", "provider_stopped_red", "finalization_reserve"}
+    {"error", "infra_error", "provider_error", "provider_stopped_red", "finalization_reserve",
+     "output_limit"}
 )
 
 

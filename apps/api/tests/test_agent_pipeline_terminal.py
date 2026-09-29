@@ -16,13 +16,55 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.services import restorations
 from yleum_api.services.agent_builder import AgentResult
-from yleum_api.services.generation import agent_pipeline, agent_publication
+from yleum_api.services.generation import agent_generation, agent_pipeline, agent_publication
 from yleum_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
     ProjectGenerationFacts,
     SourceBaseline,
 )
+
+
+def test_output_limit_failure_survives_rollback_but_not_successful_finalization():
+    failed = AgentResult(
+        done=False,
+        summary="Partial response rejected",
+        files={"src/app/page.tsx": "changed"},
+        steps=10,
+        stop_reason="output_limit",
+    )
+    cause = agent_generation._primary_provider_failure(failed)
+    assert cause is not None and "output_limit" in cause
+    failed.needs_finalization = True
+    assert agent_generation._primary_provider_failure(failed) is None
+
+
+@pytest.mark.asyncio
+async def test_first_max_output_limit_reaches_safe_core_restoration():
+    stopped = AgentResult(
+        done=False,
+        summary="Incomplete provider response",
+        files={"src/app/page.tsx": "partial"},
+        steps=10,
+        stop_reason="output_limit",
+    )
+    result, cause = await agent_generation.execute_agent_turn(
+        _agent_res=stopped,
+        _is_edit=False,
+        _max_has_generated_snapshot=False,
+        _max_seed_files={},
+        _max_shell_enabled=False,
+        baseline=SimpleNamespace(sha=None),
+        ids=None,
+        is_free=False,
+        project_info=None,
+        prompt_text="",
+        runtime=SimpleNamespace(handle=None),
+        plan=None,
+        operations=None,
+    )
+    assert result is stopped
+    assert cause is not None and "output_limit" in cause
 
 
 @pytest.fixture

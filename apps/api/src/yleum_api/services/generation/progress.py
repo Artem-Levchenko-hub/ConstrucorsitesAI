@@ -111,6 +111,17 @@ class GenerationProgress:
             "detail": str(data.get("detail", "") or ""),
             "ok": bool(data.get("ok", True)),
         }
+        if raw_tool == "provider_response":
+            reason = data.get("reason")
+            if reason in {
+                "output_limit",
+                "invalid_tool_arguments",
+                "missing_tool_arguments",
+            }:
+                step_row["reason"] = reason
+            recovery_attempt = data.get("recovery_attempt")
+            if type(recovery_attempt) is int and 1 <= recovery_attempt <= 3:
+                step_row["recovery_attempt"] = recovery_attempt
         await self.record_agent_step(step_row)
 
 

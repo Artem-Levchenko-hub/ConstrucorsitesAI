@@ -20,6 +20,14 @@ from yleum_api.services.generation.file_transforms import _merge_seeded_agent_fi
 _log = logging.getLogger("yleum_api.routers.messages")
 
 
+def _primary_provider_failure(result: agent_builder.AgentResult) -> str | None:
+    if result.stop_reason == "provider_error":
+        return result.summary
+    if result.stop_reason == "output_limit" and not result.needs_finalization:
+        return "Provider response rejected (output_limit); unverified changes were not published."
+    return None
+
+
 async def execute_agent_turn(
     *,
     _agent_res: agent_builder.AgentResult | None,
@@ -197,8 +205,12 @@ async def execute_agent_turn(
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,
         )
-    _provider_failure = _agent_res.summary if _agent_res.stop_reason == "provider_error" else None
-    if _provider_failure and not (baseline.sha and _max_has_generated_snapshot):
+    _provider_failure = _primary_provider_failure(_agent_res)
+    if (
+        _agent_res.stop_reason == "provider_error"
+        and _provider_failure
+        and not (baseline.sha and _max_has_generated_snapshot)
+    ):
         raise RuntimeError(_provider_failure)
     if runtime.handle is not None:
         _agent_res.files = await runtime.handle.export_files()

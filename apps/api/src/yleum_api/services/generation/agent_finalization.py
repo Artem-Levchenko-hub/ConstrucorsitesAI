@@ -201,6 +201,11 @@ async def finalize_max_candidate(
                 edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
                 completion_check=repair_completion,
             )
+            if result.stop_reason == "output_limit" and not result.needs_finalization:
+                raise RuntimeError(
+                    "Provider response rejected (output_limit); "
+                    "finalization repair was not verified."
+                )
             if result.stop_reason in {"provider_error", "infra_error", "error"}:
                 raise RuntimeError(result.summary)
 

@@ -61,6 +61,40 @@ async def _read_progress(recorder: progress.GenerationProgress):
         return events, message.agent_steps
 
 
+async def test_provider_response_keeps_bounded_structured_failure_reason(monkeypatch):
+    recorder = progress.GenerationProgress(None, uuid4(), uuid4(), uuid4())
+    recorded = []
+
+    async def capture(step):
+        recorded.append(step)
+
+    monkeypatch.setattr(recorder, "record_agent_step", capture)
+    await recorder.emit_agent_event(
+        "agent.step",
+        {
+            "step": 10,
+            "action": "provider_response",
+            "detail": "Response rejected",
+            "ok": False,
+            "reason": "output_limit",
+            "recovery_attempt": 2,
+        },
+    )
+    assert recorded[0]["reason"] == "output_limit"
+    assert recorded[0]["recovery_attempt"] == 2
+
+    await recorder.emit_agent_event(
+        "agent.step",
+        {
+            "action": "provider_response",
+            "reason": "token=private-value",
+            "recovery_attempt": -1,
+        },
+    )
+    assert "reason" not in recorded[1]
+    assert "recovery_attempt" not in recorded[1]
+
+
 async def test_mixed_progress_keeps_wire_payload_order_and_independent_durable_sequence(
     test_engine,
     monkeypatch,

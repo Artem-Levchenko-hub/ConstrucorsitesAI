@@ -338,6 +338,70 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
     assert "src/app/new.tsx" in tasks[1] and "src/app/page.tsx" in tasks[1]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("needs_finalization", [False, True])
+async def test_finalization_repair_rejects_unverified_output_limit(
+    monkeypatch: pytest.MonkeyPatch, needs_finalization: bool,
+) -> None:
+    from yleum_api.services import agent_native
+    from yleum_api.services.generation import agent_finalization
+
+    async def run_native_build(**kwargs: Any) -> Any:
+        return SimpleNamespace(
+            stop_reason="output_limit", needs_finalization=needs_finalization,
+            summary="provider response too long", files={}, steps=1,
+        )
+
+    monkeypatch.setattr(agent_native, "run_native_build", run_native_build)
+    observed: list[str] = []
+
+    async def coordinator_finalize(*, prompt: str, repair: Any) -> Any:
+        if needs_finalization:
+            await repair("build failed")
+            observed.append("verified handoff")
+        else:
+            with pytest.raises(RuntimeError, match="output_limit"):
+                await repair("build failed")
+            observed.append("rejected")
+        raise agent_finalization.AdaptationActivationPending("stop after callback")
+
+    async def no_deadline(**kwargs: Any) -> None:
+        return None
+
+    runtime = SimpleNamespace(
+        migration_baseline={},
+        coordinator=SimpleNamespace(
+            finalize_with_repair=coordinator_finalize,
+            source_edit_deadline=no_deadline,
+        ),
+        handle=SimpleNamespace(
+            snapshot_files=_snapshot({"src/app/page.tsx": "changed"}),
+            prove_restoration_adaptation=True,
+        ),
+    )
+    with pytest.raises(agent_finalization.AdaptationActivationPending):
+        await agent_finalization.finalize_max_candidate(
+            _is_edit=True,
+            _max_has_generated_snapshot=True,
+            _max_shell_enabled=False,
+            accumulated="",
+            baseline=SimpleNamespace(files={}, sha=None, snapshot_id=None),  # type: ignore[arg-type]
+            files={"src/app/page.tsx": "before"},
+            ids=SimpleNamespace(  # type: ignore[arg-type]
+                run_id=uuid4(), project_id=uuid4(), user_id=uuid4(),
+                user_message_id=uuid4(), assistant_message_id=uuid4(),
+            ),
+            is_free=False,
+            prompt_text="Change page",
+            runtime=runtime,  # type: ignore[arg-type]
+            plan=SimpleNamespace(user="TASK", stack_guide="G", skills=None, steps=40),  # type: ignore[arg-type]
+            operations=SimpleNamespace(  # type: ignore[arg-type]
+                execute=None, emit=_emit(), probe_runtime=None, probe_build=None, preview_url=None
+            ),
+        )
+    assert observed == (["verified handoff"] if needs_finalization else ["rejected"])
+
+
 def _snapshot(files: dict[str, str]):
     async def snapshot_files() -> dict[str, str]:
         return dict(files)
