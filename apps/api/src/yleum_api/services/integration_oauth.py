@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -15,6 +16,12 @@ from yleum_api.services.integration_providers import (
     IntegrationProviderError,
     IntegrationProviderUnavailable,
 )
+
+_AMOCRM_ACCOUNT_HOST = re.compile(
+    r"(?=.{1,253}\Z)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+"
+    r"(?:amocrm\.ru|kommo\.com)\Z"
+)
+_AMOCRM_REFERER_ERROR = "amoCRM не передал адрес авторизованного аккаунта"
 
 
 @dataclass(frozen=True)
@@ -64,6 +71,34 @@ def credentials(provider: str) -> OAuthCredentials | None:
 def callback_url(provider: str) -> str:
     base = get_settings().integration_oauth_callback_base_url.rstrip("/")
     return f"{base}/{provider}/callback"
+
+
+def _amocrm_base_url(referer: str | None) -> str:
+    """Return a provider-owned HTTPS origin from amoCRM's callback referer."""
+    value = (referer or "").strip()
+    if not value:
+        raise IntegrationCredentialsInvalid(_AMOCRM_REFERER_ERROR)
+    if "://" not in value:
+        host = value.lower()
+        if _AMOCRM_ACCOUNT_HOST.fullmatch(host) is None:
+            raise IntegrationCredentialsInvalid(_AMOCRM_REFERER_ERROR)
+        return f"https://{host}"
+
+    parsed = urlparse(value)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise IntegrationCredentialsInvalid(_AMOCRM_REFERER_ERROR) from exc
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or _AMOCRM_ACCOUNT_HOST.fullmatch(host) is None
+    ):
+        raise IntegrationCredentialsInvalid(_AMOCRM_REFERER_ERROR)
+    return f"https://{host}"
 
 
 def authorization_url(provider: str, state: str) -> str:
@@ -264,12 +299,8 @@ async def exchange_code(
                 )
 
             if provider == "amocrm":
-                host = (urlparse(referer or "").hostname or "").lower()
-                if not host.endswith((".amocrm.ru", ".kommo.com")):
-                    raise IntegrationCredentialsInvalid(
-                        "amoCRM не передал адрес авторизованного аккаунта"
-                    )
-                base_url = f"https://{host}"
+                base_url = _amocrm_base_url(referer)
+                host = urlparse(base_url).hostname or ""
                 token_response = await client.post(
                     f"{base_url}/oauth2/access_token",
                     json={

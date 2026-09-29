@@ -279,6 +279,47 @@ def test_oauth_credentials_strip_platform_configuration(
     )
 
 
+@pytest.mark.parametrize(
+    ("referer", "expected"),
+    [
+        ("officeyleumru.amocrm.ru", "https://officeyleumru.amocrm.ru"),
+        ("OfficeYleumRu.AmoCRM.ru", "https://officeyleumru.amocrm.ru"),
+        ("https://officeyleumru.amocrm.ru/", "https://officeyleumru.amocrm.ru"),
+        ("https://team.kommo.com/oauth/callback", "https://team.kommo.com"),
+        ("https://team.kommo.com:443/", "https://team.kommo.com"),
+    ],
+)
+def test_amocrm_base_url_accepts_provider_account_referers(
+    referer: str, expected: str
+) -> None:
+    assert integration_oauth._amocrm_base_url(referer) == expected
+
+
+@pytest.mark.parametrize(
+    "referer",
+    [
+        None,
+        "",
+        "amocrm.ru",
+        "https://amocrm.ru",
+        "officeyleumru.amocrm.ru/path",
+        "http://officeyleumru.amocrm.ru",
+        "ftp://officeyleumru.amocrm.ru",
+        "https://officeyleumru.amocrm.ru:8443",
+        "https://user@officeyleumru.amocrm.ru",
+        "https://officeyleumru.amocrm.ru.evil.example",
+        "https://evilamocrm.ru",
+        "https://officeyleumru.amocrm.ru%2Fevil.example",
+    ],
+)
+def test_amocrm_base_url_rejects_unsafe_referers(referer: str | None) -> None:
+    with pytest.raises(
+        integration_providers.IntegrationCredentialsInvalid,
+        match="amoCRM не передал адрес авторизованного аккаунта",
+    ):
+        integration_oauth._amocrm_base_url(referer)
+
+
 def _max_init_data(token: str, user_id: int | str = 42) -> str:
     values = {
         "auth_date": str(int(time.time())),
