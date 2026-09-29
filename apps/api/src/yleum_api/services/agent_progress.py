@@ -84,6 +84,25 @@ def bounded_redacted_text(value: str, *, max_bytes: int, lookahead_bytes: int = 
     return encoded[:max_bytes].decode("utf-8", errors="ignore")
 
 
+def bounded_redacted_diagnostic(value: str, *, max_bytes: int) -> str:
+    """Keep both the cause prefix and final compiler/command error, after redaction."""
+    marker = b"\n[output omitted]\n"
+    if max_bytes <= len(marker):
+        return bounded_redacted_text(value, max_bytes=max_bytes)
+    # Redact before splitting: a credential crossing a cut must never become an
+    # unlabelled suffix. The caller already holds this command result in memory.
+    safe = redact_sensitive_text(value).encode("utf-8")
+    if len(safe) <= max_bytes:
+        return safe.decode("utf-8")
+    available = max_bytes - len(marker)
+    head = available // 3
+    return (
+        safe[:head].decode("utf-8", errors="ignore")
+        + marker.decode()
+        + safe[-(available - head):].decode("utf-8", errors="ignore")
+    )
+
+
 def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 

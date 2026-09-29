@@ -1,11 +1,100 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+
 import pytest
 
 from yleum_api.services.generation.agent_finalization import (
+    explicitly_readonly_request,
     source_change_allows_partial_save,
+    unchanged_candidate_before_finalization,
     validate_edit_source_change,
 )
+
+
+@pytest.mark.asyncio
+async def test_noop_never_invokes_production_build_or_migrations():
+    from yleum_api.services.generation.agent_finalization import finalize_max_candidate
+
+    files = {"src/app/page.tsx": "same product"}
+    finalize = AsyncMock()
+    runtime = SimpleNamespace(
+        coordinator=SimpleNamespace(finalize_with_repair=finalize),
+        handle=SimpleNamespace(
+            prove_restoration_adaptation=None, snapshot_files=AsyncMock(return_value=files),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="no source changes"):
+        await finalize_max_candidate(
+            _is_edit=True, _max_has_generated_snapshot=True, _max_shell_enabled=True,
+            accumulated="done", baseline=SimpleNamespace(files=files), files=files,
+            ids=SimpleNamespace(), is_free=False, prompt_text="Change the button",
+            runtime=runtime, plan=SimpleNamespace(), operations=SimpleNamespace(),
+        )
+    finalize.assert_not_awaited()
+
+
+def test_readonly_exception_does_not_swallow_a_requested_change():
+    assert not explicitly_readonly_request("ничего не меняй кроме кнопки")
+    assert not explicitly_readonly_request('добавь текст "ничего не меняй"')
+
+
+def test_managed_sdk_refresh_does_not_count_as_requested_product_edit():
+    verdict = unchanged_candidate_before_finalization(
+        baseline_files={"src/app/page.tsx": "same", "src/lib/omnia/integration-client.ts": "old"},
+        workspace_files={"src/app/page.tsx": "same", "src/lib/omnia/integration-client.ts": "new"},
+        requires_source_change=True,
+        message="done",
+    )
+    assert verdict is not None and verdict.failure
+
+
+def test_file_deletion_is_a_real_change():
+    assert (
+        unchanged_candidate_before_finalization(
+            baseline_files={"src/app/page.tsx": "same", "src/app/old/page.tsx": "delete"},
+            workspace_files={"src/app/page.tsx": "same"},
+            requires_source_change=True,
+            message="done",
+        )
+        is None
+    )
+
+
+def test_unchanged_candidate_is_rejected_before_expensive_finalization():
+    baseline = {"src/app/page.tsx": "existing product"}
+    verdict = unchanged_candidate_before_finalization(
+        baseline_files=baseline,
+        workspace_files=baseline,
+        requires_source_change=True,
+        message="done",
+    )
+    assert verdict is not None and verdict.failure == "edit produced no source changes"
+
+
+def test_readonly_inspection_can_end_without_build_or_new_snapshot():
+    baseline = {"src/app/page.tsx": "existing product"}
+    verdict = unchanged_candidate_before_finalization(
+        baseline_files=baseline,
+        workspace_files=baseline,
+        requires_source_change=False,
+        message="inspection result",
+    )
+    assert verdict is not None and verdict.failure is None and verdict.files == {}
+    assert verdict.message == "inspection result"
+
+
+def test_changed_candidate_still_requires_full_finalization():
+    assert (
+        unchanged_candidate_before_finalization(
+            baseline_files={"a": "before"},
+            workspace_files={"a": "after"},
+            requires_source_change=True,
+            message="done",
+        )
+        is None
+    )
 
 
 def test_identical_exact_edit_is_rejected_before_versioning() -> None:

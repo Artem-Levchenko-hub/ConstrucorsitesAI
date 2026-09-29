@@ -167,6 +167,10 @@ async def execute_agent_turn(
             allow_max_bash=_max_shell_enabled,
             portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
             initial_files=baseline.files if _is_edit or _max_has_generated_snapshot else None,
+            edit_deadline=(
+                await runtime.coordinator.source_edit_deadline()
+                if runtime.coordinator is not None else None
+            ),
         )
     elif _agent_res is None:
         _agent_res = await agent_builder.run_agent_build(

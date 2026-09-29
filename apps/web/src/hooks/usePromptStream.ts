@@ -65,6 +65,38 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const reconnectAttemptsRef = useRef(0);
   const reconnectProbeRef = useRef(false);
   const terminalGenerationMessagesRef = useRef<Set<string>>(new Set());
+  const terminalHistoryPollsRef = useRef(new Map<string, { cancelled: boolean; timer?: number }>());
+  useEffect(() => {
+    const polls = terminalHistoryPollsRef.current;
+    return () => {
+      for (const entry of polls.values()) {
+        entry.cancelled = true;
+        window.clearTimeout(entry.timer);
+      }
+      polls.clear();
+    };
+  }, [projectId]);
+  const refreshTerminalHistory = useCallback((messageId: string) => {
+    if (terminalHistoryPollsRef.current.has(messageId)) return;
+    const entry: { cancelled: boolean; timer?: number } = { cancelled: false };
+    terminalHistoryPollsRef.current.set(messageId, entry);
+    let attempt = 0;
+    const poll = async () => {
+      try {
+        const generation = await getLatestGeneration(projectId);
+        if (entry.cancelled) return;
+        if (!isActiveGenerationForMessage(generation, messageId)) {
+          await qc.invalidateQueries({ queryKey: ["messages", projectId] });
+          terminalHistoryPollsRef.current.delete(messageId);
+          return;
+        }
+      } catch { /* A lost status response does not mean that cleanup finished. */ }
+      if (!entry.cancelled) {
+        entry.timer = window.setTimeout(() => { void poll(); }, Math.min(15_000, 1000 * 2 ** attempt++));
+      }
+    };
+    void poll();
+  }, [projectId, qc]);
   const connectRef = useRef<() => void>(() => {});
   const streamMetaRef = useRef<
     Record<string, { lastSeq: number; resyncing: boolean }>
@@ -587,10 +619,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
         qc.invalidateQueries({ queryKey: ["generation", projectId] });
+        // The error event may precede cleanup/terminal commit. Read durable
+        // history after that commit so the failure card also appears live.
+        refreshTerminalHistory(event.data.message_id);
         fireQueued();
       }
     },
-    [qc, projectId, fireQueued, updateMessage],
+    [qc, projectId, fireQueued, updateMessage, refreshTerminalHistory],
   );
 
   // Silence watchdog: fires `onSilence` if the message gets no update for

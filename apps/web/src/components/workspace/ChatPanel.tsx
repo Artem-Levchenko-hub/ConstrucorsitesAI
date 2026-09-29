@@ -426,6 +426,8 @@ export function ChatPanel({
             streaming={m.id === streamingId}
             projectId={projectId}
             onFix={handleFix}
+            onRetry={m.id === messages?.at(-1)?.id && !isPending && !pendingPrompt
+              ? () => submitWithCredentialIntake("Попробуй ещё раз", []) : undefined}
             onSuggest={handleSuggest}
             presentation="studio"
           />

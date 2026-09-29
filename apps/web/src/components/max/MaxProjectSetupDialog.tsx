@@ -96,6 +96,7 @@ export function MaxProjectSetupDialog({
       void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
       void qc.invalidateQueries({ queryKey: ["max-preview-session", projectId] });
       toast.success("Данные сохранены", {
+        id: `max-config-save-${projectId}`,
         description: data.application_mode === "runtime"
           ? (data.synced_snapshot_id
             ? "Конфигурация, поддержка и документы обновлены. Для изменения экранов нажмите «Применить к приложению»."
@@ -109,7 +110,11 @@ export function MaxProjectSetupDialog({
     },
     onError: (error) => {
       applyAfterSave.current = false;
-      toast.error("Не удалось сохранить", { description: errorMessage(error) });
+      if (error instanceof ApiError && error.status === 409 && error.message.includes("Дождитесь завершения сборки")) {
+        toast.info("Сборка ещё выполняется", { id: `max-config-save-${projectId}`, description: error.message, duration: 8000 });
+        return;
+      }
+      toast.error("Не удалось сохранить", { id: `max-config-save-${projectId}`, description: errorMessage(error), duration: 8000 });
     },
   });
   // Публикацию блокирует ровно одно поле данных — подтверждение документов.

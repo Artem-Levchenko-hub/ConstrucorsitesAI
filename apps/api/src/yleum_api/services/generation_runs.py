@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal, cast
@@ -18,6 +19,7 @@ from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.restoration import Restoration
+from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 
 ACTIVE_GENERATION_STATUSES = (
     "pending",
@@ -26,6 +28,14 @@ ACTIVE_GENERATION_STATUSES = (
     "cancel_requested",
 )
 INTERRUPTED_GENERATION_STATUSES = ("pending", "running", "cancel_requested")
+
+
+def note_generation_release(run: GenerationRun) -> None:
+    from yleum_api.core.config import get_settings
+
+    release = get_settings().omnia_release_sha
+    if re.fullmatch(r"[0-9a-f]{40}", release):
+        run.agent_state = {**(run.agent_state or {}), "runtime_revision": release}
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,7 +268,7 @@ async def terminalize_generation_run_locked(
     run.status = status
     run.finished_at = finished_at or datetime.now(UTC)
     if error is not None:
-        run.error = error[:2000]
+        run.error = bounded_redacted_diagnostic(error, max_bytes=2000)
     state = run.agent_state if isinstance(run.agent_state, dict) else {}
     raw_adaptation = state.get("restoration_adaptation")
     if (
@@ -297,7 +307,9 @@ async def record_generation_product_failure(
         return
     run.agent_state = {
         **(run.agent_state or {}),
-        "product_outcome": {"status": "failed", "error": error[:2000]},
+        "product_outcome": {
+            "status": "failed", "error": bounded_redacted_diagnostic(error, max_bytes=2000),
+        },
     }
 
 
@@ -543,6 +555,7 @@ async def promote_generation_after_admission(
             return "lost"
         run.status = "running"
         run.started_at = run.started_at or datetime.now(UTC)
+        note_generation_release(run)
         await session.commit()
         return "admitted"
 
@@ -838,7 +851,7 @@ async def set_generation_run_status(
         if new_status == "running" and run.started_at is None:
             run.started_at = now
         if error is not None and new_status not in {"cancelled", "completed", "failed"}:
-            run.error = error[:2000]
+            run.error = bounded_redacted_diagnostic(error, max_bytes=2000)
         await compile_terminal_run_memory(session, run)
         await session.commit()
 

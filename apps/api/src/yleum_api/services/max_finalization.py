@@ -25,7 +25,7 @@ from yleum_api.models.project_cell import (
 )
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services import repo
-from yleum_api.services.agent_progress import bounded_redacted_text
+from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from yleum_api.services.generation_deadline import (
     generation_deadline,
@@ -33,6 +33,7 @@ from yleum_api.services.generation_deadline import (
     note_proof_sealed,
     note_proof_settled,
     note_repair_stage_started,
+    source_edit_deadline,
 )
 from yleum_api.services.generation_metrics import (
     GenerationPhase,
@@ -92,7 +93,7 @@ from yleum_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
 # A repair is one model turn plus a build; starting it with less time only burns the rest.
-_MIN_REPAIR_SECONDS = 120
+_MIN_REPAIR_SECONDS = 60
 # Сколько раз подряд источнику возвращают замечания. У обычной правки три прохода:
 # больше почти всегда означает, что агент ходит по кругу.
 _ORDINARY_REPAIR_ROUNDS = 3
@@ -341,6 +342,15 @@ class MaxFinalizationCoordinator:
             raise ProjectCellInfrastructureError(
                 PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED, operation_id
             )
+
+    async def source_edit_deadline(self, *, repair: bool = False) -> datetime | None:
+        async with self.session_factory() as session:
+            run = await self._locked_run(session)
+            deadline = generation_deadline(run).at
+        return source_edit_deadline(
+            deadline, started_at=run.started_at or run.created_at,
+            reserve_seconds=180 if repair else 300,
+        ) if deadline is not None else None
 
     async def fast_check(self) -> ProjectCellProofResult:
         await self._raise_persisted_infrastructure_failure()
@@ -591,7 +601,10 @@ class MaxFinalizationCoordinator:
                 raise MaxFinalizationConflict(
                     "sealed restoration adaptation cannot enter a source repair"
                 )
-            remaining = (deadline - datetime.now(UTC)).total_seconds()
+            repair_end = source_edit_deadline(
+                deadline, started_at=run.started_at or run.created_at, reserve_seconds=180,
+            )
+            remaining = (repair_end - datetime.now(UTC)).total_seconds()
             if remaining < _MIN_REPAIR_SECONDS:
                 raise TimeoutError("generation deadline exceeded before source repair")
             try:
@@ -639,7 +652,7 @@ class MaxFinalizationCoordinator:
         artifact_ref: str | None = None,
         artifact_digest: str | None = None,
     ) -> ProjectCellProofResult:
-        detail_text = bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
+        detail_text = bounded_redacted_diagnostic(detail, max_bytes=_MAX_DETAIL_BYTES)
         return ProjectCellProofResult(
             id=uuid5(
                 operation_id,
@@ -802,9 +815,9 @@ class MaxFinalizationCoordinator:
         )
         current = await self._identity()
         unchanged = current == identity
-        detail = bounded_redacted_text(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
+        detail = bounded_redacted_diagnostic(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
         if not unchanged:
-            detail = bounded_redacted_text(
+            detail = bounded_redacted_diagnostic(
                 "release proof changed the frozen candidate proof identity\n" + detail,
                 max_bytes=_MAX_DETAIL_BYTES,
             )
@@ -1825,7 +1838,7 @@ class MaxFinalizationCoordinator:
         )
         dimension_key = bundle.identity.proof_key + build_digest
         operation_id = uuid5(self.generation_run_id, f"release:{dimension_key}")
-        detail = bounded_redacted_text(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
+        detail = bounded_redacted_diagnostic(verdict.summary, max_bytes=_MAX_DETAIL_BYTES)
         digest = release_receipt_digest(
             proof_key=bundle.identity.proof_key,
             artifact_digest=build_digest,
@@ -1857,7 +1870,7 @@ class MaxFinalizationCoordinator:
         artifact_digest: str | None = None,
         refresh_incompatible: bool = False,
     ) -> ProjectCellProofResult:
-        detail_text = bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
+        detail_text = bounded_redacted_diagnostic(detail, max_bytes=_MAX_DETAIL_BYTES)
 
         def needs_refresh(result: ProjectCellProofResult) -> bool:
             return (
@@ -2143,7 +2156,7 @@ class MaxFinalizationCoordinator:
         proof: ProofBundle,
         detail: str,
     ) -> MaxFinalizationOutcome:
-        safe_detail = bounded_redacted_text(detail, max_bytes=_MAX_DETAIL_BYTES)
+        safe_detail = bounded_redacted_diagnostic(detail, max_bytes=_MAX_DETAIL_BYTES)
         async with self.session_factory() as session:
             run = await session.scalar(
                 select(GenerationRun)
@@ -2414,7 +2427,7 @@ async def watch_generation_deadline(
             "agent_operation_id": str(agent_operation_id) if agent_operation_id else None,
             "proof_key": proof_key,
         }
-        diagnostic = bounded_redacted_text(
+        diagnostic = bounded_redacted_diagnostic(
             f"generation {'cancelled' if cancelled else 'deadline exceeded'}; "
             f"stage={terminal['stage']}; phase={phase}; "
             f"restoration_operation_id={terminal['restoration_operation_id'] or 'none'}; "

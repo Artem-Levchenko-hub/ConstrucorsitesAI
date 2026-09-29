@@ -515,7 +515,8 @@ async def test_a_repair_that_runs_out_of_time_says_so(
     run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
     assert run is not None
     # Enough headroom that a loaded runner cannot turn this into the "before" refusal.
-    run.started_at = datetime.now(UTC) - _EDIT + timedelta(seconds=5)
+    # Five seconds for editing, followed by the reserved 180-second final build.
+    run.started_at = datetime.now(UTC) - _EDIT + timedelta(seconds=185)
     await db_session.commit()
     monkeypatch.setattr(max_finalization, "_MIN_REPAIR_SECONDS", 0)
 

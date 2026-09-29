@@ -21,6 +21,7 @@ import asyncio
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -448,11 +449,25 @@ def _with_incremental_cache(convo: list[dict[str, Any]]) -> list[dict[str, Any]]
     return [*convo[:-1], {**last, "content": new_content}]
 
 
-def _tool_use_to_action(block: dict[str, Any]) -> Action:
+def _tool_use_to_action(block: dict[str, Any], *, portable_cell: bool = False) -> Action:
     inp = block.get("input") or {}
     if not isinstance(inp, dict):
         inp = {}
-    return Action(name=str(block.get("name", "")), args=dict(inp), raw="")
+    args = dict(inp)
+    # Tools operate under this exact workspace root. Accept its documented
+    # absolute spelling without admitting another root or traversal.
+    path = args.get("path")
+    if portable_cell and block.get("name") in {"list_dir", "grep"} and path == "/workspace":
+        args["path"] = "."
+    if (
+        portable_cell
+        and block.get("name") in {"read_file", "write_file", "edit_file", "list_dir", "grep"}
+        and isinstance(path, str) and path.startswith("/workspace/")
+    ):
+        relative = path.removeprefix("/workspace/")
+        if relative and ".." not in relative.replace("\\", "/").split("/"):
+            args["path"] = relative
+    return Action(name=str(block.get("name", "")), args=args, raw="")
 
 
 def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
@@ -767,6 +782,16 @@ def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
         parts.append(skills.strip())
     if is_max_prompt:
         parts.append(_MAX_NATIVE_VERIFICATION_OVERRIDE)
+        parts.append(
+            "MAX UI 0.2.0: Typography is a namespace, not a JSX component. "
+            "Never render <Typography>. Inspect the installed public exports/types "
+            "for the concrete text components and their props. Use the managed "
+            "integration SDK for connected services; do not invent webhook secrets "
+            "or local provider status mappings when the SDK supplies the capability. "
+            "Before a database command, check package.json and available binaries; "
+            "do not assume psql or the pg package is installed. Reuse the installed "
+            "database driver and the project's documented migration command."
+        )
     return "\n\n".join(p for p in parts if p)
 
 
@@ -928,6 +953,7 @@ async def _run_native_segment(
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
     initial_files: Mapping[str, str] | None = None,
+    edit_deadline: datetime | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -954,6 +980,7 @@ async def _run_native_segment(
     successful_tools: dict[str, int] = {}
     proof_after_write: set[str] = set()
     invalidated_proofs: set[str] = set()
+    checkpoint_at: float | None = None
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
@@ -1113,6 +1140,49 @@ async def _run_native_segment(
 
     async with httpx.AsyncClient() as client:
         for step in range(effective_max_steps):
+            remaining = (
+                (edit_deadline - datetime.now(UTC)).total_seconds()
+                if edit_deadline is not None else None
+            )
+            if remaining is not None and remaining <= 0:
+                return await _finish_without_provider(
+                    steps=step, reason="finalization_reserve",
+                    detail="Source editing budget ended; final checks remain mandatory.",
+                )
+            # Check the first source batch, then at most once per three minutes
+            # while it changes. Compiler feedback must reach the model while it
+            # still has time to repair, rather than after twenty minutes of work.
+            now = asyncio.get_running_loop().time()
+            if coordinated_max and wrote_since_build and (
+                checkpoint_at is None or now - checkpoint_at >= 180
+            ):
+                checked = await execute(Action("build", {}, ""))
+                checkpoint_at = asyncio.get_running_loop().time()
+                last_build_ok = bool(checked.get("ok"))
+                wrote_since_build = False
+                _invalidate_proofs("build")
+                if last_build_ok:
+                    proof_after_write.add("build")
+                    successful_tools["build"] = successful_tools.get("build", 0) + 1
+                detail = _step_detail("build", Action("build", {}, ""), checked)
+                convo.append({"role": "user", "content": "EARLY SOURCE CHECK:\n" + detail})
+                if emit:
+                    await emit("agent.step", {
+                        "step": step, "action": "build", "path": "",
+                        "detail": detail, "ok": last_build_ok,
+                    })
+                if edit_deadline is not None:
+                    remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
+                    if remaining <= 0:
+                        return await _finish_without_provider(
+                            steps=step, reason="finalization_reserve", detail=detail,
+                        )
+            if remaining is not None and remaining <= 180:
+                convo.append({"role": "user", "content": (
+                    f"Editing time remaining: {int(remaining)} seconds. Complete the requested "
+                    "source now, fix known errors and call done. Final production checks "
+                    "have reserved time; do not start new exploration or optional features."
+                )})
             force_max_entry_write = (
                 max_runtime
                 and completion_check is not None
@@ -1130,38 +1200,45 @@ async def _run_native_segment(
                 if last_build_ok is True and not wrote_since_build
                 else "native_agent"
             )
+            call_budget = asyncio.timeout(remaining)
             try:
-                resp = await _call_messages(
-                    client,
-                    url,
-                    convo,
-                    system,
-                    user_id=str(user_id) if user_id else None,
-                    project_id=str(project_id) if project_id else None,
-                    run_id=str(run_id) if run_id else None,
-                    message_id=str(message_id) if message_id else None,
-                    free=free,
-                    stage=call_stage,
-                    headers=messages_headers,
-                    auth_factory=messages_auth_factory,
-                    tools=(
-                        _MAX_ENTRY_WRITE_TOOLS
-                        if force_max_entry_write
-                        else _MAX_COORDINATOR_BASH_TOOLS_CACHED
-                        if coordinated_max and allow_max_bash
-                        else _MAX_COORDINATOR_TOOLS_CACHED
-                        if coordinated_max
-                        else _MAX_PORTABLE_TOOLS_CACHED
-                        if max_runtime and allow_max_bash and portable_cell
-                        else _MAX_TOOLS_WITH_BASH_CACHED
-                        if max_runtime and allow_max_bash
-                        else _MAX_TOOLS_CACHED
-                        if max_runtime
-                        else None
-                    ),
-                    tool_choice=(_MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None),
-                )
+                async with call_budget:
+                    resp = await _call_messages(
+                        client,
+                        url,
+                        convo,
+                        system,
+                        user_id=str(user_id) if user_id else None,
+                        project_id=str(project_id) if project_id else None,
+                        run_id=str(run_id) if run_id else None,
+                        message_id=str(message_id) if message_id else None,
+                        free=free,
+                        stage=call_stage,
+                        headers=messages_headers,
+                        auth_factory=messages_auth_factory,
+                        tools=(
+                            _MAX_ENTRY_WRITE_TOOLS
+                            if force_max_entry_write
+                            else _MAX_COORDINATOR_BASH_TOOLS_CACHED
+                            if coordinated_max and allow_max_bash
+                            else _MAX_COORDINATOR_TOOLS_CACHED
+                            if coordinated_max
+                            else _MAX_PORTABLE_TOOLS_CACHED
+                            if max_runtime and allow_max_bash and portable_cell
+                            else _MAX_TOOLS_WITH_BASH_CACHED
+                            if max_runtime and allow_max_bash
+                            else _MAX_TOOLS_CACHED
+                            if max_runtime
+                            else None
+                        ),
+                        tool_choice=(_MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None),
+                    )
             except Exception as exc:
+                if isinstance(exc, TimeoutError) and call_budget.expired():
+                    return await _finish_without_provider(
+                        steps=step, reason="finalization_reserve",
+                        detail="Editing budget exhausted during the provider call.",
+                    )
                 # A provider failure is not a model handoff to verification.
                 # Do not build/accept a starter or overwrite the primary cause
                 # with a source-completion gap after failed model traffic.
@@ -1267,7 +1344,7 @@ async def _run_native_segment(
                     results.append({"type": "tool_result", "tool_use_id": tu_id, "content": "done"})
                     continue
 
-                action = _tool_use_to_action(tu)
+                action = _tool_use_to_action(tu, portable_cell=portable_cell)
                 _max_contract_active = max_runtime and completion_check is not None
                 _max_entry_missing = (
                     _MAX_PRODUCT_ENTRY_PATH not in baseline_files
@@ -1529,7 +1606,7 @@ NativeSegmentRunner = Callable[
 ]
 
 _CONTINUATION_TERMINAL_REASONS = frozenset(
-    {"error", "infra_error", "provider_error", "provider_stopped_red"}
+    {"error", "infra_error", "provider_error", "provider_stopped_red", "finalization_reserve"}
 )
 
 
@@ -1698,6 +1775,7 @@ async def run_native_build(
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
     initial_files: Mapping[str, str] | None = None,
+    edit_deadline: datetime | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
 
@@ -1724,6 +1802,7 @@ async def run_native_build(
             messages_headers=messages_headers,
             messages_auth_factory=messages_auth_factory,
             initial_files=initial_files,
+            edit_deadline=edit_deadline,
         )
 
     return await _run_native_segments(

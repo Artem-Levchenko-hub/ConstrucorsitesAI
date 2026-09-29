@@ -21,6 +21,21 @@ DeadlineStage = Literal["edit", "repair", "proof"]
 
 _STATE_KEY = "max_finalization"
 _BOOK_KEY = "deadline"
+# Observed full builds take 156–188 seconds, followed by runtime and release
+# proofs. Editing must leave room for those checks inside the existing ceiling.
+FINALIZATION_RESERVE_SECONDS = 300
+
+
+def source_edit_deadline(
+    deadline: datetime,
+    *,
+    started_at: datetime | None = None,
+    reserve_seconds: int = FINALIZATION_RESERVE_SECONDS,
+) -> datetime:
+    reserve = float(reserve_seconds)
+    if started_at is not None:
+        reserve = min(reserve, max(0, (deadline - started_at).total_seconds()) / 5)
+    return deadline - timedelta(seconds=reserve)
 
 
 @dataclass(frozen=True, slots=True)

@@ -1,4 +1,5 @@
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -131,7 +132,7 @@ async def test_finalization_fatal_skips_source_repair_and_preserves_code(monkeyp
             _max_has_generated_snapshot=True,
             _max_shell_enabled=False,
             accumulated="candidate",
-            baseline=SimpleNamespace(sha="a" * 40),
+            baseline=SimpleNamespace(sha="a" * 40, files={"src/app/page.tsx": "before"}),
             files={"src/app/page.tsx": "candidate"},
             ids=SimpleNamespace(project_id=uuid4()),
             is_free=True,
@@ -139,7 +140,11 @@ async def test_finalization_fatal_skips_source_repair_and_preserves_code(monkeyp
             plan=SimpleNamespace(),
             operations=SimpleNamespace(),
             runtime=SimpleNamespace(
-                handle=object(), coordinator=SimpleNamespace(finalize_with_repair=finalize)
+                handle=SimpleNamespace(
+                    prove_restoration_adaptation=None,
+                    snapshot_files=AsyncMock(return_value={"src/app/page.tsx": "candidate"}),
+                ),
+                coordinator=SimpleNamespace(finalize_with_repair=finalize)
             ),
         )
     assert calls == []
@@ -178,7 +183,8 @@ async def test_sealed_adaptation_failure_preserves_candidate_for_forward_recover
             plan=SimpleNamespace(),
             operations=SimpleNamespace(),
             runtime=SimpleNamespace(
-                handle=object(), coordinator=SimpleNamespace(finalize_with_repair=finalize)
+                handle=SimpleNamespace(prove_restoration_adaptation=True),
+                coordinator=SimpleNamespace(finalize_with_repair=finalize)
             ),
         )
     assert calls == []
@@ -220,7 +226,8 @@ async def test_terminal_adaptation_cancel_stops_pipeline_without_source_rollback
             plan=SimpleNamespace(),
             operations=SimpleNamespace(),
             runtime=SimpleNamespace(
-                handle=object(), coordinator=SimpleNamespace(finalize_with_repair=finalize)
+                handle=SimpleNamespace(prove_restoration_adaptation=True),
+                coordinator=SimpleNamespace(finalize_with_repair=finalize)
             ),
         )
     assert calls == []

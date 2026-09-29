@@ -291,9 +291,16 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
         # finalization is not what this test is about.
         raise agent_finalization.AdaptationActivationPending("handed off")
 
+    async def _no_deadline(**kwargs):
+        return None
+
     runtime = SimpleNamespace(
-        coordinator=SimpleNamespace(finalize_with_repair=coordinator_finalize),
-        handle=SimpleNamespace(snapshot_files=_snapshot(workspace)),
+        coordinator=SimpleNamespace(
+            finalize_with_repair=coordinator_finalize, source_edit_deadline=_no_deadline,
+        ),
+        handle=SimpleNamespace(
+            snapshot_files=_snapshot(workspace), prove_restoration_adaptation=True,
+        ),
     )
     with pytest.raises(agent_finalization.AdaptationActivationPending):
         await agent_finalization.finalize_max_candidate(

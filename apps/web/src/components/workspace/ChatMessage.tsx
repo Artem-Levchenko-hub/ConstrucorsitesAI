@@ -34,6 +34,7 @@ import { PassProgressBar } from "./PassProgressBar";
 import { AgentTranscript } from "./AgentTranscript";
 import { RemixRecapCard } from "./RemixRecapCard";
 import { Markdown } from "./Markdown";
+import { GenerationFailureCard } from "./GenerationFailureCard";
 
 // The onboarding quiz folds its answers into the user prompt after this marker
 // (see OnboardingQuiz.compile). We split on it to render the answers as chips
@@ -50,6 +51,7 @@ export function ChatMessage({
   projectId,
   onFix,
   onSuggest,
+  onRetry,
   presentation = "default",
 }: {
   message: Message;
@@ -67,6 +69,7 @@ export function ChatMessage({
   /** Submit a starter-edit prompt from a fork recap card's one-tap chips.
    *  Omitted in replays / screenshots → chips render non-interactive. */
   onSuggest?: (prompt: string) => void;
+  onRetry?: () => Promise<boolean>;
   presentation?: "default" | "studio";
 }) {
   const isUser = message.role === "user";
@@ -140,6 +143,10 @@ export function ChatMessage({
               finishedAt={message.generation_finished_at}
               generationStatus={message.generation_status}
             />
+          )}
+
+          {!isUser && message.generation_status === "failed" && message.generation_failure && (
+            <GenerationFailureCard failure={message.generation_failure} onRetry={onRetry} />
           )}
 
           {isUser ? (

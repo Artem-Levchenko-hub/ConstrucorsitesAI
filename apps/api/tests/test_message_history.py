@@ -17,9 +17,11 @@ from yleum_api.models.user import User
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.mark.parametrize("run_status", ["completed", "failed", "cancelled"])
 async def test_message_history_returns_latest_rows_with_persisted_steps(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
+    run_status: str,
 ) -> None:
     user = User(email="history@example.com", password_hash="x")
     db_session.add(user)
@@ -57,6 +59,8 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
         for index in range(5)
     ]
     db_session.add_all(rows)
+    if run_status == "failed":
+        rows[-1].content = ""
     await db_session.flush()
     run_started_at = started_at + timedelta(minutes=4, seconds=2)
     run_finished_at = run_started_at + timedelta(seconds=73)
@@ -67,7 +71,8 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
             assistant_message_id=rows[-1].id,
             idempotency_key="history-timer",
             prompt_hash="a" * 64,
-            status="completed",
+            status=run_status,
+            error="generation deadline exceeded; password=NEVER_PUBLISH_THIS",
             response_mode="build",
             created_at=started_at + timedelta(minutes=4),
             started_at=run_started_at,
@@ -87,11 +92,20 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
 
     assert response.status_code == 200
     payload = response.json()
-    assert [message["content"] for message in payload] == ["reply-3", "reply-4"]
+    assert [message["content"] for message in payload] == [
+        "reply-3",
+        "" if run_status == "failed" else "reply-4",
+    ]
     assert payload[-1]["agent_steps"][0]["action"] == "Проверяю проект"
     assert payload[-1]["generation_started_at"] == run_started_at.isoformat().replace("+00:00", "Z")
     assert payload[-1]["generation_finished_at"] == run_finished_at.isoformat().replace(
         "+00:00", "Z"
     )
-    assert payload[-1]["generation_status"] == "completed"
+    assert payload[-1]["generation_status"] == run_status
+    if run_status == "failed":
+        assert payload[-1]["generation_failure"]["code"] == "deadline"
+        assert payload[-1]["generation_failure"]["retryable"] is True
+    else:
+        assert payload[-1]["generation_failure"] is None
+    assert "NEVER_PUBLISH_THIS" not in response.text
     assert payload[0]["generation_started_at"] is None

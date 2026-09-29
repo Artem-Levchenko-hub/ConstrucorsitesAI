@@ -87,6 +87,30 @@ afterEach(async () => {
 });
 
 describe("prompt stream terminal reconciliation", () => {
+  it("hydrates durable failure history after the error event wins the commit race", async () => {
+    vi.mocked(getLatestGeneration).mockResolvedValueOnce(run("running")).mockResolvedValue(run("failed"));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await act(async () => TestSocket.instances.at(-1)!.emit({
+      type: "llm.error", data: { message_id: "message-1", error: "deadline" },
+    }));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["messages", "project-1"] });
+  });
+
+  it("keeps observing a slow cleanup until durable failure is committed", async () => {
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("running"));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await act(async () => TestSocket.instances.at(-1)!.emit({
+      type: "llm.error", data: { message_id: "message-1", error: "deadline" },
+    }));
+    await act(async () => vi.advanceTimersByTimeAsync(31_000));
+    invalidate.mockClear();
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("failed"));
+    await act(async () => vi.advanceTimersByTimeAsync(15_000));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["messages", "project-1"] });
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
   it.each([
     [{ type: "generation.cancelled", data: { run_id: "run-1", message_id: "message-1" } }, "cancelled"],
     [{ type: "llm.error", data: { message_id: "message-1", error: "Build failed" } }, "failed"],

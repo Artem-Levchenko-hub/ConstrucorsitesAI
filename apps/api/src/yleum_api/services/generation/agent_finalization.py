@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Mapping
 from typing import NamedTuple
 
@@ -40,6 +41,34 @@ class EditSourceChangeVerdict(NamedTuple):
 def source_change_allows_partial_save(verdict: EditSourceChangeVerdict) -> bool:
     """Suppress the partial-save CTA after an explicit no-source-change failure."""
     return verdict.failure is None
+
+
+def explicitly_readonly_request(prompt: str) -> bool:
+    return re.fullmatch(
+        r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
+        r"(?:do\s+not|don't)\s+(?:change|modify|edit)\s+(?:anything|files|code)",
+        prompt.strip().rstrip(".!"), flags=re.IGNORECASE,
+    ) is not None
+
+
+def unchanged_candidate_before_finalization(
+    *, baseline_files: Mapping[str, str], workspace_files: Mapping[str, str],
+    requires_source_change: bool, message: str,
+) -> EditSourceChangeVerdict | None:
+    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+
+    product_before = {
+        p: value for p, value in baseline_files.items() if p not in MAX_SECURITY_LOCKED_FILES
+    }
+    product_after = {
+        p: value for p, value in workspace_files.items() if p not in MAX_SECURITY_LOCKED_FILES
+    }
+    if product_after != product_before:
+        return None
+    return EditSourceChangeVerdict(
+        {}, _NO_SOURCE_CHANGE_MESSAGE if requires_source_change else message,
+        _NO_SOURCE_CHANGE_FAILURE if requires_source_change else None,
+    )
 
 
 def validate_edit_source_change(
@@ -92,6 +121,23 @@ async def finalize_max_candidate(
 
         assert runtime.handle is not None
 
+        # A healthy unchanged tree cannot prove that the requested edit happened.
+        # Check before spending minutes on a production build or running SQL.
+        if (
+            (_is_edit or _max_has_generated_snapshot)
+            and runtime.handle.prove_restoration_adaptation is None
+        ):
+            unchanged = unchanged_candidate_before_finalization(
+                baseline_files=baseline.files,
+                workspace_files=await runtime.handle.snapshot_files(),
+                requires_source_change=not explicitly_readonly_request(prompt_text),
+                message=accumulated,
+            )
+            if unchanged is not None:
+                if unchanged.failure:
+                    raise RuntimeError(unchanged.failure)
+                return FinalizedAgentSource(None, {}, unchanged.message)
+
         _repair_history: list[str] = []
 
         async def _repair_finalization_source(detail: str) -> None:
@@ -99,6 +145,7 @@ async def finalize_max_candidate(
             from yleum_api.services.max_generation_contract import max_source_completion_gap
 
             assert runtime.handle is not None
+            assert runtime.coordinator is not None
             baseline = await runtime.handle.snapshot_files()
             # Each repair opens a fresh transcript, so the agent cannot see what it
             # already changed or what the earlier passes were told. Hand both over.
@@ -144,6 +191,7 @@ async def finalize_max_candidate(
                 allow_max_bash=_max_shell_enabled,
                 portable_cell=True,
                 initial_files=baseline,
+                edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
                 completion_check=lambda written, evidence: max_source_completion_gap(
                     prompt_text,
                     {**baseline, **written},

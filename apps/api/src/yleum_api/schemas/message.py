@@ -22,6 +22,12 @@ class SelectedElement(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
+class GenerationFailure(BaseModel):
+    code: str
+    message: str
+    retryable: bool
+
+
 class MessagePublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -44,6 +50,7 @@ class MessagePublic(BaseModel):
     # a reload and to keep a completed duration frozen.
     generation_started_at: datetime | None = None
     generation_finished_at: datetime | None = None
+    generation_failure: GenerationFailure | None = None
     generation_status: (
         Literal[
             "pending",
