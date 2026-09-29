@@ -68,6 +68,8 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     pid, uid, mid, rid = (UUID(int=i) for i in range(1, 5))
     state = {"model_ran": False, "runtime_probed": False, "config_reads": 0}
     rendered = []
+    # Snapshot is the full staged tree, including seed; export is only the model diff.
+    workspace_files: dict[str, str] = {}
     prompt = "Создай сервис " + "я" * 1050
     if fallback == "empty":
         prompt = ""
@@ -177,8 +179,15 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     monkeypatch.setattr(progress, "generation_event_envelope", lambda event: {})
     monkeypatch.setattr(lifecycle, "set_generation_run_status", AsyncMock())
     monkeypatch.setattr(agent_preparation, "_build_agent_seed_parts", AsyncMock(return_value=[]))
-    monkeypatch.setattr(agent_seed, "_apply_project_cell_preview_files", AsyncMock())
-    monkeypatch.setattr(agent_recovery, "_apply_project_cell_preview_files", AsyncMock())
+    async def apply_files(*, files, **kwargs):
+        for path, content in files.items():
+            if content == "":
+                workspace_files.pop(path, None)
+            else:
+                workspace_files[path] = content
+
+    monkeypatch.setattr(agent_seed, "_apply_project_cell_preview_files", apply_files)
+    monkeypatch.setattr(agent_recovery, "_apply_project_cell_preview_files", apply_files)
     monkeypatch.setattr(integration_generation, "generation_context", AsyncMock(return_value=""))
     monkeypatch.setattr(max_data_evolution, "build_max_agent_guide", AsyncMock(return_value=""))
 
@@ -188,7 +197,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     handle = SimpleNamespace(
         capabilities={"portable_machine": portable},
         is_portable=lambda: portable,
-        snapshot_files=AsyncMock(return_value={}),
+        snapshot_files=AsyncMock(side_effect=lambda: dict(workspace_files)),
         export_files=AsyncMock(return_value=product),
         release=AsyncMock(),
     )
@@ -209,6 +218,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
 
     async def model(**kwargs):
         state["model_ran"] = True
+        workspace_files.update(product)
         return lifecycle.agent_builder.AgentResult(
             done=caller == "verification_rollback",
             summary="Baseline result",
