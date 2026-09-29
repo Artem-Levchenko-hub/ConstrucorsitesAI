@@ -100,7 +100,7 @@ it.each([
   ["idempotency_conflict", "idempotency key was already used for another prompt", "уже был отправлен"],
   ["conflict", "Черновик изменился", "Черновик изменился"],
 ])("shows %s as its own refusal and keeps the composer free", async (code, message, shown) => {
-  vi.mocked(sendPrompt).mockRejectedValueOnce(refusal(code, message));
+  vi.mocked(sendPrompt).mockRejectedValueOnce(refusal(code, message + " token=NEVER_PUBLISH"));
   await mount();
   await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
   expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
@@ -108,6 +108,7 @@ it.each([
     description: expect.stringContaining(shown),
   }));
   expect(getLatestGeneration).not.toHaveBeenCalled();
+  expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
   // Not streaming: the next prompt is sent, not parked in a queue that never drains.
   vi.mocked(sendPrompt).mockResolvedValueOnce({ run_id: "r2", message_id: "m2", snapshot_id: null,
     replayed: false, run_status: "pending" } as never);

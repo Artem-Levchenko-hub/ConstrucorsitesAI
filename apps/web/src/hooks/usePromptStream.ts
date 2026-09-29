@@ -38,6 +38,9 @@ const PROMPT_REFUSALS: Record<string, string> = {
     "Сейчас идёт другая сборка. Дождитесь её завершения и отправьте запрос ещё раз.",
   idempotency_conflict:
     "Запрос с этим ключом уже был отправлен с другим текстом. Обновите страницу и повторите.",
+  restoration_active: "Идёт восстановление версии: примените или отмените его перед новым запросом.",
+  source_changed: "Данные приложения изменились. Откройте настройки и повторите запрос.",
+  conflict: "Черновик изменился. Обновите страницу и повторите запрос.",
   wallet_empty: "Недостаточно средств для генерации. Пополните баланс и повторите запрос.",
   payment_required: "Для генерации требуется пополнить баланс.",
   not_found: "Проект не найден. Обновите страницу и проверьте доступ.",
@@ -1055,7 +1058,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         // — network error, 4xx (wallet_empty, not_found), 5xx, timeout.
         // Surface to user; placeholder turns into an explicit error row.
         const errMsg =
-          e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
+          e instanceof ApiError && e.code === "conflict" && opts?.restorationAdaptation
+            ? "Не удалось начать адаптацию версии. Откройте историю версий и заново выберите проверенную версию."
+            : e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
             ? PROMPT_REFUSALS[e.code]
             : "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.";
         _failPrompt(errMsg);

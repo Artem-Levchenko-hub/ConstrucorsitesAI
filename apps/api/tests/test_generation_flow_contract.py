@@ -346,7 +346,8 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
         assert flow.trace.index("release_finished") < flow.trace.index("generation.cancelled")
     else:
         assert run.error == "fixture managed SDK unavailable"
-        assert "fixture managed SDK unavailable" in message.content
+        assert "Приложение не прошло финальную проверку" in message.content
+        assert "fixture managed SDK unavailable" not in message.content
 
 
 async def test_real_process_prompt_hands_uncertain_activation_to_late_reconciler(

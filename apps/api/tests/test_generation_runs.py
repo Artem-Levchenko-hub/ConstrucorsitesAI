@@ -133,7 +133,7 @@ async def test_process_failure_preserves_primary_error_after_finalization(
     monkeypatch.setattr(db, "get_engine", lambda: test_engine)
 
     async def fail(*args, **kwargs):
-        raise RuntimeError("PROVIDER_AUTH_FAILED: access denied")
+        raise RuntimeError("PROVIDER_AUTH_FAILED: access denied PRIVATE_DIAGNOSTIC")
 
     monkeypatch.setattr(lifecycle, "render_project_memory_context", fail)
     await lifecycle._process_prompt(
@@ -150,9 +150,11 @@ async def test_process_failure_preserves_primary_error_after_finalization(
     await db_session.refresh(run)
     await db_session.refresh(assistant)
     assert run.status == "failed"
-    assert run.error == "PROVIDER_AUTH_FAILED: access denied"
+    assert run.error == "PROVIDER_AUTH_FAILED: access denied PRIVATE_DIAGNOSTIC"
     assert assistant.tokens_out == 0
-    assert "PROVIDER_AUTH_FAILED" in assistant.content
+    assert "провайдер модели отклонил доступ" in assistant.content
+    assert "PROVIDER_AUTH_FAILED" not in assistant.content
+    assert "PRIVATE_DIAGNOSTIC" not in assistant.content
 
 
 async def test_same_idempotency_key_replays_and_other_key_is_blocked(

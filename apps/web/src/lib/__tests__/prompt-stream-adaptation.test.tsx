@@ -75,7 +75,7 @@ it("passes the exact structured reference and stable key through the real stream
   await act(async () => { expect(await stream.submit("Adapt", "model", [], options)).toBe(true); });
   expect(sendPrompt).toHaveBeenCalledWith("p", "Adapt", "model", [], options);
 });
-it("retains the attachment and real error after a rejected historical source, including a pending duplicate", async () => {
+it("retains the attachment and safe actionable error after a rejected historical source, including a pending duplicate", async () => {
   let reject!: (reason: Error) => void;
   vi.mocked(sendPrompt).mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
   await mount();
@@ -90,14 +90,15 @@ it("retains the attachment and real error after a rejected historical source, in
   await act(async () => { expect(await send()).toBe(false); });
   expect(attachment.attachment?.reference).toEqual(options.restorationAdaptation);
   await act(async () => {
-    reject(new ApiError(409, { code: "conflict", message: "Исторический исходник недоступен" }));
+    reject(new ApiError(409, { code: "conflict", message: "Исторический исходник недоступен token=NEVER_PUBLISH" }));
     expect(await first).toBe(false);
   });
   expect(attachment.attachment?.reference).toEqual(options.restorationAdaptation);
   expect(sendPrompt).toHaveBeenCalledOnce();
+  expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
   expect(client.getQueryData<Message[]>(["messages", "p"])?.at(-1)?.tokens_out).toBe(0);
   expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена", expect.anything());
   expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
-    description: expect.stringContaining("Исторический исходник недоступен"),
+    description: expect.stringContaining("Откройте историю версий"),
   }));
 });
