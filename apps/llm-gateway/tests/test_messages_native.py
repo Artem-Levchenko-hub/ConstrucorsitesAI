@@ -296,6 +296,32 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
     assert adapted["usage"]["cache_creation_input_tokens"] == 3
 
 
+@pytest.mark.parametrize("arguments", ['{"path":"src/a.ts","content":"unfinished', '[]', None])
+@pytest.mark.parametrize("finish", ["length", "tool_calls"])
+def test_incomplete_tool_arguments_are_marked_without_echoing_raw(arguments, finish) -> None:
+    adapted = messages_native._anthropic_response({
+        "choices": [{"finish_reason": finish, "message": {"tool_calls": [{
+            "id": "partial", "function": {"name": "write_file", "arguments": arguments},
+        }]}}],
+    }, "claude-sonnet-5")
+    assert adapted["stop_reason"] == ("max_tokens" if finish == "length" else "tool_use")
+    assert adapted["provider_finish_reason"] == finish
+    tool = adapted["content"][0]
+    assert tool["input_error"] == "invalid_tool_arguments"
+    assert tool["input"] == {}
+    assert "unfinished" not in json.dumps(adapted)
+
+
+def test_length_takes_precedence_even_with_complete_tool_json() -> None:
+    adapted = messages_native._anthropic_response({
+        "choices": [{"finish_reason": "length", "message": {"tool_calls": [{
+            "id": "complete", "function": {"name": "bash", "arguments": '{"cmd":"touch x"}'},
+        }]}}],
+    }, "claude-sonnet-5")
+    assert adapted["stop_reason"] == "max_tokens"
+    assert adapted["provider_finish_reason"] == "length"
+
+
 def test_native_endpoint_uses_llmgw_chat_tools(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

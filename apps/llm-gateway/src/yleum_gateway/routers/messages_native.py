@@ -229,25 +229,27 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
             function = call.get("function") or {}
             if not isinstance(function, dict):
                 continue
-            arguments = function.get("arguments") or "{}"
+            arguments = function.get("arguments")
             try:
                 tool_input = json.loads(arguments) if isinstance(arguments, str) else arguments
             except ValueError:
-                tool_input = {"raw": str(arguments)}
+                tool_input = None
             content.append(
                 {
                     "type": "tool_use",
                     "id": str(call.get("id") or f"call_{uuid4().hex}"),
                     "name": str(function.get("name") or ""),
                     "input": tool_input if isinstance(tool_input, dict) else {},
+                    **({"input_error": "invalid_tool_arguments"}
+                       if not isinstance(tool_input, dict) else {}),
                 }
             )
 
     finish_reason = choice.get("finish_reason")
-    if tool_calls or finish_reason == "tool_calls":
-        stop_reason = "tool_use"
-    elif finish_reason == "length":
+    if finish_reason == "length":
         stop_reason = "max_tokens"
+    elif tool_calls or finish_reason == "tool_calls":
+        stop_reason = "tool_use"
     else:
         stop_reason = "end_turn"
 
@@ -260,6 +262,9 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
         "model": omnia_model,
         "content": content,
         "stop_reason": stop_reason,
+        "provider_finish_reason": finish_reason if finish_reason in {
+            "length", "tool_calls", "stop", "content_filter", "function_call",
+        } else None,
         "stop_sequence": None,
         "usage": {
             "input_tokens": int(usage.get("prompt_tokens") or 0),
@@ -599,6 +604,11 @@ async def _native_messages_impl(
                 "provider_request_id": provider_request_id,
                 "fallback_used": fallback_used,
                 "stream": False,
+                "provider_finish_reason": adapted.get("provider_finish_reason"),
+                "invalid_tool_argument_count": sum(
+                    bool(block.get("input_error")) for block in adapted["content"]
+                    if isinstance(block, dict)
+                ),
             }
         )
     except Exception:

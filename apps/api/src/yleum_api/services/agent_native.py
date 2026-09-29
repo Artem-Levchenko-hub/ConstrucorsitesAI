@@ -470,6 +470,32 @@ def _tool_use_to_action(block: dict[str, Any], *, portable_cell: bool = False) -
     return Action(name=str(block.get("name", "")), args=args, raw="")
 
 
+def _incomplete_tool_response(resp: dict[str, Any], content: list[Any]) -> str | None:
+    if resp.get("stop_reason") == "max_tokens" or resp.get("provider_finish_reason") == "length":
+        return "output_limit"
+    schemas = {tool["name"]: tool["input_schema"] for tool in _TOOLS}
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use":
+            continue
+        args = block.get("input")
+        if block.get("input_error") or not isinstance(args, dict):
+            return "invalid_tool_arguments"
+        # Existing done calls may omit human-facing summary; the completion
+        # proof gate, not prose, authorizes finishing. It executes no tool.
+        schema = {} if block.get("name") == "done" else schemas.get(block.get("name"), {})
+        required = schema.get("required", [])
+        if any(key not in args for key in required):
+            return "missing_tool_arguments"
+        properties = schema.get("properties", {})
+        if any(
+            args[key] is None
+            or (properties.get(key, {}).get("type") == "string" and not isinstance(args[key], str))
+            for key in required
+        ):
+            return "invalid_tool_arguments"
+    return None
+
+
 def _obs_to_tool_result(tool_use_id: str, obs: dict[str, Any]) -> dict[str, Any]:
     ok = bool(obs.get("ok"))
     body = obs.get("content") or obs.get("detail") or obs.get("error") or ("ok" if ok else "error")
@@ -1007,6 +1033,7 @@ async def _run_native_segment(
     proof_after_write: set[str] = set()
     invalidated_proofs: set[str] = set()
     checkpoint_at: float | None = None
+    incomplete_responses = 0
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
     max_runtime = "MAX VERIFICATION OVERRIDE" in system
@@ -1037,6 +1064,12 @@ async def _run_native_segment(
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic; flagged MAX transfers proof to finalization."""
+        if incomplete_responses and last_build_ok is not True:
+            return AgentResult(
+                done=False, summary="Неполный ответ модели не был исправлен и проверен. "
+                "Сохранён предыдущий результат.", files=written, steps=steps,
+                transcript=convo, stop_reason="error", evidence=_evidence(),
+            )
         if max_runtime and get_settings().use_max_finalization_coordinator:
             from yleum_api.services.max_generation_contract import (
                 max_source_completion_gap,
@@ -1289,6 +1322,55 @@ async def _run_native_segment(
                     stop_reason="error",
                     evidence=_evidence(),
                 )
+            response_problem = _incomplete_tool_response(resp, content)
+            if response_problem:
+                # Validate the entire response before executing ANY call. A valid
+                # prefix of a truncated batch is not an authorized complete plan.
+                # Never replay earlier successful calls or echo broken/raw JSON.
+                incomplete_responses += 1
+                # A rejected verification/done response cannot reuse an earlier
+                # green checkpoint as completion of the requested change.
+                last_build_ok = None
+                _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
+                feedback = (
+                    f"Provider response rejected ({response_problem}). "
+                    "No tools from this response were executed. Earlier successful "
+                    "tool calls remain applied; do not repeat them. Use one small "
+                    "edit_file change (path, search, replace) per response, "
+                    "or split new code into small modules "
+                    "with write_file. Do not rewrite the whole large page. Supply complete "
+                    "JSON arguments including all required fields, then build and verify."
+                )
+                sanitized = [
+                    {"type": "tool_use", "id": block.get("id", ""),
+                     "name": block.get("name", ""), "input": {}}
+                    if isinstance(block, dict) and block.get("type") == "tool_use" else block
+                    for block in content
+                ]
+                convo.append({"role": "assistant", "content": sanitized})
+                recovery_results = [
+                    {"type": "tool_result", "tool_use_id": block.get("id", ""),
+                     "is_error": True, "content": feedback}
+                    for block in sanitized
+                    if isinstance(block, dict) and block.get("type") == "tool_use"
+                ]
+                convo.append({"role": "user", "content": [
+                    *recovery_results, {"type": "text", "text": feedback},
+                ]})
+                if emit:
+                    await emit("agent.step", {
+                        "step": step, "action": "provider_response", "ok": False,
+                        "detail": feedback, "reason": response_problem,
+                        "recovery_attempt": incomplete_responses,
+                    })
+                if incomplete_responses > 2:
+                    return AgentResult(
+                        done=False, summary="Модель повторно вернула неполные команды. "
+                        "Изменения из этих ответов не выполнялись; сохранён предыдущий результат.",
+                        files=written, steps=step + 1, transcript=convo,
+                        stop_reason="error", evidence=_evidence(),
+                    )
+                continue
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.
             convo.append({"role": "assistant", "content": content})
