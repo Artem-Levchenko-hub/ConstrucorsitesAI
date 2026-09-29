@@ -9,6 +9,7 @@ import re
 import stat
 import time
 from collections.abc import AsyncIterator, Callable
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +21,7 @@ from yleum_orchestrator.core.cell_resources import WorkspaceLockTimeout, Workspa
 _LOCK_FILE_MODE = 0o600
 _LOCK_DIR_MODE = 0o700
 _LOCK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,127}$")
+_LOCK_IO_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="workspace-lock")
 
 
 @dataclass(frozen=True, slots=True)
@@ -162,7 +164,11 @@ class WorkspaceOperationLock:
         finally:
             if owner is not None:
                 try:
-                    await asyncio.shield(asyncio.to_thread(self.backend.release, owner))
+                    await asyncio.shield(
+                        asyncio.get_running_loop().run_in_executor(
+                            _LOCK_IO_EXECUTOR, self.backend.release, owner
+                        )
+                    )
                 except Exception:
                     if primary_error is None:
                         raise
@@ -176,7 +182,9 @@ class WorkspaceOperationLock:
                 local_lock.release()
 
     async def _attempt_acquire(self, fd: int) -> FileLockOwnerToken | None:
-        attempt = asyncio.create_task(asyncio.to_thread(self.backend.try_acquire, fd))
+        attempt = asyncio.get_running_loop().run_in_executor(
+            _LOCK_IO_EXECUTOR, self.backend.try_acquire, fd
+        )
         try:
             return await asyncio.shield(attempt)
         except asyncio.CancelledError as exc:
@@ -188,7 +196,11 @@ class WorkspaceOperationLock:
             finally:
                 if owner is not None:
                     try:
-                        await asyncio.shield(asyncio.to_thread(self.backend.release, owner))
+                        await asyncio.shield(
+                            asyncio.get_running_loop().run_in_executor(
+                                _LOCK_IO_EXECUTOR, self.backend.release, owner
+                            )
+                        )
                     except Exception:
                         pass
             raise

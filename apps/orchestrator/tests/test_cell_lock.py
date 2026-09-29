@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -115,6 +117,42 @@ async def test_cancelled_waiter_does_not_poison_future_acquire(tmp_path) -> None
     await holder_task
     async with lock.hold(workspace_id):
         pass
+
+
+@pytest.mark.asyncio
+async def test_lock_io_does_not_wait_for_the_shared_default_executor(tmp_path) -> None:
+    loop = asyncio.get_running_loop()
+    started = threading.Event()
+    release = threading.Event()
+
+    def occupy_default_executor() -> None:
+        started.set()
+        release.wait(timeout=2)
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        loop.set_default_executor(executor)
+        blocker = loop.run_in_executor(None, occupy_default_executor)
+        for _ in range(100):
+            if started.is_set():
+                break
+            await asyncio.sleep(0.001)
+        assert started.is_set()
+        timer = threading.Timer(0.3, release.set)
+        timer.start()
+        began = loop.time()
+        try:
+            lock = WorkspaceOperationLock(
+                tmp_path,
+                acquire_timeout_seconds=0.1,
+                retry_interval_seconds=0.01,
+            )
+            async with lock.hold(uuid4()):
+                pass
+        finally:
+            release.set()
+            timer.cancel()
+            await blocker
+        assert loop.time() - began < 0.2
 
 
 @pytest.mark.asyncio
