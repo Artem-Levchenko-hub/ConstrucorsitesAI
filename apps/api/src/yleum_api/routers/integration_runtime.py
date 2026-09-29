@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import re
 import time
 from dataclasses import dataclass
 from decimal import Decimal
@@ -52,6 +54,7 @@ from yleum_api.services.integration_responses import (
 from yleum_api.services.secret_safety import redact_provider_secrets
 
 router = APIRouter(prefix="/api/runtime/projects", tags=["integration-runtime"])
+log = logging.getLogger(__name__)
 MAX_INIT_DATA_AGE_SECONDS = 24 * 60 * 60
 _RUNTIME_AI_LIMIT_SCRIPT = """
 for i = 1, #KEYS do
@@ -164,6 +167,40 @@ async def _secrets(session: SessionDep, connection: AccountIntegration) -> dict[
 
 
 def _provider_failure(provider: str, response: httpx.Response) -> ApiError:
+    title = "-"
+    codes: set[str] = set()
+    paths: set[str] = set()
+    try:
+        body = response.json()
+    except (ValueError, TypeError):
+        body = None
+    if isinstance(body, dict):
+        candidate_title = body.get("title")
+        if candidate_title in {"Bad Request", "Unauthorized", "Forbidden"}:
+            title = candidate_title
+        validation_errors = body.get("validation-errors")
+        if isinstance(validation_errors, list):
+            for validation_error in validation_errors[:10]:
+                if not isinstance(validation_error, dict):
+                    continue
+                errors = validation_error.get("errors")
+                if not isinstance(errors, list):
+                    continue
+                for error in errors[:10]:
+                    if not isinstance(error, dict):
+                        continue
+                    for key, target in (("code", codes), ("path", paths)):
+                        value = error.get(key)
+                        if isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,120}", value):
+                            target.add(value)
+    log.warning(
+        "integration_provider_rejected provider=%s status=%s title=%s codes=%s paths=%s",
+        provider,
+        response.status_code,
+        title,
+        ",".join(sorted(codes)) or "-",
+        ",".join(sorted(paths)) or "-",
+    )
     if response.status_code in {400, 401, 403}:
         return ApiError(
             "integration_request_rejected",
@@ -625,7 +662,6 @@ async def _send_runtime_lead(
                     {
                         "name": payload.name,
                         "_embedded": {"contacts": [contact]},
-                        "custom_fields_values": [],
                     }
                 ],
             )
