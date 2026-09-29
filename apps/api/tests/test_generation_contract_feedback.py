@@ -228,3 +228,128 @@ async def test_attested_adaptation_preserves_schema_exemption_but_not_migration_
     proof.assert_awaited_once_with(runtime, ids)
     candidate["drizzle/0000_core.sql"] = "changed"
     assert "immutable" in await migration_feedback(runtime, ids)
+
+
+@pytest.mark.asyncio
+async def test_final_candidate_keeps_checked_retry_tree_including_preexisting_migration():
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation.agent_generation import complete_empty_legacy_build
+    from yleum_api.services.generation.agent_runtime import migration_feedback
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
+
+    baseline = {"src/lib/db/schema.ts": "accepted", "src/obsolete.ts": "remove me"}
+    checked = {
+        "src/lib/db/schema.ts": "new schema",
+        "drizzle/0002_retry.sql": "CREATE TABLE coffee_requests(id int);",
+        "src/app/page.tsx": "new product",
+    }
+    # The retained failed workspace already had 0002 at executor bootstrap.
+    # Its export diff omits that SQL even though the checked tree contains it.
+    result = AgentResult(
+        done=True,
+        summary="done",
+        steps=3,
+        files={
+            "src/lib/db/schema.ts": "new schema",
+            "src/app/page.tsx": "new product",
+        },
+    )
+    runtime = GenerationRuntime(
+        migration_baseline=dict(baseline),
+        handle=SimpleNamespace(
+            snapshot_files=AsyncMock(return_value=checked),
+        ),
+    )
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    assert await migration_feedback(runtime, ids) is None
+    _, files, _ = await complete_empty_legacy_build(
+        _agent_res=result,
+        _is_edit=False,
+        _max_seed_files={"src/lib/db/schema.ts": "accepted"},
+        ids=ids,
+        runtime=runtime,
+        plan=SimpleNamespace(),
+        operations=SimpleNamespace(),
+    )
+    candidate = dict(baseline)
+    for path, content in files.items():
+        if content == "":
+            candidate.pop(path, None)
+        else:
+            candidate[path] = content
+    assert candidate == checked
+    assert not max_migration_contract_errors(baseline, candidate)
+    assert "drizzle/0002_retry.sql" not in result.files  # Executor diff semantics unchanged.
+    candidate["drizzle/0002_retry.sql"] = "altered"
+    assert "immutable" in ";".join(max_migration_contract_errors(checked, candidate))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("readonly", [False, True])
+async def test_snapshot_candidate_preserves_managed_only_noop_semantics(readonly):
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation.agent_finalization import (
+        unchanged_candidate_before_finalization,
+    )
+    from yleum_api.services.generation.agent_generation import complete_empty_legacy_build
+
+    baseline = {"src/app/page.tsx": "same", "src/lib/omnia/integration-client.ts": "old"}
+    snapshot = {**baseline, "src/lib/omnia/integration-client.ts": "new managed SDK"}
+    runtime = GenerationRuntime(
+        migration_baseline=dict(baseline),
+        handle=SimpleNamespace(
+            snapshot_files=AsyncMock(return_value=snapshot),
+        ),
+    )
+    _, files, _ = await complete_empty_legacy_build(
+        _agent_res=AgentResult(done=True, summary="inspection", steps=2, files={}),
+        _is_edit=True,
+        _max_seed_files={},
+        ids=GenerationIds(*(uuid4() for _ in range(5))),
+        runtime=runtime,
+        plan=SimpleNamespace(),
+        operations=SimpleNamespace(),
+    )
+    assert files == snapshot
+    verdict = unchanged_candidate_before_finalization(
+        baseline_files=baseline,
+        workspace_files=files,
+        requires_source_change=not readonly,
+        message="inspection",
+    )
+    assert verdict is not None
+    assert (verdict.failure is None) is readonly
+    assert verdict.files == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["rewrite", "delete"])
+async def test_snapshot_candidate_does_not_legalize_accepted_migration_changes(operation):
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation.agent_generation import complete_empty_legacy_build
+    from yleum_api.services.generation.agent_runtime import migration_feedback
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
+
+    baseline = {"drizzle/0000_core.sql": "CREATE TABLE core(id int);"}
+    snapshot = {} if operation == "delete" else {"drizzle/0000_core.sql": "rewritten"}
+    runtime = GenerationRuntime(
+        migration_baseline=dict(baseline),
+        handle=SimpleNamespace(
+            snapshot_files=AsyncMock(return_value=snapshot),
+        ),
+    )
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    assert await migration_feedback(runtime, ids)
+    _, files, _ = await complete_empty_legacy_build(
+        _agent_res=AgentResult(done=True, summary="done", steps=2, files={}),
+        _is_edit=True,
+        _max_seed_files={},
+        ids=ids,
+        runtime=runtime,
+        plan=SimpleNamespace(),
+        operations=SimpleNamespace(),
+    )
+    candidate = {k: v for k, v in {**baseline, **files}.items() if v != ""}
+    assert candidate == snapshot
+    assert max_migration_contract_errors(baseline, candidate)
+    assert runtime.migration_baseline == baseline

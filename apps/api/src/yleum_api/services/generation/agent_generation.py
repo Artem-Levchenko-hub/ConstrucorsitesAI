@@ -323,4 +323,14 @@ async def complete_empty_legacy_build(
             _all_files = _merge_seeded_agent_files(_max_seed_files, _agent_res.files)
             files = _all_files
 
+    if runtime.handle is not None:
+        # A retained failed workspace can predate this run's accepted source.
+        # export_files is a diff against that workspace, NOT against accepted
+        # source or the platform seed. Reusing it here can drop existing SQL
+        # from a tree that just passed build/migration checks, or revive deleted
+        # files. Final verification must receive that same full checked tree.
+        snapshot = await runtime.handle.snapshot_files()
+        reference = runtime.migration_baseline or _max_seed_files
+        files = {**dict.fromkeys(reference.keys() - snapshot.keys(), ""), **snapshot}
+
     return _agent_res, files, _total_steps
