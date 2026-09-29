@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
 
-const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), verify: vi.fn(), catalog: vi.fn(), platformAi: vi.fn(), success: vi.fn() }));
+const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), verify: vi.fn(), catalog: vi.fn(), platformAi: vi.fn(), amocrmOptions: vi.fn(), saveAmocrm: vi.fn(), success: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: boundary.push }) }));
 vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: async () => undefined }));
@@ -13,6 +13,7 @@ vi.mock("sonner", () => ({ toast: { success: boundary.success, error: vi.fn(), w
 vi.mock("@/lib/api/app-integrations", () => ({
   getIntegrationCatalog: boundary.catalog, setPlatformAiEnabled: boundary.platformAi, connectAppIntegration: boundary.connect, verifyAppIntegration: boundary.verify,
   bindAppIntegration: vi.fn(), disconnectAppIntegration: vi.fn(), applyIntegrationPack: vi.fn(), startIntegrationOAuth: vi.fn(),
+  getAmocrmOptions: boundary.amocrmOptions, saveAmocrmSettings: boundary.saveAmocrm,
 }));
 const provider: IntegrationProvider = {
   key: "yookassa", name: "ЮKassa", category: "payments", description: "Оплата", capabilities: ["payments"],
@@ -40,6 +41,10 @@ function input(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
   const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
   Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(element, value);
   element.dispatchEvent(new Event("input", { bubbles: true }));
+}
+function select(element: HTMLSelectElement, value: string) {
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(element, value);
+  element.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
 describe("Integration Hub implementation handoff", () => {
@@ -103,7 +108,7 @@ describe("Integration Hub implementation handoff", () => {
     await render([connection]);
     await click("Добавить в приложение");
     const proposal = document.querySelector("textarea")!.value;
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage blocked"); });
+    vi.spyOn(Object.getPrototypeOf(window.sessionStorage), "setItem").mockImplementation(() => { throw new Error("Storage blocked"); });
     await click("Запустить доработку");
     expect(document.querySelector("textarea")!.value).toBe(proposal);
     expect(boundary.push).not.toHaveBeenCalled();
@@ -213,5 +218,50 @@ describe("Integration Hub implementation handoff", () => {
     expect(brief).toContain("остатки");
     expect(brief).toContain("заказа покупателя");
     expect(brief).not.toContain("пока недоступны");
+  });
+  it("offers an amoCRM lead form with reconciliation and an idempotency key", async () => {
+    await render(
+      [{ ...connection, provider: "amocrm" }],
+      [{ ...provider, key: "amocrm", name: "amoCRM", category: "crm" }],
+    );
+    await click("Добавить в приложение");
+    const brief = document.querySelector<HTMLTextAreaElement>("textarea")!.value;
+    expect(brief).toContain("Имя");
+    expect(brief).toContain("телефон");
+    expect(brief).toContain("e-mail");
+    expect(brief).toContain("комментарий");
+    expect(brief).toContain("getYleumLeads()");
+    expect(brief).toContain("getYleumLeadStatus(id)");
+    expect(brief).toContain("details_status");
+    expect(brief).toContain("идемпотентности");
+  });
+  it("loads, changes, and saves amoCRM pipeline settings without fixed IDs", async () => {
+    const amoConnection: AppIntegration = {
+      ...connection,
+      provider: "amocrm",
+      binding_config: { pipeline_id: 10, status_id: 101 },
+    };
+    boundary.amocrmOptions.mockResolvedValue({
+      pipelines: [
+        { id: 10, name: "Продажи", statuses: [{ id: 101, name: "Первичный контакт" }] },
+        { id: 20, name: "Поддержка", statuses: [{ id: 201, name: "Новая заявка" }] },
+      ],
+    });
+    await render(
+      [amoConnection],
+      [{ ...provider, key: "amocrm", name: "amoCRM", category: "crm" }],
+    );
+    await click("Настроить");
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+    const pipeline = document.querySelector<HTMLSelectElement>("#amocrm-pipeline")!;
+    const status = document.querySelector<HTMLSelectElement>("#amocrm-status")!;
+    expect(pipeline.value).toBe("10");
+    expect(status.value).toBe("101");
+    await act(async () => select(pipeline, "20"));
+    expect(status.value).toBe("");
+    await act(async () => select(status, "201"));
+    boundary.saveAmocrm.mockResolvedValue({ status: "saved" });
+    await click("Сохранить этап");
+    expect(boundary.saveAmocrm).toHaveBeenCalledWith("project-1", 20, 201);
   });
 });

@@ -1,11 +1,13 @@
 """Safe capability requests made by a generated MAX Mini App."""
 
 import json
+import re
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
+from pydantic.networks import validate_email
 
 
 class RuntimeIntegrationStatus(BaseModel):
@@ -48,10 +50,52 @@ class RuntimeLeadRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=4000)
     source: str = Field(default="MAX Mini App", max_length=128)
 
+    @field_validator("name", "phone", "email", "comment", "source", mode="before")
+    @classmethod
+    def trim_fields(cls, value: Any) -> Any:
+        return value.strip() if isinstance(value, str) else value
+
+    @field_validator("phone")
+    @classmethod
+    def valid_phone(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not re.fullmatch(r"\+?[0-9 ()\-]{7,64}", value) or not 7 <= len(
+            re.sub(r"\D", "", value)
+        ) <= 15:
+            raise ValueError("Введите корректный телефон")
+        return value
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, value: str | None) -> str | None:
+        return validate_email(value)[1] if value else None
+
 
 class RuntimeLeadPublic(BaseModel):
     provider: str
     id: str
+    details_status: str = "recorded"
+    warning: str | None = None
+
+
+class RuntimeLeadStatusRequest(BaseModel):
+    lead_id: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
+
+
+class RuntimeLeadStatusPublic(RuntimeLeadPublic):
+    name: str
+    pipeline_id: int
+    pipeline_name: str
+    status_id: int
+    status_name: str
+    updated_at: int
+    checked_at: str
+
+
+class RuntimeLeadListPublic(BaseModel):
+    items: list[RuntimeLeadStatusPublic]
+    has_more: bool = False
 
 
 class RuntimeCatalogItem(BaseModel):

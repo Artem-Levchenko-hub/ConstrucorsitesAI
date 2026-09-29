@@ -11,8 +11,8 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Any, cast
-from urllib.parse import parse_qsl, urlparse
-from uuid import UUID
+from urllib.parse import parse_qsl
+from uuid import UUID, uuid4
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -28,6 +28,7 @@ from yleum_api.models.app_integration import (
     AccountIntegration,
     ProjectIntegrationBinding,
 )
+from yleum_api.models.integration_operation import IntegrationOperation
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.project import Project
 from yleum_api.schemas.integration_runtime import (
@@ -565,16 +566,34 @@ async def create_runtime_lead(
             "Подключите Битрикс24 или amoCRM к этому приложению",
             status.HTTP_409_CONFLICT,
         )
+    if connection.provider == "amocrm" and payload.idempotency_key is None:
+        raise ApiError(
+            "integration_request_rejected",
+            "Обновите приложение: для заявки amoCRM требуется ключ безопасной отправки.",
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+        )
     credentials = await _secrets(session, connection)
     from yleum_api.services.integration_operations import execute_once
 
-    async def send() -> dict[str, Any]:
-        return (await _send_runtime_lead(connection, credentials, context, payload)).model_dump()
+    binding = (await session.scalars(select(ProjectIntegrationBinding).where(
+        ProjectIntegrationBinding.project_id == project_id,
+        ProjectIntegrationBinding.integration_id == connection.id,
+    ))).one_or_none()
+    config = dict(binding.config) if binding else {}
 
-    if payload.idempotency_key is None:
-        # Compatibility with previously generated clients; new clients always
-        # provide a stable operation key. No platform retry occurs on this path.
-        return await _send_runtime_lead(connection, credentials, context, payload)
+    async def send() -> dict[str, Any]:
+        result = (await _send_runtime_lead(
+            connection, credentials, context, payload, config,
+        )).model_dump()
+        if connection.provider == "amocrm":
+            from yleum_api.services.amocrm import base_url
+
+            result["_account_base_url"] = base_url(connection)
+        return result
+
+    # Legacy clients cannot safely replay across requests, but still need a
+    # durable receipt and full field delivery within this single request.
+    operation_key = payload.idempotency_key or str(uuid4())
     result = await execute_once(
         session,
         project_id=project_id,
@@ -582,10 +601,64 @@ async def create_runtime_lead(
         provider=connection.provider,
         max_user_id=context.max_user_id,
         kind="lead",
-        client_key=payload.idempotency_key,
+        client_key=operation_key,
         payload=payload.model_dump(exclude={"idempotency_key"}),
         send=send,
     )
+    if connection.provider == "amocrm":
+        from yleum_api.services import amocrm
+
+        if result.get("_account_base_url") != amocrm.base_url(connection):
+            raise ApiError("integration_operation_conflict",
+                           "Аккаунт CRM изменился. Проверьте предыдущую заявку.", 409)
+
+        # Persist the lead ID BEFORE the second external write. A note failure
+        # must never turn a confirmed lead into a rejected/replayable creation.
+        async def send_note() -> dict[str, Any]:
+            async with amocrm.client(credentials) as client:
+                try:
+                    response = await client.post(
+                        f"{amocrm.base_url(connection)}/api/v4/leads/{result['id']}/notes",
+                        json=[{"note_type": "common", "params": {"text": amocrm.note_text(
+                            payload, project_id, context.max_user_id,
+                        )}}],
+                    )
+                except (httpx.TimeoutException, httpx.NetworkError,
+                        httpx.RemoteProtocolError) as exc:
+                    raise ApiError("integration_provider_unavailable",
+                                   "Не удалось подтвердить примечание amoCRM", 503) from exc
+            if response.status_code >= 300:
+                raise _provider_failure("amoCRM", response)
+            embedded = response_object(response).get("_embedded")
+            notes = embedded.get("notes") if isinstance(embedded, dict) else None
+            if not isinstance(notes, list) or not notes or not isinstance(notes[0], dict):
+                raise invalid_response()
+            lead_id(notes[0].get("id"))
+            return {"id": result["id"], "details_status": "recorded"}
+
+        try:
+            await execute_once(
+                session, project_id=project_id, integration_id=connection.id, provider="amocrm",
+                max_user_id=context.max_user_id, kind="lead_note",
+                client_key=operation_key,
+                payload={"lead_id": result["id"], "comment": payload.comment,
+                         "source": payload.source}, send=send_note,
+            )
+            result = {**result, "details_status": "recorded", "warning": None}
+        except ApiError:
+            result = {**result, "details_status": "unknown", "warning": (
+                "Заявка создана. Передача комментария и источника не подтверждена. "
+                "Не отправляйте заявку повторно; свяжитесь с менеджером."
+            )}
+        receipt = (await session.scalars(select(IntegrationOperation).where(
+            IntegrationOperation.project_id == project_id,
+            IntegrationOperation.provider == "amocrm",
+            IntegrationOperation.max_user_id == str(context.max_user_id),
+            IntegrationOperation.kind == "lead",
+            IntegrationOperation.client_key == operation_key,
+        ))).one()
+        receipt.result = result
+        await session.commit()
     return RuntimeLeadPublic.model_validate(result)
 
 
@@ -594,6 +667,7 @@ async def _send_runtime_lead(
     credentials: dict[str, str],
     context: RuntimeContext,
     payload: RuntimeLeadRequest,
+    config: dict[str, Any] | None = None,
 ) -> RuntimeLeadPublic:
     try:
         async with httpx.AsyncClient(timeout=15) as client:
@@ -629,41 +703,16 @@ async def _send_runtime_lead(
                 result = response_object(response).get("result")
                 return RuntimeLeadPublic(provider="bitrix24", id=lead_id(result))
 
-            base_url = str(connection.public_config.get("base_url") or "").rstrip("/")
-            parsed = urlparse(base_url)
-            if not parsed.hostname:
-                raise ApiError(
-                    "integration_configuration_invalid",
-                    "Переподключите amoCRM",
-                    status.HTTP_409_CONFLICT,
-                )
-            contact: dict[str, Any] = {"name": payload.name, "custom_fields_values": []}
-            if payload.phone:
-                contact["custom_fields_values"].append(
-                    {
-                        "field_code": "PHONE",
-                        "values": [{"value": payload.phone, "enum_code": "WORK"}],
-                    }
-                )
-            if payload.email:
-                contact["custom_fields_values"].append(
-                    {
-                        "field_code": "EMAIL",
-                        "values": [{"value": payload.email, "enum_code": "WORK"}],
-                    }
-                )
+            from yleum_api.services import amocrm
+
+            base_url = amocrm.base_url(connection)
             response = await client.post(
                 f"{base_url}/api/v4/leads/complex",
                 headers={
                     "Authorization": f"Bearer {credentials.get('access_token', '')}",
                     "Content-Type": "application/json",
                 },
-                json=[
-                    {
-                        "name": payload.name,
-                        "_embedded": {"contacts": [contact]},
-                    }
-                ],
+                json=[amocrm.lead_body(payload, config or {})],
             )
             if response.status_code >= 300:
                 raise _provider_failure("amoCRM", response)
@@ -671,7 +720,10 @@ async def _send_runtime_lead(
             lead = result[0] if isinstance(result, list) and result else {}
             if not isinstance(lead, dict):
                 raise invalid_response()
-            return RuntimeLeadPublic(provider="amocrm", id=lead_id(lead.get("id")))
+            return RuntimeLeadPublic(
+                provider="amocrm", id=lead_id(lead.get("id")), details_status="unknown",
+                warning="Заявка создана; передача комментария и источника ещё не подтверждена.",
+            )
     except ApiError:
         raise
     except (httpx.TimeoutException, httpx.NetworkError) as exc:

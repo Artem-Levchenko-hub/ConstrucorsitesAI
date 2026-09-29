@@ -21,7 +21,7 @@ export class YleumIntegrationError extends Error {
 }
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "catalog" | "orders" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "catalog" | "orders" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -122,8 +122,34 @@ export function createYleumLead(input: {
   email?: string;
   comment?: string;
   source?: string;
-}): Promise<{ provider: string; id: string }> {
+}): Promise<{ provider: string; id: string; details_status: "recorded" | "unknown"; warning: string | null }> {
   return invokeWrite("leads", input);
+}
+
+export type YleumLeadStatus = {
+  provider: "amocrm";
+  id: string;
+  name: string;
+  pipeline_id: number;
+  pipeline_name: string;
+  status_id: number;
+  status_name: string;
+  updated_at: number;
+  checked_at: string;
+  details_status: "recorded" | "unknown";
+  warning: string | null;
+};
+
+/** Latest 20 receipts belonging to this authenticated MAX user in this project.
+ * Statuses are read from amoCRM now. Refresh on focus and show checked_at/errors.
+ */
+export function getYleumLeads(): Promise<{ items: YleumLeadStatus[]; has_more: boolean }> {
+  return invoke("lead-list");
+}
+
+/** Authorization is checked against a durable project/user/account receipt. */
+export function getYleumLeadStatus(leadId: string): Promise<YleumLeadStatus> {
+  return invoke("lead-status", { lead_id: leadId });
 }
 
 export function getYleumCatalog(): Promise<{

@@ -57,6 +57,30 @@ export function saveMoyskladSettings(
   });
 }
 
+export type AmocrmStatusOption = { id: number; name: string };
+export type AmocrmPipelineOption = {
+  id: number;
+  name: string;
+  statuses: AmocrmStatusOption[];
+};
+
+export function getAmocrmOptions(projectId: Uuid): Promise<{
+  pipelines: AmocrmPipelineOption[];
+}> {
+  return apiFetch(`${path(projectId)}/amocrm/options`);
+}
+
+export function saveAmocrmSettings(
+  projectId: Uuid,
+  pipelineId: number,
+  statusId: number,
+): Promise<{ status: "saved" }> {
+  return apiFetch(`${path(projectId)}/amocrm/settings`, {
+    method: "PUT",
+    json: { pipeline_id: pipelineId, status_id: statusId },
+  });
+}
+
 export function verifyAppIntegration(
   projectId: Uuid,
   provider: string,

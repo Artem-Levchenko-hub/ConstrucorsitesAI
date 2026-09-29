@@ -15,6 +15,15 @@ function sdk(fetch: ReturnType<typeof vi.fn>, initData: string | null = 'signed'
 
 describe('generated integration SDK', () => {
   afterEach(() => { vi.restoreAllMocks(); sessionStorage.clear(); });
+  it('reads current user lead history and status through managed authenticated routes', async () => {
+    const fetch = vi.fn().mockResolvedValue({ok:true,json:async()=>({items:[]})});
+    const client = sdk(fetch);
+    await client.getYleumLeads();
+    await client.getYleumLeadStatus('123');
+    expect(fetch.mock.calls[0][0]).toBe('/api/omnia/integrations/lead-list');
+    expect(fetch.mock.calls[1][0]).toBe('/api/omnia/integrations/lead-status');
+    expect(JSON.parse(fetch.mock.calls[1][1].body).payload).toEqual({lead_id:'123'});
+  });
   it('retains the same lead operation key after a lost response and page reload', async () => {
     sessionStorage.clear();
     const fetch = vi.fn().mockRejectedValueOnce(new TypeError('network response lost'))
@@ -77,7 +86,7 @@ describe('generated integration SDK', () => {
   });
   it('does not dispatch when the operation key cannot be persisted', async () => {
     sessionStorage.clear();
-    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('Storage blocked'); });
+    vi.spyOn(Object.getPrototypeOf(window.sessionStorage), 'setItem').mockImplementation(() => { throw new Error('Storage blocked'); });
     const fetch = vi.fn();
     await expect(sdk(fetch).createOmniaLead({name:'Blocked customer'})).rejects.toThrow('Storage blocked');
     expect(fetch).not.toHaveBeenCalled();

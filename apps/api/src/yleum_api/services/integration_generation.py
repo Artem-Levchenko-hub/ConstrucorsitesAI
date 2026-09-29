@@ -19,8 +19,19 @@ _METHODS = {
         "idempotency_key}). Creates a lead, not a deal or task."
     ),
     "amocrm": (
-        "createYleumLead({name, phone?, email?, idempotency_key}). Creates a "
-        "lead/contact, not an arbitrary CRM operation."
+        "createYleumLead({name, phone?, email?, comment?, source?, idempotency_key}) "
+        "creates a lead/contact in the project's configured pipeline/stage. Name maps to "
+        "lead/contact name, phone/email to contact fields, comment/source to a lead note. "
+        "Do not invent CRM custom-field mappings or set provider IDs in generated code. "
+        "Show visible field validation (trimmed nonempty name, valid phone/email), never "
+        "silently return from an invalid submit. A returned id proves creation; if "
+        "details_status is unknown show warning and never resubmit that lead. "
+        "getYleumLeads() returns {items, has_more}, the latest 20 current user's leads; "
+        "getYleumLeadStatus(id) returns current authorized CRM status. Both are amoCRM-only. "
+        "Build My requests with status_name, checked_at and refresh/error/empty states; "
+        "refresh on mount, window focus and visible resume, plus an explicit refresh. "
+        "These statuses are live on read, not webhook push. Never store fake CRM statuses "
+        "in getMaxActions/localStorage. Do not claim more than the returned history."
     ),
     "moysklad": (
         "getYleumCatalog() reads catalog, prices and current stock; a null "

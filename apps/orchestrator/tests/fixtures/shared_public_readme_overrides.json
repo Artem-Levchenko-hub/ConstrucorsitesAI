@@ -1,14 +1,14 @@
 {
   "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts": {
     "mode": "100644",
-    "git_blob": "c6a996d274f20c1e343941056436de3401bbf00e",
-    "bytes": 4081,
-    "sha256": "fb697ea08814f4c42f12c31b415449ab28b2a50bb4e9a114bd964a393c184d08"
+    "git_blob": "e67208b9969e88575cf9bfb4eeed8e90466074bf",
+    "bytes": 4323,
+    "sha256": "78b2b20d6fe76e89ae3001ef7524ff9d9b36bbc24b35223ad7c9ca9aae2744cb"
   },
   "max-miniapp-nextjs/src/lib/omnia/integration-client.ts": {
     "mode": "100644",
-    "git_blob": "1259831c9d4ffb59027e3ff6d167abd9ac167bc2",
-    "bytes": 9079,
-    "sha256": "0c2f5c477e54e3f635bc5eaf641cb0cc3ee0807c39e2f55075e73a1355b9d920"
+    "git_blob": "28a3019f839e689be663f8a8b463326971f21e82",
+    "bytes": 9973,
+    "sha256": "0f41d59c1e2cbfa0b804a4c40cdb01dd5f5d5e083a303aaae840fe1b995643e3"
   }
 }

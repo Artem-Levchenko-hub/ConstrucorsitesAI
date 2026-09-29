@@ -20,6 +20,7 @@ from yleum_api.core.redis import dispose_redis
 from yleum_api.core.release import normalize_release_sha
 from yleum_api.routers import account as account_router
 from yleum_api.routers import admin as admin_router
+from yleum_api.routers import amocrm as amocrm_router
 from yleum_api.routers import app_integrations as app_integrations_router
 from yleum_api.routers import auth as auth_router
 from yleum_api.routers import auth_oauth as auth_oauth_router
@@ -151,6 +152,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router.router)
     app.include_router(account_router.router)
     app.include_router(app_integrations_router.router)
+    app.include_router(amocrm_router.router)
     app.include_router(moysklad_vendor_router.router)
     app.include_router(integration_runtime_router.router)
     app.include_router(account_router.legal_router)

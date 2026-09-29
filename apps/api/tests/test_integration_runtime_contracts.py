@@ -223,7 +223,9 @@ async def test_crm_replay_returns_same_lead_and_rejects_changed_payload(
     second = await client.post(url, headers=headers(), json=data)
     changed = await client.post(url, headers=headers(), json={**data, "name": "Changed"})
     assert first.status_code == second.status_code == 200
-    assert first.json() == second.json() == {"provider": "bitrix24", "id": "123"}
+    assert first.json() == second.json() == {
+        "provider": "bitrix24", "id": "123", "details_status": "recorded", "warning": None,
+    }
     assert changed.status_code == 409
     assert len(calls) == 1
 

@@ -44,8 +44,10 @@ import {
   claimMoyskladIntegration,
   connectAppIntegration,
   disconnectAppIntegration,
+  getAmocrmOptions,
   getIntegrationCatalog,
   getMoyskladOptions,
+  saveAmocrmSettings,
   saveMoyskladSettings,
   startIntegrationOAuth,
   setPlatformAiEnabled,
@@ -89,7 +91,7 @@ const implementationFeatures: Record<string, string> = {
   yookassa: "Добавь оплату заказа через ЮKassa: создание платежа и проверку его статуса. Подтверждай оплату только по серверному статусу, а не по возврату пользователя со страницы оплаты. Возвраты не поддерживаются.",
   iiko: "Добавь меню iiko с категориями и блюдами. Доступно только чтение меню; создание заказов не поддерживается.",
   bitrix24: "Добавь форму заявки с созданием лида в Битрикс24 и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
-  amocrm: "Добавь форму заявки с созданием лида в amoCRM и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
+  amocrm: "Добавь форму заявки с созданием лида в amoCRM. Имя и телефон обязательны; e-mail и комментарий необязательны. Показывай ошибки валидации у соответствующих полей, без тихого пропуска отправки. Для одного намерения пользователя сохраняй стабильный ключ идемпотентности, блокируй повторную отправку на время запроса и при неизвестном результате не создавай новый лид: покажи неизвестный исход и предложи сверку. Создавай лид только через доступный управляемый метод интеграции. При открытии, возобновлении и обновлении формы загружай собственную историю заявок через getYleumLeads() и текущий статус CRM через getYleumLeadStatus(id); показывай ошибки загрузки и время последнего обновления. Обрабатывай результат лида с details_status: recorded | unknown и необязательным warning: при unknown покажи предупреждение, а при сбое записи комментария никогда не повторяй исходное создание лида.",
   moysklad: "Добавь каталог товаров, цены и доступные остатки выбранного склада из МойСклад. Не показывай наличие, если актуальный остаток неизвестен. Добавь оформление заказа покупателя через управляемую интеграцию; используй ключ идемпотентности и не повторяй отправку при неизвестном результате.",
   yandex_metrica: "Подключи счётчик Яндекс Метрики к приложению через управляемую интеграцию.",
   llmgw: "Добавь ИИ-помощника с отправкой сообщений через встроенный LLMGW и отображением ответа. Используй requestYleumAI; расходы оплачиваются с баланса владельца приложения. Пользователю не нужны API-ключи или отдельное подключение ИИ.",
@@ -128,6 +130,8 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   const [moyskladCode, setMoyskladCode] = useState("");
   const [moyskladOrganization, setMoyskladOrganization] = useState("");
   const [moyskladStore, setMoyskladStore] = useState("");
+  const [amocrmPipeline, setAmocrmPipeline] = useState("");
+  const [amocrmStatus, setAmocrmStatus] = useState("");
   const queryKey = ["app-integrations", projectId];
   const catalog = useQuery({
     queryKey,
@@ -150,6 +154,19 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     enabled: selected?.key === "moysklad" && moyskladConnection?.status === "active",
     retry: false,
   });
+  const amocrmConnection = connections.get("amocrm");
+  const amocrmOptions = useQuery({
+    queryKey: ["amocrm-options", projectId],
+    queryFn: () => getAmocrmOptions(projectId),
+    enabled: selected?.key === "amocrm" && amocrmConnection?.status === "active",
+    retry: false,
+  });
+  const selectedAmocrmPipeline = amocrmOptions.data?.pipelines.find(
+    (pipeline) => String(pipeline.id) === amocrmPipeline,
+  );
+  const selectedAmocrmStatus = selectedAmocrmPipeline?.statuses.find(
+    (status) => String(status.id) === amocrmStatus,
+  );
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
     return (catalog.data?.providers ?? []).filter(
@@ -204,6 +221,15 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       toast.success("Организация и склад для заказов сохранены");
     },
     onError: (error) => toast.error("Не удалось сохранить настройки склада", { description: message(error) }),
+  });
+  const saveAmocrm = useMutation({
+    mutationFn: () => saveAmocrmSettings(projectId, Number(amocrmPipeline), Number(amocrmStatus)),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey });
+      void amocrmOptions.refetch();
+      toast.success("Воронка и этап amoCRM сохранены");
+    },
+    onError: (error) => toast.error("Не удалось сохранить настройки amoCRM", { description: message(error) }),
   });
   const bind = useMutation({
     mutationFn: (provider: string) => bindAppIntegration(projectId, provider),
@@ -293,7 +319,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       onExit?.();
     },
   });
-  const busy = connect.isPending || claimMoysklad.isPending || saveMoysklad.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
+  const busy = connect.isPending || claimMoysklad.isPending || saveMoysklad.isPending || saveAmocrm.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onBusyChange?.(false); }, [onBusyChange]);
 
@@ -305,6 +331,12 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     if (provider.key === "moysklad") {
       setMoyskladOrganization(String(connection?.public_config.organization_id ?? ""));
       setMoyskladStore(String(connection?.public_config.store_id ?? ""));
+    }
+    if (provider.key === "amocrm") {
+      const pipelineId = connection?.binding_config.pipeline_id;
+      const statusId = connection?.binding_config.status_id;
+      setAmocrmPipeline(typeof pipelineId === "number" ? String(pipelineId) : "");
+      setAmocrmStatus(typeof statusId === "number" ? String(statusId) : "");
     }
     setValues(
       Object.fromEntries(
@@ -411,6 +443,38 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                 {moyskladOptions.data.stores.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
               <Button disabled={!moyskladOrganization || !moyskladStore || saveMoysklad.isPending} onClick={() => saveMoysklad.mutate()} className="min-h-11">Сохранить для заказов</Button>
+            </>}
+          </div>
+        )}
+        {selected.key === "amocrm" && amocrmConnection?.status === "active" && (
+          <div className="space-y-3 rounded-[10px] border border-border-default p-4">
+            <h3 className="text-sm font-semibold">Воронка и этап для новых лидов</h3>
+            <p className="text-xs text-fg-secondary">Выберите, в какую воронку и на какой этап направлять заявки. Без настройки amoCRM использует этап по умолчанию.</p>
+            {amocrmOptions.isPending && <p className="text-sm text-fg-secondary">Загружаем воронки…</p>}
+            {amocrmOptions.isError && <p role="alert" className="text-sm text-danger-fg">Не удалось получить воронки amoCRM. Проверьте подключение и повторите попытку.</p>}
+            {amocrmOptions.data && <>
+              <Label htmlFor="amocrm-pipeline">Воронка</Label>
+              <select
+                id="amocrm-pipeline"
+                value={amocrmPipeline}
+                onChange={(event) => { setAmocrmPipeline(event.target.value); setAmocrmStatus(""); }}
+                className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm"
+              >
+                <option value="">Выберите воронку</option>
+                {amocrmOptions.data.pipelines.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <Label htmlFor="amocrm-status">Этап</Label>
+              <select
+                id="amocrm-status"
+                value={amocrmStatus}
+                disabled={!selectedAmocrmPipeline}
+                onChange={(event) => setAmocrmStatus(event.target.value)}
+                className="h-11 w-full rounded-md border border-border-default bg-surface px-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <option value="">Выберите этап</option>
+                {(selectedAmocrmPipeline?.statuses ?? []).map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+              <Button disabled={!selectedAmocrmPipeline || !selectedAmocrmStatus || saveAmocrm.isPending} onClick={() => saveAmocrm.mutate()} className="min-h-11">{saveAmocrm.isPending && <Loader2 className="size-4 animate-spin" />}Сохранить этап</Button>
             </>}
           </div>
         )}
