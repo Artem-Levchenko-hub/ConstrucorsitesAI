@@ -673,6 +673,10 @@ async def reserve_generation_run(
             )
         return existing, True
 
+    from yleum_api.services.generation_deployment_drain import require_generation_admission
+
+    await require_generation_admission(session)
+
     # Restoration uses this same lock order and keeps its claim across worker restarts.
     from yleum_api.services.restorations import assert_no_active_restoration
 

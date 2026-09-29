@@ -14,6 +14,8 @@
 #     --legal-version V   версия юридических документов: явно пишется в env воркера биллинга
 #     --gateway           менялся apps/llm-gateway: пересобрать образ omnia-gateway:prod и поднять один контейнер
 #                         шлюза (yleum-prod-gw) с --no-deps, проверить его health на :8101
+#     --bootstrap-admission первый выпуск: старый API ещё не имеет durable drain;
+#                         ingress + read-only gate → target migration/fence → обычный rollout
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
@@ -30,6 +32,7 @@ API=1
 LEGAL=""
 REPAIR=3600
 GW=0
+BOOTSTRAP=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
@@ -37,16 +40,49 @@ while [ $# -gt 0 ]; do
     --legal-version) LEGAL="${2:?}"; shift ;;
     --repair-window) REPAIR="${2:?}"; shift ;;
     --gateway) GW=1 ;;
+    --bootstrap-admission) BOOTSTRAP=1 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
   shift
 done
+if [ "$API" = 0 ] && { [ "$GW" = 1 ] || [ "$BOOTSTRAP" = 1 ]; }; then
+  echo "--web-only нельзя сочетать с --gateway или --bootstrap-admission: нужен полный drain" >&2
+  exit 2
+fi
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "нужен полный 40-символьный sha, получено: $SHA" >&2; exit 2; }
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
 say() { echo "== $* ($(date -u +%H:%M:%SZ))"; }
+ingress_drain() {
+  git -C "$REPO" show "$SHA:infra/release/generation-ingress-drain.py" \
+    | ssh max-core "sudo python3 - $1 $SHA"
+}
+publication_drain() {
+  if [ "$1" = core ]; then
+    git -C "$REPO" show "$SHA:infra/release/generation-publication-drain.py" \
+      | ssh max-core "sudo /opt/omnia/apps/orchestrator/.venv/bin/python -"
+  else
+    git -C "$REPO" show "$SHA:infra/release/generation-publication-drain.py" \
+      | ssh max-core "ssh -o BatchMode=yes commerce 'sudo /opt/omnia/apps/orchestrator/.venv/bin/python -'"
+  fi
+}
+quiescence_gate() {
+  database_quiescence \
+    && publication_drain core && publication_drain commerce
+}
+database_quiescence() {
+  if [ "$BOOTSTRAP" = 1 ]; then
+    # Read-only target helper runs against legacy models without importing the
+    # new fence model/table. Only the verified ingress barrier supplies exclusion.
+    ingress_drain check || return
+    git -C "$REPO" show "$SHA:apps/api/src/yleum_api/services/generation_deployment_drain.py" \
+      | ssh max-core "docker exec -i yleum-prod-api python - bootstrap-check $SHA"
+  else
+    ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain check $SHA"
+  fi
+}
 
 say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
 git -C "$REPO" fetch -q origin
@@ -56,6 +92,33 @@ say "core: замок выкатки"
 ssh max-core "set -o noclobber; echo \"$(whoami)@$(hostname -s) $(date -u +%FT%TZ) $SHA\" > /opt/omnia/.deploy.lock" \
   || { echo "на core уже идёт выкатка (или остался замок): $(ssh max-core cat /opt/omnia/.deploy.lock)" >&2; exit 75; }
 trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
+
+if [ "$API" = 1 ]; then
+  say "scoped ingress barrier: новые изменения проектов временно закрыты"
+  ingress_drain begin
+  say "закрываю новый admission; существующие запуски продолжают работу"
+  # First installation needs the ingress bootstrap documented alongside this
+  # script. Never silently bypass this when the old API lacks the drain module.
+  if [ "$BOOTSTRAP" = 1 ]; then
+    ssh max-core "docker exec yleum-prod-api python -c 'import importlib.util; assert importlib.util.find_spec(\"yleum_api.services.generation_deployment_drain\") is None, \"use normal fenced deployment\"'"
+  else
+    ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain begin $SHA" || {
+    echo "Не удалось установить durable drain. Первый выпуск: см. generation-drain.md; выкатка остановлена." >&2
+    exit 75
+  }
+  fi
+  drained=0
+  for i in $(seq 1 180); do
+    if quiescence_gate; then
+      drained=1; break
+    fi
+    sleep 10
+  done
+  [ "$drained" = 1 ] || {
+    echo "Есть незавершённые операции. Drain оставлен закрытым; не перезапускайте сервисы." >&2
+    exit 75
+  }
+fi
 
 say "core: ff-merge + идентичность релиза в compose .env"
 ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
@@ -72,7 +135,7 @@ if [ -n "$LEGAL" ]; then
 fi
 
 say "core: проверка отрендеренного compose (секреты входа только у api, окно починки, теги образов)"
-ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose config --format json 2>/dev/null | python3 -c '
+ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml config --format json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)[\"services\"]
 api = d[\"api\"][\"environment\"]; gw = d[\"generation-worker\"][\"environment\"]; wk = d[\"worker\"].get(\"environment\", {})
@@ -93,7 +156,7 @@ print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECR
 
 TARGETS=""; [ $API = 1 ] && TARGETS="api"; [ $WEB = 1 ] && TARGETS="$TARGETS web"; TARGETS="${TARGETS# }"
 say "core: сборка $TARGETS под nohup, опрос до готовности"
-ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && rm -f $LOG && (nohup docker compose build $TARGETS >$LOG 2>&1 </dev/null &) && echo сборка запущена"
+ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && rm -f $LOG && (nohup docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build $TARGETS >$LOG 2>&1 </dev/null &) && echo сборка запущена"
 IMAGES=""; [ $API = 1 ] && IMAGES="omnia-api:$SHA"; [ $WEB = 1 ] && IMAGES="$IMAGES omnia-web:$SHA"; IMAGES="${IMAGES# }"
 state=""
 for i in $(seq 1 60); do
@@ -109,13 +172,21 @@ done
 ssh max-core "grep -E 'ERROR|error:' $LOG | tail -3 || true"
 
 if [ $API = 1 ]; then
+ingress_drain check
+quiescence_gate
+if [ "$BOOTSTRAP" = 1 ]; then
+  say "первый выпуск: target image мигрирует platform DB и устанавливает durable fence"
+  ssh max-core "set -e; cd /opt/omnia/apps/llm-gateway/deploy/full; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml run --rm --no-deps --entrypoint /bin/sh api -ec '/app/.venv/bin/alembic upgrade head && /app/.venv/bin/python -m yleum_api.services.generation_deployment_drain begin $SHA && /app/.venv/bin/python -m yleum_api.services.generation_deployment_drain check $SHA'"
+  quiescence_gate
+fi
 say "core: образ api читаем для uid 10001 (воркер биллинга в K3s)?"
 ssh max-core "docker run --rm --user 10001:10001 --entrypoint sh omnia-api:$SHA -c 'n=\$(find /app/src /app/migrations /orchestrator/templates -type f ! -perm -o=r 2>/dev/null | wc -l); echo \"нечитаемых файлов: \$n\"; [ \"\$n\" = 0 ]'"
 
 say "core: api worker generation-worker (api раньше оркестраторов)"
-ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --no-build api worker generation-worker 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -5; for i in \$(seq 1 40); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8200/api/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"api health 200 с попытки \$i\"; break; }; sleep 3; done; docker compose logs --since 3m api 2>&1 | grep -i -E 'running upgrade|RuntimeError|Traceback' | tail -3; docker tag omnia-api:$SHA omnia-api:prod"
+ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build api worker generation-worker 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -5; for i in \$(seq 1 40); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8200/api/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"api health 200 с попытки \$i\"; break; }; sleep 3; done; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml logs --since 3m api 2>&1 | grep -i -E 'running upgrade|RuntimeError|Traceback' | tail -3; docker tag omnia-api:$SHA omnia-api:prod"
 
 say "оркестраторы: core, затем commerce (одна ревизия)"
+BOOTSTRAP=0  # API now runs the target image and must enforce the persisted fence.
 # У commerce есть собственные служебные файлы и Git objects: --delete удалял их при выпуске.
 ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --exclude .venv --exclude .env --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
 
@@ -123,12 +194,12 @@ fi
 
 if [ $WEB = 1 ]; then
   say "core: web"
-  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose up -d --no-build --no-deps web 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; docker tag omnia-web:$SHA omnia-web:prod; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' https://yleum.ru/web-health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"web-health 200 с попытки \$i\"; break; }; sleep 3; done"
+  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps web 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; docker tag omnia-web:$SHA omnia-web:prod; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' https://yleum.ru/web-health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"web-health 200 с попытки \$i\"; break; }; sleep 3; done"
 fi
 
 if [ $GW = 1 ]; then
   say "core: шлюз моделей (gateway) — сборка и перезапуск одного контейнера"
-  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose build gateway 2>&1 | grep -E 'Built|ERROR|error' | tail -2; docker compose up -d --no-build --no-deps gateway 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
+  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build gateway 2>&1 | grep -E 'Built|ERROR|error' | tail -2; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps gateway 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
 fi
 
 say "публичный health"
@@ -168,7 +239,7 @@ if bad:
 PY'
 
 say "core: шлюз моделей не в деградации?"
-ssh max-core 'set -e; code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8101/health || true); echo "gateway health: $code"; [ "$code" = 200 ] || { echo "ШЛЮЗ НЕ ОТВЕЧАЕТ"; exit 1; }; n=$(docker logs yleum-prod-gw 2>&1 | grep -c "startup.postgres_unavailable" || true); echo "startup.postgres_unavailable в текущем контейнере: $n"; [ "$n" = 0 ] || { echo "ШЛЮЗ РАБОТАЕТ БЕЗ БАЗЫ: списания теряются, вызовы моделей оплачиваются впустую. Починка: разрешить подсеть контейнера в ufw и pg_hba хостового PostgreSQL, затем docker compose up -d --no-build --no-deps --force-recreate gateway"; exit 1; }'
+ssh max-core 'set -e; code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8101/health || true); echo "gateway health: $code"; [ "$code" = 200 ] || { echo "ШЛЮЗ НЕ ОТВЕЧАЕТ"; exit 1; }; n=$(docker logs yleum-prod-gw 2>&1 | grep -c "startup.postgres_unavailable" || true); echo "startup.postgres_unavailable в текущем контейнере: $n"; [ "$n" = 0 ] || { echo "ШЛЮЗ РАБОТАЕТ БЕЗ БАЗЫ: списания теряются, вызовы моделей оплачиваются впустую. Починка: разрешить подсеть контейнера в ufw и pg_hba хостового PostgreSQL, затем docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps --force-recreate gateway"; exit 1; }'
 
 say "github: ожидаемые ревизии (пять + общая)"
 cd "$REPO"
@@ -201,4 +272,26 @@ fi
 say "smoke"
 cd "$REPO"
 gh workflow run production-smoke.yml >/dev/null && echo "smoke запущен (gh run list --workflow production-smoke.yml --limit 1)"
+if [ "$API" = 1 ]; then
+  # Only the owning release may reopen admission, after all synchronous health
+  # and identity gates above. Failure/EXIT never removes the durable fence.
+  ssh max-core "docker exec -i yleum-prod-api python - '$SHA'" <<'PY'
+import json, os, sys, urllib.request
+expected = sys.argv[1]
+assert os.environ.get("OMNIA_RELEASE_SHA") == expected, "API process revision mismatch"
+urls = ["https://yleum.ru/api/health"]
+hosts = json.loads(os.environ.get("ORCHESTRATOR_HOSTS") or "[]")
+assert len(hosts) >= 2, "both controller roles must be verified"
+urls.extend(h["url"].rstrip("/") + "/health" for h in hosts)
+for url in urls:
+    with urllib.request.urlopen(url, timeout=10) as response:
+        body = json.load(response)
+    assert body.get("release_sha") == expected, "runtime revision mismatch"
+    assert body.get("status") in ("ok", "healthy"), "runtime health is not green"
+print("API and both controller runtime identities confirmed")
+PY
+  quiescence_gate
+  ingress_drain end
+  ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain end $SHA"
+fi
 say "готово: прод на $SHORT"

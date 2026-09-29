@@ -21,6 +21,7 @@ dependencies = [
     "redis>=5.0,<6.0",
     "asyncssh>=2.21,<3.0",
     "kubernetes>=31,<34",
+    "pglast>=8.4,<9",
 ]
 
 [dependency-groups]

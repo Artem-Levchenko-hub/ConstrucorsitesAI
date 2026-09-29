@@ -26,7 +26,30 @@ def postgres_cases():
     apply = migration_sql(migration, verify_only=False)
     check = migration_sql(migration, verify_only=False, verify_applied=True)
     b2 = {**migration, "drizzle/0003_detail.sql": "ALTER TABLE qa_notes ADD COLUMN detail text;"}
+    portable = {"drizzle/0002_coffee.sql": "CREATE TABLE coffee(subject text NOT NULL);"}
+    portable_apply = migration_sql(portable, verify_only=False)
     return [
+        (
+            "portable_missing_core_parent_rolls_back",
+            migration_sql({"drizzle/0002_coffee.sql":
+                "CREATE TABLE coffee(subject text REFERENCES max_users(max_user_id));"},
+                verify_only=False),
+            False,
+            "SELECT to_regclass('public.coffee') IS NULL AND "
+            "to_regclass('public.__omnia_project_migrations') IS NULL",
+            "t",
+        ),
+        ("portable_product_subject", portable_apply, True,
+         "SELECT count(*) FROM public.__omnia_project_migrations", "1"),
+        ("portable_product_replay", portable_apply, True,
+         "SELECT count(*) FROM public.__omnia_project_migrations", "1"),
+        ("portable_applied_checksum_immutable",
+         migration_sql(
+             {"drizzle/0002_coffee.sql": portable["drizzle/0002_coffee.sql"] + "--changed"},
+             verify_only=False), False,
+         "SELECT count(*) FROM public.__omnia_project_migrations", "1"),
+        ("reset_disposable_portable_fixture", "DROP SCHEMA public CASCADE; CREATE SCHEMA public;",
+         True, "SELECT count(*) FROM pg_tables WHERE schemaname='public'", "0"),
         (
             "materialize_B",
             apply,

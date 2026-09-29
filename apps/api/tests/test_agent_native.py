@@ -1707,6 +1707,42 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_active_provider_request_cannot_outlive_shared_retry_budget(monkeypatch):
+    monkeypatch.setattr(agent_native, "_CALL_RETRY_WINDOW_S", 0.02)
+    calls = []
+
+    class SlowClient:
+        async def post(self, *args, **kwargs):
+            calls.append(kwargs["timeout"])
+            await asyncio.sleep(0.1)
+            return httpx.Response(200, request=httpx.Request("POST", "https://gateway.test"),
+                                  json={"content": []})
+
+    with pytest.raises(RuntimeError, match="PROVIDER_TIMEOUT"):
+        await agent_native._call_messages(SlowClient(), "https://gateway.test", [], "s")
+    assert len(calls) == 1
+    assert calls[0] <= 0.02
+
+
+@pytest.mark.asyncio
+async def test_unknown_upstream_model_contract_is_not_retried(monkeypatch):
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(409, json={"error": {"type": "model_route_mismatch"}})
+
+    async def no_sleep(_delay):
+        pytest.fail("unknown model contract cannot trigger another paid attempt")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError, match="PROVIDER_MODEL_MISMATCH"):
+            await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_coordinator_tools_and_feedback_handoff_without_runtime_loop(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
     from yleum_api.core.config import get_settings

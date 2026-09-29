@@ -528,4 +528,11 @@ def render_max_starter_files(
         if project_id is None:
             raise ValueError("portable MAX starter requires a project identity")
         files.update(render_portable_max_managed_files(config, project_id))
+        files["src/lib/db/schema.ts"] = (
+            "// PORTABLE PRODUCT DATABASE: the legacy core exports below are type-compatible\n"
+            "// definitions, not physical product tables. Core 0000/0001 SQL is skipped.\n"
+            "// Add project-owned tables and canonical SQL. Store getMaxUser().id as text\n"
+            "// without a max_users FK unless your own migration creates a local parent.\n"
+            + files["src/lib/db/schema.ts"]
+        )
     return files

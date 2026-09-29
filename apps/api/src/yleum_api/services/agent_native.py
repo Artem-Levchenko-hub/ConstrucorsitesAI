@@ -834,6 +834,8 @@ async def _call_messages(
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     for attempt in range(_CALL_RETRIES):
+        if loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
+            break
         request_headers = dict(headers) if headers is not None else None
         metadata: dict[str, Any] = {
             "user_id": user_id,
@@ -863,12 +865,29 @@ async def _call_messages(
         # struggling, but never spend a whole minute inside one pause.
         delay = min(45.0, 4.0 * (2**attempt))
         try:
-            r = await client.post(
-                url,
-                json=payload,
-                timeout=_HTTP_TIMEOUT_S,
-                headers=request_headers,
-            )
+            remaining = _CALL_RETRY_WINDOW_S - (loop.time() - started_at)
+            if remaining <= 0:
+                break
+            # httpx's timeout is per I/O operation. The outer scope also bounds
+            # an active request by total remaining wall time; no retry follows
+            # an exhausted request whose upstream accounting may still settle.
+            async with asyncio.timeout(remaining):
+                r = await client.post(
+                    url,
+                    json=payload,
+                    timeout=min(_HTTP_TIMEOUT_S, remaining),
+                    headers=request_headers,
+                )
+            if r.status_code == 409:
+                try:
+                    route_error = r.json().get("error", {}).get("type")
+                except (ValueError, AttributeError):
+                    route_error = None
+                if route_error == "model_route_mismatch":
+                    raise RuntimeError(
+                        "PROVIDER_MODEL_MISMATCH: upstream model identity is unsupported; "
+                        "no automatic replay or wrong-model charge"
+                    )
             # 402 = provider key out of balance. Retrying can't fix it, so fail
             # FAST with a human cause instead of grinding 8 backoff retries and
             # surfacing an opaque "соединение потеряно" 3+ minutes later.
@@ -897,7 +916,10 @@ async def _call_messages(
                     # Keep the auth cause if the shared retry budget ends first.
                     auth_attempt += 1
                     last = refusal
-                    await asyncio.sleep(_AUTH_RETRY_DELAY_S * auth_attempt)
+                    await asyncio.sleep(min(
+                        _AUTH_RETRY_DELAY_S * auth_attempt,
+                        max(0.0, _CALL_RETRY_WINDOW_S - (loop.time() - started_at)),
+                    ))
                     continue
                 raise refusal
             if r.status_code == 402:
@@ -921,6 +943,8 @@ async def _call_messages(
                         _RUNS_WITH_A_LIVE_KEY.clear()
                     _RUNS_WITH_A_LIVE_KEY.add(str(run_id))
                 return body
+        except TimeoutError as exc:
+            raise RuntimeError("PROVIDER_TIMEOUT: native request budget exhausted") from exc
         except httpx.HTTPError as exc:
             # The provider flakes in SUSTAINED bursts. Live on 2026-09-22 a plain
             # 502 window of 51 s was enough to fail a user's whole build, because
@@ -930,7 +954,9 @@ async def _call_messages(
         # A pause is only worth taking if another attempt follows it.
         if attempt + 1 >= _CALL_RETRIES or loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
             break
-        await asyncio.sleep(delay)
+        await asyncio.sleep(min(
+            delay, max(0.0, _CALL_RETRY_WINDOW_S - (loop.time() - started_at)),
+        ))
     raise last or RuntimeError("messages call failed")
 
 

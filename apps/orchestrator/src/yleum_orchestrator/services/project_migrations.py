@@ -9,11 +9,19 @@ from typing import Any
 from uuid import uuid5
 
 from yleum_orchestrator.core.cell_resources import CellResourceError
-from yleum_orchestrator.services.restoration_database import admin_sql
+from yleum_orchestrator.services.restoration_database import ControllerDatabaseError, admin_sql
 
 RECEIPT_PREFIX = "[project-migrations:v1]"
 LEGACY_PATHS = ("drizzle/0000_max_core.sql", "drizzle/0001_business_core.sql")
 _JOURNAL = "public.__omnia_project_migrations"
+SOURCE_SQL_ERRORS = {
+    "42P01": "A referenced relation is absent from the product database",
+    "42703": "A referenced column is absent from the product database",
+    "42601": "The pending project migration has invalid SQL syntax",
+    "42804": "The pending project migration has incompatible SQL types",
+    "42830": "The pending foreign key has no matching unique parent key",
+    "42704": "A referenced SQL object is absent from the product database",
+}
 
 
 def select_migrations(files: Mapping[str, str], legacy: Mapping[str, str]) -> dict[str, str]:
@@ -200,11 +208,27 @@ def run_project_migrations(
             raise ValueError("incomplete receipt")
         return dict(receipt)
     except (CellResourceError, ValueError, TypeError, UnicodeError) as exc:
+        if (
+            isinstance(exc, ControllerDatabaseError)
+            and exc.terminated
+            and exc.sqlstate in SOURCE_SQL_ERRORS
+            and not (verify_only or verify_applied or record_witnessed)
+        ):
+            raise CellResourceError(
+                f"[project-migration-source-error:{exc.sqlstate}] "
+                f"{SOURCE_SQL_ERRORS[exc.sqlstate]}. The controller SQL transaction aborted; "
+                "no migration batch was committed. Repair pending project SQL and schema, "
+                "then rebuild. The product database is separate from managed MAX core: "
+                "legacy 0000_max_core.sql/0001_business_core.sql are not applied here; "
+                "a schema.ts export does not create max_users or other core tables. "
+                "Store the trusted MAX subject as text, or explicitly define a product-owned "
+                "parent before its foreign keys. Preserve accepted/applied migrations."
+            ) from exc
         raise CellResourceError(
-            "project migration verification failed; check pending drizzle SQL and its checksum. "
-            "A populated database without a project journal requires explicit reconciliation. "
-            "SQL applied manually without a journal must be reconciled explicitly; "
-            "the controller does not guess that it was applied. No build was accepted."
+            "project migration verification failed; no safe source-repair receipt is available. "
+            "Check controller state, pending SQL and journal checksums. If existing data lacks "
+            "a journal, explicit reconciliation is required; do not guess that SQL was applied. "
+            "No build was accepted."
         ) from exc
 
 

@@ -66,6 +66,15 @@ development admin access. It is isolated from the managed MAX core PostgreSQL an
 other projects. Manage your own schema, migrations, roles, settings and bundled
 extensions there. The platform snapshots and restore-smokes its disk. Database
 superuser access does not grant container, host or managed-platform privileges.
+The product database starts empty. Legacy drizzle/0000_max_core.sql and
+drizzle/0001_business_core.sql describe the separate trusted core and are skipped
+by the product migration controller. Existing schema.ts core exports are compile-time
+compatibility definitions, NOT evidence of physical product tables. For own records,
+store getMaxUser().id as a text subject without a foreign key to max_users, unless
+an explicit product migration creates and maintains a local parent first. Never
+copy managed auth/session/CRM secrets or core tables into the product database.
+The fast check uses the live product catalog to report simple missing FK prerequisites
+without applying SQL. The final PostgreSQL transaction remains authoritative.
 Persistent data still needs backward-compatible migrations. Follow the appended
 MAX DATA EVOLUTION POLICY; admin access is not permission to discard existing data.
 Project drizzle/*.sql files are applied transactionally by the controller before

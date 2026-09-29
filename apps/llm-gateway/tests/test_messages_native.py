@@ -448,6 +448,68 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert str(kwargs["provider_cost_usd"]) == "0.125"
 
 
+@pytest.mark.parametrize(
+    ("reported", "actual", "fallback"),
+    [
+        (None, "claude-sonnet-5", False),
+        ("claude-sonnet-5", "claude-sonnet-5", False),
+        ("anthropic/claude-sonnet-5", "claude-sonnet-5", False),
+        ("gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview-customtools", True),
+        ("unknown-private-route", None, False),
+    ],
+)
+def test_native_endpoint_accounts_for_actual_model(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    reported: str | None,
+    actual: str | None,
+    fallback: bool,
+) -> None:
+    charge = AsyncMock(return_value=None)
+    records: list[dict[str, Any]] = []
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native.file_logger, "log_request", records.append)
+    monkeypatch.setattr(
+        messages_native,
+        "native_messages_route",
+        lambda: ("test-key", "https://api.llmgw.ru/v1"),
+    )
+    monkeypatch.setattr(
+        messages_native,
+        "_post_llmgw",
+        lambda *args: httpx.Response(
+            200,
+            json={
+                "model": reported,
+                "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+            },
+        ),
+    )
+    response = client.post(
+        "/v1/messages",
+        json={
+            "model": "claude-sonnet-5",
+            "max_tokens": 128,
+            "user": "11111111-1111-1111-1111-111111111111",
+            "messages": [{"role": "user", "content": "check"}],
+        },
+    )
+    if actual is None:
+        assert response.status_code == 409
+        assert response.json()["error"]["type"] == "model_route_mismatch"
+        assert "unknown-private-route" not in response.text
+        charge.assert_not_awaited()
+        return
+    assert response.status_code == 200
+    assert response.json()["model"] == actual
+    assert charge.await_args.kwargs["model_id"] == actual
+    assert records[0]["model"] == actual
+    assert records[0]["fallback_used"] is fallback
+    assert response.json()["metadata"]["model_identity_confirmed"] is (reported is not None)
+
+
 def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

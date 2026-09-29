@@ -276,6 +276,36 @@ async def test_full_build_migration_failure_never_builds_or_activates():
     runtime._activate_runtime.assert_not_awaited()
 
 
+async def test_fast_check_missing_database_dependency_is_feedback_before_commands():
+    from unittest.mock import AsyncMock
+
+    api = module()
+    machine = SimpleNamespace(
+        ensure=AsyncMock(), request_start=AsyncMock(return_value=None),
+        request_finish=AsyncMock(side_effect=lambda _mutation, result: result),
+        exec_start=AsyncMock(),
+    )
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.parts = lambda _: (machine, object())
+    runtime._migration_dependency_gap = AsyncMock(
+        return_value="absent product table public.max_users",
+    )
+    runtime._project_migrations = AsyncMock()
+    value = payload()
+    value["tasks"] = [{"name": "types", "role": "fast_check", "argv": ["pnpm", "typecheck"]}]
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
+        cmd="omnia:fast_check", task_role="fast_check",
+    )
+    result = await runtime.execute(
+        SimpleNamespace(), MachineManifest.model_validate(value), request,
+    )
+    assert result.exit_code == 1
+    assert "public.max_users" in result.output
+    machine.exec_start.assert_not_awaited()
+    runtime._project_migrations.assert_not_awaited()
+
+
 def test_capabilities_advertise_dedicated_project_postgres():
     capabilities = module().MachineAdapter(SimpleNamespace(), SimpleNamespace()).capabilities()
     assert capabilities["portable_machine"] is True

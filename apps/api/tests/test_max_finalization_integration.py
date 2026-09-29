@@ -159,8 +159,9 @@ async def test_authored_max_finalization_is_single_pass_and_terminal(
 
 
 @pytest.mark.parametrize("change_source", [False, True])
+@pytest.mark.parametrize("failure", ["missing_build", "sql_dependency"])
 async def test_missing_production_build_repairs_test_in_same_workspace(
-    db_session, test_engine, change_source,
+    db_session, test_engine, change_source, failure,
 ):
     harness = await _new_harness(db_session, test_engine)
     executor = harness.coordinator.executor
@@ -171,17 +172,24 @@ async def test_missing_production_build_repairs_test_in_same_workspace(
     async def run_role(role, operation_id):
         result = await original_role(role, operation_id)
         if role is ProjectCellCommandRole.FULL_BUILD and not feedback:
-            return replace(result, ok=False, redacted_detail=(
+            detail = (
                 "service web readiness failed: Could not find a production build "
                 "in the '.next' directory. Tests ran next dev after next build."
                 + "\n[successful task log] " + "x" * 8000
-            ))
+            ) if failure == "missing_build" else (
+                "[project-migration-source-error:42P01] A referenced relation is absent. "
+                "The controller SQL transaction aborted; no migration batch was committed."
+            )
+            return replace(result, ok=False, redacted_detail=detail)
         return result
 
     async def repair(detail):
         feedback.append(detail)
         if change_source:
-            tree["tests/runtime.test.mjs"] = "// test production server in an isolated port"
+            if failure == "missing_build":
+                tree["tests/runtime.test.mjs"] = "// test production server in an isolated port"
+            else:
+                tree["drizzle/0002_notes.sql"] = "CREATE TABLE notes(subject text NOT NULL);"
 
     harness.coordinator.executor = replace(
         executor,
@@ -189,8 +197,11 @@ async def test_missing_production_build_repairs_test_in_same_workspace(
     )
     outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
     assert len(feedback) == 1
-    assert "Could not find a production build" in feedback[0]
-    assert "Repair the test/manifest" in feedback[0]
+    if failure == "missing_build":
+        assert "Could not find a production build" in feedback[0]
+        assert "Repair the test/manifest" in feedback[0]
+    else:
+        assert "project-migration-source-error:42P01" in feedback[0]
     assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == (2 if change_source else 1)
     expected = MaxFinalizationStatus.COMPLETE if change_source else MaxFinalizationStatus.NEEDS_EDIT
     assert outcome.status is expected

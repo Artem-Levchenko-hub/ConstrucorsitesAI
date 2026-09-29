@@ -37,7 +37,7 @@ from yleum_gateway.core.runner_auth import (
 )
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
-from yleum_gateway.services.model_router import native_messages_route
+from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
 from yleum_gateway.services.pricing import calculate_cost_rub
 
 log = structlog.get_logger(__name__)
@@ -412,8 +412,12 @@ async def _native_messages_impl(
             "LLMGW_API_KEY is not configured for the native agent",
         )
     api_key, api_base = route
-    user_id = None if runner_claims is not None else _uuid(body.get("user") or metadata.get("user_id"))
-    project_id = runner_claims.project_id if runner_claims is not None else _uuid(metadata.get("project_id"))
+    user_id = (
+        None if runner_claims is not None else _uuid(body.get("user") or metadata.get("user_id"))
+    )
+    project_id = (
+        runner_claims.project_id if runner_claims is not None else _uuid(metadata.get("project_id"))
+    )
     message_id = _uuid(metadata.get("message_id"))
     run_id = runner_claims.run_id if runner_claims is not None else _uuid(metadata.get("run_id"))
     stage = str(metadata.get("stage") or "native_agent")[:80]
@@ -476,7 +480,19 @@ async def _native_messages_impl(
 
     try:
         upstream_data = upstream.json()
-        adapted = _anthropic_response(upstream_data, model)
+        if not isinstance(upstream_data, dict):
+            raise ValueError("upstream response must be an object")
+        reported_model = upstream_data.get("model")
+        actual_model = slug_to_omnia(reported_model) if isinstance(reported_model, str) else None
+        if reported_model and (actual_model is None or not is_supported(actual_model)):
+            return _err(
+                409,
+                "model_route_mismatch",
+                "upstream model identity cannot be accounted for safely",
+            )
+        actual_model = actual_model or model
+        fallback_used = actual_model != model
+        adapted = _anthropic_response(upstream_data, actual_model)
     except (ValueError, TypeError) as exc:
         log.warning("native_messages.malformed_response", model=model, error=str(exc))
         return _err(502, "api_error", "llmgw returned a malformed response")
@@ -488,7 +504,7 @@ async def _native_messages_impl(
     reported_rub, provider_cost_usd = _reported_cost(upstream_data, upstream)
     try:
         calculated_rub = calculate_cost_rub(
-            model,
+            actual_model,
             tokens_in,
             tokens_out,
             cached_tokens=cache_read,
@@ -506,7 +522,7 @@ async def _native_messages_impl(
                 project_id=project_id,
                 message_id=message_id,
                 run_id=run_id,
-                model_id=model,
+                model_id=actual_model,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
                 cost_rub=cost_rub,
@@ -540,6 +556,10 @@ async def _native_messages_impl(
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
     adapted["metadata"] = {
+        "requested_model": model,
+        "actual_model": actual_model,
+        "model_identity_confirmed": bool(reported_model),
+        "fallback_used": fallback_used,
         "cost_rub": str(cost_rub),
         "provider_cost_usd": str(provider_cost_usd) if provider_cost_usd is not None else None,
         "cache_read_tokens": cache_read,
@@ -547,7 +567,9 @@ async def _native_messages_impl(
         "message_id": (
             runner_claims.jti
             if runner_claims is not None
-            else str(message_id) if message_id is not None else None
+            else str(message_id)
+            if message_id is not None
+            else None
         ),
         "retry_count": retry_count,
         "run_id": str(run_id) if run_id else None,
@@ -565,7 +587,7 @@ async def _native_messages_impl(
                 "project_id": project_id,
                 "message_id": message_id,
                 "run_id": run_id,
-                "model": model,
+                "model": actual_model,
                 "tokens_in": tokens_in,
                 "tokens_out": tokens_out,
                 "cost_rub": cost_rub,
@@ -575,7 +597,7 @@ async def _native_messages_impl(
                 "retry_count": retry_count,
                 "stage": stage,
                 "provider_request_id": provider_request_id,
-                "fallback_used": False,
+                "fallback_used": fallback_used,
                 "stream": False,
             }
         )

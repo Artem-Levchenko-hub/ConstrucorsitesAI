@@ -836,6 +836,17 @@ def test_portable_starter_requires_project_identity() -> None:
         render_max_starter_files(_config(), portable=True)
 
 
+def test_portable_schema_explains_product_database_boundary_without_breaking_legacy_exports():
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
+
+    files = render_max_starter_files(_config(), uuid4(), portable=True)
+    assert "not physical product tables" in files["src/lib/db/schema.ts"]
+    assert "export const maxUsers" in files["src/lib/db/schema.ts"]
+    guide = machine_stack_guide("legacy", {"portable_machine": True}, {".omnia/cell.json": "{}"})
+    assert "0000_max_core.sql" in guide
+    assert "without a foreign key to max_users" in guide
+
+
 def test_preseeded_portable_manifest_satisfies_real_completion_without_agent_rewrite():
     from yleum_api.services.max_generation_contract import max_source_completion_gap
 

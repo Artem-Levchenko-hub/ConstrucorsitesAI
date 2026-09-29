@@ -473,6 +473,7 @@ export type ApiErrorCode =
   | "not_found"
   | "rate_limited"
   | "wallet_empty"
+  | "generation_draining"
   | "model_unavailable"
   | "internal_error"
   | "conflict"

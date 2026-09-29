@@ -240,9 +240,12 @@ describe("message cache update contracts", () => {
     expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("SECRET_VALUE");
   });
 
-  it("keeps an actionable allowlisted balance refusal without server detail", async () => {
+  it.each([
+    ["wallet_empty", "Пополните баланс"],
+    ["generation_draining", "обновляется"],
+  ] as const)("keeps actionable %s refusal without server detail", async (code, expected) => {
     vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402, {
-      code: "wallet_empty", message: "SECRET_VALUE provider balance detail",
+      code, message: "SECRET_VALUE provider detail",
     }));
     await act(async () => { await stream.submit("Follow up", "model"); });
     await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: {
@@ -250,7 +253,7 @@ describe("message cache update contracts", () => {
     } }));
     await act(async () => vi.advanceTimersByTime(0));
     const last = client.getQueryData<Message[]>(["messages", "project-1"])!.at(-1)!;
-    expect(last.content).toContain("Пополните баланс");
+    expect(last.content).toContain(expected);
     expect(last.content).not.toContain("SECRET_VALUE");
     expect(last.generation_status).toBeUndefined();
   });

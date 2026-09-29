@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import re
 import socket
 from typing import Any
 
 from yleum_orchestrator.core.cell_resources import CellResourceError
 from yleum_orchestrator.services.project_machine import machine_remaining_seconds
+
+
+class ControllerDatabaseError(CellResourceError):
+    """Safe diagnostics only; SQL/error rows never cross the controller boundary."""
+
+    def __init__(self, *, sqlstate: str | None, terminated: bool) -> None:
+        self.sqlstate = sqlstate if sqlstate and re.fullmatch(r"[0-9A-Z]{5}", sqlstate) else None
+        self.terminated = terminated
+        super().__init__("controller database operation failed")
 
 
 def admin_args(backend: Any) -> tuple[list[str], dict[str, str]]:
@@ -24,7 +34,8 @@ def admin_sql(
     if postgres is None:
         raise CellResourceError("project database is not running")
     args, env = admin_args(backend)
-    command = ["psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1", *args]
+    command = ["psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
+               "-v", "VERBOSITY=sqlstate", *args]
     if lifetime_seconds is not None:
         lifetime = min(lifetime_seconds, int(machine_remaining_seconds(lifetime_seconds)))
         if lifetime < 1:
@@ -39,17 +50,25 @@ def admin_sql(
         environment=env,
     )
     connection = backend.client.api.exec_start(execution["Id"], socket=True)
+    error_states: list[str] = []
     try:
         connection._sock.settimeout(machine_remaining_seconds(60))
         connection._sock.sendall(sql.encode())
         connection._sock.shutdown(socket.SHUT_WR)
-        output = read_controller_output(connection, max_bytes=max_bytes)
+        output = read_controller_output(
+            connection, max_bytes=max_bytes, error_states=error_states,
+        )
     finally:
         close_controller_socket(connection)
     outcome = backend.client.api.exec_inspect(execution["Id"])
     if outcome.get("Running") or outcome.get("ExitCode") != 0:
         # PostgreSQL errors can echo SQL, credentials or row contents.
-        raise CellResourceError("controller database operation failed")
+        raise ControllerDatabaseError(
+            sqlstate=error_states[-1] if error_states else None,
+            # psql's ON_ERROR_STOP exit 3 establishes an ended SQL script.
+            # Signal exits, missing receipts and running processes are unknown.
+            terminated=outcome.get("Running") is False and outcome.get("ExitCode") == 3,
+        )
     return output
 
 
@@ -63,9 +82,11 @@ def close_controller_socket(connection: Any) -> None:
         connection.close()
 
 
-def read_controller_output(connection: Any, *, max_bytes: int) -> bytes:
+def read_controller_output(
+    connection: Any, *, max_bytes: int, error_states: list[str] | None = None,
+) -> bytes:
     """Bound Docker stdout while reading, including a truncated or oversized frame."""
-    output, pending = bytearray(), bytearray()
+    output, pending, errors = bytearray(), bytearray(), bytearray()
     while chunk := connection._sock.recv(65536):
         pending.extend(chunk)
         while len(pending) >= 8:
@@ -78,7 +99,19 @@ def read_controller_output(connection: Any, *, max_bytes: int) -> bytes:
                 if len(output) + size > max_bytes:
                     raise CellResourceError("database output budget exceeded")
                 output.extend(pending[8 : size + 8])
+            elif error_states is not None:
+                if len(errors) + size > max_bytes:
+                    raise CellResourceError("database diagnostic budget exceeded")
+                errors.extend(pending[8 : size + 8])
             del pending[: size + 8]
     if pending:
         raise CellResourceError("incomplete controller database output")
+    if error_states is not None:
+        # VERBOSITY=sqlstate emits only a code. Ignore all other stderr lines,
+        # including malicious notices, SQL context, credential/row contents.
+        error_states.extend(
+            match.decode("ascii") for match in re.findall(
+                rb"(?m)^(?:ERROR|FATAL):\s+([0-9A-Z]{5})\s*$", bytes(errors),
+            )
+        )
     return bytes(output)

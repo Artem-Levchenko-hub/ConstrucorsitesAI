@@ -22,6 +22,7 @@ from yleum_api.models.billing import (
 from yleum_api.models.billing_usage_event import BillingUsageEvent
 from yleum_api.models.custom_domain import CustomDomain
 from yleum_api.models.deploy_target import DeployTarget
+from yleum_api.models.deployment_drain import DeploymentDrain
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.hero_media_asset import HeroMediaAsset
@@ -71,6 +72,7 @@ __all__ = [
     "BillingUsageEvent",
     "CustomDomain",
     "DeployTarget",
+    "DeploymentDrain",
     "GenerationEvent",
     "GenerationRun",
     "HeroMediaAsset",

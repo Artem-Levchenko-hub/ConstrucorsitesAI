@@ -2222,6 +2222,10 @@ class MaxFinalizationCoordinator:
             and "readiness failed:" in detail
             and "Could not find a production build" in detail
         )
+        migration_source_error = phase is GenerationPhase.FINAL_BUILD and any(
+            f"[project-migration-source-error:{code}]" in detail
+            for code in ("42P01", "42703", "42601", "42804", "42830", "42704")
+        )
         if missing_build:
             detail = (
                 "Repair the test/manifest that removed the production build. "
@@ -2230,7 +2234,8 @@ class MaxFinalizationCoordinator:
                 "and terminate the test server. Then the coordinator will rebuild.\n" + detail
             )
         outcome = await self._outcome(
-            MaxFinalizationStatus.NEEDS_EDIT if missing_build else MaxFinalizationStatus.FAILED,
+            MaxFinalizationStatus.NEEDS_EDIT
+            if missing_build or migration_source_error else MaxFinalizationStatus.FAILED,
             self._checkpoint(identity, phase, result.operation_id),
             bundle or ProofBundle(identity=proof),
             detail,

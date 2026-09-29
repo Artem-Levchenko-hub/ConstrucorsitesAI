@@ -454,6 +454,13 @@ class MachineAdapter:
             )
 
         output: list[str] = []
+        if role == "fast_check":
+            try:
+                gap = await self._migration_dependency_gap(state)
+            except CellResourceError as exc:
+                return await finish(exit_code=1, output=str(exc))
+            if gap:
+                return await finish(exit_code=1, output=gap)
         if role == "full_build":
             try:
                 await self._project_migrations(state, request, verify_applied=False)
@@ -547,21 +554,37 @@ class MachineAdapter:
             str(operation_id), {}
         ).get("project_migration_receipt"))
 
-    async def _project_migrations(
-        self, state: Any, request: Any, *, verify_applied: bool,
-    ) -> dict[str, Any]:
+    async def _migration_inventory(self, backend: Any) -> dict[str, str]:
         from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
         from yleum_orchestrator.services.cell_draft_support import trusted_template_source
 
+        files = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
+        template = trusted_template_source(get_stack("max-miniapp-nextjs").template_dir)
+        legacy = {path: (template / path).read_text(encoding="utf-8") for path in LEGACY_PATHS}
+        return select_migrations(files, legacy)
+
+    async def _migration_dependency_gap(self, state: Any) -> str | None:
+        from yleum_orchestrator.services.project_migration_dependencies import (
+            check_migration_dependencies,
+        )
+
+        machine, backend = self.parts(state)
+        if adaptation_database(state, machine.state()):
+            return None  # Adaptation never reinterprets copied historical migrations.
+        migrations = await self._migration_inventory(backend)
+        return cast(
+            str | None, await machine_effect(check_migration_dependencies, backend, migrations)
+        )
+
+    async def _project_migrations(
+        self, state: Any, request: Any, *, verify_applied: bool,
+    ) -> dict[str, Any]:
         machine, backend = self.parts(state)
         verify_only = adaptation_database(state, machine.state())
-        files = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
         # Adaptation verifies its copied DB, never classifies/replays historical SQL.
         migrations = {}
         if not verify_only:
-            template = trusted_template_source(get_stack("max-miniapp-nextjs").template_dir)
-            legacy = {path: (template / path).read_text(encoding="utf-8") for path in LEGACY_PATHS}
-            migrations = select_migrations(files, legacy)
+            migrations = await self._migration_inventory(backend)
         receipt: dict[str, Any] = await machine_effect(
             run_project_migrations, backend, migrations,
             verify_only=verify_only, verify_applied=verify_applied,

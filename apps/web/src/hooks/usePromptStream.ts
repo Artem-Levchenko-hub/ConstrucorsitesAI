@@ -34,6 +34,7 @@ import type { RestorationAdaptationReference } from "@/lib/api/messages";
 
 /** What the user is told when a prompt is refused for a reason other than a running build. */
 const PROMPT_REFUSALS: Record<string, string> = {
+  generation_draining: "Сервис обновляется. Подождите несколько минут и повторите запрос.",
   generation_active:
     "Сейчас идёт другая сборка. Дождитесь её завершения и отправьте запрос ещё раз.",
   idempotency_conflict:
