@@ -264,13 +264,20 @@ async def list_messages(
                 runs_by_message.setdefault(generation_run.assistant_message_id, generation_run)
 
     payload: list[MessagePublic] = []
-    from yleum_api.services.generation_failure import public_generation_failure
+    from yleum_api.services.generation_failure import (
+        public_generation_failure,
+        public_message_content,
+    )
 
     for row in rows:
         message_run = runs_by_message.get(row.id)
+        failure = public_generation_failure(message_run)
         payload.append(
             MessagePublic.model_validate(row).model_copy(
                 update={
+                    "content": public_message_content(
+                        row.role, row.content, has_failure=failure is not None,
+                    ),
                     "generation_started_at": (
                         message_run.started_at if message_run is not None else None
                     ),
@@ -278,7 +285,7 @@ async def list_messages(
                         message_run.finished_at if message_run is not None else None
                     ),
                     "generation_status": (message_run.status if message_run is not None else None),
-                    "generation_failure": public_generation_failure(message_run),
+                    "generation_failure": failure,
                 }
             )
         )

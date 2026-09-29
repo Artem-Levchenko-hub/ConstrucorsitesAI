@@ -38,6 +38,10 @@ const PROMPT_REFUSALS: Record<string, string> = {
     "Сейчас идёт другая сборка. Дождитесь её завершения и отправьте запрос ещё раз.",
   idempotency_conflict:
     "Запрос с этим ключом уже был отправлен с другим текстом. Обновите страницу и повторите.",
+  wallet_empty: "Недостаточно средств для генерации. Пополните баланс и повторите запрос.",
+  payment_required: "Для генерации требуется пополнить баланс.",
+  not_found: "Проект не найден. Обновите страницу и проверьте доступ.",
+  forbidden: "Нет доступа к генерации этого проекта.",
 };
 
 export type PromptSubmitOptions = {
@@ -596,7 +600,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         updateMessage(event.data.message_id, (m) => ({
           ...m,
-          content: `[Ошибка: ${event.data.error}]`,
+          // Preserve real partial output; raw event text is not a public error
+          // contract. The durable allowlisted failure arrives via history.
+          content: m.content,
           generation_status: "failed",
           // Без tokens_out !== null ChatPanel считает сообщение
           // всё ещё стримящимся — UI не разлочивается.
@@ -611,7 +617,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         // tab was getting overlooked while the preview placeholder kept
         // shimmering — they thought generation was still in progress.
         toast.error("Генерация прервалась", {
-          description: event.data.error.slice(0, 240),
+          description: "Подробности и доступные действия появятся в сообщении генерации.",
           duration: 8_000,
         });
         delete streamMetaRef.current[event.data.message_id];
@@ -882,10 +888,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // контекст" spinner. This is only for a POST that the backend did not
       // accept. Stream silence is reconciled against durable generation state
       // below and must never manufacture a terminal error.
-      const _failPrompt = (reason: string, detail?: string) => {
+      const _failPrompt = (reason: string) => {
         updateMessage(tempAssistantId, (m) => ({
           ...m,
-          content: `[Ошибка: ${reason}${detail ? ` — ${detail}` : ""}]`,
+          content: `[Ошибка: ${reason}]`,
           tokens_out: 0,
           tokens_in: 0,
         }));
@@ -897,9 +903,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         cancelRef.current?.();
         cancelRef.current = null;
         toast.error("Генерация не запустилась", {
-          description: detail
-            ? `${reason}: ${detail.slice(0, 200)}`
-            : reason,
+          description: reason,
           duration: 10_000,
         });
         fireQueued();
@@ -1053,10 +1057,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         const errMsg =
           e instanceof ApiError && Object.hasOwn(PROMPT_REFUSALS, e.code)
             ? PROMPT_REFUSALS[e.code]
-            : e instanceof Error
-              ? e.message
-              : "не удалось отправить промпт";
-        _failPrompt("POST /prompt не прошёл", errMsg);
+            : "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.";
+        _failPrompt(errMsg);
         return false;
       }
 

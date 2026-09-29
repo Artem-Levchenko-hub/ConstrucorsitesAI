@@ -204,11 +204,13 @@ async def _process_prompt(
         # spinning forever; otherwise tokens_out stays NULL and ChatPanel
         # treats the message as still-streaming.
         try:
+            from yleum_api.services.generation.agent_messages import _failed_build_body
+
             await set_generation_run_status(run_id, "failed", error=str(e))
             async with factory() as session:
                 m = await session.get(Message, assistant_message_id)
                 if m is not None and m.tokens_out is None:
-                    m.content = f"[Ошибка: {e}]"[:1000]
+                    m.content = _failed_build_body(m.content or "", e)
                     m.tokens_out = 0
                     m.tokens_in = 0
                     await session.commit()
@@ -216,10 +218,12 @@ async def _process_prompt(
             import traceback as _tb2
 
             print(f"[PP] failure_marker_write_failed\n{_tb2.format_exc()}", flush=True)
+        from yleum_api.services.generation_failure import failure_for_error
+
         await publish_event(
             project_id,
             "llm.error",
-            {"message_id": str(assistant_message_id), "error": str(e)},
+            {"message_id": str(assistant_message_id), "error": failure_for_error(e).message},
         )
     finally:
         if runtime.deadline_task is not None:

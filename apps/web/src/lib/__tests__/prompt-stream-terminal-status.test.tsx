@@ -8,6 +8,7 @@ import { ApiError } from "@/lib/api/client";
 import { cancelGeneration, getLatestGeneration, sendPrompt } from "@/lib/api/messages";
 import type { GenerationRun, Message, WsEvent } from "@/lib/api/types";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
+import { toast } from "sonner";
 
 vi.mock("@/lib/api/messages", () => ({
   cancelGeneration: vi.fn(),
@@ -220,13 +221,37 @@ describe("message cache update contracts", () => {
   });
 
   it("marks rejected POST placeholder without inventing a generation status", async () => {
-    vi.mocked(sendPrompt).mockRejectedValue(new Error("fixture rejected"));
+    vi.mocked(sendPrompt).mockRejectedValue(new Error("fixture rejected SECRET_VALUE"));
     await act(async () => { await stream.submit("Follow up", "model"); });
     await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: { message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0 } }));
     await act(async () => vi.advanceTimersByTime(0));
     const last = client.getQueryData<Message[]>(["messages", "project-1"])!.at(-1)!;
     expect(last.id).toMatch(/^__opt_asst_/);
-    expect(last).toMatchObject({ content: "[Ошибка: POST /prompt не прошёл — fixture rejected]", tokens_in: 0, tokens_out: 0 });
+    expect(last).toMatchObject({ content: "[Ошибка: Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.]", tokens_in: 0, tokens_out: 0 });
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("SECRET_VALUE");
+    expect(last.generation_status).toBeUndefined();
+  });
+
+  it("never copies an error event secret into partial text or toast", async () => {
+    await act(async () => TestSocket.instances.at(-1)!.emit({
+      type: "llm.error", data: { message_id: "message-1", error: "password=SECRET_VALUE" },
+    }));
+    expect(message().content).toBe("Проверяю каталог");
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("SECRET_VALUE");
+  });
+
+  it("keeps an actionable allowlisted balance refusal without server detail", async () => {
+    vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402, {
+      code: "wallet_empty", message: "SECRET_VALUE provider balance detail",
+    }));
+    await act(async () => { await stream.submit("Follow up", "model"); });
+    await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: {
+      message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0,
+    } }));
+    await act(async () => vi.advanceTimersByTime(0));
+    const last = client.getQueryData<Message[]>(["messages", "project-1"])!.at(-1)!;
+    expect(last.content).toContain("Пополните баланс");
+    expect(last.content).not.toContain("SECRET_VALUE");
     expect(last.generation_status).toBeUndefined();
   });
 

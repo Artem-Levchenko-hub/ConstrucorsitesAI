@@ -60,7 +60,7 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
     ]
     db_session.add_all(rows)
     if run_status == "failed":
-        rows[-1].content = ""
+        rows[-1].content = "[Ошибка: password=NEVER_PUBLISH_THIS]\nГотовая часть ответа"
     await db_session.flush()
     run_started_at = started_at + timedelta(minutes=4, seconds=2)
     run_finished_at = run_started_at + timedelta(seconds=73)
@@ -94,7 +94,7 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
     payload = response.json()
     assert [message["content"] for message in payload] == [
         "reply-3",
-        "" if run_status == "failed" else "reply-4",
+        "Готовая часть ответа" if run_status == "failed" else "reply-4",
     ]
     assert payload[-1]["agent_steps"][0]["action"] == "Проверяю проект"
     assert payload[-1]["generation_started_at"] == run_started_at.isoformat().replace("+00:00", "Z")
@@ -109,3 +109,42 @@ async def test_message_history_returns_latest_rows_with_persisted_steps(
         assert payload[-1]["generation_failure"] is None
     assert "NEVER_PUBLISH_THIS" not in response.text
     assert payload[0]["generation_started_at"] is None
+
+
+async def test_history_filters_legacy_service_error_without_run_but_preserves_user_text(
+    client: httpx.AsyncClient,
+    db_session: AsyncSession,
+) -> None:
+    user = User(email=f"legacy-{uuid.uuid4().hex}@example.com", password_hash="x")
+    db_session.add(user)
+    await db_session.flush()
+    project = Project(
+        owner_id=user.id, name="Legacy", slug=f"legacy-{uuid.uuid4().hex}", template="blank"
+    )
+    db_session.add(project)
+    await db_session.flush()
+    wrapper = "[Ошибка: password=PRIVATE_MARKER]"
+    assistant_content = wrapper + "\nГотовая часть ответа"
+    assistant = Message(
+        project_id=project.id, role="assistant", content=assistant_content, tokens_out=0
+    )
+    db_session.add_all([assistant, Message(project_id=project.id, role="user", content=wrapper)])
+    await db_session.commit()
+
+    async def current_user() -> User:
+        return user
+
+    app.dependency_overrides[get_current_user] = current_user
+    try:
+        response = await client.get(f"/api/projects/{project.id}/messages")
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    assert response.status_code == 200
+    rows = response.json()
+    assert next(r for r in rows if r["role"] == "user")["content"] == wrapper
+    assert "PRIVATE_MARKER" not in next(r for r in rows if r["role"] == "assistant")["content"]
+    assert next(r for r in rows if r["role"] == "assistant")["content"].endswith(
+        "Готовая часть ответа"
+    )
+    await db_session.refresh(assistant)
+    assert assistant.content == assistant_content  # Response projection, no historical DB rewrite.

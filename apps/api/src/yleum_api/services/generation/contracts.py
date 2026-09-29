@@ -49,6 +49,9 @@ class GenerationRuntime:
     handle: ProjectCellExecutorHandle | None = None
     coordinator: MaxFinalizationCoordinator | None = None
     deadline_task: asyncio.Task[None] | None = None
+    # Accepted source plus the intentional platform seed, fixed before model
+    # writes. Never refresh from a mutable draft after a failed check.
+    migration_baseline: dict[str, str] | None = None
 
 
 @dataclass(frozen=True)

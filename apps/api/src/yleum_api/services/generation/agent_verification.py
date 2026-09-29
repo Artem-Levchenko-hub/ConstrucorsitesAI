@@ -176,7 +176,9 @@ async def check_backend_and_normalize_css(
             files.update(_heal.files)
         from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
-        _migration_baseline = {**baseline.files, **_max_seed_files}
+        _migration_baseline = getattr(runtime, "migration_baseline", None)
+        if _migration_baseline is None:
+            _migration_baseline = {**baseline.files, **_max_seed_files}
         _migration_candidate = dict(_migration_baseline)
         for _path, _content in files.items():
             if _content == "":

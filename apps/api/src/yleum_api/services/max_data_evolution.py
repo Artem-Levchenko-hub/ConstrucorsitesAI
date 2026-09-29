@@ -389,6 +389,8 @@ def max_migration_contract_errors(
 async def build_max_agent_guide(
     legacy: str,
     executor: PortableGuideExecutor | None = None,
+    *,
+    integration_guide: str = "",
 ) -> str:
     """Apply policy after provider selection, which may replace the entire guide."""
     guide = (
@@ -396,4 +398,8 @@ async def build_max_agent_guide(
         if executor is not None
         else legacy
     )
-    return f"{guide}\n\n{MAX_DATA_EVOLUTION_POLICY}".strip()
+    # Provider selection may replace the legacy stack entirely. Project
+    # capabilities must be appended AFTER that replacement, never lost in it.
+    return "\n\n".join(
+        part for part in (guide, MAX_DATA_EVOLUTION_POLICY, integration_guide) if part
+    )

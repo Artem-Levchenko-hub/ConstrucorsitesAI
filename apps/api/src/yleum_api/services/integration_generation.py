@@ -8,6 +8,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from yleum_api.models.project import Project
 
+MANAGED_PRODUCT_GUIDE = """MANAGED BUSINESS CONFIGURATION AND PRODUCT STATE
+Read the owner's saved brief in src/lib/omnia/max-config.ts. In product screens
+use getYleumAppConfig() from @/lib/omnia/integration-client on mount and focus for
+editable names, descriptions, actions and catalogs. Render active content with
+stable ids, category, image_url, price, availability and options honestly; never
+invent content or copy mutable configuration into constants. Handle loading,
+empty and failed reads. Implement configured features and personal-data consent
+when required; saved policy settings do not prove consent was collected.
+Use createMaxAction/getMaxActions for managed user actions. Never fabricate user
+history or provider statuses. A connected service's history/status contract below
+supersedes a local action cache for that service. Product-owned storage remains
+available under the selected provider's isolation and authenticated identity rules.
+Keep MAX Bridge/session initialization and platform-owned /api/max/*, /api/omnia/*
+and managed config/clients intact. Use exact SDK exports; credentials belong in
+the Integration Hub, never in product code, chat instructions or .env files.
+Do not turn on unrequested features merely because a service is connected.
+""".strip()
+
 _METHODS = {
     "yookassa": (
         "createYleumPayment({amount, description, return_url, idempotency_key}); "
@@ -82,6 +100,7 @@ async def generation_context(session: AsyncSession, project_id: UUID) -> str:
     if ai_enabled:
         providers.append("llmgw")
     lines = [
+        MANAGED_PRODUCT_GUIDE,
         (
             "CONNECTED BUSINESS INTEGRATIONS (server-verified configuration, not live"
             " operation proof):"

@@ -64,7 +64,11 @@ def _failed_build_body(accumulated: str, stream_error: object) -> str:
     ``llm.error`` WS event) still sees WHY the build stopped instead of a
     blank, forever-"streaming" chat row. Mirrors ``_emergency_error``.
     """
-    return accumulated if accumulated.strip() else f"[Ошибка генерации: {str(stream_error)[:300]}]"
+    from yleum_api.services.generation_failure import failure_for_error
+
+    if accumulated.strip():
+        return accumulated
+    return f"[Ошибка генерации: {failure_for_error(stream_error).message}]"
 
 
 def _capture_hard_coverage_attestation(

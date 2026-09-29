@@ -274,10 +274,15 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
     from yleum_api.services.generation import agent_finalization
 
     tasks: list[str] = []
-    workspace = {"src/app/page.tsx": "v2", "src/app/new.tsx": "added"}
+    workspace = {
+        "src/app/page.tsx": "v2", "src/app/new.tsx": "added", "src/lib/db/schema.ts": "new",
+    }
 
     async def run_native_build(**kwargs: Any) -> Any:
         tasks.append(str(kwargs["task"]))
+        # A repair which attempts done without build gets the same accepted
+        # baseline contract, not a new baseline from its mutable candidate.
+        assert "changed without a new canonical" in kwargs["completion_check"]({}, {})
         return SimpleNamespace(stop_reason="done", summary="", files={}, steps=1)
 
     monkeypatch.setattr(agent_native, "run_native_build", run_native_build)
@@ -295,6 +300,7 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
         return None
 
     runtime = SimpleNamespace(
+        migration_baseline={"src/lib/db/schema.ts": "old"},
         coordinator=SimpleNamespace(
             finalize_with_repair=coordinator_finalize, source_edit_deadline=_no_deadline,
         ),

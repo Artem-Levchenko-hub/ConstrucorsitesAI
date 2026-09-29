@@ -338,11 +338,14 @@ async def _emergency_error(project_id: UUID, assistant_message_id: UUID, err: st
     import logging as _emerg_log
 
     _elog = _emerg_log.getLogger("yleum_api.routers.messages")
+    from yleum_api.services.generation_failure import failure_for_error
+
+    public_error = failure_for_error(err).message
     try:
         await publish_event(
             project_id,
             "llm.error",
-            {"message_id": str(assistant_message_id), "error": err[:500]},
+            {"message_id": str(assistant_message_id), "error": public_error},
         )
     except Exception as pub_exc:
         _elog.error("emergency publish_event failed: %r", pub_exc)
@@ -353,7 +356,7 @@ async def _emergency_error(project_id: UUID, assistant_message_id: UUID, err: st
             if msg is not None and msg.tokens_out is None:
                 # Keep any partial content the model managed to stream.
                 if not msg.content:
-                    msg.content = f"[Ошибка: {err[:200]}]"
+                    msg.content = f"[Ошибка генерации: {public_error}]"
                 msg.tokens_out = 0
                 msg.tokens_in = msg.tokens_in or 0
                 await session.commit()

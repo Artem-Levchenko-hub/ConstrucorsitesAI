@@ -150,6 +150,13 @@ async def execute_agent_turn(
         else:
             _native_execute = operations.execute
 
+        # Even a model that skips build must receive the same migration contract
+        # as final verification while it still has a chance to repair this run.
+        from yleum_api.services.generation.agent_runtime import guard_native_source_contract
+
+        _native_execute, _completion_check = await guard_native_source_contract(
+            runtime, ids, _native_execute, _completion_check,
+        )
         _native_max_segments = get_settings().agent_max_segments if not _is_edit else 1
         _agent_res = await agent_native.run_native_build(
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),

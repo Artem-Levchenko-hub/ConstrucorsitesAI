@@ -65,3 +65,47 @@ def test_restoration_retry_must_use_reviewed_version_workflow():
     )
     assert not failure.retryable
     assert "историю версий" in failure.message
+
+
+@pytest.mark.parametrize(
+    "wrapper", ["[Ошибка: password=NEVER_PUBLISH]", "[Ошибка генерации: token=NEVER_PUBLISH]"]
+)
+def test_legacy_service_error_is_projected_without_rewriting_user_or_partial_text(wrapper):
+    from yleum_api.services.generation_failure import public_message_content
+
+    assert "NEVER_PUBLISH" not in public_message_content("assistant", wrapper)
+    assert public_message_content("assistant", wrapper, has_failure=True) == ""
+    assert public_message_content("user", wrapper) == wrapper
+    assert public_message_content("assistant", "real partial response") == "real partial response"
+
+
+def test_empty_failed_build_never_persists_the_exception_secret():
+    from yleum_api.services.generation.agent_messages import _failed_build_body
+
+    assert "NEVER_PUBLISH" not in _failed_build_body(
+        "", "PROVIDER_AUTH_FAILED: token=NEVER_PUBLISH"
+    )
+
+
+@pytest.mark.parametrize("has_failure", [True, False])
+@pytest.mark.parametrize("prefix", ["Ошибка", "Ошибка генерации"])
+def test_legacy_wrapper_keeps_real_response_suffix(prefix, has_failure):
+    from yleum_api.services.generation_failure import public_message_content
+
+    suffix = "Готовая часть ответа…\nСледующий абзац."
+    content = f"[{prefix}: password=NEVER_PUBLISH]\n{suffix}"
+    projected = public_message_content("assistant", content, has_failure=has_failure)
+    assert projected.endswith(suffix)
+    assert "NEVER_PUBLISH" not in projected
+    if has_failure:
+        assert projected == suffix
+
+
+@pytest.mark.parametrize("has_failure", [True, False])
+def test_truncated_legacy_wrapper_never_exposes_diagnostic_tail(has_failure):
+    from yleum_api.services.generation_failure import public_message_content
+
+    content = "[Ошибка: token=NEVER_PUBLISH\ntruncated secret=NEVER_PUBLISH"
+    assert "NEVER_PUBLISH" not in public_message_content(
+        "assistant", content, has_failure=has_failure
+    )

@@ -142,6 +142,7 @@ async def finalize_max_candidate(
 
         async def _repair_finalization_source(detail: str) -> None:
             from yleum_api.services import agent_native
+            from yleum_api.services.generation.agent_runtime import guard_native_source_contract
             from yleum_api.services.max_generation_contract import max_source_completion_gap
 
             assert runtime.handle is not None
@@ -171,6 +172,12 @@ async def finalize_max_candidate(
                     "path": "",
                 },
             )
+            repair_execute, repair_completion = await guard_native_source_contract(
+                runtime, ids, operations.execute,
+                lambda written, evidence: max_source_completion_gap(
+                    prompt_text, {**baseline, **written}, portable=True,
+                ),
+            )
             result = await agent_native.run_native_build(
                 system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
                 task=(
@@ -179,7 +186,7 @@ async def finalize_max_candidate(
                     "features and data. Do not repeat SQL effects already completed. "
                     "Make real source changes, run build, then done."
                 ),
-                execute=operations.execute,
+                execute=repair_execute,
                 user_id=str(ids.user_id),
                 project_id=str(ids.project_id),
                 run_id=str(ids.run_id),
@@ -192,11 +199,7 @@ async def finalize_max_candidate(
                 portable_cell=True,
                 initial_files=baseline,
                 edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
-                completion_check=lambda written, evidence: max_source_completion_gap(
-                    prompt_text,
-                    {**baseline, **written},
-                    portable=True,
-                ),
+                completion_check=repair_completion,
             )
             if result.stop_reason in {"provider_error", "infra_error", "error"}:
                 raise RuntimeError(result.summary)

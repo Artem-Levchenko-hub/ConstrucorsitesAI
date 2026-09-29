@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 from uuid import UUID
 
@@ -28,6 +29,62 @@ from yleum_api.services.generation.runtime import (
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def migration_feedback(runtime: GenerationRuntime, ids: GenerationIds) -> str | None:
+    baseline = getattr(runtime, "migration_baseline", None)
+    if baseline is None or runtime.handle is None:
+        return None  # Platform seed preparation precedes model ownership.
+    from yleum_api.services.generation.agent_verification import _preserves_adaptation_database
+    from yleum_api.services.max_data_evolution import max_migration_contract_errors
+
+    errors = max_migration_contract_errors(
+        baseline,
+        await runtime.handle.snapshot_files(),
+        preserve_current_database=await _preserves_adaptation_database(runtime, ids),
+    )
+    if not errors:
+        return None
+    return (
+        "MAX migration contract: " + "; ".join(errors[:5])
+        + ". Repair the candidate before build/done. Preserve existing migrations; "
+        "append the required canonical migration or restore the unintended schema change."
+    )
+
+
+async def checked_fast_check(runtime: GenerationRuntime, ids: GenerationIds) -> dict[str, Any]:
+    gap = await migration_feedback(runtime, ids)
+    if gap:
+        return {"ok": False, "detail": gap, "environment_mutated": False}
+    assert runtime.coordinator is not None
+    result = await runtime.coordinator.fast_check()
+    return {"ok": result.outcome == "green", "detail": result.redacted_detail}
+
+
+async def guard_native_source_contract(
+    runtime: GenerationRuntime,
+    ids: GenerationIds,
+    execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
+    completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
+) -> tuple[
+    Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
+    Callable[[Mapping[str, str], Mapping[str, int]], str | None],
+]:
+    """One same-run contract for initial generation and finalization repair."""
+    gap = await migration_feedback(runtime, ids)
+
+    async def checked_execute(action: agent_builder.Action) -> dict[str, Any]:
+        nonlocal gap
+        result = await execute(action)
+        if action.name in {"write_file", "edit_file", "bash", "build"}:
+            # snapshot_files copies the executor's in-memory source, no I/O.
+            gap = await migration_feedback(runtime, ids)
+        return result
+
+    def checked_completion(written: Mapping[str, str], evidence: Mapping[str, int]) -> str | None:
+        return gap or (completion_check(written, evidence) if completion_check else None)
+
+    return checked_execute, checked_completion
 
 
 async def prepare_agent_runtime(
@@ -60,11 +117,7 @@ async def prepare_agent_runtime(
 
     async def _probe_build_status() -> dict[str, Any]:
         if runtime.coordinator is not None:
-            _proof_result = await runtime.coordinator.fast_check()
-            return {
-                "ok": _proof_result.outcome == "green",
-                "detail": _proof_result.redacted_detail,
-            }
+            return await checked_fast_check(runtime, ids)
         return await _project_cell_build(_require_project_cell(runtime.handle))
 
     async def _preview_base_url() -> str | None:
@@ -152,12 +205,7 @@ async def prepare_agent_runtime(
                 action: agent_builder.Action,
             ) -> dict[str, Any]:
                 if action.name == "build":
-                    assert runtime.coordinator is not None
-                    _proof_result = await runtime.coordinator.fast_check()
-                    return {
-                        "ok": _proof_result.outcome == "green",
-                        "detail": _proof_result.redacted_detail,
-                    }
+                    return await checked_fast_check(runtime, ids)
                 return await _direct_max_agent_executor(action)
 
             bindings.execute = _agent_executor

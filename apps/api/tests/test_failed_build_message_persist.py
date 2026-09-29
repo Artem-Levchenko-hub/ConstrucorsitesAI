@@ -42,7 +42,8 @@ def test_failed_build_body_writes_error_when_nothing_streamed() -> None:
     body = _failed_build_body("", "writer pass failed: insufficient balance")
     assert body != ""
     assert "Ошибка" in body
-    assert "insufficient balance" in body
+    assert "провайдер модели отклонил доступ" in body
+    assert "insufficient balance" not in body
 
     # whitespace-only is treated as empty too
     assert _failed_build_body("   \n\t ", "boom").startswith("[Ошибка")

@@ -211,12 +211,12 @@ async def prepare_stack_prompt(
 
     async with factory() as _integration_session:
         _integration_guide = await generation_context(_integration_session, ids.project_id)
-    _stack_guide += "\n\n" + _integration_guide
     from yleum_api.services.max_data_evolution import build_max_agent_guide
 
     _stack_guide = await build_max_agent_guide(
         _stack_guide,
         runtime.handle,
+        integration_guide=_integration_guide,
     )
     # K1 knowledge layer: inject the stack's .omnia/skills (security/a11y/
     # perf canons aligned with the gates) when enabled. None → unchanged.
@@ -258,4 +258,3 @@ async def prepare_stack_prompt(
             "src/app/layout.tsx (корневой) — это ломает гидрацию и реалтайм."
         )
     return StackPrompt(_seed_block, _orch_name, _stack_guide, _skills, _stack_system, _bare_stack)
-
