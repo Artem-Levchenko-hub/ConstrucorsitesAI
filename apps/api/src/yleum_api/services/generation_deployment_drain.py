@@ -15,6 +15,7 @@ from yleum_api.core.errors import ApiError
 
 if TYPE_CHECKING:
     from yleum_api.models.deployment_drain import DeploymentDrain
+    from yleum_api.models.project_cell import ProjectCellOperation
 
 _SCOPE = "generation"
 _LOCK = "yleum:generation:deployment-drain:v1"
@@ -59,9 +60,80 @@ async def end_drain(session: AsyncSession, release_sha: str) -> None:
         await session.flush()
 
 
-async def drain_status(
-    session: AsyncSession, *, bootstrap: bool = False
-) -> dict[str, object]:
+def reconciliation_settles(target: ProjectCellOperation, receipt: ProjectCellOperation) -> bool:
+    """Keep unknown history immutable; only its exact observed successor settles it."""
+    from yleum_api.services.orchestrator_client import (
+        OrchestratorUnavailable,
+        ProjectCellResourceResponse,
+    )
+    from yleum_api.services.project_cells import ProjectCellValidationError, _stored_request_payload
+
+    if (
+        target.status != "indeterminate"
+        or receipt.status != "completed"
+        or receipt.kind != "reconcile"
+        or receipt.workspace_id != target.workspace_id
+        or target.fencing_epoch is None
+        or receipt.fencing_epoch is None
+        or receipt.fencing_epoch <= target.fencing_epoch
+    ):
+        return False
+    try:
+        if _stored_request_payload(receipt) != {"indeterminate_operation_id": str(target.id)}:
+            return False
+        result = dict(receipt.result_payload or {})
+        if result.pop("reconciles_operation_id", None) != str(target.id):
+            return False
+        response = ProjectCellResourceResponse.from_json(result)
+        return (
+            response.workspace_id == target.workspace_id
+            and response.fencing_epoch == receipt.fencing_epoch
+            and response.state
+            in {
+                "retained",
+                "resources_ready",
+                "resources_paused",
+                "degraded",
+                "partial",
+                "destroyed",
+            }
+        )
+    except (ValueError, TypeError, ProjectCellValidationError, OrchestratorUnavailable):
+        return False
+
+
+async def unresolved_operation_count(session: AsyncSession) -> int:
+    from yleum_api.models.project_cell import ProjectCellOperation
+
+    unknown = list(
+        (
+            await session.scalars(
+                select(ProjectCellOperation).where(ProjectCellOperation.status == "indeterminate")
+            )
+        ).all()
+    )
+    if not unknown:
+        return 0
+    receipts = list(
+        (
+            await session.scalars(
+                select(ProjectCellOperation).where(
+                    ProjectCellOperation.workspace_id.in_(
+                        {operation.workspace_id for operation in unknown}
+                    ),
+                    ProjectCellOperation.kind == "reconcile",
+                    ProjectCellOperation.status == "completed",
+                )
+            )
+        ).all()
+    )
+    return sum(
+        not any(reconciliation_settles(target, receipt) for receipt in receipts)
+        for target in unknown
+    )
+
+
+async def drain_status(session: AsyncSession, *, bootstrap: bool = False) -> dict[str, object]:
     from yleum_api.models.generation_run import GenerationRun
     from yleum_api.models.project_cell import ProjectCellActivityLease, ProjectCellOperation
     from yleum_api.models.restoration import ACTIVE_RESTORATION_STATES, Restoration
@@ -77,9 +149,7 @@ async def drain_status(
         "generations": (GenerationRun, GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES)),
         "operations": (
             ProjectCellOperation,
-            ProjectCellOperation.status.in_(
-                ("pending", "waiting_capacity", "running", "indeterminate")
-            ),
+            ProjectCellOperation.status.in_(("pending", "waiting_capacity", "running")),
         ),
         "leases": (ProjectCellActivityLease, ProjectCellActivityLease.finished_at.is_(None)),
         "restorations": (Restoration, Restoration.state.in_(ACTIVE_RESTORATION_STATES)),
@@ -88,6 +158,7 @@ async def drain_status(
         counts[key] = int(
             await session.scalar(select(func.count()).select_from(model).where(predicate)) or 0
         )
+    counts["operations"] += await unresolved_operation_count(session)
     return {
         "release_sha": row.release_sha if row else None,
         "active": counts,

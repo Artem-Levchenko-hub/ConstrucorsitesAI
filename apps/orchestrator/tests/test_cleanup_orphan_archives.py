@@ -320,6 +320,15 @@ def test_checkpoint_docker_c1_survives_host_replacement_by_c2(
     fake_docker,
     capsys,
 ):
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def available_lock(self, workspace_id):
+        # This test isolates checkpoint reference retention. Real contention and
+        # post-lock rechecks have dedicated tests above, with the actual lock.
+        yield
+
+    monkeypatch.setattr(gc.WorkspaceOperationLock, "hold", available_lock)
     retained_c1 = archive(tmp_path, "a")
     current_c2 = archive(tmp_path, "b")
     orphan = archive(tmp_path, "c")

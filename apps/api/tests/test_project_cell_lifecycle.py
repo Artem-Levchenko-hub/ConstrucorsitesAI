@@ -892,6 +892,13 @@ async def test_reconcile_observes_only_and_records_target_operation_id(
     assert client.ensure.await_count == 0
     assert client.control.await_count == 0
     assert client.observe_resources.await_count == 1
+    from yleum_api.services.generation_deployment_drain import drain_status
+
+    async with factory() as session:
+        status = await drain_status(session, bootstrap=True)
+        assert status["active"]["operations"] == 0
+        historical = await session.get(ProjectCellOperation, operation.id)
+        assert historical.status == "indeterminate"
 
 
 async def test_reconcile_cannot_switch_durable_target(

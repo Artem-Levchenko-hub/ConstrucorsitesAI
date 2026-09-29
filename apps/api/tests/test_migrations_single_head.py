@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_moysklad_vendor_is_the_only_head() -> None:
+def test_generation_deployment_drain_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0072_moysklad_vendor"]
+    assert heads == ["0073_generation_deployment_drain"]
+    assert chain["0073_generation_deployment_drain"] == "0072_moysklad_vendor"
     assert chain["0072_moysklad_vendor"] == "0071_oauth_login"
     assert chain["0071_oauth_login"] == "0070_billing_usage_events"
     assert chain["0070_billing_usage_events"] == "0069_retire_business_profiles"
@@ -231,7 +232,10 @@ def test_restoration_adaptation_migrations_roundtrip(
     database = project_cell_migration_database
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == "0072_moysklad_vendor"
+    assert (
+        database.fetchval("SELECT version_num FROM alembic_version")
+        == "0073_generation_deployment_drain"
+    )
     assert (
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
@@ -329,7 +333,10 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_installations')") is None
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == "0072_moysklad_vendor"
+    assert (
+        database.fetchval("SELECT version_num FROM alembic_version")
+        == "0073_generation_deployment_drain"
+    )
 
 
 def test_project_cell_candidates_migration_upgrade_and_rollback(

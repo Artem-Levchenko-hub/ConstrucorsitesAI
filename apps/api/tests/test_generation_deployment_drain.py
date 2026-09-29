@@ -1,6 +1,8 @@
 import asyncio
 import builtins
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -16,6 +18,56 @@ from yleum_api.services.generation_deployment_drain import (
 from yleum_api.services.generation_runs import reserve_generation_run
 
 
+@pytest.mark.parametrize(
+    "bad", [None, "target", "workspace", "fence", "request", "status", "response"]
+)
+def test_only_exact_newer_completed_reconcile_settles_history(bad):
+    from yleum_api.models.project_cell import ProjectCellOperation
+    from yleum_api.services.generation_deployment_drain import reconciliation_settles
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
+    from yleum_api.services.project_cells import _canonical_operation_envelope
+
+    target = ProjectCellOperation(
+        id=uuid4(), workspace_id=uuid4(), status="indeterminate", kind="pause", fencing_epoch=10
+    )
+    receipt = ProjectCellOperation(
+        id=uuid4(),
+        workspace_id=target.workspace_id,
+        generation_run_id=None,
+        kind="reconcile",
+        status="completed",
+        fencing_epoch=12,
+    )
+    receipt.request_payload, receipt.request_digest = _canonical_operation_envelope(
+        target.workspace_id, None, "reconcile", {"indeterminate_operation_id": str(target.id)}
+    )
+    receipt.result_payload = ProjectCellResourceResponse(
+        workspace_id=target.workspace_id,
+        state="degraded",
+        provider_ref="owned",
+        fencing_epoch=12,
+        checkpoint_ref=None,
+        has_workspace=True,
+        has_agent_home=True,
+        has_postgres=True,
+        has_redis=True,
+    ).to_wire_json() | {"reconciles_operation_id": str(target.id)}
+    if bad == "target":
+        receipt.result_payload["reconciles_operation_id"] = str(uuid4())
+    if bad == "workspace":
+        receipt.workspace_id = uuid4()
+    if bad == "fence":
+        receipt.fencing_epoch = 10
+    if bad == "request":
+        receipt.request_digest = "invalid"
+    if bad == "status":
+        receipt.status = "indeterminate"
+    if bad == "response":
+        receipt.result_payload["fencing_epoch"] = 11
+    assert reconciliation_settles(target, receipt) is (bad is None)
+    assert target.status == "indeterminate"
+
+
 @pytest.mark.parametrize("active", [0, 1])
 async def test_bootstrap_status_works_without_new_model_or_table(monkeypatch, active):
     original = builtins.__import__
@@ -28,6 +80,7 @@ async def test_bootstrap_status_works_without_new_model_or_table(monkeypatch, ac
     monkeypatch.setattr(builtins, "__import__", legacy_import)
     session = AsyncMock()
     session.scalar.side_effect = [active, 0, 0, 0]
+    session.scalars.return_value = SimpleNamespace(all=lambda: [])
     result = await drain_status(session, bootstrap=True)
     assert result["drained"] is (active == 0)
     assert result["bootstrap_readonly"] is True
