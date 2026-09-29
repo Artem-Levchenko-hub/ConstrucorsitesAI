@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Any, cast
 from urllib.parse import parse_qsl
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import httpx
 from cryptography.fernet import InvalidToken
@@ -591,9 +591,11 @@ async def create_runtime_lead(
             result["_account_base_url"] = base_url(connection)
         return result
 
-    # Legacy clients cannot safely replay across requests, but still need a
-    # durable receipt and full field delivery within this single request.
-    operation_key = payload.idempotency_key or str(uuid4())
+    if payload.idempotency_key is None:
+        # Legacy Bitrix clients retain their response contract. amoCRM was
+        # rejected above: its lead/note flow always needs a durable intent key.
+        return await _send_runtime_lead(connection, credentials, context, payload, config)
+    operation_key = payload.idempotency_key
     result = await execute_once(
         session,
         project_id=project_id,

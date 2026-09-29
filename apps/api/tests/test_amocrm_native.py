@@ -1,9 +1,95 @@
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 from pydantic import ValidationError
 
 from yleum_api.schemas.integration_runtime import RuntimeLeadRequest
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"result": False}, {"result": {}}])
+async def test_legacy_bitrix_without_key_keeps_invalid_response_error(monkeypatch, body):
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.app_integration import AccountIntegration
+    from yleum_api.routers import integration_runtime as runtime
+
+    project_id = uuid4()
+    connection = AccountIntegration(id=uuid4(), provider="bitrix24", public_config={})
+    monkeypatch.setattr(
+        runtime,
+        "_runtime_context",
+        AsyncMock(
+            return_value=runtime.RuntimeContext(
+                project_id=project_id,
+                max_user_id=42,
+            )
+        ),
+    )
+    monkeypatch.setattr(runtime, "_connections", AsyncMock(return_value={"bitrix24": connection}))
+    monkeypatch.setattr(
+        runtime,
+        "_secrets",
+        AsyncMock(
+            return_value={
+                "webhook_url": "https://test.bitrix24.ru/rest/1/synthetic/",
+            }
+        ),
+    )
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx,
+        "AsyncClient",
+        lambda **kwargs: original_client(
+            transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+            **kwargs,
+        ),
+    )
+    session = SimpleNamespace(
+        scalars=AsyncMock(return_value=SimpleNamespace(one_or_none=lambda: None))
+    )
+    with pytest.raises(ApiError) as caught:
+        await runtime.create_runtime_lead(
+            project_id, RuntimeLeadRequest(name="Alice"), session, None
+        )
+    assert caught.value.status_code == 502
+    assert caught.value.code == "integration_response_invalid"
+
+
+@pytest.mark.asyncio
+async def test_amocrm_missing_key_fails_before_loading_secrets_or_provider(monkeypatch):
+    from yleum_api.core.errors import ApiError
+    from yleum_api.models.app_integration import AccountIntegration
+    from yleum_api.routers import integration_runtime as runtime
+
+    project_id = uuid4()
+    monkeypatch.setattr(
+        runtime,
+        "_runtime_context",
+        AsyncMock(
+            return_value=runtime.RuntimeContext(
+                project_id=project_id,
+                max_user_id=42,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_connections",
+        AsyncMock(
+            return_value={
+                "amocrm": AccountIntegration(id=uuid4(), provider="amocrm", public_config={}),
+            }
+        ),
+    )
+    secrets = AsyncMock()
+    monkeypatch.setattr(runtime, "_secrets", secrets)
+    with pytest.raises(ApiError) as caught:
+        await runtime.create_runtime_lead(project_id, RuntimeLeadRequest(name="Alice"), None, None)
+    assert caught.value.status_code == 422
+    secrets.assert_not_called()
 
 
 def test_lead_rejects_blank_name_and_invalid_contact():
