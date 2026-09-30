@@ -115,6 +115,15 @@ _HARD_MAX_STEPS = 40
 # ≈ 8-15 read calls) and the abort at 12 turns still bounds a stalled build.
 _NO_WRITE_NUDGE_AT = 6
 _NO_WRITE_ABORT_AT = 12
+_SOURCE_REPAIR_DISCOVERY_TURNS = 2
+_SOURCE_REPAIR_NO_PROGRESS_TURNS = 4
+_SOURCE_REPAIR_NUDGE = (
+    "SOURCE REPAIR REQUIRED: the coordinator rejected this source. A green fast check "
+    "does not resolve that failure. Apply a minimal write_file/edit_file change addressing "
+    "the reported source error; do not repeat shell exploration or unchanged checks. "
+    "Preserve working features, business data and accepted/applied migrations. "
+    "Then build and hand the changed candidate to the coordinator for full verification."
+)
 
 # A brief-aware first MAX build starts from a deliberately UI-free platform
 # core. Sonnet can otherwise spend the entire 12-turn stall allowance repeatedly
@@ -174,6 +183,18 @@ def _is_max_product_surface(path: str) -> bool:
         "not-found.tsx",
         "page.tsx",
     }
+
+
+def _is_source_repair_path(path: str) -> bool:
+    normalized = _normalize_agent_path(path)
+    return (
+        _is_max_product_surface(normalized)
+        or (normalized.startswith("src/") and normalized.endswith((".css", ".scss")))
+        or normalized in {
+            ".omnia/cell.json", "package.json", "package-lock.json", "pnpm-lock.yaml",
+            "tsconfig.json", "next.config.js", "next.config.mjs", "next.config.ts",
+        }
+    )
 
 
 def _normalize_agent_path(path: str) -> str:
@@ -418,6 +439,9 @@ _MAX_ENTRY_WRITE_TOOLS: list[dict[str, Any]] = [
     }
 ]
 _MAX_ENTRY_WRITE_CHOICE: dict[str, str] = {"type": "tool", "name": "write_file"}
+_SOURCE_REPAIR_TOOLS_CACHED = _cache_toolset(
+    [tool for tool in _TOOLS if tool["name"] in {"write_file", "edit_file"}]
+)
 
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
@@ -1006,6 +1030,7 @@ async def _run_native_segment(
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
     initial_files: Mapping[str, str] | None = None,
     edit_deadline: datetime | None = None,
+    source_repair: bool = False,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1054,7 +1079,24 @@ async def _run_native_segment(
         invalidated_proofs.update(names)
         proof_after_write.difference_update(names)
 
+    def _repair_source_changed() -> bool:
+        return any(
+            _is_source_repair_path(path) and content != baseline_files.get(path, "")
+            for path, content in written.items()
+        )
+
+    def _record_turn_progress(product_progress: bool) -> None:
+        nonlocal no_write_turns
+        if source_repair and not _repair_source_changed():
+            no_write_turns += 1
+        elif product_progress:
+            no_write_turns = 0
+        else:
+            no_write_turns += 1
+
     def _completion_gap() -> str | None:
+        if source_repair and not _repair_source_changed():
+            return _SOURCE_REPAIR_NUDGE
         if completion_check is None:
             return None
         try:
@@ -1287,6 +1329,10 @@ async def _run_native_segment(
                     or non_entry_writes_before_entry > 0
                 )
             )
+            repair_write_required = (
+                source_repair and not _repair_source_changed()
+                and no_write_turns >= _SOURCE_REPAIR_DISCOVERY_TURNS
+            )
             call_stage = (
                 "build_plan"
                 if step == 0
@@ -1311,7 +1357,9 @@ async def _run_native_segment(
                         headers=messages_headers,
                         auth_factory=messages_auth_factory,
                         tools=(
-                            _MAX_ENTRY_WRITE_TOOLS
+                            _SOURCE_REPAIR_TOOLS_CACHED
+                            if repair_write_required
+                            else _MAX_ENTRY_WRITE_TOOLS
                             if force_max_entry_write
                             else _MAX_COORDINATOR_BASH_TOOLS_CACHED
                             if coordinated_max and allow_max_bash
@@ -1325,7 +1373,10 @@ async def _run_native_segment(
                             if max_runtime
                             else None
                         ),
-                        tool_choice=(_MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None),
+                        tool_choice=(
+                            {"type": "any"} if repair_write_required
+                            else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
+                        ),
                     )
             except Exception as exc:
                 if isinstance(exc, TimeoutError) and call_budget.expired():
@@ -1441,6 +1492,12 @@ async def _run_native_segment(
                         stop_reason="done_green",
                         evidence=_evidence(),
                     )
+                if source_repair:
+                    _record_turn_progress(False)
+                    if not _repair_source_changed():
+                        gap = _SOURCE_REPAIR_NUDGE
+                        if no_write_turns >= _SOURCE_REPAIR_DISCOVERY_TURNS and emit:
+                            await emit("agent.stalled", {"step": step, "reason": "source_repair"})
                 convo.append(
                     {
                         "role": "user",
@@ -1452,6 +1509,13 @@ async def _run_native_segment(
                         ),
                     }
                 )
+                if (
+                    source_repair and not _repair_source_changed()
+                    and no_write_turns >= _SOURCE_REPAIR_NO_PROGRESS_TURNS
+                ):
+                    return await _finish_without_provider(
+                        steps=step + 1, reason="exploring", detail=_SOURCE_REPAIR_NUDGE,
+                    )
                 continue
 
             results: list[dict[str, Any]] = []
@@ -1511,6 +1575,10 @@ async def _run_native_segment(
                 obs: dict[str, Any]
                 if name not in _KNOWN_ACTIONS:
                     obs = {"ok": False, "error": f"unknown action {name}"}
+                elif repair_write_required and not _repair_source_changed() and not (
+                    name in {"write_file", "edit_file"} and _is_source_repair_path(action.path)
+                ):
+                    obs = {"ok": False, "error": _SOURCE_REPAIR_NUDGE}
                 elif coordinated_max and name == "runtime_check":
                     obs = {"ok": False, "error": _MAX_COORDINATOR_HANDOFF}
                 elif _max_entry_required and not (
@@ -1671,11 +1739,16 @@ async def _run_native_segment(
             # tool_results (roles must alternate; tool_result blocks must come
             # first), then abort as "exploring" — messages.py's honest-result
             # branches (looped-but-serves / edit-no-op) already consume it.
-            if product_progress_this_turn:
-                no_write_turns = 0
-            else:
-                no_write_turns += 1
-                if _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
+            _record_turn_progress(product_progress_this_turn)
+            if no_write_turns:
+                if (
+                    source_repair and not _repair_source_changed()
+                    and no_write_turns >= _SOURCE_REPAIR_DISCOVERY_TURNS
+                ):
+                    results.append({"type": "text", "text": _SOURCE_REPAIR_NUDGE})
+                    if emit:
+                        await emit("agent.stalled", {"step": step, "reason": "source_repair"})
+                elif _NO_WRITE_NUDGE_AT <= no_write_turns < _NO_WRITE_ABORT_AT:
                     max_entry_write_required = (
                         max_runtime
                         and completion_check is not None
@@ -1704,6 +1777,13 @@ async def _run_native_segment(
                     if emit:
                         await emit("agent.stalled", {"step": step})
             convo.append({"role": "user", "content": results})
+            if (
+                source_repair and not _repair_source_changed()
+                and no_write_turns >= _SOURCE_REPAIR_NO_PROGRESS_TURNS
+            ):
+                return await _finish_without_provider(
+                    steps=step + 1, reason="exploring", detail=_SOURCE_REPAIR_NUDGE,
+                )
             if infra_dead_turns >= _INFRA_DEAD_ABORT_AT:
                 log.warning("agent_native.infra_dead_abort", step=step)
                 return AgentResult(
@@ -1927,6 +2007,7 @@ async def run_native_build(
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
     initial_files: Mapping[str, str] | None = None,
     edit_deadline: datetime | None = None,
+    source_repair: bool = False,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
 
@@ -1954,6 +2035,7 @@ async def run_native_build(
             messages_auth_factory=messages_auth_factory,
             initial_files=initial_files,
             edit_deadline=edit_deadline,
+            source_repair=source_repair,
         )
 
     return await _run_native_segments(

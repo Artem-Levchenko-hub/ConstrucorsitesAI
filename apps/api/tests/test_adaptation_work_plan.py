@@ -280,6 +280,7 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
 
     async def run_native_build(**kwargs: Any) -> Any:
         tasks.append(str(kwargs["task"]))
+        assert kwargs["source_repair"] is True
         # A repair which attempts done without build gets the same accepted
         # baseline contract, not a new baseline from its mutable candidate.
         assert "changed without a new canonical" in kwargs["completion_check"]({}, {})

@@ -195,6 +195,7 @@ async def finalize_max_candidate(
                 emit=operations.emit,
                 max_steps=plan.steps,
                 max_segments=1,
+                source_repair=True,
                 allow_max_bash=_max_shell_enabled,
                 portable_cell=True,
                 initial_files=baseline,
