@@ -152,7 +152,14 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         )
 
     # ---- non-streaming path ----
-    cache_key = cache.make_cache_key(req.model, filtered_messages)
+    cache_key = cache.make_cache_key(
+        req.model,
+        filtered_messages,
+        user_id=str(req.user) if req.user is not None else None,
+        project_id=str(meta.project_id) if meta.project_id is not None else None,
+        temperature=req.temperature,
+        max_tokens=req.max_tokens,
+    )
     try:
         cached = await cache.get(cache_key)
     except Exception:

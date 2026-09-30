@@ -10,7 +10,7 @@ import pytest
 from yleum_gateway.services import cache
 
 
-def test_make_cache_key_excludes_user_and_assistant() -> None:
+def test_make_cache_key_includes_full_conversation() -> None:
     msgs_a = [
         {"role": "system", "content": "you are an agent"},
         {"role": "user", "content": "build a landing page"},
@@ -20,9 +20,34 @@ def test_make_cache_key_excludes_user_and_assistant() -> None:
         {"role": "assistant", "content": "previous reply was different"},
         {"role": "user", "content": "build a landing page"},
     ]
-    assert cache.make_cache_key("claude-sonnet-4-6", msgs_a) == cache.make_cache_key(
+    assert cache.make_cache_key("claude-sonnet-4-6", msgs_a) != cache.make_cache_key(
         "claude-sonnet-4-6", msgs_b
     )
+
+
+@pytest.mark.parametrize("changed", ["user_id", "project_id", "temperature", "max_tokens"])
+def test_make_cache_key_scopes_owner_project_and_generation_parameters(changed: str) -> None:
+    messages = [{"role": "user", "content": "same request"}]
+    base = {
+        "user_id": "owner-a",
+        "project_id": "project-a",
+        "temperature": 0.2,
+        "max_tokens": 128,
+    }
+    other = {**base, changed: {
+        "user_id": "owner-b",
+        "project_id": "project-b",
+        "temperature": 0.8,
+        "max_tokens": 256,
+    }[changed]}
+    assert cache.make_cache_key("claude-sonnet-4-6", messages, **base) != cache.make_cache_key(
+        "claude-sonnet-4-6", messages, **other
+    )
+
+
+def test_make_cache_key_uses_new_namespace() -> None:
+    key = cache.make_cache_key("claude-sonnet-4-6", [{"role": "user", "content": "hello"}])
+    assert key.startswith("llm:cache:v2:")
 
 
 def test_make_cache_key_changes_with_model() -> None:

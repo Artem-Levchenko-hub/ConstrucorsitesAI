@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from copy import deepcopy
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -165,6 +166,108 @@ def test_chat_cache_hit_returns_cached_without_calling_llm(client: TestClient) -
     assert data["choices"][0]["message"]["content"] == "from-cache"
     assert data["metadata"]["cache_hit"] is True
     llm_mock.assert_not_called()
+
+
+def test_chat_cache_does_not_reuse_answer_for_different_history(client: TestClient) -> None:
+    from yleum_gateway.routers import chat
+
+    entries: dict[str, dict] = {}
+    provider = AsyncMock(side_effect=lambda **kwargs: {
+        "model": kwargs["model"],
+        "choices": [{"message": {"role": "assistant", "content": kwargs["messages"][0]["content"]}}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+    })
+
+    async def get(key: str) -> dict | None:
+        return entries.get(key)
+
+    async def set_value(key: str, value: dict) -> None:
+        entries[key] = value
+
+    request = {
+        "model": "gemini-3.1-pro-preview-customtools",
+        "messages": [
+            {"role": "assistant", "content": "private answer A"},
+            {"role": "user", "content": "continue"},
+        ],
+        "user": str(uuid4()),
+        "metadata": {"project_id": str(uuid4())},
+    }
+    with (
+        patch.object(chat.cache, "get", new=AsyncMock(side_effect=get)),
+        patch.object(chat.cache, "set", new=AsyncMock(side_effect=set_value)),
+        patch.object(chat.router_module, "acompletion", new=provider),
+    ):
+        first = client.post("/v1/chat/completions", json=request)
+        request["messages"][0]["content"] = "private answer B"
+        second = client.post("/v1/chat/completions", json=request)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["choices"][0]["message"]["content"] == "private answer A"
+    assert second.json()["choices"][0]["message"]["content"] == "private answer B"
+    assert provider.await_count == 2
+
+
+@pytest.mark.parametrize("changed", ["user", "project_id", "temperature", "max_tokens"])
+def test_chat_cache_separates_owner_project_and_generation_parameters(
+    client: TestClient, changed: str
+) -> None:
+    from yleum_gateway.routers import chat
+
+    entries: dict[str, dict] = {}
+    calls = 0
+
+    async def provider_response(**kwargs) -> dict:
+        nonlocal calls
+        calls += 1
+        return {
+            "model": kwargs["model"],
+            "choices": [{"message": {"role": "assistant", "content": f"answer {calls}"}}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+        }
+
+    async def get(key: str) -> dict | None:
+        return entries.get(key)
+
+    async def set_value(key: str, value: dict) -> None:
+        entries[key] = value
+
+    original = {
+        "model": "gemini-3.1-pro-preview-customtools",
+        "messages": [{"role": "user", "content": "same question"}],
+        "user": str(uuid4()),
+        "metadata": {"project_id": str(uuid4())},
+        "temperature": 0.1,
+        "max_tokens": 64,
+    }
+    modified = deepcopy(original)
+    if changed == "user":
+        modified["user"] = str(uuid4())
+    elif changed == "project_id":
+        modified["metadata"]["project_id"] = str(uuid4())
+    elif changed == "temperature":
+        modified["temperature"] = 0.9
+    else:
+        modified["max_tokens"] = 128
+
+    with (
+        patch.object(chat.cache, "get", new=AsyncMock(side_effect=get)),
+        patch.object(chat.cache, "set", new=AsyncMock(side_effect=set_value)),
+        patch.object(chat.router_module, "acompletion", new=AsyncMock(side_effect=provider_response)),
+    ):
+        first = client.post("/v1/chat/completions", json=original)
+        first_replay = client.post("/v1/chat/completions", json=original)
+        second = client.post("/v1/chat/completions", json=modified)
+        second_replay = client.post("/v1/chat/completions", json=modified)
+
+    assert [r.status_code for r in (first, first_replay, second, second_replay)] == [200] * 4
+    assert [r.json()["metadata"]["cache_hit"] for r in (
+        first, first_replay, second, second_replay
+    )] == [False, True, False, True]
+    assert [r.json()["choices"][0]["message"]["content"] for r in (
+        first, first_replay, second, second_replay
+    )] == ["answer 1", "answer 1", "answer 2", "answer 2"]
+    assert calls == 2
 
 
 def test_chat_safety_filter_redacts_injection(client: TestClient) -> None:
