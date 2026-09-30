@@ -1,0 +1,13 @@
+{
+  "pages": 16,
+  "cases": 67,
+  "statusCounts": {
+    "BLOCKED": 9,
+    "PARTIAL": 11,
+    "NOT_RUN": 47
+  },
+  "pdfSha256": "e631f4ed3e80a9d9bdd618c8a465ce820272df98560da23b971190d97b983935",
+  "sensitivePatternChecks": "no IPv4, project UUID, synthetic account email or server username in published PDF text",
+  "ci": "613c90f2_PENDING_AFTER_c97bb530_FAILURE",
+  "publicReportOnly": true
+}
