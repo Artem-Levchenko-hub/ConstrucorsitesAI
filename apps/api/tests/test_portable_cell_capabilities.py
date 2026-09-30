@@ -67,6 +67,41 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
     assert "Do NOT call or retry probe/verify_isolation" in prompt
 
 
+@pytest.mark.parametrize("capabilities,files,portable", [
+    ({"portable_machine": True}, {".omnia/cell.json": "{}"}, True),
+    ({"portable_machine": True}, {}, False),
+    ({}, {".omnia/cell.json": "{}"}, False),
+])
+def test_async_loading_contract_reaches_native_prompt_only_for_portable_apps(
+    capabilities, files, portable,
+):
+    from yleum_api.services import agent_native
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
+
+    legacy = "MAX PLATFORM CORE CONTRACT\nlegacy Next guide"
+    guide = machine_stack_guide(legacy, capabilities, files)
+    prompt = agent_native.native_system_prompt(guide)
+    if not portable:
+        assert guide == legacy
+        assert prompt == agent_native.native_system_prompt(legacy)
+        return
+
+    delivered = " ".join(prompt.split())
+    for requirement in (
+        "idle/loading/success/error",
+        "Automatically fetch only idle resources",
+        "null data plus !loading is not a retry condition",
+        "including empty lists",
+        "After failure, stop until an explicit Retry action",
+        "only one in-flight request",
+        "401/403 access failures",
+        "network/503 temporary failures",
+        "never bypass authentication",
+        "Reset cached state when the authenticated identity or query changes",
+    ):
+        assert requirement in delivered
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("portable,new_product", [(True, False), (False, False), (False, True)])
 async def test_prompt_assembly_awaits_real_executor_snapshot(portable, new_product):

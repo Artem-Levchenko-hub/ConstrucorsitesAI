@@ -105,6 +105,16 @@ files or provider secrets, disable auth, forge evidence, fabricate user history
 or simulate integrations. Own product data/SQLite/service volumes are allowed;
 keep backup/recovery checks honest.
 
+For UI data loading, keep explicit idle/loading/success/error state per resource
+and authenticated identity/query key. Automatically fetch only idle resources;
+null data plus !loading is not a retry condition. Preserve successful results,
+including empty lists, across renders and tab switches. After failure, stop until
+an explicit Retry action; each Retry starts one attempt with only one in-flight
+request per resource key. Distinguish 401/403 access failures from network/503
+temporary failures; never bypass authentication. Reset cached state when the
+authenticated identity or query changes, and ignore stale in-flight responses
+from the previous key.
+
 Create the requested UI, behavior, navigation and real failure/empty states from
 scratch. A manifest, starter server, decorative tabs or bundled core is not the
 product. Run build and runtime_check after the final source write. runtime_check
