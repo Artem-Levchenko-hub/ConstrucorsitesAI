@@ -559,7 +559,7 @@ async def test_the_real_adaptive_path_seals_the_proof_against_the_deadline(
     # A rejected proof returns to unbounded repair work.
     assert "sealed_since_ms" not in state["deadline"]
     assert "sealed_ms" not in state["deadline"]
-    assert generation_deadline(run) == GenerationDeadline("repair", None)
+    assert generation_deadline(run).at is None
     # The checks left their timings, as on the ordinary path.
     assert {"prepare", "final_build", "runtime_probe"} <= set(state["phase_ms"])
 

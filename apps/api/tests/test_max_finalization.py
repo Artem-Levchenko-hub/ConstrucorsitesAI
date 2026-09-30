@@ -23,6 +23,7 @@ from yleum_api.models.project_cell import (
 )
 from yleum_api.models.restoration import Restoration
 from yleum_api.models.user import User
+from yleum_api.services.generation_deadline import note_proof_sealed
 from yleum_api.services.max_finalization import (
     AdaptationActivationRecoveryRequired,
     MaxFinalizationCoordinator,
@@ -455,7 +456,7 @@ async def _new_harness(
     return _Harness(coordinator, roles, runtime_probes, set_build_green, files)
 
 
-async def test_generation_deadline_terminalizes_bound_adaptation(
+async def test_generation_deadline_terminalizes_sealed_adaptation(
     db_session: AsyncSession,
     test_engine: AsyncEngine,
 ) -> None:
@@ -490,19 +491,27 @@ async def test_generation_deadline_terminalizes_bound_adaptation(
         request_payload={},
     )
     db_session.add(operation)
+    sealed_at = datetime.now(UTC)
     run.agent_state = {
         "restoration_adaptation": {
             "operation_id": str(operation.id),
             "adaptation_run_id": str(run.id),
-        }
+        },
+        "max_finalization": {
+            "restoration_adaptation_proof_attempt": {"number": 1, "status": "issued"}
+        },
     }
+    note_proof_sealed(run, sealed_at)
+    operation.state = "applying"
+    operation.phase = "activation_proof_intent"
     await db_session.commit()
 
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     expired = await watch_generation_deadline(
         session_factory=factory,
         generation_run_id=run.id,
-        now=datetime.now(UTC) + timedelta(hours=1),
+        now=sealed_at
+        + timedelta(seconds=get_settings().restoration_adaptation_activation_seconds + 1),
     )
 
     await db_session.refresh(run)
@@ -511,9 +520,9 @@ async def test_generation_deadline_terminalizes_bound_adaptation(
     assert run.status == "failed"
     # Terminal callbacks hold the run row. Restoration terminalization is
     # deferred to the canonical project -> restoration -> run retry transaction.
-    assert operation.state == "adapting"
-    assert run.agent_state["restoration_adaptation_owner_status"] == "terminal_pending"
-    assert operation.phase == "generation"
+    assert operation.state == "applying"
+    assert run.agent_state["restoration_adaptation_owner_status"] == "sealed_proof_retained"
+    assert operation.phase == "activation_proof_intent"
 
 
 async def test_finalize_runs_one_full_build_and_reuses_release_evidence(
