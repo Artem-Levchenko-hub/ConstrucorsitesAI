@@ -26,8 +26,7 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     USE_PROJECT_CELL_ACTIVITY_WATCHDOG="true" \
     USE_GENERATION_EVENT_REPLAY="true" \
     USE_CELL_RESOURCE_PROFILE_V2="true" \
-    MAX_GENERATION_DEADLINE_SECONDS="1600" \
-    RESTORATION_ADAPTATION_REPAIR_SECONDS="950" \
+    PROJECT_CELL_ACTIVITY_LEASE_SECONDS="1600" \
     RESTORATION_ADAPTATION_ACTIVATION_SECONDS="2500" \
     PROJECT_CELL_HEARTBEAT_SECONDS="16" \
     PROJECT_CELL_WATCHDOG_GRACE_SECONDS="21" \
@@ -60,8 +59,7 @@ expected_finalization = {
     "USE_PROJECT_CELL_ACTIVITY_WATCHDOG": "true",
     "USE_GENERATION_EVENT_REPLAY": "true",
     "USE_CELL_RESOURCE_PROFILE_V2": "true",
-    "MAX_GENERATION_DEADLINE_SECONDS": "1600",
-    "RESTORATION_ADAPTATION_REPAIR_SECONDS": "950",
+    "PROJECT_CELL_ACTIVITY_LEASE_SECONDS": "1600",
     "RESTORATION_ADAPTATION_ACTIVATION_SECONDS": "2500",
     "PROJECT_CELL_HEARTBEAT_SECONDS": "16",
     "PROJECT_CELL_WATCHDOG_GRACE_SECONDS": "21",
@@ -70,7 +68,7 @@ generation_worker = services["generation-worker"]["environment"]
 for key, value in expected_finalization.items():
     assert api[key] == value
     assert worker[key] == value
-    # The deadline watchdog runs here; a missing variable must not slip through.
+    # Activity journals and sealed hand-off recovery must not drift across workers.
     assert generation_worker[key] == value
 
 # The web image is domain-agnostic: Next inlines every NEXT_PUBLIC_* build arg

@@ -1,10 +1,9 @@
-"""When a generation run is out of time.
+"""Bound terminal hand-offs without timing out progressing generations.
 
-An ordinary run has one limit. A restoration adaptation passes through three
-stages with separate limits: the agent's own editing, the checks and repairs
-that follow it, and the sealed proof/activation hand-off. The editing deadline
-never cuts a durable intent — the hand-off has its own, much wider ceiling — and
-the time it took is not charged to the repairs that may follow a rejected proof.
+Editing, checking and repairing have no wall-clock lifetime. Individual model,
+network and Project Cell operations remain bounded by their own watchdogs. A
+sealed restoration proof keeps a finite recovery ceiling while the controller
+owns the hand-off.
 """
 
 from __future__ import annotations
@@ -21,27 +20,10 @@ DeadlineStage = Literal["edit", "repair", "proof"]
 
 _STATE_KEY = "max_finalization"
 _BOOK_KEY = "deadline"
-# Observed full builds take 156–188 seconds, followed by runtime and release
-# proofs. Editing must leave room for those checks inside the existing ceiling.
-FINALIZATION_RESERVE_SECONDS = 300
-
-
-def source_edit_deadline(
-    deadline: datetime,
-    *,
-    started_at: datetime | None = None,
-    reserve_seconds: int = FINALIZATION_RESERVE_SECONDS,
-) -> datetime:
-    reserve = float(reserve_seconds)
-    if started_at is not None:
-        reserve = min(reserve, max(0, (deadline - started_at).total_seconds()) / 5)
-    return deadline - timedelta(seconds=reserve)
-
-
 @dataclass(frozen=True, slots=True)
 class GenerationDeadline:
     stage: DeadlineStage
-    # None only when the run is already over.
+    # Editing and repair deliberately have no wall-clock deadline.
     at: datetime | None
 
 
@@ -74,48 +56,36 @@ def is_restoration_adaptation(run: GenerationRun) -> bool:
 
 
 def generation_deadline(run: GenerationRun) -> GenerationDeadline:
-    settings = get_settings()
     started = run.started_at or run.created_at
-    if not is_restoration_adaptation(run):
-        return GenerationDeadline(
-            "edit", started + timedelta(seconds=settings.max_generation_deadline_seconds)
-        )
-    # У первого хода адаптации свой срок: он сводит экраны исторической версии с
-    # текущей базой, и в окно обычной правки этот ход не помещается.
-    edit_end = started + timedelta(seconds=settings.restoration_adaptation_edit_seconds)
     book = _book(run)
-    credit = timedelta(milliseconds=book.get("sealed_ms", 0))
-    repair_started_ms = book.get("repair_started_at_ms")
-    if repair_started_ms is None:
-        editing_end = edit_end + credit
-    else:
-        repair_end = datetime.fromtimestamp(repair_started_ms / 1000, UTC) + timedelta(
-            seconds=settings.restoration_adaptation_repair_seconds
-        )
-        # Never shorter than the single limit it replaces.
-        editing_end = max(edit_end, repair_end) + credit
-    # A requested cancel keeps the ordinary limit: it has to end even when sealed.
-    if run.status != "cancel_requested" and has_sealed_adaptation_proof(run):
+    stage: DeadlineStage = "repair" if "repair_started_at_ms" in book else "edit"
+
+    # Cancellation remains fail-closed when its notification is lost. The
+    # watchdog observes an already-expired instant and terminalizes under the
+    # run row lock, which cannot overwrite an existing terminal result.
+    if run.status == "cancel_requested":
+        return GenerationDeadline(stage, started)
+    if not is_restoration_adaptation(run):
+        return GenerationDeadline("edit", None)
+    if has_sealed_adaptation_proof(run):
+        settings = get_settings()
         sealed_since_ms = book.get("sealed_since_ms")
         sealed_since = (
             datetime.fromtimestamp(sealed_since_ms / 1000, UTC)
             if sealed_since_ms is not None
-            else editing_end
+            # A missing seal mark is corrupt recovery state. Keep the controller
+            # hand-off bounded from the run start rather than leaking it forever.
+            else started
         )
-        # Not the editing deadline: the hand-off has its own ceiling, wide enough for
-        # the controller's own timeouts. Past it the run is terminalized with its proof
-        # retained, so the reconciler still finishes forward and the Cell is released.
         return GenerationDeadline(
             "proof",
             sealed_since + timedelta(seconds=settings.restoration_adaptation_activation_seconds),
         )
-    if repair_started_ms is None:
-        return GenerationDeadline("edit", editing_end)
-    return GenerationDeadline("repair", editing_end)
+    return GenerationDeadline(stage, None)
 
 
 def note_repair_stage_started(run: GenerationRun, now: datetime | None = None) -> None:
-    """The agent's own turn is over; checks and repairs get their own window."""
+    """Record that final checks and source repair have begun."""
     if not is_restoration_adaptation(run):
         return
     book = _book(run)
@@ -132,13 +102,11 @@ def note_proof_sealed(run: GenerationRun, now: datetime | None = None) -> None:
 
 
 def note_proof_settled(run: GenerationRun, now: datetime | None = None) -> None:
-    """A proof came back; the time it was sealed is returned to the repair window."""
+    """A proof came back; editing or repair can continue without a lifetime limit."""
+    _ = now  # Retained for call-site compatibility and deterministic test clocks.
     book = _book(run)
-    sealed_since_ms = book.pop("sealed_since_ms", None)
-    if sealed_since_ms is None:
+    if book.pop("sealed_since_ms", None) is None:
         return
-    elapsed = max(0, _millis(now or datetime.now(UTC)) - sealed_since_ms)
-    book["sealed_ms"] = book.get("sealed_ms", 0) + elapsed
     _write_book(run, book)
 
 

@@ -721,34 +721,20 @@ class Settings(BaseSettings):
     use_project_cell_activity_watchdog: bool = Field(default=False)
     use_generation_event_replay: bool = Field(default=False)
     use_cell_resource_profile_v2: bool = Field(default=False)
-    max_generation_deadline_seconds: int = Field(default=1500, ge=60, le=7200)
-    # The agent's OWN first turn on an adaptation, replacing the ordinary limit above.
-    # Env: RESTORATION_ADAPTATION_EDIT_SECONDS.
-    # Первый ход адаптации не помещался в срок обычной правки: живой прогон 25.09
-    # (dab6c832) работал ровно до отсечки — шлюз записал 19 оплаченных вызовов
-    # подряд за 23 минуты, — и был остановлен на полном ходу, не дойдя до починки.
-    # Предыдущий прогон уложился в 1393 секунды, то есть впритык под тот же
-    # потолок. Работа объёмнее обычной по существу: свести экраны исторической
-    # версии с текущей базой и доказать работу с данными. Обычную правку при этом
-    # расширять нельзя — убежавшая генерация тратит деньги владельца тем дольше,
-    # чем шире окно, а обычные правки в 1500 укладываются.
-    restoration_adaptation_edit_seconds: int = Field(default=2700, ge=60, le=7200)
-    # A restoration adaptation gets this much for checks and repairs once the agent's own
-    # turn is over, even when the turn used the whole limit above. The sealed proof and
-    # activation hand-off is outside both. Env: RESTORATION_ADAPTATION_REPAIR_SECONDS.
-    # 900 секунд не хватало настоящей адаптации: живой прогон 25.09 отработал
-    # 1393 секунды агентом и ровно 900 секунд починки, после чего был остановлен
-    # по сроку — делая при этом осмысленную работу (читал схему и миграцию,
-    # переписывал маршруты, ставил проверочную точку). Починка у адаптации
-    # объёмнее обычной: она сводит целые экраны с текущей базой.
-    # 1800 тоже не хватило: прогоны 4a154055 и dd63f534 (25.09) открыли починку и
-    # умерли по сроку, НИ РАЗУ не замкнув один круг — прочитать правило, поправить
-    # манифест, пересобрать приложение и прогнать доказательство на копии. Круг
-    # включает полную сборку, поэтому он дорогой по времени сам по себе.
-    restoration_adaptation_repair_seconds: int = Field(default=3600, ge=60, le=3600)
-    # A durable proof/activation intent is finished by the reconciler and must not be cut
-    # by the editing deadline — but it cannot hold the Project Cell forever either. This is
-    # the ceiling for the whole sealed hand-off, generous enough for the controller's own
+    # Durable activity rows retain a finite reconciliation horizon. Actual
+    # command, model, network and runtime-probe timeouts live at their executors.
+    project_cell_activity_lease_seconds: int = Field(
+        default=1500,
+        ge=60,
+        le=7200,
+        validation_alias=AliasChoices(
+            "PROJECT_CELL_ACTIVITY_LEASE_SECONDS",
+            "MAX_GENERATION_DEADLINE_SECONDS",
+        ),
+    )
+    # A durable proof/activation intent is finished by the reconciler, but it cannot hold
+    # the Project Cell forever. This is the ceiling for the whole sealed hand-off,
+    # generous enough for the controller's own
     # timeouts (prove 900 s + offer 120 s + apply 930 s). Env:
     # RESTORATION_ADAPTATION_ACTIVATION_SECONDS.
     restoration_adaptation_activation_seconds: int = Field(default=2400, ge=300, le=7200)
