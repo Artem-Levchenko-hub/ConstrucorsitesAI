@@ -11,6 +11,7 @@ import re
 import stat
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -74,13 +75,32 @@ def probe() -> None:
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    try:
-        urllib.request.urlopen(request, timeout=15)
-    except urllib.error.HTTPError as exc:
-        body = json.loads(exc.read(8192))
-        if exc.code == 503 and body.get("error", {}).get("code") == "generation_draining":
-            return
-    raise RuntimeError("live ingress admission barrier was not confirmed")
+    for attempt in range(5):
+        try:
+            with urllib.request.urlopen(request, timeout=15):
+                pass
+        except urllib.error.HTTPError as exc:
+            try:
+                if exc.code == 503:
+                    try:
+                        raw = exc.read(8193)
+                        body = json.loads(raw) if len(raw) <= 8192 else None
+                    except (ValueError, UnicodeDecodeError):
+                        body = None
+                    if isinstance(body, dict):
+                        error = body.get("error")
+                        if (
+                            isinstance(error, dict)
+                            and error.get("code") == "generation_draining"
+                        ):
+                            return
+                retry = exc.code == 401 and attempt < 4
+            finally:
+                exc.close()
+            if retry:
+                time.sleep(1)
+                continue
+        raise RuntimeError("live ingress admission barrier was not confirmed")
 
 
 def owned(release: str) -> dict[str, object]:

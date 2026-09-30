@@ -110,7 +110,12 @@ and authenticated identity/query key. Automatically fetch only idle resources;
 null data plus !loading is not a retry condition. Preserve successful results,
 including empty lists, across renders and tab switches. After failure, stop until
 an explicit Retry action; each Retry starts one attempt with only one in-flight
-request per resource key. Distinguish 401/403 access failures from network/503
+request per resource key. Acquire a synchronous in-flight guard inside the shared
+loader before the first await or state update (for example, a React useRef);
+reject duplicate calls while held. All entry points, including initial load,
+Retry, focus and visibility, must use this loader. React loading state alone is
+not a lock. Release the guard in finally, including error paths.
+Distinguish 401/403 access failures from network/503
 temporary failures; never bypass authentication. Reset cached state when the
 authenticated identity or query changes, and ignore stale in-flight responses
 from the previous key.
