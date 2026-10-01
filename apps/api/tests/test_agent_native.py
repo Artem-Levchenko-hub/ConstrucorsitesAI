@@ -1664,8 +1664,12 @@ async def test_native_hard_clamps_legacy_limit_and_forwards_trace_ids(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("error", [
+    "PAYMENT_REQUIRED",
+    "BILLING_UNAVAILABLE: Не удалось подтвердить учёт расходов. Автоматический повтор остановлен.",
+])
 async def test_provider_limit_does_not_accept_untouched_green_tree(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, error: str,
 ) -> None:
     calls = {"n": 0}
 
@@ -1673,7 +1677,7 @@ async def test_provider_limit_does_not_accept_untouched_green_tree(
         client: Any, url: str, convo: Any, system: str, **kwargs: Any
     ) -> dict[str, Any]:
         calls["n"] += 1
-        raise RuntimeError("PAYMENT_REQUIRED")
+        raise RuntimeError(error)
 
     monkeypatch.setattr(agent_native, "_call_messages", fake_call)
 
@@ -1685,7 +1689,7 @@ async def test_provider_limit_does_not_accept_untouched_green_tree(
     assert calls["n"] == 1
     assert res.done is False
     assert res.stop_reason == "provider_error"
-    assert "PAYMENT_REQUIRED" in res.summary
+    assert error in res.summary
 
 
 @pytest.mark.asyncio
@@ -1704,6 +1708,58 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
         with pytest.raises(RuntimeError, match="PROVIDER_AUTH_FAILED"):
             await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code_field", ["type", "code"])
+async def test_billing_unavailable_is_terminal_without_exposing_response(monkeypatch, code_field):
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(503, json={"error": {
+            code_field: "billing_unavailable", "message": "private-accounting-detail",
+        }})
+
+    async def no_sleep(_delay):
+        pytest.fail("unknown accounting must not trigger another paid provider call")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError, match="BILLING_UNAVAILABLE") as caught:
+            await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
+    assert len(calls) == 1
+    assert "private-accounting-detail" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,body", [
+    (502, {"error": {"type": "api_error"}}),
+    (503, {"error": {"type": "api_error"}}),
+    (503, {"error": {"message": "billing_unavailable in an untrusted message"}}),
+    (503, {"error": "temporary failure"}),
+    (503, []),
+    (429, {"error": {"type": "rate_limit"}}),
+])
+async def test_transient_provider_errors_still_retry(monkeypatch, status, body):
+    calls = []
+    delays = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(status, json=body) if len(calls) == 1 else httpx.Response(
+            200, json={"content": []},
+        )
+
+    async def sleep(delay):
+        delays.append(delay)
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        assert await agent_native._call_messages(
+            client, "https://gateway.test/v1/messages", [], "s",
+        ) == {"content": []}
+    assert len(calls) == 2 and len(delays) == 1
 
 
 @pytest.mark.asyncio

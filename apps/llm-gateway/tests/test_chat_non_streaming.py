@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from copy import deepcopy
+from decimal import Decimal
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -102,6 +104,62 @@ def test_chat_completion_non_streaming_happy_path(client: TestClient) -> None:
     assert data["metadata"]["actual_model_used"] == "gemini-3.1-pro-preview-customtools"
     assert data["metadata"]["fallback_used"] is False
     assert data["metadata"]["cache_hit"] is False
+
+
+@pytest.mark.parametrize("reported,expected_read,expected_write,expected_cost", [
+    ({"prompt_tokens_details": {"cached_tokens": 600}}, 600, 0, "1.4400"),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_creation_tokens": 200}},
+     600, 200, "1.5150"),
+    ({"prompt_cache_hit_tokens": 600, "cache_creation_input_tokens": 200}, 600, 200, "1.5150"),
+    ({"cache_read_input_tokens": "600"}, 600, 0, "1.4400"),
+    ({}, 0, 0, "2.2500"),
+    ({"prompt_tokens_details": "invalid"}, 0, 0, "2.2500"),
+    ({"prompt_tokens_details": {"cached_tokens": "invalid", "cache_creation_tokens": []}},
+     0, 0, "2.2500"),
+    ({"prompt_tokens_details": {"cached_tokens": -10, "cache_creation_tokens": -20}},
+     0, 0, "2.2500"),
+    ({"prompt_tokens_details": {"cached_tokens": 2000, "cache_creation_tokens": 100}},
+     1000, 0, "0.9000"),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_creation_tokens": 900}},
+     600, 400, "1.5900"),
+])
+def test_runtime_ai_bills_normalized_upstream_cache_usage(
+    client, monkeypatch, reported, expected_read, expected_write, expected_cost,
+):
+    from yleum_gateway.core.config import reset_settings_cache
+    from yleum_gateway.routers import chat
+
+    response = {
+        "model": "google/gemini-3.1-pro-preview-customtools",
+        "choices": [{"message": {"role": "assistant", "content": "answer"}}],
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 100, **reported},
+    }
+    # Exercise the real model router and provider normalization; mock only the
+    # upstream HTTP transport (billing/cache remain isolated by the fixtures).
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+    upstream_calls = []
+
+    def reply(request):
+        upstream_calls.append(request)
+        return httpx.Response(200, json=response)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    result = client.post("/v1/chat/completions", json={
+        "model": "gemini-3.1-pro-preview-customtools",
+        "messages": [{"role": "user", "content": "hello"}],
+        "user": str(uuid4()),
+        "metadata": {"require_billing": True, "stage": "runtime_ai"},
+    })
+
+    assert result.status_code == 200
+    assert len(upstream_calls) == 1
+    chat.billing.charge.assert_awaited_once()
+    billed = chat.billing.charge.await_args.kwargs
+    assert billed["cost_rub"] == Decimal(expected_cost)
+    assert billed["cache_read_tokens"] == expected_read
+    assert billed["cache_write_tokens"] == expected_write
+    assert result.json()["metadata"]["cost_rub"] == expected_cost
 
 
 def test_chat_unknown_model_returns_404(client: TestClient) -> None:

@@ -928,6 +928,22 @@ async def _call_messages(
                     timeout=min(_HTTP_TIMEOUT_S, remaining),
                     headers=request_headers,
                 )
+            if r.status_code == 503:
+                try:
+                    error_body = r.json()
+                except ValueError:
+                    error_body = None
+                billing_error = error_body.get("error") if isinstance(error_body, dict) else None
+                if isinstance(billing_error, dict) and (
+                    billing_error.get("type") == "billing_unavailable"
+                    or billing_error.get("code") == "billing_unavailable"
+                ):
+                    # The provider may already have completed this call. Retrying
+                    # before accounting settles can incur another paid request.
+                    raise RuntimeError(
+                        "BILLING_UNAVAILABLE: Не удалось подтвердить учёт расходов. "
+                        "Автоматический повтор остановлен, чтобы избежать повторных затрат."
+                    )
             if r.status_code == 409:
                 try:
                     route_error = r.json().get("error", {}).get("type")
@@ -1388,7 +1404,9 @@ async def _run_native_segment(
                 # Do not build/accept a starter or overwrite the primary cause
                 # with a source-completion gap after failed model traffic.
                 safe_reason = (
-                    str(exc) if str(exc).startswith(("PROVIDER_AUTH_FAILED", "PAYMENT_REQUIRED"))
+                    str(exc) if str(exc).startswith((
+                        "PROVIDER_AUTH_FAILED", "PAYMENT_REQUIRED", "BILLING_UNAVAILABLE",
+                    ))
                     else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
                 )
                 log.warning("agent_native.provider_failed", error_type=type(exc).__name__)

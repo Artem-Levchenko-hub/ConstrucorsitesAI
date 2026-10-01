@@ -8,6 +8,7 @@ upstream happy-path is covered by the deployed end-to-end verification.
 
 from __future__ import annotations
 
+import httpx
 import pytest
 
 from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
@@ -84,6 +85,28 @@ async def test_acompletion_unknown_model_raises() -> None:
         await llmgw.acompletion(
             model="not-a-real-model", messages=[{"role": "user", "content": "hi"}]
         )
+
+
+@pytest.mark.parametrize("reported", [
+    {"prompt_tokens_details": {"cached_tokens": 600, "cache_creation_tokens": 200}},
+    {"cache_read_input_tokens": 600, "cache_creation_input_tokens": 200},
+])
+async def test_acompletion_preserves_cache_read_and_write_usage(monkeypatch, reported):
+    from yleum_gateway.core.config import reset_settings_cache
+
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+
+    def reply(request):
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": "answer"}}],
+            "usage": {"prompt_tokens": 1000, "completion_tokens": 100, **reported},
+        })
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    result = await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    assert result["usage"]["prompt_cache_hit_tokens"] == 600
+    assert result["usage"]["cache_creation_input_tokens"] == 200
 
 
 async def test_acompletion_missing_key_raises() -> None:

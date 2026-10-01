@@ -133,14 +133,29 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _cache_token_count(usage: dict[str, Any], detail_key: str, *aliases: str) -> int:
+    details = usage.get("prompt_tokens_details")
+    details = details if isinstance(details, dict) else {}
+    value = details.get(detail_key)
+    for alias in aliases:
+        if value:
+            break
+        value = usage.get(alias)
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def _cached_tokens(usage: dict[str, Any]) -> int:
     """Prompt tokens served from the provider's context cache.
 
     llmgw reports them as `prompt_tokens_details.cached_tokens` (OpenAI shape);
-    `prompt_cache_hit_tokens` is kept as a fallback for DeepSeek-style upstreams.
+    DeepSeek and Anthropic-compatible counters remain accepted aliases.
     """
-    details = usage.get("prompt_tokens_details") or {}
-    return int(details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or 0)
+    return _cache_token_count(
+        usage, "cached_tokens", "prompt_cache_hit_tokens", "cache_read_input_tokens",
+    )
 
 
 def _key_and_url() -> tuple[str, str]:
@@ -354,7 +369,11 @@ async def acompletion(
         or _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages))
     )
     tokens_out = int(usage.get("completion_tokens") or _approx_tokens(content))
-    cache_hit_tokens = _cached_tokens(usage)
+    cache_hit_tokens = min(max(0, tokens_in), _cached_tokens(usage))
+    cache_write_tokens = min(
+        max(0, tokens_in - cache_hit_tokens),
+        _cache_token_count(usage, "cache_creation_tokens", "cache_creation_input_tokens"),
+    )
 
     # Normalize to OpenAI shape with `model` = the Omnia id so chat.py bills against
     # PRICE_TABLE (the upstream slug maps back via _SLUG_TO_OMNIA).
@@ -375,5 +394,6 @@ async def acompletion(
             "completion_tokens": tokens_out,
             "total_tokens": tokens_in + tokens_out,
             "prompt_cache_hit_tokens": cache_hit_tokens,
+            "cache_creation_input_tokens": cache_write_tokens,
         },
     }

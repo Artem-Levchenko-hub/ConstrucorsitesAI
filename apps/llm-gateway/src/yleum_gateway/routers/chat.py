@@ -87,6 +87,30 @@ def _billing_unavailable() -> HTTPException:
     )
 
 
+def _cache_token_counts(usage: dict[str, Any], tokens_in: int) -> tuple[int, int]:
+    details = usage.get("prompt_tokens_details")
+    details = details if isinstance(details, dict) else {}
+
+    def count(value: Any) -> int:
+        try:
+            return max(0, int(value or 0))
+        except (TypeError, ValueError, OverflowError):
+            return 0
+
+    # OpenAI-compatible prompt totals include cache reads and writes. Match the
+    # native adapter's aliases, and persist the same bounded counts we price.
+    total = max(0, tokens_in)
+    read = min(total, count(
+        details.get("cached_tokens")
+        or usage.get("prompt_cache_hit_tokens")
+        or usage.get("cache_read_input_tokens")
+    ))
+    write = min(total - read, count(
+        details.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens")
+    ))
+    return read, write
+
+
 def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
     """Conservative pre-flight estimate: input tokens + 25% as output guess."""
     tokens_in = count_message_tokens(model, messages)
@@ -215,7 +239,11 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     actual_model = router_module.slug_to_omnia(response.get("model", "")) or req.model
     fallback_used = actual_model != req.model
 
-    cost_rub = calculate_cost_rub(actual_model, tokens_in, tokens_out)
+    cache_read, cache_write = _cache_token_counts(usage, tokens_in)
+    cost_rub = calculate_cost_rub(
+        actual_model, tokens_in, tokens_out,
+        cached_tokens=cache_read, cache_write_tokens=cache_write,
+    )
 
     # Bill (atomic): user only — service-account requests skip billing.
     if req.user is not None:
@@ -231,6 +259,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 description=f"Completion via {actual_model}",
                 free=meta.free,
                 stage=meta.stage,
+                cache_read_tokens=cache_read,
+                cache_write_tokens=cache_write,
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc
