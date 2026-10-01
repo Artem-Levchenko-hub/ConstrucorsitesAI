@@ -31,9 +31,7 @@ class _FakeConnection:
     def transaction(self) -> _AsyncContext:
         return _AsyncContext()
 
-    async def fetchrow(
-        self, query: str, *args: object
-    ) -> dict[str, object] | None:
+    async def fetchrow(self, query: str, *args: object) -> dict[str, object] | None:
         self.statements.append((query, args))
         if self.balance_after is None:
             return None
@@ -41,6 +39,10 @@ class _FakeConnection:
             "balance_rub": self.balance_after,
             "billing_account_id": self.billing_account_id,
         }
+
+    async def fetchval(self, query: str, *args: object) -> UUID:
+        self.statements.append((query, args))
+        return self.billing_account_id
 
     async def execute(self, query: str, *args: object) -> str:
         self.statements.append((query, args))
@@ -74,10 +76,10 @@ async def test_charge_records_balance_and_usage_reference(
     )
 
     assert isinstance(charge_id, UUID)
-    assert len(connection.statements) == 3
-    wallet_sql, wallet_args = connection.statements[0]
-    ledger_sql, ledger_args = connection.statements[1]
-    usage_sql, usage_args = connection.statements[2]
+    assert len(connection.statements) == 5
+    wallet_sql, wallet_args = connection.statements[1]
+    ledger_sql, ledger_args = connection.statements[2]
+    usage_sql, usage_args = connection.statements[3]
     assert "RETURNING w.balance_rub, w.billing_account_id" in wallet_sql
     assert wallet_args == (user_id, Decimal("12.5000"))
     assert "balance_after_rub" in ledger_sql
@@ -86,7 +88,7 @@ async def test_charge_records_balance_and_usage_reference(
     assert ledger_args[6] == f"usage:{usage_args[0]}"
 
 
-async def test_charge_does_not_write_when_conditional_debit_fails(
+async def test_charge_retains_unpaid_usage_when_conditional_debit_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     connection = _FakeConnection(None)
@@ -104,4 +106,32 @@ async def test_charge_does_not_write_when_conditional_debit_fails(
             description="test usage",
         )
 
-    assert len(connection.statements) == 1
+    assert len(connection.statements) == 4
+    assert "UPDATE wallets" in connection.statements[1][0]
+    assert "INSERT INTO usage" in connection.statements[2][0]
+    assert "INSERT INTO usage_settlements" in connection.statements[3][0]
+    assert connection.statements[3][1][-1] == "unpaid"
+    assert connection.statements[3][1][-2] is None
+    assert not any("INSERT INTO wallet_charges" in sql for sql, _ in connection.statements)
+
+
+@pytest.mark.parametrize("cost", [Decimal("-1"), Decimal("NaN"), Decimal("Infinity")])
+async def test_invalid_settlement_cost_cannot_reach_the_wallet(
+    monkeypatch: pytest.MonkeyPatch,
+    cost: Decimal,
+) -> None:
+    def no_pool():
+        pytest.fail("invalid settlement must not touch financial rows")
+
+    monkeypatch.setattr(billing, "get_pool", no_pool)
+    with pytest.raises(ValueError, match="finite and nonnegative"):
+        await billing.charge(
+            user_id=uuid4(),
+            project_id=None,
+            message_id=None,
+            model_id="test-model",
+            tokens_in=1,
+            tokens_out=1,
+            cost_rub=cost,
+            description="invalid synthetic receipt",
+        )

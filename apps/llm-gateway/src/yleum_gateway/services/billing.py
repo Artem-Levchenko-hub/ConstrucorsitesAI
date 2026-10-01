@@ -1,15 +1,9 @@
-"""Wallet billing — atomic debit + audit trail.
-
-Variant 1 from AGENT-C-LLM-GATEWAY.md: gateway writes directly to the shared
-Postgres tables `wallets`, `wallet_charges`, `usage`.
-
-R-10 fail fast: balance check is a single conditional UPDATE; if RowCount = 0
-we raise WalletEmptyError without ever calling the LLM (when used as a
-pre-check) or after the fact for accurate post-stream billing.
-"""
+"""Atomically retain completed usage and settle its wallet debit exactly once."""
 
 from __future__ import annotations
 
+import hashlib
+import json
 from decimal import Decimal
 from uuid import UUID, uuid4
 
@@ -17,7 +11,7 @@ import structlog
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
-from yleum_gateway.core.errors import WalletEmptyError
+from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
 
 log = structlog.get_logger(__name__)
 
@@ -82,88 +76,170 @@ async def charge(
     retry_count: int = 0,
     provider_request_id: str | None = None,
     provider_cost_usd: Decimal | None = None,
+    provider_scope: str = "llmgw",
 ) -> UUID:
-    """Atomic debit + audit trail.
+    """Commit usage even when unpaid, then raise 402 outside the transaction.
 
-    One transaction:
-      1. UPDATE wallets … WHERE balance_rub >= cost  → 0 rows = WalletEmptyError.
-      2. INSERT wallet_charges (negative amount = debit).
-      3. INSERT usage.
-    Returns the wallet_charges row id.
-
-    ``free=True`` (first-N free generations) skips steps 1–2 entirely: the
-    wallet is NOT debited and no wallet_charges row is written, but the
-    ``usage`` row is still inserted with the real ``cost_rub`` so analytics
-    can measure what the free tier actually costs us.
+    A real provider request ID identifies a receipt within its owner/provider
+    scope. Delivery message UUIDs and retry counters do not change that identity.
+    Replay returns the original result; unpaid receipts remain unpaid until an
+    explicit reconciliation workflow. Calls without an upstream ID cannot be
+    deduplicated. The gateway owns this transaction independently of its caller.
     """
+    if not cost_rub.is_finite() or cost_rub < 0:
+        raise ValueError("Settlement cost must be finite and nonnegative")
+    if provider_cost_usd is not None and (
+        not provider_cost_usd.is_finite() or provider_cost_usd < 0
+    ):
+        raise ValueError("Provider cost must be finite and nonnegative")
+    if not provider_scope or provider_request_id == "":
+        raise ValueError("Settlement provider scope and receipt ID must be nonempty")
+    receipt_hash = hashlib.sha256(
+        json.dumps(
+            [
+                str(user_id),
+                str(project_id),
+                str(run_id),
+                model_id,
+                tokens_in,
+                tokens_out,
+                str(cost_rub.normalize()),
+                free,
+                stage,
+                max(0, cache_read_tokens),
+                max(0, cache_write_tokens),
+                str(provider_cost_usd.normalize()) if provider_cost_usd is not None else None,
+            ],
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
     pool = get_pool()
     charge_id = uuid4()
     usage_id = uuid4()
+    unpaid = False
     async with pool.acquire() as conn, conn.transaction():
-        if not free:
-            debit = await conn.fetchrow(
-                f"""
-                WITH account AS ({_RESOLVED_ACCOUNT})
-                UPDATE wallets w
-                   SET balance_rub = balance_rub - $2,
-                       updated_at = now()
-                  FROM account
-                 WHERE w.billing_account_id = account.id
-                   AND w.balance_rub >= $2
-                RETURNING w.balance_rub, w.billing_account_id
-                """,
-                user_id,
-                cost_rub,
+        if provider_request_id is not None:
+            # Lock before reading: concurrent deliveries observe the first commit.
+            # Hash collisions only serialize unrelated receipts; uniqueness is exact.
+            lock_key = json.dumps([str(user_id), provider_scope, provider_request_id])
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext('gateway:settlement'), hashtext($1))",
+                lock_key,
             )
-            if debit is None:
-                raise WalletEmptyError(
-                    "Wallet balance went negative mid-charge",
-                    details={"user_id": str(user_id), "cost_rub": str(cost_rub)},
+            existing = await conn.fetchrow(
+                "SELECT id, wallet_charge_id, receipt_hash, status FROM usage_settlements "
+                "WHERE user_id=$1 AND provider_scope=$2 AND provider_request_id=$3",
+                user_id,
+                provider_scope,
+                provider_request_id,
+            )
+            if existing is not None:
+                if existing["receipt_hash"] != receipt_hash:
+                    raise BillingReconciliationRequiredError(
+                        "Provider receipt was replayed with conflicting settlement data"
+                    )
+                if existing["status"] != "unpaid":
+                    return UUID(str(existing["wallet_charge_id"] or existing["id"]))
+                unpaid = True
+            elif provider_scope == "llmgw" and await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM usage u WHERE u.user_id=$1 "
+                "AND (u.provider_request_id=$2 OR u.provider_request_id=$3) "
+                "AND NOT EXISTS(SELECT 1 FROM usage_settlements s WHERE s.usage_id=u.id))",
+                user_id,
+                provider_request_id,
+                provider_request_id[:200] if len(provider_request_id) > 200 else None,
+            ):
+                # Existing receipts predate the registry. Never guess a winner
+                # among historical duplicates or silently debit them again.
+                # The old native writer truncated upstream IDs to 200 characters;
+                # only unregistered legacy usage may match that ambiguous prefix.
+                raise BillingReconciliationRequiredError(
+                    "A historical provider receipt requires explicit reconciliation"
                 )
-            balance_after = Decimal(debit["balance_rub"])
-            billing_account_id = debit["billing_account_id"]
+        if not unpaid:
+            billing_account_id = await conn.fetchval(_RESOLVED_ACCOUNT, user_id)
+            if not free:
+                debit = await conn.fetchrow(
+                    f"""
+                    WITH account AS ({_RESOLVED_ACCOUNT})
+                    UPDATE wallets w
+                       SET balance_rub = balance_rub - $2,
+                           updated_at = now()
+                      FROM account
+                     WHERE w.billing_account_id = account.id
+                       AND w.balance_rub >= $2
+                    RETURNING w.balance_rub, w.billing_account_id
+                    """,
+                    user_id,
+                    cost_rub,
+                )
+                unpaid = debit is None
+                if debit is not None:
+                    balance_after = Decimal(debit["balance_rub"])
+                    billing_account_id = debit["billing_account_id"]
 
+                    await conn.execute(
+                        """
+                        INSERT INTO wallet_charges
+                            (id, billing_account_id, user_id, message_id, entry_type,
+                             amount_rub, balance_after_rub, external_ref, description)
+                        VALUES ($1, $2, $3, $4, 'usage', $5, $6, $7, $8)
+                        """,
+                        charge_id,
+                        billing_account_id,
+                        user_id,
+                        message_id,
+                        -cost_rub,  # negative = debit per data-model.md convention
+                        balance_after,
+                        f"usage:{usage_id}",
+                        description,
+                    )
             await conn.execute(
                 """
-                INSERT INTO wallet_charges
-                    (id, billing_account_id, user_id, message_id, entry_type,
-                     amount_rub, balance_after_rub, external_ref, description)
-                VALUES ($1, $2, $3, $4, 'usage', $5, $6, $7, $8)
+                INSERT INTO usage
+                    (id, user_id, project_id, message_id, run_id, model_id,
+                     tokens_in, tokens_out, cost_rub, stage, cache_read_tokens,
+                     cache_write_tokens, retry_count, provider_request_id,
+                     provider_cost_usd)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+                        $13, $14, $15)
                 """,
-                charge_id,
-                billing_account_id,
+                usage_id,
                 user_id,
+                project_id,
                 message_id,
-                -cost_rub,  # negative = debit per data-model.md convention
-                balance_after,
-                f"usage:{usage_id}",
-                description,
+                run_id,
+                model_id,
+                tokens_in,
+                tokens_out,
+                cost_rub,
+                stage,
+                max(0, cache_read_tokens),
+                max(0, cache_write_tokens),
+                max(0, retry_count),
+                provider_request_id,
+                provider_cost_usd,
             )
-        await conn.execute(
-            """
-            INSERT INTO usage
-                (id, user_id, project_id, message_id, run_id, model_id,
-                 tokens_in, tokens_out, cost_rub, stage, cache_read_tokens,
-                 cache_write_tokens, retry_count, provider_request_id,
-                 provider_cost_usd)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                    $13, $14, $15)
-            """,
-            usage_id,
-            user_id,
-            project_id,
-            message_id,
-            run_id,
-            model_id,
-            tokens_in,
-            tokens_out,
-            cost_rub,
-            stage,
-            max(0, cache_read_tokens),
-            max(0, cache_write_tokens),
-            max(0, retry_count),
-            provider_request_id,
-            provider_cost_usd,
+
+            await conn.execute(
+                "INSERT INTO usage_settlements "
+                "(id,user_id,billing_account_id,provider_scope,provider_request_id,receipt_hash,"
+                "usage_id,wallet_charge_id,status) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+                charge_id,
+                user_id,
+                billing_account_id,
+                provider_scope,
+                provider_request_id,
+                receipt_hash,
+                usage_id,
+                charge_id if not free and not unpaid else None,
+                "unpaid" if unpaid else "free" if free else "settled",
+            )
+
+    if unpaid:
+        raise WalletEmptyError(
+            "Wallet balance insufficient for completed provider receipt",
+            details={"user_id": str(user_id), "cost_rub": str(cost_rub)},
         )
 
     log.info(

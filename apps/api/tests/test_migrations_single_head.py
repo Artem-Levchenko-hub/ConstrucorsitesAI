@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_generation_deployment_drain_is_the_only_head() -> None:
+def test_usage_settlements_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0073_generation_deployment_drain"]
+    assert heads == ["0074_usage_settlements"]
+    assert chain["0074_usage_settlements"] == "0073_generation_deployment_drain"
     assert chain["0073_generation_deployment_drain"] == "0072_moysklad_vendor"
     assert chain["0072_moysklad_vendor"] == "0071_oauth_login"
     assert chain["0071_oauth_login"] == "0070_billing_usage_events"
@@ -234,7 +235,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("head")
     assert (
         database.fetchval("SELECT version_num FROM alembic_version")
-        == "0073_generation_deployment_drain"
+        == "0074_usage_settlements"
     )
     assert (
         database.fetchval(
@@ -243,6 +244,41 @@ def test_restoration_adaptation_migrations_roundtrip(
         )
         == 1
     )
+    # 0074: exact owner/provider identity and financial references survive replay.
+    assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
+    assert {
+        _normalized_catalog_sql(str(row["definition"]))
+        for row in database.fetch(
+            "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid = 'usage_settlements'::regclass AND contype = 'u'"
+        )
+    } == {
+        "UNIQUE (user_id, provider_scope, provider_request_id)",
+        "UNIQUE (usage_id)",
+        "UNIQUE (wallet_charge_id)",
+    }
+    assert {
+        _normalized_catalog_sql(str(row["definition"]))
+        for row in database.fetch(
+            "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid = 'usage_settlements'::regclass AND contype = 'c'"
+        )
+    } == {
+        "CHECK ((status = ANY (ARRAY['settled', 'free', 'unpaid'])))",
+        "CHECK (((status = 'settled') = (wallet_charge_id IS NOT NULL)))",
+    }
+    assert {
+        _normalized_catalog_sql(str(row["definition"]))
+        for row in database.fetch(
+            "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid = 'usage_settlements'::regclass AND contype = 'f'"
+        )
+    } == {
+        "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT",
+        "FOREIGN KEY (billing_account_id) REFERENCES billing_accounts(id) ON DELETE RESTRICT",
+        "FOREIGN KEY (usage_id) REFERENCES usage(id) ON DELETE RESTRICT",
+        "FOREIGN KEY (wallet_charge_id) REFERENCES wallet_charges(id) ON DELETE RESTRICT",
+    }
     # 0070: the usage journal exists and Free v2 is the only active Free
     assert database.fetchval("SELECT to_regclass('billing_usage_events')") is not None
     assert [
@@ -301,6 +337,12 @@ def test_restoration_adaptation_migrations_roundtrip(
         )
         == "'core'::text"
     )
+    command.downgrade(database.config, "0073_generation_deployment_drain")
+    assert database.fetchval("SELECT version_num FROM alembic_version") == (
+        "0073_generation_deployment_drain"
+    )
+    assert database.fetchval("SELECT to_regclass('usage_settlements')") is None
+    assert database.fetchval("SELECT to_regclass('deployment_drains')") is not None
     command.downgrade(database.config, "0065_restoration_execution_policy")
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
         "0065_restoration_execution_policy"
@@ -335,8 +377,9 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("head")
     assert (
         database.fetchval("SELECT version_num FROM alembic_version")
-        == "0073_generation_deployment_drain"
+        == "0074_usage_settlements"
     )
+    assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
 
 def test_project_cell_candidates_migration_upgrade_and_rollback(

@@ -30,6 +30,11 @@ class WalletEmptyError(GatewayError):
     http_status = 402
 
 
+class BillingReconciliationRequiredError(GatewayError):
+    code = "billing_reconciliation_required"
+    http_status = 503
+
+
 class ModelNotFoundError(GatewayError):
     code = "model_not_found"
     http_status = 404

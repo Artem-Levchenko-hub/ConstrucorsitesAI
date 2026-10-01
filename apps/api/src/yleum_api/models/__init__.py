@@ -54,6 +54,7 @@ from yleum_api.models.task_board import (
     TaskBoardTask,
 )
 from yleum_api.models.usage import Usage
+from yleum_api.models.usage_settlement import UsageSettlement
 from yleum_api.models.user import User
 from yleum_api.models.wallet import Wallet
 from yleum_api.models.wallet_charge import WalletCharge
@@ -106,6 +107,7 @@ __all__ = [
     "TaskBoardAttachmentCleanup",
     "TaskBoardTask",
     "Usage",
+    "UsageSettlement",
     "User",
     "UserIdentity",
     "Wallet",

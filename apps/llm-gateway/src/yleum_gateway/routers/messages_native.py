@@ -24,7 +24,7 @@ import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
 
-from yleum_gateway.core.errors import WalletEmptyError
+from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
 from yleum_gateway.core.runner_auth import (
     RunnerAuthConfigError,
     RunnerAuthError,
@@ -519,7 +519,7 @@ async def _native_messages_impl(
     except Exception:
         calculated_rub = Decimal("0")
     cost_rub = reported_rub if reported_rub is not None else calculated_rub
-    provider_request_id = str(upstream_data.get("id") or adapted.get("id") or "")[:200] or None
+    provider_request_id = str(upstream_data.get("id") or "") or None
 
     if user_id is not None:
         try:
@@ -550,6 +550,17 @@ async def _native_messages_impl(
                 cost_rub=str(cost_rub),
             )
             return _err(402, "wallet_empty", exc.message)
+        except BillingReconciliationRequiredError as exc:
+            # Keep the terminal billing type understood by deployed callers,
+            # with a specific machine-readable reason for reconciliation.
+            return Response(
+                status_code=exc.http_status,
+                media_type="application/json",
+                content=json.dumps({"type": "error", "error": {
+                    "type": "billing_unavailable", "code": exc.code,
+                    "message": "Completed provider receipt requires explicit billing reconciliation",
+                }}),
+            )
         except Exception:
             # The provider already completed this single call, but no subsequent
             # call may run while its accounting is unknown.

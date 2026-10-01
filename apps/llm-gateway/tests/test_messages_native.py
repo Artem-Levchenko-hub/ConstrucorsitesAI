@@ -438,8 +438,9 @@ def test_reported_rub_prefers_valid_balance_audit_header(headers, data, expected
     ({"x-llmgw-cost-rub": "0"}, {"cost_rub": "9"}, "0"),
     ({"x-llmgw-cost-rub": "1.25", "x-cost-rub": "2"}, {"cost_rub": "9"}, "1.25"),
 ])
+@pytest.mark.parametrize("provider_id", ["provider-request-1", None, "x" * 201 + "1"])
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch, rub_headers, body_cost, expected_cost,
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, rub_headers, body_cost, expected_cost, provider_id,
 ) -> None:
     user_id = "11111111-1111-1111-1111-111111111111"
     project_id = "22222222-2222-2222-2222-222222222222"
@@ -461,7 +462,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
             200,
             headers={"x-cost-usd": "0.125", **rub_headers},
             json={
-                "id": "provider-request-1",
+                "id": provider_id,
                 "choices": [
                     {
                         "finish_reason": "stop",
@@ -505,6 +506,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert kwargs["project_id"] == UUID(project_id)
     assert kwargs["run_id"] == UUID(run_id)
     assert kwargs["message_id"] == UUID(message_id)
+    assert kwargs["provider_request_id"] == provider_id
     assert kwargs["stage"] == "verification"
     assert kwargs["retry_count"] == 2
     assert kwargs["cache_read_tokens"] == 600
@@ -1054,3 +1056,36 @@ def test_legacy_v1_messages_remains_auth_free(
 
     assert response.status_code == 200
     assert response.json()["content"][0]["text"] == "ok"
+
+
+def test_historical_receipt_returns_machine_readable_terminal_billing_error(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_gateway.core.errors import BillingReconciliationRequiredError
+
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(
+        messages_native.billing, "charge",
+        AsyncMock(side_effect=BillingReconciliationRequiredError("historical receipt requires reconciliation")),
+    )
+    monkeypatch.setattr(messages_native, "native_messages_route", lambda: ("synthetic", "https://gateway.test/v1"))
+    upstream_calls = []
+
+    def provider_reply(*args):
+        upstream_calls.append(args)
+        return httpx.Response(200, json={
+            "id": "historical-receipt",
+            "choices": [{"finish_reason": "stop", "message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 5},
+        })
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", provider_reply)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "max_tokens": 10,
+        "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+    assert response.json()["error"]["code"] == "billing_reconciliation_required"
+    assert len(upstream_calls) == 1

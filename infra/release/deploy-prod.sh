@@ -84,6 +84,89 @@ database_quiescence() {
   fi
 }
 
+gateway_capture_identity() {
+  # Only opaque Docker IDs leave the host; never inspect environment values.
+  GW_PREVIOUS_IDENTITY=$(ssh max-core "docker inspect yleum-prod-gw --format '{{.Id}} {{.Image}}'")
+  read -r GW_PREVIOUS_CONTAINER_ID GW_PREVIOUS_IMAGE_ID <<< "$GW_PREVIOUS_IDENTITY"
+  [[ "$GW_PREVIOUS_CONTAINER_ID" =~ ^[0-9a-f]{64}$ ]] && [[ "$GW_PREVIOUS_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+    echo "gateway identity capture failed; admission remains fenced" >&2; return 1;
+  }
+}
+gateway_cutover_gate() {
+  ssh max-core "python3 - '$GW_PREVIOUS_CONTAINER_ID' '$GW_PREVIOUS_IMAGE_ID'" <<'GATEWAY_CUTOVER_PY'
+import json
+import subprocess
+import sys
+
+old_container, old_image = sys.argv[1:]
+format_metadata = ('{"id":{{json .Id}},"image":{{json .Image}},'
+                   '"running":{{json .State.Running}},'
+                   '"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
+                   '"configured_image":{{json .Config.Image}},"name":{{json .Name}}}')
+
+def command(args, include_stderr=False, **kwargs):
+    result = subprocess.run(args, capture_output=True, text=True, **kwargs)
+    if result.returncode:
+        raise RuntimeError("gateway cutover inspection failed; admission remains fenced")
+    return (result.stdout + (result.stderr if include_stderr else "")).strip()
+
+current = json.loads(command(['docker', 'inspect', 'yleum-prod-gw', '--format', format_metadata]))
+expected_image = command(['docker', 'image', 'inspect', 'omnia-gateway:prod', '--format', '{{.Id}}'])
+if not (current['running'] is True and current['id'] != old_container
+        and current['image'] == expected_image
+        and current['configured_image'] == 'omnia-gateway:prod'
+        and current['service'] == 'gateway'):
+    raise RuntimeError("gateway replacement identity is not confirmed; admission remains fenced")
+running = command(['docker', 'ps', '--no-trunc', '--format', '{{.ID}}']).splitlines()
+if old_container in running:
+    raise RuntimeError("previous gateway container is still running; admission remains fenced")
+for container in running:
+    if container == current['id']:
+        continue
+    item = json.loads(command(['docker', 'inspect', container, '--format', format_metadata]))
+    if (item['service'] == 'gateway' or item['image'] == old_image
+            or item['configured_image'].startswith('omnia-gateway:')
+            or item['name'] in ('/yleum-prod-gw', '/omnia-prod-gw')):
+        raise RuntimeError("another gateway writer is running; admission remains fenced")
+for image in {old_image, expected_image}:
+    ancestors = command(['docker', 'ps', '--no-trunc', '--filter', 'ancestor=' + image,
+                         '--format', '{{.ID}}']).splitlines()
+    if any(container != current['id'] for container in ancestors):
+        raise RuntimeError("another gateway image writer is running; admission remains fenced")
+logs = command(['docker', 'logs', current['id']], include_stderr=True)
+if 'startup.postgres_unavailable' in logs:
+    raise RuntimeError("new gateway started without its database; admission remains fenced")
+# Query the new container's configured gateway pool, not the API's DB connection.
+# Its live /health also verifies that the serving process has initialized a pool.
+program = '''import asyncio, json, urllib.request
+from yleum_gateway.core.db import init_pool, get_pool, close_pool
+async def verify():
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8001/health", timeout=10) as response:
+            if response.status != 200 or json.load(response).get("status") != "ok":
+                raise RuntimeError("gateway health failed")
+        await init_pool()
+        async with get_pool().acquire() as connection, connection.transaction(readonly=True):
+            if not await connection.fetchval("SELECT EXISTS(SELECT 1 FROM alembic_version)"):
+                raise RuntimeError("migration marker missing")
+            if not await connection.fetchval("SELECT to_regclass('public.usage_settlements') IS NOT NULL"):
+                raise RuntimeError("settlement table missing")
+            # Feature gate accepts later migration heads without assuming head is forever 0074.
+            await connection.fetch("SELECT id,user_id,billing_account_id,provider_scope,provider_request_id,receipt_hash,usage_id,wallet_charge_id,status FROM usage_settlements LIMIT 0")
+            constraints = await connection.fetchval("SELECT count(*) FROM pg_constraint WHERE conrelid='public.usage_settlements'::regclass AND conname IN ('uq_usage_settlements_provider_receipt','ck_usage_settlements_status','ck_usage_settlements_charge')")
+            if constraints != 3:
+                raise RuntimeError("settlement constraints missing")
+    except Exception:
+        raise SystemExit("gateway settlement schema unavailable; admission remains fenced") from None
+    finally:
+        await close_pool()
+asyncio.run(verify())
+'''
+command(['docker', 'exec', '-i', current['id'], 'python', '-'], input=program)
+print("gateway writer retirement, runtime health and settlement schema confirmed")
+GATEWAY_CUTOVER_PY
+}
+
 say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
@@ -198,8 +281,9 @@ if [ $WEB = 1 ]; then
 fi
 
 if [ $GW = 1 ]; then
+  gateway_capture_identity
   say "core: шлюз моделей (gateway) — сборка и перезапуск одного контейнера"
-  ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build gateway 2>&1 | grep -E 'Built|ERROR|error' | tail -2; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps gateway 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
+  ssh max-core "set -euo pipefail; cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build gateway 2>&1 | { grep -E 'Built|ERROR|error' || true; } | tail -2; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps --force-recreate gateway 2>&1 | { grep -E 'Started|Recreated|Error|error' || true; } | tail -2; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8101/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"gateway health 200 с попытки \$i\"; break; }; sleep 2; done; docker inspect \$(docker inspect yleum-prod-gw >/dev/null 2>&1 && echo yleum-prod-gw || echo omnia-prod-gw) --format 'gateway image {{.Image}} started {{.State.StartedAt}}' | cut -c1-90"
 fi
 
 say "публичный health"
@@ -291,6 +375,9 @@ for url in urls:
 print("API and both controller runtime identities confirmed")
 PY
   quiescence_gate
+  if [ "$GW" = 1 ]; then
+    gateway_cutover_gate
+  fi
   ingress_drain end
   ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain end $SHA"
 fi
