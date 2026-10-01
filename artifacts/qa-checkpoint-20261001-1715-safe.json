@@ -1,0 +1,67 @@
+{
+  "asOfUtc": "2026-10-01T17:15:13Z",
+  "status": "BLOCKED_CLOUD_EXECUTOR_NOT_COMPLETE",
+  "browser": {
+    "completeEndToEndFlows": 1,
+    "flow": "OWN_B Booking: normalcreate→generationcompleted→apexownerpreview→twoPOST201bookings→GET200history→F5same2records",
+    "blocks": 22,
+    "passedAssertions": 231,
+    "assertionFailures": 2,
+    "qaExpectationErrors": 1,
+    "confirmedProductFailures": 1,
+    "reviewedSafeScreenshots": 43,
+    "acceptedOriginalCriteria": [
+      "Т01.1",
+      "Т01.2",
+      "Т03.3"
+    ],
+    "originalCriterionCount": 67
+  },
+  "delivery": {
+    "githubMain": "01241329f3b663b34aa5f0799b0f87d80c64cfca",
+    "ciRun": 36891744309,
+    "ci": "ALL10JOBS_SUCCESS",
+    "canonicalBackupExit": 0,
+    "canonicalDeployExit": 1,
+    "wrapperExit": 1,
+    "publicHealthLastObserved": "API/workers/controllers full012, billingworker012prefix, statusok/allchecksgreen",
+    "admissionFence": "012 retained; do not reopen without reviewed fresh gates",
+    "whyFailed": "Canonical gateway schema gate expected raw CHECK names; actual migration naming convention prefixes table name again. Gateway pool actualhealth200/marker/table/columns/unique+bothcorrectchecks are present; count expected3 actually1. No schema ALTER, SQL forceclose or manualfenceclear executed."
+  },
+  "recovery": {
+    "ownedCancelledA": "Observed actual terminal controller completed/exit0; supportedSDKactivityreconciliation then exacttarget higherfence3resource reconciliation completed. Unknown history preserved. Globalcounts all0/no fence predeployment. drainedfalse because no fence row: previoustrue roottranscription corrected.",
+    "generationHang": "NOTPROVEN; QA8min cap stopped34secintofullbuild; controller latercompleted. Bfullbuild178040ms/fullgeneration~630sec."
+  },
+  "executor": {
+    "configuration": "environment_status running/connected/no failure",
+    "actualError": "Noise harness handshake failed before connection became ready",
+    "affected": "exec_command, write_stdin oldsession13128, view_image, allagents filesystem; no remaining browser/SSH/remoteexec tools available",
+    "actions": "Boundedretries attempted; GitHub MCP+clock stillavailable"
+  },
+  "nextActions": [
+    "Restore local executor connection, verify workspace persisted. Restore authorized Serverum console without logging secrets if session13128 lost.",
+    "Read real-PG gate RED log /workspace/qa-evidence/gateway-semantic-fix/real-pg-red.log; fix only canonical gateway semantic validation and meaningful actual migrated PG test in isolatedworktree gateway-semantic-fix; complete independentreview. No weakening constraints/ALTER just for names.",
+    "Prepare/review narrow same012 resume helper; fresh exactruntime/module/writerretirement/semanticDBconditions/allactive0/bothpublicationjournals/fenceowner012, then supportednormalingressend+durableend. Preserve canonicalexit1 fact; no blindrerun/end.",
+    "Close012 delivery after freshhealth/fencereopen. Integrate reviewed WWW4files+websecurity2files+gatefix, fullverification/commit/exactpush/greenCI/canonical WITHWEB, preservecustomerandCommercehistorical.lock.",
+    "NormalOWN_Bhibernate/wake required to refresh existinggatewayCSP; verifyWWW+apexandtwoexistingrecords/F5.",
+    "ONE ordinaryheaderedit canary only after finalexactrelease/source/budget/exclusiveactor ACK; prefer25mincap, no autosubmissionretry. Preparedscripts NOTapproved/executed.",
+    "Update full67 PDF honestly; final suite results pending due executor outage, report interim only. Current accepted3/67 unchanged.",
+    "Clean only own temporaryPGs exactlabels/IDs when accessible; never prune customer resources. Restart24h observer onlyafterfinalSHA; existinga3observerwindowinvalidatedby012 rollout."
+  ],
+  "pendingChecks": {
+    "wwwOriginal3FilePatch": "c953c2f4a569461ad06cb44822f3cefbec8d89efe2df756aacb4dc96a8f4e230 approved",
+    "wwwFourthTestFile": "QA fakeclock advances delay_ms+1 ratherthan19001 for immediate successful session. Unchanged012 fullbaseline reproduced samecoldtimeout; external clockproof2PASS/3originalparamprospectivePASS; fourthfile applied Ruff/mypyPASS; fullrun94077 resultunreadable.",
+    "webPatch": "13c29949e9f52c6ef5fe692205cdb8e9b8fe3fc9548bba1ca75a3ac3e29cec0e approvedlocal814tests/audit0prodGHSA/43pages/JPEG; unshipped, Node20Alpine imageproofneeded",
+    "temporaryPGs": [
+      "gateway realPG local32768; use task-owned exactcontaineridentity from source/log, verify beforecleanup",
+      "WWWgreenPG nameyleum-qa-preview-www-green-pg-20261001 ida3ad384e49e36236bb922bda02fd147778b9d6d5219dcfe6e713d23dec696a97 labelsqa.task=preview-www-origin-final,qa.owner=regression-diagnosis"
+    ],
+    "artifacts": [
+      "/workspace/qa-evidence/core-gateway-cutover-schema-probe-v2.png",
+      "/workspace/qa-evidence/core-billing-release-failure-tail.png",
+      "/workspace/qa-evidence/core-generation-actual/owned-a-recovery-safe-result.json",
+      "/workspace/qa-evidence/report/yleum-testing-draft.pdf",
+      "/workspace/qa-evidence/live-auth-block/auth-consolidated-safe-ledger.json"
+    ]
+  }
+}
