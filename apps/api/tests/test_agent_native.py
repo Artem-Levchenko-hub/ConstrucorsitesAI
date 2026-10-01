@@ -1443,11 +1443,121 @@ async def test_edit_turn_rejects_unchanged_done_and_applies_requested_change(mon
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("behavior", ["edit", "bash", "endless_reads", "prose", "unchanged_write"])
+@pytest.mark.parametrize("coordinated", [False, True])
+async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
+    monkeypatch, behavior, coordinated,
+):
+    from uuid import uuid4
+
+    from yleum_api.core.config import get_settings
+    from yleum_api.services import max_generation_contract
+    from yleum_api.services.generation import agent_generation
+    from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+
+    settings = get_settings().model_copy(update={
+        "use_native_agent": True, "use_max_finalization_coordinator": coordinated,
+    })
+    monkeypatch.setattr(agent_generation, "get_settings", lambda: settings)
+    monkeypatch.setattr(agent_native, "get_settings", lambda: settings)
+    if coordinated:
+        monkeypatch.setattr(agent_native, "native_system_prompt",
+                            lambda *a: "MAX VERIFICATION OVERRIDE")
+    monkeypatch.setattr(max_generation_contract, "max_completion_gap", lambda *a, **kw: None)
+    initial = {
+        "src/app/page.tsx": "Catalog; My leads; History", "src/lib/auth.ts": "auth",
+        "empty.txt": "",
+    }
+    workspace = dict(initial)
+    calls = 0
+    actions = []
+    feedback = False
+
+    async def call(client, url, convo, system, **kwargs):
+        nonlocal calls, feedback
+        calls += 1
+        feedback = feedback or "EDIT SOURCE CHANGE REQUIRED" in str(convo)
+        if behavior == "prose":
+            return {"content": [{"type": "text", "text": "Still investigating"}],
+                    "stop_reason": "end_turn"}
+        if behavior == "unchanged_write":
+            return _turn(("write_file", {
+                "path": "src/app/page.tsx", "content": initial["src/app/page.tsx"],
+            }))
+        if behavior == "endless_reads" or not feedback:
+            return _turn(("read_file", {"path": "src/app/page.tsx"}))
+        if workspace == initial:
+            if behavior == "bash":
+                return _turn(("bash", {"cmd": "apply minimal history removal"}))
+            return _turn(
+                ("write_file", {"path": "src/app/page.tsx", "content": "Catalog; My leads"})
+            )
+        if not actions or actions[-1] != "build":
+            return _turn(("build", {}))
+        return _turn(("done", {"summary": "history removed"}))
+
+    async def execute(action):
+        actions.append(action.name)
+        if action.name in {"write_file", "bash"} and behavior != "unchanged_write":
+            workspace["src/app/page.tsx"] = "Catalog; My leads"
+        return {"ok": True, "content": workspace.get(action.path, ""), "detail": "clean"}
+
+    async def export():
+        # Production exports the entire tree, even after a read-only action.
+        return dict(workspace)
+
+    async def deadline():
+        return None
+
+    monkeypatch.setattr(agent_native, "_call_messages", call)
+    prompt = (
+        "В текущем приложении устаревшая история. Устрани вкладку История. SQL и auth не меняй."
+    )
+
+    async def run():
+        return await agent_generation.execute_agent_turn(
+            _agent_res=None, _is_edit=True, _max_has_generated_snapshot=True,
+            _max_seed_files={}, _max_shell_enabled=True,
+            baseline=SourceBaseline(uuid4(), "baseline", initial),
+            ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+            project_info=SimpleNamespace(template="max_miniapp"), prompt_text=prompt,
+            runtime=SimpleNamespace(
+                handle=SimpleNamespace(
+                    is_portable=lambda: True, export_files=export, snapshot_files=export,
+                ),
+                coordinator=SimpleNamespace(source_edit_deadline=deadline) if coordinated else None,
+            ),
+            plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=24),
+            operations=SimpleNamespace(execute=execute, emit=None),
+        )
+
+    if behavior in {"endless_reads", "prose", "unchanged_write"}:
+        with pytest.raises(RuntimeError, match="edit produced no source changes"):
+            await run()
+        assert calls <= 6
+        assert "build" not in actions
+        assert workspace == initial
+    else:
+        result, failure = await run()
+        assert failure is None and result.done
+        assert calls <= 7
+        assert workspace["src/app/page.tsx"] == "Catalog; My leads"
+        assert workspace["src/lib/auth.ts"] == "auth"
+    assert feedback
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("is_edit,prompt,deleting", [
     (True, "Проверь текущую реализацию, ничего не меняй", False),
     (True, "Сделай анализ текущего кода, ничего не меняй", False),
     (False, "продолжи", False),
     (True, "Delete the empty obsolete file", True),
+    (True, "Review the latest change and explain it.", False),
+    (True, "Inspect the fix for the History tab.", False),
+    (True, "Continue reviewing the latest update.", False),
+    (True, "Can you review the latest change?", False),
+    (True, "Could you inspect the fix for the History tab?", False),
+    (True, "This is a read-only review of the latest change.", False),
 ])
 async def test_existing_turn_preserves_inspection_continuation_and_empty_deletion(
     monkeypatch, is_edit, prompt, deleting
@@ -1480,8 +1590,12 @@ async def test_existing_turn_preserves_inspection_continuation_and_empty_deletio
             return {"ok": True, "detail": "clean", "files": dict(patch)}
         return {"ok": True, "detail": "clean"}
 
+    readonly_full_export = prompt.startswith(
+        ("Review", "Inspect", "Continue", "Can", "Could", "This")
+    )
+
     async def export():
-        return dict(patch)
+        return dict(baseline) if readonly_full_export else dict(patch)
 
     monkeypatch.setattr(agent_native, "_call_messages", call)
     result, failure = await agent_generation.execute_agent_turn(
@@ -1499,7 +1613,9 @@ async def test_existing_turn_preserves_inspection_continuation_and_empty_deletio
     )
     assert failure is None
     assert result.done and result.summary == "checked"
-    assert result.files == ({"obsolete.txt": ""} if deleting else {})
+    assert result.files == (
+        baseline if readonly_full_export else {"obsolete.txt": ""} if deleting else {}
+    )
     assert "Apply the requested code change" not in str(result.transcript)
 
 

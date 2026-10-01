@@ -330,6 +330,14 @@ async def verify_provider(
     if not provider.available and not (provider.oauth_supported and is_oauth):
         raise IntegrationProviderError(provider.requirement or "Интеграция пока недоступна")
 
+    if provider_key == "moysklad":
+        token = secret_values.get("token")
+        if not isinstance(token, str) or not token.strip():
+            raise IntegrationCredentialsInvalid(
+                "МойСклад отключён или данные подключения отсутствуют. "
+                "Подключите МойСклад заново."
+            )
+
     headers = {"User-Agent": "Omnia-Integration-Hub/1.0", "Accept": "application/json"}
     try:
         async with httpx.AsyncClient(

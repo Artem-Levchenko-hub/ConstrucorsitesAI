@@ -13,6 +13,44 @@ from yleum_api.services.generation.agent_finalization import (
 )
 
 
+@pytest.mark.parametrize("prompt,expected", [
+    ("В текущем приложении устаревшая история. Устрани вкладку История. SQL не меняй.", True),
+    ("В текущем приложении убери Историю, не меняй авторизацию и каталог.", True),
+    ("Сначала изучи файл, затем удали вкладку История.", True),
+    ("Please inspect the page, then remove the History tab. Do not modify auth.", True),
+    ("Remove History. Do not change code outside this page.", True),
+    ("Удали вкладку «История», сохрани остальные функции.", True),
+    ("Не удаляй Историю, исправь только подпись.", True),
+    ("Ничего не меняй, только объясни как удалить Историю.", False),
+    ("Объясни, как исправить историю.", False),
+    ("Проверь, почему команда «удали Историю» не сработала.", False),
+    ('Explain the command "remove History", do not change anything.', False),
+    ("Не убирай Историю.", False),
+    ("Please do not remove History.", False),
+    ("Нужно проверить текст `удали Историю`.", False),
+    ("продолжи", False),
+    ("Продолжи исследование проблемы.", False),
+    ("Проверь код и объясни причину.", False),
+    ("Review the latest change and explain it.", False),
+    ("Inspect the fix for the History tab.", False),
+    ("Continue reviewing the latest update.", False),
+    ("Review the latest change. Remove History.", True),
+    ("Inspect the fix, then remove History.", True),
+    ("Review the current page and remove History.", True),
+    ("Can you review the latest change?", False),
+    ("Could you inspect the fix for the History tab?", False),
+    ("This is a read-only review of the latest change.", False),
+    ("Can you remove the History tab?", True),
+    ("Would you please remove the History tab?", True),
+    ("Current problem: remove the History tab.", True),
+    ("Could you inspect the page and remove History?", True),
+])
+def test_contextual_edit_intent_preserves_readonly_and_quoted_instructions(prompt, expected):
+    from yleum_api.services.generation.agent_generation import requested_source_edit
+
+    assert requested_source_edit(prompt) is expected
+
+
 @pytest.mark.asyncio
 async def test_noop_never_invokes_production_build_or_migrations():
     from yleum_api.services.generation.agent_finalization import finalize_max_candidate

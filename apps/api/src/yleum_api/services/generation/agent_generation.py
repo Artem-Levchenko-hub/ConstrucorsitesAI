@@ -20,6 +20,61 @@ from yleum_api.services.generation.file_transforms import _merge_seeded_agent_fi
 _log = logging.getLogger("yleum_api.routers.messages")
 
 
+def requested_source_edit(prompt: str) -> bool:
+    """Recognize unquoted change commands, including after context/preservation clauses.
+
+    This is a conservative write requirement, not an intent classifier: an
+    explanation, investigation or continuation without a command stays optional.
+    """
+    text = re.sub(
+        r'```.*?```|`[^`]*`|«[^»]*»|“[^”]*”|"[^"]*"|(?<!\w)\'[^\']*\'',
+        " ", prompt, flags=re.DOTALL,
+    ).lower()
+    for clause in re.split(r"[.!;\n]", text):
+        if re.search(
+            r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
+            r"(?:do\s+not|don't)\s+(?:change|modify|edit)\s+"
+            r"(?:anything\b|(?:files|code)(?=\s*(?:$|,)))",
+            clause,
+        ) and not re.search(r"\b(?:больше|кроме|else|except)\b", clause):
+            return False
+    commands = re.compile(
+        r"\b(?:добавь|исправь|измени|поменяй|замени|удали|убери|устрани|реализуй|"
+        r"fix|add|change|modify|edit|replace|remove|delete|implement|update)\b"
+    )
+    for clause in re.split(r"[.!?;,:\n]|\b(?:затем|then)\b", text):
+        clause = re.sub(
+            r"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?",
+            "", clause,
+        )
+        # English change/fix/update can be nouns inside a read-only request.
+        # Only a separate imperative ("inspect ... and fix ...") exits that scope.
+        if re.match(
+            r"\s*(?:please\s+)?(?:review|inspect|continue|explain|investigate|check|"
+            r"analy[sz]e|проверь|объясни|расскажи|исследуй|проанализируй|продолжи)\b",
+            clause,
+        ):
+            edit_clause = re.search(r"\b(?:and|и)\s+(?=" + commands.pattern + ")", clause)
+            if edit_clause is None or re.match(
+                r"\s*(?:please\s+)?(?:explain|объясни|расскажи)\b", clause,
+            ):
+                continue
+            clause = clause[edit_clause.end():]
+        for match in commands.finditer(clause):
+            prefix = clause[:match.start()]
+            # English verbs are also nouns: require an actual leading imperative,
+            # not a keyword somewhere in contextual prose. Russian imperatives
+            # retain contextual matching (e.g. "В текущем приложении устрани ...").
+            if match.group().isascii() and prefix.strip():
+                continue
+            if re.search(r"\b(?:не|not|never|don't)\s+(?:\w+\s+){0,2}$", prefix):
+                continue
+            if re.search(r"\b(?:как|почему|how|why|whether|explain|investigate)\b", prefix):
+                continue
+            return True
+    return False
+
+
 def _primary_provider_failure(result: agent_builder.AgentResult) -> str | None:
     if result.stop_reason == "provider_error":
         return result.summary
@@ -44,6 +99,7 @@ async def execute_agent_turn(
     plan: AgentPromptPlan,
     operations: AgentOperations,
 ) -> tuple[agent_builder.AgentResult, str | None]:
+    edit_source_changed: Callable[[], bool] | None = None
     if _agent_res is None and get_settings().use_native_agent:
         # Native tool-use path (owner «как Claude Code, только на сервере»): one
         # GenerationRun/Project Cell, with bounded fresh provider segments
@@ -95,38 +151,48 @@ async def execute_agent_turn(
 
             _completion_check = _max_completion_check
 
-        # Existing-project follow-ups also include inspection and continuation.
-        # Only an explicit leading change command earns a write requirement.
-        _change_requested = re.match(
-            r"^\s*(?:пожалуйста[,\s]+)?(?:добавь|исправь|измени|поменяй|замени|"
-            r"удали|убери|реализуй|fix|add|change|replace|remove|"
-            r"delete|implement|update)\b",
-            prompt_text,
-            flags=re.IGNORECASE,
-        ) is not None
-        _read_only_requested = re.search(
-            r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
-            r"(?:do\s+not|don't)\s+(?:change|modify|edit)\s+(?:anything|files|code)",
-            prompt_text,
-            flags=re.IGNORECASE,
-        ) is not None
-        _change_requested = _change_requested and not _read_only_requested
+        _change_requested = requested_source_edit(prompt_text)
         _native_execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
         if (_is_edit or _max_has_generated_snapshot) and _change_requested and runtime.handle:
             from yleum_api.services.generation.agent_finalization import (
+                unchanged_candidate_before_finalization,
                 validate_edit_source_change,
             )
 
             _product_completion_check = _completion_check
             _edit_patch: dict[str, str] = {}
+            _edit_snapshot: dict[str, str] | None = None
+
+            def _edit_source_changed() -> bool:
+                from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+
+                if _edit_snapshot is not None:
+                    return unchanged_candidate_before_finalization(
+                        baseline_files=baseline.files, workspace_files=_edit_snapshot,
+                        requires_source_change=True, message="",
+                    ) is None
+                product_patch = {
+                    path: content for path, content in _edit_patch.items()
+                    if path not in MAX_SECURITY_LOCKED_FILES
+                }
+                verdict = validate_edit_source_change(
+                    requires_source_change=True, baseline_files=baseline.files,
+                    candidate_files=product_patch, exact_tree=False, message="",
+                )
+                return bool(product_patch) and verdict.failure is None
+
+            edit_source_changed = _edit_source_changed
 
             async def _execute_edit_action(action: agent_builder.Action) -> dict[str, Any]:
-                nonlocal _edit_patch
+                nonlocal _edit_patch, _edit_snapshot
                 result = await operations.execute(action)
                 assert runtime.handle is not None
                 # Export is the executor's in-memory diff, including deletion
                 # tombstones; model-reported cumulative files are not that diff.
                 _edit_patch = await runtime.handle.export_files()
+                snapshot = getattr(runtime.handle, "snapshot_files", None)
+                if callable(snapshot):
+                    _edit_snapshot = await snapshot()
                 return result
 
             def _edit_completion_check(
@@ -136,14 +202,7 @@ async def execute_agent_turn(
                 # the agent can still apply the requested change. Passing the
                 # existing tree below also prevents edits from being treated
                 # as a first build that must rewrite the product entry page.
-                verdict = validate_edit_source_change(
-                    requires_source_change=True,
-                    baseline_files=baseline.files,
-                    candidate_files=_edit_patch,
-                    exact_tree=False,
-                    message="",
-                )
-                if not _edit_patch or verdict.failure is not None:
+                if not _edit_source_changed():
                     return (
                         "The requested edit has not changed the source tree. "
                         "Apply the requested code change in this workspace, "
@@ -165,7 +224,9 @@ async def execute_agent_turn(
         _native_execute, _completion_check = await guard_native_source_contract(
             runtime, ids, _native_execute, _completion_check,
         )
-        _native_max_segments = get_settings().agent_max_segments if not _is_edit else 1
+        _native_max_segments = (
+            1 if _is_edit or edit_source_changed is not None else get_settings().agent_max_segments
+        )
         _agent_res = await agent_native.run_native_build(
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
             task=plan.user,
@@ -186,6 +247,7 @@ async def execute_agent_turn(
                 await runtime.coordinator.source_edit_deadline()
                 if runtime.coordinator is not None else None
             ),
+            edit_source_changed=edit_source_changed,
         )
     elif _agent_res is None:
         _agent_res = await agent_builder.run_agent_build(
@@ -214,6 +276,10 @@ async def execute_agent_turn(
         raise RuntimeError(_provider_failure)
     if runtime.handle is not None:
         _agent_res.files = await runtime.handle.export_files()
+    if edit_source_changed is not None and not edit_source_changed() and not _provider_failure:
+        # A full unchanged export is not a write. Stop before legacy probes,
+        # looped-but-serves reporting, production finalization or publication.
+        raise RuntimeError("edit produced no source changes")
     # A green starter is not proof that the user's request was generated.
     # Native `done` may otherwise succeed after only reading/building the
     # template. Require at least one attributable model write on a seeded

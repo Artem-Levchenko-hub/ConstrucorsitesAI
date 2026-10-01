@@ -199,3 +199,81 @@ model/tool journaling and effect reconciliation; process isolation alone does no
 provide that guarantee. The production release guard remains enabled. A controlled
 API-only restart acceptance test must first prove all active runs belong to its
 own QA project, and preserve the worker container identity throughout.
+
+## Pilot execution checkpoint — 2026-10-01
+
+This checkpoint distinguishes delivered code, live acceptance and remaining gates.
+Use the existing Coffee project and bot; preserve accepted versions and business
+data. Synthetic orders/leads must be submitted once with stable idempotency keys.
+Restore the bot's original URL immediately after any temporary acceptance switch.
+Never record provider credentials, signed sessions or customer payloads here.
+
+### Accepted evidence
+
+- Production revision `2372631493e8c319dcc5e2a9000866bcb254b85d` delivered
+  terminal billing-failure handling and provider cache-token propagation. Full CI
+  `36799276513` and production smoke `36800537424` passed. Canonical rollout
+  completed; 173 Core and 181 Commerce unrelated files retained their hashes/status.
+- One actual signed MAX order appeared in the test warehouse. One actual MAX CRM
+  lead persisted after reopening; changing its stage in CRM appeared back in MAX.
+  These observations establish the tested version's behavior at that time.
+- Ten server-boundary checks passed: invalid/expired/tampered request assertions
+  denied; a second synthetic user could not list/read the first user's CRM lead.
+  This does not replace two real MAX users through the generated proxy.
+- Public gateway GET/OPTIONS probes were denied (403); its host port binds only
+  to loopback. This is an exposure check, not complete hostile-tenant acceptance.
+
+### Current defects and ordered work
+
+1. **Finish the current release.** Revision
+   `1f0530a3387c977e4ba19b7cb5f7bbf619f9f124` is pushed and full CI
+   `36801342002` passed; production delivery is pending. It validates finite,
+   nonnegative reported prices and prefers the documented RUB cost header.
+   Deliver it together with reviewed generation/credential diagnostics at one
+   exact descendant revision, after collision checks, backup and quiescence.
+2. **Bound source-edit stalls.** The live Coffee edit failed after twelve model
+   calls that only read source. A contextual imperative was missed by the old
+   leading-command detector. Require a real source change for explicit edits,
+   nudge after four discovery turns and stop after six unchanged turns without
+   redundant build/provider segments. Preserve inspection/continuation requests,
+   shell edits, deletions and managed-file exclusions. Focused regressions and
+   independent review precede CI; then one ordinary live edit must pass full
+   build/runtime/release proof before publication. A quicker failure alone is
+   not evidence that generation now completes.
+3. **Restore and diagnose warehouse connection.** The test installation became
+   `uninstalled` at 02:52:38 UTC, after the accepted order. Lifecycle handling
+   cleared the token and pairing; who initiated removal is not established.
+   Missing credentials currently become a misleading unknown-response error
+   before any provider HTTP call. Classify absent/invalid tokens as reconnect
+   required (422, zero HTTP calls), preserve successful verification, then use
+   the normal installation/pairing flow and verify catalog/stock again. The
+   original test solution was reinstalled and paired through its ten-minute
+   code; Studio again displays connected. This badge does not by itself prove
+   a fresh catalog/stock read or a new end-to-end order after reconnect.
+4. **Remove project-app database superuser access before broader pilot.** Live
+   public Coffee app uses `postgres` against its dedicated project database;
+   that login is SUPERUSER. Trusted core uses a separate restricted role and
+   separate database. Introduce a restricted product-app role, keep admin
+   credentials solely in controller/init paths, and verify migration, seed,
+   publication, restore and existing-app upgrade with physical role evidence.
+   Network separation does not make project-app superuser credentials acceptable.
+5. **Close provider-spend reconciliation.** Matching 233 Sonnet request/token
+   aggregates still differ: internal estimate 1433.3709 RUB versus provider
+   retail 1646.03 RUB (212.6591 RUB). One direct current provider response lacked
+   its documented RUB header; this does not establish all historical responses.
+   Record reported versus estimated/unknown cost, pricing provenance and actual
+   model. Never substitute USD conversion or today's tariff for historical RUB.
+   Persist idempotent settlement receipts and test crash/duplicate/insufficient
+   balance behavior before enabling paid pilot accounting.
+6. **Complete release acceptance.** Real A/B user isolation, bounded concurrent
+   generation capacity, durable state after reconnect and one complete
+   generation → integration → publication → MAX flow remain mandatory. Eight
+   configured workers and green health do not prove 5–10 simultaneous builders.
+   Adaptive rollback testing remains outside the current MVP test scope.
+
+For each slice: reproduce → smallest fix → focused regressions → independent
+review → required full CI → intended-files commit/upstream push → canonical
+production rollout → exact revision/health and actual user-path evidence.
+Refactor only when these concrete gates are closed or the refactor directly
+removes a reproduced blocker. Do not replace failed live proof with build-only
+claims or manually patch the generated app to conceal a generator failure.

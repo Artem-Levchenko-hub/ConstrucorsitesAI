@@ -115,6 +115,16 @@ _HARD_MAX_STEPS = 40
 # ≈ 8-15 read calls) and the abort at 12 turns still bounds a stalled build.
 _NO_WRITE_NUDGE_AT = 6
 _NO_WRITE_ABORT_AT = 12
+# Existing edits already have the working source in context. Allow four turns
+# to locate the affected code, then two opportunities to apply a minimal patch.
+_EDIT_DISCOVERY_TURNS = 4
+_EDIT_NO_PROGRESS_TURNS = 6
+_EDIT_SOURCE_NUDGE = (
+    "EDIT SOURCE CHANGE REQUIRED: the requested edit has not changed the source tree. "
+    "Apply the requested code change now using write_file/edit_file or a surgical shell edit. "
+    "Preserve the existing entry page, working features and unrelated files; do not rebuild "
+    "the app from scratch. Stop repeated reading/checking. Then build and call done."
+)
 _SOURCE_REPAIR_DISCOVERY_TURNS = 2
 _SOURCE_REPAIR_NO_PROGRESS_TURNS = 4
 _SOURCE_REPAIR_NUDGE = (
@@ -1047,6 +1057,7 @@ async def _run_native_segment(
     initial_files: Mapping[str, str] | None = None,
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
+    edit_source_changed: Callable[[], bool] | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1103,7 +1114,9 @@ async def _run_native_segment(
 
     def _record_turn_progress(product_progress: bool) -> None:
         nonlocal no_write_turns
-        if source_repair and not _repair_source_changed():
+        if edit_source_changed is not None and not edit_source_changed():
+            no_write_turns += 1
+        elif source_repair and not _repair_source_changed():
             no_write_turns += 1
         elif product_progress:
             no_write_turns = 0
@@ -1111,6 +1124,8 @@ async def _run_native_segment(
             no_write_turns += 1
 
     def _completion_gap() -> str | None:
+        if edit_source_changed is not None and not edit_source_changed():
+            return _EDIT_SOURCE_NUDGE
         if source_repair and not _repair_source_changed():
             return _SOURCE_REPAIR_NUDGE
         if completion_check is None:
@@ -1123,6 +1138,11 @@ async def _run_native_segment(
 
     async def _finish_without_provider(*, steps: int, reason: str, detail: str) -> AgentResult:
         """Stop provider traffic; flagged MAX transfers proof to finalization."""
+        if edit_source_changed is not None and not edit_source_changed():
+            return AgentResult(
+                done=False, summary=_EDIT_SOURCE_NUDGE, files=written, steps=steps,
+                transcript=convo, stop_reason="no_progress", evidence=_evidence(),
+            )
         fast_check_green = False
         if coordinated_max and unverified_response_problem == "output_limit":
             # Preserve the provider cause across step/reserve exhaustion. The
@@ -1305,6 +1325,8 @@ async def _run_native_segment(
             # still has time to repair, rather than after twenty minutes of work.
             now = asyncio.get_running_loop().time()
             if coordinated_max and wrote_since_build and (
+                edit_source_changed is None or edit_source_changed()
+            ) and (
                 checkpoint_at is None or now - checkpoint_at >= 180
             ):
                 checked = await execute(Action("build", {}, ""))
@@ -1348,6 +1370,10 @@ async def _run_native_segment(
             repair_write_required = (
                 source_repair and not _repair_source_changed()
                 and no_write_turns >= _SOURCE_REPAIR_DISCOVERY_TURNS
+            )
+            edit_write_required = (
+                edit_source_changed is not None and not edit_source_changed()
+                and no_write_turns >= _EDIT_DISCOVERY_TURNS
             )
             call_stage = (
                 "build_plan"
@@ -1499,7 +1525,9 @@ async def _run_native_segment(
                 # Prose is not proof. Keep the turn inside the same hard budget
                 # until a real clean build exists; never ship a broken app because
                 # the model happened to finish speaking.
-                gap = _completion_gap() if _done and last_build_ok is True else None
+                gap = _completion_gap() if _done and (
+                    last_build_ok is True or edit_source_changed is not None
+                ) else None
                 if _done and last_build_ok is True and not wrote_since_build and not gap:
                     return AgentResult(
                         done=True,
@@ -1510,7 +1538,9 @@ async def _run_native_segment(
                         stop_reason="done_green",
                         evidence=_evidence(),
                     )
-                if source_repair:
+                if edit_source_changed is not None:
+                    _record_turn_progress(False)
+                elif source_repair:
                     _record_turn_progress(False)
                     if not _repair_source_changed():
                         gap = _SOURCE_REPAIR_NUDGE
@@ -1527,6 +1557,11 @@ async def _run_native_segment(
                         ),
                     }
                 )
+                if edit_source_changed is not None and not edit_source_changed():
+                    if no_write_turns >= _EDIT_NO_PROGRESS_TURNS:
+                        return await _finish_without_provider(
+                            steps=step + 1, reason="exploring", detail=_EDIT_SOURCE_NUDGE,
+                        )
                 if (
                     source_repair and not _repair_source_changed()
                     and no_write_turns >= _SOURCE_REPAIR_NO_PROGRESS_TURNS
@@ -1545,6 +1580,12 @@ async def _run_native_segment(
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
                 if name == "done":
+                    if edit_source_changed is not None and not edit_source_changed():
+                        results.append({
+                            "type": "tool_result", "tool_use_id": tu_id,
+                            "is_error": True, "content": "Not done yet: " + _EDIT_SOURCE_NUDGE,
+                        })
+                        continue
                     # Fact-gate: refuse a premature done if the model wrote files but
                     # never confirmed a CLEAN build afterwards. Bounded (R-10).
                     premature = wrote_since_build or last_build_ok is not True
@@ -1593,6 +1634,11 @@ async def _run_native_segment(
                 obs: dict[str, Any]
                 if name not in _KNOWN_ACTIONS:
                     obs = {"ok": False, "error": f"unknown action {name}"}
+                elif edit_source_changed is not None and not edit_source_changed() and (
+                    name in {"build", "runtime_check", "probe", "verify_isolation"}
+                    or (edit_write_required and name not in {"write_file", "edit_file", "bash"})
+                ):
+                    obs = {"ok": False, "error": _EDIT_SOURCE_NUDGE}
                 elif repair_write_required and not _repair_source_changed() and not (
                     name in {"write_file", "edit_file"} and _is_source_repair_path(action.path)
                 ):
@@ -1758,6 +1804,14 @@ async def _run_native_segment(
             # first), then abort as "exploring" — messages.py's honest-result
             # branches (looped-but-serves / edit-no-op) already consume it.
             _record_turn_progress(product_progress_this_turn)
+            if edit_source_changed is not None and not edit_source_changed():
+                if no_write_turns >= _EDIT_DISCOVERY_TURNS:
+                    results.append({"type": "text", "text": _EDIT_SOURCE_NUDGE})
+                if no_write_turns >= _EDIT_NO_PROGRESS_TURNS:
+                    convo.append({"role": "user", "content": results})
+                    return await _finish_without_provider(
+                        steps=step + 1, reason="exploring", detail=_EDIT_SOURCE_NUDGE,
+                    )
             if no_write_turns:
                 if (
                     source_repair and not _repair_source_changed()
@@ -2026,6 +2080,7 @@ async def run_native_build(
     initial_files: Mapping[str, str] | None = None,
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
+    edit_source_changed: Callable[[], bool] | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
 
@@ -2054,6 +2109,7 @@ async def run_native_build(
             initial_files=initial_files,
             edit_deadline=edit_deadline,
             source_repair=source_repair,
+            edit_source_changed=edit_source_changed,
         )
 
     return await _run_native_segments(
