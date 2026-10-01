@@ -114,3 +114,40 @@ async def test_owner_wake_monitor_cannot_block_generation_capacity_recovery(
 
     assert "owner_wakes" in events
     assert "generations" in events
+
+
+async def test_terminal_cleanup_monitor_cannot_block_capacity_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cleanup_started = asyncio.Event()
+    generation_scanned = asyncio.Event()
+    real_sleep = asyncio.sleep
+
+    async def cleanup() -> int:
+        cleanup_started.set()
+        await asyncio.Event().wait()
+        return 0
+
+    async def resume() -> int:
+        generation_scanned.set()
+        return 0
+
+    async def immediate(_seconds: float) -> None:
+        await real_sleep(0)
+
+    monkeypatch.setattr(main, "advance_terminal_generation_cleanup", cleanup, raising=False)
+    monkeypatch.setattr(main, "resume_capacity_queued_generations", resume)
+    monkeypatch.setattr(main.asyncio, "sleep", immediate)
+    monitor = getattr(main, "_monitor_terminal_generation_cleanup", None)
+    assert monitor is not None, "durable cancellation cleanup has no maintenance scheduler"
+    tasks = [
+        asyncio.create_task(monitor()),
+        asyncio.create_task(main._monitor_capacity_queued_generations()),
+    ]
+    try:
+        await asyncio.wait_for(cleanup_started.wait(), _EVENT_WAIT_SECONDS)
+        await asyncio.wait_for(generation_scanned.wait(), _EVENT_WAIT_SECONDS)
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)

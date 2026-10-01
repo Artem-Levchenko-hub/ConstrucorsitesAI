@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
@@ -15,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.models.project_cell import ProjectCellActivityLease, ProjectCellWorkspace
 from yleum_api.services.agent_progress import bounded_redacted_text
+from yleum_api.services.orchestrator_client import OrchestratorUnavailable
 from yleum_api.services.project_cell_errors import (
     PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
     ProjectCellInfrastructureError,
@@ -23,6 +25,10 @@ from yleum_api.services.project_cell_errors import (
 from yleum_api.services.project_cell_proofs import require_sha256_digest
 
 _MAX_DIAGNOSTIC_BYTES = 4096
+_FINAL_POLL_SECONDS = 5.0
+_FINAL_POLL_ATTEMPTS = 3
+_CONTROLLER_TERMINAL_STATES = {"completed", "failed", "timed_out", "cancelled"}
+logger = logging.getLogger(__name__)
 
 
 class ProjectCellActivityConflict(ProjectCellInfrastructureError):
@@ -205,6 +211,115 @@ async def activity_blocks_hibernation(
     return active is not None
 
 
+def _validate_activity_envelope(
+    lease: ProjectCellActivityLease,
+    expected: ActivityStart | None,
+) -> None:
+    if expected is not None and (
+        lease.workspace_id != expected.workspace_id
+        or lease.generation_run_id != expected.generation_run_id
+        or lease.fencing_epoch != expected.fencing_epoch
+        or lease.proof_key != expected.proof_key
+        or lease.kind != expected.kind.value
+    ):
+        raise ProjectCellActivityConflict("activity reconciliation envelope mismatch")
+
+
+async def _finish_local_cancellation(
+    session_factory: async_sessionmaker[AsyncSession],
+    lease: ActivityStart,
+) -> None:
+    async with session_factory() as session:
+        saved = await session.scalar(
+            select(ProjectCellActivityLease)
+            .where(ProjectCellActivityLease.operation_id == lease.operation_id)
+            .with_for_update()
+        )
+        if saved is None:
+            raise ProjectCellActivityConflict("activity lease not found for cancellation")
+        _validate_activity_envelope(saved, lease)
+        await finish_activity(
+            session,
+            operation_id=lease.operation_id,
+            state=ActivityState.CANCELLED,
+            finished_at=max(datetime.now(lease.deadline_at.tzinfo), saved.heartbeat_at),
+        )
+        await session.commit()
+
+
+async def _settle_cancelled_activity(
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    lease: ActivityStart,
+    poll_status: Callable[[UUID], Awaitable[Any]],
+    emit: Callable[[str, Mapping[str, object]], Awaitable[None]],
+    controller_owned: bool,
+) -> None:
+    try:
+        if not controller_owned:
+            # The caller's awaited local work has already unwound. No remote
+            # journal can prove this local probe's cancellation.
+            await _finish_local_cancellation(session_factory, lease)
+        else:
+            deadline = asyncio.get_running_loop().time() + _FINAL_POLL_SECONDS
+            for attempt in range(_FINAL_POLL_ATTEMPTS):
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return
+                try:
+                    async with asyncio.timeout(remaining):
+                        status = await poll_status(lease.operation_id)
+                except (OrchestratorUnavailable, TimeoutError):
+                    status = None
+                if status is not None:
+
+                    async def observed_status(_operation_id: UUID, observed: Any = status) -> Any:
+                        return observed
+
+                    await reconcile_activity(
+                        session_factory=session_factory,
+                        workspace_id=lease.workspace_id,
+                        operation_id=lease.operation_id,
+                        poll_status=observed_status,
+                        cancellation_requested=True,
+                        expected_lease=lease,
+                    )
+                    if status.state in _CONTROLLER_TERMINAL_STATES:
+                        break
+                if attempt + 1 == _FINAL_POLL_ATTEMPTS:
+                    return
+                remaining = deadline - asyncio.get_running_loop().time()
+                if remaining <= 0:
+                    return
+                await asyncio.sleep(min(0.1 * (attempt + 1), remaining))
+        # Publication follows the durable terminal commit. Its failure cannot
+        # replace cancellation or cause the command to be dispatched again.
+        async with asyncio.timeout(1):
+            await emit(
+                "tool.finished",
+                {
+                    "operation_id": str(lease.operation_id),
+                    "phase": lease.phase or lease.kind.value,
+                    "state": ActivityState.CANCELLED.value,
+                },
+            )
+    except (Exception, asyncio.CancelledError):
+        logger.warning(
+            "cancelled activity settlement remains pending or event unavailable",
+            extra={"operation_id": str(lease.operation_id)},
+        )
+
+
+async def _drain_cancelled_cleanup(task: asyncio.Task[None]) -> None:
+    # A second Stop must not strand a shielded DB writer behind the owner lock.
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            continue
+    task.result()
+
+
 async def reconcile_activity(
     *,
     session_factory: async_sessionmaker[AsyncSession],
@@ -212,15 +327,27 @@ async def reconcile_activity(
     operation_id: UUID,
     poll_status: Callable[[UUID], Awaitable[Any]],
     cancellation_requested: bool = False,
+    controller_owned: bool = True,
+    expected_lease: ActivityStart | None = None,
 ) -> Any:
     """Reconcile a durable API lease with the controller-owned operation journal."""
     status = await poll_status(operation_id)
+    if controller_owned and (
+        getattr(status, "operation_id", None) != operation_id
+        or status.state not in {"starting", "running", *_CONTROLLER_TERMINAL_STATES}
+        or (
+            status.terminal_response is not None
+            and status.terminal_response.operation_id != operation_id
+        )
+    ):
+        raise ProjectCellActivityConflict("controller activity journal envelope mismatch")
     now = datetime.now(status.heartbeat_at.tzinfo)
-    if status.state in {"starting", "running"} and not cancellation_requested:
+    if status.state in {"starting", "running"}:
         async with session_factory() as session:
             lease = await session.get(ProjectCellActivityLease, operation_id)
             if lease is None or lease.workspace_id != workspace_id:
                 raise ProjectCellActivityConflict("activity lease not found for reconciliation")
+            _validate_activity_envelope(lease, expected_lease)
             await heartbeat_activity(
                 session,
                 operation_id=operation_id,
@@ -250,9 +377,14 @@ async def reconcile_activity(
         else ActivityState.FAILED
     )
     async with session_factory() as session:
-        lease = await session.get(ProjectCellActivityLease, operation_id)
+        lease = await session.scalar(
+            select(ProjectCellActivityLease)
+            .where(ProjectCellActivityLease.operation_id == operation_id)
+            .with_for_update()
+        )
         if lease is None or lease.workspace_id != workspace_id:
             raise ProjectCellActivityConflict("activity lease not found for reconciliation")
+        _validate_activity_envelope(lease, expected_lease)
         await finish_activity(
             session,
             operation_id=operation_id,
@@ -279,6 +411,7 @@ async def run_with_activity_lease[T](
     heartbeat_seconds: int = 15,
     terminal_state: Callable[[T], ActivityState] | None = None,
     replay_terminal: Callable[[Any], Awaitable[T]] | None = None,
+    controller_owned: bool = True,
 ) -> T:
     """Run or reattach work while mirroring bounded journal progress into the DB."""
     now = datetime.now(lease.deadline_at.tzinfo)
@@ -366,6 +499,8 @@ async def run_with_activity_lease[T](
                     workspace_id=lease.workspace_id,
                     operation_id=lease.operation_id,
                     poll_status=poll_status,
+                    controller_owned=controller_owned,
+                    expected_lease=lease,
                 )
                 await emit(
                     "tool.heartbeat",
@@ -384,36 +519,46 @@ async def run_with_activity_lease[T](
                 # closed if durable state itself is unavailable.
                 continue
 
-    await emit(
-        "tool.started",
-        {
-            "operation_id": str(lease.operation_id),
-            "phase": lease.phase or lease.kind.value,
-            "deadline_at": lease.deadline_at.isoformat(),
-            "log_bytes": 0,
-        },
-    )
     heartbeat = asyncio.create_task(heartbeat_loop())
+    work_entered = False
     try:
-        result = await work()
-    except asyncio.CancelledError:
-        await reconcile_activity(
-            session_factory=session_factory,
-            workspace_id=lease.workspace_id,
-            operation_id=lease.operation_id,
-            poll_status=poll_status,
-            cancellation_requested=True,
-        )
         await emit(
-            "tool.finished",
+            "tool.started",
             {
                 "operation_id": str(lease.operation_id),
                 "phase": lease.phase or lease.kind.value,
-                "state": ActivityState.CANCELLED.value,
+                "deadline_at": lease.deadline_at.isoformat(),
+                "log_bytes": 0,
             },
         )
+        work_entered = True
+        result = await work()
+    except asyncio.CancelledError:
+
+        async def settle_after_heartbeat() -> None:
+            heartbeat.cancel()
+            with suppress(asyncio.CancelledError):
+                await heartbeat
+            await _settle_cancelled_activity(
+                session_factory=session_factory,
+                lease=lease,
+                poll_status=poll_status,
+                emit=emit,
+                # Only a newly allocated operation, before entering work, is
+                # proven never dispatched. Reattached activities still require
+                # the controller's authoritative terminal journal.
+                controller_owned=controller_owned and (existing is not None or work_entered),
+            )
+
+        cleanup = asyncio.create_task(settle_after_heartbeat())
+        await _drain_cancelled_cleanup(cleanup)
         raise
     except Exception as exc:
+        if controller_owned and existing is not None and not work_entered:
+            # A start-event outage proves nothing about a previously dispatched
+            # command. Preserve both its writer guard and the original error;
+            # terminal-generation maintenance can consult its journal later.
+            raise
         terminal_error = terminal_cell_error(exc, operation_id=lease.operation_id)
         try:
             async with session_factory() as session:

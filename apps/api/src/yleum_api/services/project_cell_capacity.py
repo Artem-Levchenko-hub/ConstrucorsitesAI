@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -10,10 +11,11 @@ from datetime import UTC, datetime, timedelta
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import and_, case, exists, or_, select, text, true
+from sqlalchemy import and_, case, exists, func, or_, select, text, true
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
+from yleum_api.core.db import get_engine
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
@@ -25,7 +27,12 @@ from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     write_capacity_dispatch_claim,
 )
-from yleum_api.services.orchestrator_client import ProjectCellOrchestratorClient
+from yleum_api.services.orchestrator_client import (
+    HttpProjectCellOrchestratorClient,
+    ProjectCellAgentOperationStatus,
+    ProjectCellOrchestratorClient,
+)
+from yleum_api.services.project_cell_activity import ActivityKind, ActivityStart, reconcile_activity
 from yleum_api.services.project_cell_lifecycle import (
     ProjectCellOperationOutcome,
     execute_cell_operation,
@@ -34,6 +41,9 @@ from yleum_api.services.project_cell_lifecycle import (
 )
 from yleum_api.services.project_cell_recovery import recover_ensure_operation
 from yleum_api.services.project_cells import ACTIVE_OPERATION_STATUSES, reserve_cell_operation
+
+logger = logging.getLogger(__name__)
+_TERMINAL_CLEANUP_CURSOR: UUID | None = None
 
 _SCHEDULER_LOCK_KEY = "project-cell-capacity-scheduler"
 _WAITING_ACTION = "Ожидаю ресурсы сервера"
@@ -52,6 +62,8 @@ def _waiting_detail(position: int) -> str:
     if position >= 2:
         return f"Вы {position}-й в очереди. " + _WAITING_DETAIL
     return _WAITING_DETAIL
+
+
 _LOCAL_ADMISSION_EVENTS: dict[UUID, asyncio.Event] = {}
 
 
@@ -245,6 +257,7 @@ async def claim_stale_generation_lease(
     *,
     requesting_run_id: UUID,
     workspace_id: UUID | None = None,
+    expected_generation_run_id: UUID | None = None,
 ) -> tuple[ProjectCellWorkspace, UUID] | None:
     """Claim terminal work, including ensure-complete/agent-bootstrap-incomplete cells."""
 
@@ -290,6 +303,11 @@ async def claim_stale_generation_lease(
                     )
                 ),
                 GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
+                (
+                    GenerationRun.id == expected_generation_run_id
+                    if expected_generation_run_id is not None
+                    else true()
+                ),
                 (
                     ~exists(
                         select(ProjectCellOperation.id).where(
@@ -355,15 +373,174 @@ async def claim_stale_generation_lease(
     return row[0], row[1]
 
 
+async def _reconcile_terminal_generation_activity(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    requesting_run_id: UUID,
+    client: ProjectCellOrchestratorClient,
+    workspace_id: UUID | None,
+) -> None:
+    # Capture the immutable envelope, then release DB locks/connections before
+    # consulting the journal. Never infer completion from a deadline or intent.
+    async with session_factory() as session:
+        requester = await session.get(GenerationRun, requesting_run_id)
+        if requester is None:
+            return
+        host = await _run_host(session, requester)
+        row = (
+            await session.execute(
+                select(ProjectCellActivityLease, GenerationRun.status)
+                .join(GenerationRun, GenerationRun.id == ProjectCellActivityLease.generation_run_id)
+                .join(
+                    ProjectCellWorkspace,
+                    ProjectCellWorkspace.id == ProjectCellActivityLease.workspace_id,
+                )
+                .where(
+                    ProjectCellActivityLease.kind == "command",
+                    ProjectCellActivityLease.state == "active",
+                    GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
+                    ProjectCellWorkspace.deleted_at.is_(None),
+                    ProjectCellWorkspace.orchestrator == host,
+                    (
+                        ProjectCellWorkspace.project_id != requester.project_id
+                        if workspace_id is None
+                        else ProjectCellWorkspace.id == workspace_id
+                    ),
+                )
+                .order_by(
+                    ProjectCellActivityLease.started_at, ProjectCellActivityLease.operation_id
+                )
+                .limit(1)
+            )
+        ).one_or_none()
+        if row is None:
+            return
+        saved, run_status = row
+        envelope = ActivityStart(
+            saved.operation_id,
+            saved.workspace_id,
+            saved.generation_run_id,
+            ActivityKind.COMMAND,
+            saved.fencing_epoch,
+            saved.deadline_at,
+            saved.proof_key,
+            saved.phase,
+        )
+
+    async def poll(operation_id: UUID) -> ProjectCellAgentOperationStatus:
+        async with asyncio.timeout(5):
+            return await client.agent_operation_status(envelope.workspace_id, operation_id)
+
+    try:
+        await reconcile_activity(
+            session_factory=session_factory,
+            workspace_id=envelope.workspace_id,
+            operation_id=envelope.operation_id,
+            poll_status=poll,
+            cancellation_requested=run_status == "cancelled",
+            expected_lease=envelope,
+        )
+    except Exception:
+        # A still-active row remains the durable retry source and drain fence.
+        logger.warning(
+            "terminal generation activity reconciliation remains pending",
+            extra={"operation_id": str(envelope.operation_id)},
+        )
+
+
+async def advance_terminal_generation_cleanup(
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    client: ProjectCellOrchestratorClient | None = None,
+    *,
+    limit: int = 3,
+) -> int:
+    """Reconcile terminal work and use the normal fenced release, without new work."""
+    global _TERMINAL_CLEANUP_CURSOR
+    factory = session_factory or async_sessionmaker(get_engine(), expire_on_commit=False)
+    controller = client or HttpProjectCellOrchestratorClient()
+    async with factory() as session:
+        # Successful executor release may already have cleared the workspace
+        # lease. The old command activity still independently needs its journal.
+        query = (
+            select(ProjectCellWorkspace.id, GenerationRun.id)
+            .outerjoin(
+                ProjectCellActivityLease,
+                and_(
+                    ProjectCellActivityLease.workspace_id == ProjectCellWorkspace.id,
+                    ProjectCellActivityLease.kind == "command",
+                    ProjectCellActivityLease.state == "active",
+                ),
+            )
+            .join(
+                GenerationRun,
+                GenerationRun.id
+                == func.coalesce(
+                    ProjectCellActivityLease.generation_run_id,
+                    ProjectCellWorkspace.generation_run_id,
+                ),
+            )
+            .where(
+                GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
+                ProjectCellWorkspace.deleted_at.is_(None),
+                ~exists(
+                    select(ProjectCellOperation.id).where(
+                        ProjectCellOperation.workspace_id == ProjectCellWorkspace.id,
+                        ProjectCellOperation.next_attempt_at > datetime.now(UTC),
+                    )
+                ),
+            )
+            .order_by(ProjectCellWorkspace.id)
+            .limit(limit)
+        )
+        rows = list(
+            (
+                await session.execute(
+                    query.where(ProjectCellWorkspace.id > _TERMINAL_CLEANUP_CURSOR)
+                    if _TERMINAL_CLEANUP_CURSOR is not None
+                    else query
+                )
+            ).all()
+        )
+        if not rows and _TERMINAL_CLEANUP_CURSOR is not None:
+            rows = list((await session.execute(query)).all())
+    released = 0
+    for workspace_id, run_id in rows:
+        # The cursor only rotates a bounded scan; all work remains durable in
+        # existing rows. Restarting this process cannot forget an active lease.
+        _TERMINAL_CLEANUP_CURSOR = workspace_id
+        try:
+            released += await release_one_stale_generation_lease(
+                factory,
+                requesting_run_id=run_id,
+                workspace_id=workspace_id,
+                expected_generation_run_id=run_id,
+                client=controller,
+            )
+        except Exception:
+            logger.warning(
+                "terminal generation lease recovery remains pending",
+                extra={"workspace_id": str(workspace_id)},
+            )
+    return released
+
+
 async def release_one_stale_generation_lease(
     session_factory: async_sessionmaker[AsyncSession],
     *,
     requesting_run_id: UUID,
     client: ProjectCellOrchestratorClient,
     workspace_id: UUID | None = None,
+    expected_generation_run_id: UUID | None = None,
     reclaim_for_repair: bool = False,
 ) -> bool:
     """Fence and release one terminal run without stopping ready compute."""
+
+    await _reconcile_terminal_generation_activity(
+        session_factory,
+        requesting_run_id=requesting_run_id,
+        client=client,
+        workspace_id=workspace_id,
+    )
 
     async with session_factory() as cleanup_session:
         # A terminal run cannot consume an undispatched admission. Keep unknown
@@ -402,6 +579,7 @@ async def release_one_stale_generation_lease(
             session,
             requesting_run_id=requesting_run_id,
             workspace_id=workspace_id,
+            expected_generation_run_id=expected_generation_run_id,
         )
         if claimed is None:
             await session.rollback()

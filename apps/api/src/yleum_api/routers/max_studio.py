@@ -147,6 +147,12 @@ async def upload_max_content_image(
         url = await asyncio.to_thread(
             max_content_images.store_content_image, str(project_id), bytes(body), content_type
         )
+    except max_content_images.ContentImageValidationError as exc:
+        raise ApiError(
+            "bad_request",
+            "Файл повреждён, не соответствует формату или слишком велик после распаковки",
+            status.HTTP_400_BAD_REQUEST,
+        ) from exc
     except max_content_images.ContentImageError as exc:
         log.warning("max_content_image_upload_failed", project_id=str(project_id))
         raise ApiError(

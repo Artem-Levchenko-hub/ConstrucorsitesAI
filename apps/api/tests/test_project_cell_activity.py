@@ -477,7 +477,8 @@ async def test_cancellation_stays_terminal_and_replay_never_resurrects_work(
     async def poll(operation_id):
         calls.append("poll")
         return SimpleNamespace(
-            state="running",
+            operation_id=operation_id,
+            state="cancelled",
             heartbeat_at=datetime.now(UTC),
             terminal_response=None,
             phase="prepare",
