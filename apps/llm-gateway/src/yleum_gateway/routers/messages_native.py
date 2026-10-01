@@ -296,9 +296,9 @@ def _decimal(value: Any) -> Decimal | None:
         return None
     try:
         result = Decimal(str(value))
-    except (InvalidOperation, ValueError):
+    except (InvalidOperation, TypeError, ValueError):
         return None
-    return result if result >= 0 else None
+    return result if result.is_finite() and result >= 0 else None
 
 
 def _non_negative_int(value: Any) -> int:
@@ -331,6 +331,7 @@ def _reported_cost(
     """Read a provider-reported charge when the upstream exposes one.
 
     llmgw deployments have used both response metadata and headers over time.
+    The documented balance-audit header takes precedence over legacy shapes.
     We accept the known shapes and otherwise fall back to token pricing with
     cache-read/cache-write counters. No message content is inspected or logged.
     """
@@ -342,10 +343,10 @@ def _reported_cost(
         (
             item
             for item in (
+                _decimal(response.headers.get("x-llmgw-cost-rub")),
+                _decimal(response.headers.get("x-cost-rub")),
                 _decimal(usage.get("cost_rub")),
                 _decimal(metadata.get("cost_rub")),
-                _decimal(response.headers.get("x-cost-rub")),
-                _decimal(response.headers.get("x-llmgw-cost-rub")),
             )
             if item is not None
         ),

@@ -8,6 +8,7 @@ import hmac
 import json
 import time
 from collections.abc import Iterator
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
@@ -401,8 +402,44 @@ def test_native_endpoint_uses_llmgw_chat_tools(
     }
 
 
+@pytest.mark.parametrize("value", [
+    None, True, False, "NaN", "sNaN", "Infinity", "-Infinity",
+    float("nan"), float("inf"), Decimal("sNaN"), -1, "-0.01", "bad", {}, [],
+])
+def test_reported_decimal_rejects_invalid_cost_without_raising(value):
+    assert messages_native._decimal(value) is None
+
+
+@pytest.mark.parametrize("value", [0, "0", "0.0000", Decimal("-0"), "1.25"])
+def test_reported_decimal_preserves_finite_nonnegative_cost(value):
+    assert messages_native._decimal(value) == Decimal(str(value))
+
+
+@pytest.mark.parametrize("headers,data,expected_rub", [
+    ({"x-llmgw-cost-rub": "1.25", "x-cost-rub": "2"},
+     {"usage": {"cost_rub": "3"}, "metadata": {"cost_rub": "4"}}, "1.25"),
+    ({"x-llmgw-cost-rub": "0"}, {"usage": {"cost_rub": "3"}}, "0"),
+    ({"x-llmgw-cost-rub": "NaN", "x-cost-rub": "2"},
+     {"usage": {"cost_rub": "3"}}, "2"),
+    ({"x-llmgw-cost-rub": "Infinity", "x-cost-rub": "bad"},
+     {"usage": {"cost_rub": "3"}}, "3"),
+    ({}, {"usage": {"cost_rub": "sNaN"}, "metadata": {"cost_rub": "4"}}, "4"),
+    ({}, {"usage": {"cost_rub": "NaN"}}, None),
+])
+def test_reported_rub_prefers_valid_balance_audit_header(headers, data, expected_rub):
+    response = httpx.Response(200, headers={**headers, "x-cost-usd": "0.125"})
+    rub, usd = messages_native._reported_cost(data, response)
+    assert rub == (Decimal(expected_rub) if expected_rub is not None else None)
+    assert usd == Decimal("0.125")
+
+
+@pytest.mark.parametrize("rub_headers,body_cost,expected_cost", [
+    ({}, {}, "1.5150"),
+    ({"x-llmgw-cost-rub": "0"}, {"cost_rub": "9"}, "0"),
+    ({"x-llmgw-cost-rub": "1.25", "x-cost-rub": "2"}, {"cost_rub": "9"}, "1.25"),
+])
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, rub_headers, body_cost, expected_cost,
 ) -> None:
     user_id = "11111111-1111-1111-1111-111111111111"
     project_id = "22222222-2222-2222-2222-222222222222"
@@ -422,7 +459,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     def fake_post(url: str, payload: dict[str, Any], headers: dict[str, str]) -> httpx.Response:
         return httpx.Response(
             200,
-            headers={"x-cost-usd": "0.125"},
+            headers={"x-cost-usd": "0.125", **rub_headers},
             json={
                 "id": "provider-request-1",
                 "choices": [
@@ -434,6 +471,7 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
                 "usage": {
                     "prompt_tokens": 1000,
                     "completion_tokens": 100,
+                    **body_cost,
                     "prompt_tokens_details": {
                         "cached_tokens": 600,
                         "cache_creation_tokens": 200,
@@ -472,6 +510,8 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert kwargs["cache_read_tokens"] == 600
     assert kwargs["cache_write_tokens"] == 200
     assert str(kwargs["provider_cost_usd"]) == "0.125"
+    assert kwargs["cost_rub"] == Decimal(expected_cost)
+    assert Decimal(response.json()["metadata"]["cost_rub"]) == Decimal(expected_cost)
 
 
 @pytest.mark.parametrize(
