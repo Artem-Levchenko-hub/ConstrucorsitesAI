@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from yleum_api.services import agent_native
-from yleum_api.services.generation_deadline import source_edit_deadline
 
 
 @pytest.mark.parametrize(("path", "expected"), [
@@ -65,18 +64,6 @@ async def test_unrelated_timeout_is_provider_failure_not_a_successful_handoff(mo
     )
     assert not result.done and not result.needs_finalization
     assert result.stop_reason == "provider_error"
-
-
-def test_source_budget_reserves_finalization_without_extending_deadline():
-    end = datetime.now(UTC) + timedelta(seconds=1500)
-    assert source_edit_deadline(end) == end - timedelta(seconds=300)
-
-
-@pytest.mark.parametrize("seconds", [60, 120, 300, 1500])
-def test_short_valid_budgets_retain_editing_time(seconds):
-    start = datetime.now(UTC)
-    end = start + timedelta(seconds=seconds)
-    assert source_edit_deadline(end, started_at=start) == start + timedelta(seconds=seconds * 0.8)
 
 
 @pytest.mark.asyncio

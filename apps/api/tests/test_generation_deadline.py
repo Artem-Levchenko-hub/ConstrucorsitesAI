@@ -1,8 +1,7 @@
-"""A restoration adaptation has three time limits, not one.
+"""Generation work has no lifetime; terminal controller hand-offs stay bounded.
 
-Live run 22f20a1e (21.09.2026) lost a nearly finished adaptive rollback to a single
-25-minute limit that the agent, the repairs and the proof all shared, and reported it
-as ``operation_id=unknown``. These tests pin the split and the telemetry.
+Editing and repairs may span many healthy operations. Individual operations,
+cancellation and sealed proof recovery keep their own finite safety contracts.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project_cell import ProjectCellActivityLease, ProjectCellWorkspace
 from yleum_api.models.restoration import Restoration
 from yleum_api.services.generation_deadline import (
+    GenerationDeadline,
     generation_deadline,
     note_proof_sealed,
     note_proof_settled,
@@ -42,11 +42,6 @@ from yleum_api.services.orchestrator_client import RestorationAdaptationProof
 from yleum_api.services.project_cell_proofs import ProofIdentity
 
 _T0 = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
-_EDIT = timedelta(seconds=1500)
-# Первый ход адаптации живёт по своему сроку: в окно обычной правки он не
-# помещался — живой прогон 25.09 (dab6c832) работал до самой отсечки.
-_ADAPT_EDIT = timedelta(seconds=2700)
-_REPAIR = timedelta(seconds=3600)
 _ACTIVATION = timedelta(seconds=2400)
 
 
@@ -88,54 +83,35 @@ def _settle(run: GenerationRun, proof_state: str) -> None:
     run.agent_state = root
 
 
-def test_the_three_windows_are_a_deliberate_order() -> None:
+def test_only_the_controller_hand_off_has_a_generation_level_ceiling() -> None:
     settings = get_settings()
-    # Exact defaults live in test_config.py under its isolation fixture; what matters
-    # here is the shape the split depends on.
-    assert 0 < settings.max_generation_deadline_seconds
-    assert 0 < settings.restoration_adaptation_repair_seconds
     # The hand-off ceiling has to outlast the controller's own prove + offer + apply.
     assert settings.restoration_adaptation_activation_seconds >= 900 + 120 + 930
 
 
-def test_an_ordinary_run_keeps_its_single_limit() -> None:
+def test_a_progressing_ordinary_run_has_no_wall_clock_deadline() -> None:
     run = _run(adaptation=False)
-    note_repair_stage_started(run, _T0 + timedelta(seconds=1400))
-    _seal(run)
 
     deadline = generation_deadline(run)
 
-    assert (deadline.stage, deadline.at) == ("edit", _T0 + _EDIT)
+    assert (deadline.stage, deadline.at) == ("edit", None)
     assert "max_finalization" not in run.agent_state or "deadline" not in dict(
         run.agent_state["max_finalization"]  # type: ignore[arg-type]
     )
 
 
-def test_an_adaptation_is_editing_until_its_checks_begin() -> None:
+def test_a_progressing_adaptation_edit_has_no_wall_clock_deadline() -> None:
     deadline = generation_deadline(_run())
-    assert (deadline.stage, deadline.at) == ("edit", _T0 + _ADAPT_EDIT)
+    assert (deadline.stage, deadline.at) == ("edit", None)
 
 
-def test_a_slow_agent_turn_cannot_eat_the_repair_window() -> None:
+def test_a_progressing_repair_has_no_wall_clock_deadline() -> None:
     run = _run()
     note_repair_stage_started(run, _T0 + timedelta(seconds=1440))
 
     deadline = generation_deadline(run)
 
-    assert deadline.stage == "repair"
-    assert deadline.at == _T0 + timedelta(seconds=1440) + _REPAIR
-
-
-def test_a_quick_agent_turn_does_not_shorten_what_the_run_had() -> None:
-    run = _run()
-    repair_started = _T0 + timedelta(seconds=300)
-    note_repair_stage_started(run, repair_started)
-
-    # Правило, а не совпадение чисел: срок — больший из обычного окна правки и
-    # окна починки от её начала. Прежде эти числа случайно совпадали при
-    # коротком окне починки, и тест закреплял совпадение, а не правило.
-    assert generation_deadline(run).at == max(_T0 + _ADAPT_EDIT, repair_started + _REPAIR)
-    assert generation_deadline(run).at >= _T0 + _ADAPT_EDIT
+    assert (deadline.stage, deadline.at) == ("repair", None)
 
 
 def test_the_repair_window_opens_once() -> None:
@@ -143,7 +119,10 @@ def test_the_repair_window_opens_once() -> None:
     note_repair_stage_started(run, _T0 + timedelta(seconds=1440))
     note_repair_stage_started(run, _T0 + timedelta(seconds=2000))
 
-    assert generation_deadline(run).at == _T0 + timedelta(seconds=1440) + _REPAIR
+    book = dict(run.agent_state["max_finalization"])["deadline"]  # type: ignore[arg-type]
+    assert book["repair_started_at_ms"] == int(
+        (_T0 + timedelta(seconds=1440)).timestamp() * 1000
+    )
 
 
 def test_a_sealed_intent_gets_its_own_ceiling_not_the_editing_one() -> None:
@@ -168,7 +147,7 @@ def test_a_seal_without_its_mark_is_still_bounded() -> None:
     deadline = generation_deadline(run)
 
     assert deadline.stage == "proof"
-    assert deadline.at == _T0 + timedelta(seconds=1440) + _REPAIR + _ACTIVATION
+    assert deadline.at == _T0 + _ACTIVATION
 
 
 @pytest.mark.parametrize("proof_state", ["proof_ready", "migration_required"])
@@ -192,21 +171,19 @@ def test_a_finished_activation_no_longer_seals() -> None:
         "restoration_adaptation_activation": {"state": "cancelled"},
     }
 
-    assert generation_deadline(run).stage == "edit"
+    assert generation_deadline(run) == GenerationDeadline("edit", None)
 
 
-def test_a_requested_cancel_still_ends_by_the_editing_limit() -> None:
-    run = _run(status="cancel_requested")
-    _seal(run)
+@pytest.mark.parametrize("adaptation", [False, True])
+def test_a_requested_cancel_remains_bounded(adaptation: bool) -> None:
+    run = _run(adaptation=adaptation, status="cancel_requested")
 
     deadline = generation_deadline(run)
 
-    # Смысл: запрошенная отмена не держится потолком запечатанного доказательства,
-    # а заканчивается по сроку правки — у адаптации это её собственный срок.
-    assert (deadline.stage, deadline.at) == ("edit", _T0 + _ADAPT_EDIT)
+    assert (deadline.stage, deadline.at) == ("edit", _T0)
 
 
-def test_time_spent_sealed_is_returned_to_the_repairs() -> None:
+def test_a_rejected_proof_resumes_unbounded_repairs() -> None:
     run = _run()
     note_repair_stage_started(run, _T0 + timedelta(seconds=1440))
     _seal(run)
@@ -217,20 +194,19 @@ def test_time_spent_sealed_is_returned_to_the_repairs() -> None:
 
     deadline = generation_deadline(run)
 
-    assert deadline.stage == "repair"
-    assert deadline.at == _T0 + timedelta(seconds=1440) + _REPAIR + timedelta(seconds=600)
-    note_proof_settled(run, _T0 + timedelta(seconds=9000))  # nothing sealed: nothing to return
-    assert generation_deadline(run).at == deadline.at
+    assert (deadline.stage, deadline.at) == ("repair", None)
+    note_proof_settled(run, _T0 + timedelta(seconds=9000))
+    assert generation_deadline(run) == deadline
 
 
-def test_a_damaged_book_falls_back_to_the_plain_limit() -> None:
+def test_a_damaged_book_cannot_restore_a_wall_clock_limit() -> None:
     run = _run()
     run.agent_state = {
         **run.agent_state,
         "max_finalization": {"deadline": {"repair_started_at_ms": "soon", "sealed_ms": -5}},
     }
 
-    assert generation_deadline(run).at == _T0 + _ADAPT_EDIT
+    assert generation_deadline(run).at is None
 
 
 @pytest.fixture
@@ -281,10 +257,10 @@ async def _bound_adaptation(
     return run, operation, async_sessionmaker(test_engine, expire_on_commit=False)
 
 
-async def test_the_deadline_names_the_restoration_and_the_stage(
+async def test_a_progressing_adaptation_is_not_terminalized_by_elapsed_time(
     db_session: AsyncSession, test_engine: AsyncEngine
 ) -> None:
-    run, operation, factory = await _bound_adaptation(db_session, test_engine)
+    run, _operation, factory = await _bound_adaptation(db_session, test_engine)
 
     expired = await watch_generation_deadline(
         session_factory=factory,
@@ -293,26 +269,11 @@ async def test_the_deadline_names_the_restoration_and_the_stage(
     )
 
     await db_session.refresh(run)
-    assert expired is True and run.status == "failed"
-    # The worker's ownership monitor recognises a deadline by this exact prefix.
-    assert run.error is not None and run.error.startswith("generation deadline exceeded; ")
-    assert (
-        f"stage=edit; phase=edit; restoration_operation_id={operation.id}; "
-        "agent_operation_id=none; " in run.error
-    )
-    assert "unknown" not in run.error.split("proof_key=")[0]
-    terminal = dict(run.agent_state["max_finalization"])["terminal"]  # type: ignore[arg-type]
-    assert terminal == {
-        "reason": "deadline",
-        "stage": "edit",
-        "phase": "edit",
-        "restoration_operation_id": str(operation.id),
-        "agent_operation_id": None,
-        "proof_key": "unknown",
-    }
+    assert expired is False
+    assert (run.status, run.error, run.finished_at) == ("running", None, None)
 
 
-async def test_the_deadline_reports_the_command_that_was_running(
+async def test_a_lost_cancel_signal_terminalizes_the_running_command(
     db_session: AsyncSession, test_engine: AsyncEngine
 ) -> None:
     run, _operation, factory = await _bound_adaptation(db_session, test_engine)
@@ -335,14 +296,18 @@ async def test_the_deadline_reports_the_command_that_was_running(
         deadline_at=now + timedelta(minutes=5),
     )
     db_session.add(lease)
+    run.status = "cancel_requested"
     await db_session.commit()
 
-    await watch_generation_deadline(
+    cancelled = await watch_generation_deadline(
         session_factory=factory, generation_run_id=run.id, now=now + timedelta(hours=1)
     )
 
     await db_session.refresh(run)
-    assert run.error is not None
+    await db_session.refresh(lease)
+    assert cancelled is True and run.status == "cancelled"
+    assert lease.state == "cancelled"
+    assert run.error is not None and run.error.startswith("generation cancelled; ")
     assert f"agent_operation_id={lease.operation_id}; " in run.error
 
 
@@ -371,7 +336,7 @@ async def test_a_sealed_proof_intent_is_not_cut_by_the_deadline(
     assert (run.status, run.error, run.finished_at) == ("running", None, None)
     assert (operation.state, operation.phase) == ("applying", "activation_proof_intent")
     assert "restoration_adaptation_owner_status" not in run.agent_state
-    # The watchdog keeps looking: a rejected proof puts the run back under a limit.
+    # The watchdog keeps looking: a rejected proof returns to unbounded repair.
     assert wait is not None and 0 < wait <= 60
 
 
@@ -398,7 +363,37 @@ async def test_a_stuck_hand_off_is_released_with_its_proof_retained(
     assert run.agent_state["restoration_adaptation_owner_status"] == "sealed_proof_retained"
 
 
-async def test_a_rejected_proof_puts_the_run_back_under_the_repair_limit(
+async def test_restoration_reconciler_enforces_the_sealed_ceiling_after_prompt_exit(
+    db_session: AsyncSession, test_engine: AsyncEngine
+) -> None:
+    from yleum_api.services.restoration_reconciliation import _observe
+
+    run, operation, factory = await _bound_adaptation(db_session, test_engine)
+    _seal(run)
+    sealed_at = datetime.now(UTC) - _ACTIVATION - timedelta(minutes=1)
+    note_proof_sealed(run, sealed_at)
+    operation.state = "applying"
+    operation.phase = "activation_proof_intent"
+    operation.next_reconcile_at = datetime.now(UTC) - timedelta(seconds=1)
+    await db_session.commit()
+
+    # The prompt-owned watchdog is already gone. Even when controller observation
+    # fails, the durable restoration worker enforces the sealed hand-off ceiling.
+    await _observe(
+        factory,
+        object(),  # type: ignore[arg-type]
+        (operation.id, operation.project_id, operation.owner_id),
+        moment=datetime.now(UTC),
+        lease_seconds=1,
+    )
+
+    await db_session.refresh(run)
+    assert run.status == "failed"
+    assert run.error is not None and "stage=proof; " in run.error
+    assert run.agent_state["restoration_adaptation_owner_status"] == "sealed_proof_retained"
+
+
+async def test_a_rejected_proof_resumes_without_a_repair_deadline(
     db_session: AsyncSession, test_engine: AsyncEngine
 ) -> None:
     run, _operation, factory = await _bound_adaptation(db_session, test_engine)
@@ -409,18 +404,15 @@ async def test_a_rejected_proof_puts_the_run_back_under_the_repair_limit(
     _settle(run, "migration_required")
     note_proof_settled(run, started + timedelta(seconds=2300))
     await db_session.commit()
-    limit = started + timedelta(seconds=1440) + _REPAIR + timedelta(seconds=600)
-
-    early = await watch_generation_deadline(
-        session_factory=factory, generation_run_id=run.id, now=limit - timedelta(seconds=1)
-    )
-    late = await watch_generation_deadline(
-        session_factory=factory, generation_run_id=run.id, now=limit
+    expired = await watch_generation_deadline(
+        session_factory=factory,
+        generation_run_id=run.id,
+        now=started + timedelta(days=1),
     )
 
     await db_session.refresh(run)
-    assert (early, late) == (False, True)
-    assert run.error is not None and "stage=repair; " in run.error
+    assert expired is False
+    assert (run.status, run.error, run.finished_at) == ("running", None, None)
 
 
 async def test_the_watchdog_stops_looking_once_the_run_is_over(
@@ -433,12 +425,12 @@ async def test_the_watchdog_stops_looking_once_the_run_is_over(
     await db_session.commit()
     after = await generation_deadline_wait(session_factory=factory, generation_run_id=run.id)
 
-    assert before is not None and 2600 < before <= 2700
+    assert before == 15.0
     assert after is None
 
 
 @pytest.mark.usefixtures("_exact_release_probe")
-async def test_checks_and_repairs_open_their_own_window(
+async def test_checks_and_repairs_continue_after_a_long_running_edit(
     db_session: AsyncSession, test_engine: AsyncEngine
 ) -> None:
     harness = await _new_harness(db_session, test_engine)
@@ -450,8 +442,7 @@ async def test_checks_and_repairs_open_their_own_window(
             "adaptation_run_id": str(run.id),
         }
     }
-    # The agent's turn used the whole edit limit.
-    run.started_at = datetime.now(UTC) - _ADAPT_EDIT - timedelta(seconds=30)
+    run.started_at = datetime.now(UTC) - timedelta(days=1)
     await db_session.commit()
     repaired: list[str] = []
 
@@ -461,73 +452,14 @@ async def test_checks_and_repairs_open_their_own_window(
             "export default function Page(){return <main>Каталог товаров</main>}"
         )
 
-    # The harness has no preservation contract, so the pass after the repair ends the run;
-    # what matters is that the repair was allowed to start past the edit limit.
+    # The harness has no preservation contract, so the pass after the repair ends the run.
+    # The one-day-old start proves elapsed lifetime does not prevent that repair.
     await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
 
     await db_session.refresh(run)
     assert len(repaired) == 1
     book = dict(run.agent_state["max_finalization"])["deadline"]  # type: ignore[arg-type]
     assert isinstance(book["repair_started_at_ms"], int)
-
-
-@pytest.mark.usefixtures("_exact_release_probe")
-async def test_an_ordinary_run_past_its_limit_still_refuses_to_repair(
-    db_session: AsyncSession, test_engine: AsyncEngine
-) -> None:
-    harness = await _new_harness(db_session, test_engine)
-    run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
-    assert run is not None
-    run.started_at = datetime.now(UTC) - _EDIT - timedelta(seconds=30)
-    await db_session.commit()
-
-    async def repair(detail: str) -> None:
-        raise AssertionError("a repair must not start without time for it")
-
-    with pytest.raises(TimeoutError, match="before source repair"):
-        await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
-
-
-@pytest.mark.usefixtures("_exact_release_probe")
-async def test_a_repair_is_not_started_with_too_little_time_left(
-    db_session: AsyncSession, test_engine: AsyncEngine
-) -> None:
-    harness = await _new_harness(db_session, test_engine)
-    run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
-    assert run is not None
-    run.started_at = datetime.now(UTC) - _EDIT + timedelta(seconds=60)
-    await db_session.commit()
-
-    async def repair(detail: str) -> None:
-        raise AssertionError("a repair must not start without time for it")
-
-    with pytest.raises(TimeoutError, match="before source repair"):
-        await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
-
-
-@pytest.mark.usefixtures("_exact_release_probe")
-async def test_a_repair_that_runs_out_of_time_says_so(
-    db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from yleum_api.services import max_finalization
-
-    harness = await _new_harness(db_session, test_engine)
-    run = await db_session.get(GenerationRun, harness.coordinator.generation_run_id)
-    assert run is not None
-    # Enough headroom that a loaded runner cannot turn this into the "before" refusal.
-    # Five seconds for editing, followed by the reserved 180-second final build.
-    run.started_at = datetime.now(UTC) - _EDIT + timedelta(seconds=185)
-    await db_session.commit()
-    monkeypatch.setattr(max_finalization, "_MIN_REPAIR_SECONDS", 0)
-
-    async def repair(detail: str) -> None:
-        await asyncio.sleep(30)
-
-    # An empty message here used to become the chat row "[Ошибка: ]".
-    with pytest.raises(TimeoutError, match="during source repair"):
-        await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
-
-
 @pytest.mark.usefixtures("_exact_release_probe")
 async def test_the_real_adaptive_path_seals_the_proof_against_the_deadline(
     db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
@@ -624,10 +556,10 @@ async def test_the_real_adaptive_path_seals_the_proof_against_the_deadline(
     assert first.status.value == "needs_edit"
     assert during_proof == [(False, "promote", True)]
     state = dict(run.agent_state["max_finalization"])  # type: ignore[arg-type]
-    # The rejected proof gave its time back and the run is under a limit again.
+    # A rejected proof returns to unbounded repair work.
     assert "sealed_since_ms" not in state["deadline"]
-    assert state["deadline"]["sealed_ms"] >= 0
-    assert generation_deadline(run).at is not None
+    assert "sealed_ms" not in state["deadline"]
+    assert generation_deadline(run).at is None
     # The checks left their timings, as on the ordinary path.
     assert {"prepare", "final_build", "runtime_probe"} <= set(state["phase_ms"])
 
@@ -638,7 +570,7 @@ async def test_the_real_adaptive_path_seals_the_proof_against_the_deadline(
     assert run.status == "running"
 
 
-async def test_the_watchdog_outlives_a_sealed_proof_and_then_enforces_the_limit(
+async def test_the_watchdog_returns_to_unbounded_repair_after_a_rejected_proof(
     db_session: AsyncSession, test_engine: AsyncEngine, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from yleum_api.services import max_finalization
@@ -655,16 +587,21 @@ async def test_the_watchdog_outlives_a_sealed_proof_and_then_enforces_the_limit(
     )
     await asyncio.sleep(0.3)
     await db_session.refresh(run)
-    # Two hours past the limit, and the one-shot watchdog this replaced would be gone.
+    # The sealed controller hand-off is still inside its own ceiling.
     assert not watchdog.done() and run.status == "running"
 
     _settle(run, "migration_required")
+    note_proof_settled(run)
     await db_session.commit()
-    await asyncio.wait_for(watchdog, timeout=5)
+    await asyncio.sleep(0.2)
 
     await db_session.refresh(run)
-    assert run.status == "failed"
-    assert run.error is not None and run.error.startswith("generation deadline exceeded; ")
+    assert not watchdog.done()
+    assert (run.status, run.error, run.finished_at) == ("running", None, None)
+
+    run.status = "completed"
+    await db_session.commit()
+    await asyncio.wait_for(watchdog, timeout=5)
 
 
 async def test_the_watchdog_ends_with_the_run(

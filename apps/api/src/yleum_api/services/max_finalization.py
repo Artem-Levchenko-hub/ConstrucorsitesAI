@@ -33,7 +33,6 @@ from yleum_api.services.generation_deadline import (
     note_proof_sealed,
     note_proof_settled,
     note_repair_stage_started,
-    source_edit_deadline,
 )
 from yleum_api.services.generation_metrics import (
     GenerationPhase,
@@ -92,17 +91,14 @@ from yleum_api.services.restoration_adaptation import restoration_probe_source_g
 from yleum_api.services.versioning_capabilities import capability_gap
 
 _MAX_DETAIL_BYTES = 4096
-# A repair is one model turn plus a build; starting it with less time only burns the rest.
-_MIN_REPAIR_SECONDS = 60
 # Сколько раз подряд источнику возвращают замечания. У обычной правки три прохода:
 # больше почти всегда означает, что агент ходит по кругу.
 _ORDINARY_REPAIR_ROUNDS = 3
 # У адаптации правил больше, и агент узнаёт их по одному, каждое — отдельный круг с
 # полной пересборкой. Прогон c32cdde8 (25.09) закончился ровно на том, что второе
 # правило ему назвали и тут же остановили, истратив при этом половину бюджета
-# времени. Настоящая граница у адаптации — окно починки по времени; счётчик поверх
-# него не защищает ни от чего, потому что агент, ничего не изменивший, и так
-# останавливается сразу.
+# времени. Общего окна по времени больше нет; цикл остаётся ограничен числом
+# проходов, а агент, ничего не изменивший, останавливается сразу.
 _ADAPTATION_REPAIR_ROUNDS = 6
 # How often the watchdog looks again while a sealed hand-off runs under its own ceiling.
 _SEALED_RECHECK_SECONDS = 15.0
@@ -344,13 +340,11 @@ class MaxFinalizationCoordinator:
             )
 
     async def source_edit_deadline(self, *, repair: bool = False) -> datetime | None:
-        async with self.session_factory() as session:
-            run = await self._locked_run(session)
-            deadline = generation_deadline(run).at
-        return source_edit_deadline(
-            deadline, started_at=run.started_at or run.created_at,
-            reserve_seconds=180 if repair else 300,
-        ) if deadline is not None else None
+        # Kept as the adapter boundary consumed by agent_native. Generations no
+        # longer have a wall-clock editing budget, so provider/tool calls decide
+        # their own timeouts and finalization receives the completed source.
+        _ = repair
+        return None
 
     async def fast_check(self) -> ProjectCellProofResult:
         await self._raise_persisted_infrastructure_failure()
@@ -571,7 +565,8 @@ class MaxFinalizationCoordinator:
 
         Обычной правке хватает трёх проходов. Адаптация узнаёт требования к
         проверочной точке по одному правилу за круг, поэтому проходов у неё
-        больше; ограничивает её при этом окно починки по времени, а не счётчик.
+        больше; цикл остаётся ограничен числом проходов и требованием реального
+        изменения исходников.
         """
         await self._raise_persisted_infrastructure_failure()
         async with self.session_factory() as session:
@@ -594,25 +589,14 @@ class MaxFinalizationCoordinator:
                 run = await self._locked_run(session)
                 if run.status == "cancel_requested":
                     raise asyncio.CancelledError
-                deadline = generation_deadline(run).at
+                deadline = generation_deadline(run)
             # NEEDS_EDIT means the last proof, if any, was settled; a run still holding a
             # durable intent has no business starting another editing pass.
-            if deadline is None:
+            if deadline.stage == "proof":
                 raise MaxFinalizationConflict(
                     "sealed restoration adaptation cannot enter a source repair"
                 )
-            repair_end = source_edit_deadline(
-                deadline, started_at=run.started_at or run.created_at, reserve_seconds=180,
-            )
-            remaining = (repair_end - datetime.now(UTC)).total_seconds()
-            if remaining < _MIN_REPAIR_SECONDS:
-                raise TimeoutError("generation deadline exceeded before source repair")
-            try:
-                async with asyncio.timeout(remaining):
-                    await repair(outcome.redacted_detail)
-            except TimeoutError as exc:
-                # A bare TimeoutError has no text; the run would fail with an empty reason.
-                raise TimeoutError("generation deadline exceeded during source repair") from exc
+            await repair(outcome.redacted_detail)
             updated = await self.executor.snapshot_files()
             if updated == files:
                 return outcome
@@ -1724,7 +1708,7 @@ class MaxFinalizationCoordinator:
                 proof_key=identity.proof_key,
                 phase=phase.value,
                 deadline_at=datetime.now(UTC)
-                + timedelta(seconds=get_settings().max_generation_deadline_seconds),
+                + timedelta(seconds=get_settings().project_cell_activity_lease_seconds),
             ),
             work=run_command,
             replay_terminal=replay_command,
@@ -1791,7 +1775,7 @@ class MaxFinalizationCoordinator:
                 proof_key=identity.proof_key,
                 phase=phase.value,
                 deadline_at=datetime.now(UTC)
-                + timedelta(seconds=get_settings().max_generation_deadline_seconds),
+                + timedelta(seconds=get_settings().project_cell_activity_lease_seconds),
             ),
             work=run_probe,
             poll_status=local_status,
@@ -2064,7 +2048,7 @@ class MaxFinalizationCoordinator:
                     phase=phase.value,
                     now=now,
                     deadline_at=now
-                    + timedelta(seconds=get_settings().max_generation_deadline_seconds),
+                    + timedelta(seconds=get_settings().project_cell_activity_lease_seconds),
                 )
                 await session.commit()
             except ProjectCellActivityConflict:
@@ -2337,10 +2321,13 @@ async def generation_deadline_wait(
         if run is None or run.status not in _ACTIVE_RUN_STATUSES:
             return None
         deadline = generation_deadline(run)
-    assert deadline.at is not None
+    if deadline.at is None:
+        # Keep observing active runs so a later sealed restoration hand-off or a
+        # lost cancellation notification still becomes bounded.
+        return _SEALED_RECHECK_SECONDS
     wait = max(0.0, (deadline.at - (now or datetime.now(UTC))).total_seconds())
-    # A rejected proof puts the run back under the much nearer editing limit, so do not
-    # sleep through the whole hand-off ceiling waiting to notice.
+    # A rejected proof returns to unbounded repair, so do not sleep through the
+    # whole hand-off ceiling before noticing the state change.
     return min(wait, _SEALED_RECHECK_SECONDS) if deadline.stage == "proof" else wait
 
 
@@ -2351,8 +2338,8 @@ async def run_generation_deadline_watchdog(
 ) -> None:
     """Follow the run until it ends or its deadline is written.
 
-    The deadline moves: an adaptation opens a repair window after the agent's turn and
-    is exempt while its proof or activation intent is sealed, so one sleep is not enough.
+    Editing and repairs are unbounded. A sealed proof later opens its own finite
+    controller hand-off ceiling, so one sleep is not enough.
     """
     while True:
         wait = await generation_deadline_wait(

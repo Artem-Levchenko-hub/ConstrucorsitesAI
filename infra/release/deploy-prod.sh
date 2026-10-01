@@ -6,7 +6,7 @@
 #   → PRODUCTION_EXPECTED_* → воркер биллинга в K3s commerce на тот же образ api → smoke.
 #
 # Использование (после ЗЕЛЁНОГО CI этой ревизии — красное не выкатываем):
-#   infra/release/deploy-prod.sh <полный sha> [--no-web | --web-only] [--legal-version 2026-09-25]
+#   infra/release/deploy-prod.sh <полный sha> [--no-web | --web-only] [--legal-version 2026-09-25] [--activity-lease-window N]
 #     --no-web            web не менялся: образ web не собирается и контейнер не трогается
 #     --web-only          менялся только web: собирается и перезапускается один контейнер web;
 #                         api/воркеры/оркестраторы/воркер биллинга не пересоздаются (безопасно во
@@ -16,9 +16,9 @@
 #                         шлюза (yleum-prod-gw) с --no-deps, проверить его health на :8101
 #     --bootstrap-admission первый выпуск: старый API ещё не имеет durable drain;
 #                         ingress + read-only gate → target migration/fence → обычный rollout
-#     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
-#                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
-#                         (compose и api берут её из docker-compose.yml / config.py)
+#     --activity-lease-window N  горизонт activity lease; без флага
+#                            сохраняется новое или прежнее значение, иначе 1500.
+#                            Это не общий срок жизни генерации.
 #
 # Замок: /opt/omnia/.deploy.lock на core — вторая выкатка одновременно не начнётся. Если
 # сценарий умер и замок остался — посмотреть его содержимое (кто, когда, что) и удалить руками.
@@ -30,7 +30,7 @@ SHA="${1:?полный sha ревизии main}"; shift || true
 WEB=1
 API=1
 LEGAL=""
-REPAIR=3600
+ACTIVITY_LEASE_WINDOW=""
 GW=0
 BOOTSTRAP=0
 while [ $# -gt 0 ]; do
@@ -38,7 +38,7 @@ while [ $# -gt 0 ]; do
     --no-web) WEB=0 ;;
     --web-only) API=0 ;;
     --legal-version) LEGAL="${2:?}"; shift ;;
-    --repair-window) REPAIR="${2:?}"; shift ;;
+    --activity-lease-window) ACTIVITY_LEASE_WINDOW="${2:?}"; shift ;;
     --gateway) GW=1 ;;
     --bootstrap-admission) BOOTSTRAP=1 ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
@@ -50,6 +50,12 @@ if [ "$API" = 0 ] && { [ "$GW" = 1 ] || [ "$BOOTSTRAP" = 1 ]; }; then
   exit 2
 fi
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "нужен полный 40-символьный sha, получено: $SHA" >&2; exit 2; }
+if [ -n "$ACTIVITY_LEASE_WINDOW" ]; then
+  [[ "$ACTIVITY_LEASE_WINDOW" =~ ^[0-9]+$ ]] \
+    && [ "$ACTIVITY_LEASE_WINDOW" -ge 60 ] \
+    && [ "$ACTIVITY_LEASE_WINDOW" -le 7200 ] \
+    || { echo "--activity-lease-window должен быть целым числом 60..7200" >&2; exit 2; }
+fi
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG="/tmp/omnia-build-${SHA:0:12}.log"
@@ -84,7 +90,7 @@ database_quiescence() {
   fi
 }
 
-say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
+say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} activity_lease=${ACTIVITY_LEASE_WINDOW:-сохранить/мигрировать}"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
 
@@ -121,10 +127,12 @@ if [ "$API" = 1 ]; then
 fi
 
 say "core: ff-merge + идентичность релиза в compose .env"
-ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
+ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|PROJECT_CELL_ACTIVITY_LEASE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
 
-say "core: окно починки адаптации в .env платформы"
-ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$REPAIR' | /opt/omnia/infra/release/update-env-value.sh .env RESTORATION_ADAPTATION_REPAIR_SECONDS - >/dev/null && grep -n '^RESTORATION_ADAPTATION_REPAIR_SECONDS=' .env"
+if [ "$API" = 1 ]; then
+  say "core: activity lease; старые общие сроки удаляются"
+  ssh max-core "set -e; cd /opt/omnia/apps/llm-gateway/deploy/full; requested='$ACTIVITY_LEASE_WINDOW'; current=\$(sed -n 's/^PROJECT_CELL_ACTIVITY_LEASE_SECONDS=//p' .env | tail -1); legacy=\$(sed -n 's/^MAX_GENERATION_DEADLINE_SECONDS=//p' .env | tail -1); value=\${requested:-\${current:-\${legacy:-1500}}}; case \$value in ''|*[!0-9]*) echo 'invalid activity lease' >&2; exit 2;; esac; [ \$value -ge 60 ] && [ \$value -le 7200 ] || { echo 'activity lease outside 60..7200' >&2; exit 2; }; printf '%s' \"\$value\" | /opt/omnia/infra/release/update-env-value.sh .env PROJECT_CELL_ACTIVITY_LEASE_SECONDS - >/dev/null; for key in MAX_GENERATION_DEADLINE_SECONDS RESTORATION_ADAPTATION_EDIT_SECONDS RESTORATION_ADAPTATION_REPAIR_SECONDS; do /opt/omnia/infra/release/remove-env-value.sh .env \"\$key\" >/dev/null; done; grep -n '^PROJECT_CELL_ACTIVITY_LEASE_SECONDS=' .env"
+fi
 
 if [ -n "$LEGAL" ]; then
   # Единственный источник — .env платформы: compose отдаёт его api, worker'ам и сборке web,
@@ -134,7 +142,7 @@ if [ -n "$LEGAL" ]; then
   ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$LEGAL' | /opt/omnia/infra/release/update-env-value.sh .env LEGAL_DOCUMENT_VERSION - >/dev/null && grep -n '^LEGAL_DOCUMENT_VERSION=' .env"
 fi
 
-say "core: проверка отрендеренного compose (секреты входа только у api, окно починки, теги образов)"
+say "core: проверка отрендеренного compose (секреты входа только у api, activity lease, теги образов)"
 ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml config --format json 2>/dev/null | python3 -c '
 import json, sys
 d = json.load(sys.stdin)[\"services\"]
@@ -142,8 +150,12 @@ api = d[\"api\"][\"environment\"]; gw = d[\"generation-worker\"][\"environment\"
 assert api.get(\"OAUTH_LOGIN_REDIRECT_BASE_URL\") == \"https://yleum.ru\", \"redirect base\"
 assert not gw.get(\"YANDEX_ID_CLIENT_SECRET\") and not wk.get(\"YANDEX_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
 assert not gw.get(\"VK_ID_CLIENT_SECRET\") and not wk.get(\"VK_ID_CLIENT_SECRET\"), \"secret leaked to a worker\"
-assert api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"$REPAIR\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
-assert gw.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\") == \"$REPAIR\", gw.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\")
+activity_lease = api.get(\"PROJECT_CELL_ACTIVITY_LEASE_SECONDS\")
+assert activity_lease == gw.get(\"PROJECT_CELL_ACTIVITY_LEASE_SECONDS\")
+assert activity_lease and activity_lease.isdigit() and 60 <= int(activity_lease) <= 7200
+requested_activity_lease = \"$ACTIVITY_LEASE_WINDOW\"
+if requested_activity_lease:
+    assert activity_lease == requested_activity_lease
 if $API: assert d[\"api\"][\"image\"].endswith(\"$SHA\"), d[\"api\"][\"image\"]
 if $WEB: assert d[\"web\"][\"image\"].endswith(\"$SHA\"), d[\"web\"][\"image\"]
 if $WEB: assert d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\") == \"$SHA\", d[\"web\"][\"environment\"].get(\"OMNIA_RELEASE_SHA\")
@@ -151,7 +163,7 @@ legal = \"$LEGAL\"
 if legal:
     assert api.get(\"LEGAL_DOCUMENT_VERSION\") == legal, api.get(\"LEGAL_DOCUMENT_VERSION\")
     assert (d[\"web\"][\"build\"].get(\"args\") or {}).get(\"NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION\") == legal
-print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECRET\")), \"| repair window\", api.get(\"RESTORATION_ADAPTATION_REPAIR_SECONDS\"), \"| legal\", api.get(\"LEGAL_DOCUMENT_VERSION\"))
+print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECRET\")), \"| activity lease\", activity_lease, \"| legal\", api.get(\"LEGAL_DOCUMENT_VERSION\"))
 '"
 
 TARGETS=""; [ $API = 1 ] && TARGETS="api"; [ $WEB = 1 ] && TARGETS="$TARGETS web"; TARGETS="${TARGETS# }"

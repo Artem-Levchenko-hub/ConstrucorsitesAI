@@ -1,52 +1,36 @@
-"""Окно починки у адаптации должно вмещать настоящую адаптацию.
-
-25.09.2026, живой прогон на проде (проект b5c4c26d): адаптивный откат отработал
-1393 секунды силами агента, затем ровно 900 секунд починки — и был остановлен по
-сроку с «generation deadline exceeded; stage=repair». Всё это время он делал
-осмысленную работу: читал описание схемы, читал новую миграцию, переписывал
-маршруты, ставил проверочную точку для доказательства работы с данными.
-
-Ровно 900 — это и есть прежнее окно починки, то есть упёрлись не в агента, а в
-настройку. Починка у адаптации объёмнее обычной: она сводит целые экраны
-исторической версии с текущей базой и доказывает чтение и запись.
-
-Здесь закреплено, что окно не меньше того, что потребовалось живому прогону, и
-что обычная правка своего срока при этом не получает лишнего.
-"""
+"""Repairs keep data checks but do not inherit a wall-clock lifetime."""
 
 from __future__ import annotations
 
-from yleum_api.core.config import Settings
+import uuid
+from datetime import UTC, datetime, timedelta
 
-# Столько секунд починки потребовалось прогону, прежде чем его остановили.
-_LIVE_REPAIR_NEEDED = 900
-
-
-def _default(name: str) -> int:
-    return int(Settings.model_fields[name].default)
-
-
-def test_the_repair_window_exceeds_what_the_live_run_ran_out_of() -> None:
-    """Прежнего окна не хватило ровно в край — значит его мало по определению."""
-    assert _default("restoration_adaptation_repair_seconds") > _LIVE_REPAIR_NEEDED
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.services.generation_deadline import (
+    generation_deadline,
+    note_repair_stage_started,
+)
 
 
-def test_the_ordinary_edit_window_is_left_alone() -> None:
-    # Растягивать обычную правку заодно нельзя: убежавшая генерация жжёт деньги
-    # дольше, а проблема была не в ней.
-    assert _default("max_generation_deadline_seconds") == 1500
-
-
-def test_repair_is_not_shorter_than_an_ordinary_edit() -> None:
-    """Нижняя граница осмысленности: починка не мельче обычной правки.
-
-    Если однажды окно починки снова окажется меньше обычного срока правки, это
-    вернёт нас ровно в ту ситуацию, где агент не успевает свести код с базой.
-
-    С собственным сроком первого хода адаптации (2700) это окно не сравнивают:
-    они отмеряются от разных точек — правка от начала прогона, починка от начала
-    починки, — и порядок между ними ничего не гарантирует.
-    """
-    assert _default("restoration_adaptation_repair_seconds") >= _default(
-        "max_generation_deadline_seconds"
+def test_a_long_running_adaptation_repair_remains_active() -> None:
+    started = datetime(2026, 9, 25, 6, 51, tzinfo=UTC)
+    run_id = uuid.uuid4()
+    run = GenerationRun(
+        id=run_id,
+        project_id=uuid.uuid4(),
+        user_id=uuid.uuid4(),
+        status="running",
+        created_at=started,
+        started_at=started,
+        agent_state={
+            "restoration_adaptation": {
+                "operation_id": str(uuid.uuid4()),
+                "adaptation_run_id": str(run_id),
+            }
+        },
     )
+    note_repair_stage_started(run, started + timedelta(minutes=20))
+
+    deadline = generation_deadline(run)
+
+    assert (deadline.stage, deadline.at) == ("repair", None)

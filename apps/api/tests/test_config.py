@@ -25,9 +25,8 @@ def isolated_settings_env(
         "USE_PROJECT_CELL_ACTIVITY_WATCHDOG",
         "USE_GENERATION_EVENT_REPLAY",
         "USE_CELL_RESOURCE_PROFILE_V2",
+        "PROJECT_CELL_ACTIVITY_LEASE_SECONDS",
         "MAX_GENERATION_DEADLINE_SECONDS",
-        "RESTORATION_ADAPTATION_EDIT_SECONDS",
-        "RESTORATION_ADAPTATION_REPAIR_SECONDS",
         "RESTORATION_ADAPTATION_ACTIVATION_SECONDS",
         "PROJECT_CELL_HEARTBEAT_SECONDS",
         "PROJECT_CELL_WATCHDOG_GRACE_SECONDS",
@@ -47,13 +46,7 @@ def test_max_finalization_defaults_are_dark_and_deadlines_are_exact(
     assert settings.use_project_cell_activity_watchdog is False
     assert settings.use_generation_event_replay is False
     assert settings.use_cell_resource_profile_v2 is False
-    assert settings.max_generation_deadline_seconds == 1500
-    # 2700: первый ход адаптации не помещался в срок обычной правки — живой
-    # прогон dab6c832 работал до самой отсечки и был остановлен на ходу.
-    assert settings.restoration_adaptation_edit_seconds == 2700
-    # 3600: сначала 900 не хватило, потом и 1800 — два живых прогона подряд
-    # открыли починку и не успели замкнуть даже один круг с пересборкой.
-    assert settings.restoration_adaptation_repair_seconds == 3600
+    assert settings.project_cell_activity_lease_seconds == 1500
     assert settings.restoration_adaptation_activation_seconds == 2400
     assert settings.project_cell_heartbeat_seconds == 15
     assert settings.project_cell_watchdog_grace_seconds == 20
@@ -70,18 +63,37 @@ def test_product_advisor_default_uses_a_current_gateway_model(
     assert get_settings().product_advisor_model == "claude-sonnet-5"
 
 
+def test_legacy_generation_deadline_config_becomes_the_activity_lease(
+    isolated_settings_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_GENERATION_DEADLINE_SECONDS", "1600")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    assert get_settings().project_cell_activity_lease_seconds == 1600
+
+
+def test_new_activity_lease_config_wins_over_the_legacy_name(
+    isolated_settings_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MAX_GENERATION_DEADLINE_SECONDS", "1600")
+    monkeypatch.setenv("PROJECT_CELL_ACTIVITY_LEASE_SECONDS", "1700")
+    get_settings.cache_clear()  # type: ignore[attr-defined]
+
+    assert get_settings().project_cell_activity_lease_seconds == 1700
+
+
 @pytest.mark.parametrize(
     ("field_name", "value"),
     [
-        ("max_generation_deadline_seconds", 0),
-        ("restoration_adaptation_repair_seconds", 0),
+        ("project_cell_activity_lease_seconds", 0),
         ("restoration_adaptation_activation_seconds", 0),
         ("project_cell_heartbeat_seconds", 0),
         ("project_cell_watchdog_grace_seconds", 0),
     ],
     ids=[
-        "deadline",
-        "adaptation-repair",
+        "activity-lease",
         "adaptation-activation",
         "heartbeat",
         "watchdog-grace",

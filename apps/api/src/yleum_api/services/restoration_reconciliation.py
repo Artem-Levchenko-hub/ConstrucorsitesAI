@@ -102,10 +102,12 @@ async def _observe(
             operation_id=str(operation_id),
             error_type=type(exc).__name__,
         )
+    adaptation_run_id: UUID | None = None
     async with factory() as session:
         operation = await session.get(Restoration, operation_id)
         if operation is None:
             return
+        adaptation_run_id = operation.adaptation_run_id
         operation.reconcile_lease_until = None
         if not waits_for_reconciliation(operation):
             # Owner-facing or terminal by now (a client may have moved it while
@@ -116,6 +118,16 @@ async def _observe(
             # failure): keep observing with backoff instead of every tick.
             schedule_reconcile(operation, now=datetime.now(UTC))
         await session.commit()
+    if adaptation_run_id is not None:
+        # The prompt task intentionally exits once the durable controller hand-off
+        # begins. This long-lived reconciler owns the remaining finite ceiling.
+        from yleum_api.services.max_finalization import watch_generation_deadline
+
+        await watch_generation_deadline(
+            session_factory=factory,
+            generation_run_id=adaptation_run_id,
+            now=max(moment, datetime.now(UTC)),
+        )
 
 
 async def reconcile_due_restorations(
