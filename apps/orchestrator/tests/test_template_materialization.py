@@ -22,16 +22,27 @@ GOLDEN = json.loads((Path(__file__).parent / "fixtures/shared_public_git_golden.
 README_OVERRIDES = json.loads(
     (Path(__file__).parent / "fixtures/shared_public_readme_overrides.json").read_text()
 )
+DEPENDENCY_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_dependency_overrides.json").read_text()
+)
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
     "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts",
     "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
 }
+assert set(DEPENDENCY_OVERRIDES) == {
+    "Dockerfile.dev", "package.json", "pnpm-lock.yaml", "tests/dependency-install.test.mjs",
+    "tests/database-compatibility.test.mjs",
+}
 
 
 def assert_golden(name: str, root: Path) -> None:
-    expected = GOLDEN["templates"][name]
+    expected = dict(GOLDEN["templates"][name])
+    if name == "max-miniapp-nextjs":
+        # Keep historical materialization hashes; pin only this dependency fix
+        # and its real install-regression input as deliberate output changes.
+        expected.update(DEPENDENCY_OVERRIDES)
     actual = {
         p.relative_to(root).as_posix(): p
         for p in root.rglob("*")

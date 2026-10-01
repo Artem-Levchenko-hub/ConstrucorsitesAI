@@ -1,0 +1,22 @@
+{
+  "Dockerfile.dev": {
+    "sha256": "d2fe36ad541a0682c0b56b172dc9f625ad513cb20c104e162f5e883a88104ab7",
+    "mode": "100644"
+  },
+  "package.json": {
+    "sha256": "9471dfa4fbe8b46040a5488b305cd05f42e83e2d31b6ebfc381359871fa5be7d",
+    "mode": "100644"
+  },
+  "pnpm-lock.yaml": {
+    "sha256": "e7a2deb624ecbd7f77827591f444cd2e3c41394ba3d29617ce1aaa67279ef5bb",
+    "mode": "100644"
+  },
+  "tests/dependency-install.test.mjs": {
+    "sha256": "233a0f3e9f84a48d86eb2ae9b8799630fbafb369516993064086a2e049b05318",
+    "mode": "100644"
+  },
+  "tests/database-compatibility.test.mjs": {
+    "sha256": "be0b310209fdeb977f1dabe2b42a8b739f93a81473a253f2debc1e8b6398cdaa",
+    "mode": "100644"
+  }
+}

@@ -51,11 +51,20 @@ location /llm/ {
    cd /opt/omnia
    revision=$(git rev-parse HEAD)
    core_base=$(docker image inspect omnia-template-max-miniapp-nextjs:dev --format '{{.Id}}')
-   bash apps/orchestrator/scripts/build-public-max-core.sh "$core_base" "omnia-max-public-core:$revision"
+   core_node_base=sha256:APPROVED_NODE_BASE_IMAGE_ID
+   bash apps/orchestrator/scripts/build-public-max-core.sh "$core_base" "omnia-max-public-core:$revision" "$core_node_base"
    docker image inspect "omnia-max-public-core:$revision" --format '{{.Id}}'
    ```
 
-   Set `CELL_PUBLIC_CORE_IMAGE` in `/opt/omnia/apps/orchestrator/.env` to that
+   Use the approved immutable Node base that was used to build the kit. Its
+   architecture and exact filesystem ancestry must match; the builder rejects
+   a different base or a changed local alias. The compiled runtime uses this
+   Node base and traced production files, excluding the kit's pnpm cache and
+   development dependencies. Verify actual native dependencies, bootstrap and
+   HTTP/auth behavior before publishing.
+
+   Set both `CELL_PUBLIC_CORE_IMAGE` and `CELL_PREVIEW_CORE_IMAGE` in
+   `/opt/omnia/apps/orchestrator/.env` to that
    immutable image ID before restarting `omnia-orchestrator.service`. Preserve
    the old environment/image for rollback. The build reuses the pinned kit's
    dependencies with no package install; its network is disabled. Its runtime

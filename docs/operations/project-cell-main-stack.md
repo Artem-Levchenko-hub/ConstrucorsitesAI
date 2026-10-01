@@ -132,8 +132,17 @@ IDs. Do not claim delivery until that loop is complete.
 
 ### Precompiled owner preview core
 
-Build the trusted image with `scripts/build-public-max-core.sh` from the pinned
-kit. Set both `CELL_PREVIEW_CORE_IMAGE` and `CELL_PUBLIC_CORE_IMAGE` to its immutable
+Build the trusted image with
+`bash scripts/build-public-max-core.sh sha256:KIT_ID omnia-max-public-core:RELEASE sha256:NODE_BASE_ID`.
+Both image IDs must already exist locally. The required Node runtime base must
+match the kit's OS/architecture and exact root filesystem ancestry; a different
+base or changed immutable alias fails before acceptance. Builds disable network
+and pulls. The runtime copies standalone production output, static assets,
+trusted scripts and migrations from the kit build, without its development
+dependencies or downloaded pnpm cache. Verify actual Node/native dependencies,
+database bootstrap and HTTP/auth behavior before publishing; this does not
+establish that the remaining OS or kit/toolchain advisories are resolved.
+Set both `CELL_PREVIEW_CORE_IMAGE` and `CELL_PUBLIC_CORE_IMAGE` to its immutable
 image ID in each host orchestrator environment. The image must advertise
 `omnia.max-core.protocol=1`, `omnia.max-core.preview-protocol=1` and
 `omnia.max-core.db-role-protocol=1`, with server-only `node server.js` startup.
