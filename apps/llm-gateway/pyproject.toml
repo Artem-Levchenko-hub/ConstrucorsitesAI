@@ -2,13 +2,12 @@
 name = "omnia-gateway"
 version = "0.1.0"
 description = "Omnia LLM Gateway — OpenAI-compatible proxy to Anthropic / OpenAI / YandexGPT / OpenRouter"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.136,<0.137",
     "uvicorn[standard]>=0.32",
-    # 1.84.x contains the security fix without the native Rust build
-    # introduced by newer LiteLLM releases.
-    "litellm>=1.84,<1.85",
+    # Security fixes are in the 1.88 branch; keep upgrades within that minor.
+    "litellm>=1.88.6,<1.89",
     "httpx>=0.27",
     "redis>=5.2",
     "asyncpg>=0.30",
