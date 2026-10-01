@@ -1,0 +1,16 @@
+{
+  "revision": "49b071162a5017374b96a193c23b9d48e4cf0995",
+  "fixture": {
+    "fixture_label": "C",
+    "owner_role": "user",
+    "owner_id_sha256": "f2ef40a428c9e57e4c215d8d6c0a55871d952ca201e6c3edb1be9f50dadbd066",
+    "project_id_sha256": "9f9147a8ba0b192858dee0aae6650b8b491f504949603883150ebb552d67cda1",
+    "run_id_sha256": "e44f8ac5d1a5cf31a6ef3164fecc3e4fe18e5027ccaa4aff7c989774c04af915",
+    "workspace_id_sha256": "43a24989fdbb7fa1d6845eb6d732894de5a0c366630226b57f9372445fe5e24d"
+  },
+  "read_ack": {
+    "purpose": "OWN_C_READONLY_TERMINAL_DIAGNOSTIC",
+    "scope_sha256": "a27449ce79abdc6ede9e7ed9ce7764b6e5b88b6dbfc6c1655a02e3a8e680717d",
+    "issued_at_utc": "2026-10-01T23:30:31.682641+00:00"
+  }
+}
