@@ -1505,6 +1505,19 @@ async def _run_native_segment(
                         files=written, steps=step + 1, transcript=convo,
                         stop_reason="error", evidence=_evidence(),
                     )
+                if edit_source_changed is not None:
+                    # A completed paid response still spent an unchanged edit
+                    # turn when its incomplete tool batch could not execute.
+                    _record_turn_progress(False)
+                    if not edit_source_changed():
+                        if no_write_turns >= _EDIT_NO_PROGRESS_TURNS:
+                            return await _finish_without_provider(
+                                steps=step + 1, reason="exploring", detail=_EDIT_SOURCE_NUDGE,
+                            )
+                        if no_write_turns >= _EDIT_DISCOVERY_TURNS:
+                            convo[-1]["content"].append({
+                                "type": "text", "text": _EDIT_SOURCE_NUDGE,
+                            })
                 continue
             # Echo the assistant turn VERBATIM — thinking blocks (with signatures)
             # MUST be preserved for the next turn or Anthropic rejects the round-trip.

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Mapping
+from pathlib import PurePosixPath
 from typing import NamedTuple
 
 from yleum_api.services import repo as repo_svc
@@ -51,17 +52,39 @@ def explicitly_readonly_request(prompt: str) -> bool:
     ) is not None
 
 
+def _is_edit_source_path(path: str) -> bool:
+    """Auxiliary notes and generated metadata cannot prove a requested source edit.
+
+    Keep source, assets, config and arbitrary existing-file deletions eligible;
+    a restrictive extension allowlist would lose valid shell/backend edits.
+    """
+    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+
+    normalized = PurePosixPath(path.replace("\\", "/")).as_posix()
+    source_path = PurePosixPath(normalized)
+    documentation = source_path.suffix.lower() in {".md", ".rst"} and (
+        len(source_path.parts) == 1
+        or normalized.startswith(("docs/", "documentation/"))
+        or source_path.stem.lower() in {"note", "notes"}
+    )
+    return (
+        normalized not in MAX_SECURITY_LOCKED_FILES
+        and not documentation
+        and not normalized.lower().endswith(".tsbuildinfo")
+        and source_path.name != "next-env.d.ts"
+        and (not normalized.startswith(".omnia/") or normalized == ".omnia/cell.json")
+    )
+
+
 def unchanged_candidate_before_finalization(
     *, baseline_files: Mapping[str, str], workspace_files: Mapping[str, str],
     requires_source_change: bool, message: str,
 ) -> EditSourceChangeVerdict | None:
-    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
-
     product_before = {
-        p: value for p, value in baseline_files.items() if p not in MAX_SECURITY_LOCKED_FILES
+        p: value for p, value in baseline_files.items() if _is_edit_source_path(p)
     }
     product_after = {
-        p: value for p, value in workspace_files.items() if p not in MAX_SECURITY_LOCKED_FILES
+        p: value for p, value in workspace_files.items() if _is_edit_source_path(p)
     }
     if product_after != product_before:
         return None
@@ -88,12 +111,14 @@ def validate_edit_source_change(
     files = dict(candidate_files)
     if not requires_source_change or not files:
         return EditSourceChangeVerdict(files, message, None)
+    product_before = {p: value for p, value in baseline_files.items() if _is_edit_source_path(p)}
+    product_after = {p: value for p, value in files.items() if _is_edit_source_path(p)}
     if exact_tree:
-        changed = files != dict(baseline_files)
+        changed = product_after != product_before
     else:
         changed = any(
-            (path in baseline_files if content == "" else baseline_files.get(path) != content)
-            for path, content in files.items()
+            (path in product_before if content == "" else product_before.get(path) != content)
+            for path, content in product_after.items()
         )
     if changed:
         return EditSourceChangeVerdict(files, message, None)
