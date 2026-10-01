@@ -13,6 +13,7 @@ import re
 
 from yleum_orchestrator.core.config import Settings, get_settings
 
+_YLEUM_STUDIO_ORIGINS = ("https://yleum.ru", "https://www.yleum.ru")
 _ORIGIN_RE = re.compile(r"^https://[a-z0-9.-]{1,253}(:\d{1,5})?$")
 
 
@@ -52,7 +53,13 @@ def studio_origins() -> list[str]:
     """Проверенные https-адреса кабинета: основной, затем запасные."""
     primary, legacy = _configured()
     origins: list[str] = []
-    for value in [primary, *re.split(r"[\s,]+", legacy or "")]:
+    normalized_primary = primary.strip().rstrip("/").lower().removesuffix(":443")
+    # Both production Studio origins serve the same owner workspace. Add only
+    # this explicit pair, even when legacy origins were configured separately;
+    # Explicit HTTPS port 443 is the same origin; custom hosts and nondefault
+    # ports never gain an inferred alias.
+    aliases = _YLEUM_STUDIO_ORIGINS if normalized_primary in _YLEUM_STUDIO_ORIGINS else ()
+    for value in [primary, *aliases, *re.split(r"[\s,]+", legacy or "")]:
         origin = (value or "").strip().rstrip("/").lower()
         if _ORIGIN_RE.match(origin) and origin not in origins:
             origins.append(origin)

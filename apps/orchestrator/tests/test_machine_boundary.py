@@ -367,7 +367,8 @@ def test_owner_framing_follows_the_cabinet_address_and_keeps_the_spare_one(monke
 
     policy = owner_framing(origins)
     assert policy == (
-        "frame-ancestors 'self' https://yleum.ru https://constructor.lead-generator.ru"
+        "frame-ancestors 'self' https://yleum.ru https://www.yleum.ru "
+        "https://constructor.lead-generator.ru"
     )
 
     # Шлюз, созданный до этой правки, не знает ключа и остаётся на запасном

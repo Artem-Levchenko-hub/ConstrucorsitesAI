@@ -153,8 +153,19 @@ async def verify():
                 raise RuntimeError("settlement table missing")
             # Feature gate accepts later migration heads without assuming head is forever 0074.
             await connection.fetch("SELECT id,user_id,billing_account_id,provider_scope,provider_request_id,receipt_hash,usage_id,wallet_charge_id,status FROM usage_settlements LIMIT 0")
-            constraints = await connection.fetchval("SELECT count(*) FROM pg_constraint WHERE conrelid='public.usage_settlements'::regclass AND conname IN ('uq_usage_settlements_provider_receipt','ck_usage_settlements_status','ck_usage_settlements_charge')")
-            if constraints != 3:
+            # Alembic's check naming convention expands explicitly named checks.
+            # Require the actual validated definitions, independent of their names.
+            constraints = await connection.fetch("SELECT c.contype::text AS kind,c.convalidated AS validated,pg_get_constraintdef(c.oid) AS definition,ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum ORDER BY k.n) AS columns FROM pg_constraint c WHERE c.conrelid='public.usage_settlements'::regclass AND c.contype IN ('u','c')")
+            receipt_unique = any(row['kind'] == 'u' and row['validated']
+                and sorted(row['columns']) == ['provider_request_id','provider_scope','user_id']
+                for row in constraints)
+            checks = {row['definition'] for row in constraints
+                      if row['kind'] == 'c' and row['validated']}
+            expected_checks = {
+                "CHECK ((status = ANY (ARRAY['settled'::text, 'free'::text, 'unpaid'::text])))",
+                "CHECK (((status = 'settled'::text) = (wallet_charge_id IS NOT NULL)))",
+            }
+            if not receipt_unique or not expected_checks.issubset(checks):
                 raise RuntimeError("settlement constraints missing")
     except Exception:
         raise SystemExit("gateway settlement schema unavailable; admission remains fenced") from None

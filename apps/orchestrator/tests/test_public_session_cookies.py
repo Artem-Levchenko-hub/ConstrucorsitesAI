@@ -382,7 +382,7 @@ def test_browser_login_handles_cold_response_with_a_bounded_portable_timeout(
             page = context.new_page()
             page.clock.install()
             page.goto(ORIGIN + "/")
-            page.clock.fast_forward(19001 if should_succeed else 61000)
+            page.clock.fast_forward(delay_ms + 1 if should_succeed else 61000)
             if should_succeed:
                 page.get_by_role("heading", name="Protected application").wait_for(timeout=5000)
                 assert session.product_requests[-1][1]["X-Omnia-User-ID"] == "123"
