@@ -121,7 +121,7 @@ _EDIT_DISCOVERY_TURNS = 4
 _EDIT_NO_PROGRESS_TURNS = 6
 _EDIT_SOURCE_NUDGE = (
     "EDIT SOURCE CHANGE REQUIRED: the requested edit has not changed the source tree. "
-    "Apply the requested code change now using write_file/edit_file or a surgical shell edit. "
+    "Apply the requested code change now using write_file or edit_file. "
     "Preserve the existing entry page, working features and unrelated files; do not rebuild "
     "the app from scratch. Stop repeated reading/checking. Then build and call done."
 )
@@ -1400,7 +1400,7 @@ async def _run_native_segment(
                         auth_factory=messages_auth_factory,
                         tools=(
                             _SOURCE_REPAIR_TOOLS_CACHED
-                            if repair_write_required
+                            if repair_write_required or edit_write_required
                             else _MAX_ENTRY_WRITE_TOOLS
                             if force_max_entry_write
                             else _MAX_COORDINATOR_BASH_TOOLS_CACHED
@@ -1416,7 +1416,7 @@ async def _run_native_segment(
                             else None
                         ),
                         tool_choice=(
-                            {"type": "any"} if repair_write_required
+                            {"type": "any"} if repair_write_required or edit_write_required
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
@@ -1636,7 +1636,7 @@ async def _run_native_segment(
                     obs = {"ok": False, "error": f"unknown action {name}"}
                 elif edit_source_changed is not None and not edit_source_changed() and (
                     name in {"build", "runtime_check", "probe", "verify_isolation"}
-                    or (edit_write_required and name not in {"write_file", "edit_file", "bash"})
+                    or (edit_write_required and name not in {"write_file", "edit_file"})
                 ):
                     obs = {"ok": False, "error": _EDIT_SOURCE_NUDGE}
                 elif repair_write_required and not _repair_source_changed() and not (

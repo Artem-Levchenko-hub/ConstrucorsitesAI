@@ -277,3 +277,29 @@ production rollout → exact revision/health and actual user-path evidence.
 Refactor only when these concrete gates are closed or the refactor directly
 removes a reproduced blocker. Do not replace failed live proof with build-only
 claims or manually patch the generated app to conceal a generator failure.
+
+### Delivery and falsifying canary — 04:59 UTC
+
+- Revision `0e88eeb8ba17b5c3c4745a90880b2c2786c9eb53` delivered through the
+  canonical production path (exit 0), including the pending `1f0530a3` parent.
+  Full CI `36816258424` and production smoke `36817417855` passed. API, both
+  controllers and billing worker report the new revision; gateway health is 200
+  with zero startup database-unavailable events. Web was intentionally retained.
+  Preservation verification: Core 173/173, Commerce 181/181 unchanged; durable
+  admission drain reopened with no active generation interrupted.
+- One ordinary retry recovered the exact original edit request server-side.
+  The contextual guard activated correctly. The model still only read source:
+  grep, read file, two shell reads, rejected grep, another shell read. Six paid
+  calls cost 14.3157 RUB (estimate); the unchanged attempt stopped after 82.633 s,
+  before build or publication. This proves bounded failure, **not successful edit**.
+- Next correction: after the discovery allowance, advertise only the minimal
+  source-write tools and require a tool call, matching the existing source-repair
+  mechanism. Reject unexpected read/shell actions while the write gate is closed;
+  retain shell edits before that gate and normal tools after a real source delta.
+  Test the actual provider tool schema, not only mocked execution results, and
+  repeat one paid canary only after focused tests, review, CI and delivery.
+- Public K3s backup coverage was checked separately: both Coffee logical DB dumps
+  pass gzip validation and match their peer copies by hash. A scratch logical
+  restore is still required; existing Docker-cell restore tests do not cover
+  published K3s databases or code PVCs. A logical restore alone must not be called
+  full published-application recovery.

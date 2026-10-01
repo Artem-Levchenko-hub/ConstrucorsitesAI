@@ -1443,7 +1443,9 @@ async def test_edit_turn_rejects_unchanged_done_and_applies_requested_change(mon
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("behavior", ["edit", "bash", "endless_reads", "prose", "unchanged_write"])
+@pytest.mark.parametrize("behavior", [
+    "edit", "bash", "endless_reads", "prose", "unchanged_write", "unexpected_bash",
+])
 @pytest.mark.parametrize("coordinated", [False, True])
 async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
     monkeypatch, behavior, coordinated,
@@ -1472,11 +1474,16 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
     calls = 0
     actions = []
     feedback = False
+    tool_schemas = []
 
     async def call(client, url, convo, system, **kwargs):
         nonlocal calls, feedback
         calls += 1
         feedback = feedback or "EDIT SOURCE CHANGE REQUIRED" in str(convo)
+        names = {tool["name"] for tool in kwargs.get("tools") or agent_native._TOOLS}
+        tool_schemas.append((names, kwargs.get("tool_choice"), kwargs.get("tools")))
+        if behavior == "bash" and workspace == initial:
+            return _turn(("bash", {"cmd": "apply minimal history removal"}))
         if behavior == "prose":
             return {"content": [{"type": "text", "text": "Still investigating"}],
                     "stop_reason": "end_turn"}
@@ -1484,21 +1491,30 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
             return _turn(("write_file", {
                 "path": "src/app/page.tsx", "content": initial["src/app/page.tsx"],
             }))
-        if behavior == "endless_reads" or not feedback:
+        if behavior == "unexpected_bash" and feedback:
+            return _turn(("bash", {"cmd": "grep History src/app/page.tsx"}))
+        if behavior == "endless_reads" or (not feedback and workspace == initial):
             return _turn(("read_file", {"path": "src/app/page.tsx"}))
         if workspace == initial:
-            if behavior == "bash":
-                return _turn(("bash", {"cmd": "apply minimal history removal"}))
+            # Simulate the observed provider selecting another advertised read.
+            # It switches to a minimal write only when reads are no longer offered.
+            if "read_file" in names:
+                return _turn(("read_file", {"path": "src/app/page.tsx"}))
             return _turn(
                 ("write_file", {"path": "src/app/page.tsx", "content": "Catalog; My leads"})
             )
+        if behavior == "edit" and "bash" not in actions:
+            return _turn(("bash", {"cmd": "inspect the applied edit"}))
         if not actions or actions[-1] != "build":
             return _turn(("build", {}))
         return _turn(("done", {"summary": "history removed"}))
 
     async def execute(action):
         actions.append(action.name)
-        if action.name in {"write_file", "bash"} and behavior != "unchanged_write":
+        if (
+            (action.name == "write_file" and behavior != "unchanged_write")
+            or (action.name == "bash" and behavior == "bash")
+        ):
             workspace["src/app/page.tsx"] = "Catalog; My leads"
         return {"ok": True, "content": workspace.get(action.path, ""), "detail": "clean"}
 
@@ -1531,19 +1547,33 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
             operations=SimpleNamespace(execute=execute, emit=None),
         )
 
-    if behavior in {"endless_reads", "prose", "unchanged_write"}:
+    if behavior in {"endless_reads", "prose", "unchanged_write", "unexpected_bash"}:
         with pytest.raises(RuntimeError, match="edit produced no source changes"):
             await run()
         assert calls <= 6
         assert "build" not in actions
         assert workspace == initial
+        if behavior == "unexpected_bash":
+            assert "bash" not in actions
     else:
         result, failure = await run()
         assert failure is None and result.done
-        assert calls <= 7
+        assert calls <= 8
         assert workspace["src/app/page.tsx"] == "Catalog; My leads"
         assert workspace["src/lib/auth.ts"] == "auth"
-    assert feedback
+    if behavior != "bash":
+        assert feedback
+        names, choice, schema = tool_schemas[4]
+        assert names == {"write_file", "edit_file"}
+        assert choice == {"type": "any"}
+        assert all("enum" not in tool["input_schema"]["properties"]["path"] for tool in schema)
+    else:
+        assert actions[0] == "bash"
+    if behavior in {"edit", "bash"}:
+        assert "build" in tool_schemas[-1][0]
+        assert "bash" in tool_schemas[-1][0]
+        assert tool_schemas[-1][1] is None
+        assert "bash" in actions
 
 
 @pytest.mark.asyncio
