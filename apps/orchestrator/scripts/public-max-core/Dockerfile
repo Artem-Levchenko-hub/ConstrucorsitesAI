@@ -25,6 +25,23 @@ FROM ${RUNTIME_BASE_IMAGE} AS runtime
 WORKDIR /app
 # Normal controller overlays atomically rename owner configuration as node.
 RUN chown node:node /app
+# Compiled runtime uses Node directly; keep package-manager tooling in the kit.
+# Validate each exact target before deleting it, preserving Node and Yarn.
+RUN node <<'NODE'
+const fs = require("node:fs");
+const roots = ["/usr/local/lib/node_modules/npm", "/usr/local/lib/node_modules/corepack"];
+const commands = ["/usr/local/bin/npm", "/usr/local/bin/npx", "/usr/local/bin/corepack"];
+for (const root of roots) {
+  if (!fs.lstatSync(root).isDirectory()) throw new Error("Unexpected package-manager directory");
+}
+for (const command of commands) {
+  if (!fs.lstatSync(command).isSymbolicLink()) throw new Error("Unexpected package-manager command");
+  const target = fs.realpathSync(command);
+  if (!roots.some(root => target.startsWith(root + "/"))) throw new Error("Unexpected package-manager target");
+}
+for (const command of commands) fs.unlinkSync(command);
+for (const root of roots) fs.rmSync(root, { recursive: true });
+NODE
 LABEL omnia.max-core.protocol="1"
 LABEL omnia.max-core.preview-protocol="1"
 LABEL omnia.max-core.db-role-protocol="1"
