@@ -1,0 +1,183 @@
+{
+  "candidate": "5001bc71acd211f73d33af49a0b404277a7aa2de",
+  "image_id": "sha256:cef537458d384b32a717fb3bea6361d76f29f4db73d8728c2b32e96e6740cfca",
+  "archive_sha256": "8e5b676d06783bee25da8bbeabe4f5d2bb135d943601bcc3aa7df7af4bbda4ff",
+  "archive_bytes": 115580327,
+  "chunk_size": 4194304,
+  "chunks": [
+    {
+      "index": 0,
+      "bytes": 4194304,
+      "sha256": "1d01a81a11e16d8101ac4909733f1df1ac1e04c34525718656618ad88a1b6c71",
+      "git_blob": "4bf715a90bc0d94701ac47f0fe62a5df2e30df64"
+    },
+    {
+      "index": 1,
+      "bytes": 4194304,
+      "sha256": "84390390485d92ef1667fbc1283334573e13f8102aee163195591c9f63117ac7",
+      "git_blob": "9b99e0a168bcaa616e7e86d77c35c9646cda28ee"
+    },
+    {
+      "index": 2,
+      "bytes": 4194304,
+      "sha256": "94bc03953b6bf357e55d447135d60f8576af8f817a38af7910e99dd1ddb49063",
+      "git_blob": "d8972a9d5409ad8ae7f806d1b67003f2c2171072"
+    },
+    {
+      "index": 3,
+      "bytes": 4194304,
+      "sha256": "7f56189fc7e0c7bb8a285e9967afbe0c993b5cfec22a4b268c6c51aaedf9b554",
+      "git_blob": "6f7b7428dbbc01c54bc6a360ee01d4da082abb27"
+    },
+    {
+      "index": 4,
+      "bytes": 4194304,
+      "sha256": "00a6c0b2a4903e0f6fcb9c690db4c9812732744980a6af0437124b329decfe73",
+      "git_blob": "71e8d4352bbebb65a3ee883fd03fa263e0b60bbe"
+    },
+    {
+      "index": 5,
+      "bytes": 4194304,
+      "sha256": "243e8eab1b1d8998cc4926672c91284cfd4483a0e496fc66d10a5074eb5a0ce4",
+      "git_blob": "68dfb081782eeda5c48570c7d33230fda79f81c8"
+    },
+    {
+      "index": 6,
+      "bytes": 4194304,
+      "sha256": "05ba81b3ab5dfd808eb7f0bfc0b8eadd2fd9d49a19ab225385fbe8f7925b22fa",
+      "git_blob": "70e471bbc36a3e71d039480ee6b1a1ce39d1af61"
+    },
+    {
+      "index": 7,
+      "bytes": 4194304,
+      "sha256": "285eb9381bd000eb23774a5639c2015c3f38ad270c5227832600b7454d572f8d",
+      "git_blob": "a73872f84e4cda3851a4e7a4c57f15b79450ee12"
+    },
+    {
+      "index": 8,
+      "bytes": 4194304,
+      "sha256": "c33b1e1ce0e2937365ba56e4a69ab5971c447f0437908ccaf37b696334eb2eeb",
+      "git_blob": "112191ca8551931789895890b9ba3505174ac63a"
+    },
+    {
+      "index": 9,
+      "bytes": 4194304,
+      "sha256": "5bbac90450bf5a9f7ec5fb04f4432bb40e3e15eae4faa259502f46d91355b243",
+      "git_blob": "c5bdf52e25925b06c547c3f31cd2a93964df45f9"
+    },
+    {
+      "index": 10,
+      "bytes": 4194304,
+      "sha256": "9c3d1e9d36ef82acd680377141605b72496ede06e1109bb971c9e55dcafc39c1",
+      "git_blob": "9b9ab4682adf8ae505c0cc69321ab2ab17b66d4a"
+    },
+    {
+      "index": 11,
+      "bytes": 4194304,
+      "sha256": "05561c889bd15d1a2ad05138ab000179f55005d472b7e4db6d1aeca9b7759cd9",
+      "git_blob": "c802343a82b3441f5cfeaf8f8c25ed4b688caed6"
+    },
+    {
+      "index": 12,
+      "bytes": 4194304,
+      "sha256": "524d6c486490a3f7636a99bbc69451982f17470c2c92f38d3abc390dbce53413",
+      "git_blob": "40acc323ed3ae74d0ca577dbb8861801aec0d14d"
+    },
+    {
+      "index": 13,
+      "bytes": 4194304,
+      "sha256": "a908553caaaaa7019de14e6ca44b70559d300315b770c362cc8fcb42d03fe949",
+      "git_blob": "1c3d2cce9434291caba824d810492c6022bb2c82"
+    },
+    {
+      "index": 14,
+      "bytes": 4194304,
+      "sha256": "00ca8840be7377166e7c002c4a4574868c52add8d45ddf495874747686da11f2",
+      "git_blob": "4e44fed292ec0c33f4a3d5c630e796c9d292693b"
+    },
+    {
+      "index": 15,
+      "bytes": 4194304,
+      "sha256": "855fa2d354047dea601230d328ba4627f334beab35961dfb3215d4bec9fbf600",
+      "git_blob": "839d91dd8ae5f4a68c92879fa26b78330183558f"
+    },
+    {
+      "index": 16,
+      "bytes": 4194304,
+      "sha256": "8416cb29d51e555e46344c65313b5991ccd869ed9cf20340b22dcfd8b1d9689d",
+      "git_blob": "8a4cf9b1e4ec4c70513f5461a72d2e9d953f8015"
+    },
+    {
+      "index": 17,
+      "bytes": 4194304,
+      "sha256": "7f4cd8357fe109dc41aca3b1192891f77a087c2fb6d9c25d3476c5d4e9972095",
+      "git_blob": "d3f09032bc987f8154510275fff679583114d672"
+    },
+    {
+      "index": 18,
+      "bytes": 4194304,
+      "sha256": "b515f1e61a4b6c3a86608089372ae4402c45cba877f59821566958f616db3d84",
+      "git_blob": "66ff904e13b6321c3656aa5a0e5d940f895a876f"
+    },
+    {
+      "index": 19,
+      "bytes": 4194304,
+      "sha256": "4a31af7c4467e365df3c73110adba8fb22314e2fb5dae9591bbf482c75a1cd08",
+      "git_blob": "a8d2bf64b4f7132202043dbca3cd7e5290bc1026"
+    },
+    {
+      "index": 20,
+      "bytes": 4194304,
+      "sha256": "1c44f1290d41289c8ebf2c75e2c04963bdd51b9bde679ab9725e89949014261a",
+      "git_blob": "d5bca66078bec3e852b212c5c0255f1c2905c59f"
+    },
+    {
+      "index": 21,
+      "bytes": 4194304,
+      "sha256": "7110b601ecf21c456a7c6c77f809f45b829b8f49079dd147499c72ffc957fc08",
+      "git_blob": "562a45a130dcb202d756ef42be8a59bf79ab65fd"
+    },
+    {
+      "index": 22,
+      "bytes": 4194304,
+      "sha256": "b33a0e60fa76e01dff5a564a5200afb21abc4793f30c0759058247bb42ae0d76",
+      "git_blob": "17c0337887ee72d1f08c474ba91a41414deda2b1"
+    },
+    {
+      "index": 23,
+      "bytes": 4194304,
+      "sha256": "c395045b4841650947825dc321d91c27579e982d1852ec25c2d1e41a0dd203e4",
+      "git_blob": "34da29158aac3efd574f2b8f02c35e11aec781bd"
+    },
+    {
+      "index": 24,
+      "bytes": 4194304,
+      "sha256": "49763c766d9da50efa41198cba7190059cc6234adec0012e9f0a677378871b97",
+      "git_blob": "29897df19777770f202c8a0906fffc04643c15b8"
+    },
+    {
+      "index": 25,
+      "bytes": 4194304,
+      "sha256": "2229ac671bf86b4068ff154082b47bd6ef55974c92bafdbdd0e7afe38b534427",
+      "git_blob": "2d73d1f25490b0ec5f8b2a1252f65471a5b32d6e"
+    },
+    {
+      "index": 26,
+      "bytes": 4194304,
+      "sha256": "629e3771b168835aa2f4245771a0592ef116516dbbb3bd4f074c03532cdd3253",
+      "git_blob": "4a432794e4f229c5a5c958c803063bd6d0d0f6bf"
+    },
+    {
+      "index": 27,
+      "bytes": 2334119,
+      "sha256": "64473cc7094fea9289ef71b50788292bbd03a80299c79aa19a18a7d1a029867a",
+      "git_blob": "b225d2c4ce212bf16783de43258f0ae302e6f9cd"
+    }
+  ],
+  "complete": true,
+  "protocols": {
+    "omnia.max-core.protocol": "1",
+    "omnia.max-core.preview-protocol": "1",
+    "omnia.max-core.db-role-protocol": "1"
+  }
+}
