@@ -25,6 +25,13 @@ RUN --network=none DATABASE_URL=postgresql://build@127.0.0.1/build_only node nod
 # ancestor; development node_modules and downloaded pnpm caches stay in build.
 FROM ${RUNTIME_BASE_IMAGE} AS runtime
 WORKDIR /app
+# Official MAX trust is added at Node startup; default roots and verification stay enabled.
+ARG MAX_ROOT_CA_BASE64
+RUN mkdir -p /usr/local/share/yleum \
+    && printf '%s' "$MAX_ROOT_CA_BASE64" | base64 --decode > /usr/local/share/yleum/max-root-ca.pem \
+    && echo 'aa800ef345422d6158c6fafe1c06c429dbda21c3df4bb1ccb45a920ec1111399  /usr/local/share/yleum/max-root-ca.pem' | sha256sum --check --status \
+    && chmod 0444 /usr/local/share/yleum/max-root-ca.pem
+ENV NODE_EXTRA_CA_CERTS=/usr/local/share/yleum/max-root-ca.pem
 # Normal controller overlays atomically rename owner configuration as node.
 RUN chown node:node /app
 # Compiled runtime uses Node directly; keep package-manager tooling in the kit.
