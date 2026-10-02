@@ -1,0 +1,22 @@
+{
+  "src/app/api/omnia/actions/route.ts": {
+    "sha256": "7a367d6f19e6bc53e1c6ca28b30c9c335f894f36a7d716af5479196103e83dda",
+    "mode": "100644"
+  },
+  "src/app/api/omnia/actions/[id]/route.ts": {
+    "sha256": "3e390cc79d8eab49468eef19bc0702b403a5907f9da83afae807e6674a132da1",
+    "mode": "100644"
+  },
+  "src/lib/omnia/integration-client.ts": {
+    "sha256": "b4eda845fe2b8d62e403a9e1f3f041940a5b2987a12c4a303b72eb3f206ba885",
+    "mode": "100644"
+  },
+  "tests/starter.test.mjs": {
+    "sha256": "eb2a65147905244ae36eb4a51c4540f38c918c04d9c832e403c886855e68bdd6",
+    "mode": "100644"
+  },
+  "src/lib/omnia/client.ts": {
+    "sha256": "b693c0330619fea290dce6dfb82e7e6b0bc36f8ed63460903ecb483f07d1697a",
+    "mode": "100644"
+  }
+}

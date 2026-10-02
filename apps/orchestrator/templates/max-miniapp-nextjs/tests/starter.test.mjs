@@ -29,7 +29,9 @@ test("activation action cleanup removes only a user created by that fixture", as
 
   assert.match(createRoute, /probeUserCreated: createdUsers\.length === 1/);
   assert.match(deleteRoute, /audit\?\.details\?\.probeUserCreated === true/);
-  assert.match(deleteRoute, /action\.actionType\.startsWith\("omnia_health_"\)/);
+  assert.match(createRoute, /healthProbe: input\.actionType\.startsWith\("omnia_health_"\)/);
+  assert.match(deleteRoute, /audit\?\.details\?\.healthProbe === true/);
+  assert.doesNotMatch(deleteRoute, /action\.actionType\.startsWith\("omnia_health_"\)/);
   assert.match(deleteRoute, /NOT EXISTS \(/);
   assert.ok(
     deleteRoute.indexOf("delete(schema.maxAuditLog)") <

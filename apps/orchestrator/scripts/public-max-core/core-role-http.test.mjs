@@ -261,12 +261,14 @@ async function main() {
       ['/api/omnia/events','POST',{}],
     ]) denial(await request(path, { method, body }), 401, []);
     const saved = [];
+    const operationKeys = [];
     for (let i = 0; i < 2; i++) {
       stage = 'owner_crud_and_spoof';
       const actor = actors[i], other = actors[1-i], cookie = cookies[i];
       const marker = `qa-marker-${i}`;
+      const operationKey = randomUUID(); operationKeys.push(operationKey);
       const created = await request('/api/omnia/actions', { method: 'POST', cookie,
-        body: { actionType: 'qa_core_role', payload: { marker }, maxUserId: other, max_user_id: other, userId: other, user_id: other } });
+        body: { actionType: 'qa_core_role', operationKey, payload: { marker }, maxUserId: other, max_user_id: other, userId: other, user_id: other } });
       assert.equal(created.status, 201);
       const action = ownedAction(created.data.action, actor, marker); saved.push(action);
       assert.equal((await actorSql(actor, 'SELECT count(*)::int n FROM max_audit_log WHERE details->>\'actionId\'=$1', [action.id])).rows[0].n, 1);
@@ -286,7 +288,7 @@ async function main() {
       denial(await request(`/api/omnia/actions/${action.id}`), 401, [action.id, marker]);
       assert.equal(JSON.stringify((await request(`/api/omnia/actions/${action.id}`, { cookie })).data.action), before);
       const patched = await request(`/api/omnia/actions/${action.id}`, { method: 'PATCH', cookie,
-        body: { status: 'done', payload: { marker } } });
+        body: { status: 'done', payload: { marker } }, headers: { 'If-Match': own.headers.get('ETag') } });
       assert.equal(patched.status, 200); assert.equal(patched.data.action.status, 'done');
       ownedAction(patched.data.action, actor, marker);
     }
@@ -325,20 +327,72 @@ async function main() {
     await stop(); await start();
     assert.deepEqual(await Promise.all(cookies.map(cookie => list(cookie))), beforeRestart);
     cases.push('real_server_restart_persistence');
+    stage = 'action_write_concurrency';
+    const beforeActorSwitch = (await list(cookies[1])).length;
+    const switchedActor = await request('/api/omnia/actions', { method: 'POST', cookie: cookies[1],
+      headers: { 'X-Omnia-Actor': actors[0] }, body: { actionType: 'qa_actor_switch', operationKey: randomUUID(), payload: {} } });
+    assert.equal(switchedActor.status, 409);assert.equal((await list(cookies[1])).length, beforeActorSwitch);
+    cases.push('captured_actor_switch_precondition_denies_before_insert');
+    const operationKey = randomUUID(), concurrentBody = {
+      actionType: 'qa_write_race', operationKey, payload: { marker: 'synthetic-write-race' },
+    };
+    const replays = await Promise.all(Array.from({ length: 6 }, () => request('/api/omnia/actions', {
+      method: 'POST', cookie: cookies[0], body: concurrentBody,
+    })));
+    assert.ok(replays.every(response => response.status === 201));
+    const raceId = replays[0].data.action.id;
+    assert.ok(replays.every(response => response.data.action.id === raceId));
+    assert.equal((await actorSql(actors[0], "SELECT count(*)::int n FROM max_audit_log WHERE details->>'operationKey'=$1", [operationKey])).rows[0].n, 1);
+    assert.equal((await request('/api/omnia/actions', { method: 'POST', cookie: cookies[0],
+      body: { ...concurrentBody, payload: { marker: 'changed-input' } } })).status, 409);
+    const fresh = await Promise.all([randomUUID(), randomUUID()].map(key => request('/api/omnia/actions', {
+      method: 'POST', cookie: cookies[0], body: { ...concurrentBody, operationKey: key },
+    })));
+    assert.ok(fresh.every(response => response.status === 201));
+    assert.notEqual(fresh[0].data.action.id, fresh[1].data.action.id);
+    const baseline = await request(`/api/omnia/actions/${raceId}`, { cookie: cookies[0] });
+    const etag = baseline.headers.get('ETag');
+    assert.ok(/^"[0-9a-f]{64}"$/.test(etag));
+    const edits = await Promise.all(['editorA', 'editorB'].map(editor => request(`/api/omnia/actions/${raceId}`, {
+      method: 'PATCH', cookie: cookies[0], body: { payload: { [editor]: true } }, headers: { 'If-Match': etag },
+    })));
+    assert.deepEqual(edits.map(response => response.status).sort(), [200, 412]);
+    const revised = await request(`/api/omnia/actions/${raceId}`, { cookie: cookies[0] });
+    assert.equal(Object.keys(revised.data.action.payload).length, 1);
+    assert.notEqual(revised.headers.get('ETag'), etag);
+    assert.equal((await request(`/api/omnia/actions/${raceId}`, { method: 'PATCH', cookie: cookies[0], body: { status: 'done' } })).status, 428);
+    assert.equal((await request(`/api/omnia/actions/${raceId}`, { method: 'PATCH', cookie: cookies[0], body: { status: 'done' }, headers: { 'If-Match': '*' } })).status, 400);
+    const latest = await request(`/api/omnia/actions/${raceId}`, { method: 'PATCH', cookie: cookies[0], body: { status: 'done' }, headers: { 'If-Match': revised.headers.get('ETag') } });
+    assert.equal(latest.status, 200); assert.notEqual(latest.headers.get('ETag'), revised.headers.get('ETag'));
+    const renamed = await request(`/api/omnia/actions/${raceId}`, { method: 'PATCH', cookie: cookies[0], body: { actionType: 'omnia_health_fake' }, headers: { 'If-Match': latest.headers.get('ETag') } });
+    assert.equal(renamed.status, 200);
+    for (const id of [raceId, ...fresh.map(response => response.data.action.id)]) {
+      assert.equal((await request(`/api/omnia/actions/${id}`, { method: 'DELETE', cookie: cookies[0] })).status, 200);
+    }
+    assert.equal((await request('/api/omnia/actions', { method: 'POST', cookie: cookies[0], body: concurrentBody })).status, 410);
+    // Remove only these test tombstones so existing fixture count assertions retain meaning.
+    await actorSql(actors[0], "DELETE FROM max_audit_log WHERE action='deleted:operation' AND details->>'actionId'=ANY($1::text[])", [[raceId, ...fresh.map(response => response.data.action.id)]]);
+    cases.push('real_HTTP_concurrent_replays_identical_distinct_intents_locked_baseline_conflicts_and_tombstones');
+    cases.push('normal_receipt_survives_mutable_health_type_replay410');
     stage = 'delete_audit_cleanup';
     for (let i = 0; i < 2; i++) {
       const response = await request(`/api/omnia/actions/${saved[i].id}`, { method: 'DELETE', cookie: cookies[i] });
       assert.equal(response.status, 200); assert.equal(response.data.deleted, true);
       assert.equal(response.data.id, saved[i].id); assert.equal((await list(cookies[i])).length, 0);
-      assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_audit_log')).rows[0].n, 0);
+      assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_audit_log')).rows[0].n, 1);
+      const tombstones = (await actorSql(actors[i], 'SELECT details FROM max_audit_log')).rows;
+      assert.equal(tombstones[0].details.deleted, true);
+      assert.ok(!JSON.stringify(tombstones).includes(`qa-marker-${i}`));
+      assert.equal((await request('/api/omnia/actions', { method: 'POST', cookie: cookies[i],
+        body: { actionType: 'qa_core_role', operationKey: operationKeys[i], payload: { marker: `qa-marker-${i}` } } })).status, 410);
       assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_users')).rows[0].n, 1);
     }
-    cases.push('own_delete_audit_cleanup_preserves_existing_parent');
+    cases.push('own_delete_minimal_receipt_replay410_preserves_existing_parent');
     stage = 'health_probe_parent_cleanup';
     const probeActor = '10003', probeCookie = await login(probeActor);
     assert.equal((await actorSql(probeActor, 'DELETE FROM max_users WHERE max_user_id=$1', [probeActor])).rowCount, 1);
     const probe = await request('/api/omnia/actions', { method: 'POST', cookie: probeCookie,
-      body: { actionType: 'omnia_health_qa', payload: { marker: 'health-only' } } });
+      body: { actionType: 'omnia_health_qa', operationKey: randomUUID(), payload: { marker: 'health-only' } } });
     assert.equal(probe.status, 201); assert.equal(probe.data.probeUserCreated, true);
     const removed = await request(`/api/omnia/actions/${probe.data.action.id}`, { method: 'DELETE', cookie: probeCookie });
     assert.equal(removed.status, 200); assert.equal(removed.data.probeUserDeleted, true);

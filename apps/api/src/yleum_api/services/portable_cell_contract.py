@@ -97,9 +97,17 @@ not a signing key or managed PostgreSQL password. For Next.js product routes,
 getMaxUser from @/lib/max/session is preconfigured to read this trusted identity;
 use it rather than implementing cookie validation in the product. Never trust a user id in a
 request body. Product-owned storage must scope records by the trusted user id.
-Managed actions are GET/POST /api/omnia/actions; existing MAX client source can
-be read for exact request shapes. Managed integrations use the reserved browser
-API, never embedded provider keys. The machine cannot contact managed PostgreSQL.
+Managed actions use GET/POST /api/omnia/actions and GET/PATCH/DELETE
+/api/omnia/actions/:id. Prefer createMaxAction/getMaxActions/getMaxAction/updateMaxAction
+from the managed SDK. Create requires a stable operationKey retained across unknown
+outcomes and renewed for a separate deliberate intent; equal payload alone is not
+operation identity. Two-argument createMaxAction supports a normal uncertain retry;
+provide an explicit operationKey or newIntent for ambiguous submission lifetimes.
+PATCH requires the revision from the original form read in If-Match; a stale baseline
+returns412 and must be reconciled, never silently resubmitted with a fresh token.
+Missing write preconditions return428; deleted-operation replay returns410. Existing
+MAX client source can be read for exact request shapes. Managed integrations use the
+reserved browser API, never embedded provider keys. The machine cannot contact managed PostgreSQL.
 Use the dedicated DATABASE_URL above for product data. Do not write credential
 files or provider secrets, disable auth, forge evidence, fabricate user history
 or simulate integrations. Own product data/SQLite/service volumes are allowed;

@@ -177,18 +177,116 @@ export function createYleumOrder(input: {
   return invokeWrite("orders", input);
 }
 
+export type MaxActionCreateOptions = {
+  /** Stable identity supplied by a caller that owns the submission's lifetime. */
+  operationKey?: string;
+  /** Start a separate deliberate intent even when an earlier result is unknown. */
+  newIntent?: boolean;
+};
+
+const activeActionWrites = new Set<string>();
+
+type PendingAction = { key: string };
+
+async function actionBrowserScope(): Promise<{ actor: string; scope: string }> {
+  const response = await fetch("/api/max/session", { credentials: "include", cache: "no-store" });
+  const body = await response.json();
+  if (!response.ok || typeof body?.user?.id !== "string" || !body.user.id) {
+    throw new YleumIntegrationError("MAX authentication required", null, response.status);
+  }
+  return { actor: body.user.id, scope: `${window.location.origin}:${body.user.id}` };
+}
+
+async function readActionResponse(response: Response): Promise<Record<string, unknown>> {
+  const body = await response.json();
+  if (!response.ok) {
+    throw new YleumIntegrationError(typeof body?.error === "string" ? body.error : "Action save failed",
+      typeof body?.code === "string" ? body.code : null, response.status);
+  }
+  return body as Record<string, unknown>;
+}
+
 export async function createMaxAction(
   actionType: string,
   payload: Record<string, unknown> = {},
+  options: MaxActionCreateOptions = {},
 ): Promise<Record<string, unknown>> {
-  const response = await fetch("/api/omnia/actions", {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ actionType, payload }),
+  // JSON defines the durable request, including Date/toJSON and omitted fields.
+  // Fingerprint and send the same normalized wire value exactly once.
+  const wireInput = JSON.parse(JSON.stringify({ actionType, payload })) as {
+    actionType: string; payload: Record<string, unknown>;
+  };
+  const { actor, scope } = await actionBrowserScope();
+  let storageKey: string | null = null;
+  let operationKey = options.operationKey;
+  function pending(): PendingAction[] {
+    const entries: unknown = JSON.parse(window.sessionStorage.getItem(storageKey!) || "[]");
+    if (!Array.isArray(entries) || entries.some(item => typeof item?.key !== "string")) {
+      throw new Error("Invalid pending action identities");
+    }
+    return entries;
+  }
+  function forget() {
+    if (!storageKey) return;
+    const remaining = pending().filter(item => item.key !== operationKey);
+    if (remaining.length) window.sessionStorage.setItem(storageKey, JSON.stringify(remaining));
+    else window.sessionStorage.removeItem(storageKey);
+  }
+  if (!operationKey) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(
+      JSON.stringify(canonical(wireInput)),
+    ));
+    const fingerprint = Array.from(new Uint8Array(digest), n => n.toString(16).padStart(2, "0")).join("");
+    storageKey = `omnia:action:${scope}:${fingerprint}`;
+    const entries = pending();
+    const uncertain = entries.filter(item => !activeActionWrites.has(item.key));
+    if (!options.newIntent && uncertain.length > 1) {
+      throw new Error("Several action outcomes are unknown; provide an explicit operation identity");
+    }
+    operationKey = !options.newIntent && uncertain.length === 1 ? uncertain[0].key : crypto.randomUUID();
+    if (!entries.some(item => item.key === operationKey)) entries.push({ key: operationKey });
+    // Persist before sending; unavailable storage must fail without a write.
+    window.sessionStorage.setItem(storageKey, JSON.stringify(entries));
+  }
+  activeActionWrites.add(operationKey);
+  try {
+    const response = await fetch("/api/omnia/actions", {
+      method: "POST", credentials: "include", headers: {
+        "Content-Type": "application/json", "X-Omnia-Actor": actor,
+      },
+      body: JSON.stringify({ ...wireInput, operationKey }),
+    });
+    const body = await readActionResponse(response);
+    if (!body.action || typeof (body.action as Record<string, unknown>).id !== "string") {
+      throw new Error("Action outcome could not be confirmed");
+    }
+    forget();
+    return body;
+  } finally {
+    // A later rejection cannot prove that an earlier uncertain attempt never
+    // committed. Retain its identity until success or an explicit new intent.
+    activeActionWrites.delete(operationKey);
+  }
+}
+
+/** Preserve this returned revision for the entire edit lifetime. */
+export async function getMaxAction(id: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`/api/omnia/actions/${encodeURIComponent(id)}`, {
+    credentials: "include", cache: "no-store",
   });
-  if (!response.ok) throw new Error("Action save failed");
-  return response.json() as Promise<Record<string, unknown>>;
+  return readActionResponse(response);
+}
+
+/** A stale revision is an explicit conflict; reload and reconcile the edit. */
+export async function updateMaxAction(id: string, input: {
+  actionType?: string; status?: string; payload?: Record<string, unknown>;
+}, expectedRevision: string): Promise<Record<string, unknown>> {
+  const response = await fetch(`/api/omnia/actions/${encodeURIComponent(id)}`, {
+    method: "PATCH", credentials: "include", headers: {
+      "Content-Type": "application/json", "If-Match": expectedRevision,
+    }, body: JSON.stringify(input),
+  });
+  return readActionResponse(response);
 }
 
 export type MaxActionHistoryPage = {

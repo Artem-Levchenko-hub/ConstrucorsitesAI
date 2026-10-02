@@ -243,6 +243,9 @@ async def logout(
         if auth_session and auth_session.revoked_at is None:
             auth_session.revoked_at = datetime.now(UTC)
             await session.commit()
+    # Browser HTTP caches outlive session cookies; preserve unrelated site data.
+    response.headers["Clear-Site-Data"] = '"cache"'
+    response.headers["Cache-Control"] = "no-store"
     settings = get_settings()
     response.delete_cookie(
         key=settings.jwt_cookie_name,

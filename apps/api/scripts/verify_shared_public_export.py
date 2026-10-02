@@ -23,7 +23,7 @@ _EXPORT_OMISSIONS = {
 
 
 # Only reviewed dependency/build files may replace the historical MAX golden.
-# SDK/source entries continue to use their existing immutable contract.
+# Separate reviewed action overrides pin the changed managed SDK/route bytes.
 _DEPENDENCY_OVERRIDE_PATHS = {
     "Dockerfile.dev",
     "package.json",
@@ -33,17 +33,31 @@ _DEPENDENCY_OVERRIDE_PATHS = {
 }
 
 
+_ACTION_WRITE_OVERRIDE_PATHS = {
+    "src/app/api/omnia/actions/route.ts",
+    "src/app/api/omnia/actions/[id]/route.ts",
+    "src/lib/omnia/integration-client.ts",
+    "src/lib/omnia/client.ts",
+    "tests/starter.test.mjs",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
     parser.add_argument("readme_overrides", type=Path)
     parser.add_argument("dependency_overrides", type=Path)
+    parser.add_argument("action_write_overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
     dependency_overrides = json.loads(args.dependency_overrides.read_text(encoding="utf-8"))
     assert set(dependency_overrides) == _DEPENDENCY_OVERRIDE_PATHS, (
         "unexpected MAX dependency override paths"
+    )
+    action_write_overrides = json.loads(args.action_write_overrides.read_text(encoding="utf-8"))
+    assert set(action_write_overrides) == _ACTION_WRITE_OVERRIDE_PATHS, (
+        "unexpected MAX action write override paths"
     )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
@@ -56,6 +70,8 @@ def main() -> None:
         assert exported.keys() == expected.keys(), f"incomplete standalone export: {name}"
         for relative, entry in expected.items():
             entry = overrides.get(f"{name}/{relative}", entry)
+            if name == "max-miniapp-nextjs":
+                entry = action_write_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

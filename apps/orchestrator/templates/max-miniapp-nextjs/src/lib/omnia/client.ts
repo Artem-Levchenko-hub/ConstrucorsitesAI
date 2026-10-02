@@ -32,14 +32,8 @@ export async function saveMaxConsent(
   if (!response.ok) throw new Error("Consent save failed");
 }
 
-export async function createMaxAction(
-  actionType: string,
-  payload: Record<string, unknown> = {},
-): Promise<Record<string, unknown>> {
-  const response = await post("/api/omnia/actions", { actionType, payload });
-  if (!response.ok) throw new Error("Action save failed");
-  return response.json() as Promise<Record<string, unknown>>;
-}
+// Keep the supported legacy import on the same durable write contract.
+export { createMaxAction } from "@/lib/omnia/integration-client";
 
 export type MaxActionHistoryPage = {
   actions: Array<Record<string, unknown>>;

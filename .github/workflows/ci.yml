@@ -400,8 +400,9 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/shared_public_git_golden.json,dst=/smoke/golden.json,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/shared_public_readme_overrides.json,dst=/smoke/readmes.json,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_dependency_overrides.json,dst=/smoke/dependencies.json,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_action_write_overrides.json,dst=/smoke/action-writes.json,readonly" \
             --entrypoint /app/.venv/bin/python omnia-api:prod \
-            /smoke/verify.py /smoke/golden.json /smoke/readmes.json /smoke/dependencies.json
+            /smoke/verify.py /smoke/golden.json /smoke/readmes.json /smoke/dependencies.json /smoke/action-writes.json
 
   workflow-lint:
     runs-on: ubuntu-latest

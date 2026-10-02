@@ -1,4 +1,6 @@
-import { and, desc, eq, lt, or } from "drizzle-orm";
+import { createHash } from "node:crypto";
+
+import { and, desc, eq, lt, or, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
@@ -12,6 +14,7 @@ const MAX_ACTION_PAYLOAD_BYTES = 262_144;
 const Action = z.object({
   actionType: z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/),
   payload: z.record(z.unknown()).default({}),
+  operationKey: z.string().uuid().optional(),
 });
 
 const ActionQuery = z.object({
@@ -24,6 +27,20 @@ const ActionCursor = z.object({
   createdAt: z.string().datetime(),
   id: z.string().uuid(),
 });
+
+function canonicalAction(value: unknown): unknown {
+  if (value instanceof Date) return value.toISOString();
+  if (Array.isArray(value)) return value.map(canonicalAction);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([key, item]) => [key, canonicalAction(item)]));
+  }
+  return value;
+}
+
+function actionRevision(action: Record<string, unknown>): string {
+  return `"${createHash("sha256").update(JSON.stringify(canonicalAction(action))).digest("hex")}"`;
+}
 
 function encodeCursor(action: { createdAt: Date; id: string }): string {
   return `${action.createdAt.toISOString()}::${action.id}`;
@@ -77,23 +94,54 @@ export async function GET(request: Request) {
   const actions = hasMore ? rows.slice(0, query.data.limit) : rows;
   const nextCursor =
     hasMore && actions.length > 0 ? encodeCursor(actions[actions.length - 1]) : null;
-  return NextResponse.json({ actions, nextCursor });
+  return NextResponse.json({ actions: actions.map(action => ({ ...action, revision: actionRevision(action) })), nextCursor },
+    { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function POST(request: Request) {
   const user = await getMaxUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const expectedActor = request.headers.get("X-Omnia-Actor");
+  if (expectedActor !== null && expectedActor !== user.id) {
+    return NextResponse.json({ error: "MAX account changed; retry with the current account",
+      code: "action_actor_changed" }, { status: 409 });
+  }
   let input: z.infer<typeof Action>;
   try {
     input = Action.parse(await request.json());
   } catch {
     return NextResponse.json({ error: "Invalid action" }, { status: 400 });
   }
+  if (!input.operationKey) {
+    return NextResponse.json({ error: "Operation identity required", code: "action_operation_required" }, { status: 428 });
+  }
+  const requestDigest = createHash("sha256").update(JSON.stringify(canonicalAction({
+    actionType: input.actionType, payload: input.payload,
+  }))).digest("hex");
   const payloadBytes = new TextEncoder().encode(JSON.stringify(input.payload)).length;
   if (payloadBytes > MAX_ACTION_PAYLOAD_BYTES) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
   const result = await withMaxUser(user.id, async (tx) => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext('omnia:action-write'), hashtext(${user.id + ":" + input.operationKey}))`);
+    const [receipt] = await tx.select().from(schema.maxAuditLog).where(and(
+      eq(schema.maxAuditLog.maxUserId, user.id),
+      sql`${schema.maxAuditLog.details}->>'operationKey' = ${input.operationKey}`,
+    )).limit(1);
+    if (receipt) {
+      if (receipt.details.requestDigest !== requestDigest) {
+        return { status: 409, body: { error: "Operation identity was reused", code: "action_operation_conflict" } };
+      }
+      const [action] = await tx.select().from(schema.maxBusinessActions).where(and(
+        eq(schema.maxBusinessActions.maxUserId, user.id),
+        eq(schema.maxBusinessActions.id, String(receipt.details.actionId)),
+      )).limit(1);
+      if (!action || receipt.details.deleted === true) {
+        return { status: 410, body: { error: "Operation was deleted", code: "action_operation_deleted" } };
+      }
+      return { status: 201, body: { action: { ...action, revision: actionRevision(action) },
+        probeUserCreated: receipt.details.probeUserCreated === true, replayed: true } };
+    }
     // A valid server-signed actor is sufficient authority to materialize its
     // FK parent. Real MAX login already creates this row; activation probes use
     // the same signed-session contract without inventing an external login.
@@ -111,10 +159,14 @@ export async function POST(request: Request) {
       action: `created:${input.actionType}`,
       details: {
         actionId: created.id,
+        operationKey: input.operationKey,
+        requestDigest,
         probeUserCreated: createdUsers.length === 1,
+        healthProbe: input.actionType.startsWith("omnia_health_"),
       },
     });
-    return { action: created, probeUserCreated: createdUsers.length === 1 };
+    return { status: 201, body: { action: { ...created, revision: actionRevision(created) }, probeUserCreated: createdUsers.length === 1 } };
   });
-  return NextResponse.json(result, { status: 201 });
+  return NextResponse.json(result.body, { status: result.status,
+    headers: { "Cache-Control": "no-store", ...("action" in result.body && result.body.action ? { ETag: result.body.action.revision } : {}) } });
 }

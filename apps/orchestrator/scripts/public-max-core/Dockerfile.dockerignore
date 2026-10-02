@@ -2,6 +2,9 @@
 !scripts/
 !scripts/public-max-core/
 !scripts/public-max-core/prepare.mjs
+!scripts/public-max-core/bootstrap-database.mjs
+!scripts/public-max-core/preview-auth.test.cjs
+!scripts/public-max-core/action-write-contract.test.cjs
 !templates/
 !templates/max-miniapp-nextjs/
 !templates/max-miniapp-nextjs/next.config.ts

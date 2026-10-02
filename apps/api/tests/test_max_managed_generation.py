@@ -8,6 +8,7 @@ from yleum_api.services.generation import runtime
 from yleum_api.services.max_project_kit import _template_file
 
 SDK_PATH = "src/lib/omnia/integration-client.ts"
+LEGACY_CLIENT_PATH = "src/lib/omnia/client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
 FOOTER_PATH = "src/components/YleumCompliance.tsx"
 CONFIG_PATH = "src/lib/omnia/max-config.ts"
@@ -17,6 +18,7 @@ CONFIG_PATH = "src/lib/omnia/max-config.ts"
 async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fail_delivery):
     tree = {
         SDK_PATH: "old SDK",
+        LEGACY_CLIENT_PATH: "old legacy SDK",
         PROVIDER_PATH: "old session bootstrap",
         "src/app/page.tsx": "existing product",
         ".omnia/cell.json": '{"project":"existing"}',
@@ -34,6 +36,7 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
     async def read(*args):
         seed_reads.append(args)
         assert tree[SDK_PATH] == _template_file(SDK_PATH)
+        assert tree[LEGACY_CLIENT_PATH] == _template_file(LEGACY_CLIENT_PATH)
         assert tree[PROVIDER_PATH] == _template_file(PROVIDER_PATH)
         return None
 
@@ -49,11 +52,15 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
             await runtime._build_agent_seed_parts(handle, refresh_managed_sdk=True)
         assert not seed_reads
         assert tree[SDK_PATH] == "old SDK"
+        assert tree[LEGACY_CLIENT_PATH] == "old legacy SDK"
         assert tree[PROVIDER_PATH] == "old session bootstrap"
         return
     for _ in range(2):
         await runtime._build_agent_seed_parts(handle, refresh_managed_sdk=True)
-    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
+    canonical = {
+        path: _template_file(path)
+        for path in (SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, FOOTER_PATH)
+    }
     assert writes == [(canonical, ())]
     assert tree["src/app/page.tsx"] == "existing product"
     assert tree[".omnia/cell.json"] == '{"project":"existing"}'
@@ -63,7 +70,10 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
     from yleum_api.services.max_managed_generation import refresh_integration_sdk
     from yleum_api.services.max_project_kit import MAX_RETIRED_MANAGED_FILES
 
-    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
+    canonical = {
+        path: _template_file(path)
+        for path in (SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, FOOTER_PATH)
+    }
     tree = {
         **canonical,
         "src/lib/omnia/data-client.ts": "export function secureCollection() {}",
@@ -105,6 +115,7 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
 
     original = {
         SDK_PATH: "old SDK",
+        LEGACY_CLIENT_PATH: "old legacy SDK",
         PROVIDER_PATH: "old session bootstrap",
         "src/app/page.tsx": "existing product",
         ".omnia/cell.json": '{"project":"existing"}',
@@ -122,7 +133,10 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     saved_source = 'export const omniaMaxConfig = {app_name: "Saved owner title"};\n'
     await refresh_integration_sdk(handle, max_config_source=saved_source)
     await refresh_integration_sdk(handle, max_config_source=saved_source)
-    canonical = {path: _template_file(path) for path in (SDK_PATH, PROVIDER_PATH, FOOTER_PATH)}
+    canonical = {
+        path: _template_file(path)
+        for path in (SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, FOOTER_PATH)
+    }
     canonical[CONFIG_PATH] = saved_source
     assert await handle.snapshot_files() == {**original, **canonical}
     assert await handle.export_files() == canonical

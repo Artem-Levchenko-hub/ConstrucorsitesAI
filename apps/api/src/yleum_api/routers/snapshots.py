@@ -108,7 +108,7 @@ async def get_snapshot_preview_image(
     return StreamingResponse(
         chunks(), media_type="image/png",
         headers={
-            "Cache-Control": "private, max-age=31536000, immutable" if v else "private, no-cache",
+            "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
             "Referrer-Policy": "no-referrer",
         },

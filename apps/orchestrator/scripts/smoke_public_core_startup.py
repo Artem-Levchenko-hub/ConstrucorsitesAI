@@ -228,7 +228,8 @@ def run(args):
             if cycle == 0:
                 status, _, _ = request(
                     gateway_ip, "/api/omnia/actions", cookie=cookie_a,
-                    body={"actionType": "cold_core_qa", "payload": {"kept": True}},
+                    body={"actionType": "cold_core_qa", "payload": {"kept": True},
+                          "operationKey": str(uuid4())},
                 )
                 require(status == 201, "action write failed")
             status, body, _ = request(gateway_ip, "/api/omnia/actions", cookie=cookie_a)

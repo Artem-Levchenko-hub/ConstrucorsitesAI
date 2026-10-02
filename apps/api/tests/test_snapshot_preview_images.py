@@ -39,7 +39,8 @@ def fixture():
     return project, snapshot, Session(project, snapshot)
 
 
-async def test_private_image_streams_only_the_selected_verified_artifact(monkeypatch):
+@pytest.mark.parametrize("v", [None, "c" * 64])
+async def test_private_image_streams_only_the_selected_verified_artifact(monkeypatch, v):
     project, snap, session = fixture()
     data = b"\x89PNG\r\n\x1a\nimage"
     stream = io.BytesIO(data)
@@ -58,7 +59,7 @@ async def test_private_image_streams_only_the_selected_verified_artifact(monkeyp
         0,
         session,
         SimpleNamespace(id=project.owner_id),
-        v="c" * 64,
+        v=v,
     )
     content = b"".join([chunk async for chunk in response.body_iterator])
     assert content == data
@@ -66,6 +67,8 @@ async def test_private_image_streams_only_the_selected_verified_artifact(monkeyp
     assert stream.closed
     assert response.headers["content-type"] == "image/png"
     assert "private" in response.headers["cache-control"]
+    assert "no-store" in response.headers["cache-control"]
+    assert "immutable" not in response.headers["cache-control"]
     assert response.headers["x-content-type-options"] == "nosniff"
 
 

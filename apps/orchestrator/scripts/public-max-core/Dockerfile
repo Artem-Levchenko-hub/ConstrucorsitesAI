@@ -11,8 +11,10 @@ COPY --chown=node:node templates/max-miniapp-nextjs/drizzle ./drizzle
 COPY --chown=node:node templates/max-miniapp-nextjs/next.config.ts ./next.config.ts
 COPY --chown=node:node scripts/public-max-core/prepare.mjs ./prepare-managed-core.mjs
 COPY --chown=node:node scripts/public-max-core/preview-auth.test.cjs ./preview-auth.test.cjs
+COPY --chown=node:node scripts/public-max-core/action-write-contract.test.cjs ./action-write-contract.test.cjs
 RUN node prepare-managed-core.mjs
 RUN node --test preview-auth.test.cjs
+RUN OMNIA_ACTION_TEST_TEMPLATE_ROOT=/app node --test action-write-contract.test.cjs
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_OPTIONS=--max-old-space-size=1536
 # Import-time pool construction needs a DSN; no connection, secret or runtime

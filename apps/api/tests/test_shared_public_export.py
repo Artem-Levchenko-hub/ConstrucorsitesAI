@@ -112,6 +112,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "shared_public_git_golden.json"),
             str(fixtures / "shared_public_readme_overrides.json"),
             str(fixtures / "max_template_dependency_overrides.json"),
+            str(fixtures / "max_template_action_write_overrides.json"),
         ],
         cwd=tmp_path,
         env=env,
@@ -134,6 +135,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "shared_public_git_golden.json"),
         str(fixtures / "shared_public_readme_overrides.json"),
         str(untrusted),
+        str(fixtures / "max_template_action_write_overrides.json"),
     ]
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
@@ -141,10 +143,23 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
     assert rejected.returncode != 0
     assert "unexpected MAX dependency override paths" in rejected.stderr
 
+    # Action overrides are bounded to the five deliberately changed source/test paths.
+    untrusted_actions = tmp_path / "untrusted-action-overrides.json"
+    bad_actions = json.loads((fixtures / "max_template_action_write_overrides.json").read_text())
+    bad_actions["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64, "mode": "100644"}
+    untrusted_actions.write_text(json.dumps(bad_actions))
+    bad_args = [*args[:-2], str(fixtures / "max_template_dependency_overrides.json"),
+                str(untrusted_actions)]
+    rejected = subprocess.run(
+        bad_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+    )
+    assert rejected.returncode != 0
+    assert "unexpected MAX action write override paths" in rejected.stderr
+
     # The actual shared SDK bytes must still match the reviewed immutable hash.
     sdk_source = mounted / "max-miniapp-nextjs" / sdk_relative
     sdk_source.write_bytes(sdk_source.read_bytes() + b"\n// qa-invalid-sdk-drift\n")
-    args[-1] = str(fixtures / "max_template_dependency_overrides.json")
+    args[-2] = str(fixtures / "max_template_dependency_overrides.json")
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
     )

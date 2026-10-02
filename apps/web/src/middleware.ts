@@ -15,6 +15,17 @@ export function middleware(req: NextRequest) {
 
   const session = req.cookies.get(AUTH_COOKIE);
   const path = req.nextUrl.pathname;
+  if (path === "/") {
+    const response = NextResponse.next();
+    if (req.method === "GET" && !session?.value) {
+      // Logout streams an anonymous home RSC response into the action reply.
+      // Clear legacy image caches immediately, including signed-out landings.
+      response.headers.set("Clear-Site-Data", '"cache"');
+      response.headers.set("Cache-Control", "no-store");
+    }
+    return response;
+  }
+
   const isGeneralAuthRoute = path === "/login" || path === "/register";
   const isPublicMaxRoute =
     path === "/max/product" ||
@@ -52,9 +63,16 @@ export function middleware(req: NextRequest) {
   // actual destination so an expired cookie also preserves payment returns.
   const headers = new Headers(req.headers);
   headers.set("x-omnia-return-to", `${path}${req.nextUrl.search}`);
-  return NextResponse.next({ request: { headers } });
+  const response = NextResponse.next({ request: { headers } });
+  if (path === "/login") {
+    // Clear legacy private-image caches before changing principals. Include
+    // login POSTs: App Router may reuse the page without another network GET.
+    response.headers.set("Clear-Site-Data", '"cache"');
+    response.headers.set("Cache-Control", "no-store");
+  }
+  return response;
 }
 
 export const config = {
-  matcher: ["/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
+  matcher: ["/", "/account/:path*", "/billing/:path*", "/admin/:path*", "/max/:path*", "/login", "/register"],
 };
