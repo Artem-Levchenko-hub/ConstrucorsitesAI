@@ -1,0 +1,19 @@
+{
+  "observed_utc": "2026-10-02T11:58:49.199903+00:00",
+  "criterion": "Т09.3",
+  "status": "PARTIAL_ACTUAL_BACKUP_INTEGRITY",
+  "actual_checks": {
+    "corrupt_file_archive": "REJECTED_archive_checksum",
+    "missing_file_archive": "REJECTED_archive_missing",
+    "valid_DB_dump_PG17_list_exit": 0,
+    "truncated_DB_dump_PG17_list_exit": 1,
+    "native_parser_scope": "PG17 list metadata only; actual full PG16 restore verified separately in T09.1"
+  },
+  "source_dump_hash_unchanged": true,
+  "backup_file_mode": "0o600",
+  "fs_access_scope": "mode600 owner1000 observed; different-UID reader NOT executed because current user1000 cannot setuid",
+  "prior_test_harness_failure": "assumed uid0; assertion correctly stopped before attempting setuid; no testPASS falsely recorded",
+  "temporary_corrupt_copies_cleaned": true,
+  "Docker_network_production_changes": 0,
+  "new_original_full_acceptance": 0
+}

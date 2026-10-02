@@ -1,0 +1,127 @@
+{
+  "T09.1": "PASS_CANDIDATE_REQUIRES_TERMINAL_GATE",
+  "T09.2": "BLOCKED_NO_APPROVED_RTO_RPO",
+  "acceptance_requires_matching_both_receipts_and_terminal_gate": true,
+  "backup_algorithm_sha256": "7bd92841aab9b9dca3df7bb399245632df5f5eabc0c96ec85cf3320696a40ff8",
+  "checks": [
+    {
+      "UI_F5_exact_own_row": true,
+      "actor_index": 0,
+      "phase": "source",
+      "row_id_sha256": "a3821a688d9b1cd148639396b0af6885cc9770f3719a0901db9b4e5e7035ef9f",
+      "server_session_issued": true
+    },
+    {
+      "API_local_only_no_redirect": true,
+      "actor_index": 0,
+      "blocked_external_request_count": 2,
+      "browser_local_origin_guard": true,
+      "external_proxy_forwarding": false,
+      "phase": "source",
+      "service_workers": "blocked",
+      "websockets": "blocked_all"
+    },
+    {
+      "UI_F5_exact_own_row": true,
+      "actor_index": 1,
+      "phase": "source",
+      "row_id_sha256": "5aa5d53d705be8c32fdf7a1ce10d9e14e0eb555fd10a585eef1ededf3c3b489c",
+      "server_session_issued": true
+    },
+    {
+      "API_local_only_no_redirect": true,
+      "actor_index": 1,
+      "blocked_external_request_count": 2,
+      "browser_local_origin_guard": true,
+      "external_proxy_forwarding": false,
+      "phase": "source",
+      "service_workers": "blocked",
+      "websockets": "blocked_all"
+    },
+    {
+      "source_resources_removed_before_target": true
+    },
+    {
+      "DB_rows_schema_roles_acl_FK_policies_exact": true,
+      "files44_exact": true,
+      "orphans_zero": true
+    },
+    {
+      "backupCells_source_target_table_count": 11,
+      "postgres_source_target_version": "160015:16.15"
+    },
+    {
+      "UI_F5_exact_own_row": true,
+      "actor_index": 0,
+      "phase": "target",
+      "row_id_sha256": "a3821a688d9b1cd148639396b0af6885cc9770f3719a0901db9b4e5e7035ef9f",
+      "server_session_issued": true
+    },
+    {
+      "acknowledged_positive_ID_deleted": true,
+      "baseline_history_preserved": true,
+      "restored_normal_UI_positive_write_F5_exactly_one": true
+    },
+    {
+      "API_local_only_no_redirect": true,
+      "actor_index": 0,
+      "blocked_external_request_count": 4,
+      "browser_local_origin_guard": true,
+      "external_proxy_forwarding": false,
+      "phase": "target",
+      "service_workers": "blocked",
+      "websockets": "blocked_all"
+    },
+    {
+      "UI_F5_exact_own_row": true,
+      "actor_index": 1,
+      "phase": "target",
+      "row_id_sha256": "5aa5d53d705be8c32fdf7a1ce10d9e14e0eb555fd10a585eef1ededf3c3b489c",
+      "server_session_issued": true
+    },
+    {
+      "API_local_only_no_redirect": true,
+      "actor_index": 1,
+      "blocked_external_request_count": 2,
+      "browser_local_origin_guard": true,
+      "external_proxy_forwarding": false,
+      "phase": "target",
+      "service_workers": "blocked",
+      "websockets": "blocked_all"
+    }
+  ],
+  "database_dump_hash": "338750a6b645d51af3cc4027021df50cfdf5d6913dad34ad2b5c36477b27bcac",
+  "dependency_proof": {
+    "cap_bytes": 2147483648,
+    "kit_image": "sha256:21813be2b9a742ec973daaa07e34bfd748fbc179c3cb9aa0de4a742984d4b786",
+    "layer_digests_verified": true,
+    "node_image": "sha256:88f8ba583a884279252779bbe221bf1ff2c61cf236cc973f8ca97676ae6d07f0",
+    "selected_extracted_bytes": 603693214,
+    "temporary_export_removed": true,
+    "versions": {
+      "@maxhub/max-ui": "0.2.0",
+      "drizzle-orm": "0.45.2",
+      "next": "15.5.24",
+      "pg": "8.22.0",
+      "react": "18.3.1"
+    }
+  },
+  "docker_owned_cleanup": true,
+  "finishedUtc": "2026-10-02T11:49:04.839551+00:00",
+  "isolated_recovery_startedUtc": "2026-10-02T11:48:35.173882+00:00",
+  "observed_measurements": {
+    "approved_RTO_RPO_comparison": "BLOCKED_NO_APPROVED_TARGETS",
+    "fixture_file_loss": 0,
+    "fixture_row_loss": 0,
+    "isolated_restore_and_UI_validation_seconds": 28.306
+  },
+  "observer_elapsed_seconds": 77.707,
+  "own_resource_cleanup": true,
+  "proxy_cleanup": true,
+  "rows_hash": "e66ea2e00fa2fbea1d46cbb4f70b0a70377c2b756328823ee63cb35fdaab3776",
+  "scope": "NEW isolated own exactB42 baseline DB/files backupCells scratch algorithm; not fullproductionbackup/MAXidentity proof",
+  "shm_owned_cleanup": true,
+  "source42_hashes_preserved": true,
+  "startedUtc": "2026-10-02T11:47:47.133322+00:00",
+  "status": "PASS_CANDIDATE_REQUIRES_TERMINAL_GATE"
+}

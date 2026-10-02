@@ -1,0 +1,34 @@
+{
+  "accepted_utc": "2026-10-02T11:50:27.604821+00:00",
+  "criterion": "Т09.1",
+  "status": "PASS_ISOLATED_OWN_DB_FILES_CONTENT_AND_RELATIONS",
+  "scope": "new isolated exact42 owned source clone, native PostgreSQL backupCells restore; not full production DR or production-image equivalence",
+  "actual_terminal": {
+    "evidence": "/workspace/qa-evidence/backup-restore-isolated-20261002/qa-t09-20261002-v1-db0e33ae",
+    "matching_receipts_sha256": "1e2d0c5dc95fde01171556b59ee3cd79543f08ed9e28d1ee56b3b4abdd5c6548",
+    "receipt_failure_count": 0,
+    "status": "PASS_ISOLATED_OWN_ROUNDTRIP",
+    "terminal_receipt_gate": true
+  },
+  "both_receipts_sha256": "1e2d0c5dc95fde01171556b59ee3cd79543f08ed9e28d1ee56b3b4abdd5c6548",
+  "native_DB_pre_post_exact": true,
+  "native_files_pre_post_exact_count": 44,
+  "source42_original_hashes_unchanged": true,
+  "root_checked_own_resources_remaining": {
+    "containers": 0,
+    "networks": 0,
+    "volumes": 0
+  },
+  "shm_remaining": false,
+  "root_viewed_safe_target_PNGs": 3,
+  "actual_measurements": {
+    "approved_RTO_RPO_comparison": "BLOCKED_NO_APPROVED_TARGETS",
+    "fixture_file_loss": 0,
+    "fixture_row_loss": 0,
+    "isolated_restore_and_UI_validation_seconds": 28.306
+  },
+  "observer_elapsed_seconds": 77.707,
+  "original_T09_2": "BLOCKED_NO_APPROVED_RTO_RPO",
+  "production_mutations": 0,
+  "workspace_free_bytes_after": 2088099840
+}
