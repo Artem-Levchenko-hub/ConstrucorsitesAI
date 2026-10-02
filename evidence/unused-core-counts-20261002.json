@@ -1,0 +1,60 @@
+{
+  "schema": "omnia-unused-core-stage-and-public-counts-v1",
+  "images": {
+    "core": {
+      "actual_image_id": "sha256:db024f8a8757471bc1a8976f0110f033962e5c13b7bb7c68643dabcf56184d5b",
+      "identity_kind": "oci-manifest",
+      "config_digest": "sha256:cef537458d384b32a717fb3bea6361d76f29f4db73d8728c2b32e96e6740cfca",
+      "oci_manifest_digest": "sha256:db024f8a8757471bc1a8976f0110f033962e5c13b7bb7c68643dabcf56184d5b",
+      "archive_sha256": "8e5b676d06783bee25da8bbeabe4f5d2bb135d943601bcc3aa7df7af4bbda4ff",
+      "protocols_verified": true,
+      "semantic_config_verified": true,
+      "pins_unchanged": true,
+      "pins_changed": false,
+      "containers_started": 0,
+      "core_loads": 0,
+      "commerce_loads": 0
+    },
+    "commerce": {
+      "actual_image_id": "sha256:db024f8a8757471bc1a8976f0110f033962e5c13b7bb7c68643dabcf56184d5b",
+      "identity_kind": "oci-manifest",
+      "config_digest": "sha256:cef537458d384b32a717fb3bea6361d76f29f4db73d8728c2b32e96e6740cfca",
+      "oci_manifest_digest": "sha256:db024f8a8757471bc1a8976f0110f033962e5c13b7bb7c68643dabcf56184d5b",
+      "archive_sha256": "8e5b676d06783bee25da8bbeabe4f5d2bb135d943601bcc3aa7df7af4bbda4ff",
+      "protocols_verified": true,
+      "semantic_config_verified": true,
+      "pins_unchanged": true,
+      "pins_changed": false,
+      "containers_started": 0,
+      "core_loads": 0,
+      "commerce_loads": 1
+    }
+  },
+  "hosts": {
+    "core": {
+      "observed_core_containers": 6,
+      "status_counts": {
+        "exited": 1,
+        "running": 5
+      },
+      "owner_scoped_core_count": 1,
+      "other_owner_core_count": 5,
+      "invalid_identity_count": 0,
+      "collected_at": "2026-10-02T08:55:23.921787+00:00"
+    },
+    "commerce": {
+      "observed_core_containers": 4,
+      "status_counts": {
+        "running": 4
+      },
+      "owner_scoped_core_count": 0,
+      "other_owner_core_count": 4,
+      "invalid_identity_count": 0,
+      "collected_at": "2026-10-02T09:05:56.781483+00:00"
+    }
+  },
+  "global_activation_safe": false,
+  "served_browser_SDK_binding": "unverified",
+  "running_apps_changed": false,
+  "original_blocked_staging_marker_preserved": true
+}
