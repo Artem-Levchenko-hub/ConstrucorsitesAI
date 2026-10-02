@@ -37,6 +37,13 @@ import structlog
 
 from yleum_orchestrator.core.errors import OrchestratorError
 from yleum_orchestrator.core.project_machine import MachineManifest
+from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
+from yleum_orchestrator.services.project_database_roles import (
+    PROJECT_RUNTIME_ROLE,
+    bootstrap_project_roles_sql,
+    project_role_hba,
+)
+from yleum_orchestrator.services.restoration_database import TRUSTED_ADMIN_PGOPTIONS
 
 log = structlog.get_logger(__name__)
 
@@ -103,6 +110,7 @@ class PublicationSpec:
     project_postgres_password: str
     core_postgres_password: str
     core_runtime_password: str
+    project_credentials: ProjectDatabaseCredentials
     seed_volumes: tuple[SeedVolume, ...] = ()
     app_env: dict[str, str] = field(default_factory=dict)
     app_cpu_cores: float = 0.5
@@ -431,13 +439,50 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
             "metadata": {"name": "app-config", "namespace": ns, "labels": _labels(spec, "app")},
             "type": "Opaque",
             "stringData": {
-                "DATABASE_URL": "postgresql://postgres:"
-                + quote(spec.project_postgres_password, safe="")
+                "DATABASE_URL": "postgresql://"
+                + PROJECT_RUNTIME_ROLE
+                + ":"
+                + quote(spec.project_credentials.runtime_password, safe="")
                 + "@project-postgres:5432/postgres",
-                "POSTGRES_PASSWORD": spec.project_postgres_password,
+                "PGPASSWORD": spec.project_credentials.runtime_password,
             },
         },
     ]
+
+    # The administrator and SQL bootstrap never enter a user-code pod.
+    objects.extend(
+        [
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "metadata": {
+                    "name": "project-admin",
+                    "namespace": ns,
+                    "labels": _labels(spec, "project-postgres"),
+                },
+                "stringData": {"POSTGRES_PASSWORD": spec.project_credentials.admin_password},
+            },
+            {
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "type": "Opaque",
+                "metadata": {
+                    "name": "project-role-bootstrap",
+                    "namespace": ns,
+                    "labels": _labels(spec, "project-postgres"),
+                },
+                "stringData": {
+                    "bootstrap.sql": bootstrap_project_roles_sql(
+                        spec.project_credentials.runtime_password,
+                        spec.project_credentials.migrator_password,
+                        admin_password=spec.project_credentials.admin_password,
+                    ),
+                    "pg_hba.conf": project_role_hba(),
+                },
+            },
+        ]
+    )
 
     # --- seed links: single-use capability URLs, never part of a pod template ---
     seeds = sorted(spec.seed_volumes, key=lambda seed: seed.mount_path)
@@ -481,13 +526,19 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
             "command": [
                 "sh",
                 "-ec",
-                'hba="$PGDATA/pg_hba.conf"; '
-                'rule="host postgres postgres samenet scram-sha-256"; '
-                'if [ -f "$hba" ] && ! grep -Fqx "$rule" "$hba"; then '
-                'printf "\\n%s\\n" "$rule" >> "$hba"; fi',
+                'if [ -s "$PGDATA/PG_VERSION" ]; then '
+                'cp /omnia/project-role-bootstrap/pg_hba.conf "$PGDATA/pg_hba.conf"; '
+                'chmod 600 "$PGDATA/pg_hba.conf"; fi',
             ],
             "env": [{"name": "PGDATA", "value": PROJECT_POSTGRES_DATA}],
-            "volumeMounts": [{"name": "data", "mountPath": PROJECT_POSTGRES_DATA}],
+            "volumeMounts": [
+                {"name": "data", "mountPath": PROJECT_POSTGRES_DATA},
+                {
+                    "name": "project-role-bootstrap",
+                    "mountPath": "/omnia/project-role-bootstrap",
+                    "readOnly": True,
+                },
+            ],
             "securityContext": {
                 "runAsUser": _POSTGRES_UID,
                 "runAsGroup": _POSTGRES_UID,
@@ -498,7 +549,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
     )
     objects.append(
         _postgres_statefulset(
-            spec, "project-postgres", spec.project_postgres_storage, "app-config", pg_init
+            spec, "project-postgres", spec.project_postgres_storage, "project-admin", pg_init
         )
     )
     objects.append(_service(spec, "project-postgres", 5432))
@@ -736,11 +787,12 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         "PORT": str(app_port),
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PUBLIC_APP_ORIGIN": spec.public_origin,
+        **spec.app_env,
+        # User configuration cannot redirect the controller-owned database login.
         "PGHOST": "project-postgres",
         "PGPORT": "5432",
-        "PGUSER": "postgres",
+        "PGUSER": PROJECT_RUNTIME_ROLE,
         "PGDATABASE": "postgres",
-        **spec.app_env,
     }
     readiness = (
         {
@@ -793,7 +845,7 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
                                         "valueFrom": {
                                             "secretKeyRef": {
                                                 "name": "app-config",
-                                                "key": "POSTGRES_PASSWORD",
+                                                "key": "PGPASSWORD",
                                             }
                                         },
                                     },
@@ -952,6 +1004,29 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
     return objects
 
 
+PROJECT_DATABASE_BOOTSTRAP_SCRIPT = r"""set -eu
+umask 077
+export PGOPTIONS='-c search_path=pg_catalog -c log_statement=none -c log_duration=off
+-c log_min_duration_statement=-1 -c log_min_duration_sample=-1
+-c log_transaction_sample_rate=0 -c log_min_error_statement=panic
+-c session_preload_libraries= -c local_preload_libraries='
+rm -f /tmp/omnia-project-db-ready
+attempt=0
+until pg_isready -q -U postgres -h /tmp -d postgres; do
+  attempt=$((attempt+1)); test "$attempt" -lt 60 || exit 1; sleep 1
+done
+cp /omnia/project-role-bootstrap/pg_hba.conf "$PGDATA/pg_hba.conf"
+chmod 600 "$PGDATA/pg_hba.conf"
+if ! psql -X -q -v ON_ERROR_STOP=1 -h /tmp -U postgres -d postgres \
+     -f /omnia/project-role-bootstrap/bootstrap.sql >/tmp/omnia-project-db-bootstrap.log 2>&1; then
+  echo 'trusted project database role bootstrap failed' >&2; exit 1
+fi
+psql -X -q -v ON_ERROR_STOP=1 -h /tmp -U postgres -d postgres \
+  -c 'SELECT pg_catalog.pg_reload_conf()' >>/tmp/omnia-project-db-bootstrap.log 2>&1
+touch /tmp/omnia-project-db-ready
+"""
+
+
 def _postgres_statefulset(
     spec: PublicationSpec, name: str, storage: str, secret: str, init: list[dict[str, Any]]
 ) -> dict[str, Any]:
@@ -961,7 +1036,7 @@ def _postgres_statefulset(
     pgdata = (
         PROJECT_POSTGRES_DATA if name == "project-postgres" else PROJECT_POSTGRES_DATA + "/pgdata"
     )
-    return {
+    result: dict[str, Any] = {
         "apiVersion": "apps/v1",
         "kind": "StatefulSet",
         "metadata": {"name": name, "namespace": spec.namespace, "labels": _labels(spec, name)},
@@ -1029,6 +1104,47 @@ def _postgres_statefulset(
             ],
         },
     }
+
+    if name == "project-postgres":
+        pod = result["spec"]["template"]["spec"]
+        result["spec"]["template"]["metadata"]["annotations"] = {
+            "omnia.project-db.role-protocol": "1",
+        }
+        pod["securityContext"] = {"fsGroup": _POSTGRES_UID, "fsGroupChangePolicy": "OnRootMismatch"}
+        pod["volumes"].append(
+            {
+                "name": "project-role-bootstrap",
+                "secret": {"secretName": "project-role-bootstrap", "defaultMode": 0o440},
+            }
+        )
+        container = pod["containers"][0]
+        container["args"].extend(["-c", "unix_socket_directories=/tmp,/var/run/postgresql"])
+        # Retained ALTER SYSTEM settings cannot redirect the trusted HBA policy.
+        container["args"].extend(["-c", "hba_file=" + PROJECT_POSTGRES_DATA + "/pg_hba.conf"])
+        # Keep the image entrypoint's default socket available during first initdb.
+        container["volumeMounts"].append(
+            {
+                "name": "project-role-bootstrap",
+                "mountPath": "/omnia/project-role-bootstrap",
+                "readOnly": True,
+            }
+        )
+        container["lifecycle"] = {
+            "postStart": {"exec": {"command": ["sh", "-ec", PROJECT_DATABASE_BOOTSTRAP_SCRIPT]}}
+        }
+        container["readinessProbe"] = {
+            "exec": {
+                "command": [
+                    "sh",
+                    "-ec",
+                    "test -f /tmp/omnia-project-db-ready && "
+                    "pg_isready -q -U postgres -h /tmp -d postgres",
+                ]
+            },
+            "periodSeconds": 5,
+            "timeoutSeconds": 5,
+        }
+    return result
 
 
 def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, Any]]:
@@ -1278,11 +1394,14 @@ class KubernetesClusterApi:
             # the replacement is stuck in its migration init container. Wait
             # until no old replicas remain before switching app/boundary traffic.
             rollout_complete = (
-                kind != "Deployment"
-                or int(status.get("replicas") or 0) == updated == wanted
+                kind != "Deployment" or int(status.get("replicas") or 0) == updated == wanted
             )
-            if (observed >= generation and ready >= wanted and updated >= wanted
-                    and rollout_complete):
+            if (
+                observed >= generation
+                and ready >= wanted
+                and updated >= wanted
+                and rollout_complete
+            ):
                 return
             if time.monotonic() >= deadline:
                 raise PublicationPlacementError(
@@ -1466,7 +1585,7 @@ class KubernetesPublishedRuntime:
         self.api = api
         self.ready_timeout = ready_timeout_seconds
 
-    def publish(self, spec: PublicationSpec) -> PlacementResult:
+    def publish(self, spec: PublicationSpec, *, activate_guest: bool = True) -> PlacementResult:
         if spec.tls_mode == "wildcard":
             self._require_wildcard_certificate(spec)
         objects = build_objects(spec)
@@ -1490,11 +1609,23 @@ class KubernetesPublishedRuntime:
             self.api.wait_ready(kind, name, ns, self.ready_timeout)
         # A failed admin bootstrap/role check leaves the previous app/boundary/
         # ingress untouched. RollingUpdate keeps its healthy old core available.
+        project_names = {
+            "project-admin",
+            "project-role-bootstrap",
+            "project-postgres",
+            "app-config",
+            "seed-links",
+        }
         for obj in objects:
-            if not core_phase(obj):
+            if not core_phase(obj) and obj["metadata"]["name"] in project_names:
+                self.api.apply(obj)
+        self.api.wait_ready("StatefulSet", "project-postgres", ns, self.ready_timeout)
+        if not activate_guest:
+            return PlacementResult(ns, spec.public_host, spec.epoch)
+        for obj in objects:
+            if not core_phase(obj) and obj["metadata"]["name"] not in project_names:
                 self.api.apply(obj)
         for kind, name in (
-            ("StatefulSet", "project-postgres"),
             ("Deployment", "app"),
             ("Deployment", "boundary"),
         ):
@@ -1517,7 +1648,35 @@ class KubernetesPublishedRuntime:
                 "distribute it (infra/max-k3s/edge) or set K8S_TLS_MODE=cert-manager"
             )
 
-    def schema_digest(self, namespace: str, password: str) -> str:
+    def quiesce_project_app(self, namespace: str) -> None:
+        """Stop all guest pods before an attested role-only database upgrade."""
+        existing = self.api.get("apps/v1", "Deployment", "app", namespace)
+        if existing is not None:
+            stopped = json.loads(json.dumps(existing))
+            stopped.pop("status", None)
+            stopped["spec"]["replicas"] = 0
+            self.api.apply(stopped)
+        deadline = time.monotonic() + self.ready_timeout
+        while True:
+            current = self.api.get("apps/v1", "Deployment", "app", namespace)
+            status = (current or {}).get("status", {})
+            generation = (current or {}).get("metadata", {}).get("generation", 1)
+            pods = self.api.list_objects("v1", "Pod", namespace, "app.kubernetes.io/component=app")
+            if not pods and (
+                current is None
+                or (
+                    status.get("observedGeneration", 0) >= generation
+                    and int(status.get("replicas", 0)) == 0
+                    and int(status.get("terminatingReplicas", 0)) == 0
+                    and int(status.get("readyReplicas", 0)) == 0
+                )
+            ):
+                return
+            if time.monotonic() >= deadline:
+                raise PublicationPlacementError("project guest quiesce was not confirmed")
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+
+    def schema_dump(self, namespace: str) -> str:
         pod = self.api.pod_name(namespace, {"app.kubernetes.io/component": "project-postgres"})
         if pod is None:
             raise PublicationPlacementError("production schema probe requires postgres")
@@ -1525,15 +1684,26 @@ class KubernetesPublishedRuntime:
             namespace,
             pod,
             [
-                "sh",
-                "-c",
-                f"PGPASSWORD='{password}' pg_dumpall --schema-only --no-role-passwords "
-                "--no-owner --no-privileges -h 127.0.0.1 -U postgres",
+                "env",
+                "PGOPTIONS=" + TRUSTED_ADMIN_PGOPTIONS,
+                "pg_dumpall",
+                "--schema-only",
+                "--no-role-passwords",
+                "--no-owner",
+                "--no-privileges",
+                "-h",
+                "/tmp,/var/run/postgresql",
+                "-U",
+                "postgres",
             ],
             container="postgres",
         )
         if rc != 0 or not output:
             raise PublicationPlacementError("publication schema inspection failed")
+        return output
+
+    def schema_digest(self, namespace: str, password: str) -> str:
+        output = self.schema_dump(namespace)
         lines = [
             line
             for line in output.splitlines()

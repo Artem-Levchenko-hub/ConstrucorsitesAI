@@ -12,6 +12,7 @@ import pytest
 
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.services import k8s_publication as kp
+from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 
 PROJECT = UUID("6cd1e70b-55b8-4025-b703-63f6d51745a8")
 OWNER = UUID("b2aec0fc-1dae-4498-8c49-8d655e24234c")
@@ -53,6 +54,9 @@ def _spec(**overrides: Any) -> kp.PublicationSpec:
         runtime_env={"MAX_BOT_TOKEN": "bot-token"},
         business_config={"operator": {"legal_name": "ООО Ромашка"}},
         project_postgres_password="pg-app",
+        project_credentials=ProjectDatabaseCredentials(
+            "runtime" + "a" * 32, "migrator" + "b" * 32, "admin" + "c" * 32
+        ),
         core_postgres_password="pg-core",
         core_runtime_password="synthetic-runtime-password-for-tests",
         seed_volumes=(
@@ -262,8 +266,10 @@ def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
     hba = init[1]
     assert hba["name"] == "project-postgres-hba"
     assert hba["securityContext"]["runAsUser"] == 70
-    assert "host postgres postgres samenet scram-sha-256" in hba["command"][2]
-    assert "host all all 0.0.0.0/0" not in hba["command"][2]
+    assert "/omnia/project-role-bootstrap/pg_hba.conf" in hba["command"][2]
+    rules = _by(objects, "Secret", "project-role-bootstrap")["stringData"]["pg_hba.conf"]
+    assert "host postgres postgres samenet" not in rules
+    assert "host all all 0.0.0.0/0 reject" in rules
     assert (
         pg["spec"]["volumeClaimTemplates"][0]["spec"]["resources"]["requests"]["storage"] == "5Gi"
     )
@@ -276,7 +282,15 @@ def test_project_postgres_is_seeded_once_and_owned_by_postgres_uid() -> None:
     assert pg_env["PGDATA"] == kp.PROJECT_POSTGRES_DATA
     assert core_env["PGDATA"] == kp.PROJECT_POSTGRES_DATA + "/pgdata"
     assert "command" not in _container(pg, "postgres")
-    assert _container(pg, "postgres")["args"] == ["postgres", "-c", "listen_addresses=*"]
+    assert _container(pg, "postgres")["args"] == [
+        "postgres",
+        "-c",
+        "listen_addresses=*",
+        "-c",
+        "unix_socket_directories=/tmp,/var/run/postgresql",
+        "-c",
+        "hba_file=" + kp.PROJECT_POSTGRES_DATA + "/pg_hba.conf",
+    ]
     redis = _container(_by(objects, "Deployment", "redis"), "redis")
     assert redis["securityContext"]["runAsUser"] == 999  # no gosu, no capabilities needed
     # warm update: no postgres artifact → no seeding step, data stays
@@ -437,7 +451,10 @@ def test_schema_digest_ignores_restriction_keys_and_comments() -> None:
     digest = kp.KubernetesPublishedRuntime(api).schema_digest("app-x", "pw")
 
     assert digest == hashlib.sha256(b"CREATE TABLE t (id int);").hexdigest()
-    assert "pg_dumpall --schema-only" in api.execs[0][2]
+    assert api.execs[0][2:4] == ["pg_dumpall", "--schema-only"]
+    assert api.execs[0][api.execs[0].index("-h") + 1] == "/tmp,/var/run/postgresql"
+    assert "PGPASSWORD" not in str(api.execs[0])
+    assert api.execs[0][-3:] == ["/tmp,/var/run/postgresql", "-U", "postgres"]
 
 
 def test_schema_digest_needs_a_postgres_pod() -> None:
@@ -734,16 +751,114 @@ def test_core_runtime_rejects_reserved_credentials_before_apply(key):
     assert api.applied == []
 
 
-@pytest.mark.parametrize("kind,replicas,expected", [
-    ("Deployment", 2, False), ("Deployment", 1, True), ("StatefulSet", 2, True),
-])
+@pytest.mark.parametrize(
+    "kind,replicas,expected",
+    [
+        ("Deployment", 2, False),
+        ("Deployment", 1, True),
+        ("StatefulSet", 2, True),
+    ],
+)
 def test_rollout_gate_cannot_count_old_ready_pod_with_new_unready_pod(kind, replicas, expected):
     api = object.__new__(kp.KubernetesClusterApi)
-    api.get = lambda *_: {"metadata": {"generation": 2}, "spec": {"replicas": 1},
-        "status": {"observedGeneration": 2, "replicas": replicas,
-                   "readyReplicas": 1, "updatedReplicas": 1}}
+    api.get = lambda *_: {
+        "metadata": {"generation": 2},
+        "spec": {"replicas": 1},
+        "status": {
+            "observedGeneration": 2,
+            "replicas": replicas,
+            "readyReplicas": 1,
+            "updatedReplicas": 1,
+        },
+    }
     if expected:
         api.wait_ready(kind, "core", "isolated", 0)
     else:
         with pytest.raises(kp.PublicationPlacementError, match="did not become ready"):
             api.wait_ready(kind, "core", "isolated", 0)
+
+
+def test_generated_app_uses_only_project_runtime_database_identity() -> None:
+    """A published user-code pod must never inherit its database administrator."""
+    spec = _spec()
+    objects = kp.build_objects(spec)
+    app = _container(_by(objects, "Deployment", "app"), "app")
+    env = {item["name"]: item for item in app["env"]}
+    assert env["PGUSER"]["value"] == "omnia_project_runtime"
+    runtime = _by(objects, "Secret", "app-config")["stringData"]
+    from urllib.parse import urlsplit
+
+    assert urlsplit(runtime["DATABASE_URL"]).username == "omnia_project_runtime"
+    assert set(runtime) == {"DATABASE_URL", "PGPASSWORD"}
+    assert all("admin" not in str(item) and "migrator" not in str(item) for item in app["env"])
+    assert all("role-bootstrap" not in str(item) for item in app["volumeMounts"])
+    pg = _container(_by(objects, "StatefulSet", "project-postgres"), "postgres")
+    assert pg["env"][1]["valueFrom"]["secretKeyRef"]["name"] == "project-admin"
+    assert "lifecycle" in pg
+    assert "unix_socket_directories=/tmp,/var/run/postgresql" in pg["args"]
+    assert "role-bootstrap" in str(pg["volumeMounts"])
+    assert "omnia-project-db-ready" in str(pg["readinessProbe"])
+
+
+def test_published_app_cannot_override_controller_database_identity() -> None:
+    objects = kp.build_objects(_spec(app_env={"PGUSER": "postgres", "PGHOST": "foreign-db"}))
+    app = _container(_by(objects, "Deployment", "app"), "app")
+    values = {item["name"]: item.get("value") for item in app["env"]}
+    assert values["PGUSER"] == "omnia_project_runtime"
+    assert values["PGHOST"] == "project-postgres"
+
+
+def test_project_role_bootstrap_failure_blocks_generated_app_activation(monkeypatch) -> None:
+    api = FakeApi()
+
+    def wait(kind, name, *_args):
+        if name == "project-postgres":
+            raise kp.PublicationPlacementError("project role bootstrap did not become ready")
+
+    monkeypatch.setattr(api, "wait_ready", wait)
+    with pytest.raises(kp.PublicationPlacementError, match="project role bootstrap"):
+        kp.KubernetesPublishedRuntime(api).publish(_spec())
+    applied = {(obj["kind"], obj["metadata"]["name"]) for obj in api.applied}
+    assert ("Secret", "project-role-bootstrap") in applied
+    assert ("Deployment", "app") not in applied
+    assert ("Deployment", "boundary") not in applied
+    assert ("Ingress", "public") not in applied
+
+
+def test_role_upgrade_stops_existing_guest_without_changing_its_image_or_claims():
+    api = FakeApi()
+    app = _by(kp.build_objects(_spec()), "Deployment", "app")
+    api.apply(app)
+    namespace = _spec().namespace
+    original = json.loads(json.dumps(app))
+    def get(_version, kind, name, ns):
+        item = api.objects.get((kind, name, ns))
+        if item and item["spec"].get("replicas") == 0:
+            return {**item, "status": {"observedGeneration": 1, "replicas": 0}}
+        return item
+    api.get = get
+    kp.KubernetesPublishedRuntime(api).quiesce_project_app(namespace)
+    stopped = api.applied[-1]
+    assert stopped["spec"]["replicas"] == 0
+    assert stopped["spec"]["template"] == original["spec"]["template"]
+    assert not api.deleted
+
+
+def test_role_upgrade_cannot_proceed_with_unconfirmed_guest_death():
+    api = FakeApi()
+    api.apply(_by(kp.build_objects(_spec()), "Deployment", "app"))
+    runtime = kp.KubernetesPublishedRuntime(api, ready_timeout_seconds=0)
+    with pytest.raises(kp.PublicationPlacementError, match="quiesce"):
+        runtime.quiesce_project_app(_spec().namespace)
+
+
+def test_database_role_upgrade_can_prepare_without_guest_activation():
+    api = FakeApi()
+    result = kp.KubernetesPublishedRuntime(api).publish(_spec(), activate_guest=False)
+    applied = {(obj["kind"], obj["metadata"]["name"]) for obj in api.applied}
+    assert ("StatefulSet", "project-postgres") in applied
+    assert ("Deployment", "app") not in applied
+    assert ("Deployment", "boundary") not in applied
+    assert ("Ingress", "public") not in applied
+    assert result.namespace == _spec().namespace
+    assert api.waited[-1] == ("StatefulSet", "project-postgres")

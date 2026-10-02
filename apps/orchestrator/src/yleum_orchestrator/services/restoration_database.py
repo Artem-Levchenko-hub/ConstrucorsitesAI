@@ -9,6 +9,20 @@ from typing import Any
 from yleum_orchestrator.core.cell_resources import CellResourceError
 from yleum_orchestrator.services.project_machine import machine_remaining_seconds
 
+TRUSTED_ADMIN_PGOPTIONS = " ".join(
+    "-c " + setting for setting in (
+        "search_path=public",
+        "log_statement=none",
+        "log_duration=off",
+        "log_min_duration_statement=-1",
+        "log_min_duration_sample=-1",
+        "log_transaction_sample_rate=0",
+        "log_min_error_statement=panic",
+        "session_preload_libraries=",
+        "local_preload_libraries=",
+    )
+)
+
 
 class ControllerDatabaseError(CellResourceError):
     """Safe diagnostics only; SQL/error rows never cross the controller boundary."""
@@ -21,8 +35,12 @@ class ControllerDatabaseError(CellResourceError):
 
 def admin_args(backend: Any) -> tuple[list[str], dict[str, str]]:
     return (
-        ["-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"],
-        {"PGPASSWORD": backend.project_postgres_password},
+        ["-h", "/tmp", "-U", "postgres", "-d", "postgres"],
+        # Startup options override retained postgres role defaults before the
+        # first trusted statement can resolve a generated public function.
+        # Omitting pg_catalog keeps it implicitly first while public remains
+        # the creation/lookup schema for existing restoration SQL callers.
+        {"PGOPTIONS": TRUSTED_ADMIN_PGOPTIONS},
     )
 
 
@@ -30,10 +48,38 @@ def admin_sql(
     backend: Any, sql: str, *, max_bytes: int = 4 * 1024 * 1024,
     lifetime_seconds: int | None = None,
 ) -> bytes:
+    args, env = admin_args(backend)
+    return _controller_sql(backend, sql, args=args, env=env, user="postgres",
+                           max_bytes=max_bytes, lifetime_seconds=lifetime_seconds)
+
+
+def migrator_sql(
+    backend: Any, sql: str, *, max_bytes: int = 8192,
+    lifetime_seconds: int | None = None,
+) -> bytes:
+    """User SQL logs in directly; RESET ROLE can never recover administrator identity."""
+    from yleum_orchestrator.services.project_database_roles import PROJECT_MIGRATOR_ROLE
+
+    credentials = backend.database_credentials()
+    return _controller_sql(
+        backend, sql,
+        args=["-h", "127.0.0.1", "-U", PROJECT_MIGRATOR_ROLE, "-d", "postgres"],
+        # Trusted bootstrap resets this login's global and per-DB role defaults.
+        # SUSET admin logging/preload options cannot be set by a limited LOGIN;
+        # retain only USERSET startup overrides on this actual migrator session.
+        env={"PGPASSWORD": credentials.migrator_password,
+             "PGOPTIONS": "-c search_path=public -c local_preload_libraries="}, user="postgres",
+        max_bytes=max_bytes, lifetime_seconds=lifetime_seconds,
+    )
+
+
+def _controller_sql(
+    backend: Any, sql: str, *, args: list[str], env: dict[str, str], user: str,
+    max_bytes: int, lifetime_seconds: int | None,
+) -> bytes:
     postgres = backend._project_postgres()
     if postgres is None:
         raise CellResourceError("project database is not running")
-    args, env = admin_args(backend)
     command = ["psql", "-X", "-qAt", "-v", "ON_ERROR_STOP=1",
                "-v", "VERBOSITY=sqlstate", *args]
     if lifetime_seconds is not None:
@@ -48,6 +94,7 @@ def admin_sql(
         command,
         stdin=True,
         environment=env,
+        user=user,
     )
     connection = backend.client.api.exec_start(execution["Id"], socket=True)
     error_states: list[str] = []

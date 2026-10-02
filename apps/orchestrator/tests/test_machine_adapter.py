@@ -180,6 +180,80 @@ async def test_publication_checkpoint_can_capture_only_release_workspace_without
     assert captured["volumes"] == ("release-workspace",)
 
 
+@pytest.mark.parametrize("role_protocol", [None, 1], ids=["legacy_unproved", "reconciled"])
+async def test_persisted_checkpoint_role_provenance_requires_current_database_protocol(
+    tmp_path,
+    monkeypatch,
+    role_protocol,
+):
+    import json
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.routers import workspace
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+    from yleum_orchestrator.services.published_machine_backend import PublishedMachineBackend
+
+    api = module()
+    workspace_id = uuid4()
+    manifest = MachineManifest.model_validate(payload())
+    metadata = {"environment_revision": "old", "environment_schema_digest": "old"}
+    if role_protocol is not None:
+        metadata["project_database_role_protocol"] = role_protocol
+    else:
+        metadata["environment_project_db_role_protocol"] = 1
+    reference = MachineEnvironmentRef(
+        workspace_id=workspace_id,
+        image_id="sha256:" + "a" * 64,
+        artifact_ref="b" * 32 + ".tar",
+        sha256="c" * 64,
+        size=1,
+        base_image="base",
+        manifest_digest=manifest.digest(),
+        volumes=(),
+        manifest=manifest,
+    )
+
+    class Store:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def capture(self, **kwargs):
+            return reference
+
+    backend = SimpleNamespace(
+        base_image="base",
+        disk_bytes=1024,
+        workspace_volume="owned-source",
+        metadata_path=tmp_path / "docker.json",
+        _container=lambda: object(),
+        _metadata=lambda: dict(metadata),
+        snapshot_volume_names=lambda _: (),
+    )
+    adapter = api.MachineAdapter(
+        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "state")), SimpleNamespace()
+    )
+    adapter.exists = lambda _: True
+    adapter.parts = lambda _: (
+        SimpleNamespace(state=lambda: {"manifest": manifest.model_dump(mode="json")}),
+        backend,
+    )
+    monkeypatch.setattr(api, "MachineEnvironmentStore", Store)
+    monkeypatch.setattr(
+        workspace,
+        "_read_agent_workspace_files",
+        AsyncMock(return_value={"README.md": "retained source"}),
+    )
+    monkeypatch.setattr(PublishedMachineBackend, "schema_digest", lambda _: "a" * 64)
+    await adapter.checkpoint(SimpleNamespace(workspace_id=workspace_id))
+    saved = json.loads(backend.metadata_path.read_text())
+    assert saved["environment_revision"] != "old"
+    assert saved["environment_schema_digest"] == "a" * 64
+    if role_protocol == 1:
+        assert saved["environment_project_db_role_protocol"] == 1
+    else:
+        assert "environment_project_db_role_protocol" not in saved
+
+
 @pytest.mark.parametrize("activation_fails", [False, True])
 async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activation_fails):
     from unittest.mock import AsyncMock
@@ -312,7 +386,7 @@ def test_capabilities_advertise_dedicated_project_postgres():
     assert capabilities["portable_machine"] is True
     assert capabilities["dedicated_postgres"] is True
     assert capabilities["database_url_env"] == "DATABASE_URL"
-    assert capabilities["database_admin"] == "full"
+    assert capabilities["database_admin"] == "runtime-crud"
 
 
 def test_capabilities_never_advertise_protected_database_or_encrypted_crud():
@@ -320,7 +394,7 @@ def test_capabilities_never_advertise_protected_database_or_encrypted_crud():
     runtime = module().MachineAdapter(SimpleNamespace(), settings)
     runtime.parts = lambda _state: pytest.fail("capabilities must not inspect workspace policy")
     capabilities = runtime.capabilities()
-    assert capabilities["database_admin"] == "full"
+    assert capabilities["database_admin"] == "runtime-crud"
     assert "secure_data_crud" not in capabilities
 
 

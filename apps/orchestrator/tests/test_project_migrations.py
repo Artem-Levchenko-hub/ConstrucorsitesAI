@@ -32,17 +32,31 @@ def test_transactional_sql_source_error_is_safe_repair_feedback(monkeypatch, sta
     def fail(*args, **kwargs):
         raise ControllerDatabaseError(sqlstate=state, terminated=True)
 
-    monkeypatch.setattr(module, "admin_sql", fail)
+    monkeypatch.setattr(module, "admin_sql", lambda *a, **kw: ("a" * 64).encode())
+    monkeypatch.setattr(module, "migrator_sql", fail)
     with pytest.raises(CellResourceError, match=rf"project-migration-source-error:{state}"):
-        module.run_project_migrations({} , {"drizzle/0002.sql": "invalid"}, verify_only=False)
+        module.run_project_migrations(
+            SimpleNamespace(bootstrap_project_database_roles=lambda: None),
+            {"drizzle/0002.sql": "invalid"},
+            verify_only=False,
+        )
 
 
-@pytest.mark.parametrize("state,terminated,verify_only", [
-    ("42P01", False, False), ("42P01", True, True),
-    ("P0001", True, False), ("57014", True, False), (None, True, False),
-])
+@pytest.mark.parametrize(
+    "state,terminated,verify_only",
+    [
+        ("42P01", False, False),
+        ("42P01", True, True),
+        ("P0001", True, False),
+        ("57014", True, False),
+        (None, True, False),
+    ],
+)
 def test_unknown_adaptation_and_policy_errors_never_offer_source_replay(
-    monkeypatch, state, terminated, verify_only,
+    monkeypatch,
+    state,
+    terminated,
+    verify_only,
 ):
     from yleum_orchestrator.services import project_migrations as module
     from yleum_orchestrator.services.restoration_database import ControllerDatabaseError
@@ -50,9 +64,14 @@ def test_unknown_adaptation_and_policy_errors_never_offer_source_replay(
     def fail(*args, **kwargs):
         raise ControllerDatabaseError(sqlstate=state, terminated=terminated)
 
-    monkeypatch.setattr(module, "admin_sql", fail)
+    monkeypatch.setattr(module, "admin_sql", lambda *a, **kw: ("a" * 64).encode())
+    monkeypatch.setattr(module, "migrator_sql", fail)
     with pytest.raises(CellResourceError) as error:
-        module.run_project_migrations({}, {"drizzle/0002.sql": "invalid"}, verify_only=verify_only)
+        module.run_project_migrations(
+            SimpleNamespace(bootstrap_project_database_roles=lambda: None),
+            {"drizzle/0002.sql": "invalid"},
+            verify_only=verify_only,
+        )
     assert "project-migration-source-error" not in str(error.value)
 
 
@@ -62,13 +81,16 @@ def test_controller_output_retains_only_sqlstate_not_sql_or_secret_rows():
     def frame(stream, data):
         return bytes([stream, 0, 0, 0]) + len(data).to_bytes(4, "big") + data
 
-    chunks = iter([
-        frame(2, b'ERROR:  42P01\nDETAIL: password=SECRET row=PRIVATE\n'),
-        frame(1, b'{}\n'), b'',
-    ])
+    chunks = iter(
+        [
+            frame(2, b"ERROR:  42P01\nDETAIL: password=SECRET row=PRIVATE\n"),
+            frame(1, b"{}\n"),
+            b"",
+        ]
+    )
     connection = SimpleNamespace(_sock=SimpleNamespace(recv=lambda _: next(chunks)))
     states = []
-    assert read_controller_output(connection, max_bytes=1024, error_states=states) == b'{}\n'
+    assert read_controller_output(connection, max_bytes=1024, error_states=states) == b"{}\n"
     assert states == ["42P01"]
 
 
@@ -137,9 +159,14 @@ def test_r1_extra_project_journal_does_not_change_business_schema_compatibility(
     from yleum_orchestrator.services.restoration_data_contract import DataContract, assess_contract
 
     business = {"name": "notes", "columns": [{"name": "id", "type": "integer"}]}
-    journal = {"name": "__omnia_project_migrations", "columns": [
-        {"name": "name", "type": "text"}, {"name": "sha256", "type": "text"},
-        {"name": "applied_at", "type": "timestamptz"}]}
+    journal = {
+        "name": "__omnia_project_migrations",
+        "columns": [
+            {"name": "name", "type": "text"},
+            {"name": "sha256", "type": "text"},
+            {"name": "applied_at", "type": "timestamptz"},
+        ],
+    }
     old = DataContract.model_validate({"version": 1, "tables": [business]})
     current = DataContract.model_validate({"version": 1, "tables": [business, journal]})
     assert assess_contract(old, current).blockers == []

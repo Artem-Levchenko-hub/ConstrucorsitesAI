@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 from types import SimpleNamespace
 
 import pytest
 
-DRIZZLE_CONFIG = '''import type { Config } from "drizzle-kit";
+DRIZZLE_CONFIG = """import type { Config } from "drizzle-kit";
 
 export default {
   schema: "./src/lib/db/schema.ts",
@@ -15,7 +16,7 @@ export default {
     url: process.env.DATABASE_URL as string,
   },
 } satisfies Config;
-'''
+"""
 
 
 # Отпечатки всех версий исполнителя миграций, когда-либо бывших в шаблоне.
@@ -36,6 +37,7 @@ def _template_runner() -> str:
     return (root / "templates/max-miniapp-nextjs/scripts/apply-migrations.mjs").read_text(
         encoding="utf-8"
     )
+
 
 def drizzle_files(**changes: str) -> dict[str, str]:
     files = {
@@ -65,6 +67,12 @@ importers:
     }
     files.update(changes)
     return files
+
+
+def sql_files() -> dict[str, str]:
+    # Structural acceptance must exercise the supported limited SQL recipe;
+    # schema-only JS versions have a separate explicit adaptation criterion.
+    return drizzle_files(**{"drizzle/0002_tasks.sql": "CREATE TABLE qa_tasks(id uuid);"})
 
 
 def test_schema_only_drizzle_materializer_uses_direct_exact_argv():
@@ -342,6 +350,7 @@ async def _prepare_empty(
     materialized_schema: str = "exact",
     project_only_catalog: bool = False,
     legacy_identity: bool = False,
+    sql_calls: list | None = None,
 ):
     from tests.test_code_restoration_engine import Lock
     from tests.test_project_machine_manifest import payload
@@ -354,6 +363,37 @@ async def _prepare_empty(
     request = _prepare_request(files)
     manifest = MachineManifest.model_validate(payload())
     events: list[object] = []
+    from yleum_orchestrator.services import project_migrations
+
+    def execute_sql(_backend, envelope, **_kwargs):
+        # The fake asserts the SQL transport boundary, then observes the exact
+        # inventory bytes that the real server EXECUTE receives as source.
+        match = re.fullmatch(
+            r"DO \$omnia_restore\$ BEGIN EXECUTE pg_catalog\.convert_from\("
+            r"pg_catalog\.decode\('([0-9a-f]*)', 'hex'\), 'UTF8'\); "
+            r"END \$omnia_restore\$;",
+            envelope,
+        )
+        assert match is not None, "historical source must remain SQL data, never psql commands"
+        sql = bytes.fromhex(match.group(1)).decode("utf-8")
+        events.append(("limited-migration", sql))
+        if sql_calls is not None:
+            sql_calls.append(("executed", sql))
+
+    def record_sql(_backend, selected):
+        events.append(("migration-receipt", selected))
+        if sql_calls is not None:
+            sql_calls.append(("recorded", selected))
+
+    monkeypatch.setattr(module, "migrator_sql", execute_sql)
+    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations", record_sql)
+    monkeypatch.setattr(
+        module,
+        "admin_sql",
+        lambda *_args, **_kwargs: pytest.fail(
+            "historical user SQL must never use administrator login"
+        ),
+    )
     engine = object.__new__(CodeRestorationEngine)
     engine.root = tmp_path
     engine.settings = SimpleNamespace(cell_required_free_disk_bytes=0)
@@ -426,6 +466,10 @@ async def _prepare_empty(
         workspace_volume="candidate-code",
         project_postgres_volume="candidate-db",
         base_image="image",
+        prepare_project_database_migrations=lambda epoch: events.append(
+            ("candidate-quiesced", epoch)
+        ),
+        bootstrap_project_database_roles=lambda: events.append("candidate-roles-reconciled"),
         stop_machine=lambda: events.append("candidate-writers-stopped"),
         stop=lambda: events.append("candidate-stopped"),
     )
@@ -553,9 +597,7 @@ async def _prepare_empty(
             actual_payload["tables"][0]["columns"].pop()
         elif materialized_schema == "missing_max_catalog_items":
             actual_payload["tables"] = [
-                table
-                for table in actual_payload["tables"]
-                if table["name"] != "max_catalog_items"
+                table for table in actual_payload["tables"] if table["name"] != "max_catalog_items"
             ]
         actual = DataContract.model_validate(actual_payload)
         return actual, [], []
@@ -583,7 +625,6 @@ async def _prepare_empty(
 
     engine._start = start
     engine._verify_source = lambda *_args: events.append("source-verified")
-    engine._rotate_database_password = lambda *_args: events.append("password-rotated")
     engine._capture_code = lambda *_args, **_kwargs: "2" * 64
     engine._capture_database = lambda *_args, **_kwargs: "3" * 64
 
@@ -594,10 +635,10 @@ async def _prepare_empty(
     return await engine.prepare(request), events
 
 
-async def test_schema_only_empty_prepare_is_exact_ready_and_uses_no_compatibility(
+async def test_sql_inventory_empty_prepare_is_exact_ready_and_uses_no_compatibility(
     tmp_path, monkeypatch
 ):
-    result, events = await _prepare_empty(tmp_path, monkeypatch, drizzle_files())
+    result, events = await _prepare_empty(tmp_path, monkeypatch, sql_files())
 
     assert result["state"] == "ready"
     assert result["report"]["mode"] == "exact"
@@ -611,22 +652,33 @@ async def test_schema_only_empty_prepare_is_exact_ready_and_uses_no_compatibilit
     assert result["report"]["retained_data"][0] == (
         "Действующая публикация не меняется. Обновить её можно отдельно."
     )
-    assert events.index("historical-contract-derived") < events.index(
-        "candidate-catalog-observed"
+    assert events.index("historical-contract-derived") < events.index("candidate-catalog-observed")
+    assert ("limited-migration", sql_files()["drizzle/0002_tasks.sql"]) in events
+    assert (
+        events.index(("candidate-quiesced", 1))
+        < events.index(("limited-migration", sql_files()["drizzle/0002_tasks.sql"]))
+        < events.index("candidate-roles-reconciled")
+        < events.index("started")
     )
-    migration = next(
-        item
-        for item in events
-        if isinstance(item, tuple) and item[0] == "empty-database-migrations"
+    assert events.index("candidate-catalog-observed") < events.index(
+        ("migration-receipt", {"drizzle/0002_tasks.sql": sql_files()["drizzle/0002_tasks.sql"]})
     )
-    assert migration[1] == [
-        "pnpm",
-        "exec",
-        "drizzle-kit",
-        "push",
-        "--config=drizzle.config.ts",
-        "--force",
-    ]
+    assert not any(
+        isinstance(item, tuple) and item[0] == "empty-database-migrations" for item in events
+    )
+
+
+async def test_schema_only_empty_prepare_requires_adaptation_without_elevated_js(
+    tmp_path,
+    monkeypatch,
+):
+    result, events = await _prepare_empty(tmp_path, monkeypatch, drizzle_files())
+    assert result["state"] == "needs_changes"
+    assert result["report"]["database_state"] == "empty"
+    assert "SQL-миграций" in result["report"]["blockers"][0]
+    assert "адаптация" in result["report"]["blockers"][0]
+    assert "candidate-provisioned" not in events
+    assert not any(isinstance(item, tuple) for item in events)
 
 
 @pytest.mark.parametrize("database_state", ["empty", "present", "unknown"])
@@ -646,26 +698,27 @@ def test_preserve_current_report_describes_data_without_promising_same_database(
 
 
 async def test_direct_sql_r0_records_only_executed_sql_after_physical_schema_check(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    from yleum_orchestrator.services import code_restoration_engine as engine_module
-    from yleum_orchestrator.services import project_migrations
-
     calls = []
-    monkeypatch.setattr(engine_module, "admin_sql", lambda _backend, sql, **kw:
-                        calls.append(("executed", sql)))
-    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations",
-                        lambda _backend, sql: calls.append(("recorded", sql)))
     files = drizzle_files()
     files.pop("drizzle.config.ts")
     files["drizzle/0002_tasks.sql"] = "CREATE TABLE qa_tasks(id uuid);"
-    result, _events = await _prepare_empty(tmp_path, monkeypatch, files)
+    result, _events = await _prepare_empty(tmp_path, monkeypatch, files, sql_calls=calls)
     assert result["state"] == "ready"
-    assert calls == [("executed", files["drizzle/0002_tasks.sql"]),
-                     ("recorded", {"drizzle/0002_tasks.sql": files["drizzle/0002_tasks.sql"]})]
+    assert calls == [
+        ("executed", files["drizzle/0002_tasks.sql"]),
+        ("recorded", {"drizzle/0002_tasks.sql": files["drizzle/0002_tasks.sql"]}),
+    ]
     calls.clear()
-    result, _events = await _prepare_empty(tmp_path / "rejected", monkeypatch, files,
-                                          materialized_schema="missing_table")
+    result, _events = await _prepare_empty(
+        tmp_path / "rejected",
+        monkeypatch,
+        files,
+        materialized_schema="missing_table",
+        sql_calls=calls,
+    )
     assert result["state"] == "needs_changes"
     assert not any(kind == "recorded" for kind, _ in calls)
 
@@ -691,20 +744,18 @@ def _external_core_files():
 
 
 async def test_external_core_r0_does_not_materialize_obsolete_canonical_core(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    from yleum_orchestrator.services import code_restoration_engine as module
-    from yleum_orchestrator.services import project_migrations
-
     files = _external_core_files()
     sql = files["drizzle/0002_tasks.sql"]
     calls = []
-    monkeypatch.setattr(module, "admin_sql", lambda _backend, statement, **kw:
-                        calls.append(("executed", statement)))
-    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations",
-                        lambda _backend, selected: calls.append(("recorded", selected)))
     result, _ = await _prepare_empty(
-        tmp_path, monkeypatch, files, project_only_catalog=True,
+        tmp_path,
+        monkeypatch,
+        files,
+        project_only_catalog=True,
+        sql_calls=calls,
     )
     assert result["state"] == "ready"
     assert calls == [("executed", sql), ("recorded", {"drizzle/0002_tasks.sql": sql})]
@@ -745,69 +796,50 @@ def test_external_core_projection_rejects_ambiguous_source(change):
 
 
 async def test_external_core_r0_does_not_hide_actual_same_named_project_table(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    from yleum_orchestrator.services import code_restoration_engine as module
-    from yleum_orchestrator.services import project_migrations
-
     files = _external_core_files()
-    monkeypatch.setattr(module, "admin_sql", lambda *_args, **_kwargs: "")
-    recorded = []
-    monkeypatch.setattr(project_migrations, "record_witnessed_project_migrations",
-                        lambda *_args: recorded.append(True))
+    calls = []
     # Actual catalog includes max_catalog_items; never remove it from observation.
-    result, _ = await _prepare_empty(tmp_path, monkeypatch, files)
+    result, _ = await _prepare_empty(tmp_path, monkeypatch, files, sql_calls=calls)
     assert result["state"] == "needs_changes"
-    assert result["report"]["blockers"] == [
-        "Историческая схема не создана в изолированной базе."
-    ]
-    assert not recorded
+    assert result["report"]["blockers"] == ["Историческая схема не создана в изолированной базе."]
+    assert not any(kind == "recorded" for kind, _ in calls)
 
 
 async def test_embedded_legacy_identity_keeps_historical_materialization(
-    tmp_path, monkeypatch,
+    tmp_path,
+    monkeypatch,
 ):
-    from yleum_orchestrator.services import code_restoration_engine as module
-    from yleum_orchestrator.services import project_migrations
-
     files = _external_core_files()
-    executed = []
-    monkeypatch.setattr(module, "admin_sql", lambda _backend, sql, **kw: executed.append(sql))
-    monkeypatch.setattr(
-        project_migrations, "record_witnessed_project_migrations", lambda *_args: None,
-    )
-    result, events = await _prepare_empty(tmp_path, monkeypatch, files, legacy_identity=True)
-    assert result["state"] == "ready"
-    assert executed == [files[name] for name in sorted(files) if name.endswith(".sql")]
-    assert "identity-installed" in events
-
-
-async def test_successful_materializer_without_expected_table_needs_changes(
-    tmp_path, monkeypatch
-):
+    calls = []
     result, events = await _prepare_empty(
         tmp_path,
         monkeypatch,
-        drizzle_files(),
+        files,
+        legacy_identity=True,
+        sql_calls=calls,
+    )
+    assert result["state"] == "ready"
+    assert [sql for kind, sql in calls if kind == "executed"] == [
+        files[name] for name in sorted(files) if name.endswith(".sql")
+    ]
+    assert "identity-installed" in events
+
+
+async def test_successful_materializer_without_expected_table_needs_changes(tmp_path, monkeypatch):
+    result, events = await _prepare_empty(
+        tmp_path,
+        monkeypatch,
+        sql_files(),
         materialized_schema="missing_table",
     )
 
-    assert (
-        "empty-database-migrations",
-        [
-            "pnpm",
-            "exec",
-            "drizzle-kit",
-            "push",
-            "--config=drizzle.config.ts",
-            "--force",
-        ],
-    ) in events
+    assert ("limited-migration", sql_files()["drizzle/0002_tasks.sql"]) in events
     assert result["state"] == "needs_changes"
     assert result["report"]["database_state"] == "empty"
-    assert result["report"]["blockers"] == [
-        "Историческая схема не создана в изолированной базе."
-    ]
+    assert result["report"]["blockers"] == ["Историческая схема не создана в изолированной базе."]
     assert "identity-installed" not in events
 
 
@@ -815,35 +847,29 @@ async def test_materializer_missing_json_column_needs_changes(tmp_path, monkeypa
     result, events = await _prepare_empty(
         tmp_path,
         monkeypatch,
-        drizzle_files(),
+        sql_files(),
         materialized_schema="missing_json_column",
     )
 
     assert result["state"] == "needs_changes"
-    assert result["report"]["blockers"] == [
-        "Историческая схема не создана в изолированной базе."
-    ]
+    assert result["report"]["blockers"] == ["Историческая схема не создана в изолированной базе."]
     assert "identity-installed" not in events
 
 
-async def test_materializer_missing_named_max_business_table_needs_changes(
-    tmp_path, monkeypatch
-):
+async def test_materializer_missing_named_max_business_table_needs_changes(tmp_path, monkeypatch):
     result, events = await _prepare_empty(
         tmp_path,
         monkeypatch,
-        drizzle_files(),
+        sql_files(),
         materialized_schema="missing_max_catalog_items",
     )
 
     assert result["state"] == "needs_changes"
-    assert result["report"]["blockers"] == [
-        "Историческая схема не создана в изолированной базе."
-    ]
+    assert result["report"]["blockers"] == ["Историческая схема не создана в изолированной базе."]
     assert "identity-installed" not in events
 
 
-async def test_legacy_empty_prepare_still_uses_historical_runner(tmp_path, monkeypatch):
+async def test_legacy_js_only_empty_prepare_requires_explicit_adaptation(tmp_path, monkeypatch):
     result, events = await _prepare_empty(
         tmp_path,
         monkeypatch,
@@ -853,8 +879,11 @@ async def test_legacy_empty_prepare_still_uses_historical_runner(tmp_path, monke
         },
     )
 
-    assert result["state"] == "ready"
-    assert ("empty-database-migrations", ["node", "scripts/apply-migrations.mjs"]) in events
+    assert result["state"] == "needs_changes"
+    assert "SQL-миграций" in result["report"]["blockers"][0]
+    assert "адаптация" in result["report"]["blockers"][0]
+    assert "candidate-provisioned" not in events
+    assert not any(isinstance(item, tuple) for item in events)
 
 
 async def test_missing_empty_schema_recipe_fails_before_candidate_with_empty_state(
@@ -872,8 +901,6 @@ async def test_missing_empty_schema_recipe_fails_before_candidate_with_empty_sta
     blocker = result["report"]["blockers"][0]
     assert "drizzle.config.ts" in blocker and "pnpm-lock.yaml" in blocker
     assert "candidate-provisioned" not in events
-
-
 
 
 def test_unchanged_config_hash_binds_candidate() -> None:

@@ -48,13 +48,19 @@ def _stale_policy(value):
     (root / "postgres-hba.conf").write_text("local all all reject\n")
 
 
-def test_runtime_always_connects_as_project_postgres_user_despite_stale_policy(tmp_path):
+def test_runtime_uses_durable_limited_project_role_despite_stale_policy(tmp_path):
     value = backend(tmp_path)
     _stale_policy(value)
     env = value.project_database_env()
-    assert env["PGUSER"] == "postgres"
-    assert env["PGPASSWORD"] == "old-agent-password"
-    assert env["DATABASE_URL"].startswith("postgresql://postgres:old-agent-password@")
+    credentials = value.database_credentials()
+    assert env["PGUSER"] == "omnia_project_runtime"
+    assert env["PGPASSWORD"] == credentials.runtime_password
+    assert env["DATABASE_URL"].startswith(
+        "postgresql://omnia_project_runtime:" + credentials.runtime_password + "@"
+    )
+    assert credentials.admin_password not in json.dumps(env)
+    assert credentials.migrator_password not in json.dumps(env)
+    assert "old-agent-password" not in json.dumps(env)
     assert "omnia_runtime" not in json.dumps(env)
     assert "stale-runtime-password" not in json.dumps(env)
     assert replace(value, owner_id=uuid4()).project_database_env() == env
@@ -64,8 +70,11 @@ def test_project_postgres_uses_its_own_configuration_despite_stale_policy(tmp_pa
     value = backend(tmp_path)
     _stale_policy(value)
     options = value._project_postgres_options("guard", 2)
-    assert "unix_socket_directories=" in options["command"]
-    assert not any("hba_file" in item or "config_file" in item for item in options["command"])
+    assert "unix_socket_directories=/tmp" in options["command"]
+    assert "hba_file=/var/lib/postgresql/data/pg_hba.conf" in options["command"]
+    assert not any("config_file" in item or str(value.root) in item for item in options["command"])
+    assert "PGPASSWORD" not in options["environment"]
+    assert "POSTGRES_PASSWORD" not in options["environment"]
     assert [mount["bind"] for mount in options["volumes"].values()] == ["/var/lib/postgresql/data"]
 
 

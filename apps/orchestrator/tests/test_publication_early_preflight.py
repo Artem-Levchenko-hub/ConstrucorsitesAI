@@ -43,7 +43,7 @@ class Source:
         self.environment_ref = environment_ref
 
     def _metadata(self) -> dict:
-        return {"environment_ref": self.environment_ref} if self.environment_ref else {}
+        return {"project_database_role_protocol": 1, "environment_ref": self.environment_ref}
 
 
 class Adapter:
@@ -140,6 +140,7 @@ def build(tmp_path, monkeypatch, *, active_release, production_digests, environm
 
 def release_for(manifest: MachineManifest, schema: str) -> dict:
     return {
+        "project_database_role_protocol": 1,
         "release_id": str(UUID(int=77)),
         "schema_digest": schema,
         "data_contract_digest": data_contract_digest(manifest),

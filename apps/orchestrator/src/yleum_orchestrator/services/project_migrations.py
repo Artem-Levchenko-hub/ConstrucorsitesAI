@@ -4,16 +4,46 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from typing import Any
 from uuid import uuid5
 
 from yleum_orchestrator.core.cell_resources import CellResourceError
-from yleum_orchestrator.services.restoration_database import ControllerDatabaseError, admin_sql
+from yleum_orchestrator.services.restoration_database import (
+    ControllerDatabaseError,
+    admin_sql,
+    migrator_sql,
+)
 
 RECEIPT_PREFIX = "[project-migrations:v1]"
 LEGACY_PATHS = ("drizzle/0000_max_core.sql", "drizzle/0001_business_core.sql")
 _JOURNAL = "public.__omnia_project_migrations"
+ADOPTION_PREFLIGHT_SQL = "BEGIN;\n" + """DO $adoption$
+DECLARE item record; populated boolean; visited integer := 0;
+BEGIN
+ IF pg_catalog.to_regclass('public.__omnia_project_migrations') IS NULL THEN
+  FOR item IN SELECT n.nspname, c.relname, c.relkind FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+    WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
+      AND c.relkind IN ('r','p','f','m') ORDER BY n.nspname,c.relname
+  LOOP
+    visited := visited + 1;
+    IF visited > 256 OR item.relkind IN ('f','m') THEN
+      RAISE EXCEPTION 'untracked project database requires explicit reconciliation';
+    END IF;
+    EXECUTE pg_catalog.format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE',
+                              item.nspname,item.relname);
+    EXECUTE pg_catalog.format('SELECT EXISTS (SELECT 1 FROM %I.%I LIMIT 1)',
+                              item.nspname,item.relname)
+      INTO populated;
+    IF populated THEN
+      RAISE EXCEPTION 'populated project database has no migration journal; reconcile explicitly';
+    END IF;
+  END LOOP;
+ END IF;
+END $adoption$;""" + "\nCOMMIT;"
+
 SOURCE_SQL_ERRORS = {
     "42P01": "A referenced relation is absent from the product database",
     "42703": "A referenced column is absent from the product database",
@@ -72,9 +102,17 @@ def migration_sql(
     verify_only: bool,
     verify_applied: bool = False,
     record_witnessed: bool = False,
+    database_identity: str | None = None,
 ) -> str:
     if record_witnessed and (verify_only or verify_applied):
         raise ValueError("cannot record SQL during read-only verification")
+    if database_identity is not None and re.fullmatch(r"[0-9a-f]{64}", database_identity) is None:
+        raise ValueError("trusted database identity is invalid")
+    identity_expression = ("'" + database_identity + "'" if database_identity is not None else
+        "pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+        "pg_catalog.current_database() || ':' || "
+        "(SELECT system_identifier::pg_catalog.text FROM "
+        "pg_catalog.pg_control_system()), 'UTF8')), 'hex')")
     inventory = {path: hashlib.sha256(sql.encode()).hexdigest() for path, sql in migrations.items()}
     digest = hashlib.sha256(json.dumps(inventory, sort_keys=True).encode()).hexdigest()
     statements = [
@@ -85,15 +123,18 @@ def migration_sql(
         "SET LOCAL search_path = public, pg_catalog;",
     ]
     if migrations and not verify_only:
-        statements.append("SELECT pg_advisory_xact_lock(hashtext('omnia:project:migrations:v1'));")
+        statements.append(
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtext('omnia:project:migrations:v1'));"
+        )
         if not verify_applied and not record_witnessed:
             statements.append("""
 DO $adoption$
 DECLARE item record; populated boolean; visited integer := 0;
 BEGIN
- IF to_regclass('public.__omnia_project_migrations') IS NULL THEN
-  FOR item IN SELECT n.nspname, c.relname, c.relkind FROM pg_class c
-    JOIN pg_namespace n ON n.oid=c.relnamespace
+ IF pg_catalog.to_regclass('public.__omnia_project_migrations') IS NULL THEN
+  FOR item IN SELECT n.nspname, c.relname, c.relkind FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
       AND c.relkind IN ('r','p','f','m') ORDER BY n.nspname,c.relname
   LOOP
@@ -101,8 +142,10 @@ BEGIN
     IF visited > 256 OR item.relkind IN ('f','m') THEN
       RAISE EXCEPTION 'untracked project database requires explicit reconciliation';
     END IF;
-    EXECUTE format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE', item.nspname,item.relname);
-    EXECUTE format('SELECT EXISTS (SELECT 1 FROM %I.%I LIMIT 1)', item.nspname,item.relname)
+    EXECUTE pg_catalog.format('LOCK TABLE %I.%I IN ACCESS EXCLUSIVE MODE',
+                              item.nspname,item.relname);
+    EXECUTE pg_catalog.format('SELECT EXISTS (SELECT 1 FROM %I.%I LIMIT 1)',
+                              item.nspname,item.relname)
       INTO populated;
     IF populated THEN
       RAISE EXCEPTION 'populated project database has no migration journal; reconcile explicitly';
@@ -115,7 +158,12 @@ END $adoption$;
             statements.append(
                 f"CREATE TABLE IF NOT EXISTS {_JOURNAL} "
                 "(name text PRIMARY KEY, sha256 text NOT NULL, applied_at timestamptz "
-                "NOT NULL DEFAULT now());"
+                "NOT NULL DEFAULT pg_catalog.now());"
+            )
+            # Runtime CRUD defaults apply to business tables, never this
+            # controller journal, including while pending SQL is executing.
+            statements.append(
+                f"REVOKE ALL ON {_JOURNAL} FROM PUBLIC, omnia_project_runtime;"
             )
         blocks = []
         for path, sql in migrations.items():
@@ -141,36 +189,41 @@ END IF;
         # One transaction covers the entire pending batch. EXECUTE also prevents
         # migration transaction control from escaping the controller transaction.
         statements.append("DO $omnia$ BEGIN\n" + "\n".join(blocks) + "\nEND $omnia$;")
-        statements.append("SET LOCAL search_path = pg_catalog, public;")
+    # Verification/empty inventories never enter the apply branch. Every final
+    # receipt must use the same controller-selected resolution, independent of
+    # generated routines or SET search_path executed by migration source.
+    statements.append("SET LOCAL search_path = pg_catalog, public;")
     statements.append(f"""
 WITH catalog AS (
     SELECT 'relation' AS kind, n.nspname || '.' || c.relname AS name,
-           jsonb_build_array(c.relkind, c.relrowsecurity, c.relforcerowsecurity,
-             (SELECT jsonb_agg(jsonb_build_array(a.attname,
-               format_type(a.atttypid,a.atttypmod),
-               a.attnotnull, pg_get_expr(d.adbin,d.adrelid)) ORDER BY a.attnum)
-              FROM pg_attribute a LEFT JOIN pg_attrdef d
+           pg_catalog.jsonb_build_array(c.relkind, c.relrowsecurity, c.relforcerowsecurity,
+             (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(a.attname,
+               pg_catalog.format_type(a.atttypid,a.atttypmod),
+               a.attnotnull, pg_catalog.pg_get_expr(d.adbin,d.adrelid))
+                ORDER BY a.attnum)
+              FROM pg_catalog.pg_attribute a LEFT JOIN pg_catalog.pg_attrdef d
                 ON d.adrelid=a.attrelid AND d.adnum=a.attnum
-              WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped))::text AS definition
-    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+              WHERE a.attrelid=c.oid AND a.attnum>0 AND NOT a.attisdropped))
+               ::pg_catalog.text AS definition
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
     WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
     UNION ALL
-    SELECT 'constraint', n.nspname || '.' || c.conname, pg_get_constraintdef(c.oid)
-    FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace
+    SELECT 'constraint', n.nspname || '.' || c.conname, pg_catalog.pg_get_constraintdef(c.oid)
+    FROM pg_catalog.pg_constraint c JOIN pg_catalog.pg_namespace n ON n.oid=c.connamespace
     WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
     UNION ALL
-    SELECT 'index', n.nspname || '.' || c.relname, pg_get_indexdef(c.oid)
-    FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace WHERE c.relkind='i'
+    SELECT 'index', n.nspname || '.' || c.relname, pg_catalog.pg_get_indexdef(c.oid)
+    FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+      WHERE c.relkind='i'
       AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'
 )
-SELECT json_build_object(
+SELECT pg_catalog.json_build_object(
     'contract', 'project-migrations-v1', 'mode', '{"verify_only" if verify_only else "apply"}',
     'source_digest', '{digest}', 'migration_count', {len(migrations)},
-    'database_identity', encode(sha256(convert_to(current_database() || ':' ||
-        (SELECT system_identifier::text FROM pg_control_system()), 'UTF8')), 'hex'),
-    'catalog_digest', encode(sha256(convert_to(COALESCE(
-        (SELECT jsonb_agg(jsonb_build_array(kind,name,definition)
-                         ORDER BY kind,name,definition)::text
+    'database_identity', {identity_expression},
+    'catalog_digest', pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to(COALESCE(
+        (SELECT pg_catalog.jsonb_agg(pg_catalog.jsonb_build_array(kind,name,definition)
+                         ORDER BY kind,name,definition)::pg_catalog.text
          FROM catalog), '[]'), 'UTF8')), 'hex')
 );
 COMMIT;
@@ -187,13 +240,25 @@ def run_project_migrations(
     record_witnessed: bool = False,
 ) -> dict[str, Any]:
     try:
-        raw = admin_sql(
+        backend.bootstrap_project_database_roles()
+        identity = admin_sql(backend,
+            "SELECT pg_catalog.encode(pg_catalog.sha256(pg_catalog.convert_to("
+            "pg_catalog.current_database() || ':' || "
+            "(SELECT system_identifier::pg_catalog.text FROM "
+            "pg_catalog.pg_control_system()), 'UTF8')), 'hex');",
+            max_bytes=256, lifetime_seconds=5).decode().strip()
+        if re.fullmatch(r"[0-9a-f]{64}", identity) is None:
+            raise ValueError("trusted database identity is invalid")
+        if migrations and not (verify_only or verify_applied or record_witnessed):
+            admin_sql(backend, ADOPTION_PREFLIGHT_SQL, max_bytes=8192, lifetime_seconds=10)
+        raw = migrator_sql(
             backend,
             migration_sql(
                 migrations,
                 verify_only=verify_only,
                 verify_applied=verify_applied,
                 record_witnessed=record_witnessed,
+                database_identity=identity,
             ),
             max_bytes=8192,
             lifetime_seconds=50,
@@ -206,6 +271,7 @@ def run_project_migrations(
             for key in ("source_digest", "database_identity", "catalog_digest")
         ):
             raise ValueError("incomplete receipt")
+        backend.bootstrap_project_database_roles()
         return dict(receipt)
     except (CellResourceError, ValueError, TypeError, UnicodeError) as exc:
         if (

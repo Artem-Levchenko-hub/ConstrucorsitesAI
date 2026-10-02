@@ -9,7 +9,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import socket
 import time
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
@@ -32,7 +31,7 @@ from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
-from yleum_orchestrator.services.restoration_database import close_controller_socket
+from yleum_orchestrator.services.restoration_database import TRUSTED_ADMIN_PGOPTIONS
 
 
 class PublicationRecoveryRequired(CellResourceError):
@@ -362,7 +361,18 @@ class PublishedMachineBackend(DockerMachineBackend):
             ):
                 raise CellIdentityConflict("production runtime differs from accepted release")
             if container.status == "running":
-                return
+                configured = dict(
+                    item.split("=", 1)
+                    for item in container.attrs.get("Config", {}).get("Env", [])
+                    if "=" in item
+                )
+                expected = self.project_database_env()
+                if metadata.get("project_database_role_protocol") == 1 and all(
+                    configured.get(key) == value for key, value in expected.items()
+                ):
+                    return
+                # Same accepted image/volumes, but its old administrator login
+                # must pass normal ensure/recreation before any guest resumes.
         else:
             metadata = self._metadata()
             metadata.update(
@@ -376,52 +386,15 @@ class PublishedMachineBackend(DockerMachineBackend):
             write_controller_json(self.metadata_path, metadata)
         self.ensure(manifest, epoch)
 
-    def rotate_seeded_postgres(self, source_password: str) -> None:
-        """New physical copy carries source roles; rotate admin before public activation."""
-        actual_password = self.project_postgres_password
-        try:
-            self.project_postgres_password = source_password
-            postgres = self._project_postgres()
-            if postgres is None:
-                raise CellResourceError("seeded production postgres is not running")
-            sql = "ALTER ROLE postgres PASSWORD '" + actual_password.replace("'", "''") + "';\n"
-            # Credentials are passed through stdin, never command arguments or logs.
-            # postgres images do not promise Python. Use pgpass via exec environment;
-            # SQL still travels only over the attached stdin stream.
-            execution = self.client.api.exec_create(
-                postgres.id,
-                [
-                    "psql",
-                    "-X",
-                    "-v",
-                    "ON_ERROR_STOP=1",
-                    "-h",
-                    "127.0.0.1",
-                    "-U",
-                    "postgres",
-                    "-d",
-                    "postgres",
-                ],
-                stdin=True,
-                environment={"PGPASSWORD": source_password},
-            )
-            connection = self.client.api.exec_start(execution["Id"], socket=True)
-            try:
-                connection._sock.settimeout(machine_remaining_seconds(30))
-                connection._sock.sendall(sql.encode())
-                connection._sock.shutdown(socket.SHUT_WR)
-                while connection._sock.recv(8192):
-                    pass
-            finally:
-                close_controller_socket(connection)
-            outcome = self.client.api.exec_inspect(execution["Id"])
-            if outcome.get("Running") or outcome.get("ExitCode") != 0:
-                raise CellResourceError("production database credential rotation failed")
-        finally:
-            self.project_postgres_password = actual_password
-        self._wait_project_postgres_ready(postgres)
+    def rotate_seeded_postgres(self, source_password: str | None = None) -> None:
+        """A retained physical seed is rekeyed through its own private authority.
 
-    def schema_digest(self) -> str:
+        The legacy source argument is accepted for controller compatibility;
+        it is never a login credential or the new administrator password.
+        """
+        self.bootstrap_project_database_roles()
+
+    def schema_dump(self) -> str:
         postgres = self._project_postgres()
         if postgres is None:
             raise CellResourceError("production schema probe requires postgres")
@@ -433,18 +406,24 @@ class PublishedMachineBackend(DockerMachineBackend):
                 "--no-owner",
                 "--no-privileges",
                 "-h",
-                "127.0.0.1",
+                "/tmp,/var/run/postgresql",
                 "-U",
                 "postgres",
             ],
-            environment={"PGPASSWORD": self.project_postgres_password},
+            environment={"PGOPTIONS": TRUSTED_ADMIN_PGOPTIONS},
+            user="postgres",
         )
         if result.exit_code != 0 or not result.output:
             raise CellResourceError("publication schema inspection failed")
+        return str(result.output.decode())
+
+    def schema_digest(self) -> str:
+        # The adapter also uses this inspector on a plain DockerMachineBackend.
+        output = PublishedMachineBackend.schema_dump(self)
         # pg_dump 17.6+ random restriction keys are not schema changes.
         lines = [
             line
-            for line in result.output.decode().splitlines()
+            for line in output.splitlines()
             if not line.startswith(("\\restrict ", "\\unrestrict ", "--"))
         ]
         return hashlib.sha256("\n".join(lines).encode()).hexdigest()

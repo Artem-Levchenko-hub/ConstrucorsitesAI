@@ -732,7 +732,10 @@ def stale_service_fixture(tmp_path, *, missing=True, stop_failure=None):
         def __init__(self):
             self.labels = {**runtime.labels("development"), "omnia.fencing_epoch": "7"}
             self.attrs = {
-                "HostConfig": {"NetworkMode": "container:guard"}, "Config": {"Labels": self.labels},
+                "HostConfig": {"NetworkMode": "container:guard"},
+                "Config": {"Labels": self.labels,
+                           "Env": [key + "=" + value
+                                   for key, value in runtime.project_database_env().items()]},
             }
 
         def reload(self):
@@ -798,6 +801,7 @@ def stale_service_fixture(tmp_path, *, missing=True, stop_failure=None):
     runtime._volume = lambda *_args: None
     runtime._ensure_namespace_guard = lambda *_args: SimpleNamespace(id="guard")
     runtime._ensure_project_postgres = lambda *_args: events.append("postgres-reused")
+    runtime.bootstrap_project_database_roles = lambda: None
     runtime.volume_mapping = lambda *_args: {}
     runtime.container_options = lambda *_args: {}
     saved = {
@@ -1072,10 +1076,11 @@ def test_project_root_can_install_userland_but_cannot_control_network_or_host(tm
     assert "AUTH_SECRET" not in options["environment"]
     assert (
         options["environment"]["DATABASE_URL"]
-        == "postgresql://postgres:test-project-postgres-password@127.0.0.1:5432/postgres"
+        == "postgresql://omnia_project_runtime:"
+        + runtime.database_credentials().runtime_password + "@127.0.0.1:5432/postgres"
     )
     assert options["environment"]["PGHOST"] == "127.0.0.1"
-    assert options["environment"]["PGPASSWORD"] == "test-project-postgres-password"
+    assert options["environment"]["PGPASSWORD"] == runtime.database_credentials().runtime_password
     assert options["volumes"]["test-source"]["bind"] == "/workspace"
     assert not any(name.startswith("/") for name in options["volumes"])
 
@@ -1366,7 +1371,9 @@ def test_project_postgres_shares_guard_namespace_without_host_or_core_access(tmp
         "-c",
         "listen_addresses=127.0.0.1",
         "-c",
-        "unix_socket_directories=",
+        "unix_socket_directories=/tmp",
+        "-c",
+        "hba_file=/var/lib/postgresql/data/pg_hba.conf",
     ]
     assert options["cap_drop"] == ["ALL"]
     assert options["cap_add"] == []
@@ -1665,7 +1672,7 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path,
     if change == "manifest":
         after.services[0].argv = ["python3", "new.py"]
     write_controller_json(runtime.metadata_path, {"manifest": before.model_dump(mode="json")})
-    runtime._container = lambda: SimpleNamespace(labels={"omnia.fencing_epoch": "7"})
+    runtime._container = lambda: SimpleNamespace(labels={"omnia.fencing_epoch": "7"}, attrs={})
     runtime._project_postgres = lambda: None
     operations = []
     runtime._checkpoint_for_recreate = lambda value: operations.append(("capture", value.digest()))

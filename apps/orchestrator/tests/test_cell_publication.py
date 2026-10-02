@@ -71,12 +71,20 @@ async def test_restoration_publication_prepares_without_a_database_policy(tmp_pa
     async def hold(_):
         yield
 
-    source = SimpleNamespace(workspace_volume="code", root=tmp_path,
-                             workspace_id=value.workspace_id)
+    source = SimpleNamespace(
+        workspace_volume="code",
+        root=tmp_path,
+        workspace_id=value.workspace_id,
+        _metadata=lambda: {},
+    )
     machine = SimpleNamespace(state=lambda: {"epoch": 3, "manifest": _manifest()})
     state = SimpleNamespace(
-        project_id=value.project_id, owner_id=value.owner_id, fencing_epoch=value.fencing_epoch,
-        active_generation_run_id=None, phase="completed", bundle_state="resources_ready",
+        project_id=value.project_id,
+        owner_id=value.owner_id,
+        fencing_epoch=value.fencing_epoch,
+        active_generation_run_id=None,
+        phase="completed",
+        bundle_state="resources_ready",
     )
     verified = []
     service._verify_restoration_source = lambda request, backend: verified.append(backend)
@@ -346,7 +354,7 @@ async def test_crash_after_candidate_start_reconciles_previous_code_without_rese
 
     value = request()
     service = CellPublicationService(SimpleNamespace(), root=tmp_path)
-    accepted = {"release_id": str(UUID(int=21)), "epoch": 1}
+    accepted = {"release_id": str(UUID(int=21)), "epoch": 1, "project_database_role_protocol": 1}
     service._write(
         value.project_id,
         {

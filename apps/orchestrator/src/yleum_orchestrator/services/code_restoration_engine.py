@@ -65,6 +65,7 @@ from yleum_orchestrator.services.restoration_database import (
     admin_args,
     admin_sql,
     close_controller_socket,
+    migrator_sql,
     read_controller_output,
 )
 from yleum_orchestrator.services.restoration_empty import (
@@ -466,6 +467,23 @@ def historical_sql_migrations(files: dict[str, str]) -> list[tuple[str, str]] | 
     if not files.get("src/lib/db/schema.ts", "").strip():
         return None
     return migrations
+
+
+def empty_project_sql_inventory(files: dict[str, str]) -> list[tuple[str, str]]:
+    """Choose limited SQL, never privileged generated JavaScript, for empty restore."""
+    selected = historical_sql_migrations(files)
+    if selected is not None:
+        return selected
+    if empty_database_materializer(files) is not None:
+        raise PreparationNeedsChanges(
+            "В исторической версии нет SQL-миграций для безопасного восстановления. "
+            "Требуется явная адаптация схемы; код приложения с правами администратора "
+            "или служебного мигратора не запускается."
+        )
+    raise PreparationNeedsChanges(
+        empty_materializer_blocker(files)
+        or "В выбранной версии нет поддерживаемого описания исторической схемы."
+    )
 
 
 def _schema_statements(source: str) -> list[tuple[str, str]]:
@@ -1492,7 +1510,6 @@ class CodeRestorationEngine:
                 raise CellIdentityConflict("prepared restoration envelope changed")
             return cast(dict[str, Any], saved)
         observed_database_state: RestorationDatabaseState = "unknown"
-        empty_materializer: list[str] | None = None
         empty_sql_migrations: list[tuple[str, str]] | None = None
         external_core_tables: set[str] = set()
         with machine_budget(870):
@@ -1681,53 +1698,33 @@ class CodeRestorationEngine:
                     )
                 if empty_witness is not None:
                     observed_database_state = "empty"
-                    empty_materializer = empty_database_materializer(files)
-                    if empty_materializer is None:
-                        # Третий рецепт: применить сами файлы миграций. Он не
-                        # исполняет код владельца и потому пробуется последним
-                        # только по историческим причинам — риск у него меньше.
-                        empty_sql_migrations = historical_sql_migrations(files)
+                    try:
+                        # Prefer the exact SQL inventory even when a historical
+                        # generated runner exists. No elevated secret enters JS.
+                        empty_sql_migrations = empty_project_sql_inventory(files)
                         if (
-                            empty_sql_migrations is not None
-                            and not empty_witness.identity_relations
+                            not empty_witness.identity_relations
                             and any(path in files for path in (
                                 "drizzle/0000_max_core.sql", "drizzle/0001_business_core.sql",
                             ))
                         ):
-                            source_catalog = await machine_effect(
-                                describe_live_catalog, source
-                            )
+                            source_catalog = await machine_effect(describe_live_catalog, source)
                             source_contract, source_blockers, source_unsupported = source_catalog
                             if not any(table.name in _MANAGED_MAX_TABLES
                                        for table in source_contract.tables):
-                                try:
-                                    if source_blockers or source_unsupported:
-                                        raise PreparationNeedsChanges(
-                                            "Не подтверждена изоляция служебной базы проекта."
-                                        )
-                                    empty_sql_migrations, external_core_tables = (
-                                        external_core_empty_sql(files)
+                                if source_blockers or source_unsupported:
+                                    raise PreparationNeedsChanges(
+                                        "Не подтверждена изоляция служебной базы проекта."
                                     )
-                                except (PreparationNeedsChanges, CellResourceError) as error:
-                                    return {
-                                        "state": "needs_changes",
-                                        "candidate_id": None,
-                                        "report": preparation_report(
-                                            blockers=[str(error)],
-                                            observed_database_state=observed_database_state,
-                                            capabilities=capabilities,
-                                        ),
-                                    }
-                    if empty_materializer is None and empty_sql_migrations is None:
+                                empty_sql_migrations, external_core_tables = (
+                                    external_core_empty_sql(files)
+                                )
+                    except (PreparationNeedsChanges, CellResourceError) as error:
                         return {
                             "state": "needs_changes",
                             "candidate_id": None,
                             "report": preparation_report(
-                                blockers=[
-                                    empty_materializer_blocker(files)
-                                    or "В выбранной версии нет поддерживаемого описания "
-                                    "исторической схемы."
-                                ],
+                                blockers=[str(error)],
                                 observed_database_state=observed_database_state,
                                 capabilities=capabilities,
                             ),
@@ -1859,19 +1856,13 @@ class CodeRestorationEngine:
                 target_witness = None
                 database_digest = None
                 if empty_witness is not None:
-                    assert empty_materializer is not None or empty_sql_migrations is not None
-                    if empty_materializer is not None:
-                        await self._run_stage(
-                            request,
-                            candidate,
-                            empty_materializer,
-                            90,
-                            stage="empty-database-migrations",
-                        )
-                    else:
-                        assert empty_sql_migrations is not None
-                        for _name, _sql in empty_sql_migrations:
-                            await machine_effect(admin_sql, candidate, _sql)
+                    assert empty_sql_migrations is not None
+                    await machine_effect(
+                        self._materialize_empty_project_database,
+                        candidate,
+                        empty_sql_migrations,
+                        epoch=1,
+                    )
                     expected_contract = await machine_effect(candidate_contract, candidate, files)
                     if external_core_tables:
                         expected_contract = expected_contract.model_copy(update={
@@ -1923,7 +1914,7 @@ class CodeRestorationEngine:
                     ]
                     # The copy lives only in this candidate's own isolated database.
                     await machine_effect(
-                        admin_sql, candidate, dump.decode(), max_bytes=4 * 1024 * 1024
+                        self._restore_project_database, candidate, dump, epoch=1
                     )
                     copied, copied_blockers = await machine_effect(catalog_contract, candidate)
                     if copied_blockers or copied != current_contract:
@@ -2033,9 +2024,8 @@ class CodeRestorationEngine:
                         candidate_business = target_witness.objects_digest
                         candidate_technical = target_witness.technical_state_digest
                         await machine_effect(
-                            self._rotate_database_password,
+                            self._reconcile_candidate_database,
                             candidate,
-                            source.project_postgres_password,
                         )
                     archive = directory / "code.tar"
                     database_archive = directory / "database.tar"
@@ -2227,6 +2217,7 @@ class CodeRestorationEngine:
                 *args,
             ],
             environment=env,
+            user="postgres",
         )
         connection = backend.client.api.exec_start(execution["Id"], socket=True)
         try:
@@ -2262,7 +2253,7 @@ class CodeRestorationEngine:
             *args,
         ]
         execution = backend.client.api.exec_create(
-            backend._project_postgres().id, command, environment=env
+            backend._project_postgres().id, command, environment=env, user="postgres"
         )
         connection = backend.client.api.exec_start(execution["Id"], socket=True)
         try:
@@ -2288,11 +2279,40 @@ class CodeRestorationEngine:
             '"public"."' + name.split(".", 1)[1].replace('"', '""') + '"' for name in relations
         )
         admin_sql(backend, "TRUNCATE " + names + " CASCADE;\n" + dump.decode("utf-8"))
+        backend.bootstrap_project_database_roles()
 
     @staticmethod
-    def _rotate_database_password(backend: Any, password: str) -> None:
-        escaped = password.replace("'", "''")
-        admin_sql(backend, "ALTER ROLE postgres PASSWORD '" + escaped + "';")
+    def _reconcile_candidate_database(backend: Any) -> None:
+        # Captured roles belong to this isolated candidate. On raw activation
+        # destination.ensure reconciles its own durable credential authority.
+        # Never copy a source legacy password into the candidate's admin role.
+        backend.bootstrap_project_database_roles()
+
+    @staticmethod
+    def _materialize_empty_project_database(
+        backend: Any, migrations: list[tuple[str, str]], *, epoch: int,
+    ) -> None:
+        backend.prepare_project_database_migrations(epoch)
+        for _name, sql in migrations:
+            # psql input is controller text only. User SQL remains encoded data
+            # to server EXECUTE: backslash commands cannot reconnect via peer
+            # authentication or execute a shell under the postgres OS identity.
+            encoded = sql.encode("utf-8").hex()
+            migrator_sql(
+                backend,
+                "DO $omnia_restore$ BEGIN EXECUTE pg_catalog.convert_from("
+                "pg_catalog.decode('" + encoded + "', 'hex'), 'UTF8'); "
+                "END $omnia_restore$;",
+            )
+        backend.bootstrap_project_database_roles()
+
+    @staticmethod
+    def _restore_project_database(backend: Any, dump: bytes, *, epoch: int) -> None:
+        # Dependency hooks may leave daemonized writers even with no registered
+        # service. Quiesce the whole candidate before controller-only import.
+        backend.prepare_project_database_migrations(epoch)
+        admin_sql(backend, dump.decode("utf-8"), max_bytes=4 * 1024 * 1024)
+        backend.bootstrap_project_database_roles()
 
     @staticmethod
     def _capture_database(backend: Any, path: Path, *, reserve_bytes: int) -> str:
@@ -2442,6 +2462,9 @@ class CodeRestorationEngine:
 
     @staticmethod
     async def _start(backend: Any, manifest: MachineManifest, epoch: int) -> None:
+        # Build hooks may change their own data, but cannot activate with stale
+        # roles or failed reconciliation. This also gates raw-volume restores.
+        await machine_effect(backend.bootstrap_project_database_roles)
         for name in manifest.service_order():
             service = next(service for service in manifest.services if service.name == name)
             await machine_effect(backend.start_service, service, epoch)

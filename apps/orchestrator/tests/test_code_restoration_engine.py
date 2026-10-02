@@ -1423,6 +1423,8 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         name="candidate",
         workspace_volume="candidate-code",
         base_image="image",
+        prepare_project_database_migrations=lambda epoch: events.append(f"quiesce:{epoch}"),
+        bootstrap_project_database_roles=lambda: events.append("reconcile:candidate"),
         stop=lambda: events.append("stop"),
         remove=lambda: pytest.fail("candidate must not restart for a database policy"),
         ensure=lambda *args: pytest.fail("candidate must not restart for a database policy"),
@@ -1576,6 +1578,11 @@ async def test_prepare_copies_current_data_into_candidate_without_database_polic
         events.index("dump:source") < events.index("egress-off") < events.index("catalog:candidate")
     )
     assert "start:candidate:1" in events
+    assert (
+        events.index("egress-off") < events.index("quiesce:1")
+        < events.index("reconcile:candidate") < events.index("catalog:candidate")
+        < events.index("start:candidate:1")
+    )
     assert result["report"]["blockers"] == []
     assert result["report"]["database_state"] == "present"
     assert events.count("resume") == expected_resumes

@@ -18,6 +18,7 @@ from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
 from yleum_orchestrator.services import k8s_publication as kp
 from yleum_orchestrator.services.cell_publication import CellPublicationService
 from yleum_orchestrator.services.k8s_placement import KubernetesPlacement
+from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_machine import write_controller_json
 from yleum_orchestrator.services.publication_trace import PublicationTrace
 
@@ -275,6 +276,9 @@ def test_build_spec_takes_the_ingress_tls_mode_from_settings(tmp_path: Path) -> 
             seeds=(),
             boundary_secret="s3cret",
             project_postgres_password="pg-app",
+            project_credentials=ProjectDatabaseCredentials(
+                "runtime" + "a" * 32, "migrator" + "b" * 32, "admin" + "c" * 32
+            ),
             core_postgres_password="pg-core",
             core_runtime_password="synthetic-runtime-password-for-tests",
         )
@@ -468,6 +472,7 @@ def _request(**overrides: Any) -> CellDeployRequest:
 class FakeAdapter:
     def __init__(self, root: Path) -> None:
         from yleum_orchestrator.services.cell_state import CoreRuntimeCredentialStore
+
         self.root = root
         self.core_runtime_credentials = CoreRuntimeCredentialStore(root / "runtime")
 
@@ -894,13 +899,22 @@ async def test_refresh_reapplies_the_live_release_with_current_configuration(
     assert all(seed.artifact_url is None for seed in refreshed.seed_volumes)
 
 
-@pytest.mark.parametrize("case", [
-    "missing-sidecar", "missing-secret", "wrong-secret", "invalid-secret",
-])
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing-sidecar",
+        "missing-secret",
+        "wrong-secret",
+        "invalid-secret",
+    ],
+)
 async def test_existing_core_secret_drift_fails_before_auth_or_cluster_apply(
-    tmp_path, monkeypatch, case,
+    tmp_path,
+    monkeypatch,
+    case,
 ):
     import base64
+
     runtime = FakeRuntime()
     service = _service(tmp_path, runtime)
     request = _request()
@@ -909,16 +923,27 @@ async def test_existing_core_secret_drift_fails_before_auth_or_cluster_apply(
     manager = service._manager(request.workspace_id)
     if case != "missing-sidecar":
         manager.machine_runtime.core_runtime_credentials.load_or_create(
-            service.production_identity(request))
-    deployment = {"spec": {"template": {"metadata": {"annotations": {
-        "omnia.max-core.db-role-protocol": "1"}}}}}
+            service.production_identity(request)
+        )
+    deployment = {
+        "spec": {
+            "template": {"metadata": {"annotations": {"omnia.max-core.db-role-protocol": "1"}}}
+        }
+    }
+
     def get(_api, kind, *_args):
         if kind == "Deployment":
             return deployment
         if case == "missing-secret":
             return None
-        return {"data": {"DATABASE_URL": "!!" if case == "invalid-secret" else
-                         base64.b64encode(b"synthetic-wrong").decode()}}
+        return {
+            "data": {
+                "DATABASE_URL": "!!"
+                if case == "invalid-secret"
+                else base64.b64encode(b"synthetic-wrong").decode()
+            }
+        }
+
     runtime.api.get = get
     monkeypatch.setattr(service.placement, "auth_secret", lambda *_: pytest.fail("auth changed"))
     with pytest.raises(CellResourceError, match="credential"):

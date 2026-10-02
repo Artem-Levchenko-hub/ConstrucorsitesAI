@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import sys
 import time
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 from scripts import cleanup_orphan_archives as gc
@@ -35,6 +37,15 @@ def run(root: Path, monkeypatch: pytest.MonkeyPatch, *, apply: bool = True) -> i
         sys, "argv", ["cleanup", "--state-root", str(root)] + (["--apply"] if apply else [])
     )
     return gc.main()
+
+
+def prepare_workspace_lock(root: Path) -> None:
+    """Initialize durable fixture storage outside GC's 100 ms acquisition budget."""
+    async def prepare():
+        async with gc.WorkspaceOperationLock(root, acquire_timeout_seconds=1).hold(UUID(WORKSPACE)):
+            pass
+
+    asyncio.run(prepare())
 
 
 def test_deletes_only_old_unreferenced_and_is_idempotent(tmp_path, monkeypatch):
@@ -283,6 +294,7 @@ def test_only_old_orphan_seals_deleted(tmp_path, monkeypatch, capsys):
 
 
 def test_seal_replaced_after_archive_unlink_is_preserved(tmp_path, monkeypatch):
+    prepare_workspace_lock(tmp_path)
     orphan = archive(tmp_path)
     marker = seal(orphan)
     before = marker.stat()
@@ -519,6 +531,7 @@ def test_checkpoint_docker_inventory_refreshed_inside_workspace_lock(
 ):
     from contextlib import asynccontextmanager
 
+    prepare_workspace_lock(tmp_path)
     orphan = archive(tmp_path, "a")
     fake_docker.output = b""
     original = gc.WorkspaceOperationLock.hold

@@ -68,8 +68,12 @@ async def test_bootstrap_keeps_new_projects_on_their_ordinary_database(
     assert not (tmp_path / str(runtime_backend.workspace_id) / "data-policy.json").exists()
     assert not (tmp_path / str(runtime_backend.workspace_id) / "initial-database.json").exists()
     env = runtime_backend.project_database_env()
-    assert env["PGUSER"] == "postgres"
-    assert env["PGPASSWORD"] == "old-agent-password"
+    credentials = runtime_backend.database_credentials()
+    assert env["PGUSER"] == "omnia_project_runtime"
+    assert env["PGPASSWORD"] == credentials.runtime_password
+    assert "old-agent-password" not in env.values()
+    assert credentials.admin_password not in env.values()
+    assert credentials.migrator_password not in env.values()
 
 
 def test_bootstrap_request_no_longer_accepts_protection_enrollment():

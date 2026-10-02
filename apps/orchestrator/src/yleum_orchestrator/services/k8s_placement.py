@@ -33,6 +33,7 @@ from yleum_orchestrator.services.k8s_publication import (
     ensure_release_image,
     push_image,
 )
+from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_machine import write_controller_json
 
 NEXT_CACHE_PATH = "/workspace/.next/cache"
@@ -142,14 +143,18 @@ class KubernetesPlacement:
         if not _PIN.fullmatch(reference):
             raise CellResourceError("pinned compiled MAX core image required")
         image = docker_client.images.get(reference)
-        if (image.labels.get("omnia.max-core.protocol") != "1"
-                or image.labels.get("omnia.max-core.db-role-protocol") != "1"):
+        if (
+            image.labels.get("omnia.max-core.protocol") != "1"
+            or image.labels.get("omnia.max-core.db-role-protocol") != "1"
+        ):
             raise CellResourceError("compiled MAX core lacks runtime role protocol")
         return {
             "core_image": push_image(
-                docker_client, image.id,
+                docker_client,
+                image.id,
                 f"{self.settings.image_registry.rstrip('/')}/platform/max-public-core",
-                _short(image.id), auth=self.registry_auth(),
+                _short(image.id),
+                auth=self.registry_auth(),
             ),
             "core_role_protocol": "1",
         }
@@ -264,6 +269,7 @@ class KubernetesPlacement:
         project_postgres_password: str,
         core_postgres_password: str,
         core_runtime_password: str,
+        project_credentials: ProjectDatabaseCredentials,
     ) -> PublicationSpec:
         from yleum_orchestrator.services.machine_business_config import boundary_source
 
@@ -293,6 +299,7 @@ class KubernetesPlacement:
             project_postgres_password=project_postgres_password,
             core_postgres_password=core_postgres_password,
             core_runtime_password=core_runtime_password,
+            project_credentials=project_credentials,
             seed_volumes=seeds,
             app_cpu_cores=float(self.settings.k8s_app_cpu_cores),
             app_memory_bytes=int(self.settings.k8s_app_memory_bytes),

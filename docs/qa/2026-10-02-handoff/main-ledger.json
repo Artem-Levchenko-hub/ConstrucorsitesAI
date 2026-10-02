@@ -901,5 +901,39 @@
   "updated_at": "2026-10-02T17:21:00Z",
   "delivery_candidate_status": "awaiting exact CI, deployment and health",
   "current_runtime_baseline": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
-  "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged"
+  "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
+  "latest_delivery": {
+    "revision": "409e8c9bd9286b2d142b34896f0659b06e4a8074",
+    "scope": "MVP customer generation/edit UI",
+    "ci_run_id": 37051633118,
+    "ci_jobs_success": 10,
+    "production_health": "API/web/Core and Commerce controllers exact SHA ok; fences absent, active counts0; canonical backup/deploy exits0",
+    "public_browser": "landing and guide2PASS; owner editor live flow not covered by public check",
+    "change": "Customer version selection/history/restoration removed; internal snapshots/provenance retained. Full original67 count unchanged."
+  },
+  "pilot_release_gate": {
+    "scope": "FREE_PILOT_NO_PAYMENT",
+    "status": "NOT_ACCEPTED",
+    "payments_required": false,
+    "criteria": [
+      "Ordinary eligible owner: generation, preview, publish, signed MAX launch, CRUD, F5 and reopen without developer SSH/source patches",
+      "Owner connects own MoySklad and amoCRM through UI/provider redirects/install; independent customer access to providers confirmed",
+      "Real synthetic order/lead and current provider status survive reopen",
+      "One real MAX action appears in owner analytics after refresh; foreign owner has no access",
+      "Concurrent write/idempotent retry and least-privilege project database regressions pass"
+    ],
+    "open_dependencies": [
+      "Pilot entitlement policy: selected participants via admin or automatic new registrations; answer pending",
+      "Provider public/moderation readiness and Coffee MoySklad missing token lifecycle cause",
+      "Two genuine MAX actors and owner analytics live proof",
+      "T06.2/T06.3/T11.4 fixes and current production retests"
+    ],
+    "customer_versioning_required": false,
+    "customer_flow": "generation -> edit requests -> current preview -> publish",
+    "excluded_customer_features": [
+      "version selection",
+      "publication/version history",
+      "restoration/adaptation of historical versions"
+    ]
+  }
 }

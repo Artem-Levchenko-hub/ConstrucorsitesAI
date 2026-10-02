@@ -33,6 +33,10 @@ from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentStore,
 )
 from yleum_orchestrator.services.machine_services import MachineServiceFailed, MachineServices
+from yleum_orchestrator.services.project_database_credentials import (
+    ProjectDatabaseCredentials,
+    ProjectDatabaseCredentialStore,
+)
 from yleum_orchestrator.services.project_machine import (
     MachineOperationResult,
     ProjectMachine,
@@ -169,7 +173,8 @@ class MachineAdapter:
             "managed_max_boundary": True,
             "dedicated_postgres": True,
             "database_url_env": "DATABASE_URL",
-            "database_admin": "full",
+            "database_admin": "runtime-crud",
+            "database_migrations": "controller-limited-login",
             "commands": ["bash", "build", "runtime_check"],
             "task_roles": ["bootstrap", "fast_check", "full_build"],
             "framework": "nextjs",
@@ -235,6 +240,7 @@ class MachineAdapter:
             guard_image=self.settings.cell_machine_guard_image,
             postgres_image=profile.postgres_image,
             project_postgres_password=self.project_database_password(state.workspace_id),
+            project_credentials=self.project_database_credentials(state.workspace_id),
             project_postgres_memory_bytes=project_postgres_memory,
             project_postgres_cpu_cores=project_postgres_cpu,
             network_pool=self.settings.cell_network_pool,
@@ -292,6 +298,16 @@ class MachineAdapter:
             .load_or_create(workspace_id)
             .postgres_password
         )
+
+    def project_database_credentials(self, workspace_id: UUID) -> ProjectDatabaseCredentials:
+        from yleum_orchestrator.services.cell_state import _read_plain_json_file
+
+        store = ProjectDatabaseCredentialStore(self.root / "project-db-credentials")
+        metadata_path = self.root / str(workspace_id) / "docker.json"
+        if (metadata_path.exists() and
+                _read_plain_json_file(metadata_path).get("project_database_role_protocol") == 1):
+            return store.load(workspace_id)
+        return store.load_or_create(workspace_id)
 
     def _project_postgres_memory_bytes(self) -> int:
         if self.manager.profile.is_v2:
@@ -598,6 +614,13 @@ class MachineAdapter:
         migrations = {}
         if not verify_only:
             migrations = await self._migration_inventory(backend)
+        if not (verify_only or verify_applied):
+            mutation = LifecycleMutation(request.operation_id, request.fencing_epoch,
+                                         self._request_digest(
+                                             MachineManifest.model_validate(machine.state()["manifest"]),
+                                             request))
+            await machine.assert_ready(mutation)
+            await machine_effect(backend.prepare_project_database_migrations, request.fencing_epoch)
         receipt: dict[str, Any] = await machine_effect(
             run_project_migrations, backend, migrations,
             verify_only=verify_only, verify_applied=verify_applied,
@@ -667,6 +690,7 @@ class MachineAdapter:
                 "environment_revision",
                 "environment_schema_digest",
                 "environment_sealed_at",
+                "environment_project_db_role_protocol",
             ):
                 metadata.pop(key, None)
             if seal is not None:
@@ -675,10 +699,13 @@ class MachineAdapter:
                     environment_schema_digest=seal["schema_digest"],
                     environment_sealed_at=datetime.now(UTC).isoformat(),
                 )
+                if (seal.get("project_db_role_protocol") == 1
+                        and metadata.get("project_database_role_protocol") == 1):
+                    metadata["environment_project_db_role_protocol"] = 1
             write_controller_json(backend.metadata_path, metadata)
         return cast(MachineEnvironmentRef, reference)
 
-    async def _seal_identity(self, backend: Any) -> dict[str, str] | None:
+    async def _seal_identity(self, backend: Any) -> dict[str, str | int] | None:
         """Source revision (agent view of the workspace) and the live database
         schema, read while the machine still runs. Best effort: None on failure."""
         from yleum_orchestrator.routers.runtime import _workspace_revision
@@ -689,11 +716,15 @@ class MachineAdapter:
             files = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
             revision = _workspace_revision(files)
             schema = await machine_effect(PublishedMachineBackend.schema_digest, backend)
+            role_protocol = backend._metadata().get("project_database_role_protocol")
         except asyncio.CancelledError:
             raise
         except Exception:
             return None
-        return {"revision": revision, "schema_digest": schema}
+        seal: dict[str, str | int] = {"revision": revision, "schema_digest": schema}
+        if role_protocol == 1:
+            seal["project_db_role_protocol"] = 1
+        return seal
 
     async def checkpoint_payload(self, state: Any) -> bytes | None:
         reference = await self.checkpoint(state)

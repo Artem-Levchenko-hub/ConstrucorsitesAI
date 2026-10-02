@@ -12,6 +12,7 @@ import ipaddress
 import json
 import os
 import re
+import shlex
 import socket
 import tarfile
 import tempfile
@@ -33,6 +34,7 @@ from yleum_orchestrator.services.machine_network_allocation import (
     choose_subnet,
     create_pool_network,
 )
+from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
@@ -153,6 +155,7 @@ class DockerMachineBackend:
     pids: int
     resource_profile_version: str = "docker-owner-cell-resources-v1"
     namespace: str = "prod"
+    project_credentials: ProjectDatabaseCredentials | None = None
 
     def __post_init__(self) -> None:
         if (
@@ -349,11 +352,14 @@ class DockerMachineBackend:
         return self.environment_volume_names(manifest)
 
     def project_database_env(self) -> dict[str, str]:
+        from yleum_orchestrator.services.project_database_roles import PROJECT_RUNTIME_ROLE
+
+        credentials = self.database_credentials()
         database_url = (
             "postgresql://"
-            + _PROJECT_POSTGRES_USER
+            + PROJECT_RUNTIME_ROLE
             + ":"
-            + quote(self.project_postgres_password, safe="")
+            + quote(credentials.runtime_password, safe="")
             + "@"
             + _PROJECT_POSTGRES_HOST
             + ":"
@@ -365,10 +371,92 @@ class DockerMachineBackend:
             "DATABASE_URL": database_url,
             "PGHOST": _PROJECT_POSTGRES_HOST,
             "PGPORT": str(_PROJECT_POSTGRES_PORT),
-            "PGUSER": _PROJECT_POSTGRES_USER,
-            "PGPASSWORD": self.project_postgres_password,
+            "PGUSER": PROJECT_RUNTIME_ROLE,
+            "PGPASSWORD": credentials.runtime_password,
             "PGDATABASE": _PROJECT_POSTGRES_DB,
         }
+
+    def database_credentials(self) -> ProjectDatabaseCredentials:
+        from yleum_orchestrator.services.project_database_credentials import (
+            ProjectDatabaseCredentialStore,
+        )
+
+        if self.project_credentials is not None:
+            return self.project_credentials
+        store = ProjectDatabaseCredentialStore(self.root / "project-db-credentials")
+        if self._metadata().get("project_database_role_protocol") == 1:
+            return store.load(self.workspace_id)
+        return store.load_or_create(self.workspace_id)
+
+    def bootstrap_project_database_roles(self) -> None:
+        """Trusted reconciliation before activation and after limited user migrations."""
+        from yleum_orchestrator.services.project_database_roles import bootstrap_project_roles_sql
+        from yleum_orchestrator.services.restoration_database import admin_sql
+
+        credentials = self.database_credentials()
+        try:
+            self._install_project_role_hba()
+            if admin_sql(self, "SELECT pg_catalog.pg_reload_conf();", max_bytes=32,
+                         lifetime_seconds=5).strip() != b"t":
+                raise CellResourceError("project database HBA reload failed")
+            admin_sql(self, bootstrap_project_roles_sql(
+                credentials.runtime_password, credentials.migrator_password,
+                admin_password=credentials.admin_password,
+            ), max_bytes=8192, lifetime_seconds=35)
+        except Exception:
+            self.stop_machine()
+            raise CellResourceError(
+                "project database role reconciliation failed; activation fenced"
+            ) from None
+        metadata = self._metadata()
+        metadata["project_database_role_protocol"] = 1
+        write_controller_json(self.metadata_path, metadata)
+
+    def _install_project_role_hba(self) -> None:
+        from yleum_orchestrator.services.project_database_roles import project_role_hba
+
+        postgres = self._project_postgres()
+        if postgres is None:
+            raise CellResourceError("project database is not running")
+        result = postgres.exec_run(
+            ["sh", "-eu", "-c", "umask 077; printf '%s' " + shlex.quote(project_role_hba())
+             + " > " + shlex.quote(_PROJECT_POSTGRES_DATA + "/pg_hba.conf")],
+            user="postgres",
+        )
+        if result.exit_code != 0:
+            raise CellResourceError("project database HBA reconciliation failed")
+
+    def prepare_project_database_migrations(self, epoch: int) -> None:
+        """A lease-owned build stops all product descendants; only idle PID1 resumes.
+
+        The controller starts services again after migration reconciliation and
+        the full build. The database and every code/data/cache volume remain.
+        """
+        machine = self._container()
+        if machine is None:
+            raise CellResourceError("migration requires an owned development machine")
+        machine.reload()
+        metadata = self._metadata()
+        postgres = self._project_postgres()
+        if (int(machine.labels.get("omnia.fencing_epoch", "0")) != epoch
+                or metadata.get("epoch") != epoch
+                or postgres is None
+                or int(postgres.labels.get("omnia.fencing_epoch", "0")) != epoch):
+            raise CellIdentityConflict("migration quiesce epoch does not own the environment")
+        # An empty service registry says nothing about arbitrary exec children
+        # or daemonized descendants. Prove the whole PID namespace stopped.
+        if any(record.get("epoch") != epoch for record in metadata["services"].values()):
+            raise CellIdentityConflict("migration quiesce service epoch changed")
+        self.prepare_capture()
+        if machine.status == "running":
+            machine.stop(timeout=10)
+        machine.reload()
+        if machine.status != "exited":
+            raise CellResourceError("migration quiesce product stop was not confirmed")
+        metadata = self._metadata()
+        metadata.update(services={}, exec_logs={}, exec_pids={}, quiesce_state=None)
+        write_controller_json(self.metadata_path, metadata)
+        machine.start()
 
     def environment_digest(self) -> str:
         """Hash controller-selected runtime and package inventory without environment values."""
@@ -438,7 +526,8 @@ class DockerMachineBackend:
             "name": self.machine_name,
             "detach": True,
             "user": "0:0",
-            "labels": {**self.labels("development"), "omnia.fencing_epoch": str(epoch)},
+            "labels": {**self.labels("development"), "omnia.fencing_epoch": str(epoch),
+                       "omnia.project_database_role_protocol": "1"},
             "entrypoint": ["python3", "-c"],
             # PID1 ignores default SIGTERM. Explicit exit lets Docker tear down
             # the PID namespace after quiesce instead of waiting for SIGKILL.
@@ -524,7 +613,13 @@ class DockerMachineBackend:
                 raise CellIdentityConflict("machine and project postgres epochs differ")
             metadata = self._metadata()
             previous_manifest = MachineManifest.model_validate(metadata["manifest"])
-            if physical_epoch != epoch or previous_manifest.digest() != manifest.digest():
+            expected_env = self.project_database_env()
+            actual_env = dict(item.split("=", 1) for item in
+                              (existing.attrs.get("Config", {}).get("Env") or []) if "=" in item)
+            unsafe_credentials = any(actual_env.get(key) != value
+                                     for key, value in expected_env.items())
+            if (physical_epoch != epoch or previous_manifest.digest() != manifest.digest()
+                    or unsafe_credentials):
                 self._checkpoint_for_recreate(previous_manifest)
                 self.remove(expected_epoch=physical_epoch)
             else:
@@ -621,6 +716,7 @@ class DockerMachineBackend:
             if name != self.workspace_volume:
                 self._volume(name)
         self._ensure_project_postgres(guard.id, epoch)
+        self.bootstrap_project_database_roles()
         metadata = self._metadata()
         metadata.update(
             proxy_ip=proxy_ip,
@@ -711,6 +807,7 @@ class DockerMachineBackend:
                 **self.labels("project-postgres"),
                 "omnia.fencing_epoch": str(epoch),
                 "omnia.image_ref": self.postgres_image,
+                "omnia.project_database_role_protocol": "1",
             },
             "entrypoint": [],
             "command": [
@@ -720,7 +817,9 @@ class DockerMachineBackend:
                 "-c",
                 f"listen_addresses={_PROJECT_POSTGRES_HOST}",
                 "-c",
-                "unix_socket_directories=",
+                "unix_socket_directories=/tmp",
+                "-c",
+                "hba_file=" + _PROJECT_POSTGRES_DATA + "/pg_hba.conf",
             ],
             "network_mode": "container:" + namespace_id,
             "user": _PROJECT_POSTGRES_USER,
@@ -809,6 +908,8 @@ class DockerMachineBackend:
                 helper.remove(force=True)
 
     def _initialize_project_postgres_volume(self) -> None:
+        from yleum_orchestrator.services.project_database_roles import project_role_hba
+
         helper_name = self.stem + "-project-postgres-init"
         helper = self._lookup(self.client.containers, helper_name, "project-postgres-init")
         if helper is not None:
@@ -825,7 +926,9 @@ class DockerMachineBackend:
                 "initdb --username=postgres --auth-host=scram-sha-256",
                 '--pwfile=/tmp/postgres-password -D "$PGDATA";',
                 "rm -f /tmp/postgres-password;",
-                "fi",
+                "fi;",
+                "umask 077; printf '%s' " + shlex.quote(project_role_hba())
+                + ' > "$PGDATA/pg_hba.conf";',
             ]
         )
         helper = self.client.containers.create(
@@ -948,13 +1051,13 @@ class DockerMachineBackend:
                 [
                     "pg_isready",
                     "-h",
-                    _PROJECT_POSTGRES_HOST,
+                    "/tmp",
                     "-U",
                     _PROJECT_POSTGRES_USER,
                     "-d",
                     _PROJECT_POSTGRES_DB,
                 ],
-                environment={"PGPASSWORD": self.project_postgres_password},
+                environment={},
                 user=_PROJECT_POSTGRES_USER,
             )
             if result.exit_code == 0:
@@ -1679,7 +1782,9 @@ class DockerMachineBackend:
                 "-c",
                 f"listen_addresses={_PROJECT_POSTGRES_HOST}",
                 "-c",
-                "unix_socket_directories=",
+                "unix_socket_directories=/tmp",
+                "-c",
+                "hba_file=" + _PROJECT_POSTGRES_DATA + "/pg_hba.conf",
             ],
             name=helper_name,
             labels=self.labels("project-postgres-restore"),
@@ -1716,7 +1821,7 @@ class DockerMachineBackend:
                 [
                     "psql",
                     "-h",
-                    _PROJECT_POSTGRES_HOST,
+                    "/tmp",
                     "-U",
                     _PROJECT_POSTGRES_USER,
                     "-d",
@@ -1724,7 +1829,7 @@ class DockerMachineBackend:
                     "-Atc",
                     "select 1",
                 ],
-                environment={"PGPASSWORD": self.project_postgres_password},
+                environment={},
                 user=_PROJECT_POSTGRES_USER,
             )
             output = smoke.output if isinstance(smoke.output, bytes) else str(smoke.output).encode()

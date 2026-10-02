@@ -123,6 +123,7 @@ def _seal_source(
     )
     source.environment_ref = reference.model_dump(mode="json")
     source.metadata_extra = {
+        "environment_project_db_role_protocol": 1,
         "environment_revision": revision,
         "environment_schema_digest": SEALED_SCHEMA,
     }

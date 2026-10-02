@@ -300,6 +300,8 @@ class CellPublicationService:
         """True only when the active release provably serves right now: the app
         container runs the release image, the gateway is up and the public HTTPS
         address answers. Any doubt means a full publication."""
+        if active.get("project_database_role_protocol") != 1:
+            return False
         if KubernetesPlacement.placed(active):
             return await self._serving_kubernetes(request, active)
         if self.placement is not None:
@@ -317,6 +319,16 @@ class CellPublicationService:
                     return False
                 app.reload()
                 if app.status != "running" or app.attrs.get("Image") != active.get("image_id"):
+                    return False
+                configured = dict(
+                    item.split("=", 1)
+                    for item in app.attrs.get("Config", {}).get("Env", [])
+                    if "=" in item
+                )
+                if any(
+                    configured.get(key) != value
+                    for key, value in backend.project_database_env().items()
+                ):
                     return False
                 gateway = backend._lookup(
                     backend.client.containers, backend.stem + "-gateway", "max-gateway"
@@ -495,6 +507,8 @@ class CellPublicationService:
 
         trace = trace or PublicationTrace()
         trace.stage("preflight")
+        await self._upgrade_kubernetes_project_roles(request.project_id)
+        await self._upgrade_docker_project_roles(request.project_id)
         manager = self._manager(request.workspace_id)
         adapter = manager.machine_runtime
         if adapter is None:
@@ -524,6 +538,7 @@ class CellPublicationService:
             self._verify_restoration_source(request, source)
             manifest = MachineManifest.model_validate(machine.state()["manifest"])
             seeded = self._data_seeded(self._read(request.project_id))
+            source_roles_installed = source._metadata().get("project_database_role_protocol") == 1
             sealed = self._checkpoint_seal(request, source, adapter, manifest) if seeded else None
             if sealed is not None:
                 # P12: the accepted version was packaged at finalization; the
@@ -546,7 +561,12 @@ class CellPublicationService:
                 preview = adapter.preview(source_state)
                 serving_epoch, machine_epoch = serving_resume_epochs(adapter, source_state)
                 detached = serving_epoch is not None and machine_epoch != serving_epoch
-                if preview is None or preview[0] != "running" or detached:
+                if (
+                    preview is None
+                    or preview[0] != "running"
+                    or detached
+                    or not source_roles_installed
+                ):
                     # Resume at the cell's serving epoch: a machine record left on an
                     # older epoch (wake after a host reboot) would otherwise stay
                     # detached and the source pair could not be trusted.
@@ -731,6 +751,10 @@ class CellPublicationService:
         warm volumes are the release artifact: no stop, no wake, no export.
         Any doubt (other revision/manifest, missing archive) → capture path."""
         metadata = source._metadata() if hasattr(source, "_metadata") else {}
+        # Historical artifacts remain intact, but need a fresh AI-free capture
+        # when their environment predates the restricted project database login.
+        if metadata.get("environment_project_db_role_protocol") != 1:
+            return None
         raw = metadata.get("environment_ref")
         schema = metadata.get("environment_schema_digest")
         if not raw or not schema or metadata.get("environment_revision") != request.source_revision:
@@ -899,22 +923,10 @@ class CellPublicationService:
         await ensure_managed_infrastructure(manager, state)
         backend = self._backend(manager, state, release)
         manifest = MachineManifest.model_validate(release["manifest"])
-        target_password = backend.project_postgres_password
-        if release.get("needs_password_rotation"):
-            secret = json.loads(
-                (self.root / str(request.project_id) / "seed-secret.json").read_text()
-            )
-            backend.project_postgres_password = secret["password"]
         method = backend.switch_code if switch else backend.ensure_published
         await machine_effect(method, manifest, release["image_id"], release["epoch"])
         if release.get("needs_password_rotation"):
-            source_password = backend.project_postgres_password
-            backend.project_postgres_password = target_password
-            await machine_effect(backend.rotate_seeded_postgres, source_password)
-            # Machine environment initially received source password; recreate after rotation.
-            await machine_effect(
-                backend.switch_code, manifest, release["image_id"], release["epoch"]
-            )
+            await machine_effect(backend.rotate_seeded_postgres)
             release["needs_password_rotation"] = False
             saved = self._read(request.project_id)
             saved["data_seeded"] = True
@@ -928,7 +940,9 @@ class CellPublicationService:
                 raise CellResourceError("public product service readiness failed")
         if trace is not None:
             trace.stage("verify_runtime")
-        if check_schema and await machine_effect(backend.schema_digest) != release["schema_digest"]:
+        if check_schema and await machine_effect(
+            backend.schema_digest
+        ) != self._accepted_schema_digest(release):
             raise CellResourceError("publication startup changed database schema")
         env = {**request.runtime_env, "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"]}
         await machine_effect(
@@ -1019,6 +1033,7 @@ class CellPublicationService:
                 if probe.status_code != 200:
                     raise CellResourceError("public HTTPS bootstrap readiness failed")
                 saved = self._read(request.project_id)
+                release["project_database_role_protocol"] = 1
                 saved["active_release"] = release
                 saved["prepared_release"] = None
                 saved["activation_pending"] = None
@@ -1273,6 +1288,7 @@ class CellPublicationService:
         return bool(saved.get("active_release"))
 
     async def _refresh_public_configuration(self, project_id: UUID) -> None:
+        await self._upgrade_docker_project_roles(project_id)
         saved = self._read(project_id)
         if KubernetesPlacement.placed(saved.get("active_release")):
             await self._refresh_kubernetes(project_id)
@@ -1376,6 +1392,9 @@ class CellPublicationService:
             return None
         if saved.get("recovery_required"):
             return {"project_id": str(project_id), "state": "recovery_required"}
+        await self._upgrade_docker_project_roles(project_id)
+        saved = self._read(project_id)
+        release = saved["active_release"]
         request = CellDeployRequest.model_validate_json(
             (path.parent / "requests" / f"{release['release_id']}.json").read_text()
         )
@@ -1515,20 +1534,33 @@ class CellPublicationService:
         release["placement"] = {**release["placement"], **core}
         store = adapter.core_runtime_credentials
         existing = await machine_effect(
-            placement.runtime.api.get, "apps/v1", "Deployment", "core",
+            placement.runtime.api.get,
+            "apps/v1",
+            "Deployment",
+            "core",
             placement.namespace(request.project_id),
         )
-        annotations = ((existing or {}).get("spec", {}).get("template", {})
-                       .get("metadata", {}).get("annotations", {}))
-        if (annotations.get("omnia.max-core.db-role-protocol") == "1"
-                and not (store.root / f"{production_id}.json").is_file()):
+        annotations = (
+            (existing or {})
+            .get("spec", {})
+            .get("template", {})
+            .get("metadata", {})
+            .get("annotations", {})
+        )
+        if (
+            annotations.get("omnia.max-core.db-role-protocol") == "1"
+            and not (store.root / f"{production_id}.json").is_file()
+        ):
             raise CellResourceError(
                 "existing core runtime credential missing; explicit recovery required"
             )
         runtime_password = store.load_or_create(production_id).runtime_password
         if annotations.get("omnia.max-core.db-role-protocol") == "1":
             secret = await machine_effect(
-                placement.runtime.api.get, "v1", "Secret", "core-runtime",
+                placement.runtime.api.get,
+                "v1",
+                "Secret",
+                "core-runtime",
                 placement.namespace(request.project_id),
             )
             try:
@@ -1536,14 +1568,20 @@ class CellPublicationService:
                 current_dsn = base64.b64decode(encoded, validate=True).decode("utf-8")
             except (ValueError, TypeError, binascii.Error):
                 raise CellResourceError("existing core runtime credential invalid") from None
-            expected_dsn = "postgresql://omnia_core_runtime:" + quote(
-                runtime_password, safe=""
-            ) + "@core-postgres:5432/postgres"
+            expected_dsn = (
+                "postgresql://omnia_core_runtime:"
+                + quote(runtime_password, safe="")
+                + "@core-postgres:5432/postgres"
+            )
             if current_dsn != expected_dsn:
                 raise CellResourceError("existing core runtime credential mismatch")
+        project_credentials = await self._kubernetes_project_credentials(
+            placement, adapter, production_id, request.project_id
+        )
         return placement.build_spec(
             request,
             release,
+            project_credentials=project_credentials,
             seeds=placement.seeds(release["placement"]["seeds"], present=present),
             boundary_secret=placement.auth_secret(
                 adapter, production_id, dict(request.runtime_env)
@@ -1554,6 +1592,232 @@ class CellPublicationService:
             ).postgres_password,
             core_runtime_password=runtime_password,
         )
+
+    async def _upgrade_docker_project_roles(self, project_id: UUID) -> bool:
+        """Role-only upgrade of retained Docker publication; never import data."""
+        from yleum_orchestrator.services.project_database_schema_proof import (
+            begin_schema_bridge,
+            complete_schema_bridge,
+            resolve_schema_proof,
+            validate_schema_bridge,
+        )
+
+        saved = self._read(project_id)
+        release = saved.get("active_release")
+        if (
+            not release
+            or KubernetesPlacement.placed(release)
+            or release.get("project_database_role_protocol") == 1
+        ):
+            return False
+        request = CellDeployRequest.model_validate_json(
+            (self.root / str(project_id) / "requests" / f"{release['release_id']}.json").read_text()
+        )
+        manager = self._production_manager(request.workspace_id)
+        production_id = UUID(saved["production_workspace_id"])
+        async with manager.operation_lock.hold(production_id):
+            state = manager.state_store.load(production_id)
+            await ensure_managed_infrastructure(manager, state)
+            backend = self._backend(manager, state, release)
+            volume = backend._lookup(
+                manager.docker._client_obj().volumes,
+                backend.project_postgres_volume,
+                "project-volume",
+            )
+            created_at = (getattr(volume, "attrs", {}) or {}).get("CreatedAt")
+            if volume is None or not created_at:
+                raise CellResourceError("existing project database volume identity unavailable")
+            binding = {
+                "identity": str(project_id),
+                "reference": release["release_id"],
+                "epoch": int(release["epoch"]),
+                "volume": backend.project_postgres_volume + ":" + str(created_at),
+                "revision": release["source_revision"],
+            }
+            receipt_path = (
+                self.root
+                / str(project_id)
+                / "project-role-bridges"
+                / (release["release_id"] + ".json")
+            )
+            await machine_effect(backend.quiesce_current)
+            before = await machine_effect(backend.schema_dump)
+            if receipt_path.exists():
+                validate_schema_bridge(
+                    receipt_path,
+                    binding=binding,
+                    accepted_digest=release["schema_digest"],
+                    dump=before,
+                )
+            else:
+                begin_schema_bridge(
+                    receipt_path,
+                    binding=binding,
+                    accepted_digest=release["schema_digest"],
+                    before_dump=before,
+                )
+            manifest = MachineManifest.model_validate(release["manifest"])
+            await machine_effect(
+                backend.ensure_published, manifest, release["image_id"], release["epoch"]
+            )
+            after = await machine_effect(backend.schema_dump)
+            receipt = complete_schema_bridge(
+                receipt_path, binding=binding, after_dump=after, policy_verified=True
+            )
+            proof = resolve_schema_proof(
+                accepted_digest=release["schema_digest"],
+                binding=binding,
+                dump=after,
+                receipt_path=receipt_path,
+            )
+            release.update(
+                role_schema_digest=receipt["after_digest"],
+                schema_proof=proof,
+                project_database_role_protocol=1,
+            )
+            saved["active_release"] = release
+            self._write(project_id, saved)
+            await self._start(manager, state, release, request, switch=False)
+            return True
+
+    async def _upgrade_kubernetes_project_roles(self, project_id: UUID) -> bool:
+        """Bridge an accepted live schema before changing its database identities.
+
+        The caller holds the project submission lock. Guests stay stopped until
+        the durable pre-proof, role readiness and unchanged business proof agree.
+        """
+        from yleum_orchestrator.services.project_database_schema_proof import (
+            begin_schema_bridge,
+            complete_schema_bridge,
+            resolve_schema_proof,
+            validate_schema_bridge,
+        )
+
+        saved = self._read(project_id)
+        release = saved.get("active_release")
+        if release is None:
+            return False
+        if not isinstance(release, dict):
+            raise CellIdentityConflict("active release record invalid")
+        if not KubernetesPlacement.placed(release):
+            return False
+        if release.get("project_database_role_protocol") == 1:
+            return False
+        placement = self._kubernetes()
+        runtime = placement.runtime
+        namespace = placement.namespace(project_id)
+        pvc = await machine_effect(
+            runtime.api.get, "v1", "PersistentVolumeClaim", "data-project-postgres-0", namespace
+        )
+        volume_uid = (pvc or {}).get("metadata", {}).get("uid")
+        if not volume_uid:
+            raise CellResourceError("existing project database volume identity unavailable")
+        request = CellDeployRequest.model_validate_json(
+            (self.root / str(project_id) / "requests" / f"{release['release_id']}.json").read_text()
+        )
+        binding = {
+            "identity": str(project_id),
+            "reference": release["release_id"],
+            "epoch": int(release["epoch"]),
+            "volume": str(volume_uid),
+            "revision": release["source_revision"],
+        }
+        receipt_path = (
+            self.root / str(project_id) / "project-role-bridges" / (release["release_id"] + ".json")
+        )
+        await machine_effect(runtime.quiesce_project_app, namespace)
+        before = await machine_effect(runtime.schema_dump, namespace)
+        if receipt_path.exists():
+            validate_schema_bridge(
+                receipt_path, binding=binding, accepted_digest=release["schema_digest"], dump=before
+            )
+        else:
+            begin_schema_bridge(
+                receipt_path,
+                binding=binding,
+                accepted_digest=release["schema_digest"],
+                before_dump=before,
+            )
+        spec = await self._kubernetes_spec(request, release, present=True)
+        # This phase waits for the real postStart bootstrap but cannot start guests.
+        await machine_effect(runtime.publish, spec, activate_guest=False)
+        after = await machine_effect(runtime.schema_dump, namespace)
+        receipt = complete_schema_bridge(
+            receipt_path, binding=binding, after_dump=after, policy_verified=True
+        )
+        proof = resolve_schema_proof(
+            accepted_digest=release["schema_digest"],
+            binding=binding,
+            dump=after,
+            receipt_path=receipt_path,
+        )
+        release["role_schema_digest"] = receipt["after_digest"]
+        release["schema_proof"] = proof
+        release["project_database_role_protocol"] = 1
+        saved["active_release"] = release
+        self._write(project_id, saved)
+        await machine_effect(runtime.publish, spec)
+        return True
+
+    @staticmethod
+    def _accepted_schema_digest(release: dict[str, Any]) -> str:
+        return str(release.get("role_schema_digest") or release["schema_digest"])
+
+    async def _kubernetes_project_credentials(
+        self,
+        placement: Any,
+        adapter: Any,
+        production_id: UUID,
+        project_id: UUID,
+    ) -> Any:
+        """An installed role never silently regenerates its lost private authority."""
+        from yleum_orchestrator.services.project_database_credentials import (
+            ProjectDatabaseCredentialStore,
+        )
+
+        project_store = ProjectDatabaseCredentialStore(adapter.root / "project-db-credentials")
+        project_pg = await machine_effect(
+            placement.runtime.api.get,
+            "apps/v1",
+            "StatefulSet",
+            "project-postgres",
+            placement.namespace(project_id),
+        )
+        project_annotations = (
+            (project_pg or {})
+            .get("spec", {})
+            .get("template", {})
+            .get("metadata", {})
+            .get("annotations", {})
+        )
+        project_roles_installed = project_annotations.get("omnia.project-db.role-protocol") == "1"
+        project_credentials = (
+            project_store.load(production_id)
+            if project_roles_installed
+            else project_store.load_or_create(production_id)
+        )
+        if project_roles_installed:
+            project_secret = await machine_effect(
+                placement.runtime.api.get,
+                "v1",
+                "Secret",
+                "app-config",
+                placement.namespace(project_id),
+            )
+            try:
+                project_dsn = base64.b64decode(
+                    (project_secret or {}).get("data", {}).get("DATABASE_URL", ""), validate=True
+                ).decode("utf-8")
+            except (ValueError, TypeError, binascii.Error):
+                raise CellResourceError("existing project runtime credential invalid") from None
+            expected_project_dsn = (
+                "postgresql://omnia_project_runtime:"
+                + quote(project_credentials.runtime_password, safe="")
+                + "@project-postgres:5432/postgres"
+            )
+            if project_dsn != expected_project_dsn:
+                raise CellResourceError("existing project runtime credential mismatch")
+        return project_credentials
 
     async def _probe_public(self, url: str, *, timeout_seconds: float) -> None:
         """The cluster issues the certificate after the ingress appears; keep
@@ -1599,13 +1863,14 @@ class CellPublicationService:
             actual = await machine_effect(
                 runtime.schema_digest, spec.namespace, spec.project_postgres_password
             )
-            if actual != release["schema_digest"]:
+            if actual != self._accepted_schema_digest(release):
                 raise CellResourceError("publication startup changed database schema")
             trace.stage("observe")
             await self._probe_public(
                 release["prod_url"], timeout_seconds=machine_remaining_seconds(300)
             )
             saved = self._read(project_id)
+            release["project_database_role_protocol"] = 1
             saved["active_release"] = release
             saved["prepared_release"] = None
             saved["activation_pending"] = None
@@ -1676,6 +1941,7 @@ class CellPublicationService:
         )
 
     async def _refresh_kubernetes(self, project_id: UUID) -> None:
+        await self._upgrade_kubernetes_project_roles(project_id)
         saved = self._read(project_id)
         release = saved.get("active_release")
         if not release:
@@ -1734,6 +2000,9 @@ class CellPublicationService:
         if saved.get("recovery_required"):
             return {"project_id": str(project_id), "state": "recovery_required"}
         with machine_budget(870):
+            await self._upgrade_kubernetes_project_roles(project_id)
+            saved = self._read(project_id)
+            release = saved["active_release"]
             status = await machine_effect(runtime.status, project_id)
             placement = release.get("placement") or {}
             settled = (
