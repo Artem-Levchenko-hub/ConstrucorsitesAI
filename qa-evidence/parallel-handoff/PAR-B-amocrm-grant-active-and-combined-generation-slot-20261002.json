@@ -1,0 +1,31 @@
+{
+  "received_utc": "2026-10-02T12:47:58.405271+00:00",
+  "source_thread": "01a0fb53-bd45-7402-9889-2f97bea12bf3",
+  "evidence_kind": "external-window attestation, raw evidence not yet Root-audited",
+  "user_explicit_grant_authorization_reported": true,
+  "fresh_oauth_state_reported": true,
+  "selected_account": "Yleum",
+  "callback_reported_successful": true,
+  "active_integrations_reported": [
+    "amoCRM",
+    "MoySklad"
+  ],
+  "amocrm_verify_reported_successful": true,
+  "binding_reported": {
+    "pipeline": "Воронка",
+    "status": "Первичный контакт",
+    "F5_persistence": true
+  },
+  "additional_private_client_support_waiver_shown": false,
+  "additional_private_client_support_waiver_accepted": false,
+  "root_existing_serial_slot": "PAR-B-MoySklad-normal-UI-generation-publication-slot-20261002.json",
+  "generation_prompt_budget_total": 1,
+  "scope": "one combined normal owned PAR-B generation/publication adding MS catalog-stock-order and CRM lead/current-status UI; preserve tasks/data/MAX schema/auth",
+  "root_conflicting_deploy_restore_restart_hold": true,
+  "lead_create_replay_status_checks": "pending external window",
+  "generation_submission": "not reported yet",
+  "generation_terminal": "pending",
+  "publication_terminal": "pending",
+  "full_original_criteria_count_unchanged": 7,
+  "configured_client_developer_owner": "UNKNOWN"
+}

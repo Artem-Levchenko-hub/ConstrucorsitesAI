@@ -1,0 +1,17 @@
+{
+  "observed_utc": "2026-10-02T12:36:12.033996+00:00",
+  "receipt_type": "Root visually inspected Core console canvas",
+  "actual_stdout": {
+    "phase": "blocked",
+    "error_class": "Rejected"
+  },
+  "helper_sha256": "617e01c53dcd4c861fffd12c18b7719a886e41269093ba5ab5e8668198b5ffa7",
+  "launcher_sha256": "69a53d80239045c0f816e423b2d7d9a45c23aa3acfc4f16038a7ddfa38b4933f",
+  "private_canvas_sha256": "c8d09853d4b0682f6feb76f4d13b98786ec69f69da2d29d305295daef044c957",
+  "probe_success_proved": false,
+  "number_of_network_requests": "UNVERIFIED; rejection stage not emitted",
+  "claim_preserved": true,
+  "launcher_will_not_be_replayed": true,
+  "par_b_root_cause_proved": false,
+  "read_only_guard_diagnosis_pending": true
+}

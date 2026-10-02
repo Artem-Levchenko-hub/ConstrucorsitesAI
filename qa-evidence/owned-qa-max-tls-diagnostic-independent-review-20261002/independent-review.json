@@ -1,0 +1,50 @@
+{
+  "verdict": "SOURCE_CLEAR",
+  "scope": "Read-only current preflight diagnosis source and synthetic selected-metadata guards only. No original failure recovery or TLS replay.",
+  "reviewed_utc": "2026-10-02T12:42:17.362309+00:00",
+  "source": {
+    "path": "/workspace/qa-tools/diagnose_owned_qa_max_tls_readonly.py",
+    "sha256": "414ee614a2dc40e33d1e72f25a5e7f28df6aeee56b6dfc4666689237e14e5541"
+  },
+  "findings": [],
+  "verification": {
+    "thirteen_focused_fake_cases_independently_passed": true,
+    "compile": true,
+    "default_prepared_no_source_inventory_or_runtime_reads": true,
+    "reviewed_scope_removes_execute_main_exclusive_Node_PROBE": true,
+    "unchanged_frozen_inputs": {
+      "launch_owned_qa_max_tls_once.py": "69a53d80239045c0f816e423b2d7d9a45c23aa3acfc4f16038a7ddfa38b4933f",
+      "readonly_owned_qa_max_tls.py": "617e01c53dcd4c861fffd12c18b7719a886e41269093ba5ab5e8668198b5ffa7",
+      "readonly_max_reply_metadata_v3.py": "669c10a5715a29a81df7d90d96245f2833ed1c6834d73eddd18db3f46c1b75cb"
+    }
+  },
+  "reviewed_guards": [
+    "Defaultprepared stageNOT_RUN returns before pinnedfile reads; onlycheck runsmetadata guards",
+    "Hash-pinned69launcher and617helper regularbounded/no-symlink/O_NOFOLLOW file loaders and nonmain compileexec; execute/main/exclusive/NODE_PROBE entrypoints removed and never called",
+    "Prior exacthash/ownerUUIDprincipal/one scopedrow/identity/prior semantics validated before selectedmetadata; no newidentity guesses/projectselection",
+    "Only pinned helperinspect_owned is used through command gate localunixDocker/container-or-image inspect/exactCIDimage/timeout15/inspectformat noEnvArgsCmdMounts; exec/log commands rejected before invoking run",
+    "Fresh owned/running/immutableimage/publicCoreDBrole/ownerprojectworkspace/protocol guards unchanged; missing labels produce fixedcategory codes without actualids/values/rawstdout/stderr",
+    "PublicCA stage checks exact approvedhash/path separately; ifCAfails, safe selectedmetadata may stillrun afterprior/identity passed; no Nodeprocess/GET/provider calls occur",
+    "Outputs onlystage+allowlistederrorcode; missingfile/permission/invalidJSON/other errors sanitized; no once marker/result read/write/delete or resume path"
+  ],
+  "limitations": [
+    "This diagnoses current preflight guards. Original once69 recorded only Rejected, which may have happened preflight, after requests or post-inspect; currentcheck cannot establish the historical exact failure stage or whether originalGETs occurred.",
+    "SOURCE_CLEAR is diagnostic preparation only; no actual source files onhost/inventory/currentlabels/CA were examined. Root alone stages/runs against reviewed originalQA-B targets.",
+    "No TLS/providerrequest/reply/PAR-B root cause proof, no retry authorization or mutation."
+  ],
+  "effects": {
+    "production_inventory_or_CA_reads": 0,
+    "actualDocker": 0,
+    "Nodeexec": 0,
+    "networkHTTP": 0,
+    "envcredentialslogsSQL": 0,
+    "once_state_access_or_changes": 0,
+    "Git_staging_product_helper_pins_lifecycle_mutations": 0
+  },
+  "evidence": [
+    {
+      "path": "/workspace/qa-evidence/owned-qa-max-tls-diagnostic-independent-review-20261002/reviewed-frozen-diagnostic.py",
+      "sha256": "414ee614a2dc40e33d1e72f25a5e7f28df6aeee56b6dfc4666689237e14e5541"
+    }
+  ]
+}
