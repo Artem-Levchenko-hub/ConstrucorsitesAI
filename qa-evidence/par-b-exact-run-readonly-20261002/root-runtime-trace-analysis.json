@@ -1,0 +1,195 @@
+{
+  "observed_utc": "2026-10-02T13:13:20.507986+00:00",
+  "source_hash_matches_expected": true,
+  "source_sha256": "65fb10c446304fe05384e176bb59187670548d1cd17426f8a403e445ed090cc4",
+  "trace_sha256": "26efee74b55796319c3b42b05b1f49c5d709345f6fb7c8c3eff3b38178865d1d",
+  "source_gitblob": "a9f97436e297bbc9b48624f1e04495363bc7e5d8",
+  "tool_counts": {
+    "null": 1,
+    "bash": 5,
+    "read_file": 5
+  },
+  "failed_steps": [
+    {
+      "ordinal": 10,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": false,
+      "step": 4,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 11,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": false,
+      "step": 5,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    }
+  ],
+  "provider_response_steps": [],
+  "run": {
+    "status": "failed",
+    "execution_backend": "worker",
+    "response_mode": "build",
+    "started_at": "2026-10-02T12:51:13.131783+00:00",
+    "finished_at": "2026-10-02T12:53:03.865326+00:00",
+    "has_message_snapshot": false,
+    "exact_allowlisted_failure": "edit produced no source changes",
+    "public_failure_code": "no_changes",
+    "product_outcome_status": null,
+    "product_outcome_exact_failure": null,
+    "product_outcome_failure_code": null,
+    "runtime_revision": "a5a174d85571713f3aeeb4a34b7f70caf37fad39",
+    "assistant_steps_count": 11,
+    "recorded_changed_files_count": 0
+  },
+  "event_count": 11,
+  "assistant_steps": [
+    {
+      "ordinal": 1,
+      "kind": "step",
+      "tool": null,
+      "path": null,
+      "ok": true,
+      "step": 0,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 2,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": true,
+      "step": 0,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "data_contract",
+      "detail_present": true
+    },
+    {
+      "ordinal": 3,
+      "kind": "step",
+      "tool": "read_file",
+      "path": null,
+      "ok": true,
+      "step": 0,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 4,
+      "kind": "step",
+      "tool": "read_file",
+      "path": "src/app/page.tsx",
+      "ok": true,
+      "step": 1,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 5,
+      "kind": "step",
+      "tool": "read_file",
+      "path": "src/lib/omnia/integration-client.ts",
+      "ok": true,
+      "step": 1,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 6,
+      "kind": "step",
+      "tool": "read_file",
+      "path": "src/lib/db/schema.ts",
+      "ok": true,
+      "step": 1,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "data_contract",
+      "detail_present": true
+    },
+    {
+      "ordinal": 7,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": true,
+      "step": 2,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "deadline",
+      "detail_present": true
+    },
+    {
+      "ordinal": 8,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": true,
+      "step": 3,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 9,
+      "kind": "step",
+      "tool": "read_file",
+      "path": null,
+      "ok": true,
+      "step": 3,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 10,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": false,
+      "step": 4,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    },
+    {
+      "ordinal": 11,
+      "kind": "step",
+      "tool": "bash",
+      "path": null,
+      "ok": false,
+      "step": 5,
+      "reason": null,
+      "recovery_attempt": null,
+      "diagnostic_code": "verification",
+      "detail_present": true
+    }
+  ],
+  "truncated": {
+    "events": false,
+    "assistant_steps": false,
+    "recorded_changed_files": false
+  }
+}

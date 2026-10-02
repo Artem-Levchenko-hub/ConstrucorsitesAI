@@ -1,0 +1,44 @@
+{
+  "verdict": "SOURCE_CLEAR",
+  "source_path": "/workspace/qa-evidence/par-b-exact-run-readonly-20261002/collect_exact_run_trace_v3.py",
+  "source_sha256": "d0c94dc2d6a6765fa83642c0d92f7bc8a9c21840a21b3167e8a5f627ca68bf17",
+  "review_scope": "Independent offline source review only; no live SQL, Docker, network, credentials, environment, profiles, Git or production execution.",
+  "findings": [],
+  "checks": {
+    "exact_final_and_preserved_v1_v2_hashes": true,
+    "v3_delta_only_datetime_import_and_aware_utc_params": true,
+    "compile": true,
+    "focused_tests": {
+      "passed": 6,
+      "command": "python -m unittest discover -s /workspace/qa-evidence/par-b-exact-run-readonly-20261002 -p test_collect_exact_run_trace_v3.py"
+    },
+    "exact_run_project_assistant_owner_and_role_joins": true,
+    "explicit_utc_timestamptz_comparisons_and_datetime_binding": true,
+    "select_only_projected_allowlisted_metadata": true,
+    "read_only_transaction_timeout_rollback_dispose": true,
+    "default_prepared_only": true,
+    "release_full_sha_and_runtime_equality_before_sql": true,
+    "raw_prompt_detail_error_state_env_tokens_not_exported": true
+  },
+  "evidence_lines": {
+    "exact_owner_role_scope": 30,
+    "utc_comparison": 34,
+    "typed_timestamp_binding": 101,
+    "release_guard": 114,
+    "source_hash_output": 121,
+    "read_only_transaction": 128,
+    "rollback": 143,
+    "dispose": 145,
+    "default_prepared_mode": 153
+  },
+  "runtime_prerequisites": [
+    "Root runs only in the intended Core API container with --execute --expected-release a5a174d85571713f3aeeb4a34b7f70caf37fad39.",
+    "Root independently compares exported agent_generation_source_sha256 with its expected 65fb10c4... source hash; helper reports this hash rather than pinning it."
+  ],
+  "interpretation_limits": [
+    "No live SQL or asyncpg execution was performed by this reviewer.",
+    "Stored no_progress reason may be absent despite transient runtime occurrence.",
+    "The no_changes diagnostic code is classification; the separate exact_allowlisted_failure field proves only its exact allowlisted literal.",
+    "Empty recorded_changed_files does not prove zero attempted writes or establish the full cause."
+  ]
+}
