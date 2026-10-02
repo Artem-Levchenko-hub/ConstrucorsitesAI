@@ -44,6 +44,11 @@ def test_default_max_environment_is_next_with_extensible_dependencies_not_produc
     assert "src/app/api/omnia/health/route.ts" in seeded
     assert "src/components/MaxAppProvider.tsx" in seeded
     assert "src/lib/db/index.ts" not in seeded
+    assert "Dockerfile.dev" not in seeded
+    # Platform image-recipe tests cannot run in a product without that recipe.
+    assert "tests/dependency-install.test.mjs" not in seeded
+    assert "tests/database-compatibility.test.mjs" in seeded
+    assert "tests/starter.test.mjs" in seeded
     assert {path for path in seeded if path.startswith("src/app/api/")} == {
         "src/app/api/omnia/health/route.ts"
     }

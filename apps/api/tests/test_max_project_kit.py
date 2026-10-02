@@ -352,6 +352,18 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
     test_task = next(task for task in manifest.tasks if task.argv[1] == "test")
     pnpm = which(test_task.argv[0])
     assert pnpm is not None
+    # The declared final tests now include real driver/ORM behavior. Run the same
+    # frozen bootstrap as the machine before invoking its complete test task.
+    install_task = next(task for task in manifest.tasks if task.role == "bootstrap")
+    installed = run(
+        [pnpm, *install_task.argv[1:]],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=300,
+    )
+    assert installed.returncode == 0, installed.stdout + installed.stderr
     result = run(
         [pnpm, *test_task.argv[1:]],
         cwd=tmp_path,
@@ -359,7 +371,7 @@ def test_every_max_starter_overlay_keeps_portable_machine_tasks_executable(
         text=True,
         check=False,
     )
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "MAX starter package satisfies portable machine contract" in result.stdout
 
 

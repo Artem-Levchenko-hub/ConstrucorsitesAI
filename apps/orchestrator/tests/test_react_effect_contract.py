@@ -31,6 +31,8 @@ export default function Page() {
 
 def check(tmp_path, source, react=True):
     if not TS.exists():
+        if os.environ.get("CI", "").lower() in {"1", "true", "yes"}:
+            pytest.fail("CI requires the installed TypeScript parser at QA_TYPESCRIPT_PATH")
         pytest.skip("Installed TypeScript required for actual AST execution")
     root = tmp_path
     (root / "src").mkdir(exist_ok=True)
@@ -305,3 +307,12 @@ def test_enclosing_lexical_bindings_prevent_react_timer_certainty(tmp_path, wrap
     else:
         source = BROKEN + "\nfunction clearTimeout() {}"
     assert check(tmp_path, source).returncode == 0
+
+
+def test_ci_missing_parser_fails_instead_of_skipping(tmp_path, monkeypatch):
+    monkeypatch.setenv('CI', 'true')
+    monkeypatch.setitem(globals(), 'TS', tmp_path / 'missing-typescript')
+    with pytest.raises(BaseException) as observed:
+        check(tmp_path, BROKEN)
+    assert isinstance(observed.value, pytest.fail.Exception)
+    assert "CI requires the installed TypeScript parser" in str(observed.value)

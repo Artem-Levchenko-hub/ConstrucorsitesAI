@@ -22,14 +22,32 @@ _EXPORT_OMISSIONS = {
 }
 
 
+# Only reviewed dependency/build files may replace the historical MAX golden.
+# SDK/source entries continue to use their existing immutable contract.
+_DEPENDENCY_OVERRIDE_PATHS = {
+    "Dockerfile.dev",
+    "package.json",
+    "pnpm-lock.yaml",
+    "tests/database-compatibility.test.mjs",
+    "tests/dependency-install.test.mjs",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
     parser.add_argument("readme_overrides", type=Path)
+    parser.add_argument("dependency_overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
+    dependency_overrides = json.loads(args.dependency_overrides.read_text(encoding="utf-8"))
+    assert set(dependency_overrides) == _DEPENDENCY_OVERRIDE_PATHS, (
+        "unexpected MAX dependency override paths"
+    )
     for name, complete_tree in golden.items():
+        if name == "max-miniapp-nextjs":
+            complete_tree = complete_tree | dependency_overrides
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
         expected = {path: entry for path, entry in complete_tree.items() if path not in omissions}

@@ -18,6 +18,13 @@ GOLDEN = json.loads(
 )
 
 
+DEPENDENCY_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_dependency_overrides.json"
+    ).read_text()
+)
+
 SOURCE_MAPPING = json.loads(
     (
         Path(__file__).resolve().parents[2]
@@ -69,7 +76,10 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         if not asset.is_file():
             continue
         asset.write_bytes(asset.read_bytes().replace(b"\r\n", b"\n"))
-    for template, expected in GOLDEN["templates"].items():
+    for template, frozen in GOLDEN["templates"].items():
+        expected = dict(frozen)
+        if template == "max-miniapp-nextjs":
+            expected.update(DEPENDENCY_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -101,6 +111,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(script),
             str(fixtures / "shared_public_git_golden.json"),
             str(fixtures / "shared_public_readme_overrides.json"),
+            str(fixtures / "max_template_dependency_overrides.json"),
         ],
         cwd=tmp_path,
         env=env,
@@ -110,6 +121,35 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.count("complete export hashes and generated override passed") == 1
+
+    # Dependency overrides must never turn into an SDK/source-hash bypass.
+    untrusted = tmp_path / "untrusted-dependency-overrides.json"
+    bad_overrides = dict(DEPENDENCY_OVERRIDES)
+    sdk_relative = "src/lib/omnia/integration-client.ts"
+    bad_overrides[sdk_relative] = {"sha256": "0" * 64, "mode": "100644"}
+    untrusted.write_text(json.dumps(bad_overrides))
+    args = [
+        sys.executable,
+        str(script),
+        str(fixtures / "shared_public_git_golden.json"),
+        str(fixtures / "shared_public_readme_overrides.json"),
+        str(untrusted),
+    ]
+    rejected = subprocess.run(
+        args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+    )
+    assert rejected.returncode != 0
+    assert "unexpected MAX dependency override paths" in rejected.stderr
+
+    # The actual shared SDK bytes must still match the reviewed immutable hash.
+    sdk_source = mounted / "max-miniapp-nextjs" / sdk_relative
+    sdk_source.write_bytes(sdk_source.read_bytes() + b"\n// qa-invalid-sdk-drift\n")
+    args[-1] = str(fixtures / "max_template_dependency_overrides.json")
+    rejected = subprocess.run(
+        args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+    )
+    assert rejected.returncode != 0
+    assert f"max-miniapp-nextjs/{sdk_relative}" in rejected.stderr
 
 
 @pytest.mark.parametrize("template", ["max-miniapp-nextjs"])

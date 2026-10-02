@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -42,7 +42,8 @@ try:
    state["images"][state["drift"]]["id"]="sha256:"+"d"*64
  elif args[0]=="run":
   if args[-2]==state.get("node_id") and not state.get("has_node",True): sys.exit(127)
-  print(state.get("runtime_version","v22.23.3") if args[-2]==state.get("node_id") else state.get("kit_version","v22.23.3"))
+  print(state.get("runtime_version","v22.23.3") if args[-2]==state.get("node_id")
+        else state.get("kit_version","v22.23.3"))
  else: sys.exit(2)
 finally: p.write_text(json.dumps(state))
 '''
@@ -54,7 +55,8 @@ def invoke(tmp_path, *, change=None, missing_node=False, wrong_alias=False, drif
     if change:
         node.update(change)
     state = {"images": {
-        KIT: {"id": KIT, "os": "linux", "arch": "amd64", "layers": ["node-layer-1", "node-layer-2", "kit-layer"]},
+        KIT: {"id": KIT, "os": "linux", "arch": "amd64",
+              "layers": ["node-layer-1", "node-layer-2", "kit-layer"]},
         NODE: node,
     }, "calls": [], "drift": drift, "node_id": NODE, "has_node": has_node,
         "runtime_version": runtime_version, "kit_version": kit_version}
@@ -65,7 +67,8 @@ def invoke(tmp_path, *, change=None, missing_node=False, wrong_alias=False, drif
     docker = tmp_path / "docker"
     docker.write_text(f"#!{sys.executable}\n" + DOCKER)
     docker.chmod(0o755)
-    env = {**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"], "QA_DOCKER_STATE": str(state_file)}
+    env = {**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"],
+           "QA_DOCKER_STATE": str(state_file)}
     args = ["bash", str(BUILDER), KIT, OUTPUT, *([] if missing_node else [NODE])]
     result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=15)
     return result, json.loads(state_file.read_text())["calls"]
@@ -103,7 +106,9 @@ def test_mutated_runtime_alias_is_not_overwritten_or_built(tmp_path):
 def test_alias_drift_during_build_rejects_result(tmp_path, alias):
     result, calls = invoke(tmp_path, drift=alias)
     assert any(call[0] == "build" for call in calls)
-    assert "Traceback" not in result.stderr, "a broken synthetic backend is not a provenance refusal"
+    assert "Traceback" not in result.stderr, (
+        "a broken synthetic backend is not a provenance refusal"
+    )
     assert result.returncode != 0
 
 

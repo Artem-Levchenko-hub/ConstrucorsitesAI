@@ -259,6 +259,21 @@ jobs:
         # Типы пока только по src: на тестах strict-mypy даёт 3030 замечаний,
         # это отдельная работа и она не про качество продукта.
         run: uv run ruff check . && uv run mypy src
+      - name: Install the frozen React effect AST parser
+        run: |
+          # This job does not install the web app; AST regressions must still run.
+          parser_version=$(node -e '
+            const fs = require("node:fs");
+            const lock = fs.readFileSync("apps/orchestrator/templates/max-miniapp-nextjs/pnpm-lock.yaml", "utf8");
+            const matches = [...lock.matchAll(/^      typescript:\n        specifier: [^\n]+\n        version: ([0-9]+\.[0-9]+\.[0-9]+)$/gm)];
+            if (matches.length !== 1) throw Error("Expected one frozen starter TypeScript version");
+            process.stdout.write(matches[0][1]);
+          ')
+          parser_root="$RUNNER_TEMP/react-effect-parser"
+          npm install --prefix "$parser_root" --ignore-scripts --no-audit --no-fund "typescript@$parser_version"
+          export QA_TYPESCRIPT_PATH="$parser_root/node_modules/typescript"
+          node -e 'const ts = require(process.env.QA_TYPESCRIPT_PATH); console.log("React effect parser:", ts.version)'
+          echo "QA_TYPESCRIPT_PATH=$QA_TYPESCRIPT_PATH" >> "$GITHUB_ENV"
       - name: Run orchestrator tests
         working-directory: apps/orchestrator
         # A test that hangs longer than four minutes dumps every thread's stack into the
@@ -384,8 +399,9 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/api/scripts/verify_shared_public_export.py,dst=/smoke/verify.py,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/shared_public_git_golden.json,dst=/smoke/golden.json,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/shared_public_readme_overrides.json,dst=/smoke/readmes.json,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_dependency_overrides.json,dst=/smoke/dependencies.json,readonly" \
             --entrypoint /app/.venv/bin/python omnia-api:prod \
-            /smoke/verify.py /smoke/golden.json /smoke/readmes.json
+            /smoke/verify.py /smoke/golden.json /smoke/readmes.json /smoke/dependencies.json
 
   workflow-lint:
     runs-on: ubuntu-latest
