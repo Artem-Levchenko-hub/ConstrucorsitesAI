@@ -48,6 +48,11 @@ from yleum_orchestrator.services.project_migrations import (
     run_project_migrations,
     select_migrations,
 )
+from yleum_orchestrator.services.react_effect_contract import (
+    REACT_EFFECT_CHECK_PHASE,
+    REACT_EFFECT_CONTRACT_JS,
+    node_manifest_commands,
+)
 from yleum_orchestrator.services.restoration_database import close_controller_socket
 from yleum_orchestrator.services.studio_origins import studio_origins
 
@@ -349,6 +354,9 @@ class MachineAdapter:
                     )
                 if status.state in {"starting", "running"}:
                     active_names = {task.name for task in manifest.tasks}
+                    if (request.task_role in {"fast_check", "full_build"}
+                            and node_manifest_commands(manifest)):
+                        active_names.add(REACT_EFFECT_CHECK_PHASE)
                     if status.phase in active_names:
                         operation_id = uuid5(request.operation_id, status.phase)
                         try:
@@ -469,6 +477,11 @@ class MachineAdapter:
         heartbeat_seconds = int(
             getattr(self.settings, "cell_machine_command_heartbeat_seconds", 15)
         )
+        if role in {"fast_check", "full_build"} and node_manifest_commands(manifest):
+            commands.insert(0, (
+                REACT_EFFECT_CHECK_PHASE,
+                ["node", "-e", REACT_EFFECT_CONTRACT_JS], ".", 30,
+            ))
         for name, argv, cwd, timeout in commands:
             await machine.request_heartbeat(
                 mutation,

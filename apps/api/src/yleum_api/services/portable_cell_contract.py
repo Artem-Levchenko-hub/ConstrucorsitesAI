@@ -105,6 +105,16 @@ files or provider secrets, disable auth, forge evidence, fabricate user history
 or simulate integrations. Own product data/SQLite/service volumes are allowed;
 keep backup/recovery checks honest.
 
+Do not invent loading for static content: render a static welcome/about page
+immediately. For real asynchronous loading, keep the attempt's lifetime separate
+from its displayed status. Changing an effect dependency runs its cleanup: an
+effect guarded by status === idle that sets status to loading while depending on
+status cancels its own timer/request and then refuses to restart it. Start the
+attempt from a stable identity/query/retry key, or let an effect driven by loading
+start work only after that transition. Keep unmount/key-change cleanup and ignore
+stale results; do not fix this by disabling cleanup. Test actual React rerenders
+and completion so loading reaches success or error, including explicit Retry.
+
 For UI data loading, keep explicit idle/loading/success/error state per resource
 and authenticated identity/query key. Automatically fetch only idle resources;
 null data plus !loading is not a retry condition. Preserve successful results,

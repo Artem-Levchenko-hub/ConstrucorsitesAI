@@ -241,7 +241,8 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activ
         assert "[final-test] passed" in result.output
         assert result.output.startswith("service web readiness failed: missing build")
         assert 4096 < len(result.output) <= 24000
-    assert commands == [["pnpm", "build"], ["pnpm", "test"]]
+    assert commands[0] == ["node", "-e", api.REACT_EFFECT_CONTRACT_JS]
+    assert commands[1:] == [["pnpm", "build"], ["pnpm", "test"]]
     runtime._activate_runtime.assert_awaited_once()
     assert runtime._project_migrations.await_count == 2
 

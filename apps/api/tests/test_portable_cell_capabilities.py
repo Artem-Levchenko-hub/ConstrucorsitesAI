@@ -168,3 +168,30 @@ async def test_portable_build_client_sends_task_role_and_stable_operation_id(mon
     )
     assert captured[0]["task_role"] == "build"
     assert captured[0]["operation_id"] == str(operation)
+
+
+def test_portable_loading_prompt_prevents_effect_cleanup_deadlock():
+    from yleum_api.services import agent_native
+    from yleum_api.services.portable_cell_contract import machine_stack_guide
+
+    prompt = agent_native.native_system_prompt(machine_stack_guide(
+        'legacy', {'portable_machine': True}, {'.omnia/cell.json': '{}'}))
+    delivered = ' '.join(prompt.split())
+    for rule in (
+        'Do not invent loading for static content',
+        'Changing an effect dependency runs its cleanup',
+        'stable identity/query/retry key',
+        'loading reaches success or error',
+    ):
+        assert rule in delivered
+
+
+def test_old_green_build_without_effect_check_cannot_promote():
+    from types import SimpleNamespace
+
+    from yleum_api.services.max_finalization import _current_build_result
+
+    result = SimpleNamespace(
+        redacted_detail='[build-contract:max-full-build-project-migrations-v2] green',
+        outcome='green', artifact_ref='build/sha256/' + 'a' * 64)
+    assert not _current_build_result(result, 'a' * 64)
