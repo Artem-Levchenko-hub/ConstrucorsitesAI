@@ -1,0 +1,25 @@
+{
+  "revision": "4f8bbbe6221c7836eaf794f7ee8e37d3f7be0473",
+  "api_container_id": "2b67e4dbc762cba85729ca8c029c6e8e302e919e35d34e91eea0fd8df7ed3e28",
+  "fixture": {
+    "fixture_label": "C",
+    "owner_role": "user",
+    "owner_id_sha256": "f2ef40a428c9e57e4c215d8d6c0a55871d952ca201e6c3edb1be9f50dadbd066",
+    "project_id_sha256": "9f9147a8ba0b192858dee0aae6650b8b491f504949603883150ebb552d67cda1",
+    "workspace_id_sha256": "43a24989fdbb7fa1d6845eb6d732894de5a0c366630226b57f9372445fe5e24d"
+  },
+  "new_run_sha256": "b9d3e68bf459104515fb7c840cf09ae4a83ff7b84db49ddca6bbf47a70865245",
+  "source_fix_safe_receipt_sha256": "989d4e6c01d6aa561664bebb7dfc3398d5a8f5d6a17359316bde501a65bfc5a5",
+  "read_ack": {
+    "purpose": "OWN_C_POST_SOURCE_FIX_TYPED_NATIVE_READONLY_V2",
+    "scope_sha256": "3a6ce993476776672a51dc26b69981fdf3d2fcbb960cdbc547a603a5a13784aa",
+    "helper_sha256": "cd47b12332ba984a80d77d91e29af1223ce284c06aad0d0cc461233ab5c796b9",
+    "issued_at_utc": "2026-10-02T05:06:57.070221+00:00",
+    "root_readonly_authorized": true,
+    "production_delivered": true,
+    "exclusive_actor": true,
+    "inprogress": false,
+    "model_calls_authorized": false,
+    "new_commands_authorized": false
+  }
+}
