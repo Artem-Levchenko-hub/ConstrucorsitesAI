@@ -1,0 +1,905 @@
+{
+  "scope": "Consolidated dated evidence, not all current-release acceptance",
+  "platform_sha": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
+  "parallel_report_cutoff_msk": "2026-10-02 17:05",
+  "count": 67,
+  "counts": {
+    "ACCEPTED_SCOPED": 7,
+    "PARTIAL": 33,
+    "NOT_RUN_REQUIRED_FLOW": 22,
+    "PARALLEL_PASS_PENDING_AUDIT": 2,
+    "FAIL_REPRODUCED": 2,
+    "FAIL_REPORTED_PENDING_EVIDENCE_AUDIT": 1
+  },
+  "release_ready": false,
+  "cases": [
+    {
+      "id": "Т01.1",
+      "group": "Версия и условия проверки",
+      "action": "Сопоставить исходники, сервер и работающие сервисы: проверяем именно утверждённую версию.",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "Карта релиза сверена; для 6a7f6f4b есть push, CI, квитанция выкладки и API/web 200/ok.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/user-scenarios/t01-1-release-map-audit.json",
+        "qa-evidence/config-render-fd9/final-delivery-ack.json",
+        "qa-evidence/user-scenarios/current-accepted-original-gates.json",
+        "qa-evidence/portable-stopped-state-4f8/canonical-delivery-safe.json",
+        "qa-evidence/portable-stopped-state-4f8/post-delivery-public-health.json",
+        "qa-evidence/portable-stopped-state-4f8/ci-jobs-safe.json"
+      ]
+    },
+    {
+      "id": "Т01.2",
+      "group": "Версия и условия проверки",
+      "action": "Зафиксировать включённые способы входа, тарифы, платёжные сценарии и поддерживаемые приложения.",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "Инвентаризация способов входа, тарифов и MAX выполнена; платежи отключены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/user-scenarios/t01-2-inventory-audit.json",
+        "qa-evidence/user-scenarios/current-accepted-original-gates.json"
+      ]
+    },
+    {
+      "id": "Т01.3",
+      "group": "Версия и условия проверки",
+      "action": "Подготовить независимых владельцев A/B, проекты A/B, пользователей и администраторов приложений.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Владельцы PAR-A/PAR-B и проекты созданы. Не хватает второго настоящего пользователя MAX и полной матрицы ролей.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/registration-safe-ledger.json",
+        "qa-evidence/live-auth-block/owned-project-create-B-result.json",
+        "qa-evidence/live-auth-block/owned-A-delete-B-preserved-result.json"
+      ]
+    },
+    {
+      "id": "Т01.4",
+      "group": "Версия и условия проверки",
+      "action": "До тестов определить допустимые задержки, нагрузку, время восстановления и объём допустимой потери данных.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Найдены цели генерации; остальные пределы задержек, нагрузки, RTO/RPO не согласованы.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/performance-readonly-20261002/results.json",
+        "qa-evidence/performance-readonly-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т02.1",
+      "group": "Вход, сессии и восстановление доступа",
+      "action": "Проверить все включённые способы входа, выход, повторный запуск и восстановление доступа.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Вход по паролю, выход и повторный вход пройдены. Положительный Yandex OAuth и восстановление по почте не завершены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/auth-consolidated-safe-ledger.json",
+        "qa-evidence/live-auth-batch-20261002/results.json",
+        "qa-evidence/live-auth-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т02.2",
+      "group": "Вход, сессии и восстановление доступа",
+      "action": "Изменённые, просроченные и отозванные токены отклоняются; использованные ссылки восстановления не работают повторно.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Изменённые/отозванные токены и повтор OAuth state отклонены. Нужны реальное истечение и успешное восстановление с повтором ссылки.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/auth-consolidated-safe-ledger.json",
+        "qa-evidence/live-auth-block/oauth-wall-clock-expiry-result.json",
+        "qa-evidence/live-auth-batch-20261002/results.json",
+        "qa-evidence/live-auth-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т02.3",
+      "group": "Вход, сессии и восстановление доступа",
+      "action": "Проверить завершение сессий после выхода, смены пароля и отзыва доступа.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Выход и отзыв отдельной сессии проверены. Отзыв сессий после смены пароля не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-access-revocation-result.json",
+        "qa-evidence/live-auth-block/own-A-logout-browser-history-coverage.json",
+        "qa-evidence/live-auth-batch-20261002/results.json",
+        "qa-evidence/live-auth-batch-20261002/REPORT.md",
+        "qa-evidence/live-auth-continuation-20261002/results.json",
+        "qa-evidence/live-auth-continuation-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т02.4",
+      "group": "Вход, сессии и восстановление доступа",
+      "action": "Перебор паролей и кодов ограничивается; восстановление не позволяет захватить чужой аккаунт.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "30 неверных входов → 401, 31-й → 429. Полный перебор кодов и защита действительного восстановления не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/auth-rate-limit-source-budget.json",
+        "qa-evidence/live-auth-batch-20261002/results.json",
+        "qa-evidence/live-auth-batch-20261002/REPORT.md",
+        "qa-evidence/live-auth-continuation-20261002/results.json",
+        "qa-evidence/live-auth-continuation-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т02.5",
+      "group": "Вход, сессии и восстановление доступа",
+      "action": "OAuth и вход через MAX, если включены: подмена параметров, повтор callback, истечение срока и связывание аккаунтов не обходят проверку личности.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Подмена/отмена/повтор OAuth state проверены. Успешный Yandex-вход и связывание аккаунтов не пройдены; amoCRM OAuth — отдельная интеграция.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/oauth-negative-boundary-result.json",
+        "qa-evidence/live-auth-block/oauth-wall-clock-expiry-result.json",
+        "qa-evidence/live-auth-batch-20261002/results.json",
+        "qa-evidence/live-auth-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т03.1",
+      "group": "Изоляция владельцев и проектов",
+      "action": "Подменять идентификаторы во всех операциях чтения, изменения, удаления и экспорта: A не получает доступ к B.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Проверены owner/foreign GET, PATCH, DELETE, snapshots и ZIP: владелец имеет доступ, чужой получает 404. Вся матрица маршрутов не покрыта.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/platform-owned-A-to-B-readonly-idor-result.json",
+        "qa-evidence/live-owner-write-isolation-20261002/results.json",
+        "qa-evidence/live-owner-write-isolation-20261002/REPORT.md",
+        "qa-evidence/live-owner-read-surfaces-20261002/results.json",
+        "qa-evidence/live-owner-read-surfaces-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т03.2",
+      "group": "Изоляция владельцев и проектов",
+      "action": "Проверить отдельно файлы, БД, поиск, кеш, предпросмотры, временные ссылки и резервные копии.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Проверены файлы, архивы и часть preview. Воспроизведён кеш изображения после смены владельца; полная изоляция БД/поиска/копий не принята.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/platform-owned-A-to-B-readonly-idor-result.json",
+        "qa-evidence/live-owner-write-isolation-20261002/results.json",
+        "qa-evidence/live-owner-read-surfaces-20261002/results.json",
+        "qa-evidence/live-owner-read-surfaces-20261002/REPORT.md",
+        "qa-evidence/live-owner-cache-normal-ui-20261002/results.json",
+        "qa-evidence/live-owner-cache-normal-ui-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т03.3",
+      "group": "Изоляция владельцев и проектов",
+      "action": "Проверить отозванные права и роли: отказ действует сразу и на сервере.",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "На проверенной ревизии снятие роли сразу давало 403, блокировка старого токена — 401. Это датированная приёмка.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/user-scenarios/t03-3-role-rights-revocation-audit.json",
+        "qa-evidence/user-scenarios/current-accepted-original-gates.json"
+      ]
+    },
+    {
+      "id": "Т03.4",
+      "group": "Изоляция владельцев и проектов",
+      "action": "Удаление или сбой проекта A не затрагивает проект B.",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "Удалён собственный A; B сохранил записи, исходники и версию. Принята ветвь удаления, не полный набор аварий.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-A-delete-B-preserved-result.json",
+        "qa-evidence/live-auth-block/t03-4-clause-assessment.json",
+        "qa-evidence/user-scenarios/current-accepted-original-gates.json"
+      ]
+    },
+    {
+      "id": "Т04.1",
+      "group": "Защита конечных пользователей приложений",
+      "action": "Отдельно проверить вход и сессии внутри опубликованных приложений.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Пройдены реальный MAX-вход, переоткрытие приложения и отрицательные подписи. Полный набор сессий/истечения не завершён.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-app-readonly-boundaries-post-release-result.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json"
+      ]
+    },
+    {
+      "id": "Т04.2",
+      "group": "Защита конечных пользователей приложений",
+      "action": "Пользователь видит только разрешённые ему записи и файлы; подмена роли или ID не расширяет доступ.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Проверены действительная MAX-подпись и отказы подменённой личности. Нет второго реального actor и полной матрицы строк/файлов/ролей.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-app-readonly-boundaries-post-release-result.json",
+        "qa-evidence/template-security-followup/disposable-integration-safe.stdout.json"
+      ]
+    },
+    {
+      "id": "Т04.3",
+      "group": "Защита конечных пользователей приложений",
+      "action": "Пользователи разных приложений изолированы, включая приложения одного владельца.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Изоляция конечных пользователей разных приложений целиком не запускалась; owner-тесты её не заменяют.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т04.4",
+      "group": "Защита конечных пользователей приложений",
+      "action": "Экспорт и удаление персональных данных охватывают нужного пользователя без выдачи чужих данных.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Экспорт/удаление данных именно конечного пользователя приложения не пройдены. Экспорт аккаунта владельца — другая проверка.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т04.5",
+      "group": "Защита конечных пользователей приложений",
+      "action": "Новая генерация приложения не убирает ранее проверенные ограничения доступа.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "После доработки PAR-B повторены проверки MAX-доступа. Полная матрица прав с двумя настоящими пользователями не завершена.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json"
+      ]
+    },
+    {
+      "id": "Т05.1",
+      "group": "Генерация и публикация",
+      "action": "Проверить первое создание, повторную генерацию, предпросмотр и публикацию.",
+      "status": "PARALLEL_PASS_PENDING_AUDIT",
+      "label": "🟦 PASS параллельного окна",
+      "actual": "Параллельное окно сообщает полный PASS: первое создание, обычная доработка, preview и публикация PAR-B. В общий счёт до аудита доказательств не добавлен.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/root-derived-successful-source-fix-receipt-v2.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/actual-runtime-safe.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-attempt-registry/0b025f1bcfd1a76d99611e0406f0668c6843ae3d529be2bf20796b507c53bf1d.result.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-preparation/v2/current-native-resources-2fea-safe.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-preparation/v2/current-validation-receipt-2fea.json"
+      ]
+    },
+    {
+      "id": "Т05.2",
+      "group": "Генерация и публикация",
+      "action": "Ошибка сборки, отмена и тайм-аут дают понятный статус и возможность безопасного повтора.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Были отмена и реальный no_changes, после которого повтор завершился успешно. Все ветви ошибки сборки/тайм-аута не закрыты.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-project-cancel-confirmation-A-result.json"
+      ]
+    },
+    {
+      "id": "Т05.3",
+      "group": "Генерация и публикация",
+      "action": "Предыдущая рабочая версия доступна до успешного переключения.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Старая версия и данные сохранялись при генерации; во время переключения был неразбираемый ответ и заминка запуска. Непрерывная доступность не доказана.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json"
+      ]
+    },
+    {
+      "id": "Т05.4",
+      "group": "Генерация и публикация",
+      "action": "Опубликованный результат соответствует выбранной версии.",
+      "status": "PARALLEL_PASS_PENDING_AUDIT",
+      "label": "🟦 PASS параллельного окна",
+      "actual": "Параллельное окно сообщает полный PASS: snapshot/commit выбранной версии, terminal publish и настоящее MAX-приложение совпали. Требуется аудит доказательств.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json"
+      ]
+    },
+    {
+      "id": "Т05.5",
+      "group": "Генерация и публикация",
+      "action": "Повторная публикация не создаёт конфликтующие ресурсы; бесплатные и платные ограничения проверяются сервером.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "PAR-B опубликован повторно, записи сохранены. Все конфликты ресурсов и платные ограничения не проверены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т06.1",
+      "group": "Запись и сохранность данных",
+      "action": "Проверить создание, чтение, изменение, удаление, файлы, связи и ограничения полей.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Реальные задачи CRUD/F5, каталог, PNG, история и интеграционные записи проверены. Полная матрица файлов/связей/ролей не завершена.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json",
+        "qa-evidence/own-B-image-postfix/root-acceptance.json",
+        "qa-evidence/live-booking-crud-batch-20261002/results.json",
+        "qa-evidence/live-booking-crud-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т06.2",
+      "group": "Запись и сохранность данных",
+      "action": "Одновременное редактирование не приводит к незаметной потере изменений.",
+      "status": "FAIL_REPRODUCED",
+      "label": "❌ FAIL",
+      "actual": "Два одновременных PATCH → 200/200, одно изменение потерялось. Исправление ещё не принято в живом опубликованном приложении.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json",
+        "qa-evidence/live-booking-crud-batch-20261002/results.json",
+        "qa-evidence/live-booking-crud-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т06.3",
+      "group": "Запись и сохранность данных",
+      "action": "Обрыв связи после записи не создаёт дубликат при повторе запроса.",
+      "status": "FAIL_REPRODUCED",
+      "label": "❌ FAIL",
+      "actual": "Ответ после успешной записи оборван; обычный повтор создал вторую запись, F5 показал дубликаты. Исправление ещё не принято в живом приложении.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json",
+        "qa-evidence/live-booking-crud-batch-20261002/results.json",
+        "qa-evidence/live-booking-crud-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т06.4",
+      "group": "Запись и сохранность данных",
+      "action": "Ошибка БД не показывает пользователю ложное «сохранено».",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "В изолированной копии точного исходника с настоящим PostgreSQL ошибка БД показана честно, ложного сохранения нет; восстановление/F5 пройдены. Это не авария production.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json",
+        "qa-evidence/live-booking-crud-batch-20261002/results.json",
+        "qa-evidence/live-booking-crud-batch-20261002/REPORT.md",
+        "qa-evidence/booking-isolated-db-20261002/root-acceptance.json",
+        "qa-evidence/booking-isolated-db-20261002/results.json",
+        "qa-evidence/booking-isolated-db-20261002/provenance.json",
+        "qa-evidence/booking-isolated-db-20261002/cleanup.json",
+        "qa-evidence/booking-isolated-db-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т06.5",
+      "group": "Запись и сохранность данных",
+      "action": "После обновления приложения сверить записи, идентификаторы, связи, файлы и права доступа.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Две задачи и восемь исходных событий PAR-B сохранены при доработке/публикации. Все файлы, связи и права после обновления не проверены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json",
+        "qa-evidence/own-B-image-postfix/root-acceptance.json",
+        "qa-evidence/live-booking-crud-batch-20261002/results.json",
+        "qa-evidence/live-booking-crud-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т07.1",
+      "group": "Одновременные операции",
+      "action": "Запустить генерацию и публикацию дважды и из разных сессий.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Есть связанные проверки повторного расчёта AI. Полный одновременный запуск генерации/публикации из двух сессий не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/regression-diagnosis/billing-physical-evidence.json"
+      ]
+    },
+    {
+      "id": "Т07.2",
+      "group": "Одновременные операции",
+      "action": "Проверить конфликт публикации, удаления, изменения тарифа и отката.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Матрица конфликтов публикация/удаление/тариф/restore не запускалась.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т07.3",
+      "group": "Одновременные операции",
+      "action": "Задержавшаяся старая задача не перезаписывает результат новой.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Живой запоздавший старый job против нового результата не запускался. Проверки исходников не считаются этим сценарием.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т07.4",
+      "group": "Одновременные операции",
+      "action": "Истечение блокировки и перезапуск исполнителя не создают двух владельцев операции.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Реальное истечение lease и перезапуск исполнителя в изоляции не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т07.5",
+      "group": "Одновременные операции",
+      "action": "Активная версия, статус операции и журнал публикации остаются согласованными.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Сверялись операции, версии и публикации PAR-B; весь контракт согласованности журнала не принят.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/root-derived-successful-source-fix-receipt-v2.json",
+        "qa-evidence/owned-B-terminal-proof/actual-core-safe-receipt.json"
+      ]
+    },
+    {
+      "id": "Т08.1",
+      "group": "Платежи и подписки",
+      "action": "Проверить успех, отказ, отмену и зависший платёж: сумма, валюта, владелец, тариф и срок верны.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Платёжный провайдер отключён; успешный/отклонённый/отменённый/зависший платёж не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т08.2",
+      "group": "Платежи и подписки",
+      "action": "Возврат из платёжной страницы сам по себе не выдаёт платный доступ.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Реальный возврат с платёжной страницы без подтверждения не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т08.3",
+      "group": "Платежи и подписки",
+      "action": "Повторные запросы и уведомления провайдера не дают двойного списания или начисления.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Проверялись связанные расчёты AI; это не проверка платежей клиента. Реальные уведомления платёжного провайдера не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/regression-diagnosis/billing-physical-evidence.json"
+      ]
+    },
+    {
+      "id": "Т08.4",
+      "group": "Платежи и подписки",
+      "action": "Поддельные уведомления и несоответствие суммы/аккаунта отклоняются.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Поддельные и несовпадающие уведомления реального тестового платёжного провайдера не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т08.5",
+      "group": "Платежи и подписки",
+      "action": "Потерянные, задержанные и переставленные уведомления корректно обрабатываются; сверка с провайдером выявляет расхождения.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Потеря/перестановка уведомлений и сверка с платёжным провайдером не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т08.6",
+      "group": "Платежи и подписки",
+      "action": "Проверить автопродление, отмену, неудачное продление, окончание доступа, смену тарифа и возврат.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Продление, отмена, истечение подписки, смена тарифа и возврат не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т08.7",
+      "group": "Платежи и подписки",
+      "action": "При снижении тарифа данные сохраняются согласно утверждённой политике.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Реальное снижение тарифа с проверкой политики сохранения данных не пройдено.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т09.1",
+      "group": "Резервные копии, миграции и откат",
+      "action": "Восстановить БД и файлы в отдельной среде; проверить содержимое и связи, а не только успешное завершение команды.",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "В изоляции восстановлены настоящая БД и 44 файла; содержимое/связи сверены, браузер/F5/новая запись успешны. Production DR и продуктовый restore — отдельные проверки.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/config-render-fd9/final-delivery-ack.json",
+        "qa-evidence/core-generation-proof-04-and-restore.png",
+        "qa-evidence/backup-restore-isolated-20261002/qa-t09-20261002-v1-db0e33ae/root-acceptance.json"
+      ]
+    },
+    {
+      "id": "Т09.2",
+      "group": "Резервные копии, миграции и откат",
+      "action": "Измерить фактическое время восстановления и потерю данных.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Измерено изолированное восстановление; полный профиль восстановления и допустимой потери данных не принят, RTO/RPO не согласованы.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/core-generation-proof-04-and-restore.png"
+      ]
+    },
+    {
+      "id": "Т09.3",
+      "group": "Резервные копии, миграции и откат",
+      "action": "Проверить доступность и защиту копий; повреждённая или неполная копия обнаруживается.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Настоящий шифрованный архив и повреждённые/усечённые копии проверялись. Не закрыты все права доступа к ключам и plaintext.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/config-render-fd9/final-delivery-ack.json",
+        "qa-evidence/live-backup-boundary-20261002/results.json",
+        "qa-evidence/live-backup-boundary-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т09.4",
+      "group": "Резервные копии, миграции и откат",
+      "action": "Отдельно проверить откат кода, совместимость схемы и восстановление бизнес-данных.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Есть проверки runtime/preview и сохранности. Продуктовые CASE1 → CASE2 → CASE3 целиком не приняты.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/actual-runtime-safe.json",
+        "qa-evidence/portable-stopped-state-4f8/HANDOFF.md",
+        "qa-evidence/core-generation-proof-04-and-restore.png",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-attempt-registry/0b025f1bcfd1a76d99611e0406f0668c6843ae3d529be2bf20796b507c53bf1d.result.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-preparation/v2/current-native-resources-2fea-safe.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-preparation/v2/current-validation-receipt-2fea.json"
+      ]
+    },
+    {
+      "id": "Т09.5",
+      "group": "Резервные копии, миграции и откат",
+      "action": "Создать записи до и после обновления: откат приложения не должен молча удалить новые данные.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Полный restore с записями до и после обновления не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json"
+      ]
+    },
+    {
+      "id": "Т09.6",
+      "group": "Резервные копии, миграции и откат",
+      "action": "Проверить ошибку миграции и тайм-аут после изменения схемы, включая безопасное продолжение восстановления.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Реальная частичная миграция/тайм-аут и безопасное продолжение restore не пройдены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т10.1",
+      "group": "Отказы и перезапуски",
+      "action": "Перезапустить сервисы во время сохранения, генерации и публикации.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Контролируемый рестарт во время сохранения, генерации и публикации не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т10.2",
+      "group": "Отказы и перезапуски",
+      "action": "Имитировать недоступность БД, очереди, хранилища, AI и платёжного провайдера.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Полная изолированная матрица отказов БД/очереди/хранилища/AI/платежей не пройдена.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т10.3",
+      "group": "Отказы и перезапуски",
+      "action": "Проверить заполнение диска, нехватку памяти и исчерпание соединений.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Контролируемые заполнение диска, OOM и исчерпание соединений не запускались.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т10.4",
+      "group": "Отказы и перезапуски",
+      "action": "Повторы ограничены; завершённая операция не выполняется заново.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Проверялись связанные повторы; обнаружен дубликат при повторной записи. Полная проверка бюджета повторов и завершённых операций не принята.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-booking-crud-batch-20261002/results.json"
+      ]
+    },
+    {
+      "id": "Т10.5",
+      "group": "Отказы и перезапуски",
+      "action": "После восстановления нет потерянных записей, вечных статусов «выполняется» и бесконечных очередей.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Есть терминальные статусы и восстановленный runtime отдельных проектов; полный набор восстановления данных/очередей не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/root-derived-successful-source-fix-receipt-v2.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/actual-runtime-safe.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-attempt-registry/0b025f1bcfd1a76d99611e0406f0668c6843ae3d529be2bf20796b507c53bf1d.result.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-preparation/v2/current-native-resources-2fea-safe.json",
+        "qa-evidence/restore-empty-C/post-source-fix-preview-preparation/v2/current-validation-receipt-2fea.json"
+      ]
+    },
+    {
+      "id": "Т11.1",
+      "group": "Безопасность и исполнение сгенерированного кода",
+      "action": "Проверить обход прав, XSS, CSRF, SQL-инъекции, SSRF и обход путей.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Выполнены поднаборы XSS, подмены URL/path, неверных запросов и CORS. Сохранённый SVG в задаче отображался текстом. Полная CSRF/SQLi/SSRF-матрица не пройдена.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/post-final-security-readonly-coverage.json",
+        "qa-evidence/live-security-batch-20261002/results.json",
+        "qa-evidence/live-security-batch-20261002/REPORT.md",
+        "qa-evidence/live-security-surfaces-20261002/results.json",
+        "qa-evidence/live-security-surfaces-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т11.2",
+      "group": "Безопасность и исполнение сгенерированного кода",
+      "action": "Проверить опасные файлы, неверный тип, чрезмерный размер и архивы.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "PNG upload/F5 успешен; SVG, MIME mismatch, обрезанные/пустые/большие файлы отклонены. Вся матрица архивов и загрузок не закрыта.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/own-B-image-postfix/root-acceptance.json",
+        "qa-evidence/live-security-batch-20261002/results.json",
+        "qa-evidence/live-security-batch-20261002/REPORT.md",
+        "qa-evidence/live-security-surfaces-20261002/results.json",
+        "qa-evidence/live-security-surfaces-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т11.3",
+      "group": "Безопасность и исполнение сгенерированного кода",
+      "action": "Проверить HTTPS, cookies, CORS и отсутствие секретов в браузере, URL, логах и ошибках.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "TLS/cookies/CORS проверены частично. На 6a7f6f4b защитные заголовки прошли 10 HTTP-проверок; полный аудит утечек/каналов не завершён.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/live-auth-block/post-final-security-readonly-coverage.json",
+        "qa-evidence/live-security-batch-20261002/results.json",
+        "qa-evidence/live-security-batch-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т11.4",
+      "group": "Безопасность и исполнение сгенерированного кода",
+      "action": "Сгенерированный код не получает доступ к инфраструктуре, секретам и соседним проектам.",
+      "status": "FAIL_REPORTED_PENDING_EVIDENCE_AUDIT",
+      "label": "❌ FAIL — отчёт локального окна",
+      "actual": "На platform 6a7f6f4b локальное окно физически проверило Coffee: generated-app DATABASE_URL использует postgres с SUPERUSER/CREATEDB/CREATEROLE/BYPASSRLS/REPLICATION, TRUNCATE на 4/4 таблиц, RLS 0/4. Core-role отдельно ограничена. Доступ к соседям/секретам НЕ доказан. Исправление и живой ретест отсутствуют; исходные доказательства ожидаются от окна.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/template-security-followup/disposable-integration-safe.stdout.json"
+      ]
+    },
+    {
+      "id": "Т11.5",
+      "group": "Безопасность и исполнение сгенерированного кода",
+      "action": "Инструкции в пользовательских файлах и запросах к AI не позволяют выполнить запрещённые действия или вывести приватные данные.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Живой сценарий prompt injection через файлы/запрос к AI не пройден.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т11.6",
+      "group": "Безопасность и исполнение сгенерированного кода",
+      "action": "Проверить зависимости и образы; опасные находки разобрать до выпуска.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Проверены lockfiles и отдельные образы, найдены уязвимости. Полный аудит реально обслуживающих образов и разбор всех опасных находок не завершены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/user-scenarios/t11-6-dependency-image-closure-audit.json"
+      ]
+    },
+    {
+      "id": "Т12.1",
+      "group": "Нагрузка и длительная работа",
+      "action": "Измерить задержки обычных запросов, генерации и публикации при ожидаемой нагрузке.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Есть измерения запросов без нагрузки и длительности живых генераций/публикаций. Ожидаемая согласованная нагрузка не проверена.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/performance-readonly-20261002/results.json",
+        "qa-evidence/performance-readonly-20261002/REPORT.md"
+      ]
+    },
+    {
+      "id": "Т12.2",
+      "group": "Нагрузка и длительная работа",
+      "action": "Проверить всплеск выше ожидаемого пика: ограничения работают, система восстанавливается.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Согласованный всплеск выше пика не запускался.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т12.3",
+      "group": "Нагрузка и длительная работа",
+      "action": "Тяжёлый проект не блокирует остальных клиентов.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Тяжёлый проект одновременно с независимыми клиентами не проверялся.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т12.4",
+      "group": "Нагрузка и длительная работа",
+      "action": "Провести минимум 24 часа непрерывной работы: память, соединения, диск и очередь не растут бесконтрольно.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Есть отдельные замеры ресурсов, но 24 часа непрерывного наблюдения на стабильной ревизии не завершены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/core-soak-first-status.png",
+        "qa-evidence/report/full67-report-data.json"
+      ]
+    },
+    {
+      "id": "Т12.5",
+      "group": "Нагрузка и длительная работа",
+      "action": "После снятия нагрузки показатели возвращаются к норме.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Возврат показателей после согласованной нагрузки не проверен.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т13.1",
+      "group": "Мониторинг и выпуск",
+      "action": "По идентификатору операции можно проследить платёж, генерацию, публикацию и ошибку.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Сопоставлены отдельные генерации, публикации, ошибки и записи стоимости. Платёжная ветвь и полный trace не завершены.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/generation-stability-review/booking-edit-canary/root-acceptance.json",
+        "qa-evidence/restore-empty-C/source-fix-edit-v2-actual-4f8/actual-financial-delta-safe.json",
+        "qa-evidence/owned-B-terminal-proof/actual-core-safe-receipt.json"
+      ]
+    },
+    {
+      "id": "Т13.2",
+      "group": "Мониторинг и выпуск",
+      "action": "Проверить доставку алертов о недоступности, зависших задачах, неуспешных копиях и заполнении диска.",
+      "status": "NOT_RUN_REQUIRED_FLOW",
+      "label": "⚪ Не пройден",
+      "actual": "Получение всех требуемых алертов реальным разрешённым адресатом не проверено.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json"
+      ]
+    },
+    {
+      "id": "Т13.3",
+      "group": "Мониторинг и выпуск",
+      "action": "Провести репетицию инцидента и восстановления по инструкции.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "Есть изолированное восстановление и штатные выкладки; полная репетиция инцидента по инструкции не пройдена.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/core-generation-proof-04-and-restore.png"
+      ]
+    },
+    {
+      "id": "Т13.4",
+      "group": "Мониторинг и выпуск",
+      "action": "После выкладки повторить короткие проверки входа, доступа, записи данных, публикации и оплаты.",
+      "status": "PARTIAL",
+      "label": "🟡 Частично",
+      "actual": "После выкладок проверены health и отдельные живые ветви. Полный свежий smoke с публикацией и платежом не завершён.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/config-render-fd9/final-delivery-ack.json",
+        "qa-evidence/live-auth-block/owned-B-booking-functional-result.json"
+      ]
+    },
+    {
+      "id": "Т13.5",
+      "group": "Мониторинг и выпуск",
+      "action": "Зафиксировать версию, результаты, известные ограничения и ответственного за выпуск.",
+      "status": "ACCEPTED_SCOPED",
+      "label": "✅ Принят",
+      "actual": "Ревизия, результаты, ограничения и ответственные зафиксированы; решение NOT_READY. Это приёмка документационного пункта, не разрешение запуска.",
+      "original_evidence_paths": [
+        "qa-evidence/report/actual-checkpoint.json",
+        "qa-evidence/user-scenarios/current-accepted-original-gates.json",
+        "qa-evidence/release-record-20261002.json"
+      ]
+    }
+  ],
+  "sources": [
+    "current-67-dispatch-20261002.json",
+    "report/actual-checkpoint.json",
+    "provider-security-delivery-checkpoint.json",
+    "/workspace/ConstrucorsitesAI/docs/qa/2026-10-02-handoff/status.json"
+  ],
+  "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
+  "updated_at": "2026-10-02T17:21:00Z",
+  "delivery_candidate_status": "awaiting exact CI, deployment and health",
+  "current_runtime_baseline": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
+  "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged"
+}
