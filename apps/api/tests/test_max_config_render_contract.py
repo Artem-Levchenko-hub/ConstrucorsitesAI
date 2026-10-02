@@ -44,6 +44,40 @@ class RenderBoundary(BaseException):
     pass
 
 
+_LEGACY_DEPENDENCY_HASHES = {
+    "package.json": "4cc5e3cd91a3e897d1f50a73b5e0d6599c4458ec1ff5933be1cc7b090ec6e80b",
+    "pnpm-lock.yaml": "a91a9ccf05cbdcb8876256b780d24060b93f00c55f39557626b764d6b7866d94",
+}
+
+
+def _assert_render_golden(files, expected):
+    """Check approved dependencies, then the unchanged original full SDK golden."""
+    fixture_root = Path(__file__).parent / "fixtures"
+    legacy = json.loads(
+        (fixture_root / "max_config_render_legacy_dependencies.json").read_text(encoding="utf-8")
+    )
+    assert legacy["revision"] == "49b071162a5017374b96a193c23b9d48e4cf0995"
+    assert set(legacy["files"]) == set(_LEGACY_DEPENDENCY_HASHES)
+    overrides_path = (
+        Path(__file__).parents[2]
+        / "orchestrator/tests/fixtures/max_template_dependency_overrides.json"
+    )
+    overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
+    # Project only these two verified dependency blobs back to the old baseline;
+    # all other rendered bytes must still match the unchanged original golden.
+    original_dependencies = dict(files)
+    for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
+        assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
+        baseline = legacy["files"][path]
+        assert hashlib.sha256(baseline.encode()).hexdigest() == frozen_hash, path
+        original_dependencies[path] = baseline
+    digest = hashlib.sha256(
+        json.dumps(original_dependencies, sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()
+    assert {"files": len(files), "sha256": digest} == expected
+    return digest
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "caller,stored,portable,fallback,fault",
@@ -305,14 +339,37 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "Persisted summary" if stored else prompt[:1000] or "Сервис внутри MAX"
     )
     assert "src/app/api/omnia/actions/[id]/route.ts" in files
-    digest = hashlib.sha256(
-        json.dumps(files, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
     golden = json.loads(
         (Path(__file__).parent / "fixtures/max_config_render_golden.json").read_text(
             encoding="utf-8"
         )
     )
     key = f"{caller}:{stored}:{portable}" + (f":{fallback}" if fallback != "long" else "")
-    assert {"files": len(files), "sha256": digest} == golden[key]
+    digest = _assert_render_golden(files, golden[key])
     print(f"BASELINE {key} files={len(files)} sha256={digest}")
+
+
+@pytest.mark.parametrize("changed", ["src/lib/max/session.ts", "package.json", "pnpm-lock.yaml"])
+def test_config_render_golden_rejects_sdk_or_unreviewed_dependency_drift(changed):
+    config = MaxProjectConfigPayload(
+        app_name="Initial config",
+        app_type="custom",
+        summary="Persisted summary",
+    )
+    files = max_project_kit.render_max_starter_files(config, UUID(int=1))
+    golden = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_golden.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    _assert_render_golden(files, golden["seed:True:False"])
+    if changed == "package.json":
+        package = json.loads(files[changed])
+        package["dependencies"]["unexpected-dependency"] = "1.0.0"
+        files[changed] = json.dumps(package, indent=2) + "\n"
+    elif changed == "pnpm-lock.yaml":
+        files[changed] += "\n# Unexpected lockfile drift\n"
+    else:
+        files[changed] += "\n// Unexpected SDK drift\n"
+    with pytest.raises(AssertionError):
+        _assert_render_golden(files, golden["seed:True:False"])
