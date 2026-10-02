@@ -4,15 +4,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { MaxProjectSetupDialog } from "@/components/max/MaxProjectSetupDialog";
 import { MaxProjectDataApplyDialog } from "@/components/max/MaxProjectDataApplyDialog";
+import { ApiError } from "@/lib/api/client";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), send: vi.fn(), push: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn() }));
 vi.mock("@/lib/api/max-studio", () => ({
   getMaxProjectConfig: mocks.get, saveMaxProjectConfig: mocks.save,
 }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("@/lib/api/messages", () => ({ sendPrompt: mocks.send }));
-vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error } }));
+vi.mock("sonner", () => ({ toast: { success: mocks.success, error: mocks.error, info: mocks.info } }));
 
 const record: MaxProjectConfig = {
   project_id: "qa", config_version: 1, synced_snapshot_id: "same-build",
@@ -363,5 +364,53 @@ it("показывает снаружи, какая вкладка блокир�
     await act(async () => consent.click());
     expect(policies.getAttribute("data-required")).toBe("done");
     expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Всё, что нужно для публикации, заполнено");
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
+it.each([
+  { code: "generation_draining", error: new ApiError(503, { code: "generation_draining", message: "Generation is draining for deployment" }), level: "info", title: "Сервис обновляется", description: "Подождите несколько минут и повторите сохранение. Введённые данные останутся в форме." },
+  { code: "other-api", error: new ApiError(503, { code: "internal_error", message: "Другая ошибка сохранения" }), level: "error", title: "Не удалось сохранить", description: "Другая ошибка сохранения" },
+  { code: "active-build", error: new ApiError(409, { code: "conflict", message: "Дождитесь завершения сборки" }), level: "info", title: "Сборка ещё выполняется", description: "Дождитесь завершения сборки" },
+  { code: "network", error: new Error("Network failed"), level: "error", title: "Не удалось сохранить", description: "Попробуйте ещё раз" },
+])("preserves the content draft without retrying a refused save: $code", async ({ error, level, title, description }) => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.get.mockResolvedValue(record);
+  let rejectSave!: (error: Error) => void;
+  mocks.save.mockImplementation(() => new Promise((_resolve, reject) => { rejectSave = reject; }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const changedOpen = vi.fn();
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const button = (label: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === label)!;
+  const render = () => <QueryClientProvider client={client}><MaxProjectSetupDialog projectId="qa" onOpenChange={changedOpen} /></QueryClientProvider>;
+  try {
+    await act(async () => root.render(render()));
+    await act(async () => container.querySelector<HTMLButtonElement>("button")!.click());
+    await act(async () => { await vi.waitFor(() => expect(document.querySelector("#max-config-name")).not.toBeNull()); });
+    await act(async () => button("Контент").click());
+    await act(async () => button("Добавить позицию").click());
+    const input = document.querySelector<HTMLInputElement>('[aria-label="Название элемента 1"]')!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Несохранённая QA позиция");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await act(async () => button("Сохранить и проверить").click());
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+    const submitted = JSON.stringify(mocks.save.mock.calls[0][1]);
+    expect(mocks.save.mock.calls[0][1].content[0].title).toBe("Несохранённая QA позиция");
+    await act(async () => rejectSave(error));
+    const notification = level === "info" ? mocks.info : mocks.error;
+    await act(async () => { await vi.waitFor(() => expect(notification).toHaveBeenCalledWith(title, expect.objectContaining({ description }))); });
+    expect((level === "info" ? mocks.error : mocks.info)).not.toHaveBeenCalled();
+    expect(mocks.success).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')?.textContent).toContain("Контент");
+    expect(input.value).toBe("Несохранённая QA позиция");
+    expect(changedOpen).not.toHaveBeenCalledWith(false);
+    await act(async () => { await vi.waitFor(() => expect(button("Сохранить и проверить").disabled).toBe(false)); });
+    await act(async () => { root.render(render()); await new Promise(resolve => setTimeout(resolve, 1100)); });
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(mocks.save.mock.calls[0][1])).toBe(submitted);
+    expect(mocks.send).not.toHaveBeenCalled();
   } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
 });

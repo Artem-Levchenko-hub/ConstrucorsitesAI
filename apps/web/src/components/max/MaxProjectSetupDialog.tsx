@@ -110,6 +110,10 @@ export function MaxProjectSetupDialog({
     },
     onError: (error) => {
       applyAfterSave.current = false;
+      if (error instanceof ApiError && error.code === "generation_draining") {
+        toast.info("Сервис обновляется", { id: `max-config-save-${projectId}`, description: "Подождите несколько минут и повторите сохранение. Введённые данные останутся в форме.", duration: 8000 });
+        return;
+      }
       if (error instanceof ApiError && error.status === 409 && error.message.includes("Дождитесь завершения сборки")) {
         toast.info("Сборка ещё выполняется", { id: `max-config-save-${projectId}`, description: error.message, duration: 8000 });
         return;
