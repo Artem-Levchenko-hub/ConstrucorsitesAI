@@ -69,7 +69,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
     : busyDeploy ? "Публикация продолжается"
     : !available ? "Проверяем готовность…"
     : deploy.isPending ? "Проверяем публикацию…"
-    : published ? "Текущая версия опубликована"
+    : published ? "Приложение опубликовано"
     : failed ? "Публикация не завершилась"
     : currentStage?.id === "publish" ? "Всё готово к публикации" : currentStage?.label ?? "Проверьте готовность";
 
@@ -90,16 +90,16 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
-          <p>{stateError ? MAX_STATUS_COPY.readiness.hint : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Эта версия доступна пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
+          <p>{stateError ? MAX_STATUS_COPY.readiness.hint : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Приложение доступно пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
           {busyDeploy && <div data-testid="max-launch-publication-progress" className="max-launch-publication-progress" aria-live="polite">
             <strong>{stageLabel || "Публикуем"}</strong>
             {elapsedMs !== null && <span>идёт {formatElapsed(elapsedMs)}</span>}
             {bytesLabel && <span>{bytesLabel}</span>}
             {stale && <p className="max-launch-notice">Сервер давно не сообщал о ходе публикации — проверяем состояние. Новая публикация не запускается.</p>}
           </div>}
-          {!published && publication === "outdated" && !stateError && <p className="max-launch-notice">Текущая версия не опубликована. После последней публикации появились изменения.</p>}
-          {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "already_current" && <p className="max-launch-notice" data-testid="max-launch-noop">Эта версия уже работала — повторная сборка не потребовалась.</p>}
-          {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "config_only" && <p className="max-launch-notice" data-testid="max-launch-noop">Обновлены только настройки — версия не пересобиралась.</p>}
+          {!published && publication === "outdated" && !stateError && <p className="max-launch-notice">Изменения не опубликованы. После последней публикации появились изменения.</p>}
+          {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "already_current" && <p className="max-launch-notice" data-testid="max-launch-noop">Приложение уже опубликовано — повторная сборка не потребовалась.</p>}
+          {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "config_only" && <p className="max-launch-notice" data-testid="max-launch-noop">Обновлены только настройки — приложение не пересобиралось.</p>}
           {failed && <div role="alert" className="text-sm text-danger-fg"><p>{failure.title}</p>{failure.detail && <p className="max-launch-failure-detail">{failure.detail}</p>}</div>}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">

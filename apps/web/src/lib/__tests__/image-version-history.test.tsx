@@ -9,6 +9,8 @@ import { MaxLivePreview } from "@/components/max/MaxLivePreview";
 import { MaxWorkspaceShell } from "@/components/max/MaxWorkspaceShell";
 import type { Project, ProjectVersion } from "@/lib/api/types";
 
+vi.mock("@/lib/max-product-policy", () => ({ MAX_CUSTOMER_VERSIONING: true }));
+
 const api = vi.hoisted(() => ({ runtime: vi.fn(), start: vi.fn(), sync: vi.fn(), session: vi.fn(), versions: vi.fn(), snapshots: vi.fn(), rollback: vi.fn(), send: vi.fn() }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 vi.mock("@/lib/api/restorations", () => ({ listRestorations: async () => ({ enabled: false, items: [] }) }));

@@ -388,7 +388,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       {embedded && <Button variant="ghost" className="w-fit" disabled={implement.isPending} onClick={() => setImplementationProvider(null)}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
       <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
       <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
-      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в новой версии приложения; затем потребуется публикация.</p>
+      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; затем потребуется публикация.</p>
       <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
       <Textarea id="integration-implementation-prompt" value={implementationPrompt} disabled={implement.isPending} onChange={(event) => {
         if (implementationSubmitting.current) return;
@@ -507,7 +507,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
           сервисов. Текст остался, но уступил место самим сервисам. */}
       <details className="mt-4 max-w-[850px] rounded-[6px] border border-border-subtle bg-surface-base px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium text-accent-secondary">Что даёт подключение</summary>
-        <p className="mt-2 text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Изменения попадут в опубликованную версию после повторной публикации.</p>
+        <p className="mt-2 text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Пользователи увидят изменения после повторной публикации.</p>
       </details>
       <section className="max-integration-summary mt-6 grid gap-4 lg:grid-cols-[1fr_220px]">
         <div className="rounded-[12px] border border-border-default bg-surface p-6">

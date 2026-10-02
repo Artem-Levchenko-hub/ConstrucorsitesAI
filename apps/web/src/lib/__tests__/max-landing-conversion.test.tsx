@@ -36,6 +36,12 @@ describe("Yleum landing conversion", () => {
     expect(host.querySelector('[data-testid="landing-example"]')?.textContent).toContain("Записаться на");
     expect(events).toContainEqual({ event: "max_scenario_select", page: "landing", placement: "services" });
   });
+  it("describes generation and edits without promising customer version restoration", () => {
+    expect(host.textContent).toContain("Правки словами");
+    expect(host.textContent).not.toContain("Откат за секунды");
+    expect(host.textContent).not.toContain("Вернитесь к предыдущей версии");
+    expect(host.textContent).not.toContain("История версий");
+  });
   it("keeps every section navigation target on the page", () => {
     for (const link of host.querySelectorAll<HTMLAnchorElement>('a[href^="#"]')) {
       expect(host.querySelector(link.getAttribute("href")!)).not.toBeNull();

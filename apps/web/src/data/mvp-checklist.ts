@@ -83,8 +83,8 @@ export const mvpChecklist: MvpChecklistSection[] = [
       },
       {
         id: "editing",
-        title: "Правки и версии",
-        detail: "Изменения сохраняются снимками, старую версию можно открыть и восстановить.",
+        title: "Правки через чат",
+        detail: "Опишите изменения в чате, проверьте результат в превью и опубликуйте обновление.",
         status: "done",
         completedAt: "30 июля 2026",
       },
@@ -161,8 +161,8 @@ export const mvpChecklist: MvpChecklistSection[] = [
     items: [
       {
         id: "production-deploy",
-        title: "Production-деплой и откат",
-        detail: "Сборка, контейнер, HTTPS, health-check, история релизов и возврат к предыдущей версии.",
+        title: "Публикация приложения",
+        detail: "Сборка, контейнер, постоянный HTTPS-адрес и проверка работоспособности перед запуском.",
         status: "done",
         completedAt: "30 июля 2026",
       },

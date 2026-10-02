@@ -48,7 +48,7 @@ it("keeps optional services discoverable outside collapsed readiness details and
 });
 it("does not call an older release the current version in launch", async () => {
   await mount(<MaxLaunchPanel project={project} />);
-  await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
+  await settle(() => expect(container.textContent).toContain("Изменения не опубликованы"));
   expect(container.textContent).not.toContain("Production URL готов");
 });
 
@@ -112,17 +112,17 @@ it("waits for deployment details before announcing the already-ready version as 
   api.deploy.mockImplementation(() => new Promise<DeployStatus>(done => { resolve = done; }));
   await mount(<MaxLaunchPanel project={project} />);
   await settle(() => expect(container.textContent).toContain("Проверяем публикацию"));
-  expect(container.textContent).not.toContain("Текущая версия опубликована");
+  expect(container.textContent).not.toContain("Приложение опубликовано");
   expect(container.textContent).not.toContain("Полностью готово к запуску");
   expect(container.querySelector('[data-testid="max-launch-app-url"]')).toBeNull();
   await act(async () => resolve(release));
-  await settle(() => expect(container.textContent).toContain("Текущая версия опубликована"));
+  await settle(() => expect(container.textContent).toContain("Приложение опубликовано"));
   expect(container.querySelector('[data-testid="max-launch-app-url"]')?.getAttribute("href")).toBe("https://app.example.com");
 });
 it.each([true, false])("reports publication evidence without claiming continuous uptime (published=%s)", async published => {
   api.readiness.mockResolvedValue(readiness(published));
   await mount(dashboard());
-  await settle(() => expect(container.textContent).toContain(published ? "Текущая версия опубликована" : "Текущая версия не опубликована"));
+  await settle(() => expect(container.textContent).toContain(published ? "Приложение опубликовано" : "Изменения не опубликованы"));
   expect(container.textContent).toContain("Рабочая среда редактора");
   // Про наблюдение говорим прямо: не «мониторинг не подключён», а что это
   // значит для владельца, если приложение перестанет открываться.
@@ -139,27 +139,18 @@ it("offers a retry for failed status queries without showing stale success", asy
   // это и что нажать. Раньше то же самое называлось тремя разными фразами.
   await settle(() => expect(container.textContent).toContain("Не дозвонились до сервера"));
   expect(container.textContent).toContain("продолжает работать");
-  expect(container.textContent).not.toContain("Текущая версия опубликована");
+  expect(container.textContent).not.toContain("Приложение опубликовано");
   api.readiness.mockResolvedValue(readiness(false));
   const retry = [...container.querySelectorAll("button")].find(button => button.textContent?.includes("Проверить ещё раз"));
   expect(retry).toBeDefined();
   await act(async () => retry!.click());
-  await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
+  await settle(() => expect(container.textContent).toContain("Изменения не опубликованы"));
 });
-it("distinguishes history loading and failure from an empty history", async () => {
-  let reject!: (error: Error) => void;
-  api.history.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+it("does not expose publication history on the MVP dashboard", async () => {
   await mount(dashboard());
-  await settle(() => expect(container.textContent).toContain("Загружаем историю"));
-  expect(container.textContent).not.toContain("после первой публикации");
-  await act(async () => { reject(new Error("offline")); });
-  await settle(() => expect(container.textContent).toContain("Не дозвонились до сервера"));
-  expect(container.textContent).toContain("Сами публикации на месте");
-  expect(container.textContent).not.toContain("после первой публикации");
-});
-it("shows an explicit empty history after a successful empty response", async () => {
-  await mount(dashboard());
-  await settle(() => expect(container.textContent).toContain("История появится после первой публикации"));
+  await settle(() => expect(container.querySelector(".max-dashboard-release")).not.toBeNull());
+  expect(container.querySelector(".max-dashboard-history")).toBeNull();
+  expect(api.history).not.toHaveBeenCalled();
 });
 it("reports a failed deployment separately from an unpublished draft", async () => {
   api.deploy.mockResolvedValue({ ...release, phase: "failed", error: "Сборка не завершена" });
@@ -185,7 +176,18 @@ it("после публикации отвечает, что опубликов�
   await settle(() => expect(container.querySelector(".max-dashboard-release dl")).not.toBeNull());
   const fields = [...container.querySelectorAll(".max-dashboard-release dt")].map(node => node.textContent);
   expect(fields).toEqual(["Что опубликовано", "Где открывается", "Когда"]);
-  expect(container.querySelector(".max-dashboard-release dd")?.textContent).toBe("Версия v1");
+  expect(container.querySelector(".max-dashboard-release dd")?.textContent).toBe("Ваше приложение");
   // Про наблюдение за доступностью говорим прямо, а не техническим отрицанием.
   expect(container.textContent).toContain("мы не узнаем об этом сами");
+});
+
+it("keeps current application management without querying publication history", async () => {
+  api.readiness.mockResolvedValue(readiness(true));
+  api.deploy.mockResolvedValue(release);
+  await mount(dashboard());
+  await settle(() => expect(container.querySelector(".max-dashboard-release dl")).not.toBeNull());
+  expect(container.querySelector(".max-dashboard-history")).toBeNull();
+  expect(container.textContent).not.toContain("Версия v1");
+  expect(api.history).not.toHaveBeenCalled();
+  expect(container.querySelector('a[href="/max/project-surfaces"]')).not.toBeNull();
 });

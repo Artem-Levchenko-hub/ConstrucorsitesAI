@@ -8,6 +8,7 @@ import { getMaxLaunchErrorDescription } from "@/lib/max-launch-error";
 import { isMaxDeployActive, shouldStartMaxDeploy } from "@/lib/max-launch-state";
 import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
 import { toast } from "sonner";
+import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 
 const LAUNCH_TIMEOUT_MS = 20 * 60_000;
 const deadlineMessage = "Проверка публикации превысила время ожидания. Откройте статус публикации или повторите проверку.";
@@ -92,14 +93,14 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
         const pending = JSON.parse(window.localStorage.getItem(`omnia:restore:request:${projectId}`) ?? "null");
         pendingRestoration = !!pending && !pending.rejected;
       } catch { /* Canonical server admission remains authoritative. */ }
-      if (pendingRestoration) {
+      if (MAX_CUSTOMER_VERSIONING && pendingRestoration) {
         discardCheckpoint = state.phase === "new";
         throw new Error("Сначала проверьте результат восстановления версии.");
       }
       const restorations = await listRestorations(projectId, signal);
       if (restorations.items.some(item => !["completed", "cancelled", "failed"].includes(item.state))) {
         discardCheckpoint = state.phase === "new";
-        throw new Error("Сначала завершите или отмените восстановление версии.");
+        throw new Error("В приложении есть незавершённая операция. Публикация пока недоступна — проверьте статус или обратитесь в поддержку.");
       }
       // Resolve the authoritative HEAD once. Retrying a lost POST must never change its body.
       if (!state.commitSha && state.phase === "new") {
@@ -109,7 +110,7 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
           && snapshot.project_id === projectId);
         if (!target || !/^[0-9a-f]{40}$/.test(target.commit_sha)) {
           discardCheckpoint = true;
-          throw new Error("Текущая версия не найдена. Обновите редактор перед публикацией.");
+          throw new Error("Рабочая сборка не найдена. Обновите редактор перед публикацией.");
         }
         state.commitSha = target.commit_sha;
       }
@@ -126,7 +127,7 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
       // Never activate another run implicitly or retain an unrecoverable identity.
       // Clearing the checkpoint lets only the next explicit click create a new key.
       discardCheckpoint = true;
-      throw new Error("Статус относится к другой публикации. Проверьте её результат или опубликуйте текущую версию заново.");
+      throw new Error("Статус относится к другой публикации. Проверьте её результат или опубликуйте приложение заново.");
     }
     state.runId = deployment.run_id;
     state.phase = "deploying";
@@ -172,7 +173,7 @@ export function launchMaxProject(
       const result = await finishMaxLaunch(projectId, onStatus);
       toast.success("Приложение опубликовано", {
         id: `max-launch-result:${projectId}`,
-        description: "Новая версия уже работает по постоянному адресу.",
+        description: "Приложение уже работает по постоянному адресу.",
       });
       return result;
     } catch (error) {

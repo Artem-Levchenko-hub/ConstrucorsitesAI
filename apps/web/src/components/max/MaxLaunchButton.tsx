@@ -86,7 +86,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
         title={
           blockers.length
             ? `Сначала: ${blockers.map((item) => item.label).join(", ")}`
-            : "Зафиксировать зелёную версию и переключить на неё постоянный URL"
+            : "Опубликовать проверенное приложение по постоянному адресу"
         }
         data-testid="max-one-click-launch"
       >
@@ -95,7 +95,7 @@ export function MaxLaunchButton({ projectId }: { projectId: string }) {
         ) : (
           <Rocket className="h-4 w-4" />
         )}
-        {launch.isPending ? "Публикуем…" : launch.isError && readMaxLaunch(projectId) ? "Повторить проверку" : "Опубликовать новую версию"}
+        {launch.isPending ? "Публикуем…" : launch.isError && readMaxLaunch(projectId) ? "Повторить проверку" : "Опубликовать приложение"}
       </Button>
       {launch.isError && (
         <p role="alert" className="mt-2 text-xs leading-5 text-danger-fg">

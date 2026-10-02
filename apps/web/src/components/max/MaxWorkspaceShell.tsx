@@ -27,6 +27,7 @@ import { MaxRestorationPanel } from "./MaxRestorationPanel";
 import { useMaxAdaptation, type MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
 import { cancelRestoration, getRestoration } from "@/lib/api/restorations";
 import { Button } from "@/components/ui/button";
+import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 
 export function MaxWorkspaceShell({
   project,
@@ -69,7 +70,8 @@ export function MaxWorkspaceShell({
   );
   const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
   const history = useInfiniteQuery({
-    queryKey: ["project-versions", project.id],
+    queryKey: MAX_CUSTOMER_VERSIONING ? ["project-versions", project.id] : ["project-versions", project.id, "current-build"],
+    maxPages: MAX_CUSTOMER_VERSIONING ? undefined : 1,
     queryFn: async ({ pageParam, signal }) => {
       // Capture before the request: a late response for an earlier HEAD must
       // not authorize live preview of that HEAD's selected user version.
@@ -97,7 +99,7 @@ export function MaxWorkspaceShell({
   // Selection belongs to the project, never the moving HEAD. Clear during
   // render so switching A → B → A cannot resurrect a stale selection.
   if (versionSelection && versionSelection.projectId !== project.id) setVersionSelection(null);
-  const selectedVersionId = versionSelection?.projectId === project.id ? versionSelection.versionId : null;
+  const selectedVersionId = MAX_CUSTOMER_VERSIONING && versionSelection?.projectId === project.id ? versionSelection.versionId : null;
 
   function applyRestoredSnapshot(snapshot: Snapshot) {
       const previousSnapshotId = queryClient.getQueryData<Snapshot[]>(["snapshots", project.id])?.[0]?.id;
@@ -143,6 +145,7 @@ export function MaxWorkspaceShell({
 
   const restoration = useMaxRestoration({
     projectId: project.id, currentSnapshotId, onCompleted: applyRestoredSnapshot,
+    available: MAX_CUSTOMER_VERSIONING,
   });
   useEffect(() => () => {
     // A live click never survives navigation, a different operation/HEAD, or F5.
@@ -225,6 +228,7 @@ export function MaxWorkspaceShell({
   }
 
   function selectVersion(versionId: string | null) {
+    if (!MAX_CUSTOMER_VERSIONING) return;
     setVersionSelection(
       versionId ? { versionId, projectId: project.id } : null,
     );
@@ -240,14 +244,14 @@ export function MaxWorkspaceShell({
       historyError={history.isError}
       hasOlder={history.hasNextPage}
       loadingOlder={history.isFetchingNextPage}
-      onLoadOlder={() => { void (history.isError && !history.isFetchNextPageError ? history.refetch() : history.fetchNextPage()); }}
+      onLoadOlder={MAX_CUSTOMER_VERSIONING ? () => { void (history.isError && !history.isFetchNextPageError ? history.refetch() : history.fetchNextPage()); } : undefined}
       snapshotsLoading={history.isPending}
       currentSnapshotId={currentSnapshotId}
       selectedVersionId={selectedVersionId}
       onSelectVersion={selectVersion}
-      onRestoreSnapshot={async (snapshotId) => { await rollbackMutation.mutateAsync(snapshotId); }}
+      onRestoreSnapshot={async (snapshotId) => { if (MAX_CUSTOMER_VERSIONING) await rollbackMutation.mutateAsync(snapshotId); }}
       restoringSnapshot={rollbackMutation.isPending}
-      onPrepareRestoration={restoration.prepare}
+      onPrepareRestoration={MAX_CUSTOMER_VERSIONING ? restoration.prepare : undefined}
       restorationEnabled={restoration.enabled}
       restorationBusy={restoration.busy || restoration.active || restoration.hasPendingRequest}
     />
@@ -291,7 +295,7 @@ export function MaxWorkspaceShell({
       }
     >
       <div className="flex h-full min-h-0 flex-col">
-      {adaptation.attachment && <div className="mx-4 my-2 rounded-lg border p-3 text-sm" role="status">
+      {MAX_CUSTOMER_VERSIONING && adaptation.attachment && <div className="mx-4 my-2 rounded-lg border p-3 text-sm" role="status">
         <p>{adaptationSubmitting ? "Запускаем адаптацию выбранной версии…"
           : "Запрос на адаптацию сохранён. Если запуск не подтверждён, повторите попытку — второй запрос не будет создан."}</p>
         <div className="mt-2 flex flex-wrap gap-3">
@@ -302,14 +306,14 @@ export function MaxWorkspaceShell({
       <div className="min-h-0 flex-1">
       <ChatPanel
         key={project.id}
-        adaptationRef={adaptationRef}
+        adaptationRef={MAX_CUSTOMER_VERSIONING ? adaptationRef : undefined}
         projectId={project.id}
         projectSlug={project.slug}
         currentSnapshotId={currentSnapshotId}
         basePath={`/max/${project.id}`}
       />
       </div>
-      <div className="max-h-[45%] shrink-0 overflow-y-auto">
+      {MAX_CUSTOMER_VERSIONING && <div className="max-h-[45%] shrink-0 overflow-y-auto">
         <MaxRestorationPanel restoration={restoration}
           onPrepareAdapt={(prompt, reference) => {
             const saved = adaptation.attach(prompt, reference, "cancelling");
@@ -319,7 +323,7 @@ export function MaxWorkspaceShell({
           onAdapt={async (prompt, reference) => {
             await submitAdaptation({ projectId: project.id, prompt, reference, phase: "ready" });
           }} />
-      </div>
+      </div>}
       </div>
     </MaxEditorLayout>
   );

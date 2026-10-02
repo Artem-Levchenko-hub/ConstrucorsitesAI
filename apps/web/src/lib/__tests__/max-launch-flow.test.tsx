@@ -7,6 +7,9 @@ import { toast } from "sonner";
 import { MaxLaunchButton } from "@/components/max/MaxLaunchButton";
 import type { DeployStatus } from "@/lib/api/types";
 
+const policy = vi.hoisted(() => ({ versioning: false }));
+vi.mock("@/lib/max-product-policy", () => ({ get MAX_CUSTOMER_VERSIONING() { return policy.versioning; } }));
+
 const deploy = (phase: DeployStatus["phase"], run_id: string | null): DeployStatus => ({
   phase, run_id, started_at: null, finished_at: null, prod_url: null,
   image_tag: null, error: null, detail: null, target_label: null, target_id: null,
@@ -35,6 +38,7 @@ beforeEach(() => {
   stallDeployRead = false;
   headSha = "a".repeat(40);
   restoring = false;
+  policy.versioning = false;
   status = deploy("queued", null);
   window.localStorage.clear();
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
@@ -126,9 +130,10 @@ it("does not publish while a durable restoration is active", async () => {
   await mount();
   await click();
   expect(posts()).toHaveLength(0);
-  expect(container.textContent).toContain("восстановление");
+  expect(container.textContent).toContain("незавершённая операция");
 });
-it("refuses publication while a restoration POST is still uncertain in this browser", async () => {
+it("refuses publication while a restoration POST is still uncertain when historical UI is enabled", async () => {
+  policy.versioning = true;
   localStorage.setItem(`omnia:restore:request:${projectId}`, JSON.stringify({ kind: "prepare", payload: {} }));
   await mount();
   await click();
@@ -250,4 +255,18 @@ it("aborts a stuck HTTP request at the persisted deadline without issuing POST",
   expect(button().disabled).toBe(false);
   expect(posts()).toHaveLength(0);
   expect(container.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+});
+
+it.each(["prepare", "reprepare"])("publishes current app despite retired local %s intent and adaptation", async kind => {
+  localStorage.setItem(`omnia:restore:request:${projectId}`, JSON.stringify({ kind, payload: {
+    target_version_id: "historical", expected_draft_snapshot_id: "current", idempotency_key: "retired-request",
+  } }));
+  localStorage.setItem(`omnia:max:adaptation:${projectId}`, JSON.stringify({ projectId, prompt: "retired adaptation", reference: {
+    operation_id: "old-operation", expected_draft_snapshot_id: "current",
+  } }));
+  await mount(); await click();
+  expect(posts()).toHaveLength(1);
+  expect(calls.filter(call => call.path.includes("/restorations") && call.method === "POST")).toHaveLength(0);
+  expect(calls.some(call => call.path.endsWith("/activate"))).toBe(true);
+  expect(localStorage.getItem(`omnia:max:launch:${projectId}`)).toBeNull();
 });

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { LaunchVisual, PartnerVisual } from "@/components/max/guide/GuideVisuals";
+import { DashboardVisual, LaunchVisual, PartnerVisual } from "@/components/max/guide/GuideVisuals";
 
 describe("MAX guide visuals", () => {
   it("labels walkthrough screenshots as illustrative examples", () => {
@@ -11,6 +11,13 @@ describe("MAX guide visuals", () => {
     expect(html).toContain("MAX для партнёров");
   });
 
+  it("shows current application actions instead of version history or rollback", () => {
+    const html = renderToStaticMarkup(<DashboardVisual />);
+    expect(html).not.toContain("История публикаций");
+    expect(html).not.toContain("Versions");
+    expect(html).not.toContain("Версии и откат");
+    expect(html).toContain("Редактировать приложение");
+  });
   it("keeps all six launch stages visible", () => {
     const html = renderToStaticMarkup(<LaunchVisual />);
 

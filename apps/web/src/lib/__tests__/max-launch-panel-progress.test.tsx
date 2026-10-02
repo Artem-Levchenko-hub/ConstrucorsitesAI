@@ -95,7 +95,7 @@ it("explains a failure by its reason code and stage, keeping the technical text 
 it("removes the publication progress once the run is done", async () => {
   api.deploy.mockResolvedValue({ ...base, phase: "done", finished_at: "2026-09-18T15:16:54Z", prod_url: "https://app.example.com", format_version: 2, stages: [], metrics: { total_ms: 110718 } });
   await mount(<MaxLaunchPanel project={project} />);
-  await settle(() => expect(container.textContent).toContain("Текущая версия не опубликована"));
+  await settle(() => expect(container.textContent).toContain("Изменения не опубликованы"));
   expect(progressBlock()).toBeNull();
 });
 

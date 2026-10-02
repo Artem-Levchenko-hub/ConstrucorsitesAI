@@ -71,10 +71,10 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
       <DialogHeader>
         <DialogTitle>Применить данные к приложению</DialogTitle>
         <DialogDescription>
-          Данные сохранены. ИИ доработает экраны по версии {config.config_version}: название, содержание, оформление и пользовательские сценарии.
+          Данные сохранены. ИИ доработает экраны: название, содержание, оформление и пользовательские сценарии.
         </DialogDescription>
       </DialogHeader>
-      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в новой версии; для опубликованного приложения затем потребуется публикация.</p>
+      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>
       <p className="text-sm text-fg-secondary">После привязки названия и каталог смогут обновляться из настроек. Изменение функций и дизайна каждый раз требует запуска доработки.</p>
       {start.error && <p role="alert" className="text-sm text-danger-fg">{start.error instanceof Error ? start.error.message : "Не удалось передать задание. Повторите попытку."}</p>}
       {terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по этим же данным; она расходует баланс.</p>}

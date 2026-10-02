@@ -63,10 +63,11 @@ function reprepareBindingMatches(
     && candidate.source_version_id === intent.payload.target_version_id;
 }
 
-export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }: {
+export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted, available = true }: {
   projectId: string;
   currentSnapshotId: string | null;
   onCompleted: (snapshot: Snapshot) => void;
+  available?: boolean;
 }) {
   const qc = useQueryClient();
   const inflight = useRef(new Set<string>());
@@ -89,10 +90,11 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
   const list = useQuery({
     queryKey: ["restorations", projectId],
     queryFn: ({ signal }) => api.listRestorations(projectId, signal),
+    enabled: available,
     retry: false,
-    refetchInterval: query => query.state.data?.enabled ? 5_000 : false,
+    refetchInterval: query => available && query.state.data?.enabled ? 5_000 : false,
   });
-  const items = (list.data?.items ?? []).filter(item => item.project_id === projectId);
+  const items = (available ? list.data?.items ?? [] : []).filter(item => item.project_id === projectId);
   const sorted = [...items].sort((a, b) => b.updated_at.localeCompare(a.updated_at));
   const activeListed = sorted.find(item => !terminal(item.state));
   const selected = selection.data
@@ -106,7 +108,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
       if (next.project_id !== projectId || next.id !== operationId) throw new Error("Статус относится к другой операции");
       return newer(qc.getQueryData<api.RestoreOperation>(["restoration", projectId, operationId]), next);
     },
-    enabled: operationId !== null,
+    enabled: available && operationId !== null,
     initialData: () => items.find(item => item.id === operationId),
     retry: false,
     refetchInterval: query => query.state.data && !terminal(query.state.data.state) ? 2_000 : false,
@@ -120,7 +122,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
       previous?.project_id === projectId && previous.id === operationId && listed.revision > previous.revision
         ? newer(previous, listed) : previous);
   }, [list.data, operationId, projectId, qc]);
-  const operation = detail.data?.project_id === projectId && detail.data.id === operationId ? detail.data : null;
+  const operation = available && detail.data?.project_id === projectId && detail.data.id === operationId ? detail.data : null;
   const headChanged = !!operation && ["ready", "needs_changes"].includes(operation.state)
     && operation.base_draft_snapshot_id !== currentSnapshotId;
 
@@ -134,7 +136,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
   }, [projectId, currentSnapshotId, operation]);
 
   useEffect(() => {
-    if (!operation || operation.state !== "completed" || !operation.applied_snapshot) return;
+    if (!available || !operation || operation.state !== "completed" || !operation.applied_snapshot) return;
     const snapshot = operation.applied_snapshot;
     if (snapshot.project_id !== projectId) return;
     const observedKey = ["restoration-observed", projectId, operation.id];
@@ -146,7 +148,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
       void qc.invalidateQueries({ queryKey: ["snapshots", projectId] });
       void qc.invalidateQueries({ queryKey: ["project", projectId] });
     }
-  }, [operation, projectId, currentSnapshotId, onCompleted, qc]);
+  }, [available, operation, projectId, currentSnapshotId, onCompleted, qc]);
 
   function saveRequest(request: Request | null) {
     // Storage is a retry aid; canonical operation discovery is always server-side.
@@ -157,6 +159,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     qc.setQueryData(requestKey, request);
   }
   async function dispatch(request: DirectRequest) {
+    if (!available) return;
     if (request.kind !== "cancel" && readMaxLaunch(projectId)) {
       saveRequest({ ...request, rejected: true, error: "Сначала проверьте результат публикации приложения." });
       return;
@@ -186,7 +189,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     }
   }
   async function runExclusive<T>(action: () => Promise<T>) {
-    if (inflight.current.has(projectId)) return;
+    if (!available || inflight.current.has(projectId)) return;
     inflight.current.add(projectId);
     setBusyProjects(previous => new Set([...previous, projectId]));
     try {
@@ -326,6 +329,7 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
     void qc.invalidateQueries({ queryKey: ["restorations", projectId] });
   }
   async function retry() {
+    if (!available) return;
     const request = saved.data ?? readRequest(projectId);
     if (request?.kind === "reprepare") {
       if (request.rejected) {
@@ -343,12 +347,12 @@ export function useMaxRestoration({ projectId, currentSnapshotId, onCompleted }:
   });
   useEffect(() => {
     const intent = saved.data;
-    if (projectBusy || intent?.kind !== "reprepare" || intent.rejected
+    if (!available || projectBusy || intent?.kind !== "reprepare" || intent.rejected
       || operation?.state !== "cancelled") return;
     void resumeReprepareRef.current(intent, operation);
-  }, [projectBusy, saved.data, operation, projectId, currentSnapshotId]);
+  }, [available, projectBusy, saved.data, operation, projectId, currentSnapshotId]);
   return {
-    operation, enabled: list.isSuccess && list.data.enabled,
+    operation, enabled: available && list.isSuccess && list.data.enabled,
     loading: list.isPending, busy: projectBusy, headChanged,
     preparing: projectBusy && saved.data?.kind === "prepare",
     active: !!operation && !terminal(operation.state), running: !!operation && running(operation.state),

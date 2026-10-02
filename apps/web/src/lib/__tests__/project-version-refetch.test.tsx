@@ -9,6 +9,8 @@ import type { Message, Project, ProjectVersionPage, Snapshot, WsEvent } from "@/
 
 type PreviewProps = ComponentProps<typeof import("@/components/max/MaxLivePreview").MaxLivePreview>;
 type ChatProps = ComponentProps<typeof import("@/components/workspace/ChatPanel").ChatPanel>;
+vi.mock("@/lib/max-product-policy", () => ({ MAX_CUSTOMER_VERSIONING: true }));
+
 const observed = vi.hoisted(() => ({ preview: null as PreviewProps | null }));
 function preview(): PreviewProps {
   if (!observed.preview) throw new Error("Preview has not rendered");

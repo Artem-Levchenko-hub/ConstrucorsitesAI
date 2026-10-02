@@ -482,13 +482,30 @@ describe("MAX live preview recovery", () => {
     expect(container.textContent).not.toContain("Первая сборка не завершена");
   });
 
-  it("keeps historical inspection separate from the failed live first build", async () => {
+  it("shows only the current preview even when a stale historical selection survives", async () => {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://working.example"));
+    renderPreview("snapshot-1", {
+      versions: [buildVersion("ready")], selectedVersionId: "old-version",
+    });
+    expect(container.querySelector("[data-testid='max-version-rail']")).toBeNull();
+    expect(container.querySelector("[data-testid='max-version-prompt-toggle']")).toBeNull();
+    expect(container.querySelector("[data-testid='max-restore-version']")).toBeNull();
+    expect(container.textContent).not.toContain("История версий");
+    expect(container.textContent).not.toMatch(/\bv\d+/);
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(frame.src).toBe("https://working.example/");
+    expect(container.querySelector("[data-testid='max-refresh-preview']")).not.toBeNull();
+    expect(container.querySelector("[data-testid='max-open-preview-separate']")).not.toBeNull();
+  });
+
+  it("ignores historical selection and keeps the honest failed-first-build state", async () => {
     queryClient.setQueryData(["messages", PROJECT.id], [buildMessage("failed")]);
     listMessages.mockResolvedValue([buildMessage("failed")]);
     renderPreview("seed-snapshot", { versions: [buildVersion()], selectedVersionId: "version-1" });
     await flushPromises();
-    expect(container.querySelector("[data-testid='max-history-unavailable']")).not.toBeNull();
-    expect(container.textContent).not.toContain("Первая сборка не завершена");
+    expect(container.querySelector("[data-testid='max-history-unavailable']")).toBeNull();
+    expect(container.textContent).toContain("Первая сборка не завершена");
     expect(startRuntime).not.toHaveBeenCalled();
   });
 
@@ -546,7 +563,7 @@ describe("MAX live preview recovery", () => {
     );
     expect(fallbackFrame?.getAttribute("src")).toBe("https://preview-1.example");
     expect(container.textContent).toContain(
-      "Пока показываем последнюю рабочую версию.",
+      "Пока показываем работающий экран.",
     );
     expect(syncMaxManagedKit).toHaveBeenCalledTimes(2);
 
@@ -661,7 +678,7 @@ describe("MAX live preview recovery", () => {
     }
     expect(startRuntime).toHaveBeenCalledTimes(21);
     expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
-    expect(container.textContent).toContain("Новая версия не открылась");
+    expect(container.textContent).toContain("Приложение не открылось");
   });
 
   it("refreshes preview from the header and restarts a retained draft without dropping the iframe", async () => {
@@ -781,9 +798,9 @@ describe("MAX live preview recovery", () => {
     renderPreview("snapshot-1", { versions: [buildVersion("ready")] });
     await waitForValue(() => container.textContent?.includes("Превью пока недоступно"));
     act(() => queryClient.setQueryData(["runtime", PROJECT.id], runtime()));
-    await waitForValue(() => container.textContent?.includes("Синхронизируем последнюю версию"));
+    await waitForValue(() => container.textContent?.includes("Синхронизируем приложение"));
     expect(container.textContent).not.toContain("Превью пока недоступно");
-    expect(container.textContent).toContain("Синхронизируем последнюю версию");
+    expect(container.textContent).toContain("Синхронизируем приложение");
   });
 
   it("shows a toast when manual preview refresh fails", async () => {

@@ -113,7 +113,7 @@ describe("MAX chat suggestions and draft", () => {
 
   it("does not analyze an empty app or an active build", async () => {
     render(null); await click(button("Подсказки"));
-    expect(container.textContent).toContain("первую версию");
+    expect(container.textContent).toContain("Соберите приложение");
     expect(requests).toEqual([]);
     render("version-a", true);
     expect(container.textContent).toContain("завершения");

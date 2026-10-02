@@ -20,7 +20,7 @@ export type MaxProjectStateView = {
 const STAGE_STATE: Record<string, MaxProjectStateView> = {
   build: {
     title: "Приложение ещё не собрано",
-    hint: "Опишите задачу в чате — ИИ соберёт первую версию",
+    hint: "Опишите задачу в чате — ИИ соберёт приложение",
     tone: "build",
   },
   app: {
@@ -35,7 +35,7 @@ const STAGE_STATE: Record<string, MaxProjectStateView> = {
   },
   publish: {
     title: "Готово к публикации",
-    hint: "Опубликуем версию и дадим постоянный адрес приложения",
+    hint: "Опубликуем приложение и дадим постоянный адрес приложения",
     tone: "connect",
   },
   max: {

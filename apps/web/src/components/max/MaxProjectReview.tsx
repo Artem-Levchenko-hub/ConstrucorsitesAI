@@ -116,8 +116,8 @@ export function MaxProjectReview({
         <h4 id="max-review-next">Что произойдёт после кнопки «Создать проект»</h4>
         <ol>
           <li><span aria-hidden="true">1</span><span>Создадим проект и откроем редактор — описание уже будет внутри.</span></li>
-          <li><span aria-hidden="true">2</span><span>ИИ соберёт первую рабочую версию приложения: экраны, данные, кнопки.</span></li>
-          <li><span aria-hidden="true">3</span><span>Дальше правите словами в чате, а любую версию можно вернуть назад.</span></li>
+          <li><span aria-hidden="true">2</span><span>ИИ соберёт приложение: экраны, данные, кнопки.</span></li>
+          <li><span aria-hidden="true">3</span><span>Дальше правите словами в чате, проверяете приложение и публикуете обновления.</span></li>
         </ol>
       </section>
     </section>

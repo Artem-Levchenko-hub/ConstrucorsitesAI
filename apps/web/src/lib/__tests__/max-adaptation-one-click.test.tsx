@@ -6,6 +6,8 @@ import { MaxWorkspaceShell } from "@/components/max/MaxWorkspaceShell";
 import type { Project, Message } from "@/lib/api/types";
 import type { RestoreOperation } from "@/lib/api/restorations";
 
+vi.mock("@/lib/max-product-policy", () => ({ MAX_CUSTOMER_VERSIONING: true }));
+
 const api = vi.hoisted(() => ({
   submit: vi.fn(), cancel: vi.fn(), prepare: vi.fn(), list: vi.fn(), detail: vi.fn(), snapshots: vi.fn(),
   pendingPrompt: null as string | null,

@@ -80,7 +80,7 @@ export function MaxChatComposer({ projectId, snapshotId, contextVersion, draftRe
         <div className="max-chat-advice-body">
           {!available ? <p className="max-chat-advice-notice">{props.isStreaming
             ? "Дождитесь завершения изменений — подсказки будут по обновлённому приложению."
-            : "Создайте первую версию приложения — ИИ предложит, что улучшить именно в ней."}</p>
+            : "Соберите приложение — ИИ предложит, что в нём улучшить."}</p>
             : advice.isFetching || advice.isPending ? <div role="status" className="max-chat-advice-loading">
               <div className="max-chat-thinking" aria-hidden="true"><span /><span /><span /></div>
               <strong>Анализируем приложение</strong><p>Учитываем его возможности и последние изменения.</p>

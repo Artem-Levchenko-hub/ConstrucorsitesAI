@@ -377,7 +377,7 @@ export function LaunchVisual() {
             <div className="mt-[6%] rounded-lg border border-[#2b2d32] bg-[#191b20] p-[5%]">
               <div className="flex items-center justify-between"><div><p className="text-[9px] font-semibold">Production</p><p className="mt-1 text-[7px] text-[#828491]">Постоянный HTTPS-адрес и проверка контейнера</p></div><Cloud className="size-5 text-accent" /></div>
               <div className="mt-[5%] grid grid-cols-3 gap-2 text-[7px]">
-                <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Версия</p><p className="mt-1 font-semibold">v.12</p></div>
+                <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Приложение</p><p className="mt-1 font-semibold">готово</p></div>
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">Health</p><p className="mt-1 font-semibold">готов</p></div>
                 <div className="rounded-md bg-[#121519] p-2"><p className="text-[#828491]">URL</p><p className="mt-1 font-semibold">после deploy</p></div>
               </div>
@@ -452,16 +452,16 @@ export function DashboardVisual() {
           </div>
           <div className="mt-[4%] grid grid-cols-[1.25fr_.75fr] gap-[3%]">
             <div className="overflow-hidden rounded-lg border border-[#2b2d32] bg-[#191b20]">
-              <div className="flex items-center justify-between border-b border-[#2b2d32] p-[4%]"><div><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Versions</p><p className="mt-1 text-[10px] font-semibold">История публикаций</p></div><button className="rounded-md border border-[#2b2d32] px-2 py-1 text-[7px]">Обновить</button></div>
-              {["v.12 · Production build", "v.11 · Обновление каталога", "v.10 · Первая публикация"].map((item, index) => <div key={item} data-guide-target={index === 0 ? "dashboard-version" : undefined} className="flex items-center gap-3 border-b border-[#25272b] p-[3%] text-[7px]"><span className="grid size-6 place-items-center rounded-full bg-success/10 text-success-fg"><Check className="size-3" /></span><span className="font-semibold">{item}</span><span className="ml-auto text-[#828491]">{index === 0 ? "сейчас" : `${index} дн.`}</span><span className="font-semibold text-success-fg">done</span></div>)}
+              <div className="border-b border-[#2b2d32] p-[4%]"><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Приложение</p><p className="mt-1 text-[10px] font-semibold">Следующее обновление</p></div>
+              <div data-guide-target="dashboard-edit" className="p-[4%] text-[8px]"><p className="text-[#9fa1b1]">Опишите правки в чате, проверьте результат в превью и опубликуйте обновление.</p><button className="mt-3 rounded-md border border-[#2b2d32] px-3 py-2 font-semibold">Редактировать приложение</button></div>
             </div>
-            <div className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[7%]"><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Эксплуатация</p><p className="mt-2 text-[10px] font-semibold">Без разработчика</p><div className="mt-[10%] space-y-3 text-[7px] text-[#9fa1b1]"><p className="flex gap-2"><ShieldCheck className="size-3 shrink-0 text-accent" />Health-check после релиза</p><p className="flex gap-2"><Cloud className="size-3 shrink-0 text-accent" />Всегда активный контейнер</p><p className="flex gap-2"><ArrowRight className="size-3 shrink-0 text-accent" />Версии и откат</p></div></div>
+            <div className="rounded-lg border border-[#2b2d32] bg-[#191b20] p-[7%]"><p className="font-mono text-[6px] uppercase tracking-[.15em] text-[#828491]">Эксплуатация</p><p className="mt-2 text-[10px] font-semibold">Без разработчика</p><div className="mt-[10%] space-y-3 text-[7px] text-[#9fa1b1]"><p className="flex gap-2"><ShieldCheck className="size-3 shrink-0 text-accent" />Health-check после релиза</p><p className="flex gap-2"><Cloud className="size-3 shrink-0 text-accent" />Всегда активный контейнер</p><p className="flex gap-2"><ArrowRight className="size-3 shrink-0 text-accent" />Правки и публикация</p></div></div>
           </div>
         </div>
       </div>
       <CalloutLayer callouts={[
         { number: 1, target: "dashboard-open", offset: [-15, 8] },
-        { number: 2, target: "dashboard-version", offset: [8, 20] },
+        { number: 2, target: "dashboard-edit", offset: [8, 20] },
       ]} />
     </ScreenshotFrame>
   );

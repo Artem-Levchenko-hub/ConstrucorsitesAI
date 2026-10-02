@@ -40,6 +40,7 @@ import { maxHistoryState, maxVersionImage } from "@/lib/max-version-history";
 import { VersionImagePreview } from "../workspace/VersionImagePreview";
 import { shortSha } from "@/lib/utils";
 import { MaxVersionRail } from "./MaxVersionRail";
+import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 
 const SCREEN_WIDTH = 390;
 const SCREEN_HEIGHT = 844;
@@ -83,7 +84,7 @@ export function MaxLivePreview({
   versions,
   snapshotsLoading,
   currentSnapshotId,
-  selectedVersionId,
+  selectedVersionId: requestedVersionId,
   onSelectVersion,
   onRestoreSnapshot,
   restoringSnapshot,
@@ -115,6 +116,7 @@ export function MaxLivePreview({
   restorationEnabled?: boolean;
   restorationBusy?: boolean;
 }) {
+  const selectedVersionId = MAX_CUSTOMER_VERSIONING ? requestedVersionId : null;
   const queryClient = useQueryClient();
   const [imageFailures, setImageFailures] = useState({ projectId: project.id, urls: new Set<string>() });
   if (imageFailures.projectId !== project.id) setImageFailures({ projectId: project.id, urls: new Set() });
@@ -425,11 +427,11 @@ export function MaxLivePreview({
   const preparationLabel = !runtimeRunning
     ? "Запускаем сервер приложения"
     : !managedKit.isSuccess
-      ? "Синхронизируем последнюю версию"
+      ? "Синхронизируем приложение"
       : "Создаём безопасную preview-сессию";
   const preparationSteps = [
     { label: "Сервер приложения", done: runtimeRunning },
-    { label: "Последняя версия", done: managedKit.isSuccess },
+    { label: "Приложение", done: managedKit.isSuccess },
     { label: "Безопасная сессия", done: Boolean(previewUrl) },
   ];
   // До первой сборки показывать нечего: технический прогресс запуска сервера
@@ -495,7 +497,7 @@ export function MaxLivePreview({
           <p className="omnia-kicker text-fg-tertiary">
             {viewingHistorical ? "История версий" : "Живое превью"}
           </p>
-          {displayedVersion ? (
+          {MAX_CUSTOMER_VERSIONING && displayedVersion ? (
             <div className="max-version-header-summary">
               <h2>v{displayedVersion.number}{!viewingHistorical && " · текущая"}</h2>
               <Button
@@ -512,7 +514,7 @@ export function MaxLivePreview({
                 Подробнее
               </Button>
             </div>
-          ) : <h2 className="mt-1 truncate text-sm font-semibold">{viewingHistorical ? "Версия недоступна" : "Текущая версия"}</h2>}
+          ) : <h2 className="mt-1 truncate text-sm font-semibold">{viewingHistorical ? "Версия недоступна" : "Ваше приложение"}</h2>}
         </div>
         <div className="flex h-14 shrink-0 items-center justify-end gap-1 sm:gap-1.5">
           {!viewingHistorical && <span className="inline-flex items-center gap-2 text-[11px] text-fg-secondary">
@@ -552,7 +554,7 @@ export function MaxLivePreview({
       </div>
 
       <div className="mt-3 flex min-h-0 flex-1">
-        {(versions.length > 0 || historyError || (snapshotsLoading && !!currentSnapshotId)) && <MaxVersionRail
+        {MAX_CUSTOMER_VERSIONING && (versions.length > 0 || historyError || (snapshotsLoading && !!currentSnapshotId)) && <MaxVersionRail
           key={project.id}
           versions={historyCurrent ? versions : versions.map((version) => ({ ...version, is_current: false }))}
           error={historyError}
@@ -654,7 +656,7 @@ export function MaxLivePreview({
                             {preparationLabel}
                           </p>
                           <p className="mt-1 text-[11px] text-fg-tertiary">
-                            Пока показываем последнюю рабочую версию.
+                            Пока показываем работающий экран.
                           </p>
                         </div>
                       )}
@@ -662,7 +664,7 @@ export function MaxLivePreview({
                         <div className="absolute inset-x-3 top-3 z-20 rounded-[10px] border border-danger/25 bg-surface-raised/95 px-3 py-2 text-left shadow-sm backdrop-blur">
                           <p className="flex items-center gap-2 text-[11px] font-medium text-fg-primary">
                             <CircleAlert className="size-3 text-danger-fg" />
-                            Новая версия не открылась
+                            Приложение не открылось
                           </p>
                           <button
                             type="button"
@@ -797,7 +799,7 @@ export function MaxLivePreview({
         </div>
         </div>
       </div>
-      <Dialog open={promptOpen} onOpenChange={(open) => { if (!open) setPromptTargetId(null); }}>
+      {MAX_CUSTOMER_VERSIONING && <><Dialog open={promptOpen} onOpenChange={(open) => { if (!open) setPromptTargetId(null); }}>
         <DialogContent data-product-shell data-max-editor id={promptContentId} className="max-editor-version-dialog max-h-[80dvh] max-w-xl overflow-y-auto" data-testid="max-version-prompt" onCloseAutoFocus={(event) => { event.preventDefault(); promptToggle.current?.focus(); }}>
           <DialogHeader>
             <DialogTitle>Версия v{displayedVersion?.number}</DialogTitle>
@@ -851,7 +853,7 @@ export function MaxLivePreview({
             </Button>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
+      </Dialog></>}
     </aside>
   );
 }
