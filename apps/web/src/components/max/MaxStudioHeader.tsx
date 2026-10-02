@@ -96,7 +96,7 @@ export function MaxStudioHeader({
             {accountLinks.map(([href, Icon, label]) => <DropdownMenuItem asChild key={href}><Link href={href}><Icon className="h-4 w-4" />{label}</Link></DropdownMenuItem>)}
             <DropdownMenuSeparator />
             <form action={logoutAction} className="w-full">
-              <DropdownMenuItem asChild>
+              <DropdownMenuItem asChild onSelect={(event) => event.preventDefault()}>
                 <button type="submit">
                   <LogOut className="h-4 w-4" />
                   Выйти
