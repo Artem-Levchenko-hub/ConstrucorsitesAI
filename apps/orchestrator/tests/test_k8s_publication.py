@@ -357,6 +357,15 @@ class FakeApi:
     def delete(self, api_version: str, kind: str, name: str, namespace: str | None) -> None:
         self.deleted.append((api_version, kind, name, namespace))
 
+    def scale_deployment(
+        self, name: str, namespace: str, replicas: int, *, resource_version: str | None = None
+    ) -> None:
+        key = ("Deployment", name, namespace)
+        item = json.loads(json.dumps(self.objects[key]))
+        assert resource_version == item["metadata"].get("resourceVersion")
+        item["spec"]["replicas"] = replicas
+        self.objects[key] = item
+
     def wait_ready(self, kind: str, name: str, namespace: str, timeout_seconds: float) -> None:
         self.waited.append((kind, name))
 
@@ -838,7 +847,7 @@ def test_role_upgrade_stops_existing_guest_without_changing_its_image_or_claims(
         return item
     api.get = get
     kp.KubernetesPublishedRuntime(api).quiesce_project_app(namespace)
-    stopped = api.applied[-1]
+    stopped = api.objects[("Deployment", "app", namespace)]
     assert stopped["spec"]["replicas"] == 0
     assert stopped["spec"]["template"] == original["spec"]["template"]
     assert not api.deleted

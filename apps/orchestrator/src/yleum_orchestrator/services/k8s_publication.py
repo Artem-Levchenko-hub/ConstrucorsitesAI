@@ -1303,6 +1303,9 @@ class KubernetesApi(Protocol):
     """The handful of cluster operations the placement needs (fakeable in tests)."""
 
     def apply(self, obj: dict[str, Any]) -> None: ...
+    def scale_deployment(
+        self, name: str, namespace: str, replicas: int, *, resource_version: str | None = None
+    ) -> None: ...
     def delete(self, api_version: str, kind: str, name: str, namespace: str | None) -> None: ...
     def wait_ready(self, kind: str, name: str, namespace: str, timeout_seconds: float) -> None: ...
     def exec(
@@ -1350,6 +1353,20 @@ class KubernetesClusterApi:
             namespace=metadata.get("namespace"),
             field_manager=FIELD_MANAGER,
             force_conflicts=True,
+        )
+
+    def scale_deployment(
+        self, name: str, namespace: str, replicas: int, *, resource_version: str | None = None
+    ) -> None:
+        """Change replicas without replaying server-owned GET metadata or pruning other fields."""
+        body: dict[str, Any] = {"spec": {"replicas": replicas}}
+        if resource_version is not None:
+            body["metadata"] = {"resourceVersion": resource_version}
+        self._resource("apps/v1", "Deployment").patch(
+            body=body,
+            name=name,
+            namespace=namespace,
+            content_type="application/merge-patch+json",
         )
 
     def delete(self, api_version: str, kind: str, name: str, namespace: str | None) -> None:
@@ -1652,10 +1669,10 @@ class KubernetesPublishedRuntime:
         """Stop all guest pods before an attested role-only database upgrade."""
         existing = self.api.get("apps/v1", "Deployment", "app", namespace)
         if existing is not None:
-            stopped = json.loads(json.dumps(existing))
-            stopped.pop("status", None)
-            stopped["spec"]["replicas"] = 0
-            self.api.apply(stopped)
+            self.api.scale_deployment(
+                "app", namespace, 0,
+                resource_version=existing["metadata"].get("resourceVersion"),
+            )
         deadline = time.monotonic() + self.ready_timeout
         while True:
             current = self.api.get("apps/v1", "Deployment", "app", namespace)

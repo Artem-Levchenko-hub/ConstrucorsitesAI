@@ -49,7 +49,7 @@
       "action": "Подготовить независимых владельцев A/B, проекты A/B, пользователей и администраторов приложений.",
       "status": "PARTIAL",
       "label": "🟡 Частично",
-      "actual": "Владельцы PAR-A/PAR-B и проекты созданы. Не хватает второго настоящего пользователя MAX и полной матрицы ролей.",
+      "actual": "Владельцы PAR-A/PAR-B и проекты подготовлены. Пользователь подтвердил второй настоящий MAX-аккаунт; локальное QA сообщило об успешной собственной заявке и F5/reopen в PAR-20261002-B. Полная матрица ролей и парная A/B изоляция ещё не приняты.",
       "original_evidence_paths": [
         "qa-evidence/report/actual-checkpoint.json",
         "qa-evidence/live-auth-block/registration-safe-ledger.json",
@@ -213,7 +213,7 @@
       "action": "Отдельно проверить вход и сессии внутри опубликованных приложений.",
       "status": "PARTIAL",
       "label": "🟡 Частично",
-      "actual": "Пройдены реальный MAX-вход, переоткрытие приложения и отрицательные подписи. Полный набор сессий/истечения не завершён.",
+      "actual": "Пройдены реальный MAX-вход, переоткрытие приложения и отрицательные подписи. Полный набор сессий/истечения не завершён. Дополнение локального QA на 15f5e4fb: второй реальный MAX-актёр через UI создал одну синтетическую amoCRM-заявку, provider UI подтвердил marker/этап/комментарий; MAX F5/reopen сохранил ту же запись. Это scoped positive; whole A/B denial и double-submit этим прогоном не покрыты.",
       "original_evidence_paths": [
         "qa-evidence/report/actual-checkpoint.json",
         "qa-evidence/live-auth-block/owned-B-app-readonly-boundaries-post-release-result.json",
@@ -338,7 +338,7 @@
       "action": "Проверить создание, чтение, изменение, удаление, файлы, связи и ограничения полей.",
       "status": "PARTIAL",
       "label": "🟡 Частично",
-      "actual": "Реальные задачи CRUD/F5, каталог, PNG, история и интеграционные записи проверены. Полная матрица файлов/связей/ролей не завершена.",
+      "actual": "Реальные задачи CRUD/F5, каталог, PNG, история и интеграционные записи проверены. Полная матрица файлов/связей/ролей не завершена. Дополнение локального QA на 15f5e4fb: второй реальный MAX-актёр через UI создал одну синтетическую amoCRM-заявку, provider UI подтвердил marker/этап/комментарий; MAX F5/reopen сохранил ту же запись. Это scoped positive; whole A/B denial и double-submit этим прогоном не покрыты.",
       "original_evidence_paths": [
         "qa-evidence/report/actual-checkpoint.json",
         "qa-evidence/live-auth-block/owned-B-booking-functional-result.json",
@@ -739,7 +739,7 @@
       "action": "Сгенерированный код не получает доступ к инфраструктуре, секретам и соседним проектам.",
       "status": "FAIL_REPORTED_PENDING_EVIDENCE_AUDIT",
       "label": "❌ FAIL — отчёт локального окна",
-      "actual": "На platform 6a7f6f4b локальное окно физически проверило Coffee: generated-app DATABASE_URL использует postgres с SUPERUSER/CREATEDB/CREATEROLE/BYPASSRLS/REPLICATION, TRUNCATE на 4/4 таблиц, RLS 0/4. Core-role отдельно ограничена. Доступ к соседям/секретам НЕ доказан. Исправление и живой ретест отсутствуют; исходные доказательства ожидаются от окна.",
+      "actual": "На 6a7f6f4b физически подтверждён postgres SUPERUSER в собственной Coffee project DB; доступ к соседям не доказан. Код ограниченных ролей доставлен на 15f5e4fb, но live upgrade блокируется HTTP400 при полном GET Deployment через SSA. Actual paired API dry-run: replicas-only merge patch принят, физический объект не изменился. Узкий transport fix подготовлен; физическая активация runtime-роли, сохранность данных и SQL отказы ещё не приняты.",
       "original_evidence_paths": [
         "qa-evidence/report/actual-checkpoint.json",
         "qa-evidence/template-security-followup/disposable-integration-safe.stdout.json"
@@ -903,13 +903,13 @@
   "current_runtime_baseline": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
   "latest_delivery": {
-    "revision": "409e8c9bd9286b2d142b34896f0659b06e4a8074",
-    "scope": "MVP customer generation/edit UI",
-    "ci_run_id": 37051633118,
+    "platform_sha": "15f5e4fb2bf4398b4ca0d3f1d80de2d9da0f179c",
+    "verified_utc": "2026-10-02T20:29:00Z",
+    "ci_run_id": 37059216622,
     "ci_jobs_success": 10,
-    "production_health": "API/web/Core and Commerce controllers exact SHA ok; fences absent, active counts0; canonical backup/deploy exits0",
-    "public_browser": "landing and guide2PASS; owner editor live flow not covered by public check",
-    "change": "Customer version selection/history/restoration removed; internal snapshots/provenance retained. Full original67 count unchanged."
+    "canonical_receipt_checks_pass": 44,
+    "actual_api_web_health": "200/ok exact revision",
+    "scope": "MVP generation/edit UI delivered; project database role source delivered, physical role activation blocked by quiesce HTTP400; no whole T11.4 closure"
   },
   "pilot_release_gate": {
     "scope": "FREE_PILOT_NO_PAYMENT",
@@ -935,5 +935,20 @@
       "publication/version history",
       "restoration/adaptation of historical versions"
     ]
-  }
+  },
+  "scoped_parallel_evidence": [
+    {
+      "source": "local QA thread 01a0dc56-1bec-7102-807d-d64dbd6b2724",
+      "platform_sha": "15f5e4fb2bf4398b4ca0d3f1d80de2d9da0f179c",
+      "app": "PAR-20261002-B",
+      "branch": "Second real MAX actor: one synthetic CRM lead via UI, native provider marker/stage/comment, same one receipt after MAX F5/reopen",
+      "writes": "one own synthetic lead only; no order/stock/task changes reported",
+      "artifact": "other local environment: qa-20261002/public/max-second-actor-crm-proof.jpg",
+      "artifact_review": "visually reviewed by local QA; unavailable at root workspace",
+      "excluded_artifacts": "first two crops had mismatched geometry and must not be used",
+      "root_independent_live_retest": false,
+      "whole_original_pass": false
+    }
+  ],
+  "analytics_implementation_status": "Source audit on 15f5e4fb: post-launch owner dashboard has no visitor/user/event aggregates; template event helper has no automatic ordinary callers. MVP implementation and live owner/foreign-owner acceptance pending."
 }
