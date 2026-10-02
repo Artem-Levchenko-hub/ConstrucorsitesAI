@@ -1958,9 +1958,13 @@ async def test_portable_owner_start_retries_do_not_restart_healthy_services(
     assert manager.state_store.load(workspace_id) == before
 
 
-@pytest.mark.parametrize("gateway_state", [None, "running", "exited"])
+@pytest.mark.parametrize(
+    "gateway_state,expected_draft_state",
+    [(None, None), ("running", "running"), ("exited", "stopped"),
+     ("stopped", "stopped"), ("failed", "failed"), ("unexpected", "failed")],
+)
 async def test_retained_portable_identity_does_not_invent_a_draft_runtime(
-    monkeypatch, tmp_path, gateway_state,
+    monkeypatch, tmp_path, gateway_state, expected_draft_state,
 ):
     workspace_id = uuid4()
     provider, manager, _, _ = await _ready_provider(tmp_path, workspace_id)
@@ -1978,9 +1982,17 @@ async def test_retained_portable_identity_does_not_invent_a_draft_runtime(
 
     assert response.has_draft_runtime is (gateway_state is not None)
     assert (response.preview_url is not None) is (gateway_state is not None)
-    assert response.draft_state == (
-        None if gateway_state is None else "running" if gateway_state == "running" else "stopped"
-    )
+    assert response.draft_state == expected_draft_state
+
+
+@pytest.mark.parametrize(
+    "raw_state,expected",
+    [("running", "running"), ("stopped", "stopped"), ("created", "stopped"),
+     ("paused", "stopped"), ("exited", "stopped"), ("failed", "failed"),
+     (None, "failed"), ("dead", "failed"), ("unexpected", "failed")],
+)
+def test_draft_state_preserves_normalized_portable_lifecycle(raw_state, expected):
+    assert workspace._draft_state_name(raw_state) == expected
 
 
 @pytest.mark.parametrize("failure", [None, "owner", "project", "active", "token"])

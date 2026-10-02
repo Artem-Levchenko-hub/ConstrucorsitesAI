@@ -1283,7 +1283,7 @@ def _draft_preview_url(workspace_id: UUID) -> str:
 def _draft_state_name(raw_state: str) -> Literal["running", "stopped", "failed"]:
     if raw_state == "running":
         return "running"
-    if raw_state in {"created", "paused", "exited"}:
+    if raw_state in {"created", "paused", "exited", "stopped"}:
         return "stopped"
     return "failed"
 
