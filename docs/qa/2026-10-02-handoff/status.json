@@ -1,0 +1,70 @@
+{
+  "as_of_utc": "2026-10-02T14:05:03.344301+00:00",
+  "timezone": "Europe/Moscow",
+  "scope": "Independent QA window; not the main 67-scenario ledger",
+  "fully_closed_this_run": [
+    "Т05.1",
+    "Т05.4"
+  ],
+  "inherited_pass_not_retested": [
+    "Т01.1",
+    "Т01.2",
+    "Т03.3",
+    "Т03.4",
+    "Т06.4",
+    "Т13.5"
+  ],
+  "reserved_main": [
+    "Т06.2",
+    "Т06.3"
+  ],
+  "last_tested_platform_sha": "a5a174d85571713f3aeeb4a34b7f70caf37fad39",
+  "test_app_published_commit": "ee31bea0db7f5927e90508e2effad3c0c6a2bee5",
+  "test_app_version": "v4",
+  "counts": {
+    "MAX_API": 75,
+    "moysklad_runtime": 16,
+    "amocrm_runtime": 19,
+    "amocrm_oauth": 10,
+    "live_integration_UI_observations": 19,
+    "automatic_after_records": 374,
+    "private_screenshots": 368,
+    "incomplete_captures": 6
+  },
+  "open_findings": [
+    "PAR-MS-BUYER-01",
+    "PAR-INTEGRATION-VALIDATION-UI-01",
+    "MAX-BOT-REPLY-01",
+    "Missing security headers on audited release"
+  ],
+  "resolved_on_retest": [
+    "PAR-LOGOUT-01 specific reproduction no longer observed"
+  ],
+  "baseline": {
+    "tasks": 2,
+    "history_events": 8,
+    "own_SKU_price_rub": 123.45,
+    "own_SKU_physical_stock": 5,
+    "own_SKU_reserve": 4,
+    "own_SKU_free": 1,
+    "own_UI_orders": 2,
+    "own_UI_leads": 1,
+    "own_leads_total": 2
+  },
+  "dependencies": [
+    "Second real MAX user unavailable",
+    "Controlled mailbox",
+    "Payment test shop disabled",
+    "Isolated faults/restore environment and approved RTO/RPO/load",
+    "Production image digests/SBOM",
+    "24-hour soak",
+    "Public amoCRM moderation"
+  ],
+  "fixes_reported_by_main_not_live_accepted": {
+    "localized_errors_tests": 32,
+    "web_security_headers_tests": 834,
+    "buyer_contact": "in verification"
+  },
+  "support_message_sent": false,
+  "private_evidence_transferred": false
+}
