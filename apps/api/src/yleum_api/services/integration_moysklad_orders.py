@@ -195,6 +195,8 @@ async def prepare_customer_order(
 async def submit_customer_order(
     client: httpx.AsyncClient, prepared: PreparedOrder
 ) -> dict[str, str]:
+    buyer_name = prepared.buyer_name.strip()
+    phone = prepared.phone.strip() or None if prepared.phone is not None else None
     counterparty_id = prepared.counterparty_id
     if counterparty_id is None:
         # Another order may have created the buyer after our read-only preflight.
@@ -211,11 +213,11 @@ async def submit_customer_order(
             ) from exc
     if counterparty_id is None:
         body: dict[str, str] = {
-            "name": prepared.buyer_name,
+            "name": buyer_name,
             "externalCode": prepared.customer_code,
         }
-        if prepared.phone:
-            body["phone"] = prepared.phone
+        if phone:
+            body["phone"] = phone
         created = await client.post(f"{BASE}/entity/counterparty", json=body)
         if created.status_code >= 300:
             _rows(created)
@@ -226,7 +228,18 @@ async def submit_customer_order(
                 "integration_response_invalid", "Неверный ответ о покупателе", 502
             ) from exc
 
-    payload = {**prepared.payload, "agent": _meta("counterparty", counterparty_id)}
+    # Keep this order's submitted contact independent of the shared actor profile.
+    description = [
+        "Заказ из мини-приложения MAX через Yleum",
+        f"Покупатель: {buyer_name}",
+    ]
+    if phone:
+        description.append(f"Телефон: {phone}")
+    payload = {
+        **prepared.payload,
+        "agent": _meta("counterparty", counterparty_id),
+        "description": "\n".join(description),
+    }
     response = await client.post(f"{BASE}/entity/customerorder", json=payload)
     if response.status_code >= 300:
         _rows(response)

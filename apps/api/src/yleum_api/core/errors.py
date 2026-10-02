@@ -1,9 +1,11 @@
+from collections.abc import Sequence
 from typing import Any, Literal
 
 from fastapi import Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 
 ErrorCode = Literal[
@@ -143,11 +145,76 @@ async def api_error_handler(request: Request, exc: Exception) -> JSONResponse:
     )
 
 
+_RUNTIME_FORM_ROUTES = {
+    "/api/runtime/projects/{project_id}/leads": (
+        ("name", "phone", "email"),
+        "Проверьте данные заявки и повторите отправку.",
+    ),
+    "/api/runtime/projects/{project_id}/orders": (
+        ("buyer_name", "phone"),
+        "Проверьте данные заказа и повторите отправку.",
+    ),
+}
+_RUNTIME_FIELD_MESSAGES = {
+    "name": {
+        "missing": "Укажите имя.",
+        "string_too_short": "Укажите имя.",
+        "string_too_long": "Имя должно содержать не более 200 символов.",
+        "string_type": "Имя должно быть текстом.",
+    },
+    "buyer_name": {
+        "missing": "Укажите имя покупателя.",
+        "string_too_short": "Укажите имя покупателя.",
+        "string_too_long": "Имя покупателя должно содержать не более 200 символов.",
+        "string_type": "Имя покупателя должно быть текстом.",
+    },
+    "phone": dict.fromkeys(
+        ("value_error", "string_too_long", "string_type"),
+        "Введите корректный телефон.",
+    ),
+    "email": dict.fromkeys(
+        ("value_error", "string_too_long", "string_type"),
+        "Введите корректную электронную почту.",
+    ),
+}
+
+
+def _validation_message(request: Request, errors: Sequence[Any]) -> str:
+    route = request.scope.get("route")
+    if (
+        request.method != "POST"
+        or not isinstance(route, APIRoute)
+        or "POST" not in route.methods
+        or route.path not in _RUNTIME_FORM_ROUTES
+    ):
+        return "request validation failed"
+    fields, fallback = _RUNTIME_FORM_ROUTES[route.path]
+    failures: set[tuple[str, str]] = set()
+    for error in errors:
+        if not isinstance(error, dict):
+            continue
+        location, kind = error.get("loc"), error.get("type")
+        if (
+            isinstance(location, (list, tuple))
+            and len(location) == 2
+            and location[0] == "body"
+            and isinstance(location[1], str)
+            and isinstance(kind, str)
+        ):
+            failures.add((location[1], kind))
+    # Fixed field/type priority and fixed strings: never echo input, msg or ctx.
+    for field in fields:
+        for kind, message in _RUNTIME_FIELD_MESSAGES[field].items():
+            if (field, kind) in failures:
+                return message
+    return fallback
+
+
 async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, RequestValidationError)
     body = ErrorBody(
         code="validation_failed",
-        message="request validation failed",
+        message=_validation_message(request, exc.errors()),
         details={
             "errors": jsonable_encoder(
                 exc.errors(),

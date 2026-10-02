@@ -116,12 +116,16 @@ echo "   orchestrator: $(curl -fsS -m 5 http://127.0.0.1:8003/health || echo DOW
 echo "== 6. nginx: $DOMAIN (платформа) + grafana.$DOMAIN + /otchet, сертификаты certbot"
 tar -C /var/www -xzf "$IN/otchet.tgz" && chown -R www-data:www-data /var/www/otchet
 TRAEFIK_IP=$(k3s kubectl -n kube-system get svc traefik -o jsonpath='{.spec.clusterIP}' 2>/dev/null || echo 127.0.0.1)
+install -d -m 755 /etc/nginx/snippets
+install -m 644 /opt/omnia/infra/security/nginx/platform-header-values.conf /etc/nginx/conf.d/yleum-platform-header-values.conf
+install -m 644 /opt/omnia/infra/security/nginx/platform-https-headers.conf /etc/nginx/snippets/yleum-platform-https-headers.conf
 cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF
 # MAX Studio — платформа (генерируется infra/max-k3s/migrate/30-bring-up.sh; certbot дописывает TLS)
 server {
     listen 80;
     listen [::]:80;
     server_name $DOMAIN www.$DOMAIN;
+    include /etc/nginx/snippets/yleum-platform-https-headers.conf;
     client_max_body_size 50m;
     location /.well-known/acme-challenge/ { root /opt/omnia-runtime/acme-webroot; }
     location = /otchet { return 301 /otchet/; }
@@ -130,6 +134,7 @@ server {
         index index.html;
         try_files \$uri \$uri/ =404;
         add_header Cache-Control "no-cache";
+        include /etc/nginx/snippets/yleum-platform-https-headers.conf;
     }
     location / {
         proxy_pass         http://127.0.0.1:3100;
@@ -188,6 +193,7 @@ server {
         proxy_read_timeout 60s;
         expires 30d;
         add_header Cache-Control "public, immutable";
+        include /etc/nginx/snippets/yleum-platform-https-headers.conf;
     }
 }
 EOF

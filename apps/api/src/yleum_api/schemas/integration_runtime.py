@@ -10,6 +10,16 @@ from pydantic import BaseModel, Field, HttpUrl, field_validator
 from pydantic.networks import validate_email
 
 
+def _valid_phone(value: str | None) -> str | None:
+    if not value:
+        return None
+    if not re.fullmatch(r"\+?[0-9 ()\-]{7,64}", value) or not 7 <= len(
+        re.sub(r"\D", "", value)
+    ) <= 15:
+        raise ValueError("Введите корректный телефон")
+    return value
+
+
 class RuntimeIntegrationStatus(BaseModel):
     providers: list[str]
     capabilities: list[str]
@@ -58,13 +68,7 @@ class RuntimeLeadRequest(BaseModel):
     @field_validator("phone")
     @classmethod
     def valid_phone(cls, value: str | None) -> str | None:
-        if not value:
-            return None
-        if not re.fullmatch(r"\+?[0-9 ()\-]{7,64}", value) or not 7 <= len(
-            re.sub(r"\D", "", value)
-        ) <= 15:
-            raise ValueError("Введите корректный телефон")
-        return value
+        return _valid_phone(value)
 
     @field_validator("email")
     @classmethod
@@ -124,6 +128,20 @@ class RuntimeOrderRequest(BaseModel):
     buyer_name: str = Field(min_length=1, max_length=200)
     phone: str | None = Field(default=None, max_length=64)
     lines: list[RuntimeOrderLine] = Field(min_length=1, max_length=50)
+
+    @field_validator("buyer_name")
+    @classmethod
+    def valid_buyer_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Введите имя покупателя")
+        return value
+
+    @field_validator("phone")
+    @classmethod
+    def valid_phone(cls, value: str | None) -> str | None:
+        # Preserve the original contact in the durable operation digest.
+        _valid_phone(value.strip() if value is not None else None)
+        return value
 
 
 class RuntimeOrderPublic(BaseModel):
