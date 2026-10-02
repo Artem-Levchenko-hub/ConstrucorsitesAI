@@ -85,13 +85,22 @@ async def test_timeout_includes_process_local_wait(tmp_path) -> None:
             entered.set()
             await release.wait()
 
+    # Initialize durable fixture storage before measuring the 50 ms contention budget.
+    async with WorkspaceOperationLock(tmp_path, acquire_timeout_seconds=1).hold(workspace_id):
+        pass
+
     holder_task = asyncio.create_task(holder())
-    await entered.wait()
-    with pytest.raises(WorkspaceLockTimeout):
-        async with lock.hold(workspace_id):
-            pass
-    release.set()
-    await holder_task
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        with pytest.raises(WorkspaceLockTimeout):
+            async with lock.hold(workspace_id):
+                pass
+        release.set()
+        await asyncio.wait_for(holder_task, timeout=2)
+    finally:
+        release.set()
+        holder_task.cancel()
+        await asyncio.gather(holder_task, return_exceptions=True)
 
 
 @pytest.mark.asyncio
@@ -124,6 +133,11 @@ async def test_lock_io_does_not_wait_for_the_shared_default_executor(tmp_path) -
     loop = asyncio.get_running_loop()
     started = threading.Event()
     release = threading.Event()
+    workspace_id = uuid4()
+
+    # Keep durable setup outside executor occupancy and the 100 ms acquisition phase.
+    async with WorkspaceOperationLock(tmp_path, acquire_timeout_seconds=1).hold(workspace_id):
+        pass
 
     def occupy_default_executor() -> None:
         started.set()
@@ -146,7 +160,7 @@ async def test_lock_io_does_not_wait_for_the_shared_default_executor(tmp_path) -
                 acquire_timeout_seconds=0.1,
                 retry_interval_seconds=0.01,
             )
-            async with lock.hold(uuid4()):
+            async with lock.hold(workspace_id):
                 pass
         finally:
             release.set()
