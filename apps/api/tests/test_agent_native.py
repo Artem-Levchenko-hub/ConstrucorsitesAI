@@ -20,6 +20,7 @@ from uuid import UUID
 
 import httpx
 import pytest
+from structlog.testing import capture_logs
 
 from yleum_api.services import agent_native
 from yleum_api.services.agent_builder import AgentResult
@@ -2598,3 +2599,30 @@ async def test_activity_envelope_conflict_is_terminal_to_native_loop(monkeypatch
     with pytest.raises(ProjectCellActivityConflict, match="activity replay envelope mismatch"):
         await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=10)
     assert calls == ["model"]
+
+
+@pytest.mark.asyncio
+async def test_native_timeout_keeps_safe_cause_and_run_correlation(monkeypatch):
+    async def failed_call(*args, **kwargs):
+        raise RuntimeError("PROVIDER_TIMEOUT: synthetic-private-upstream-detail")
+
+    monkeypatch.setattr(agent_native, "_call_messages", failed_call)
+
+    async def execute(action):
+        pytest.fail("a provider timeout must not execute or accept source")
+
+    run_id = "33333333-3333-3333-3333-333333333333"
+    project_id = "22222222-2222-2222-2222-222222222222"
+    with capture_logs() as logs:
+        result = await agent_native.run_native_build(
+            system="s", task="t", execute=execute, run_id=run_id,
+            project_id=project_id, message_id="44444444-4444-4444-4444-444444444444",
+        )
+    assert not result.done and result.stop_reason == "provider_error"
+    assert result.summary.startswith("PROVIDER_TIMEOUT:")
+    assert "synthetic-private" not in result.summary
+    event = next(row for row in logs if row["event"] == "agent_native.provider_failed")
+    assert event["reason_code"] == "provider_timeout"
+    assert event["run_id"] == run_id and event["project_id"] == project_id
+    assert event["stage"] == "build_plan"
+    assert "synthetic-private" not in str(logs)

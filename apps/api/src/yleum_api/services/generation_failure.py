@@ -34,6 +34,12 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
             "Требуется восстановить доступ к модели."
         )
         retryable = False
+    elif "provider_timeout:" in error:
+        code = "provider_unavailable"
+        message = (
+            "Провайдер модели не ответил вовремя. Автоматический повтор остановлен. "
+            "Можно повторить исходный запрос."
+        )
     elif "provider_unavailable" in error:
         code = "provider_unavailable"
         message = "Модель не ответила после повторных попыток. Попробуйте продолжить генерацию."

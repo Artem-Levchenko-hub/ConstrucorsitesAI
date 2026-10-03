@@ -35,6 +35,16 @@ def test_nonfailure_has_no_error_card(status):
     assert public_generation_failure(SimpleNamespace(status=status, error="deadline")) is None
 
 
+def test_provider_timeout_is_not_reported_as_a_failed_build_check():
+    failure = public_generation_failure(SimpleNamespace(
+        status="failed", error="PROVIDER_TIMEOUT: synthetic-private-detail", agent_state={},
+    ))
+    assert failure.code == "provider_unavailable"
+    assert "провайдер модели не ответил вовремя" in failure.message.casefold()
+    assert "Автоматический повтор остановлен" in failure.message
+    assert "synthetic-private" not in failure.model_dump_json()
+
+
 @pytest.mark.parametrize(
     ("error", "code", "retryable"),
     [

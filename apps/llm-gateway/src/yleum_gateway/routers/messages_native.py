@@ -473,7 +473,15 @@ async def _native_messages_impl(
             headers,
         )
     except httpx.HTTPError as exc:
-        log.warning("native_messages.transport_error", model=model, error=str(exc))
+        log.warning(
+            "native_messages.transport_error",
+            error_type=type(exc).__name__,
+            run_id=str(run_id) if run_id else None,
+            project_id=str(project_id) if project_id else None,
+            message_id=str(message_id) if message_id else None,
+            stage=stage if stage in {"build_plan", "native_agent", "verification"} else "unknown",
+            retry_count=retry_count,
+        )
         return _err(502, "api_error", f"upstream transport: {type(exc).__name__}")
 
     if upstream.status_code >= 400:

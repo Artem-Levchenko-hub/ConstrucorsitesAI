@@ -978,6 +978,26 @@
       "settlements_all_free": true,
       "provider_per_request_reconciliation": false,
       "new_full_original_PASS": 0
+    },
+    {
+      "date": "2026-10-03",
+      "platform_sha": "0716fbaba867e9b477135b3b3340fb31f3c3d611",
+      "scope": "Native Coffee MoySklad install/claim/F5 and protected PAR-B catalog; failed one authorized PAR-B operator repair before source writes; provider timeout diagnostics",
+      "coffee_native_moysklad": "Local QA reports ordinary approved reinstall + one-time-code claim + F5 Active/Connected, organization/store selections loaded; Root read-only installed/token-present/owner-match/ready metadata agrees. PAR-B separate credentials remain active/ready; catalog stock1/3 unchanged. Coffee signed MAX end-to-end and public marketplace availability not accepted.",
+      "operator_repair_run_id": "3864ff81-0d5e-4bc8-93d2-bc683292402a",
+      "operator_repair_status": "failed",
+      "operator_customer_ui_acceptance": false,
+      "source_writes": 0,
+      "new_publication": false,
+      "business_baseline_before_repair": {
+        "task_count": 5,
+        "event_count": 13,
+        "rows_exposed": false
+      },
+      "failure_evidence": "project_cell ok; worker provider_failed RuntimeError; gateway read timed out/502 in bounded time window; old logs lack exact run correlation. No usage rows does not prove no upstream charge.",
+      "diagnostic_change": "This commit keeps a static safe provider timeout message in durable history and adds UUID/error-class/stage correlation; timeout, retry and billing policy unchanged. Production receipt/live activation must be checked separately.",
+      "task_conflict_retry_fix": "Exact-source local fix verified; not applied or published by failed attempt. T06.2/T06.3 remain FAIL.",
+      "new_full_original_PASS": 0
     }
   ],
   "analytics_implementation_status": "Source audit on 15f5e4fb: post-launch owner dashboard has no visitor/user/event aggregates; template event helper has no automatic ordinary callers. MVP implementation and live owner/foreign-owner acceptance pending."

@@ -1435,7 +1435,21 @@ async def _run_native_segment(
                     ))
                     else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
                 )
-                log.warning("agent_native.provider_failed", error_type=type(exc).__name__)
+                reason_code = safe_reason.partition(":")[0].lower()
+                if str(exc).startswith("PROVIDER_TIMEOUT:"):
+                    reason_code = "provider_timeout"
+                    safe_reason = (
+                        "PROVIDER_TIMEOUT: провайдер модели не ответил вовремя. "
+                        "Автоматический повтор остановлен."
+                    )
+                log.warning(
+                    "agent_native.provider_failed", error_type=type(exc).__name__,
+                    reason_code=reason_code,
+                    run_id=str(run_id) if run_id else None,
+                    project_id=str(project_id) if project_id else None,
+                    message_id=str(message_id) if message_id else None,
+                    stage=call_stage,
+                )
                 return AgentResult(
                     done=False, summary=safe_reason, files=written, steps=step,
                     transcript=convo, stop_reason="provider_error", evidence=_evidence(),

@@ -1089,3 +1089,30 @@ def test_historical_receipt_returns_machine_readable_terminal_billing_error(
     assert response.json()["error"]["type"] == "billing_unavailable"
     assert response.json()["error"]["code"] == "billing_reconciliation_required"
     assert len(upstream_calls) == 1
+
+
+@pytest.mark.parametrize("stage,expected_stage", [
+    ("build_plan", "build_plan"), ("synthetic-private-stage", "unknown"),
+])
+def test_transport_failure_logs_safe_class_and_correlation(client, monkeypatch, stage, expected_stage):
+    from structlog.testing import capture_logs
+
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+
+    def failed_post(*args):
+        raise httpx.ReadTimeout("synthetic-private-upstream-detail")
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", failed_post)
+    with capture_logs() as logs:
+        response = client.post("/v1/messages", json={
+            "model": "synthetic-private-model", "messages": [{"role": "user", "content": "s"}],
+            "metadata": {"run_id": _RUNNER_RUN_ID, "project_id": _RUNNER_PROJECT_ID,
+                         "message_id": _RUNNER_MESSAGE_ID, "stage": stage, "retry_count": 0},
+        })
+    assert response.status_code == 502
+    event = next(row for row in logs if row["event"] == "native_messages.transport_error")
+    assert event["error_type"] == "ReadTimeout"
+    assert event["run_id"] == _RUNNER_RUN_ID and event["project_id"] == _RUNNER_PROJECT_ID
+    assert event["stage"] == expected_stage and event["retry_count"] == 0
+    assert "synthetic-private" not in str(logs) + response.text
