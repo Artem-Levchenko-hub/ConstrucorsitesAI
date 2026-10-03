@@ -40,6 +40,10 @@ from yleum_api.services.project_cell_capacity import (
     clear_capacity_admission_event,
 )
 
+# Identity-only internal reason; user text can never request this cancellation path.
+_OWNERSHIP_LOST_CANCEL_REASON = object()
+
+
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
 
 
@@ -260,12 +264,13 @@ async def _run_tracked_prompt(
             await cancel_task
         await work_task
         await finalize_generation_run(run_id)
-    except asyncio.CancelledError:
+    except asyncio.CancelledError as cancellation:
         work_task.cancel()
         cancel_task.cancel()
         with suppress(asyncio.CancelledError):
             await work_task
-        await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
+        if not (cancellation.args and cancellation.args[0] is _OWNERSHIP_LOST_CANCEL_REASON):
+            await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
     except AdaptationActivationPending:
         # The restoration reconciler owns the durable activation outbox and
         # will settle the run after the controller returns a terminal receipt.

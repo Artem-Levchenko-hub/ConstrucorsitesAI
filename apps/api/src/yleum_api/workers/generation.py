@@ -27,7 +27,7 @@ from yleum_api.core.db import (
     GENERATION_QUERY_CONNECTION_RESERVE,
     get_engine,
 )
-from yleum_api.core.redis import get_redis
+from yleum_api.core.redis import get_redis, publish_event
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
@@ -98,22 +98,36 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
         run = await session.get(GenerationRun, run_id, with_for_update=True)
         if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
             return
-        await terminalize_generation_run_locked(
-            session,
-            run,
-            status="failed",
-            error=message,
-        )
+        # A durable Stop request wins a race with ownership loss. Other active
+        # runs are infrastructure failures, never a fabricated user cancellation.
+        cancelled = run.status == "cancel_requested"
+        if cancelled:
+            await apply_cancelled_generation_locked(session, run)
+        else:
+            await terminalize_generation_run_locked(
+                session,
+                run,
+                status="failed",
+                error=message,
+            )
         project_id, assistant_id = run.project_id, run.assistant_message_id
         await _abandon_operations(session, run_id)
         await session.commit()
     if assistant_id is not None:
-        await _emergency_error(project_id, assistant_id, message)
+        if cancelled:
+            await publish_event(project_id, "generation.cancelled", {
+                "run_id": str(run_id), "message_id": str(assistant_id),
+            })
+        else:
+            await _emergency_error(project_id, assistant_id, message)
 
 
 async def execute_dispatch(run_id: UUID) -> bool:
     from yleum_api.services.generation.lifecycle import _process_prompt
-    from yleum_api.services.generation.supervisor import _run_tracked_prompt
+    from yleum_api.services.generation.supervisor import (
+        _OWNERSHIP_LOST_CANCEL_REASON,
+        _run_tracked_prompt,
+    )
 
     engine = get_engine()
     factory = async_sessionmaker(engine, expire_on_commit=False)
@@ -219,7 +233,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
             # Losing ownership must stop physical work before any database write:
             # orphan persistence may itself block on the unavailable database.
             if work is not None:
-                work.cancel()
+                work.cancel(_OWNERSHIP_LOST_CANCEL_REASON)
                 with suppress(asyncio.CancelledError, Exception):
                     await work
             await _fail_orphan(

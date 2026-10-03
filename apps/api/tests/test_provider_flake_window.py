@@ -116,8 +116,11 @@ async def test_the_backoff_grows_and_stays_capped(monkeypatch: pytest.MonkeyPatc
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("window_seconds, expected_attempts", [(210.0, 2), (270.0, 3)])
 async def test_a_provider_that_hangs_cannot_eat_the_whole_deadline(
     monkeypatch: pytest.MonkeyPatch,
+    window_seconds: float,
+    expected_attempts: int,
 ) -> None:
     """Второй бок бюджета: потолок не по числу попыток, а по реальному времени.
 
@@ -125,8 +128,13 @@ async def test_a_provider_that_hangs_cannot_eat_the_whole_deadline(
     отпущенные попытки, но каждая стоит минуты. Без потолка семь таких попыток
     съели бы весь дедлайн генерации на одном шаге.
     """
-    _record_sleeps(monkeypatch)
     clock = {"now": 0.0}
+    monkeypatch.setattr(agent_native, "_CALL_RETRY_WINDOW_S", window_seconds)
+
+    async def elapsed_sleep(delay: float) -> None:
+        clock["now"] += delay
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", elapsed_sleep)
 
     class _FakeLoop:
         def time(self) -> float:
@@ -134,19 +142,25 @@ async def test_a_provider_that_hangs_cannot_eat_the_whole_deadline(
 
     monkeypatch.setattr(agent_native.asyncio, "get_running_loop", lambda: _FakeLoop())
     attempts: list[int] = []
+    request_budgets: list[float] = []
 
     def hangs_then_fails(request: httpx.Request) -> httpx.Response:
         attempts.append(1)
-        clock["now"] += 120.0  # столько висит один запрос до таймаута
+        budget = request.extensions["timeout"]["read"]
+        request_budgets.append(budget)
+        # MockTransport не применяет timeout сам: моделируем ожидание строго
+        # в пределах бюджета, который передал настоящий клиент.
+        clock["now"] += min(120.0, budget)
         return httpx.Response(502, text="bad gateway")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(hangs_then_fails)) as client:
         with pytest.raises(httpx.HTTPError):
             await agent_native._call_messages(client, _URL, [], "s")
 
-    # Две попытки по две минуты уже исчерпали окно — третьей быть не должно.
-    assert len(attempts) == 2
-    assert clock["now"] < 600.0
+    assert len(attempts) == expected_attempts
+    assert clock["now"] == window_seconds
+    assert request_budgets == sorted(request_budgets, reverse=True)
+    assert request_budgets[-1] < 120.0, "последний запрос ограничен оставшимся временем"
 
 
 @pytest.mark.asyncio

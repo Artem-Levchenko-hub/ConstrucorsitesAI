@@ -1061,3 +1061,148 @@ async def test_dispatcher_retries_unclaimed_work_after_connection_failure(
         worker.cancel()
         with pytest.raises(asyncio.CancelledError):
             await worker
+
+
+@pytest.mark.parametrize(
+    "state", ["active", "cancel_requested", "cancel_during_cleanup", "deadline_failed"]
+)
+async def test_ownership_loss_keeps_real_tracker_terminal_reason(
+    db_session, test_engine, monkeypatch, state,
+):
+    """Real tracker + cancelled/orphan finalizers; only signals/model work are fake."""
+    run = await _queued_dispatch(db_session)
+    run.execution_backend = "worker"
+    await db_session.commit()
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    monkeypatch.setattr(generation, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+    entered, drained = asyncio.Event(), asyncio.Event()
+    events = []
+
+    async def work(**_):
+        async with factory() as session:
+            current = await session.get(GenerationRun, run.id)
+            current.status = "running"
+            current.started_at = datetime.now(UTC)
+            await session.commit()
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            if state == "cancel_during_cleanup":
+                async with factory() as session:
+                    current = await session.get(GenerationRun, run.id, with_for_update=True)
+                    current.status = "cancel_requested"
+                    await session.commit()
+            drained.set()
+
+    async def no_signal(*_):
+        await asyncio.Future()
+
+    async def clear(*_):
+        return None
+
+    async def event(_project, name, _payload):
+        events.append(name)
+
+    async def monitor(*_):
+        await entered.wait()
+        if state in {"cancel_requested", "deadline_failed"}:
+            async with factory() as session:
+                current = await session.get(GenerationRun, run.id, with_for_update=True)
+                if state == "cancel_requested":
+                    current.status = "cancel_requested"
+                else:
+                    current.status = "failed"
+                    current.error = "generation deadline exceeded; phase=agent"
+                    current.finished_at = datetime.now(UTC)
+                await session.commit()
+        raise ConnectionError("synthetic ownership connection lost")
+
+    monkeypatch.setattr(lifecycle, "_process_prompt", work)
+    monkeypatch.setattr(generation, "_ownership_monitor", monitor)
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", no_signal)
+    monkeypatch.setattr(supervisor, "_wait_for_capacity_dispatch_lease_loss", no_signal)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", clear)
+    monkeypatch.setattr(supervisor, "publish_event", event)
+    monkeypatch.setattr(generation, "publish_event", event)
+    assert await asyncio.wait_for(generation.execute_dispatch(run.id), 5) is False
+    assert drained.is_set()
+    await db_session.refresh(run)
+    assistant = await db_session.get(Message, run.assistant_message_id)
+    assert run.finished_at is not None
+    if state in {"cancel_requested", "cancel_during_cleanup"}:
+        assert run.status == "cancelled"
+        assert "[Отменено пользователем]" in assistant.content
+        assert "generation.cancelled" in events
+    else:
+        assert run.status == "failed", "ownership loss was misclassified as user cancellation"
+        assert "[Отменено пользователем]" not in assistant.content
+        assert "generation.cancelled" not in events
+        if state == "deadline_failed":
+            assert run.error == "generation deadline exceeded; phase=agent"
+        else:
+            assert "lost ownership" in run.error
+            assert assistant.tokens_out == 0
+
+
+@pytest.mark.parametrize("cancel_mode", ["task_cancel", "stop_signal"])
+async def test_real_tracker_preserves_ordinary_user_cancellation(
+    db_session, test_engine, monkeypatch, cancel_mode,
+):
+    run = await _queued_dispatch(db_session)
+    run.status = "running"
+    run.started_at = datetime.now(UTC)
+    await db_session.commit()
+    monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+    entered, stop, drained = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    events = []
+
+    async def work():
+        entered.set()
+        try:
+            await asyncio.Future()
+        finally:
+            drained.set()
+
+    async def signal(*_):
+        await stop.wait()
+
+    async def no_lease_signal(*_):
+        await asyncio.Future()
+
+    async def clear(*_):
+        return None
+
+    async def event(_project, name, _payload):
+        events.append(name)
+
+    monkeypatch.setattr(supervisor, "_wait_for_generation_cancel", signal)
+    monkeypatch.setattr(supervisor, "_wait_for_capacity_dispatch_lease_loss", no_lease_signal)
+    monkeypatch.setattr(supervisor, "clear_generation_cancel", clear)
+    monkeypatch.setattr(supervisor, "publish_event", event)
+    task = asyncio.create_task(supervisor._run_tracked_prompt(
+        work(), run_id=run.id, project_id=run.project_id,
+        assistant_message_id=run.assistant_message_id, label="ownership-regression",
+        capacity_dispatch_token=uuid4(),
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        if cancel_mode == "task_cancel":
+            # Matching text is not the internal object identity sentinel.
+            task.cancel("_OWNERSHIP_LOST_CANCEL_REASON")
+        else:
+            run.status = "cancel_requested"
+            await db_session.commit()
+            stop.set()
+        await asyncio.wait_for(task, 5)
+        assert drained.is_set()
+        await db_session.refresh(run)
+        assistant = await db_session.get(Message, run.assistant_message_id)
+        assert run.status == "cancelled"
+        assert "[Отменено пользователем]" in assistant.content
+        assert events == ["generation.cancelled"]
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
