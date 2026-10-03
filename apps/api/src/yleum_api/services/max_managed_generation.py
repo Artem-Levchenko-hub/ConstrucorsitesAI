@@ -1,4 +1,4 @@
-"""Deliver managed integration SDK and session bootstrap through the generation lease."""
+"""Deliver managed browser files through the generation lease."""
 
 from yleum_api.services.max_project_kit import MAX_RETIRED_MANAGED_FILES, _template_file
 from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
@@ -7,6 +7,7 @@ INTEGRATION_SDK_PATH = "src/lib/omnia/integration-client.ts"
 MANAGED_BROWSER_PATHS = (
     INTEGRATION_SDK_PATH, "src/lib/omnia/client.ts",
     "src/components/MaxAppProvider.tsx", "src/components/YleumCompliance.tsx",
+    "src/app/support/page.tsx",
 )
 
 
