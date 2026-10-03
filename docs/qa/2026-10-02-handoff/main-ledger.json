@@ -899,17 +899,21 @@
   ],
   "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
   "updated_at": "2026-10-03T05:27:47.646884+00:00",
-  "delivery_candidate_status": "awaiting exact CI, deployment and health",
+  "delivery_candidate_status": "UTF-8 fixture portability locally verified; next exact CI/push/deploy recorded by serial owner",
   "current_runtime_baseline": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
   "latest_delivery": {
-    "platform_sha": "15f5e4fb2bf4398b4ca0d3f1d80de2d9da0f179c",
-    "verified_utc": "2026-10-02T20:29:00Z",
-    "ci_run_id": 37059216622,
+    "platform_sha": "2d3224542a86e5d9fcbb5d67493e620441068fed",
+    "verified_utc": "2026-10-03T06:10:10Z",
+    "ci_run_id": 37100697877,
     "ci_jobs_success": 10,
-    "canonical_receipt_checks_pass": 44,
+    "backup_exit": 0,
+    "canonical_deploy_exit": 0,
     "actual_api_web_health": "200/ok exact revision",
-    "scope": "MVP generation/edit UI delivered; project database role source delivered, physical role activation blocked by quiesce HTTP400; no whole T11.4 closure"
+    "actual_managed_kit": 26,
+    "actual_source_hashes_verified": true,
+    "admission_fences_clear": true,
+    "generated_support_live_retest": false
   },
   "pilot_release_gate": {
     "scope": "FREE_PILOT_NO_PAYMENT",
@@ -960,6 +964,20 @@
       "new_full_original_PASS": 0,
       "support_code_fix": "kit26; production delivery and current generated-app activation pending",
       "dependency_image_audit": "not complete"
+    },
+    {
+      "date": "2026-10-03",
+      "platform_sha": "2d3224542a86e5d9fcbb5d67493e620441068fed",
+      "scope": "Root current Coffee product Cell physical runtime role only; nine usage rows and per-row static fallback equality; external canonical-header classification corrected",
+      "physical_role": "omnia_project_runtime",
+      "login": true,
+      "admin_flags_all_false": true,
+      "exact_served_candidate_and_neighbor_denial_proven": false,
+      "usage_rows": 9,
+      "usage_internal_rub": "20.7259",
+      "settlements_all_free": true,
+      "provider_per_request_reconciliation": false,
+      "new_full_original_PASS": 0
     }
   ],
   "analytics_implementation_status": "Source audit on 15f5e4fb: post-launch owner dashboard has no visitor/user/event aggregates; template event helper has no automatic ordinary callers. MVP implementation and live owner/foreign-owner acceptance pending."

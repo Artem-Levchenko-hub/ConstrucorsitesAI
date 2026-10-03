@@ -73,14 +73,14 @@ def _assert_render_golden(files, expected):
         original_dependencies[path] = baseline
     support_path = "src/app/support/page.tsx"
     support_override = json.loads(
-        (overrides_path.parent / "max_template_support_overrides.json").read_text()
+        (overrides_path.parent / "max_template_support_overrides.json").read_text(encoding="utf-8")
     )
     assert set(support_override) == {support_path}
     assert hashlib.sha256(files[support_path].encode()).hexdigest() == (
         support_override[support_path]["sha256"]
     ), support_path
     legacy_support = json.loads(
-        (fixture_root / "max_config_render_legacy_support.json").read_text()
+        (fixture_root / "max_config_render_legacy_support.json").read_text(encoding="utf-8")
     )
     assert legacy_support["revision"] == "65322513e1a4eeee42a9195bb5747d14179928e1"
     assert legacy_support["path"] == support_path
