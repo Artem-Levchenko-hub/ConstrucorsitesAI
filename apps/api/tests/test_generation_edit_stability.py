@@ -87,7 +87,8 @@ async def test_existing_build_change_command_stops_unchanged_exploration(edit_wo
     assert workspace == initial
     for call in calls[4:]:
         assert {tool["name"] for tool in call["tools"]} == {"write_file", "edit_file"}
-        assert call["tool_choice"] == {"type": "any"}
+    assert calls[4]["tool_choice"] == {"type": "any"}
+    assert calls[5]["tool_choice"] == {"type": "tool", "name": "edit_file"}
 
 
 async def test_existing_build_make_command_unlocks_tools_after_real_edit(
@@ -125,6 +126,28 @@ async def test_existing_build_make_command_unlocks_tools_after_real_edit(
     assert executed == ["read_file"] * 4 + ["edit_file", "build"]
     assert workspace["src/app/page.tsx"] == "Catalog; dueDate input"
     assert workspace["src/lib/auth.ts"] == initial["src/lib/auth.ts"]
+
+
+@pytest.mark.parametrize("prompt", [
+    "Ничего не меняй, только объясни команду сделай интерфейс.",
+    'Explain the command "обнови интерфейс", do not change anything.',
+])
+async def test_quoted_readonly_commands_never_force_named_edit(edit_workspace, prompt):
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) <= 5:
+            return turn("bash", {"cmd": "inspect only"})
+        if len(calls) == 6:
+            return turn("build", {})
+        return turn("done", {"summary": "inspection complete"})
+
+    await run(provider, is_edit=False, generated_snapshot=True, prompt_text=prompt)
+    assert workspace == initial
+    assert "edit_file" not in executed and "write_file" not in executed
+    assert all(call["tool_choice"] != {"type": "tool", "name": "edit_file"} for call in calls)
 
 
 @pytest.mark.parametrize("prompt, expected", [

@@ -1085,6 +1085,7 @@ async def _run_native_segment(
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     wrote_since_build = False
+    edit_tool_choice_ignored = False
     # Consecutive turns without a visible/product-surface change. A helper or
     # config mutation still dirties the build fact-gate, but is not progress.
     no_write_turns = 0
@@ -1425,7 +1426,9 @@ async def _run_native_segment(
                             else None
                         ),
                         tool_choice=(
-                            {"type": "any"} if repair_write_required or edit_write_required
+                            {"type": "tool", "name": "edit_file"}
+                            if edit_write_required and edit_tool_choice_ignored
+                            else {"type": "any"} if repair_write_required or edit_write_required
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
@@ -1475,6 +1478,28 @@ async def _run_native_segment(
                     stop_reason="error",
                     evidence=_evidence(),
                 )
+            if (
+                edit_write_required and not source_repair and not edit_tool_choice_ignored
+                and _MAX_PRODUCT_ENTRY_PATH in baseline_files
+            ):
+                for block in content:
+                    if not isinstance(block, dict) or block.get("type") != "tool_use":
+                        continue
+                    name = block.get("name")
+                    if name in ("write_file", "edit_file"):
+                        continue
+                    edit_tool_choice_ignored = True
+                    mismatch = {
+                        "tool": (
+                            name if isinstance(name, str) and name in _KNOWN_ACTIONS else "unknown"
+                        ),
+                        "step": step,
+                        "required_mode": "existing_edit_write_only",
+                    }
+                    log.warning("agent_native.edit_tool_contract_mismatch", **mismatch)
+                    if emit:
+                        await emit("agent.tool_contract_mismatch", mismatch)
+                    break
             response_problem = _incomplete_tool_response(resp, content)
             if response_problem:
                 # Validate the entire response before executing ANY call. A valid
