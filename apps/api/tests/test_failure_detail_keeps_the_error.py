@@ -89,3 +89,125 @@ def test_secrets_in_the_tail_are_still_redacted() -> None:
 
     assert "hunter2" not in stored
     assert "Type error" in stored
+
+
+def _middle_tap_failure():
+    prefix = '[typecheck]\n> tsc --noEmit\n[targeted-test]\nTAP version 13\n'
+    passing = ''.join(
+        f'# Subtest: passing {i}\nok {i} - passing {i}\n  ---\n  duration_ms: 1\n  ...\n'
+        for i in range(1, 80)
+    )
+    failure = (
+        '# Subtest: Coffee filter keeps requested predicate\n'
+        'not ok 80 - Coffee filter keeps requested predicate\n'
+        "  ---\n  location: '/workspace/tests/qa-coffee.test.mjs:126:1'\n"
+        "  failureType: 'testCodeFailure'\n  error: 'Coffee filter pipeline not found'\n"
+        "  code: 'ERR_ASSERTION'\n  ...\n"
+    )
+    return prefix + passing + failure + passing + '# tests 159\n# pass 158\n# fail 1\n'
+
+
+def test_middle_tap_failure_keeps_real_source_repair_classifier():
+    from yleum_api.services.generation.agent_finalization import source_check_is_repairable
+
+    excerpt = failure_detail_excerpt(_middle_tap_failure())
+    assert source_check_is_repairable('fast_check', 'red', excerpt)
+    assert 'Coffee filter pipeline not found' in excerpt
+    assert '# fail 1' in excerpt
+    assert len(excerpt.encode()) <= _MAX_DETAIL_BYTES
+
+
+def test_middle_compiler_diagnostic_survives_later_noise():
+    detail = ('[typecheck]\n' + _NOISE
+              + '\nsrc/app/page.tsx(777,9): error TS2322: incompatible card type\n' + _NOISE)
+    excerpt = failure_detail_excerpt(detail)
+    assert 'page.tsx(777,9): error TS2322' in excerpt
+    assert len(excerpt.encode()) <= _MAX_DETAIL_BYTES
+
+
+def test_failure_excerpt_redacts_before_cuts_and_handles_utf8():
+    detail = (_middle_tap_failure().replace(
+        'Coffee filter pipeline not found', 'Ошибка 😀 ' * 1000,
+    ) + '\nAUTH_SECRET=' + 'private-sentinel' * 600)
+    excerpt = failure_detail_excerpt(detail)
+    assert 'private-sentinel' not in excerpt
+    assert len(excerpt.encode()) <= _MAX_DETAIL_BYTES
+    assert "code: 'ERR_ASSERTION'" in excerpt
+
+
+async def test_real_recorder_retains_middle_assertion_and_digest(monkeypatch):
+    import hashlib
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock
+    from uuid import uuid4
+
+    from yleum_api.services import project_cell_proofs as module
+    from yleum_api.services.generation.agent_finalization import source_check_is_repairable
+
+    proof = SimpleNamespace(
+        id=uuid4(), workspace_id=uuid4(), generation_run_id=uuid4(), fencing_epoch=1,
+        **{key: 'a' * 64 for key in (
+            'workspace_revision', 'dependency_digest', 'schema_data_digest',
+            'cell_manifest_digest', 'base_image_digest', 'toolchain_digest',
+            'build_config_digest',
+        )}, resource_profile_version='test',
+    )
+    session = MagicMock()
+    session.flush = AsyncMock()
+    monkeypatch.setattr(module, 'find_proof_result', AsyncMock(return_value=None))
+    result = await module.record_proof_result(
+        session, proof=proof, dimension=module.ProofDimension.FAST_CHECK,
+        outcome=module.ProofOutcome.RED, operation_id=uuid4(), artifact_ref=None,
+        detail=_middle_tap_failure(),
+    )
+    assert source_check_is_repairable(result.dimension, result.outcome, result.redacted_detail)
+    assert len(result.redacted_detail.encode()) <= _MAX_DETAIL_BYTES
+    assert result.detail_digest == hashlib.sha256(result.redacted_detail.encode()).hexdigest()
+    session.add.assert_called_once_with(result)
+    session.flush.assert_awaited_once()
+
+
+def test_diagnostic_excerpt_does_not_invent_trusted_source_section():
+    from yleum_api.services.generation.agent_finalization import source_check_is_repairable
+
+    log = _middle_tap_failure().replace('[targeted-test]', '[untrusted-command]')
+    assert not source_check_is_repairable('fast_check', 'red', failure_detail_excerpt(log))
+
+
+def test_small_byte_limits_remain_bounded():
+    for limit in (1, 10, 31, 80, 256):
+        assert len(failure_detail_excerpt(_middle_tap_failure(), max_bytes=limit).encode()) <= limit
+
+
+def test_multiline_tap_assertion_message_is_kept():
+    detail = _middle_tap_failure().replace(
+        "error: 'Coffee filter pipeline not found'",
+        'error: |-\n    Coffee filter pipeline not found\n    Expected requested control',
+    )
+    excerpt = failure_detail_excerpt(detail)
+    assert 'Coffee filter pipeline not found' in excerpt
+    assert 'Expected requested control' in excerpt
+    assert "code: 'ERR_ASSERTION'" in excerpt
+    assert len(excerpt.encode()) <= _MAX_DETAIL_BYTES
+
+
+def test_long_multiline_tap_context_cannot_displace_classifier_fields():
+    from yleum_api.services.generation.agent_finalization import source_check_is_repairable
+
+    detail = _middle_tap_failure().replace(
+        "error: 'Coffee filter pipeline not found'",
+        'error: |-\n' + '\n'.join('    Expected ' + 'x' * 600 for _ in range(8)),
+    )
+    assert source_check_is_repairable('fast_check', 'red', detail)
+    excerpt = failure_detail_excerpt(detail)
+    assert source_check_is_repairable('fast_check', 'red', excerpt)
+    assert "code: 'ERR_ASSERTION'" in excerpt
+    assert len(excerpt.encode()) <= _MAX_DETAIL_BYTES
+
+
+def test_tiny_secret_redaction_caps_never_expand():
+    for limit in (1, 6, 7, 8, 9, 10):
+        excerpt = failure_detail_excerpt('PASS=syntheticprivate\n' + 'noise' * 50,
+                                         max_bytes=limit)
+        assert 'syntheticprivate' not in excerpt
+        assert len(excerpt.encode()) <= limit

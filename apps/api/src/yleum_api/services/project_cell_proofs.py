@@ -13,7 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.models.project_cell import ProjectCellProof, ProjectCellProofResult
-from yleum_api.services.agent_progress import bounded_redacted_text
+from yleum_api.services.agent_progress import bounded_redacted_text, redact_sensitive_text
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _MAX_DETAIL_BYTES = 4096
@@ -67,28 +67,67 @@ _CUT_MARKER = "\n…середина пропущена…\n"
 
 
 def failure_detail_excerpt(detail: str, *, max_bytes: int = _MAX_DETAIL_BYTES) -> str:
-    """Оставить у провала то место, где он произошёл.
-
-    Описание режется по верхней границе, и резалось оно от начала. У лога
-    сборки или проверки начало — это шапка инструмента и перечень успешных
-    шагов, а ошибка всегда в конце. Живой прогон c8d0c5f7 (25.09) получил из-за
-    этого отказ с текстом «✓ Compiled successfully» и списком маршрутов: он
-    буквально противоречил случившемуся, и агент по нему чинил вслепую.
-
-    Поэтому оставляем начало как контекст, конец как саму ошибку, а вырезанную
-    середину называем вслух: молчаливый обрыв читается как «больше ничего не
-    было».
-    """
-
-    encoded = detail.encode("utf-8")
+    """Keep compiler/TAP failure diagnostics even among later successful checks."""
+    if max_bytes <= 0:
+        raise ValueError("diagnostic byte limit must be positive")
+    # Redact the whole input before cutting: a tail must not start inside an
+    # otherwise recognisable credential assignment.
+    safe = redact_sensitive_text(detail)
+    encoded = safe.encode("utf-8")
     if len(encoded) <= max_bytes:
-        return detail
+        return safe
     marker = _CUT_MARKER.encode("utf-8")
+    if max_bytes <= len(marker):
+        return encoded[:max_bytes].decode("utf-8", errors="ignore")
+
+    diagnostics: list[str] = []
+    context: list[str] = []
+    in_failed_test = False
+    error_context = 0
+    for line in safe.splitlines():
+        if re.match(r"^\s*not ok \d+ - ", line):
+            in_failed_test = True
+        elif re.match(r"^\s*(?:ok \d+ - |# Subtest:|1\.\.)", line):
+            in_failed_test = False
+            error_context = 0
+        continuation = bool(error_context and line.startswith("    "))
+        if error_context:
+            error_context -= 1
+        if in_failed_test and re.match(r"^\s*error:", line):
+            error_context = 8
+        critical = bool(
+            re.search(r"\(\d+,\d+\): error TS\d{4}:", line)
+            or (in_failed_test and re.match(
+                r"^\s*(?:not ok \d+ - |location:|failureType:|code:)", line,
+            ))
+        )
+        if critical:
+            diagnostics.append(line.encode("utf-8")[:512].decode("utf-8", errors="ignore"))
+        elif continuation or (in_failed_test and re.match(r"^\s*error:", line)):
+            context.append(line.encode("utf-8")[:512].decode("utf-8", errors="ignore"))
+    if diagnostics:
+        # These original tool section labels are required to interpret the
+        # diagnostics; do not invent a source-check label for arbitrary output.
+        headings = [line for line in safe.splitlines()
+                    if line.strip() in {"[typecheck]", "[targeted-test]"}]
+        # Mandatory failure fields precede optional multiline values so a
+        # large expected/actual assertion cannot displace its code/location.
+        diagnostic = "\n".join([*headings, *diagnostics, *context]).encode("utf-8")
+        head_bytes = min(_FAILURE_HEAD_BYTES, max_bytes // 5)
+        available = max_bytes - head_bytes - 2 * len(marker)
+        diagnostic_bytes = min(len(diagnostic), max(0, available - min(512, max_bytes // 5)))
+        if diagnostic_bytes > 0:
+            tail_bytes = max(0, available - diagnostic_bytes)
+            return (
+                encoded[:head_bytes].decode("utf-8", errors="ignore") + _CUT_MARKER
+                + diagnostic[:diagnostic_bytes].decode("utf-8", errors="ignore")
+                + _CUT_MARKER
+                + (encoded[-tail_bytes:].decode("utf-8", errors="ignore") if tail_bytes else "")
+            )
     head_bytes = min(_FAILURE_HEAD_BYTES, max(0, max_bytes - len(marker)))
     tail_bytes = max(0, max_bytes - head_bytes - len(marker))
-    head = encoded[:head_bytes].decode("utf-8", errors="ignore")
-    tail = encoded[len(encoded) - tail_bytes :].decode("utf-8", errors="ignore")
-    return head + _CUT_MARKER + tail
+    return (encoded[:head_bytes].decode("utf-8", errors="ignore") + _CUT_MARKER
+            + (encoded[-tail_bytes:].decode("utf-8", errors="ignore") if tail_bytes else ""))
 
 
 @dataclass(frozen=True, slots=True)
