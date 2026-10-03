@@ -25,28 +25,30 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
   // Полоса во всю ширину ради «0,00 ₽» занимала место у того, что нужно во
   // время сборки. Пока тратить нечего — блока нет.
   if (!usage.isLoading && !usage.isError && current === 0 && total === 0) return null;
+  const currentLabel = usage.isError ? "Недоступно" : usage.isLoading ? "…" : `${rub(current)} ₽`;
+  const totalLabel = usage.isError ? "Недоступно" : usage.isLoading ? "…" : `${rub(total)} ₽`;
 
   return (
     <details className="group relative" data-testid="max-usage-breakdown">
       <summary className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-[6px] border border-border-default bg-surface-raised px-2.5 text-[11px] font-semibold text-fg-secondary hover:bg-surface-base [&::-webkit-details-marker]:hidden">
         <Coins className="size-3.5 text-accent" />
-        <span className="hidden sm:inline">Расход</span>
-        <span>{usage.isLoading ? "…" : `${rub(current)} ₽`}</span>
+        {!usage.isError && <span className="hidden sm:inline">Расход</span>}
+        <span>{usage.isError ? "Данные о расходе недоступны" : currentLabel}</span>
       </summary>
       <section className="absolute right-0 top-11 z-[80] w-[340px] max-w-[calc(100vw-24px)] rounded-[10px] border border-border-default bg-surface-raised p-4 shadow-[0_24px_70px_rgba(23,23,22,.16)]">
         <div className="flex items-start justify-between gap-4 border-b border-border-default pb-3">
           <div>
             <p className="omnia-kicker text-fg-tertiary">Текущая сборка</p>
-            <p className="mt-1 text-xl font-semibold tracking-[-.03em]">{rub(current)} ₽</p>
+            <p className="mt-1 text-xl font-semibold tracking-[-.03em]">{currentLabel}</p>
           </div>
           <div className="text-right text-[11px] text-fg-tertiary">
             <p>За всё время</p>
-            <p className="mt-1 font-semibold text-fg-secondary">{rub(total)} ₽</p>
+            <p className="mt-1 font-semibold text-fg-secondary">{totalLabel}</p>
           </div>
         </div>
 
         {usage.isError ? (
-          <p className="py-5 text-xs leading-5 text-fg-tertiary">Не удалось загрузить разбивку. Она обновится автоматически.</p>
+          <p className="py-5 text-xs leading-5 text-fg-tertiary">Данные о расходе недоступны. Разбивка обновится автоматически.</p>
         ) : (
           <div className="mt-3 space-y-2">
             {(usage.data?.stages ?? []).map((stage) => (

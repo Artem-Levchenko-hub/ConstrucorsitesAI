@@ -892,7 +892,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       // контекст" spinner. This is only for a POST that the backend did not
       // accept. Stream silence is reconciled against durable generation state
       // below and must never manufacture a terminal error.
-      const _failPrompt = (reason: string) => {
+      const _failPrompt = (reason: string, drainQueued = true) => {
         updateMessage(tempAssistantId, (m) => ({
           ...m,
           content: `[Ошибка: ${reason}]`,
@@ -910,7 +910,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           description: reason,
           duration: 10_000,
         });
-        fireQueued();
+        if (drainQueued) fireQueued();
       };
 
       let message_id: string;
@@ -990,6 +990,16 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (e instanceof ApiError && e.status === 401) {
+          // This POST was not accepted. Keep the caller's draft (false below)
+          // and the visible queued text; login/manual retry must precede any
+          // further submit. Status takes precedence over an arbitrary error code.
+          _failPrompt(
+            "Сессия завершилась. Войдите в аккаунт снова и отправьте запрос ещё раз.",
+            false,
+          );
+          return false;
+        }
         // Only `generation_active` means "a build is already running". Every other
         // refusal (a version restoration, changed app data, a reused key) is an
         // ordinary error: treating it as a running build left the composer queueing

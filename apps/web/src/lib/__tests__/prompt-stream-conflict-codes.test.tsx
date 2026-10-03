@@ -163,3 +163,59 @@ it("keeps a restoration adaptation out of the follow-the-build branch", async ()
     description: expect.stringContaining("идёт другая сборка"),
   }));
 });
+
+it.each(["unauthorized", "internal_error", "generation_active", "conflict"])(
+  "explains an expired session for HTTP401 with code %s without leaking details", async (code) => {
+    vi.mocked(sendPrompt).mockRejectedValueOnce(new ApiError(401, {
+      code, message: "token=NEVER_PUBLISH private diagnostic",
+      details: { token: "NEVER_PUBLISH" },
+    } as ConstructorParameters<typeof ApiError>[1]));
+    await mount();
+    await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
+    expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+      description: "Сессия завершилась. Войдите в аккаунт снова и отправьте запрос ещё раз.",
+    }));
+    expect(getLatestGeneration).not.toHaveBeenCalled();
+    expect(toast.info).not.toHaveBeenCalled();
+    expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+    const rows = optimisticRows();
+    expect(rows.find((m) => m.role === "user")?.content).toBe("Добавь поле");
+    expect(rows.find((m) => m.role === "assistant")?.content).toContain("Сессия завершилась");
+    expect(rows.every((m) => !m.generation_failure)).toBe(true);
+    expect(sendPrompt).toHaveBeenCalledTimes(1);
+  },
+);
+
+it("holds a queued prompt after401 instead of automatically sending it with the expired session", async () => {
+  let refuse!: (reason: unknown) => void;
+  vi.mocked(sendPrompt).mockReturnValueOnce(new Promise((_, reject) => { refuse = reject; }));
+  await mount();
+  let submitted!: Promise<boolean>;
+  await act(async () => { submitted = stream.submit("Первый запрос", "model"); });
+  await act(async () => { expect(await stream.submit("Сохранённый следующий запрос", "model")).toBe(true); });
+  expect(stream.pendingPrompt).toBe("Сохранённый следующий запрос");
+  await act(async () => {
+    refuse(new ApiError(401, { code: "unauthorized", message: "NEVER_PUBLISH" }));
+    expect(await submitted).toBe(false);
+    await vi.advanceTimersByTimeAsync(0);
+  });
+  expect(sendPrompt).toHaveBeenCalledTimes(1);
+  expect(stream.pendingPrompt).toBe("Сохранённый следующий запрос");
+  expect(getLatestGeneration).not.toHaveBeenCalled();
+  // Only the owner's explicit retry makes another HTTP submit.
+  vi.mocked(sendPrompt).mockResolvedValueOnce({ run_id: "r2", message_id: "m2", snapshot_id: null,
+    replayed: false, run_status: "pending" } as never);
+  await act(async () => { expect(await stream.submit("Первый запрос", "model")).toBe(true); });
+  expect(sendPrompt).toHaveBeenCalledTimes(2);
+});
+
+it("keeps the generic safe network error message for non401 transport failures", async () => {
+  vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("private network token=NEVER_PUBLISH"));
+  await mount();
+  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
+  expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({
+    description: "Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.",
+  }));
+  expect(getLatestGeneration).not.toHaveBeenCalled();
+  expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+});
