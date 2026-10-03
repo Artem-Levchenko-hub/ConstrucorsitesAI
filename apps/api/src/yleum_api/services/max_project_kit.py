@@ -15,7 +15,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 25
+MAX_MANAGED_KIT_VERSION = 26
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
 # platform-owned paths. v20 materializes trusted gateway subjects in the
 # isolated product DB before business tables can enforce max_users FKs. v21
@@ -281,25 +281,7 @@ export default function TermsPage() {
   );
 }
 """,
-        "src/app/support/page.tsx": """import { omniaMaxConfig as app } from "@/lib/omnia/max-config";
-
-export const metadata = { title: `Поддержка — ${app.app_name}` };
-
-export default function SupportPage() {
-  return (
-    <main style={{ maxWidth: 680, margin: "0 auto", padding: "32px 20px 64px", lineHeight: 1.65 }}>
-      <h1>Поддержка</h1>
-      <p>Опишите проблему, ожидаемый результат и время, когда она возникла.</p>
-      {app.support.email && <p><strong>Email:</strong> <a href={`mailto:${app.support.email}`}>{app.support.email}</a></p>}
-      <p>{app.support.response_time}</p>
-      <nav style={{ display: "flex", gap: 16, flexWrap: "wrap", marginTop: 28 }}>
-        <a href="/legal/privacy">Конфиденциальность</a>
-        <a href="/legal/terms">Условия использования</a>
-      </nav>
-    </main>
-  );
-}
-""",
+        "src/app/support/page.tsx": _template_file("src/app/support/page.tsx"),
     }
     _validate_managed_component_graph(files)
     return files

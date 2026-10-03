@@ -48,6 +48,7 @@ def main() -> None:
     parser.add_argument("readme_overrides", type=Path)
     parser.add_argument("dependency_overrides", type=Path)
     parser.add_argument("action_write_overrides", type=Path)
+    parser.add_argument("support_overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -58,6 +59,10 @@ def main() -> None:
     action_write_overrides = json.loads(args.action_write_overrides.read_text(encoding="utf-8"))
     assert set(action_write_overrides) == _ACTION_WRITE_OVERRIDE_PATHS, (
         "unexpected MAX action write override paths"
+    )
+    support_overrides = json.loads(args.support_overrides.read_text(encoding="utf-8"))
+    assert set(support_overrides) == {"src/app/support/page.tsx"}, (
+        "unexpected support override paths"
     )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
@@ -72,6 +77,7 @@ def main() -> None:
             entry = overrides.get(f"{name}/{relative}", entry)
             if name == "max-miniapp-nextjs":
                 entry = action_write_overrides.get(relative, entry)
+                entry = support_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

@@ -32,6 +32,10 @@ assert set(ACTION_WRITE_OVERRIDES) == {
     "src/app/api/omnia/actions/route.ts", "src/app/api/omnia/actions/[id]/route.ts",
     "src/lib/omnia/integration-client.ts", "src/lib/omnia/client.ts", "tests/starter.test.mjs",
 }
+SUPPORT_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_support_overrides.json").read_text()
+)
+assert set(SUPPORT_OVERRIDES) == {"src/app/support/page.tsx"}
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
@@ -60,6 +64,7 @@ def assert_golden(name: str, root: Path) -> None:
         entry = README_OVERRIDES.get(f"{name}/{relative}", entry)
         if name == "max-miniapp-nextjs":
             entry = ACTION_WRITE_OVERRIDES.get(relative, entry)
+            entry = SUPPORT_OVERRIDES.get(relative, entry)
         data = actual[relative].read_bytes()
         if os.name == "nt":
             data = data.replace(b"\r\n", b"\n")  # Git autocrlf; Linux gate checks raw bytes.
