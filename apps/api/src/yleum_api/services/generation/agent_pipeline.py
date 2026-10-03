@@ -361,6 +361,8 @@ async def run_agent_generation(
         project_info=project_info,
         runtime=runtime,
         operations=_operations,
+        plan=_prompt_plan, prompt_text=prompt_text, is_free=is_free,
+        _max_shell_enabled=bindings.shell_enabled,
     )
 
     # Design DNA — give this entity/agent app a DISTINCT identity (seeded

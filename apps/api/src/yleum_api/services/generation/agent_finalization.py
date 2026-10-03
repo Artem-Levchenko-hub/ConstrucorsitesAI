@@ -4,9 +4,11 @@ import asyncio
 import logging
 import re
 from collections.abc import Mapping
+from datetime import datetime
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
+from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.generation.contracts import (
     AgentOperations,
@@ -125,6 +127,58 @@ def validate_edit_source_change(
     return EditSourceChangeVerdict({}, _NO_SOURCE_CHANGE_MESSAGE, _NO_SOURCE_CHANGE_FAILURE)
 
 
+def source_check_is_repairable(dimension: str, outcome: str, detail: str) -> bool:
+    """Only trusted fast-check compiler/assertion diagnostics permit this repair."""
+    if dimension != "fast_check" or outcome != "red":
+        return False
+    compiler = "[typecheck]" in detail and re.search(
+        r"(?m)^.+\(\d+,\d+\): error TS\d{4}:", detail,
+    )
+    test = (
+        "[targeted-test]" in detail
+        and re.search(r"(?m)^not ok \d+ - ", detail)
+        and "failureType: 'testCodeFailure'" in detail
+        and "code: 'ERR_ASSERTION'" in detail
+        and re.search(r"location: '/workspace/tests/[^'\r\n]+:\d+:\d+'", detail)
+    )
+    return bool(compiler or test)
+
+
+async def run_native_source_repair(
+    *, task: str, prompt_text: str, baseline: Mapping[str, str],
+    runtime: GenerationRuntime, ids: GenerationIds, plan: AgentPromptPlan,
+    operations: AgentOperations, is_free: bool, shell_enabled: bool,
+    edit_deadline: datetime | None,
+) -> agent_builder.AgentResult:
+    """Reuse the finalizer's guarded, single-segment editor without accepting proof."""
+    from yleum_api.services import agent_native
+    from yleum_api.services.generation.agent_runtime import guard_native_source_contract
+    from yleum_api.services.max_generation_contract import max_source_completion_gap
+
+    repair_execute, repair_completion = await guard_native_source_contract(
+        runtime, ids, operations.execute,
+        lambda written, evidence: max_source_completion_gap(
+            prompt_text, {**baseline, **written}, portable=True,
+        ),
+    )
+    result = await agent_native.run_native_build(
+        system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+        task=task, execute=repair_execute,
+        user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
+        message_id=str(ids.assistant_message_id), free=is_free, emit=operations.emit,
+        max_steps=plan.steps, max_segments=1, source_repair=True,
+        allow_max_bash=shell_enabled, portable_cell=True, initial_files=baseline,
+        edit_deadline=edit_deadline, completion_check=repair_completion,
+    )
+    if result.stop_reason == "output_limit" and not result.needs_finalization:
+        raise RuntimeError(
+            "Provider response rejected (output_limit); finalization repair was not verified."
+        )
+    if result.stop_reason in {"provider_error", "infra_error", "error"}:
+        raise RuntimeError(result.summary)
+    return result
+
+
 async def finalize_max_candidate(
     *,
     _is_edit: bool,
@@ -166,10 +220,6 @@ async def finalize_max_candidate(
         _repair_history: list[str] = []
 
         async def _repair_finalization_source(detail: str) -> None:
-            from yleum_api.services import agent_native
-            from yleum_api.services.generation.agent_runtime import guard_native_source_contract
-            from yleum_api.services.max_generation_contract import max_source_completion_gap
-
             assert runtime.handle is not None
             assert runtime.coordinator is not None
             baseline = await runtime.handle.snapshot_files()
@@ -197,43 +247,18 @@ async def finalize_max_candidate(
                     "path": "",
                 },
             )
-            repair_execute, repair_completion = await guard_native_source_contract(
-                runtime, ids, operations.execute,
-                lambda written, evidence: max_source_completion_gap(
-                    prompt_text, {**baseline, **written}, portable=True,
-                ),
-            )
-            result = await agent_native.run_native_build(
-                system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+            await run_native_source_repair(
                 task=(
                     f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n{detail}{_carry}\n"
                     "Fix the existing product in this same workspace. Preserve working "
                     "features and data. Do not repeat SQL effects already completed. "
                     "Make real source changes, run build, then done."
                 ),
-                execute=repair_execute,
-                user_id=str(ids.user_id),
-                project_id=str(ids.project_id),
-                run_id=str(ids.run_id),
-                message_id=str(ids.assistant_message_id),
-                free=is_free,
-                emit=operations.emit,
-                max_steps=plan.steps,
-                max_segments=1,
-                source_repair=True,
-                allow_max_bash=_max_shell_enabled,
-                portable_cell=True,
-                initial_files=baseline,
+                prompt_text=prompt_text, baseline=baseline, runtime=runtime, ids=ids,
+                plan=plan, operations=operations, is_free=is_free,
+                shell_enabled=_max_shell_enabled,
                 edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
-                completion_check=repair_completion,
             )
-            if result.stop_reason == "output_limit" and not result.needs_finalization:
-                raise RuntimeError(
-                    "Provider response rejected (output_limit); "
-                    "finalization repair was not verified."
-                )
-            if result.stop_reason in {"provider_error", "infra_error", "error"}:
-                raise RuntimeError(result.summary)
 
         try:
             _finalization = await runtime.coordinator.finalize_with_repair(

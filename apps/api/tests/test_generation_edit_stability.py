@@ -66,6 +66,120 @@ def edit_workspace(monkeypatch):
     return run, initial, workspace, executed
 
 
+@pytest.mark.parametrize("command", ["Сделай", "Обнови", "Доработай"])
+async def test_existing_build_change_command_stops_unchanged_exploration(edit_workspace, command):
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) <= 4:
+            return turn("read_file", {"path": "src/app/page.tsx"})
+        if len(calls) == 5:
+            return turn("bash", {"command": "inspect existing dueDate styles"})
+        return turn("build", {})
+
+    with pytest.raises(RuntimeError, match="edit produced no source changes"):
+        await run(provider, is_edit=False, generated_snapshot=True,
+                  prompt_text=f"{command} интерфейс срока выполнения dueDate. Сохрани задачи.")
+    assert len(calls) == 6
+    assert executed == ["read_file"] * 4
+    assert workspace == initial
+    for call in calls[4:]:
+        assert {tool["name"] for tool in call["tools"]} == {"write_file", "edit_file"}
+        assert call["tool_choice"] == {"type": "any"}
+
+
+async def test_existing_build_make_command_unlocks_tools_after_real_edit(
+    edit_workspace, monkeypatch,
+):
+    from yleum_api.services import max_generation_contract
+
+    # The fixture has a small source sentinel rather than a runnable MAX page;
+    # this regression exercises edit admission, progress and build/done ordering.
+    monkeypatch.setattr(max_generation_contract, "max_completion_gap", lambda *args, **kwargs: None)
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) <= 4:
+            return turn("read_file", {"path": "src/app/page.tsx"})
+        if len(calls) == 5:
+            return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                      "replace": "dueDate input"})
+        if len(calls) == 6:
+            return turn("build", {})
+        return turn("done", {"summary": "dueDate UI applied"})
+
+    result, failure = await run(
+        provider, is_edit=False, generated_snapshot=True,
+        prompt_text="Сделай интерфейс срока выполнения dueDate. Сохрани остальные функции.",
+    )
+    assert result.done and failure is None
+    assert len(calls) == 7
+    assert {tool["name"] for tool in calls[4]["tools"]} == {"write_file", "edit_file"}
+    assert calls[4]["tool_choice"] == {"type": "any"}
+    assert calls[5]["tool_choice"] is None
+    assert calls[5]["tools"] is None  # Restore this fixture's default toolset.
+    assert executed == ["read_file"] * 4 + ["edit_file", "build"]
+    assert workspace["src/app/page.tsx"] == "Catalog; dueDate input"
+    assert workspace["src/lib/auth.ts"] == initial["src/lib/auth.ts"]
+
+
+@pytest.mark.parametrize("prompt, expected", [
+    ("Сделай интерфейс dueDate.", True),
+    ("Обнови интерфейс dueDate.", True),
+    ("Доработай интерфейс dueDate.", True),
+    ("Не делай новый интерфейс.", False),
+    ("Не обновляй интерфейс.", False),
+    ("Ничего не меняй, только объясни команду сделай интерфейс.", False),
+    ("Проверь, почему команда «сделай интерфейс» не сработала.", False),
+    ('Explain the command "обнови интерфейс", do not change anything.', False),
+    ("Продолжи исследование команды `доработай интерфейс`.", False),
+    ("Объясни, как сделать интерфейс dueDate.", False),
+    ("Сделай краткий обзор текущего кода без изменений.", False),
+    ("Сделай анализ причин ошибки, только объясни результат.", False),
+    ("Сделай ревью текущей реализации, без правок.", False),
+    ("Сделай обзор кода и сделай подробный анализ рисков, без правок.", False),
+    ("Сделай анализ причин ошибки и сделай ревью текущей реализации, без правок.", False),
+    ("Сделай обзор кода. Затем обнови интерфейс.", True),
+    ("Сделай обзор кода и обнови интерфейс.", True),
+    ("Сделай обзор кода и сделай подробный анализ рисков, затем обнови интерфейс.", True),
+    ("Сделай интерфейс dueDate без изменений API и БД.", True),
+])
+def test_russian_change_commands_preserve_readonly_exceptions(prompt, expected):
+    assert agent_generation.requested_source_edit(prompt) is expected
+
+
+@pytest.mark.parametrize("prompt", [
+    "Сделай краткий обзор текущего кода без изменений.",
+    "Сделай анализ причин ошибки, только объясни результат.",
+    "Сделай ревью текущей реализации, без правок.",
+    "Сделай обзор кода и сделай подробный анализ рисков, без правок.",
+    "Сделай анализ причин ошибки и сделай ревью текущей реализации, без правок.",
+])
+async def test_existing_app_analysis_request_does_not_require_source_write(edit_workspace, prompt):
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        if len(calls) <= 4:
+            return turn("read_file", {"path": "src/app/page.tsx"})
+        if len(calls) == 5:
+            return turn("build", {})
+        return turn("done", {"summary": "existing source reviewed"})
+
+    result, failure = await run(provider, prompt_text=prompt)
+    assert result.done and failure is None
+    assert len(calls) == 6
+    assert calls[4]["tool_choice"] is None
+    assert calls[4]["tools"] is None
+    assert executed == ["read_file"] * 4 + ["build"]
+    assert workspace == initial
+
+
 @pytest.mark.parametrize("path", [".omnia/notes.md", "notes.md", "src/notes.md"])
 @pytest.mark.parametrize("snapshot", [False, True])
 async def test_notes_do_not_unlock_existing_edit_or_build(edit_workspace, path, snapshot):

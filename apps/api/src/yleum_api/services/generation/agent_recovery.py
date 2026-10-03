@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.generation.contracts import (
     AgentOperations,
+    AgentPromptPlan,
     GenerationIds,
     GenerationRuntime,
     ProjectGenerationFacts,
@@ -181,7 +183,74 @@ async def recover_rejected_candidate(
     project_info: ProjectGenerationFacts,
     runtime: GenerationRuntime,
     operations: AgentOperations,
+    plan: AgentPromptPlan | None = None,
+    prompt_text: str = "",
+    is_free: bool = False,
+    _max_shell_enabled: bool = False,
 ) -> VerificationRecovery:
+    repair_failure: Exception | None = None
+    if (
+        get_settings().use_native_agent and runtime.coordinator is not None
+        and runtime.handle is not None and plan is not None and files
+        and (_agent_res.done or _agent_res.needs_finalization)
+        and _runtime_ok and not _typecheck_ok
+    ):
+        from yleum_api.services.generation.agent_finalization import (
+            run_native_source_repair,
+            source_check_is_repairable,
+        )
+
+        proof = await runtime.coordinator.fast_check()
+        if source_check_is_repairable(proof.dimension, proof.outcome, proof.redacted_detail):
+            deadline = await runtime.coordinator.source_edit_deadline(repair=True)
+            remaining = (deadline - datetime.now(UTC)).total_seconds() if deadline else 0
+            if remaining < 60:
+                raise TimeoutError("generation deadline exceeded before source repair")
+            before = await runtime.handle.snapshot_files()
+            await operations.emit("agent.step", {
+                "action": "source_repair", "human": "Дорабатываю по замечаниям проверки",
+                "detail": proof.redacted_detail, "ok": False, "path": "",
+            })
+            try:
+                async with asyncio.timeout(remaining):
+                    repaired = await run_native_source_repair(
+                        task=(f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n"
+                              f"{proof.redacted_detail}\n"
+                              "Fix the existing product and keep the tested requirement. "
+                              "Preserve working features and data; do not repeat SQL effects. "
+                              "Make real source changes, run build, then done."),
+                        prompt_text=prompt_text, baseline=before, runtime=runtime, ids=ids,
+                        plan=plan, operations=operations, is_free=is_free,
+                        shell_enabled=_max_shell_enabled, edit_deadline=deadline,
+                    )
+                    after = await runtime.handle.snapshot_files()
+                    files = {**files, **repaired.files, **{
+                        path: after.get(path, "") for path in set(before) | set(after)
+                        if before.get(path) != after.get(path)
+                    }}
+                    _agent_res.files = files
+                    if after != before and (repaired.done or repaired.needs_finalization):
+                        check = await operations.probe_build()
+                        if check.get("ok"):
+                            files = await runtime.handle.export_files()
+                            repaired.files = files
+                            _agent_res = repaired
+                            _typecheck_ok = True
+                            _tc_error = ""
+            except Exception as exc:
+                raise_if_terminal_cell_error(exc)
+                repair_failure = exc
+                # Retain every actual repair path even when the provider stops
+                # after a partial write. Restore via the ordinary guarded path.
+                try:
+                    after = await runtime.handle.snapshot_files()
+                    files = {**files, **{
+                        path: after.get(path, "") for path in set(before) | set(after)
+                        if before.get(path) != after.get(path)
+                    }}
+                    _agent_res.files = files
+                except Exception:
+                    _log.warning("Native source repair snapshot unavailable")
     _agent_verification_failed = not (_typecheck_ok and _runtime_ok)
     # Final green-tree invariant. A bounded native run may stop for a
     # budget/provider reason, but Studio must never keep its red tree. The
@@ -253,16 +322,23 @@ async def recover_rejected_candidate(
                     "опубликованы, чтобы не сломать приложение."
                 )
         except Exception as _verification_rollback_exc:
-            raise_if_terminal_cell_error(_verification_rollback_exc)
+            if repair_failure is None:
+                raise_if_terminal_cell_error(_verification_rollback_exc)
             files = {}
             accumulated = (
                 "Финальная проверка не прошла; изменения не "
                 "опубликованы, чтобы не сломать приложение."
             )
-            print(
-                f"[PP] native final verification rollback failed: {_verification_rollback_exc!r}",
-                flush=True,
-            )
+            if repair_failure is None:
+                print(
+                    "[PP] native final verification rollback failed: "
+                    f"{_verification_rollback_exc!r}",
+                    flush=True,
+                )
+            else:
+                _log.warning("Native source repair rollback failed")
+    if repair_failure is not None:
+        raise repair_failure
 
     return VerificationRecovery(
         _agent_verification_failed, _agent_res, files, _runtime_ok, _typecheck_ok, accumulated

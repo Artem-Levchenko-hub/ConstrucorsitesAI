@@ -106,6 +106,11 @@ def requested_source_edit(prompt: str) -> bool:
         r'```.*?```|`[^`]*`|«[^»]*»|“[^”]*”|"[^"]*"|(?<!\w)\'[^\']*\'',
         " ", prompt, flags=re.DOTALL,
     ).lower()
+    # Normalize every analysis object, including a second request after "и".
+    text = re.sub(
+        r"\bсделай\s+(?:(?:краткий|подробный)\s+)?(?:обзор|анализ|ревью)\b",
+        "проанализируй", text,
+    )
     for clause in re.split(r"[.!;\n]", text):
         if re.search(
             r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
@@ -116,6 +121,7 @@ def requested_source_edit(prompt: str) -> bool:
             return False
     commands = re.compile(
         r"\b(?:добавь|исправь|измени|поменяй|замени|удали|убери|устрани|реализуй|"
+        r"сделай|обнови|доработай|"
         r"fix|add|change|modify|edit|replace|remove|delete|implement|update)\b"
     )
     for clause in re.split(r"[.!?;,:\n]|\b(?:затем|then)\b", text):
@@ -123,7 +129,7 @@ def requested_source_edit(prompt: str) -> bool:
             r"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?",
             "", clause,
         )
-        # English change/fix/update can be nouns inside a read-only request.
+        # Change verbs can describe an analysis request ("сделай обзор кода").
         # Only a separate imperative ("inspect ... and fix ...") exits that scope.
         if re.match(
             r"\s*(?:please\s+)?(?:review|inspect|continue|explain|investigate|check|"
