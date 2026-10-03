@@ -104,19 +104,6 @@ async def prepare_agent_prompt(
             f"на чтении — как только нашёл причину, СРАЗУ пиши правку (а не ещё "
             f"один read). Если ошибка указывает на бандл (src_*.js) — найди "
             f"реальный исходник в src/ по симптому. Не пересобирай работающее."
-            "\n\nREQUEST COVERAGE: identify each explicit requirement in the owner's "
-            "request, including constraints, before editing. Before done, check every "
-            "requirement against the actual implementation and relevant tests within "
-            "this same turn budget. An API-only change does not fulfill requested "
-            "rendered UI behavior, field display, accessibility or styling. A helper "
-            "that is never used by the relevant screen is not an implementation. "
-            "A green build does not prove these requirements. Fix missing requested "
-            "pieces before done; report any remaining unverified or platform-managed "
-            "requirement honestly. Do not add requirements or change unrelated behavior. "
-            "Honor API-only and read-only requests; do not force UI or source changes "
-            "when they were not requested. Do not weaken existing tests to get green, "
-            "bypass managed-file protections or perform external business writes "
-            "as a verification shortcut."
         )
         _agent_system = agent_builder.build_edit_system_prompt(stack.guide)
         # Budget above the no-write/stall thresholds so the loop's
@@ -160,6 +147,21 @@ async def prepare_agent_prompt(
         _agent_steps = 30
         _agent_system = stack.system
         _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
+    _agent_user += (
+        "\n\nREQUEST COVERAGE: identify each explicit requirement in the owner's "
+        "request, including constraints, before editing. Before done, check every "
+        "requirement against the actual implementation and relevant tests within "
+        "this same turn budget. An API-only change does not fulfill requested "
+        "rendered UI behavior, field display, accessibility or styling. A helper "
+        "that is never used by the relevant screen is not an implementation. "
+        "A green build does not prove these requirements. Fix missing requested "
+        "pieces before done; report any remaining unverified or platform-managed "
+        "requirement honestly. Do not add requirements or change unrelated behavior. "
+        "Honor API-only and read-only requests; do not force UI or source changes "
+        "when they were not requested. Do not weaken existing tests to get green, "
+        "bypass managed-file protections or perform external business writes "
+        "as a verification shortcut."
+    )
     if not _is_edit:
         _agent_steps = _agent_step_budget(
             project_info.template,

@@ -13,6 +13,8 @@ from yleum_api.services.generation.contracts import (
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("portable", [False, True])
+@pytest.mark.parametrize("mode", ["edit", "build", "continue"])
 @pytest.mark.parametrize(
     "owner_prompt",
     [
@@ -21,8 +23,13 @@ from yleum_api.services.generation.contracts import (
         "Review the nullable date PATCH. Do not modify source or tests.",
     ],
 )
-async def test_edit_prompt_preserves_all_requested_clauses_without_expanding_scope(owner_prompt):
-    factory = Mock(side_effect=AssertionError("ordinary edit must not add DB/planning work"))
+async def test_prompt_preserves_all_requested_clauses_without_expanding_scope(
+    owner_prompt, mode, portable,
+):
+    factory = Mock(side_effect=AssertionError("request coverage must not add DB/planning work"))
+    handle = Mock(capabilities={"portable_machine": True}) if portable else None
+    if handle is not None:
+        handle.is_portable.return_value = True
     plan, build_plan = await prepare_agent_prompt(
         stack=StackPrompt("existing context", "max-miniapp-nextjs", "guide", None, "system", False),
         factory=factory,
@@ -31,11 +38,11 @@ async def test_edit_prompt_preserves_all_requested_clauses_without_expanding_sco
             "max-miniapp-nextjs", "qa", "QA", None, None, False, "en", False, "", "",
         ),
         prompt_text=owner_prompt,
-        runtime=GenerationRuntime(),
-        orchestrate=False,
+        runtime=GenerationRuntime(handle=handle),
+        orchestrate=mode != "edit",
         selected_elements=None,
-        _is_edit=True,
-        _is_continue=False,
+        _is_edit=mode == "edit",
+        _is_continue=mode == "continue",
         force_model=None,
     )
     assert owner_prompt in plan.user
@@ -45,6 +52,6 @@ async def test_edit_prompt_preserves_all_requested_clauses_without_expanding_sco
     assert "Do not add requirements" in plan.user
     assert "read-only" in plan.user
     assert "Do not weaken existing tests" in plan.user
-    assert plan.steps == 18
+    assert plan.steps == (18 if mode == "edit" else 40)
     assert build_plan is None
     factory.assert_not_called()
