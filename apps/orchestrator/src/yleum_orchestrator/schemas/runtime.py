@@ -178,6 +178,16 @@ class DeployStage(BaseModel):
     bytes_total: int | None = None
 
 
+class ActivePublication(BaseModel):
+    """Durable accepted release identity; does not assert current availability."""
+
+    release_id: str
+    snapshot_id: UUID
+    commit_sha: str
+    prod_url: str
+    finished_at: str | None = None
+
+
 class DeployResponse(BaseModel):
     project_id: UUID
     run_id: str | None = None
@@ -185,6 +195,7 @@ class DeployResponse(BaseModel):
     commit_sha: str | None = None
     phase: DeployPhase
     prod_url: str | None = None
+    active_publication: ActivePublication | None = None
     image_tag: str | None = None
     error: str | None = None
     detail: str | None = None
@@ -205,4 +216,3 @@ class DeployResponse(BaseModel):
     metrics: dict[str, int] = Field(default_factory=dict)
     error_stage: str | None = None
     reason_code: str | None = None
-

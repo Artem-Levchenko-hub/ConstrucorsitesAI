@@ -1000,5 +1000,45 @@
       "new_full_original_PASS": 0
     }
   ],
-  "analytics_implementation_status": "Source audit on 15f5e4fb: post-launch owner dashboard has no visitor/user/event aggregates; template event helper has no automatic ordinary callers. MVP implementation and live owner/foreign-owner acceptance pending."
+  "analytics_implementation_status": "Source audit on 15f5e4fb: post-launch owner dashboard has no visitor/user/event aggregates; template event helper has no automatic ordinary callers. MVP implementation and live owner/foreign-owner acceptance pending.",
+  "generation_stability_cohorts_20261003": {
+    "scope": "Real production generations on existing QA projects; user-authorized8cohorts×3; no new projects or bot changes during cohorts",
+    "target_runs": 24,
+    "max_parallel": 3,
+    "first_cohort_started": false,
+    "historical_census": {
+      "window_days": 7,
+      "observed_release": "bc38e290c55a8794ba4b94434d6d3a82d7bd3d9a",
+      "accepted_runs": 52,
+      "completed": 30,
+      "failed": 21,
+      "cancelled": 1,
+      "persisted_build_runtime_release_and_snapshot_proof": 29,
+      "scope": "Different revisions; persisted proof subset does not replace actual working preview acceptance; operator runs and failures retained",
+      "evidence": "qa-evidence/parallel-handoff/generation-seven-day-census-bc38.json"
+    },
+    "last_failure": {
+      "run_id": "7eebd65b-6c16-46ed-8f62-c0aac6f9a9ef",
+      "status": "failed",
+      "reason": "provider_timeout",
+      "cause_exact_run_correlated": true,
+      "late_usage_after_terminal_seconds": 25.021215,
+      "usage_rows": 4,
+      "internal_cost_rub": "43.6595",
+      "provider_cost_usd": "0.287101",
+      "retail_or_provider_rub_reconciliation": false,
+      "source_applied": false,
+      "data_baseline_unchanged": true,
+      "task_count": 5,
+      "history_count": 13
+    },
+    "pending_release_changes": [
+      "Native wait headroom270s with outer deadline; no replay of ambiguous read timeout",
+      "Stop and drain lost-ownership work before orphan DB persistence",
+      "Lease/stream cleanup survives failed watchdog; narrow transientDB retry preserves cancellation",
+      "Keep actual active publication address separate from latest candidate/attempt"
+    ],
+    "original_67_counts_unchanged": true,
+    "next": "Exact pushedCIgreen canonicaldeploy health, then cohort3 actualUI requests and workingpreview checks; successful cohort immediately followed by next; failures fixed/deployed before next"
+  }
 }

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MaxLaunchPanel } from "@/components/max/MaxLaunchPanel";
 import { MaxPostLaunchDashboard } from "@/components/max/MaxPostLaunchDashboard";
 import type { DeployStatus, MaxReadiness, Project } from "@/lib/api/types";
+import { relativeDateLabel } from "@/lib/relative-date";
 
 const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn() }));
 vi.mock("@/lib/api/max-studio", async (original) => ({ ...await original<object>(), getMaxReadiness: api.readiness }));
@@ -12,6 +13,7 @@ vi.mock("@/lib/api/runtime", async (original) => ({ ...await original<object>(),
 vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<object>(), getMaxIntegration: api.integration }));
 const project = { id: "project-surfaces", name: "Проверка", template: "max_miniapp" } as Project;
 const release: DeployStatus = { phase: "done", run_id: "old-release", started_at: null, finished_at: "2026-09-01T10:00:00Z", prod_url: "https://app.example.com", image_tag: "app:v1", error: null, detail: null, target_label: "Yleum", target_id: null, can_cancel: false, logs: [] };
+const activePublication = { release_id: "old-release", snapshot_id: "old-snapshot", commit_sha: "old-commit", prod_url: release.prod_url!, finished_at: release.finished_at };
 function readiness(published = false): MaxReadiness {
   return { ready_to_launch: published, progress: published ? 100 : 67, items: ["build", "legal", "bot", "publish", "max_url"].map(id => ({ id, label: id, done: published || !["publish", "max_url"].includes(id), blocking: true, action: null })) };
 }
@@ -157,6 +159,65 @@ it("reports a failed deployment separately from an unpublished draft", async () 
   await mount(dashboard());
   await settle(() => expect(container.textContent).toContain("Последняя публикация не завершилась"));
   expect(container.textContent).toContain("Сборка не завершена");
+});
+
+it.each(["done", "queued", "failed"] as const)("keeps the actual published address beside unpublished changes and latest %s attempt", async phase => {
+  api.deploy.mockResolvedValue({ ...release, phase, run_id: "latest-attempt", active_publication: activePublication, error: phase === "failed" ? "Сборка не завершена" : null });
+  await mount(dashboard());
+  await settle(() => expect(container.querySelector('a[href="https://app.example.com"]')).not.toBeNull());
+  expect(container.textContent).toContain("Изменения не опубликованы");
+  expect(container.textContent).toContain("После последней публикации появились изменения");
+  expect(container.textContent).not.toContain("Приложение опубликовано");
+  if (phase === "failed") expect(container.textContent).toContain("Последняя публикация не завершилась");
+  expect(api.history).not.toHaveBeenCalled();
+});
+
+it.each(["failed", "queued", "config_only", "already_current"] as const)("summarizes the actual release independently of later %s attempt", async attempt => {
+  const phase = attempt === "failed" || attempt === "queued" ? attempt : "done";
+  api.deploy.mockResolvedValue({ ...release, phase, run_id: "latest-attempt", active_publication: activePublication, started_at: "2026-10-03T09:00:00Z", finished_at: phase === "queued" ? null : "2026-10-03T10:00:00Z", detail: phase === "done" ? attempt : null, error: phase === "failed" ? "Сборка не завершена" : null });
+  await mount(dashboard());
+  await settle(() => expect(container.querySelector(".max-dashboard-release dl")).not.toBeNull());
+  const fields = [...container.querySelectorAll(".max-dashboard-release dd")];
+  expect(fields[0].textContent).toBe("Ваше приложение");
+  expect(fields[1].querySelector("a")?.getAttribute("href")).toBe(activePublication.prod_url);
+  expect(fields[2].textContent).toBe(relativeDateLabel(activePublication.finished_at));
+  if (phase === "failed") expect(container.textContent).toContain("Последняя публикация не завершилась");
+  if (phase === "queued") expect(container.textContent).toContain("В очереди — публикация выполняется на сервере");
+  expect(api.history).not.toHaveBeenCalled();
+});
+
+it.each(["queued", "failed"] as const)("does not summarize a %s attempt as an accepted publication when active projection is null", async phase => {
+  api.deploy.mockResolvedValue({ ...release, phase, run_id: "latest-attempt", active_publication: null, error: phase === "failed" ? "Сборка не завершена" : null });
+  await mount(dashboard());
+  await settle(() => expect(container.textContent).toContain("Изменения не опубликованы"));
+  expect(container.querySelector(".max-dashboard-release dl")).toBeNull();
+  expect(container.querySelector(".max-dashboard-empty")).not.toBeNull();
+  if (phase === "failed") expect(container.textContent).toContain("Последняя публикация не завершилась");
+  if (phase === "queued") expect(container.textContent).toContain("В очереди — публикация выполняется на сервере");
+  expect(api.history).not.toHaveBeenCalled();
+});
+
+it("does not invent an active address when controller explicitly reports none", async () => {
+  api.readiness.mockResolvedValue(readiness(true));
+  api.deploy.mockResolvedValue({ ...release, active_publication: null });
+  api.integration.mockResolvedValue({ app_url: "https://stale-integration.example.com" });
+  await mount(dashboard());
+  await settle(() => expect(container.textContent).toContain("Изменения не опубликованы"));
+  expect(container.querySelector('a[href="https://app.example.com"]')).toBeNull();
+  expect(container.querySelector('a[href="https://stale-integration.example.com"]')).toBeNull();
+  expect(api.history).not.toHaveBeenCalled();
+});
+
+it.each(["readiness", "deploy"] as const)("hides stale active-publication success after %s status fails", async source => {
+  api.readiness.mockResolvedValue(readiness(true));
+  api.deploy.mockResolvedValue({ ...release, active_publication: activePublication });
+  client.setQueryData([source === "readiness" ? "max-readiness" : "deploy", project.id], source === "readiness" ? readiness(true) : { ...release, active_publication: activePublication });
+  client.setQueryDefaults([source === "readiness" ? "max-readiness" : "deploy", project.id], { staleTime: 0 });
+  api[source].mockRejectedValue(new Error("offline"));
+  await mount(dashboard());
+  await settle(() => expect(container.textContent).toContain("Не дозвонились до сервера"));
+  expect(container.querySelector('a[href="https://app.example.com"]')).toBeNull();
+  expect(container.textContent).not.toContain("Приложение опубликовано");
 });
 
 it("вместо прочерков говорит, что публикаций ещё не было", async () => {

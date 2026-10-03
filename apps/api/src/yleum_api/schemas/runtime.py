@@ -9,10 +9,10 @@ live inside the internal contract between api and orchestrator.
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SerializerFunctionWrapHandler, model_serializer
 
 RuntimeState = Literal["provisioning", "running", "paused", "stopped", "failed"]
 DeployPhase = Literal[
@@ -72,6 +72,16 @@ class DeployStage(BaseModel):
     bytes_total: int | None = None
 
 
+class ActivePublication(BaseModel):
+    """Accepted public release identity, without an uptime guarantee."""
+
+    release_id: str
+    snapshot_id: UUID
+    commit_sha: str
+    prod_url: str
+    finished_at: str | None = None
+
+
 class DeployStatus(BaseModel):
     run_id: str | None = None
     snapshot_id: UUID | None = None
@@ -81,6 +91,8 @@ class DeployStatus(BaseModel):
     finished_at: str | None = None
     # Public prod URL once swap is done (or null until then).
     prod_url: str | None = None
+    # Absent on older controllers; explicit null means no accepted active release.
+    active_publication: ActivePublication | None = None
     image_tag: str | None = None
     error: str | None = None
     detail: str | None = None
@@ -99,3 +111,12 @@ class DeployStatus(BaseModel):
     metrics: dict[str, int] = Field(default_factory=dict)
     error_stage: str | None = None
     reason_code: str | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_publication_absence(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if "active_publication" not in self.model_fields_set:
+            payload.pop("active_publication", None)
+        return payload

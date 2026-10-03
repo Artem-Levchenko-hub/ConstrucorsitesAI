@@ -216,6 +216,12 @@ async def execute_dispatch(run_id: UUID) -> bool:
             return True
         except Exception:
             log.exception("generation dispatcher failed", extra={"run_id": str(run_id)})
+            # Losing ownership must stop physical work before any database write:
+            # orphan persistence may itself block on the unavailable database.
+            if work is not None:
+                work.cancel()
+                with suppress(asyncio.CancelledError, Exception):
+                    await work
             await _fail_orphan(
                 run_id, "Generation executor lost ownership or could not load its durable dispatch"
             )

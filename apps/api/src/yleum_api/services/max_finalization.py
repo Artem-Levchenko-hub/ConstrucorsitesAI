@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -13,6 +14,8 @@ from typing import cast
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.exc import TimeoutError as DatabasePoolTimeout
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -2356,22 +2359,39 @@ async def run_generation_deadline_watchdog(
     The deadline moves: an adaptation opens a repair window after the agent's turn and
     is exempt while its proof or activation intent is sealed, so one sleep is not enough.
     """
+    database_failure_logged = False
     while True:
-        wait = await generation_deadline_wait(
-            session_factory=session_factory,
-            generation_run_id=generation_run_id,
-        )
-        if wait is None:
-            return
-        if wait > 0:
-            await asyncio.sleep(wait)
-            continue
-        if await watch_generation_deadline(
-            session_factory=session_factory,
-            generation_run_id=generation_run_id,
-        ):
-            return
-        # The run was sealed or finished between the two reads; look again shortly.
+        try:
+            wait = await generation_deadline_wait(
+                session_factory=session_factory,
+                generation_run_id=generation_run_id,
+            )
+            if wait is None:
+                return
+            if wait > 0:
+                database_failure_logged = False
+                await asyncio.sleep(wait)
+                continue
+            if await watch_generation_deadline(
+                session_factory=session_factory,
+                generation_run_id=generation_run_id,
+            ):
+                return
+            database_failure_logged = False
+        except (DBAPIError, DatabasePoolTimeout, ConnectionError, TimeoutError) as error:
+            if isinstance(error, DBAPIError):
+                sqlstate = str(getattr(error.orig, "sqlstate", ""))
+                if not (error.connection_invalidated or sqlstate.startswith("08") or
+                        sqlstate in {"40001", "40P01", "53300", "57P01", "57P02", "57P03"}):
+                    raise
+            if not database_failure_logged:
+                logging.getLogger(__name__).warning(
+                    "Generation deadline database query unavailable; retrying",
+                    extra={"error_class": type(error).__name__},
+                )
+                database_failure_logged = True
+        # Re-read the current stage after recovery; never enforce a cached
+        # editing deadline while an adaptation may have sealed its proof.
         await asyncio.sleep(1.0)
 
 

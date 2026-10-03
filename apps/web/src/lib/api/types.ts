@@ -780,6 +780,14 @@ export type DeployStage = {
   bytes_total?: number | null;
 };
 
+export type ActivePublication = {
+  release_id: string;
+  snapshot_id: Uuid;
+  commit_sha: string;
+  prod_url: string;
+  finished_at: IsoDateTime | null;
+};
+
 export type DeployStatus = {
   run_id: string | null;
   snapshot_id?: Uuid | null;
@@ -788,6 +796,8 @@ export type DeployStatus = {
   started_at: IsoDateTime | null;
   finished_at: IsoDateTime | null;
   prod_url: string | null;
+  /** Absent on older controllers; null means no accepted active publication. */
+  active_publication?: ActivePublication | null;
   image_tag: string | null;
   error: string | null;
   detail: string | null;

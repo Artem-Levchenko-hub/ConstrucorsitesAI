@@ -30,7 +30,7 @@ from yleum_orchestrator.core.cell_resources import (
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
 from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
-from yleum_orchestrator.schemas.runtime import DeployResponse
+from yleum_orchestrator.schemas.runtime import ActivePublication, DeployResponse
 from yleum_orchestrator.services import nginx_writer
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
@@ -158,8 +158,50 @@ class CellPublicationService:
         return uuid5(NAMESPACE_URL, f"omnia:public-cell:{request.project_id}")
 
     def get(self, project_id: UUID) -> DeployResponse | None:
-        history = self._read(project_id)["history"]
-        return DeployResponse.model_validate(history[-1]["response"]) if history else None
+        saved = self._read(project_id)
+        history = saved["history"]
+        if not history:
+            return None
+        response = DeployResponse.model_validate(history[-1]["response"])
+        response.active_publication = self._active_publication(project_id, saved)
+        return response
+
+    def _active_publication(
+        self, project_id: UUID, saved: dict[str, Any]
+    ) -> ActivePublication | None:
+        """Project-bound accepted release, independently of the latest attempt.
+
+        A generic last success can refer to a shortcut or a different release.
+        Only the successful run which actually activated this release proves
+        its public snapshot and commit. Private release/request fields stay here.
+        """
+        if any(saved.get(key) for key in ("disabled", "recovery_required", "activation_pending")):
+            return None
+        active = saved.get("active_release")
+        if not isinstance(active, dict) or not active.get("release_id"):
+            return None
+        for item in reversed(saved["history"]):
+            matched = item["response"]
+            if matched.get("run_id") != active["release_id"]:
+                continue
+            if (
+                matched.get("phase") != "done"
+                or matched.get("project_id") != str(project_id)
+                or not matched.get("snapshot_id")
+                or matched["snapshot_id"] != active.get("snapshot_id")
+                or not matched.get("prod_url")
+                or matched["prod_url"] != active.get("prod_url")
+                or not matched.get("commit_sha")
+            ):
+                return None
+            return ActivePublication(
+                release_id=active["release_id"],
+                snapshot_id=matched["snapshot_id"],
+                commit_sha=matched["commit_sha"],
+                prod_url=matched["prod_url"],
+                finished_at=matched.get("finished_at"),
+            )
+        return None
 
     def history(self, project_id: UUID) -> list[DeployResponse]:
         return [

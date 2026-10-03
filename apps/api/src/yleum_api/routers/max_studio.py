@@ -561,6 +561,16 @@ async def get_max_readiness(
             and deployment.get("snapshot_id") == str(current_snapshot.id)
             and deployment.get("commit_sha") == current_snapshot.commit_sha
         )
+    if "active_publication" in deployment:
+        # The latest attempt can be queued or failed while an earlier release
+        # remains accepted. Explicit null must never fall back to a stale success.
+        active_publication = deployment.get("active_publication") or {}
+        published = bool(
+            active_publication.get("prod_url")
+            and current_snapshot
+            and active_publication.get("snapshot_id") == str(current_snapshot.id)
+            and active_publication.get("commit_sha") == current_snapshot.commit_sha
+        )
     # No owner requisites are asked for anywhere: a Yleum account is an email and
     # a way to sign in; the business behind a bot is verified by MAX itself.
     items = [

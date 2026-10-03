@@ -226,30 +226,45 @@ async def _process_prompt(
             {"message_id": str(assistant_message_id), "error": failure_for_error(e).message},
         )
     finally:
-        if runtime.deadline_task is not None:
-            runtime.deadline_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await runtime.deadline_task
-        if runtime.handle is not None:
-            try:
-                release_task: asyncio.Future[None] = asyncio.ensure_future(runtime.handle.release())
-                try:
-                    await asyncio.shield(release_task)
-                except asyncio.CancelledError:
-                    # Keep the executor ownership lock until cleanup finishes;
-                    # shield alone leaves an untracked release running behind us.
-                    with suppress(Exception):
-                        await release_task
-                    raise
-            except Exception as release_exc:
-                _log.warning(
-                    "Project Cell generation lease release failed",
-                    exc_info=release_exc,
-                )
-        # Стрим завершён (done / error / отмена / краш) — снимаем горячее
-        # состояние, чтобы reconnect после конца не пытался досматривать
-        # мёртвый поток. Best-effort: ошибка Redis тут не должна валить ответ.
         try:
-            await clear_stream_state(project_id, assistant_message_id)
-        except Exception:
-            pass
+            if runtime.deadline_task is not None:
+                runtime.deadline_task.cancel()
+                try:
+                    await runtime.deadline_task
+                except asyncio.CancelledError:
+                    current = asyncio.current_task()
+                    if current is not None and current.cancelling():
+                        raise
+                except Exception as deadline_exc:
+                    # A failed watchdog must not mask the primary turn outcome
+                    # or prevent physical lease and stream cleanup.
+                    _log.warning(
+                        "Generation deadline watchdog failed (%s)", type(deadline_exc).__name__
+                    )
+        finally:
+            try:
+                if runtime.handle is not None:
+                    try:
+                        release_task: asyncio.Future[None] = asyncio.ensure_future(
+                            runtime.handle.release()
+                        )
+                        try:
+                            await asyncio.shield(release_task)
+                        except asyncio.CancelledError:
+                            # Keep the executor ownership lock until cleanup finishes;
+                            # shield alone leaves an untracked release running behind us.
+                            with suppress(Exception):
+                                await release_task
+                            raise
+                    except Exception as release_exc:
+                        _log.warning(
+                            "Project Cell generation lease release failed",
+                            exc_info=release_exc,
+                        )
+            finally:
+                # A watchdog/release failure or cancellation still clears the
+                # finished stream; Redis failures remain best-effort.
+                try:
+                    await clear_stream_state(project_id, assistant_message_id)
+                except Exception:
+                    pass

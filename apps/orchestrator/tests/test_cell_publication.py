@@ -194,6 +194,121 @@ def request(**overrides):
     return CellDeployRequest(**{**value, **overrides})
 
 
+def active_publication_journal():
+    value = request()
+    active = {
+        "release_id": "actual-release",
+        "snapshot_id": str(value.snapshot_id),
+        "prod_url": "https://active.example.test",
+        "runtime_env": {"MAX_BOT_TOKEN": "private-release-token"},
+    }
+    successful = {
+        "project_id": str(value.project_id),
+        "run_id": active["release_id"],
+        "snapshot_id": active["snapshot_id"],
+        "commit_sha": value.commit_sha,
+        "phase": "done",
+        "prod_url": active["prod_url"],
+        "finished_at": "2026-09-01T10:00:00Z",
+    }
+    return {
+        "project_id": str(value.project_id),
+        "active_release": active,
+        "history": [{"response": successful}],
+    }
+
+
+@pytest.mark.parametrize("phase", ["queued", "failed", "done"])
+def test_get_separates_actual_active_publication_from_latest_attempt(tmp_path, phase):
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    saved = active_publication_journal()
+    latest = {
+        **saved["history"][0]["response"],
+        "run_id": "latest-attempt",
+        "snapshot_id": str(UUID(int=99)),
+        "commit_sha": "e" * 40,
+        "phase": phase,
+        "prod_url": "https://other.example.test" if phase == "done" else None,
+        "error": "Latest attempt failed" if phase == "failed" else None,
+        "detail": "already_current" if phase == "done" else None,
+    }
+    saved["history"].append({"response": latest, "request": {"secret": "private-request"}})
+    service._write(request().project_id, saved)
+
+    response = service.get(request().project_id).model_dump(mode="json")
+
+    assert response["run_id"] == "latest-attempt"
+    assert response["phase"] == phase
+    assert response["error"] == latest["error"]
+    assert response["active_publication"] == {
+        "release_id": "actual-release",
+        "snapshot_id": str(request().snapshot_id),
+        "commit_sha": request().commit_sha,
+        "prod_url": "https://active.example.test",
+        "finished_at": "2026-09-01T10:00:00Z",
+    }
+    assert "private-" not in str(response)
+
+
+@pytest.mark.parametrize("blocked", ["disabled", "recovery_required", "activation_pending"])
+def test_get_does_not_advertise_active_publication_during_blocked_state(tmp_path, blocked):
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    saved = active_publication_journal()
+    saved[blocked] = True
+    service._write(request().project_id, saved)
+    assert service.get(request().project_id).model_dump(mode="json")["active_publication"] is None
+
+
+@pytest.mark.parametrize(
+    "mismatch", ["release_id", "snapshot_id", "prod_url", "project_id", "phase", "commit_sha"]
+)
+def test_get_rejects_unmatched_active_publication_identity(tmp_path, mismatch):
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    saved = active_publication_journal()
+    matched = saved["history"][0]["response"]
+    if mismatch == "commit_sha":
+        matched["commit_sha"] = None
+    elif mismatch in {"project_id", "phase"}:
+        matched[mismatch] = str(UUID(int=999)) if mismatch == "project_id" else "failed"
+    else:
+        saved["active_release"][mismatch] = "different"
+    service._write(request().project_id, saved)
+    assert service.get(request().project_id).model_dump(mode="json")["active_publication"] is None
+
+
+def test_get_keeps_original_active_identity_after_configuration_shortcut(tmp_path, monkeypatch):
+    from yleum_orchestrator.services.cell_publication import CellPublicationService
+
+    service = CellPublicationService(SimpleNamespace(), root=tmp_path)
+    saved = active_publication_journal()
+    saved["history"].append({"response": {
+        **saved["history"][0]["response"],
+        "run_id": "config-shortcut",
+        "detail": "config_only",
+        "finished_at": "2026-09-03T10:00:00Z",
+    }})
+    service._write(request().project_id, saved)
+    reads = []
+    read = service._read
+
+    def read_once(project_id):
+        reads.append(project_id)
+        return read(project_id)
+
+    monkeypatch.setattr(service, "_read", read_once)
+    response = service.get(request().project_id).model_dump(mode="json")
+    assert response["detail"] == "config_only"
+    assert response["active_publication"]["release_id"] == "actual-release"
+    assert response["active_publication"]["finished_at"] == "2026-09-01T10:00:00Z"
+    assert reads == [request().project_id]
+
+
 async def test_durable_submit_deduplicates_and_never_exposes_secrets(tmp_path):
     from yleum_orchestrator.services.cell_publication import CellPublicationService
 

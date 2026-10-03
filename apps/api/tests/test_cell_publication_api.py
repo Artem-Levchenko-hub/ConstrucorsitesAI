@@ -187,6 +187,74 @@ async def test_readiness_requires_published_snapshot_not_just_later_timestamp(
     assert statuses["publish"] is exact
 
 
+@pytest.mark.parametrize("identity", ["exact", "snapshot", "commit", "none"])
+@pytest.mark.parametrize("cell_selected", [False, True])
+async def test_readiness_uses_actual_active_publication_even_after_failed_attempt(
+    client, db_session, monkeypatch, identity, cell_selected
+):
+    value, _ = await seed(db_session)
+    snapshot = value["snapshot"]
+    active = {
+        "release_id": "active-release",
+        "prod_url": "https://active.example.test",
+        "snapshot_id": str(uuid4() if identity == "snapshot" else snapshot.id),
+        "commit_sha": "different" if identity == "commit" else snapshot.commit_sha,
+        "finished_at": datetime.now(UTC).isoformat(),
+    }
+    deployment = {
+        "phase": "failed" if identity != "none" else "done",
+        "prod_url": "https://stale.example.test",
+        "snapshot_id": str(snapshot.id),
+        "commit_sha": snapshot.commit_sha,
+        "active_publication": active if identity != "none" else None,
+    }
+    monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value=deployment))
+    if not cell_selected:
+        monkeypatch.setattr(
+            project_cell_runtime, "resolve_project_cell_public_selection",
+            AsyncMock(return_value=SimpleNamespace(selected=False)),
+        )
+
+    response = await client.get(f"/api/projects/{value['project'].id}/max/readiness")
+
+    assert response.status_code == 200, response.text
+    statuses = {item["id"]: item["done"] for item in response.json()["items"]}
+    assert statuses["publish"] is (identity == "exact")
+
+
+@pytest.mark.parametrize("projection", ["present", "null", "legacy"])
+async def test_deploy_wire_preserves_active_projection_and_legacy_absence(
+    client, db_session, monkeypatch, projection
+):
+    value, _ = await seed(db_session)
+    deployment = {"phase": "failed", "error": "Latest attempt failed", "run_id": "latest"}
+    active = {
+        "release_id": "actual-release",
+        "snapshot_id": str(value["snapshot"].id),
+        "commit_sha": value["snapshot"].commit_sha,
+        "prod_url": "https://active.example.test",
+        "finished_at": datetime.now(UTC).isoformat(),
+    }
+    if projection != "legacy":
+        deployment["active_publication"] = (
+            {**active, "runtime_env": {"MAX_BOT_TOKEN": "private-token"}}
+            if projection == "present" else None
+        )
+    monkeypatch.setattr(orchestrator_client, "get_deploy", AsyncMock(return_value=deployment))
+
+    response = await client.get(f"/api/projects/{value['project'].id}/deploy")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["phase"] == "failed"
+    assert payload["error"] == "Latest attempt failed"
+    if projection == "legacy":
+        assert "active_publication" not in payload
+    else:
+        assert payload["active_publication"] == (active if projection == "present" else None)
+    assert "private-token" not in response.text
+
+
 @pytest.mark.parametrize("explicit_empty_brief", [False, True])
 async def test_launch_ready_without_optional_app_brief(
     client,

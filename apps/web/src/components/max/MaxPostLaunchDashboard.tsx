@@ -28,23 +28,31 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
   const integration = useQuery({ queryKey: ["max-integration", projectId], queryFn: () => getMaxIntegration(projectId), retry: false });
   const statusError = readiness.isError || deploy.isError;
   const publicationState = getMaxPublicationState(readiness.isSuccess ? readiness.data : undefined, deploy.data?.phase);
-  const published = !statusError && publicationState === "published";
+  const latest = deploy.isSuccess ? deploy.data : undefined;
+  const hasActiveProjection = latest?.active_publication !== undefined;
+  const activePublication = !statusError ? latest?.active_publication : null;
+  const currentPublished = readiness.isSuccess && readiness.data.items.some(item => item.id === "publish" && item.done);
+  const published = !statusError && (hasActiveProjection
+    ? Boolean(activePublication && currentPublished)
+    : publicationState === "published");
   const active = !deploy.isError && isMaxDeployActive(deploy.data?.phase ?? "idle", deploy.data?.run_id);
   const statusLabel = statusError ? MAX_STATUS_COPY.publication.title
     : readiness.isPending || deploy.isPending ? "Проверяем публикацию"
     : published ? "Приложение опубликовано" : "Изменения не опубликованы";
-  const url = published ? deploy.data?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
-  const latest = deploy.isSuccess ? deploy.data : undefined;
+  const url = hasActiveProjection ? activePublication?.prod_url
+    : published ? latest?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
   const integrationLabel = integration.isError ? MAX_UNKNOWN_LABEL : integration.isPending ? "Проверяем…" : integration.data?.connected ? integration.data.bot_name ?? "Подключён" : "Не подключён";
 
-  const everPublished = Boolean(latest && latest.phase !== "idle");
-  const releaseName = latest
+  const everPublished = hasActiveProjection ? Boolean(activePublication) : Boolean(latest && latest.phase !== "idle");
+  const releaseName = hasActiveProjection ? "Ваше приложение" : latest
     ? latest.phase === "done" ? "Ваше приложение" : phaseLabels[latest.phase]
     : MAX_UNKNOWN_LABEL;
-  const releaseWhen = latest?.finished_at
-    ? relativeDateLabel(latest.finished_at) ?? new Date(latest.finished_at).toLocaleString("ru-RU")
-    : latest?.started_at
-      ? `начата ${relativeDateLabel(latest.started_at) ?? new Date(latest.started_at).toLocaleString("ru-RU")}`
+  const releaseFinishedAt = hasActiveProjection ? activePublication?.finished_at : latest?.finished_at;
+  const releaseStartedAt = hasActiveProjection ? null : latest?.started_at;
+  const releaseWhen = releaseFinishedAt
+    ? relativeDateLabel(releaseFinishedAt) ?? new Date(releaseFinishedAt).toLocaleString("ru-RU")
+    : releaseStartedAt
+      ? `начата ${relativeDateLabel(releaseStartedAt) ?? new Date(releaseStartedAt).toLocaleString("ru-RU")}`
       : "Время неизвестно";
 
   function refreshStatus() { void readiness.refetch(); void deploy.refetch(); void runtime.refetch(); void integration.refetch(); }
@@ -61,7 +69,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
               : <Button asChild><Link href={`/max/${projectId}?panel=publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
             <Button asChild variant="outline"><Link href={`/max/${projectId}`}>Редактировать</Link></Button>
           </div>
-          {publicationState === "outdated" && !statusError && <p className="max-launch-notice">После последней публикации появились изменения. Проверьте их в редакторе и опубликуйте обновление.</p>}
+          {!statusError && (hasActiveProjection ? activePublication && readiness.isSuccess && !currentPublished : publicationState === "outdated") && <p className="max-launch-notice">После последней публикации появились изменения. Проверьте их в редакторе и опубликуйте обновление.</p>}
           {active && <p className="max-launch-notice" role="status">{phaseLabels[deploy.data!.phase]} — публикация выполняется на сервере.</p>}
           {latest?.phase === "failed" && <div role="alert" className="max-dashboard-error"><strong>Последняя публикация не завершилась</strong><p>{latest.error ?? "Проверьте готовность и повторите попытку."}</p></div>}
           {statusError && <Button variant="outline" className="mt-3" onClick={refreshStatus}>{MAX_STATUS_COPY.publication.retry}</Button>}
@@ -74,11 +82,13 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
               Пока публикаций нет, вместо таблицы — одна честная строка. */}
           {!everPublished ? (
             <p className="max-dashboard-empty">
-              {deploy.isError
+              {statusError
                 ? "Не дозвонились до сервера — состояние публикации покажем, когда он ответит."
                 : deploy.isPending
                   ? "Проверяем, была ли публикация…"
-                  : "Публикаций ещё не было. Здесь появится, что именно опубликовано и по какому адресу открывается."}
+                  : hasActiveProjection
+                    ? "Опубликованная версия не подтверждена. Адрес появится после успешной публикации."
+                    : "Публикаций ещё не было. Здесь появится, что именно опубликовано и по какому адресу открывается."}
             </p>
           ) : (
             <dl>

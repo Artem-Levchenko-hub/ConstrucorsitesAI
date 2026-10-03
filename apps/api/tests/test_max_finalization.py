@@ -1436,3 +1436,122 @@ async def test_ordinary_generation_is_not_capability_checked(
     # No restoration_adaptation marker: removing routes is a normal edit.
     outcome = await harness.coordinator.finalize(files=_files(), prompt="Build tracker")
     assert outcome.status is MaxFinalizationStatus.COMPLETE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["wait", "terminal_write"])
+@pytest.mark.parametrize(
+    "fault_kind",
+    ["disconnect", "pool_timeout", "serialization", "connect_refused", "connect_timeout"],
+)
+async def test_deadline_watchdog_recovers_transient_database_fault(
+    monkeypatch, caplog, stage, fault_kind
+):
+    from sqlalchemy.exc import OperationalError
+    from sqlalchemy.exc import TimeoutError as DatabasePoolTimeout
+
+    from yleum_api.services import max_finalization as finalization
+
+    if fault_kind == "pool_timeout":
+        fault = DatabasePoolTimeout("private-watchdog-marker")
+    elif fault_kind == "connect_refused":
+        fault = ConnectionRefusedError("private-watchdog-marker")
+    elif fault_kind == "connect_timeout":
+        fault = TimeoutError("private-watchdog-marker")
+    else:
+        original = ConnectionResetError("private-watchdog-marker")
+        if fault_kind == "serialization":
+            original.sqlstate = "40001"
+        fault = OperationalError(None, None, original,
+                                 connection_invalidated=fault_kind == "disconnect")
+    calls = {"wait": 0, "terminal_write": 0}
+    sleeps = []
+
+    async def wait(**_):
+        calls["wait"] += 1
+        if stage == "wait" and calls["wait"] == 1:
+            raise fault
+        return 0
+
+    async def write(**_):
+        calls["terminal_write"] += 1
+        if stage == "terminal_write" and calls["terminal_write"] == 1:
+            raise fault
+        return True
+
+    async def sleep(seconds):
+        sleeps.append(seconds)
+
+    monkeypatch.setattr(finalization, "generation_deadline_wait", wait)
+    monkeypatch.setattr(finalization, "watch_generation_deadline", write)
+    monkeypatch.setattr(finalization.asyncio, "sleep", sleep)
+    await finalization.run_generation_deadline_watchdog(
+        session_factory=None, generation_run_id=uuid.uuid4(),
+    )
+    assert calls["wait"] == 2
+    assert calls["terminal_write"] == (1 if stage == "wait" else 2)
+    assert sleeps == [1.0]
+    assert "retrying" in caplog.text
+    assert "private-watchdog-marker" not in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("error", [ValueError("synthetic coding defect"),
+                                  asyncio.CancelledError("synthetic cancellation")])
+async def test_deadline_watchdog_preserves_non_database_failure(monkeypatch, error):
+    from yleum_api.services import max_finalization as finalization
+
+    async def wait(**_):
+        raise error
+
+    monkeypatch.setattr(finalization, "generation_deadline_wait", wait)
+    with pytest.raises(type(error)) as caught:
+        await finalization.run_generation_deadline_watchdog(
+            session_factory=None, generation_run_id=uuid.uuid4(),
+        )
+    assert caught.value is error
+
+
+@pytest.mark.asyncio
+async def test_deadline_watchdog_does_not_retry_programming_error(monkeypatch):
+    from sqlalchemy.exc import ProgrammingError
+
+    from yleum_api.services import max_finalization as finalization
+
+    original = ProgrammingError(None, None, ValueError("synthetic invalid query"))
+
+    async def wait(**_):
+        raise original
+
+    monkeypatch.setattr(finalization, "generation_deadline_wait", wait)
+    with pytest.raises(ProgrammingError) as caught:
+        await finalization.run_generation_deadline_watchdog(
+            session_factory=None, generation_run_id=uuid.uuid4(),
+        )
+    assert caught.value is original
+
+
+@pytest.mark.asyncio
+async def test_deadline_watchdog_retry_pause_preserves_cancellation(monkeypatch):
+    from sqlalchemy.exc import TimeoutError as DatabasePoolTimeout
+
+    from yleum_api.services import max_finalization as finalization
+
+    original = asyncio.CancelledError("synthetic retry cancelled")
+    waits = []
+
+    async def wait(**_):
+        raise DatabasePoolTimeout("synthetic pool unavailable")
+
+    async def sleep(seconds):
+        waits.append(seconds)
+        raise original
+
+    monkeypatch.setattr(finalization, "generation_deadline_wait", wait)
+    monkeypatch.setattr(finalization.asyncio, "sleep", sleep)
+    with pytest.raises(asyncio.CancelledError) as caught:
+        await finalization.run_generation_deadline_watchdog(
+            session_factory=None, generation_run_id=uuid.uuid4(),
+        )
+    assert caught.value is original
+    assert waits == [1.0]

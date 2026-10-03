@@ -103,6 +103,7 @@ jobs:
           tests/test_agent_native.py
           tests/test_generation_runs.py
           tests/test_generation_worker.py
+          tests/test_generation_cleanup_faults.py
           tests/test_app_integrations_api.py
           tests/test_platform_ai.py
           tests/test_runtime_ai_gateway.py
@@ -135,6 +136,7 @@ jobs:
           tests/test_snapshot_restore.py
           tests/test_rollback_container_hot_reload.py
           tests/test_cell_publication_evidence.py
+          tests/test_cell_publication_api.py
           tests/test_secret_safety.py
           tests/test_restoration_adaptation.py
       - name: Run MAX portable starter contract

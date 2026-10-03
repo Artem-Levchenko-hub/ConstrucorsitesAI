@@ -119,6 +119,8 @@ def _to_deploy_status(payload: dict[str, Any]) -> DeployStatus:
         metrics=dict(payload.get("metrics") or {}),
         error_stage=payload.get("error_stage"),
         reason_code=payload.get("reason_code"),
+        **({"active_publication": payload["active_publication"]}
+           if "active_publication" in payload else {}),
     )
 
 

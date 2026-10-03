@@ -101,7 +101,12 @@ def _provider_complaint(response: Any) -> str:
     text = str(raw or getattr(response, "text", "") or "")[:200]
     # Похожее на ключ или токен наружу не выносим, даже если провайдер его вернул.
     return re.sub(r"[A-Za-z0-9_\-]{20,}", "…", text).strip()
-_CALL_RETRY_WINDOW_S = 210.0
+# The gateway allows 240s per upstream I/O. A 210s caller window discarded
+# a healthy paid response before it arrived (live 2026-10-03). Keep bounded
+# response/accounting headroom; this also bounds all retries/backoff in a turn,
+# and the outer editing deadline may still end the turn earlier. This is not
+# a guarantee that every per-I/O gateway request completes within the window.
+_CALL_RETRY_WINDOW_S = 270.0
 # The first verified MAX production loop completed a five-screen product inside
 # one 40-turn transcript. Keep that headroom so callers do not need a second
 # provider pass with a fresh context merely because the old 30-turn clamp fired.
@@ -1021,6 +1026,10 @@ async def _call_messages(
                 return body
         except TimeoutError as exc:
             raise RuntimeError("PROVIDER_TIMEOUT: native request budget exhausted") from exc
+        except httpx.ReadTimeout as exc:
+            # The gateway may still finish/account the accepted upstream call.
+            # Replaying it could pay twice while the original response settles.
+            raise RuntimeError("PROVIDER_TIMEOUT: native response read timed out") from exc
         except httpx.HTTPError as exc:
             # The provider flakes in SUSTAINED bursts. Live on 2026-09-22 a plain
             # 502 window of 51 s was enough to fail a user's whole build, because

@@ -2626,3 +2626,71 @@ async def test_native_timeout_keeps_safe_cause_and_run_correlation(monkeypatch):
     assert event["run_id"] == run_id and event["project_id"] == project_id
     assert event["stage"] == "build_plan"
     assert "synthetic-private" not in str(logs)
+
+@pytest.mark.asyncio
+async def test_native_accepts_reply_within_gateway_deadline_without_paid_replay(monkeypatch):
+    """A gateway-valid late reply must reach the native tool dispatcher."""
+    import ast
+    from pathlib import Path
+
+    source = (
+        Path(__file__).parents[2]
+        / "llm-gateway/src/yleum_gateway/routers/messages_native.py"
+    )
+    tree = ast.parse(await asyncio.to_thread(source.read_text, encoding="utf-8"))
+    upstream_seconds = next(
+        float(ast.literal_eval(node.value))
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(name, ast.Name) and name.id == "_TIMEOUT_S" for name in node.targets)
+    )
+    scale = 0.002
+    monkeypatch.setattr(
+        agent_native, "_CALL_RETRY_WINDOW_S", agent_native._CALL_RETRY_WINDOW_S * scale
+    )
+    calls = []
+    reply = {
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "write-1",
+                "name": "write_file",
+                "input": {"path": "a.ts", "content": "corrected"},
+            }
+        ]
+    }
+
+    class DelayedGateway:
+        async def post(self, url, **kwargs):
+            calls.append(kwargs["json"]["metadata"]["retry_count"])
+            await asyncio.sleep((upstream_seconds - 5) * scale)
+            return httpx.Response(200, request=httpx.Request("POST", url), json=reply)
+
+    result = await agent_native._call_messages(
+        DelayedGateway(), "https://gateway.test/v1/messages", [], "s"
+    )
+    assert result == reply
+    assert calls == [0]
+
+
+@pytest.mark.asyncio
+async def test_native_read_timeout_is_not_replayed_when_accounting_may_settle(monkeypatch):
+    calls = []
+
+    class AmbiguousGateway:
+        async def post(self, url, **kwargs):
+            calls.append(kwargs["json"]["metadata"]["retry_count"])
+            raise httpx.ReadTimeout(
+                "synthetic-private-upstream-detail", request=httpx.Request("POST", url)
+            )
+
+    async def no_sleep(delay):
+        pytest.fail("an ambiguous timed-out paid request must not be automatically replayed")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    with pytest.raises(RuntimeError, match="PROVIDER_TIMEOUT") as error:
+        await agent_native._call_messages(
+            AmbiguousGateway(), "https://gateway.test/v1/messages", [], "s"
+        )
+    assert calls == [0]
+    assert "synthetic-private" not in str(error.value)
