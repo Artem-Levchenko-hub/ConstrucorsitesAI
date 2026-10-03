@@ -790,3 +790,145 @@ def test_every_dump_records_the_format_it_actually_wrote(
         assert value == ("custom" if (method, kind) == ("exec", "core") else "plain"), (
             method, kind, value,
         )
+
+
+ADMIN_PASSWORD = "admin-independent-secret-" + "a" * 32
+
+
+def _protocol_one_authority(state_root: Path) -> Path:
+    _write_json(
+        state_root / "project-machines" / EDITOR / "docker.json",
+        {"project_database_role_protocol": 1, "services": {}},
+    )
+    authority = state_root / "project-machines" / "project-db-credentials" / f"{EDITOR}.json"
+    _write_json(authority, {
+        "version": 1, "workspace_id": EDITOR,
+        "runtime_password": "r" * 43, "migrator_password": "m" * 43,
+        "admin_password": ADMIN_PASSWORD,
+    })
+    authority.parent.chmod(0o700)
+    authority.chmod(0o600)
+    return authority
+
+
+def test_protocol_one_backup_uses_bound_existing_admin_authority(state_root: Path) -> None:
+    authority = _protocol_one_authority(state_root)
+    original = authority.read_bytes()
+    redactor = backup_cells.SecretRedactor()
+    inventory = backup_cells.build_inventory(state_root, [project_volume(EDITOR)], redactor)
+    assert inventory.plans[0].databases[0].password == ADMIN_PASSWORD
+    assert authority.read_bytes() == original
+    assert ADMIN_PASSWORD not in redactor.scrub(ADMIN_PASSWORD)
+
+
+@pytest.mark.parametrize("problem", [
+    "missing", "corrupt", "wrong_workspace", "wrong_version", "duplicate_key",
+    "unsafe_mode", "symlink", "shared_password", "missing_admin",
+])
+def test_protocol_one_backup_never_falls_back_to_legacy_authority(
+    state_root: Path, problem: str,
+) -> None:
+    authority = _protocol_one_authority(state_root)
+    payload = json.loads(authority.read_bytes())
+    if problem == "missing":
+        authority.unlink()
+    elif problem == "corrupt":
+        authority.write_text("{broken", encoding="utf-8")
+    elif problem == "wrong_workspace":
+        payload["workspace_id"] = PRODUCTION
+    elif problem == "wrong_version":
+        payload["version"] = True
+    elif problem == "duplicate_key":
+        authority.write_text(
+            authority.read_text().replace('{', '{"version":1,', 1), encoding="utf-8",
+        )
+    elif problem == "unsafe_mode":
+        authority.chmod(0o644)
+    elif problem == "symlink":
+        other = authority.with_suffix(".real")
+        authority.rename(other)
+        authority.symlink_to(other)
+    elif problem == "shared_password":
+        payload["admin_password"] = payload["runtime_password"]
+    elif problem == "missing_admin":
+        del payload["admin_password"]
+    if problem in {"wrong_workspace", "wrong_version", "shared_password", "missing_admin"}:
+        authority.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(backup_cells.BackupError, match="project database authority") as failure:
+        backup_cells.build_inventory(
+            state_root, [project_volume(EDITOR)], backup_cells.SecretRedactor(),
+        )
+    assert ADMIN_PASSWORD not in str(failure.value)
+    assert PROJECT_PASSWORD not in str(failure.value)
+
+
+@pytest.mark.parametrize("encoded", [
+    '{broken', 'null', '{"project_database_role_protocol":null}',
+    '{"project_database_role_protocol":true}', '{"project_database_role_protocol":2}',
+    '{"project_database_role_protocol":1,"project_database_role_protocol":0}',
+])
+def test_invalid_project_protocol_metadata_cannot_downgrade_backup(
+    state_root: Path, encoded: str,
+) -> None:
+    _protocol_one_authority(state_root)
+    metadata = state_root / "project-machines" / EDITOR / "docker.json"
+    metadata.write_text(encoded, encoding="utf-8")
+    with pytest.raises(backup_cells.BackupError, match="project database authority"):
+        backup_cells.build_inventory(
+            state_root, [project_volume(EDITOR)], backup_cells.SecretRedactor(),
+        )
+
+
+def test_explicit_legacy_protocol_keeps_existing_password(state_root: Path) -> None:
+    _write_json(
+        state_root / "project-machines" / EDITOR / "docker.json",
+        {"project_database_role_protocol": 0},
+    )
+    inventory = backup_cells.build_inventory(
+        state_root, [project_volume(EDITOR)], backup_cells.SecretRedactor(),
+    )
+    assert inventory.plans[0].databases[0].password == PROJECT_PASSWORD
+
+
+def test_protocol_one_admin_password_only_reaches_dump_child_environment(
+    state_root: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    _protocol_one_authority(state_root)
+    runner = _runner(running=[project_volume(EDITOR)])
+    runner.volumes = [project_volume(EDITOR)]
+    runner.dump_exit = 1
+    runner.dump_stderr = f'FATAL: password "{ADMIN_PASSWORD}" authentication failed'.encode()
+    assert _backup(state_root, tmp_path / "out", runner) == 1
+    captured = capsys.readouterr()
+    manifest = (tmp_path / "out" / "MANIFEST.json").read_text(encoding="utf-8")
+    assert all("PGPASSWORD" not in env for env in runner.envs)
+    assert all(env.get("PGPASSWORD") != PROJECT_PASSWORD for env in runner.envs)
+    for secret in (ADMIN_PASSWORD, PROJECT_PASSWORD):
+        assert secret not in captured.out + captured.err + manifest
+        assert all(secret not in argument for call in runner.calls for argument in call)
+    assert "***" in manifest
+
+
+@pytest.mark.parametrize("running", [True, False])
+def test_protocol_one_dump_and_table_count_use_admin_peer_with_trusted_options(
+    state_root: Path, tmp_path: Path, running: bool,
+) -> None:
+    from yleum_orchestrator.services.restoration_database import TRUSTED_ADMIN_PGOPTIONS
+    _protocol_one_authority(state_root)
+    runner = _runner(running=[project_volume(EDITOR)] if running else [])
+    runner.volumes = [project_volume(EDITOR)]
+    assert _backup(state_root, tmp_path / "out", runner) == 0
+    calls = [(call, env) for call, env in zip(runner.calls, runner.envs, strict=True)
+             if "pg_dumpall" in call or "psql" in call]
+    assert len(calls) == 2
+    for call, env in calls:
+        assert call[1:4] == ("exec", "--user", "postgres")
+        assert call[call.index("-h") + 1] == "/tmp"
+        assert "127.0.0.1" not in call
+        assert "PGPASSWORD" not in call and "PGPASSWORD" not in env
+        assert env == {"PGOPTIONS": TRUSTED_ADMIN_PGOPTIONS}
+        assert call[call.index("-e") + 1] == "PGOPTIONS"
+    if not running:
+        scripts = [a for call in runner.calls for a in call if "local all all trust" in a]
+        assert scripts and all("hba_file=/tmp/" in a for a in scripts)
+        assert any(f"{project_volume(EDITOR)}:/source:ro" in call for call in runner.calls)

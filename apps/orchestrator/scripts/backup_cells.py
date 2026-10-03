@@ -448,6 +448,7 @@ class DatabaseTarget:
     # Directory inside the read-only helper mount that holds PGDATA's content.
     source_dir: str
     password: str | None
+    project_role_protocol: Literal[0, 1] = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -526,6 +527,51 @@ def _credential(path: Path) -> str | None:
     return password if isinstance(password, str) and password else None
 
 
+def _unique_project_metadata(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError("duplicate metadata key")
+        payload[key] = value
+    return payload
+
+
+def _project_database_authority(
+    state_root: Path, workspace_id: str
+) -> tuple[Literal[0, 1], str | None]:
+    """Use only the existing authority selected by the installed role protocol."""
+    machine_root = state_root / "project-machines"
+    metadata = machine_root / workspace_id / "docker.json"
+    protocol = 0
+    try:
+        if metadata.exists() or metadata.is_symlink():
+            if metadata.is_symlink() or not metadata.is_file():
+                raise ValueError("invalid metadata path")
+            with metadata.open(encoding="utf-8") as handle:
+                payload = json.load(handle, object_pairs_hook=_unique_project_metadata)
+            if not isinstance(payload, dict):
+                raise ValueError("invalid metadata structure")
+            protocol = payload.get("project_database_role_protocol", 0)
+            if type(protocol) is not int or protocol not in (0, 1):
+                raise ValueError("unsupported database role protocol")
+        if protocol == 1:
+            # The documented caller uses the orchestrator venv. Keep legacy
+            # backup/verify usable without package imports; never allocate here.
+            from yleum_orchestrator.services.project_database_credentials import (
+                ProjectDatabaseCredentialStore,
+            )
+
+            credentials = ProjectDatabaseCredentialStore(
+                machine_root / "project-db-credentials"
+            ).load(UUID(workspace_id))
+            return 1, credentials.admin_password
+    except (ImportError, OSError, RuntimeError, ValueError, UnicodeError):
+        # JSON parse exceptions can retain their input; suppress chaining and
+        # expose neither credential paths nor any record/password contents.
+        raise BackupError("project database authority unavailable or invalid") from None
+    return 0, _credential(machine_root / "project-postgres-secrets" / f"{workspace_id}.json")
+
+
 def _project_id(workspace: Mapping[str, Any], published: str | None) -> str | None:
     value = workspace.get("project_id")
     if isinstance(value, str) and _UUID_RE.fullmatch(value):
@@ -579,12 +625,7 @@ def build_inventory(
                 state_root, workspace_id, f"omnia-machine-{stem}-app-postgres-data"
             )
             if active in owned:
-                password = _credential(
-                    state_root
-                    / "project-machines"
-                    / "project-postgres-secrets"
-                    / f"{workspace_id}.json"
-                )
+                protocol, password = _project_database_authority(state_root, workspace_id)
                 redactor.add(password)
                 targets.append(
                     DatabaseTarget(
@@ -593,6 +634,7 @@ def build_inventory(
                         container=f"omnia-machine-{stem}-project-postgres",
                         source_dir=_PROJECT_SOURCE_DIR,
                         password=password,
+                        project_role_protocol=protocol,
                     )
                 )
             for spare in sorted(owned - {active}):
@@ -755,6 +797,12 @@ class CellBackup:
         # `-e PGPASSWORD` without a value: docker copies it out of THIS process's
         # environment, so the secret never enters argv, /proc or any log.
         env = {"PGPASSWORD": target.password}
+        prefix = ["exec", "-e", "PGPASSWORD", container]
+        if target.project_role_protocol == 1:
+            if target.kind != "project":
+                raise BackupError("invalid project database transport")
+            connection, env = self.project_admin_connection()
+            prefix = ["exec", "--user", "postgres", "-e", "PGOPTIONS", container]
         if target.kind == "core":
             path = self.out_dir / f"{workspace_id}-core.dump"
             command = [
@@ -768,20 +816,21 @@ class CellBackup:
             ]
             connection = ["-U", "postgres", "-d", "postgres"]
         else:
-            # Unix sockets are disabled on the project server and the app holds
-            # full admin rights, so only a cluster-wide dump is complete.
+            # A cluster dump preserves project roles and grants. Protocol 1
+            # permits administrator access only through the postgres peer socket.
             path = self.out_dir / f"{workspace_id}-project.sql"
             command = [
                 "pg_dumpall",
                 "-h",
-                "127.0.0.1",
+                "/tmp" if target.project_role_protocol == 1 else "127.0.0.1",
                 "-U",
                 "postgres",
                 f"--lock-wait-timeout={_LOCK_WAIT}",
             ]
-            connection = ["-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
+            if target.project_role_protocol == 0:
+                connection = ["-h", "127.0.0.1", "-U", "postgres", "-d", "postgres"]
         result = self.runner.run_to_file(
-            ["exec", "-e", "PGPASSWORD", container, *command],
+            [*prefix, *command],
             path=path,
             timeout=_DUMP_TIMEOUT,
             env=env,
@@ -794,7 +843,7 @@ class CellBackup:
                 bytes=result.size_bytes,
                 detail=_detail(self.redactor, "dump command failed", result.stderr),
             )
-        tables = self.count_tables(["exec", "-e", "PGPASSWORD", container], connection, env=env)
+        tables = self.count_tables(prefix, connection, env=env)
         if tables is None:
             return DumpOutcome(
                 status="failed", method="exec", file=path.name, detail="table count unavailable"
@@ -905,10 +954,15 @@ class CellBackup:
         server = self.start_scratch_server(pool, scratch_volume)
         if isinstance(server, DumpOutcome):
             return server
+        prefix = ["exec", server]
+        connection = self.scratch_connection()
+        env = None
+        if target.project_role_protocol == 1:
+            connection, env = self.project_admin_connection()
+            prefix = ["exec", "--user", "postgres", "-e", "PGOPTIONS", server]
         result = self.runner.run_to_file(
             [
-                "exec",
-                server,
+                *prefix,
                 "pg_dumpall",
                 "-U",
                 "postgres",
@@ -918,6 +972,7 @@ class CellBackup:
             ],
             path=destination,
             timeout=_DUMP_TIMEOUT,
+            env=env,
         )
         if not result.ok or result.size_bytes == 0:
             return DumpOutcome(
@@ -927,7 +982,7 @@ class CellBackup:
                 bytes=result.size_bytes,
                 detail=_detail(self.redactor, "scratch dump failed", result.stderr),
             )
-        tables = self.count_tables(["exec", server], self.scratch_connection())
+        tables = self.count_tables(prefix, connection, env=env)
         if tables is None:
             return DumpOutcome(
                 status="failed",
@@ -1037,6 +1092,15 @@ class CellBackup:
                     detail=_detail(self.redactor, "scratch server never got ready", ready.stderr),
                 )
             time.sleep(_READY_POLL_SECONDS)
+
+    @staticmethod
+    def project_admin_connection() -> tuple[list[str], dict[str, str]]:
+        try:
+            from yleum_orchestrator.services.restoration_database import admin_args
+
+            return admin_args(None)
+        except (ImportError, OSError, RuntimeError, ValueError):
+            raise BackupError("project database admin transport unavailable") from None
 
     @staticmethod
     def scratch_connection() -> list[str]:
