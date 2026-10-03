@@ -1,0 +1,6 @@
+{
+  "revision": "65322513e1a4eeee42a9195bb5747d14179928e1",
+  "path": "src/app/support/page.tsx",
+  "sha256": "c532e2fd9be3327afefa8f380ad7cdbe18231362b499241a75e785e8f55f5706",
+  "source": "import { omniaMaxConfig as app } from \"@/lib/omnia/max-config\";\n\nexport const metadata = { title: `Поддержка — ${app.app_name}` };\n\nexport default function SupportPage() {\n  return (\n    <main style={{ maxWidth: 680, margin: \"0 auto\", padding: \"32px 20px 64px\", lineHeight: 1.65 }}>\n      <h1>Поддержка</h1>\n      <p>Опишите проблему, ожидаемый результат и время, когда она возникла.</p>\n      {app.support.email && <p><strong>Email:</strong> <a href={`mailto:${app.support.email}`}>{app.support.email}</a></p>}\n      <p>{app.support.response_time}</p>\n      <nav style={{ display: \"flex\", gap: 16, flexWrap: \"wrap\", marginTop: 28 }}>\n        <a href=\"/legal/privacy\">Конфиденциальность</a>\n        <a href=\"/legal/terms\">Условия использования</a>\n      </nav>\n    </main>\n  );\n}\n"
+}

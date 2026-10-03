@@ -51,7 +51,7 @@ _LEGACY_DEPENDENCY_HASHES = {
 
 
 def _assert_render_golden(files, expected):
-    """Check approved dependencies, then the unchanged original full SDK golden."""
+    """Check reviewed changed files, then the unchanged original full SDK golden."""
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
         (fixture_root / "max_config_render_legacy_dependencies.json").read_text(encoding="utf-8")
@@ -71,6 +71,23 @@ def _assert_render_golden(files, expected):
         baseline = legacy["files"][path]
         assert hashlib.sha256(baseline.encode()).hexdigest() == frozen_hash, path
         original_dependencies[path] = baseline
+    support_path = "src/app/support/page.tsx"
+    support_override = json.loads(
+        (overrides_path.parent / "max_template_support_overrides.json").read_text()
+    )
+    assert set(support_override) == {support_path}
+    assert hashlib.sha256(files[support_path].encode()).hexdigest() == (
+        support_override[support_path]["sha256"]
+    ), support_path
+    legacy_support = json.loads(
+        (fixture_root / "max_config_render_legacy_support.json").read_text()
+    )
+    assert legacy_support["revision"] == "65322513e1a4eeee42a9195bb5747d14179928e1"
+    assert legacy_support["path"] == support_path
+    assert hashlib.sha256(legacy_support["source"].encode()).hexdigest() == (
+        "c532e2fd9be3327afefa8f380ad7cdbe18231362b499241a75e785e8f55f5706"
+    )
+    original_dependencies[support_path] = legacy_support["source"]
     digest = hashlib.sha256(
         json.dumps(original_dependencies, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
@@ -349,7 +366,10 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     print(f"BASELINE {key} files={len(files)} sha256={digest}")
 
 
-@pytest.mark.parametrize("changed", ["src/lib/max/session.ts", "package.json", "pnpm-lock.yaml"])
+@pytest.mark.parametrize(
+    "changed",
+    ["src/lib/max/session.ts", "package.json", "pnpm-lock.yaml", "src/app/support/page.tsx"],
+)
 def test_config_render_golden_rejects_sdk_or_unreviewed_dependency_drift(changed):
     config = MaxProjectConfigPayload(
         app_name="Initial config",
