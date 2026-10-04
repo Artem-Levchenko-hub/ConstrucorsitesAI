@@ -23,11 +23,11 @@ test at tests/database-compatibility.test.mjs:8:1
 ✖ PostgreSQL identifier delimiters stay inside one quoted identifier (2.797306ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   + actual - expected
-  
+
   + 'select "two"quotes""'
   - 'select "two""quotes"""'
                  ^
-  
+
       at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:13:12)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1382:25)
@@ -45,11 +45,11 @@ test at tests/database-compatibility.test.mjs:18:1
 ✖ Hostile values remain driver parameters alongside escaped identifiers (0.342285ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   + actual - expected
-  
+
   + 'select "qa"column" where "value" = $1'
   - 'select "qa""column" where "value" = $1'
                 ^
-  
+
       at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:22:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1382:25)
@@ -68,13 +68,13 @@ test at tests/database-compatibility.test.mjs:18:1
 test at tests/dependency-install.test.mjs:36:1
 ✖ kit install refuses mismatched lock instead of silently resolving and rewriting it (960.81184ms)
   AssertionError [ERR_ASSERTION]: The input did not match the regular expression /ERR_PNPM_OUTDATED_LOCKFILE/. Input:
-  
+
   '✓ Lockfile passes supply-chain policies (verified 2d ago)\n' +
     `[ERR_PNPM_LOCKFILE_CONFIG_MISMATCH] Cannot proceed with the frozen installation. The current "overrides" configuration doesn't match the value found in the lockfile\n` +
     '\n' +
     'Update your lockfile using "pnpm install --no-frozen-lockfile"\n' +
     '[WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides". See https://pnpm.io/settings for the new home of each setting.\n'
-  
+
       at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/dependency-install.test.mjs:43:10)
       at async Test.run (node:internal/test_runner/test:1389:7)
       at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {

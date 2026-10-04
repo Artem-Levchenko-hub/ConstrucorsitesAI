@@ -23,11 +23,11 @@ test at tests/database-compatibility.test.mjs:8:1
 ✖ PostgreSQL identifier delimiters stay inside one quoted identifier (6.166513ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   + actual - expected
-  
+
   + 'select "two"quotes""'
   - 'select "two""quotes"""'
                  ^
-  
+
       at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:13:12)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1382:25)
@@ -45,11 +45,11 @@ test at tests/database-compatibility.test.mjs:18:1
 ✖ Hostile values remain driver parameters alongside escaped identifiers (0.395144ms)
   AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
   + actual - expected
-  
+
   + 'select "qa"column" where "value" = $1'
   - 'select "qa""column" where "value" = $1'
                 ^
-  
+
       at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:22:10)
       at Test.runInAsyncScope (node:async_hooks:227:14)
       at Test.run (node:internal/test_runner/test:1382:25)
