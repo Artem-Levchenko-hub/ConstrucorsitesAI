@@ -480,7 +480,8 @@ def test_empty_passive_header_data_preserves_other_routes_and_candidate_bytes(em
     module = helper()
     source = VHOST.replace(
         "location /api/ { proxy_pass http://127.0.0.1:8200; }",
-        f"location /api/ {{ proxy_pass http://127.0.0.1:8200; proxy_set_header Connection {empty}; }}",
+        "location /api/ { proxy_pass http://127.0.0.1:8200; "
+        f"proxy_set_header Connection {empty}; }}",
     )
     candidate = module.prepare(source)
     assert f"proxy_set_header Connection {empty};" in candidate
