@@ -1,0 +1,88 @@
+
+> omnia-max-miniapp@0.1.0 test /workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs
+> node --test tests/*.test.mjs
+
+✖ PostgreSQL identifier delimiters stay inside one quoted identifier (2.797306ms)
+✖ Hostile values remain driver parameters alongside escaped identifiers (0.342285ms)
+✖ kit install refuses mismatched lock instead of silently resolving and rewriting it (960.81184ms)
+✔ kit install accepts a matching lock without rewriting it (546.234292ms)
+✔ MAX starter package satisfies portable machine contract (6.905264ms)
+✔ activation action cleanup removes only a user created by that fixture (2.113659ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 3
+ℹ fail 3
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1647.275412
+
+✖ failing tests:
+
+test at tests/database-compatibility.test.mjs:8:1
+✖ PostgreSQL identifier delimiters stay inside one quoted identifier (2.797306ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'select "two"quotes""'
+  - 'select "two""quotes"""'
+                 ^
+  
+      at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:13:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'select "two"quotes""',
+    expected: 'select "two""quotes"""',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/database-compatibility.test.mjs:18:1
+✖ Hostile values remain driver parameters alongside escaped identifiers (0.342285ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'select "qa"column" where "value" = $1'
+  - 'select "qa""column" where "value" = $1'
+                ^
+  
+      at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:22:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'select "qa"column" where "value" = $1',
+    expected: 'select "qa""column" where "value" = $1',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/dependency-install.test.mjs:36:1
+✖ kit install refuses mismatched lock instead of silently resolving and rewriting it (960.81184ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /ERR_PNPM_OUTDATED_LOCKFILE/. Input:
+  
+  '✓ Lockfile passes supply-chain policies (verified 2d ago)\n' +
+    `[ERR_PNPM_LOCKFILE_CONFIG_MISMATCH] Cannot proceed with the frozen installation. The current "overrides" configuration doesn't match the value found in the lockfile\n` +
+    '\n' +
+    'Update your lockfile using "pnpm install --no-frozen-lockfile"\n' +
+    '[WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides". See https://pnpm.io/settings for the new home of each setting.\n'
+  
+      at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/dependency-install.test.mjs:43:10)
+      at async Test.run (node:internal/test_runner/test:1389:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: `✓ Lockfile passes supply-chain policies (verified 2d ago)\n[ERR_PNPM_LOCKFILE_CONFIG_MISMATCH] Cannot proceed with the frozen installation. The current "overrides" configuration doesn't match the value found in the lockfile\n\nUpdate your lockfile using "pnpm install --no-frozen-lockfile"\n[WARN] The "pnpm" field in package.json is no longer read by pnpm. The following keys were ignored: "pnpm.overrides". See https://pnpm.io/settings for the new home of each setting.\n`,
+    expected: /ERR_PNPM_OUTDATED_LOCKFILE/,
+    operator: 'match',
+    diff: 'simple'
+  }
+ ELIFECYCLE  Test failed. See above for more details.

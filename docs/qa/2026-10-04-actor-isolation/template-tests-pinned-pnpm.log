@@ -1,0 +1,66 @@
+
+> omnia-max-miniapp@0.1.0 test
+> node --test tests/*.test.mjs
+
+✖ PostgreSQL identifier delimiters stay inside one quoted identifier (6.166513ms)
+✖ Hostile values remain driver parameters alongside escaped identifiers (0.395144ms)
+✔ kit install refuses mismatched lock instead of silently resolving and rewriting it (819.798222ms)
+✔ kit install accepts a matching lock without rewriting it (536.359635ms)
+✔ MAX starter package satisfies portable machine contract (59.643821ms)
+✔ activation action cleanup removes only a user created by that fixture (19.293102ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 4
+ℹ fail 2
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1465.551471
+
+✖ failing tests:
+
+test at tests/database-compatibility.test.mjs:8:1
+✖ PostgreSQL identifier delimiters stay inside one quoted identifier (6.166513ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'select "two"quotes""'
+  - 'select "two""quotes"""'
+                 ^
+  
+      at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:13:12)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.start (node:internal/test_runner/test:1242:17)
+      at startSubtestAfterBootstrap (node:internal/test_runner/harness:387:17) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'select "two"quotes""',
+    expected: 'select "two""quotes"""',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }
+
+test at tests/database-compatibility.test.mjs:18:1
+✖ Hostile values remain driver parameters alongside escaped identifiers (0.395144ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'select "qa"column" where "value" = $1'
+  - 'select "qa""column" where "value" = $1'
+                ^
+  
+      at TestContext.<anonymous> (file:///workspace/qa-worktrees/mvp-actor-isolation/apps/orchestrator/templates/max-miniapp-nextjs/tests/database-compatibility.test.mjs:22:10)
+      at Test.runInAsyncScope (node:async_hooks:227:14)
+      at Test.run (node:internal/test_runner/test:1382:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:960:18)
+      at Test.postRun (node:internal/test_runner/test:1522:19)
+      at Test.run (node:internal/test_runner/test:1447:12)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:387:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'select "qa"column" where "value" = $1',
+    expected: 'select "qa""column" where "value" = $1',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

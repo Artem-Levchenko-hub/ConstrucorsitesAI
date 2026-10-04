@@ -1,0 +1,18 @@
+✔ real HMAC MAX U/V isolation probe performs only GET and does not count preview as actor (186.887576ms)
+✔ probe rejects list leakage (55.74476ms)
+✔ probe rejects denial-body leakage (36.140014ms)
+✔ probe rejects escaped-denial-body leakage (33.766624ms)
+✔ probe rejects redirect leakage (3.060222ms)
+✔ probe rejects oversize leakage (3.463558ms)
+✔ pre-issued signed cookies support portable Cell transport without login POST (60.403622ms)
+✔ Cell identity binds signed U/V to exact project and excludes preview (107.438509ms)
+✔ preview identity cannot satisfy genuine MAX actor identity acceptance (8.08608ms)
+✔ probe refuses production targets, duplicate actors and unsafe paths before traffic (28.78663ms)
+ℹ tests 10
+ℹ suites 0
+ℹ pass 10
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 981.235768
