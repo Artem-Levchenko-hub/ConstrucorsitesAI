@@ -1,0 +1,146 @@
+{
+  "candidate": "31538bff0433e81fb8376a7771bab841defebe46",
+  "parent": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+  "ciRunId": 37182290954,
+  "withWeb": false,
+  "withGateway": false,
+  "started": "2026-10-04T06:33:14.423063+00:00",
+  "phase": "complete",
+  "checks": {
+    "ciRunId": 37182290954,
+    "ciConclusion": "success",
+    "preDrainStatus": {
+      "active": {
+        "generations": 0,
+        "leases": 0,
+        "operations": 0,
+        "restorations": 0
+      },
+      "bootstrap_readonly": false,
+      "drained": false,
+      "release_sha": null
+    },
+    "oldLiveHealth": {
+      "status": "ok",
+      "service": "api",
+      "release_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+      "checks": {
+        "generation_worker": "ok",
+        "database": "ok",
+        "redis": "ok",
+        "worker": "ok",
+        "deploy_control_plane": "ok",
+        "preview_storage": "ok"
+      },
+      "dependencies": {
+        "generation_worker_release_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+        "generation_worker_load": "0/8",
+        "generation_worker_running": "0",
+        "generation_worker_waiting_capacity": "0",
+        "generation_worker_other": "0",
+        "generation_worker_configured_limit": "8",
+        "generation_worker_effective_limit": "8",
+        "worker_release_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+        "orchestrator_release_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+        "billing_worker": "ok",
+        "billing_worker_release_sha": "a0e2677746ee"
+      }
+    },
+    "candidatePaths": 7,
+    "protectedRsyncOverwrites": 0,
+    "backupOperatorReaderSHA256": "f84da3f79db560b01d8678f33f17a3a20413ae15e0bd419afa086a9d4b477e02",
+    "backupExitCode": 0,
+    "freshCellsCompleteness": {
+      "databases": 32,
+      "ok": 32,
+      "failed": 0,
+      "busy": 0,
+      "deferred": 0,
+      "stamp": "20261004-063319",
+      "manifestSHA256": "76209230d0bd7f37e9658514cb7e53c1fac32dcaba9d6b7c40866a5da1c09546"
+    },
+    "pinConfiguration": {
+      "core": {
+        "CELL_PUBLIC_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf",
+        "CELL_PREVIEW_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf"
+      },
+      "commerce": {
+        "CELL_PUBLIC_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf",
+        "CELL_PREVIEW_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf"
+      },
+      "changed": false
+    },
+    "canonicalSourceSHA256": "106d9b35bb6fe4eb9b9e028c184f3564b065783af85a16a2b1e1f17ce31724ac",
+    "canonicalExitCode": 0,
+    "publicHealth": {
+      "status": "ok",
+      "service": "api",
+      "release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+      "checks": {
+        "generation_worker": "ok",
+        "database": "ok",
+        "redis": "ok",
+        "worker": "ok",
+        "deploy_control_plane": "ok",
+        "preview_storage": "ok"
+      },
+      "dependencies": {
+        "generation_worker_release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+        "generation_worker_load": "0/8",
+        "generation_worker_running": "0",
+        "generation_worker_waiting_capacity": "0",
+        "generation_worker_other": "0",
+        "generation_worker_configured_limit": "8",
+        "generation_worker_effective_limit": "8",
+        "worker_release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+        "orchestrator_release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+        "billing_worker": "ok",
+        "billing_worker_release_sha": "31538bff0433"
+      }
+    },
+    "webHealth": {
+      "status": "ok",
+      "service": "web",
+      "release_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796"
+    },
+    "coreControllerHealth": {
+      "status": "ok",
+      "release_sha": "31538bff0433e81fb8376a7771bab841defebe46"
+    },
+    "commerceControllerHealth": {
+      "status": "ok",
+      "release_sha": "31538bff0433e81fb8376a7771bab841defebe46"
+    },
+    "gatewayBillingModuleSHA256": "6f255b96aa942060f924efacbc9c3d84582415e20fd051b53510ca964e84a7ae",
+    "actualRuntimeModuleHashes": {
+      "yleum_api.services.generation.agent_prompt": "88965927adadf698a10711a4bce76449ba7de82b84e3700b456d1f2e631644d6",
+      "yleum_api.services.project_cell_proofs": "62ec79f1f8a2f6384fd1c8a9fb88adef000fee8e6aea3a6542d4ba82ad10e606",
+      "yleum_api.services.generation.agent_generation": "0f6ed72b5cf83e786ad3412f868c7e4b1d2381ae0ab479eedc37b6fe9a378cf4",
+      "yleum_api.services.generation.agent_pipeline": "415bcc65a6896a2474938f561675517dcfaf60db76f829d6cf87b1b1989ef0d0",
+      "yleum_api.services.generation.agent_recovery": "009432e6c74de1996f3754ca108558819cd598d243356e28b87f060356d72b35",
+      "yleum_api.services.generation.agent_finalization": "1d969d412c6e3d596540e940051be3442e610caa2688371d54ca60ac4f1344bd",
+      "yleum_api.services.agent_native": "4180b0e5ea910cd8b6b41748fdea658d16f3e69e64afa30bde4a8ff5aebd13f6",
+      "yleum_api.services.generation.lifecycle": "d85ea6415067a2773cc16ad2e790efd5308f7ae4c5aca8cd5de711e39a75ba86",
+      "yleum_api.services.generation.supervisor": "a8af16bdd9ad1104a6ec4934002a0550a465030c9865a8abf35e786d7211e289",
+      "yleum_api.workers.generation": "b4fe4dfb98a5c7d76f313800ff83ef48cbd160bb10518ed1063a85292f4cef2c",
+      "yleum_api.services.max_finalization": "7df3a6cd0988fe57101dd1aa939f11791020f80771df9a0f9b45c0a9c6616bba",
+      "yleum_api.services.max_project_kit": "a8e2ea64338c5751282b1f548c0f5aea2d33423bec6540f6dec2197e6db9adeb"
+    },
+    "postIngressStatus": {
+      "activeState": false,
+      "mapPresent": false,
+      "vhostMarkerPresent": false
+    },
+    "postDrainStatus": {
+      "active": {
+        "generations": 0,
+        "leases": 0,
+        "operations": 0,
+        "restorations": 0
+      },
+      "bootstrap_readonly": false,
+      "drained": false,
+      "release_sha": null
+    }
+  }
+}

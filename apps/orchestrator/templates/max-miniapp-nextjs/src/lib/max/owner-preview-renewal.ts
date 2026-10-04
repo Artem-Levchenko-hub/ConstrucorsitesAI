@@ -97,8 +97,12 @@ export function installOwnerPreviewFetch(boundary: Window = window, configuredOr
   };
   const guarded: typeof window.fetch = async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), boundary.location.href);
+    const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     if (url.origin !== boundary.location.origin || !url.pathname.startsWith("/api/") ||
-      url.pathname === SESSION_PATH || url.pathname === BOOTSTRAP_PATH) return native(input, init);
+      (url.pathname === SESSION_PATH && method !== "GET") || url.pathname === BOOTSTRAP_PATH) return native(input, init);
+    // SDK actor preflight uses this public GET before its guarded business POST.
+    // Internal session probes use captured native fetch, so guarding the caller's
+    // GET renews expiry without recursion or replaying a business request.
     const signal = init?.signal !== undefined ? init.signal : (input instanceof Request ? input.signal : undefined);
     signal?.throwIfAborted();
     const permitted = await waitForSession(signal);

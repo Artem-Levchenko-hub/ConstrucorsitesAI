@@ -1,0 +1,1169 @@
+{
+  "B_source_write_classification": {
+    "classifier_source_sha256": "0f6ed72b5cf83e786ad3412f868c7e4b1d2381ae0ab479eedc37b6fe9a378cf4",
+    "prompt_sha256": "ce22932975934afbfdaf1c1ddb634656e68d7bd3406c988f5cbb8c6c4a40654a",
+    "requires_source_write": true,
+    "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+    "scope": "installed read-only classifier on exact stored owner request; model context emission is not independently observed"
+  },
+  "accepted_runtime_assets": {
+    "projects": [
+      {
+        "accepted_matches_workspace_files": true,
+        "alias": "A",
+        "changed_files": [
+          "src/app/page.tsx"
+        ],
+        "commit_sha": "6cff39292f87e96e1f22d7da37a491e8bf47be07",
+        "current_snapshot_id": "899d0e37-2cc1-4c98-8815-6f20118e141c",
+        "files": {
+          "src/app/globals.css": {
+            "excerpt": "1: @import url(\"https://fonts.googleapis.com/css2?family=Jost:wght@400;500;600;700&family=Open+Sans:wght@400;500;600&display=swap\");\n2: @import \"tailwindcss\";\n3: \n4: :root {\n5:   color-scheme: light;\n6: \n7:   /* QA 30.09 \u2014 \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0438 \u0437\u0430\u0434\u0430\u0447: \u043f\u0440\u043e\u0434\u0443\u043a\u0442\u043e\u0432\u0430\u044f \u043f\u0430\u043b\u0438\u0442\u0440\u0430 \u00abSandy Teal\u00bb (QA-G02-A) */\n8:   --app-bg: #f6efe2;\n9:   --app-surface: #ffffff;\n10:   --app-text: #1f2a24;\n11:   --app-muted: #7a7265;\n12:   --app-border: #e7ddc9;",
+            "feature_patterns": {
+              "density": 0,
+              "g11": 0,
+              "overdue": 0,
+              "purple": 0
+            },
+            "sha256": "2118cb99762b189d4bc5ef0ea683a3f1366633fd292bc021115745f089eda198"
+          },
+          "src/app/page.tsx": {
+            "excerpt": "61: // QA-G07-A: \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0430\u0442\u0435\u043b\u044c \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u0441\u043f\u0438\u0441\u043a\u0430 \u0437\u0430\u0434\u0430\u0447. \u041c\u0435\u043d\u044f\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u043e, \u043a\u0430\u043a\n62: // \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0430\u044e\u0442\u0441\u044f \u0443\u0436\u0435 \u043e\u0442\u0444\u0438\u043b\u044c\u0442\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u0434\u0430\u0447\u0438 \u2014 \u0441\u043f\u0438\u0441\u043e\u043a \u043a\u0430\u0440\u0442\u043e\u0447\u0435\u043a \u0438\u043b\u0438 \u0434\u043e\u0441\u043a\u0430 \u043f\u043e\n63: // \u0441\u0442\u0430\u0442\u0443\u0441\u0430\u043c \u00ab\u041d\u043e\u0432\u0430\u044f\u00bb/\u00ab\u0412\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0430\u00bb. \u041f\u043e\u0438\u0441\u043a \u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u044b \u0441\u0442\u0430\u0442\u0443\u0441\u0430/\u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430 \u0438\u0437\n64: // G05/G06 \u043e\u0433\u0440\u0430\u043d\u0438\u0447\u0438\u0432\u0430\u044e\u0442 \u043e\u0431\u0430 \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u043e\u0434\u0438\u043d\u0430\u043a\u043e\u0432\u043e.\n65: type ViewMode = \"list\" | \"board\";\n66: // QA-G09-A: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0430\u0435\u043c\u044b\u0445 \u0437\u0430\u0434\u0430\u0447 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e. \u0415\u0449\u0451 \u043e\u0434\u0438\u043d \u0441\u043b\u043e\u0439 \u043d\u0430\u0434\n67: // \u043f\u043e\u0438\u0441\u043a\u043e\u043c \u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u0430\u043c\u0438 \u0441\u0442\u0430\u0442\u0443\u0441\u0430/\u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430 \u2014 \u043f\u0440\u0438\u043c\u0435\u043d\u044f\u0435\u0442\u0441\u044f \u043e\u0434\u0438\u043d\u0430\u043a\u043e\u0432\u043e \u043a \u0441\u043f\u0438\u0441\u043a\u0443 \u0438\n68: // \u043a \u043a\u0430\u0436\u0434\u043e\u0439 \u043a\u043e\u043b\u043e\u043d\u043a\u0435 \u0434\u043e\u0441\u043a\u0438. \u0421\u0430\u043c\u0438 \u0434\u0430\u043d\u043d\u044b\u0435, \u0438\u0445 \u043f\u043e\u0440\u044f\u0434\u043e\u043a \u0445\u0440\u0430\u043d\u0435\u043d\u0438\u044f \u0432 \u0411\u0414 \u0438 \u0431\u0438\u0437\u043d\u0435\u0441-\n69: // \u0437\u0430\u043f\u0438\u0441\u0438 \u043d\u0435 \u043c\u0435\u043d\u044f\u044e\u0442\u0441\u044f, \u0441\u043e\u0440\u0442\u0438\u0440\u0443\u0435\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u043e, \u0447\u0442\u043e \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u043d\u0430 \u044d\u043a\u0440\u0430\u043d\u0435.\n70: type TaskSort = \"default\" | \"title-asc\" | \"title-desc\";\n71: \n72: // QA-G10-A: \u043f\u043b\u043e\u0442\u043d\u043e\u0441\u0442\u044c \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f \u043a\u0430\u0440\u0442\u043e\u0447\u0435\u043a \u0441\u043f\u0438\u0441\u043a\u0430/\u0434\u043e\u0441\u043a\u0438. \u0427\u0438\u0441\u0442\u043e \u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u0430\u044f\n73: // \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u0438\u043d\u0442\u0435\u0440\u0444\u0435\u0439\u0441\u0430 \u2014 \u043d\u0435 \u0442\u0440\u043e\u0433\u0430\u0435\u0442 \u0434\u0430\u043d\u043d\u044b\u0435, \u0444\u0438\u043b\u044c\u0442\u0440\u044b, \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0443 \u0438\u043b\u0438 URL-state.\n74: // \u0425\u0440\u0430\u043d\u0438\u0442\u0441\u044f \u0442\u043e\u043b\u044c\u043a\u043e \u0432 localStorage \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f (\u043e\u0434\u0438\u043d \u043f\u0440\u043e\u0441\u0442\u043e\u0439 \u0441\u0442\u0440\u043e\u043a\u043e\u0432\u044b\u0439\n75: // \u043a\u043b\u044e\u0447), \u0430 \u043d\u0435 \u0431\u0438\u0437\u043d\u0435\u0441-\u0437\u0430\u043f\u0438\u0441\u0438/\u043f\u043e\u043b\u044f \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f/\u0442\u043e\u043a\u0435\u043d\u044b, \u043f\u043e\u044d\u0442\u043e\u043c\u0443 \u043f\u0435\u0440\u0435\u0436\u0438\u0432\u0430\u0435\u0442\n76: // \u043f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0443 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b \u0431\u0435\u0437 \u043f\u043e\u0445\u043e\u0434\u0430 \u0432 \u0411\u0414.\n77: type Density = \"comfortable\" | \"compact\";\n78: const DENSITY_STORAGE_KEY = \"qa-tasks:density\";\n79: \n80: function isDensity(value: unknown): value is Density {\n81:   return value === \"comfortable\" || value === \"compact\";\n82: }\n83: \n84: const STATUS_LABEL: Record<TaskStatus, string> = {\n85:   new: \"\u041d\u043e\u0432\u0430\u044f\",\n86:   done: \"\u0412\u044b\u043f\u043e\u043b\u043d\u0435\u043d\u0430\",\n87: };\n88: \n89: const PRIORITY_LABEL: Record<TaskPriority, string> = {\n90:   normal: \"\u041e\u0431\u044b\u0447\u043d\u044b\u0439\",\n91:   high: \"\u0412\u044b\u0441\u043e\u043a\u0438\u0439\",\n92:   low: \"\u041d\u0438\u0437\u043a\u0438\u0439\",\n93: };\n94: \n95: const PRIORITY_COLOR: Record<TaskPriority, { bg: string; fg: string }> = {\n96:   normal: { bg: \"rgba(122,114,101,0.14)\", fg: \"var(--app-muted)\" },\n97:   high: { bg: \"rgba(220,38,38,0.14)\", fg: \"#dc2626\" },\n183: \n184: function parseSearchParam(value: string | null): string {\n185:   return typeof value === \"string\" ? value : \"\";\n186: }\n187: \n188: // QA-G09-A: \u043f\u0440\u0438 \u043d\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043d\u043e\u043c/\u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044e\u0449\u0435\u043c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0438 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u0430 \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0438\n189: // \u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u043c \u0438\u0441\u0445\u043e\u0434\u043d\u044b\u0439 \u043f\u043e\u0440\u044f\u0434\u043e\u043a (\u00abdefault\u00bb), \u043a\u0430\u043a \u0438 \u043e\u0441\u0442\u0430\u043b\u044c\u043d\u044b\u0435 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b.\n190: function parseSortParam(value: string | null): TaskSort {\n191:   return value === \"asc\" ? \"title-asc\" : value === \"desc\" ? \"title-desc\" : \"default\";\n192: }\n193: \n194: function compareTaskTitles(a: Task, b: Task): number {\n195:   return a.title.localeCompare(b.title, \"ru\", { sensitivity: \"base\", numeric: true });\n196: }\n197: \n198: /**\n199:  * QA-G09-A: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e \u043d\u0430\u0434 \u0443\u0436\u0435 \u043e\u0442\u0444\u0438\u043b\u044c\u0442\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u043c \u0441\u043f\u0438\u0441\u043a\u043e\u043c \u0437\u0430\u0434\u0430\u0447.\n200:  * \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442\u0441\u044f \u0438 \u0434\u043b\u044f \u043f\u043b\u043e\u0441\u043a\u043e\u0433\u043e \u0441\u043f\u0438\u0441\u043a\u0430, \u0438 \u0434\u043b\u044f \u0434\u043e\u0441\u043a\u0438 (\u0434\u043e\u0441\u043a\u0430 \u0444\u0438\u043b\u044c\u0442\u0440\u0443\u0435\u0442 \u044d\u0442\u043e\u0442 \u0436\u0435\n201:  * \u043e\u0442\u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u043d\u044b\u0439 \u043c\u0430\u0441\u0441\u0438\u0432 \u043f\u043e \u0441\u0442\u0430\u0442\u0443\u0441\u0443, \u043f\u043e\u044d\u0442\u043e\u043c\u0443 \u043f\u043e\u0440\u044f\u0434\u043e\u043a \u0432\u043d\u0443\u0442\u0440\u0438 \u043a\u0430\u0436\u0434\u043e\u0439 \u043a\u043e\u043b\u043e\u043d\u043a\u0438\n202:  * \u0441\u043e\u0432\u043f\u0430\u0434\u0430\u0435\u0442 \u0441 \u043f\u043e\u0440\u044f\u0434\u043a\u043e\u043c \u0432 \u0441\u043f\u0438\u0441\u043a\u0435).\n203:  */\n204: function sortTasksByTitle(list: Task[], sort: TaskSort): Task[] {\n205:   if (sort === \"default\") return list;\n206:   const sorted = [...list].sort(compareTaskTitles);\n251:   const [formError, setFormError] = useState<string | null>(null);\n252:   const [formSaving, setFormSaving] = useState(false);\n253: \n254:   const [rowBusyId, setRowBusyId] = useState<string | null>(null);\n255: \n256:   // QA-G10-A: \u043f\u043b\u043e\u0442\u043d\u043e\u0441\u0442\u044c \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f \u00ab\u041e\u0431\u044b\u0447\u043d\u044b\u0439 / \u041a\u043e\u043c\u043f\u0430\u043a\u0442\u043d\u044b\u0439\u00bb. \u0427\u0438\u0442\u0430\u0435\u0442\u0441\u044f \u0438\u0437\n257:   // localStorage \u044d\u0442\u043e\u0433\u043e \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u044f \u043e\u0434\u0438\u043d \u0440\u0430\u0437 \u043f\u0440\u0438 \u043c\u043e\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0438 (SSR-\u0431\u0435\u0437\u043e\u043f\u0430\u0441\u043d\u043e \u2014\n258:   // \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e \"comfortable\", \u043a\u0430\u043a \u0438 \u043f\u0440\u0435\u0436\u043d\u0438\u0439 \u0432\u0438\u0434), \u0437\u0430\u0442\u0435\u043c \u043f\u0435\u0440\u0435\u0436\u0438\u0432\u0430\u0435\u0442 F5.\n259:   // \u042d\u0442\u043e \u0447\u0438\u0441\u0442\u043e \u0432\u0438\u0437\u0443\u0430\u043b\u044c\u043d\u0430\u044f \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430, \u0444\u0438\u043b\u044c\u0442\u0440\u044b, \u043f\u043e\u0438\u0441\u043a \u0438 URL-state\n260:   // \u0438\u0437 G08/G09 \u044d\u0442\u043e\u0442 \u0441\u0442\u0435\u0439\u0442 \u043d\u0435 \u0442\u0440\u043e\u0433\u0430\u044e\u0442 \u0438 \u043d\u0435 \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u044e\u0442\u0441\u044f \u043f\u0440\u0438 \u0435\u0433\u043e \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0438.\n261:   const [density, setDensity] = useState<Density>(\"comfortable\");\n262:   const [densityLoaded, setDensityLoaded] = useState(false);\n263: \n264:   useEffect(() => {\n265:     try {\n266:       const stored = window.localStorage.getItem(DENSITY_STORAGE_KEY);\n267:       if (isDensity(stored)) setDensity(stored);\n268:     } catch {\n269:       // localStorage \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d (\u043f\u0440\u0438\u0432\u0430\u0442\u043d\u044b\u0439 \u0440\u0435\u0436\u0438\u043c/\u043a\u0432\u043e\u0442\u0430) \u2014 \u043e\u0441\u0442\u0430\u0451\u043c\u0441\u044f \u043d\u0430 \"comfortable\".\n270:     } finally {\n271:       setDensityLoaded(true);\n272:     }\n273:   }, []);\n274: \n275:   const changeDensity = useCallback((next: Density) => {\n276:     setDensity(next);\n277:     try {\n278:       window.localStorage.setItem(DENSITY_STORAGE_KEY, next);\n279:     } catch {\n280:       // \u0421\u043e\u0445\u0440\u0430\u043d\u0435\u043d\u0438\u0435 \u043d\u0435 \u043a\u0440\u0438\u0442\u0438\u0447\u043d\u043e \u0434\u043b\u044f \u0440\u0430\u0431\u043e\u0442\u044b \u044d\u043a\u0440\u0430\u043d\u0430 \u2014 \u043d\u0430\u0441\u0442\u0440\u043e\u0439\u043a\u0430 \u043f\u0440\u043e\u0441\u0442\u043e \u043d\u0435 \u043f\u0435\u0440\u0435\u0436\u0438\u0432\u0451\u0442 \u043f\u0435\u0440\u0435\u0437\u0430\u0433\u0440\u0443\u0437\u043a\u0443.\n281:     }\n282:   }, []);\n283: \n284:   // QA-G08-A: \u0432\u0438\u0434 (\u0421\u043f\u0438\u0441\u043e\u043a/\u0414\u043e\u0441\u043a\u0430) \u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u044b \u0441\u0442\u0430\u0442\u0443\u0441\u0430/\u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430/\u043f\u043e\u0438\u0441\u043a\u0430 \u0447\u0438\u0442\u0430\u044e\u0442\n285:   // \u0441\u0432\u043e\u0451 \u043d\u0430\u0447\u0430\u043b\u044c\u043d\u043e\u0435 \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u043f\u0440\u044f\u043c\u043e \u0438\u0437 \u0442\u0435\u043a\u0443\u0449\u0435\u0433\u043e \u0430\u0434\u0440\u0435\u0441\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b \u043e\u0434\u0438\u043d \u0440\u0430\u0437 \u043f\u0440\u0438\n297:   );\n298:   const [searchQuery, setSearchQuery] = useState(() => parseSearchParam(searchParams.get(SEARCH_PARAM)));\n299:   // QA-G07-A/QA-G08-A: \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0430\u0442\u0435\u043b\u044c \u00ab\u0421\u043f\u0438\u0441\u043e\u043a / \u0414\u043e\u0441\u043a\u0430\u00bb \u2014 \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 \u0432\u044b\u0431\u043e\u0440\n300:   // \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0438\u044f, \u0441\u043e\u0445\u0440\u0430\u043d\u044f\u0435\u043c\u044b\u0439 \u0432 \u0430\u0434\u0440\u0435\u0441\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b \u0432\u043c\u0435\u0441\u0442\u0435 \u0441 \u0444\u0438\u043b\u044c\u0442\u0440\u0430\u043c\u0438.\n301:   const [viewMode, setViewMode] = useState<ViewMode>(() => parseViewParam(searchParams.get(VIEW_PARAM)));\n302:   // QA-G09-A: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e \u2014 \u0442\u0430\u043a\u043e\u0439 \u0436\u0435 \u043f\u0430\u0440\u0430\u043c\u0435\u0442\u0440 \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f, \u043a\u0430\u043a \u0432\u0438\u0434\n303:   // \u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u044b: \u0447\u0438\u0442\u0430\u0435\u0442\u0441\u044f \u0438\u0437 \u0430\u0434\u0440\u0435\u0441\u0430 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b \u043e\u0434\u0438\u043d \u0440\u0430\u0437 \u043f\u0440\u0438 \u043c\u043e\u043d\u0442\u0438\u0440\u043e\u0432\u0430\u043d\u0438\u0438.\n304:   const [taskSort, setTaskSort] = useState<TaskSort>(() => parseSortParam(searchParams.get(SORT_PARAM)));\n305: \n306:   // \u041e\u0442\u0440\u0430\u0436\u0430\u0435\u043c \u0442\u0435\u043a\u0443\u0449\u0438\u0439 \u0432\u0438\u0434, \u0444\u0438\u043b\u044c\u0442\u0440\u044b \u0438 \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0443 \u0432 \u0430\u0434\u0440\u0435\u0441\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b. \u041f\u0430\u0440\u0430\u043c\u0435\u0442\u0440\u044b\n307:   // \u0441\u043e \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435\u043c \u043f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e \u043d\u0435 \u0437\u0430\u043f\u0438\u0441\u044b\u0432\u0430\u044e\u0442\u0441\u044f, \u0447\u0442\u043e\u0431\u044b \u0430\u0434\u0440\u0435\u0441 \u043e\u0441\u0442\u0430\u0432\u0430\u043b\u0441\u044f \u043a\u043e\u0440\u043e\u0442\u043a\u0438\u043c.\n308:   // \u042d\u0442\u043e \u0432\u043b\u0438\u044f\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u043d\u0430 query-\u0441\u0442\u0440\u043e\u043a\u0443 \u0442\u0435\u043a\u0443\u0449\u0435\u0439 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b \u2014 \u0441\u0430\u043c\u0438 \u0434\u0430\u043d\u043d\u044b\u0435 \u0437\u0430\u0434\u0430\u0447\n309:   // (API-\u0437\u0430\u043f\u0440\u043e\u0441\u044b, \u0438\u0434\u0435\u043d\u0442\u0438\u0444\u0438\u043a\u0430\u0442\u043e\u0440\u044b, \u0441\u0442\u0430\u0442\u0443\u0441\u044b \u0432 \u0411\u0414) \u044d\u0442\u043e\u0442 \u044d\u0444\u0444\u0435\u043a\u0442 \u043d\u0435 \u0442\u0440\u043e\u0433\u0430\u0435\u0442.\n530:             onSearchQueryChange={setSearchQuery}\n531:             viewMode={viewMode}\n532:             onViewModeChange={setViewMode}\n533:             sort={taskSort}\n534:             onSortChange={setTaskSort}\n535:             density={density}\n536:             onDensityChange={changeDensity}\n537:             hasActiveFilters={hasActiveFilters}\n538:             onResetFilters={resetFilters}\n539:             onRetry={() => void loadTasks()}\n540:             onOpenDetails={(id) => setSelectedId(id)}\n541:             onToggleStatus={(task) => void toggleStatus(task)}\n542:             onCreate={openCreateForm}\n543:           />\n616:   onSearchQueryChange: (value: string) => void;\n617:   viewMode: ViewMode;\n618:   onViewModeChange: (mode: ViewMode) => void;\n619:   sort: TaskSort;\n620:   onSortChange: (sort: TaskSort) => void;\n621:   density: Density;\n622:   onDensityChange: (density: Density) => void;\n623:   hasActiveFilters: boolean;\n624:   onResetFilters: () => void;\n625:   onRetry: () => void;\n626:   onOpenDetails: (id: string) => void;\n627:   onToggleStatus: (task: Task) => void;\n628:   onCreate: () => void;\n629: }) {\n642:     onSearchQueryChange,\n643:     viewMode,\n644:     onViewModeChange,\n645:     sort,\n646:     onSortChange,\n647:     density,\n648:     onDensityChange,\n649:     hasActiveFilters,\n650:     onResetFilters,\n651:     onRetry,\n652:     onOpenDetails,\n653:     onToggleStatus,\n654:     onCreate,\n655:   } = props;\n656: \n657:   // QA-G11-A: \u043e\u0442\u0441\u0442\u0443\u043f\u044b \u043a\u0430\u0440\u0442\u043e\u0447\u0435\u043a \u0438 \u0440\u0430\u0441\u0441\u0442\u043e\u044f\u043d\u0438\u0435 \u043c\u0435\u0436\u0434\u0443 \u043d\u0438\u043c\u0438 \u0437\u0430\u0432\u0438\u0441\u044f\u0442 \u043e\u0442 \u0432\u044b\u0431\u0440\u0430\u043d\u043d\u043e\u0439\n658:   // \u043f\u043b\u043e\u0442\u043d\u043e\u0441\u0442\u0438 \u2014 \u043f\u0440\u0438\u043c\u0435\u043d\u044f\u0435\u0442\u0441\u044f \u0438 \u043a \u043f\u043b\u043e\u0441\u043a\u043e\u043c\u0443 \u0441\u043f\u0438\u0441\u043a\u0443, \u0438 \u043a \u0434\u043e\u0441\u043a\u0435 (\u043a\u043e\u043b\u043e\u043d\u043a\u0430\u043c \u0438\n659:   // \u043a\u0430\u0440\u0442\u043e\u0447\u043a\u0430\u043c \u0432\u043d\u0443\u0442\u0440\u0438 \u043d\u0438\u0445). \u0421\u0430\u043c\u0438 \u0434\u0430\u043d\u043d\u044b\u0435, \u0444\u0438\u043b\u044c\u0442\u0440\u044b \u0438 \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043d\u0435 \u0437\u0430\u0442\u0440\u0430\u0433\u0438\u0432\u0430\u044e\u0442\u0441\u044f.\n660:   const spacing =\n661:     density === \"compact\"\n662:       ? { cardPadding: 8, listGap: 6, boardColumnGap: 6, boardCardGap: 6 }\n663:       : { cardPadding: 16, listGap: 12, boardColumnGap: 12, boardCardGap: 12 };\n664: \n665:   // \u0424\u0438\u043b\u044c\u0442\u0440 \u043c\u0435\u043d\u044f\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0442\u043e, \u0447\u0442\u043e \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0430\u0435\u0442\u0441\u044f: \u0441\u0430\u043c\u0438 \u0437\u0430\u0434\u0430\u0447\u0438 \u0438 \u0438\u0445 \u0441\u0442\u0430\u0442\u0443\u0441\u044b \u043d\u0435\n666:   // \u0437\u0430\u0442\u0440\u0430\u0433\u0438\u0432\u0430\u044e\u0442\u0441\u044f \u2014 \u0444\u0438\u043b\u044c\u0442\u0440\u0430\u0446\u0438\u044f \u0432\u044b\u043f\u043e\u043b\u043d\u044f\u0435\u0442\u0441\u044f \u043d\u0430\u0434 \u0443\u0436\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d\u043d\u044b\u043c `tasks`.\n667:   const statusFiltered =\n668:     filter === \"all\" ? tasks : tasks.filter((task) => task.status === filter);\n669: \n670:   // QA-G06-A: \u0444\u0438\u043b\u044c\u0442\u0440 \u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430 \u2014 \u0435\u0449\u0451 \u043e\u0434\u0438\u043d \u0441\u043b\u043e\u0439 \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f \u043d\u0430\u0434 \u0441\u0442\u0430\u0442\u0443\u0441\u043d\u044b\u043c\n687:         (task) =>\n688:           task.title.toLowerCase().includes(normalizedQuery) ||\n689:           task.description.toLowerCase().includes(normalizedQuery),\n690:       )\n691:     : priorityFiltered;\n692:   // QA-G09-A: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e \u2014 \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0439 \u0441\u043b\u043e\u0439 \u043e\u0442\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u044f, \u043f\u0440\u0438\u043c\u0435\u043d\u044f\u0435\u0442\u0441\u044f\n693:   // \u043f\u043e\u0441\u043b\u0435 \u043f\u043e\u0438\u0441\u043a\u0430 \u0438 \u043e\u0431\u043e\u0438\u0445 \u0444\u0438\u043b\u044c\u0442\u0440\u043e\u0432. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0435\u0442\u0441\u044f \u0438 \u0434\u043b\u044f \u0441\u043f\u0438\u0441\u043a\u0430, \u0438 \u0434\u043b\u044f \u0434\u043e\u0441\u043a\u0438\n694:   // (\u0434\u043e\u0441\u043a\u0430 \u0440\u0430\u0441\u043a\u043b\u0430\u0434\u044b\u0432\u0430\u0435\u0442 \u044d\u0442\u043e\u0442 \u0436\u0435 \u043f\u043e\u0440\u044f\u0434\u043e\u043a \u043f\u043e \u043a\u043e\u043b\u043e\u043d\u043a\u0430\u043c \u0441\u0442\u0430\u0442\u0443\u0441\u043e\u0432), \u043f\u043e\u044d\u0442\u043e\u043c\u0443 \u043f\u043e\u0440\u044f\u0434\u043e\u043a\n695:   // \u043e\u0434\u0438\u043d\u0430\u043a\u043e\u0432\u044b\u0439 \u0432 \u043e\u0431\u043e\u0438\u0445 \u043f\u0440\u0435\u0434\u0441\u0442\u0430\u0432\u043b\u0435\u043d\u0438\u044f\u0445.\n696:   const visibleTasks = sortTasksByTitle(searchFiltered, sort);\n697:   const isSearching = normalizedQuery.length > 0;\n698:   const isFilteredByPriority = priorityFilter !== \"all\";\n699: \n755:               marginLeft: \"auto\",\n756:               alignSelf: \"center\",\n757:               flexShrink: 0,\n758:               fontSize: 11,\n759:               fontWeight: 600,\n760:               letterSpacing: 0.3,\n761:               color: \"#7c3aed\",\n762:               border: \"1px solid #7c3aed\",\n763:               borderRadius: 999,\n764:               padding: \"4px 8px\",\n765:               whiteSpace: \"nowrap\",\n766:             }}\n767:           >\n768:             QA-G07-A\n769:           </span>\n770:         </div>\n771:       )}\n772: \n773:       {/* QA-G09-A: \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e \u2014 \u0440\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043e\u0434\u0438\u043d\u0430\u043a\u043e\u0432\u043e \u0432 \u0441\u043f\u0438\u0441\u043a\u0435 \u0438 \u0432\n774:           \u043a\u0430\u0436\u0434\u043e\u0439 \u043a\u043e\u043b\u043e\u043d\u043a\u0435 \u0434\u043e\u0441\u043a\u0438, \u043f\u0440\u0438\u043c\u0435\u043d\u044f\u0435\u0442\u0441\u044f \u043f\u043e\u0441\u043b\u0435 \u043f\u043e\u0438\u0441\u043a\u0430 \u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u043e\u0432 \u0441\u0442\u0430\u0442\u0443\u0441\u0430/\n775:           \u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430 \u0438 \u043d\u0435 \u0441\u0431\u0440\u0430\u0441\u044b\u0432\u0430\u0435\u0442 \u0438\u0445. \u00ab\u041f\u043e \u0443\u043c\u043e\u043b\u0447\u0430\u043d\u0438\u044e\u00bb \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0430\u0435\u0442 \u0438\u0441\u0445\u043e\u0434\u043d\u044b\u0439\n776:           \u043f\u043e\u0440\u044f\u0434\u043e\u043a (\u043f\u043e \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0435\u043c\u0443 \u043e\u0431\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u044e), \u043a\u043e\u0442\u043e\u0440\u044b\u0439 \u0431\u044b\u043b \u0434\u043e \u0434\u043e\u0431\u0430\u0432\u043b\u0435\u043d\u0438\u044f \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0438. */}\n777:       {loadState === \"ready\" && tasks.length > 0 && (\n778:         <div style={{ display: \"flex\", alignItems: \"center\", gap: 8 }}>\n779:           <span style={{ fontSize: 12, color: \"var(--app-muted)\", flexShrink: 0 }}>\u0421\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0430:</span>\n780:           <div\n804:             title=\"QA-\u043c\u0430\u0440\u043a\u0435\u0440 \u0432\u0435\u0440\u0441\u0438\u0438 \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0438 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e\"\n805:             style={{\n806:               flexShrink: 0,\n807:               fontSize: 11,\n808:               fontWeight: 600,\n809:               letterSpacing: 0.3,\n810:               color: \"#2563eb\",\n811:               border: \"1px solid #2563eb\",\n812:               borderRadius: 999,\n813:               padding: \"4px 8px\",\n814:               whiteSpace: \"nowrap\",\n815:             }}\n816:           >\n817:             QA-G09-A\n818:           </span>\n819:         </div>\n820:       )}\n821: \n822:       {loadState === \"ready\" && tasks.length > 0 && (\n823:         <div style={{ display: \"flex\", flexDirection: \"column\", gap: 6 }}>\n824:           <div style={{ display: \"flex\", alignItems: \"center\", gap: 8 }}>\n884:               title=\"QA-\u043c\u0430\u0440\u043a\u0435\u0440 \u0432\u0435\u0440\u0441\u0438\u0438 \u044d\u043a\u0440\u0430\u043d\u0430 \u043f\u043e\u0438\u0441\u043a\u0430\"\n885:               style={{\n886:                 flexShrink: 0,\n887:                 fontSize: 11,\n888:                 fontWeight: 600,\n889:                 letterSpacing: 0.3,\n890:                 color: \"var(--app-muted)\",\n891:                 border: \"1px solid var(--app-border)\",\n892:                 borderRadius: 999,\n893:                 padding: \"4px 8px\",\n894:                 whiteSpace: \"nowrap\",\n895:               }}\n896:             >\n901:               title=\"QA-\u043c\u0430\u0440\u043a\u0435\u0440 \u0432\u0435\u0440\u0441\u0438\u0438 \u0444\u043e\u0440\u043c\u044b \u0438 \u0441\u0447\u0451\u0442\u0447\u0438\u043a\u0430 \u0440\u0435\u0437\u0443\u043b\u044c\u0442\u0430\u0442\u043e\u0432\"\n902:               style={{\n903:                 flexShrink: 0,\n904:                 fontSize: 11,\n905:                 fontWeight: 600,\n906:                 letterSpacing: 0.3,\n907:                 color: \"var(--app-accent)\",\n908:                 border: \"1px solid var(--app-accent)\",\n909:                 borderRadius: 999,\n910:                 padding: \"4px 8px\",\n911:                 whiteSpace: \"nowrap\",\n912:               }}\n913:             >\n918:               title=\"QA-\u043c\u0430\u0440\u043a\u0435\u0440 \u0432\u0435\u0440\u0441\u0438\u0438 \u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430 \u0437\u0430\u0434\u0430\u0447\"\n919:               style={{\n920:                 flexShrink: 0,\n921:                 fontSize: 11,\n922:                 fontWeight: 600,\n923:                 letterSpacing: 0.3,\n924:                 color: \"#dc2626\",\n925:                 border: \"1px solid #dc2626\",\n926:                 borderRadius: 999,\n927:                 padding: \"4px 8px\",\n928:                 whiteSpace: \"nowrap\",\n929:               }}\n930:             >\n935:               title=\"QA-\u043c\u0430\u0440\u043a\u0435\u0440 \u0432\u0435\u0440\u0441\u0438\u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u0430 \u043f\u0440\u0438\u043e\u0440\u0438\u0442\u0435\u0442\u0430\"\n936:               style={{\n937:                 flexShrink: 0,\n938:                 fontSize: 11,\n939:                 fontWeight: 600,\n940:                 letterSpacing: 0.3,\n941:                 color: \"#0d9488\",\n942:                 border: \"1px solid #0d9488\",\n943:                 borderRadius: 999,\n944:                 padding: \"4px 8px\",\n945:                 whiteSpace: \"nowrap\",\n946:               }}\n947:             >\n952:               title=\"QA-\u043c\u0430\u0440\u043a\u0435\u0440 \u0432\u0435\u0440\u0441\u0438\u0438 \u0437\u0430\u043f\u043e\u043c\u0438\u043d\u0430\u043d\u0438\u044f \u0432\u0438\u0434\u0430 \u0438 \u0444\u0438\u043b\u044c\u0442\u0440\u043e\u0432 \u0432 \u0430\u0434\u0440\u0435\u0441\u0435 \u0441\u0442\u0440\u0430\u043d\u0438\u0446\u044b\"\n953:               style={{\n954:                 flexShrink: 0,\n955:                 fontSize: 11,\n956:                 fontWeight: 600,\n957:                 letterSpacing: 0.3,\n958:                 color: \"#b45309\",\n959:                 border: \"1px solid #b45309\",\n960:                 borderRadius: 999,\n961:                 padding: \"4px 8px\",\n962:                 whiteSpace: \"nowrap\",\n963:               }}\n964:             >\n1023:               count={priorityHighCount}\n1024:               active={priorityFilter === \"high\"}\n1025:               onClick={() => onPriorityFilterChange(\"high\")}\n1026:             />\n1027:             <FilterChip\n1028:               label=\"\u041e\u0431\u044b\u0447\u043d\u044b\u0439\"\n1029:               count={priorityNormalCount}\n1030:               active={priorityFilter === \"normal\"}\n1031:               onClick={() => onPriorityFilterChange(\"normal\")}\n1032:             />\n1033:             <FilterChip\n1034:               label=\"\u041d\u0438\u0437\u043a\u0438\u0439\"\n1035:               count={priorityLowCount}\n1499:       </span>\n1500:     </button>\n1501:   );\n1502: }\n1503: \n1504: /** QA-G09-A: \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0430\u0442\u0435\u043b\u044c \u043e\u0434\u043d\u043e\u0433\u043e \u0438\u0437 \u0442\u0440\u0451\u0445 \u0432\u0430\u0440\u0438\u0430\u043d\u0442\u043e\u0432 \u0441\u043e\u0440\u0442\u0438\u0440\u043e\u0432\u043a\u0438 \u043f\u043e \u043d\u0430\u0437\u0432\u0430\u043d\u0438\u044e. */\n1505: function SortChip(props: { label: string; active: boolean; onClick: () => void }) {\n1506:   const { label, active, onClick } = props;\n1507:   return (\n1508:     <button\n1509:       role=\"tab\"\n1510:       aria-selected={active}\n1511:       onClick={onClick}",
+            "feature_patterns": {
+              "density": 37,
+              "g11": 1,
+              "overdue": 0,
+              "purple": 2
+            },
+            "sha256": "db70e378f477d6403b6acbe4f9c99da19080abfe903dfa928d9b9749ad2aded6"
+          }
+        },
+        "orchestrator": "core",
+        "parent_commit": "2b9e3ccc72ee7ba3373ed27b47ac91d19ed1d1d7",
+        "project_id": "afe27034-ab68-48cd-be9f-8883702c6bd3",
+        "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+        "runtime": {
+          "compiled_page": {
+            "density": 5,
+            "mtime": "2026-10-04T07:52:18.415Z",
+            "purple": 2,
+            "sha256": "2b29dc83797777ad2725547e9b80114a9004e1b27569c08737ec66cf062985d5",
+            "theme": 1
+          },
+          "container_id": "0577f4d437efbce771c423ffcaa38fd1dc98d244c5f51565aa49fa8836ab8fde",
+          "files": {
+            "src/app/globals.css": "2118cb99762b189d4bc5ef0ea683a3f1366633fd292bc021115745f089eda198",
+            "src/app/page.tsx": "db70e378f477d6403b6acbe4f9c99da19080abfe903dfa928d9b9749ad2aded6"
+          },
+          "image": "sha256:1a8a2c48cdb091815241f848b668ed51d866b37d7bcaf7ee96af0b48d69400ed",
+          "observed_qa_asset_files": {
+            "page-56a8ac3794510b22.js": {
+              "present": false
+            },
+            "page-7fdf2a6aa5c5ae3a.js": {
+              "density": 6,
+              "mtime": "2026-10-04T07:52:31.909Z",
+              "sha256": "b2c0ed12cbf79750af5b0613e45d251b23c59216dbc447c82e016b06022d8e5b",
+              "theme": 0
+            }
+          },
+          "resource_kind": "development"
+        },
+        "snapshot_id": "899d0e37-2cc1-4c98-8815-6f20118e141c",
+        "status": "completed",
+        "workspace_id": "4991fba3-4db7-4bbd-b9e4-2d214b53fc32"
+      },
+      {
+        "accepted_matches_workspace_files": true,
+        "alias": "C",
+        "changed_files": [
+          "src/app/globals.css",
+          "src/app/page.tsx"
+        ],
+        "commit_sha": "1cdcce9cdef6aea0d4a2a9b20df8dba9ac48fa72",
+        "current_snapshot_id": "e8a6b491-ba7a-4142-976d-52cf7ead71fe",
+        "files": {
+          "src/app/globals.css": {
+            "excerpt": "1: @import url(\"https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Playfair+Display:wght@400;500;600;700&display=swap\");\n2: @import \"tailwindcss\";\n3: \n4: :root {\n5:   color-scheme: light;\n6: \n7:   /* Product design tokens \u2014 \u00ab\u041a\u043e\u0444\u0435 \u0420\u044f\u0434\u043e\u043c\u00bb (coffee palette, QA-G03-C).\n8:      Do not override MAX UI's internal semantic tokens; these are for product\n9:      surfaces/composition only. See DESIGN.md. */\n10:   --app-bg: #f7f0e8;\n11:   --app-surface: #ffffff;\n12:   --app-text: #2b1a10;\n15:   --app-brand: #6b4226;\n16:   --app-accent: #6b4226;\n17:   --app-font-display: \"Playfair Display\", serif;\n18:   --app-font-body: \"Inter\", system-ui, sans-serif;\n19: \n20:   /* Extra semantic tokens used by the light/dark theme toggle (QA-G11-C).\n21:      These layer on top of --app-* above: status colors keep their meaning\n22:      (error/success/warning) but get a readable background/border per theme,\n23:      and --app-input-bg lets inputs/cards follow the surface color instead of\n24:      being hardcoded to white. */\n25:   --app-input-bg: #ffffff;\n26:   --app-error-bg: #fdecec;\n27:   --app-error-border: #b91c1c;\n28:   --app-error-text: #b91c1c;\n29:   --app-success-bg: #edf7ee;\n33:   --app-warning-border: #b45309;\n34:   --app-warning-text: #92400e;\n35:   --app-on-brand: #faf5ef;\n36: }\n37: \n38: [data-theme=\"dark\"] {\n39:   color-scheme: dark;\n40:   --app-bg: #1b1410;\n41:   --app-surface: #2a1f17;\n42:   --app-text: #f3e9df;\n43:   --app-muted: #c7ab95;\n44:   --app-border: #4a3a2c;\n45:   --app-brand: #d9a066;\n46:   --app-accent: #e3b07f;",
+            "feature_patterns": {
+              "density": 0,
+              "g11": 1,
+              "overdue": 0,
+              "purple": 0
+            },
+            "sha256": "41ee24996a5386b4e0767b90e3479e67028cf4b97c2b8d187d2c91ebd0c4a9b8"
+          },
+          "src/app/page.tsx": {
+            "excerpt": "186:   } catch {\n187:     return iso;\n188:   }\n189: }\n190: \n191: // Local-only draft of the request form's comment text (QA-G09-C). This key is\n192: // specific to this app and holds ONLY the free-text comment \u2014 never the name,\n193: // phone, email, tokens, session/user ids or any other field \u2014 so it is safe\n194: // to read/write directly from the browser without touching auth or the API.\n195: const COMMENT_DRAFT_STORAGE_KEY = \"coffee-nearby:new-request-comment-draft:v1\";\n196: \n197: function readCommentDraft(): string {\n198:   if (typeof window === \"undefined\") return \"\";\n220:   const [form, setForm] = useState<FormState>(EMPTY_FORM);\n221:   const [errors, setErrors] = useState<Partial<Record<keyof FormState, string>>>({});\n222:   const [submitting, setSubmitting] = useState(false);\n223:   const [submitResult, setSubmitResult] = useState<SubmitResult | null>(null);\n224:   const [unknownAck, setUnknownAck] = useState(true);\n225:   // Bumped every time a submit attempt fails validation (QA-G10-C). The\n226:   // error-summary DOM node only exists once React has committed the new\n227:   // `errors` state and re-rendered NewRequestForm, which has not happened\n228:   // yet at the point handleSubmit calls setErrors \u2014 so focusing it\n229:   // synchronously right there always misses. NewRequestForm watches this\n230:   // token in a useEffect (which runs AFTER the commit) and focuses the\n231:   // already-rendered summary element then.\n232:   const [errorFocusToken, setErrorFocusToken] = useState(0);\n237:   // Tracks whether the very first automatic attempt for this tab has already\n238:   // happened. A failed attempt must NOT be retried just by re-rendering or\n239:   // switching tabs back and forth \u2014 only an explicit \"\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c\" click or a\n240:   // fresh successful write (which resets this to false) starts a new attempt.\n241:   const leadsAttemptedRef = useRef(false);\n242:   // Synchronous in-flight guards: checked and set BEFORE the first await or\n243:   // setState in each raw loader, released in `finally`. This closes the race\n244:   // where two synchronous calls (e.g. a double \"\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c\" click before\n245:   // React re-renders `*Loading`) would otherwise both pass the stale-state\n246:   // check and start two parallel requests.\n247:   const leadsInFlightRef = useRef(false);\n248:   const [refreshingId, setRefreshingId] = useState<string | null>(null);\n249: \n250:   const [history, setHistory] = useState<Array<{ id: string; eventType: string; status: string | null; note: string; createdAt: string }> | null>(null);\n251:   const [historyError, setHistoryError] = useState<string | null>(null);\n252:   const [historyLoading, setHistoryLoading] = useState(false);\n253:   const historyAttemptedRef = useRef(false);\n254:   const historyInFlightRef = useRef(false);\n255: \n256:   const [catalog, setCatalog] = useState<CatalogItem[] | null>(null);\n257:   const [catalogError, setCatalogError] = useState<string | null>(null);\n258:   const [catalogUnavailable, setCatalogUnavailable] = useState(false);\n259:   const [catalogLoading, setCatalogLoading] = useState(false);\n260:   const catalogAttemptedRef = useRef(false);\n261:   const catalogInFlightRef = useRef(false);\n262:   const [cart, setCart] = useState<Record<string, number>>({});\n263: \n264:   const [orderBuyerName, setOrderBuyerName] = useState(\"\");\n265:   const [orderPhone, setOrderPhone] = useState(\"\");\n266:   const [orderFieldErrors, setOrderFieldErrors] = useState<{ buyerName?: string }>({});\n267:   const [orderSubmitting, setOrderSubmitting] = useState(false);\n268:   const [orderOutcome, setOrderOutcome] = useState<OrderOutcome | null>(null);\n269:   const [orderUnknownAck, setOrderUnknownAck] = useState(true);\n270:   const [placedOrders, setPlacedOrders] = useState<PlacedOrder[]>([]);\n271: \n272:   const loadLeads = useCallback(async () => {\n273:     // Synchronous in-flight guard: two \"\u041f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u044c\" clicks (or a retry racing\n274:     // an initial/focus refresh) that fire before React has re-rendered\n275:     // `leadsLoading` must still only ever start one real request. Checking\n276:     // and setting a ref happens synchronously, before any await/setState.\n277:     if (leadsInFlightRef.current) return;\n278:     leadsInFlightRef.current = true;\n279:     setLeadsLoading(true);\n280:     setLeadsError(null);\n281:     try {\n282:       const body = await getYleumLeads();\n283:       setLeads(body.items);\n284:     } catch (error) {\n285:       const status = error instanceof YleumIntegrationError ? error.status : null;\n288:       } else {\n289:         setLeadsError(classifyLoadError(error, status));\n290:       }\n291:     } finally {\n292:       setLeadsLoading(false);\n293:       leadsInFlightRef.current = false;\n294:     }\n295:   }, []);\n296: \n297:   const refreshOneLead = useCallback(async (leadId: string) => {\n298:     setRefreshingId(leadId);\n299:     try {\n300:       const fresh = await getYleumLeadStatus(leadId);\n306:       setRefreshingId(null);\n307:     }\n308:   }, []);\n309: \n310:   const loadHistory = useCallback(async () => {\n311:     // Same synchronous in-flight guard as `loadLeads`: set before any\n312:     // await/setState, released in finally, so two near-simultaneous callers\n313:     // (e.g. a double click) collapse into a single request.\n314:     if (historyInFlightRef.current) return;\n315:     historyInFlightRef.current = true;\n316:     setHistoryLoading(true);\n317:     setHistoryError(null);\n318:     try {\n319:       const response = await fetchWithAuth(\"/api/coffee/history\");\n320:       if (!response.ok) {\n321:         if (response.status === 401 || response.status === 403) {\n322:           setHistoryError(\"\u041d\u0435\u0442 \u0434\u043e\u0441\u0442\u0443\u043f\u0430 \u043a \u0438\u0441\u0442\u043e\u0440\u0438\u0438. \u0412\u043e\u0439\u0434\u0438\u0442\u0435 \u0432 \u043f\u0440\u0438\u043b\u043e\u0436\u0435\u043d\u0438\u0435 \u0447\u0435\u0440\u0435\u0437 MAX \u0438 \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435 \u043f\u043e\u043f\u044b\u0442\u043a\u0443.\");\n332:     } catch {\n333:       // A thrown fetch error here (no response object at all) means a network failure.\n334:       setHistoryError(\"\u041d\u0435\u0442 \u0441\u043e\u0435\u0434\u0438\u043d\u0435\u043d\u0438\u044f \u0441 \u0441\u0435\u0440\u0432\u0435\u0440\u043e\u043c. \u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0438\u043d\u0442\u0435\u0440\u043d\u0435\u0442 \u0438 \u043f\u043e\u0432\u0442\u043e\u0440\u0438\u0442\u0435 \u043f\u043e\u043f\u044b\u0442\u043a\u0443.\");\n335:     } finally {\n336:       setHistoryLoading(false);\n337:       historyInFlightRef.current = false;\n338:     }\n339:   }, []);\n340: \n341:   const loadCatalog = useCallback(async () => {\n342:     // Same synchronous in-flight guard as `loadLeads`/`loadHistory`.\n343:     if (catalogInFlightRef.current) return;\n344:     catalogInFlightRef.current = true;\n345:     setCatalogLoading(true);\n346:     setCatalogError(null);\n347:     setCatalogUnavailable(false);\n348:     try {\n349:       const body = await getYleumCatalog();\n350:       setCatalog(body.items);\n351:     } catch (error) {\n355:       } else {\n356:         setCatalogError(classifyLoadError(error, status));\n357:       }\n358:     } finally {\n359:       setCatalogLoading(false);\n360:       catalogInFlightRef.current = false;\n361:     }\n362:   }, []);\n363: \n364:   // Each section makes exactly ONE automatic attempt per tab activation.\n365:   // A failed attempt marks the ref as \"attempted\" so re-renders and tab\n366:   // switches never re-trigger the request; only the explicit retry\n367:   // handlers below (which reset the ref first) start a new attempt.\n499:       window.removeEventListener(\"focus\", refreshIfHealthy);\n500:       document.removeEventListener(\"visibilitychange\", onVisible);\n501:     };\n502:   }, [tab, leads, leadsError, leadsLoading, loadLeads]);\n503: \n504:   // Restore the locally saved comment draft once on mount (QA-G09-C). This\n505:   // runs only on the client, after the initial SSR-safe empty render, so it\n506:   // never causes a hydration mismatch. It intentionally restores ONLY the\n507:   // comment \u2014 name/phone/email/participantCount/desiredDate are never\n508:   // persisted here and always start empty, exactly as before this change.\n509:   useEffect(() => {\n510:     const draft = readCommentDraft();\n511:     if (draft) {\n685:               borderRadius: 8,\n686:               padding: \"3px 6px\",\n687:               alignSelf: \"flex-start\",\n688:             }}\n689:           >\n690:             QA-G10-C\n691:           </span>\n692:         </div>\n693:       </header>\n694: \n695:       <main\n696:         style={{\n697:           flex: 1,\n896: }) {\n897:   const hasErrors = Object.values(errors).some(Boolean);\n898:   const submitDisabled = submitting || (submitResult?.type === \"unknown\" && !unknownAck);\n899:   const errorSummaryRef = useRef<HTMLDivElement | null>(null);\n900: \n901:   // QA-G10-C: move real keyboard focus to the error summary every time a\n902:   // submit attempt is rejected for validation. `errorFocusToken` changes\n903:   // on every failed submit (even if the same fields are still invalid, so\n904:   // repeated empty-submits keep re-announcing the summary to screen\n905:   // readers and keep moving keyboard focus back to it instead of leaving\n906:   // focus stranded on the submit button). This effect runs after the\n907:   // summary has actually been committed to the DOM (hasErrors is true by\n908:   // the time errorFocusToken changes), so the element always exists here.",
+            "feature_patterns": {
+              "density": 0,
+              "g11": 0,
+              "overdue": 0,
+              "purple": 0
+            },
+            "sha256": "9b4dd12f3639526ed54c802a7b794928175ec1f7adb75d1efca3b7bbc7dfeb91"
+          }
+        },
+        "orchestrator": "commerce",
+        "parent_commit": "c534e5e1cd4ec0fda85858c88ca1bf7db2f67669",
+        "project_id": "e604e5ee-d699-46ae-be44-9975af011207",
+        "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+        "runtime": {
+          "compiled_page": {
+            "density": 0,
+            "mtime": "2026-10-04T08:03:49.330Z",
+            "purple": 0,
+            "sha256": "85395f1bda6667457ae29a75a0284ef8ba2207ab4cd47b2d2f0caa06a79f0118",
+            "theme": 1
+          },
+          "container_id": "47e3a5032174443f72560aed208d0f28a2448b08ee60a31250aeccf464dba84e",
+          "files": {
+            "src/app/globals.css": "41ee24996a5386b4e0767b90e3479e67028cf4b97c2b8d187d2c91ebd0c4a9b8",
+            "src/app/page.tsx": "9b4dd12f3639526ed54c802a7b794928175ec1f7adb75d1efca3b7bbc7dfeb91"
+          },
+          "image": "sha256:7c086df07cba0987c3a4f06c5bf2004010ae3a8b82dd523e88df7f953ad0cd27",
+          "observed_qa_asset_files": {
+            "page-56a8ac3794510b22.js": {
+              "density": 0,
+              "mtime": "2026-10-04T08:04:03.291Z",
+              "sha256": "3fecbe568a6d62185c71f61eca914b6d97bd290e3ea4135739ed31112946fea3",
+              "theme": 0
+            },
+            "page-7fdf2a6aa5c5ae3a.js": {
+              "present": false
+            }
+          },
+          "resource_kind": "development"
+        },
+        "snapshot_id": "e8a6b491-ba7a-4142-976d-52cf7ead71fe",
+        "status": "completed",
+        "workspace_id": "0fa38329-e261-411f-96d8-486429f2708a"
+      }
+    ],
+    "readonly": true,
+    "scope": "snapshot and actual development files; compiled source is not proof of browser cache or mounted DOM"
+  },
+  "activity_intervals": [
+    {
+      "finished_at": "2026-10-04 07:48:19.213221+00:00",
+      "generation_run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "heartbeat_at": "2026-10-04 07:48:19.213221+00:00",
+      "kind": "command",
+      "phase": "prepare",
+      "started_at": "2026-10-04 07:47:36.501950+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:47:56.017338+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:47:56.017338+00:00",
+      "kind": "command",
+      "phase": "install",
+      "started_at": "2026-10-04 07:47:37.281633+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:48:31.223237+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 07:48:31.223237+00:00",
+      "kind": "command",
+      "phase": "install",
+      "started_at": "2026-10-04 07:47:51.565484+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:48:36.242305+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:48:36.242305+00:00",
+      "kind": "command",
+      "phase": "targeted-test",
+      "started_at": "2026-10-04 07:47:56.088568+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:49:08.529252+00:00",
+      "generation_run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "heartbeat_at": "2026-10-04 07:49:08.529252+00:00",
+      "kind": "command",
+      "phase": "targeted-test",
+      "started_at": "2026-10-04 07:48:19.307893+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:49:12.575604+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 07:49:12.575604+00:00",
+      "kind": "command",
+      "phase": "targeted-test",
+      "started_at": "2026-10-04 07:48:31.295566+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:50:10.486638+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:50:10.486638+00:00",
+      "kind": "command",
+      "phase": "typecheck",
+      "started_at": "2026-10-04 07:49:28.560502+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:53:46.578703+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:53:46.578703+00:00",
+      "kind": "command",
+      "phase": "final-test",
+      "started_at": "2026-10-04 07:50:30.327370+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:54:53.051765+00:00",
+      "generation_run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "heartbeat_at": "2026-10-04 07:54:53.051765+00:00",
+      "kind": "command",
+      "phase": "final-test",
+      "started_at": "2026-10-04 07:51:38.510129+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:53:51.026527+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:53:51.026527+00:00",
+      "kind": "tool",
+      "phase": "runtime_probe",
+      "started_at": "2026-10-04 07:53:48.825397+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:54:01.508650+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:54:01.508650+00:00",
+      "kind": "snapshot",
+      "phase": "snapshot",
+      "started_at": "2026-10-04 07:53:59.901164+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:54:03.108354+00:00",
+      "generation_run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "heartbeat_at": "2026-10-04 07:54:03.108354+00:00",
+      "kind": "promotion",
+      "phase": "promote",
+      "started_at": "2026-10-04 07:54:01.543477+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:54:57.057312+00:00",
+      "generation_run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "heartbeat_at": "2026-10-04 07:54:57.057312+00:00",
+      "kind": "tool",
+      "phase": "runtime_probe",
+      "started_at": "2026-10-04 07:54:55.623606+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:55:07.886078+00:00",
+      "generation_run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "heartbeat_at": "2026-10-04 07:55:07.886078+00:00",
+      "kind": "snapshot",
+      "phase": "snapshot",
+      "started_at": "2026-10-04 07:55:06.296611+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 07:55:09.590499+00:00",
+      "generation_run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "heartbeat_at": "2026-10-04 07:55:09.590499+00:00",
+      "kind": "promotion",
+      "phase": "promote",
+      "started_at": "2026-10-04 07:55:07.917304+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 08:01:09.109144+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 08:01:09.109144+00:00",
+      "kind": "command",
+      "phase": "targeted-test",
+      "started_at": "2026-10-04 08:00:18.503975+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 08:03:06.440078+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 08:03:06.440078+00:00",
+      "kind": "command",
+      "phase": "targeted-test",
+      "started_at": "2026-10-04 08:02:15.998056+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 08:06:26.433046+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 08:06:26.433046+00:00",
+      "kind": "command",
+      "phase": "final-test",
+      "started_at": "2026-10-04 08:03:08.219877+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 08:06:30.910038+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 08:06:30.910038+00:00",
+      "kind": "tool",
+      "phase": "runtime_probe",
+      "started_at": "2026-10-04 08:06:29.048665+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 08:06:41.554248+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 08:06:41.554248+00:00",
+      "kind": "snapshot",
+      "phase": "snapshot",
+      "started_at": "2026-10-04 08:06:40.030236+00:00",
+      "state": "completed"
+    },
+    {
+      "finished_at": "2026-10-04 08:06:43.061792+00:00",
+      "generation_run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "heartbeat_at": "2026-10-04 08:06:43.061792+00:00",
+      "kind": "promotion",
+      "phase": "promote",
+      "started_at": "2026-10-04 08:06:41.590623+00:00",
+      "state": "completed"
+    }
+  ],
+  "aggregate": {
+    "accepted": 33,
+    "backend_completion_pct": "81.8181818182",
+    "calls": 606,
+    "completed": 27,
+    "failed": 6,
+    "internal_rub": "3285.9541",
+    "provider_reported_usd": "22.19309160",
+    "running": 0,
+    "scope": "backend completion; not full semantic or provider E2E acceptance"
+  },
+  "browser_chunk_scope": "Named browser-observed page assets found in actual development containers and hashed; captured browser response-body hashes not available. Accepted source itself contains the two feature omissions.",
+  "cohort": "G11",
+  "health": {
+    "api_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+    "dependencies": {
+      "billing_worker": "ok",
+      "billing_worker_release_sha": "31538bff0433",
+      "generation_worker_configured_limit": "8",
+      "generation_worker_effective_limit": "8",
+      "generation_worker_load": "0/8",
+      "generation_worker_other": "0",
+      "generation_worker_release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+      "generation_worker_running": "0",
+      "generation_worker_waiting_capacity": "0",
+      "orchestrator_release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+      "worker_release_sha": "31538bff0433e81fb8376a7771bab841defebe46"
+    },
+    "observed_utc": "2026-10-04T08:15:49.485463+00:00",
+    "status": "ok",
+    "web_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796"
+  },
+  "lifecycle_triple_overlap_seconds": 476.946625,
+  "model_call_overlap": null,
+  "observed_utc": "2026-10-04 08:07:48.559975+00:00",
+  "physical_after": {
+    "helper_sha256": "17ded4158c924f98fad879a49a56a5175ff98e9492b26de1dd71ad101708b50c",
+    "observed_utc": "2026-10-04T08:09:44.545883+00:00",
+    "projects": [
+      {
+        "all_ids_sha256": "c3c0e0fad5a118f5dee93fe43aeb375b172f7304794d75a22151ac5ee62b27aa",
+        "cohort": "A",
+        "count": 3,
+        "observed_utc": "2026-10-04T08:09:15.047356+00:00",
+        "row_sha256": "01e6499a8489c4fde96dad2193f53e6225594cc2ef14c0efae509e5175989e0a",
+        "schema_sha256": "0e6420fd39887e907d8d2f9ab4e08957263c12f45874511c4e6a8f51ea7fd0bb",
+        "status": "captured"
+      },
+      {
+        "all_ids_sha256": "92fa9254de61a36a960c8102703a6a5f044d19c2adf7b89a0adbb516f1b44bf4",
+        "cohort": "B",
+        "count": 7,
+        "observed_utc": "2026-10-04T08:09:17.994787+00:00",
+        "row_sha256": "357c8a3f94ba88061fd2e4557cedef84f24e4d87968d25ad429d02c10593cf85",
+        "schema_sha256": "d8987d952fd0c9ed3f2f50530d41c8138557d91b06388599a99cbdc7f0f22ea9",
+        "status": "captured"
+      }
+    ],
+    "readonly": true,
+    "release_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+    "scope": "all current columns/values, row counts and IDs, schema equal authorized 02:21 full baselines; no new-row exception",
+    "status": "PASS_STRICT_FULL_A3_B7"
+  },
+  "platform_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+  "readonly": true,
+  "root_paid_submissions": 0,
+  "runs": [
+    {
+      "accepted_commit_sha": "6cff39292f87e96e1f22d7da37a491e8bf47be07",
+      "accepted_snapshot": true,
+      "accepted_snapshot_id": "899d0e37-2cc1-4c98-8815-6f20118e141c",
+      "alias": "A",
+      "created_at": "2026-10-04 07:45:52.762584+00:00",
+      "duration_seconds": 567.742433,
+      "failure_code": null,
+      "failure_reason_code": null,
+      "finance": {
+        "cache_read_tokens": 834804,
+        "cache_write_tokens": 0,
+        "input_tokens": 905049,
+        "internal_cost_rub": "67.5153",
+        "output_tokens": 11060,
+        "provider_reported_usd": "0.45315980",
+        "provider_usd_nonnull_rows": 14,
+        "request_id_distinct_count": 14,
+        "request_id_nonnull_rows": 14,
+        "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+        "settlement_rows": 14,
+        "settlement_status": "free",
+        "signed_wallet_amount_rub": "0",
+        "usage_rows": 14,
+        "wallet_amount_mismatch": 0,
+        "wallet_charge_rows": 0
+      },
+      "finished_at": "2026-10-04 07:55:55.111775+00:00",
+      "full_build_green": true,
+      "id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "phase": "complete",
+      "project_id": "afe27034-ab68-48cd-be9f-8883702c6bd3",
+      "release_green": true,
+      "response_mode": "edit",
+      "runtime_green": true,
+      "runtime_revision": "31538bff0433e81fb8376a7771bab841defebe46",
+      "started_at": "2026-10-04 07:46:27.369342+00:00",
+      "status": "completed"
+    },
+    {
+      "accepted_commit_sha": "62dee50089bce04d555e761f5392655f087888a2",
+      "accepted_snapshot": true,
+      "accepted_snapshot_id": "dbd0b196-fff8-4426-9e90-e3093d8e81ae",
+      "alias": "B",
+      "created_at": "2026-10-04 07:45:53.047721+00:00",
+      "duration_seconds": 508.745781,
+      "failure_code": null,
+      "failure_reason_code": null,
+      "finance": {
+        "cache_read_tokens": 313382,
+        "cache_write_tokens": 0,
+        "input_tokens": 404856,
+        "internal_cost_rub": "46.0169",
+        "output_tokens": 3931,
+        "provider_reported_usd": "0.33065690",
+        "provider_usd_nonnull_rows": 10,
+        "request_id_distinct_count": 10,
+        "request_id_nonnull_rows": 10,
+        "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+        "settlement_rows": 10,
+        "settlement_status": "free",
+        "signed_wallet_amount_rub": "0",
+        "usage_rows": 10,
+        "wallet_amount_mismatch": 0,
+        "wallet_charge_rows": 0
+      },
+      "finished_at": "2026-10-04 07:54:53.915413+00:00",
+      "full_build_green": true,
+      "id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "phase": "complete",
+      "project_id": "8c3d891f-3048-4f85-819b-f8a1ab697f65",
+      "release_green": true,
+      "response_mode": "edit",
+      "runtime_green": true,
+      "runtime_revision": "31538bff0433e81fb8376a7771bab841defebe46",
+      "started_at": "2026-10-04 07:46:25.169632+00:00",
+      "status": "completed"
+    },
+    {
+      "accepted_commit_sha": "1cdcce9cdef6aea0d4a2a9b20df8dba9ac48fa72",
+      "accepted_snapshot": true,
+      "accepted_snapshot_id": "e8a6b491-ba7a-4142-976d-52cf7ead71fe",
+      "alias": "C",
+      "created_at": "2026-10-04 07:45:53.810208+00:00",
+      "duration_seconds": 1229.195539,
+      "failure_code": null,
+      "failure_reason_code": null,
+      "finance": {
+        "cache_read_tokens": 955237,
+        "cache_write_tokens": 0,
+        "input_tokens": 1076681,
+        "internal_cost_rub": "158.0173",
+        "output_tokens": 54450,
+        "provider_reported_usd": "1.03912690",
+        "provider_usd_nonnull_rows": 18,
+        "request_id_distinct_count": 18,
+        "request_id_nonnull_rows": 18,
+        "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+        "settlement_rows": 18,
+        "settlement_status": "free",
+        "signed_wallet_amount_rub": "0",
+        "usage_rows": 18,
+        "wallet_amount_mismatch": 0,
+        "wallet_charge_rows": 0
+      },
+      "finished_at": "2026-10-04 08:07:26.164327+00:00",
+      "full_build_green": true,
+      "id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "phase": "complete",
+      "project_id": "e604e5ee-d699-46ae-be44-9975af011207",
+      "release_green": true,
+      "response_mode": "edit",
+      "runtime_green": true,
+      "runtime_revision": "31538bff0433e81fb8376a7771bab841defebe46",
+      "started_at": "2026-10-04 07:46:56.968788+00:00",
+      "status": "completed"
+    }
+  ],
+  "scope": "Usage timestamps are accounting times, not model-call spans; lifecycle rows are not working-app acceptance. Preview and prompt outcome require Local QA.",
+  "semantic_acceptance": {
+    "A": {
+      "cause": "onDensityChange is only passed/typed/destructured, never invoked by a mounted control; spacing fields are declared but not used in task-card/board JSX; actual workspace sources match accepted snapshot",
+      "verdict": "FEATURE_MISSING_ACCEPTED_SOURCE"
+    },
+    "B": {
+      "checks": "Add/All7 actual RGB124,58,237 with white text persists after full owner reload; due02Oct/overdue/B7 retained; frame390 no page overflow",
+      "verdict": "SCOPED_UI_PASS_REPORTED_BY_LOCAL_QA"
+    },
+    "C": {
+      "cause": "dark CSS tokens/selectors added, but product page does not implement requested visible light/dark control, theme selection or persistence; actual workspace source matches accepted snapshot",
+      "verdict": "FEATURE_MISSING_ACCEPTED_SOURCE"
+    }
+  },
+  "settlement_wallet": {
+    "cohort_usage_settlement_wallet": [
+      {
+        "cache_read_tokens": 313382,
+        "cache_write_tokens": 0,
+        "input_tokens": 404856,
+        "internal_cost_rub": "46.0169",
+        "output_tokens": 3931,
+        "provider_reported_usd": "0.33065690",
+        "provider_usd_nonnull_rows": 10,
+        "request_id_distinct_count": 10,
+        "request_id_nonnull_rows": 10,
+        "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+        "settlement_rows": 10,
+        "settlement_status": "free",
+        "signed_wallet_amount_rub": "0",
+        "usage_rows": 10,
+        "wallet_amount_mismatch": 0,
+        "wallet_charge_rows": 0
+      },
+      {
+        "cache_read_tokens": 955237,
+        "cache_write_tokens": 0,
+        "input_tokens": 1076681,
+        "internal_cost_rub": "158.0173",
+        "output_tokens": 54450,
+        "provider_reported_usd": "1.03912690",
+        "provider_usd_nonnull_rows": 18,
+        "request_id_distinct_count": 18,
+        "request_id_nonnull_rows": 18,
+        "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+        "settlement_rows": 18,
+        "settlement_status": "free",
+        "signed_wallet_amount_rub": "0",
+        "usage_rows": 18,
+        "wallet_amount_mismatch": 0,
+        "wallet_charge_rows": 0
+      },
+      {
+        "cache_read_tokens": 834804,
+        "cache_write_tokens": 0,
+        "input_tokens": 905049,
+        "internal_cost_rub": "67.5153",
+        "output_tokens": 11060,
+        "provider_reported_usd": "0.45315980",
+        "provider_usd_nonnull_rows": 14,
+        "request_id_distinct_count": 14,
+        "request_id_nonnull_rows": 14,
+        "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+        "settlement_rows": 14,
+        "settlement_status": "free",
+        "signed_wallet_amount_rub": "0",
+        "usage_rows": 14,
+        "wallet_amount_mismatch": 0,
+        "wallet_charge_rows": 0
+      }
+    ],
+    "exact_cohort_runs": 3,
+    "limits": "Provider scope is NOT proof of same API key or provider organization; accounting timestamps and current day snapshot differ from provider day snapshot. Request IDs only counted, not emitted; provider_reported_usd NULL counted separately. No FX/RUB conversion/fee or financial charge performed.",
+    "observed_utc": "2026-10-04 08:10:22.425028+00:00",
+    "platform_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+    "readonly": true
+  },
+  "source_evidence_blobs": {
+    "AC_runtime_assets": "51d426822b9d75814dde7cd614135c931b094844",
+    "A_density_render": "cc8aa49e978aa4776f6d1199c7e79eeeafa43e80",
+    "physical": "bac9ecea9ad21494d0fec434aefd3d6807ef4dbd",
+    "settlements": "e80b89e3f6bf17cec10dd11d472f8304614ac556",
+    "terminal": "d9bbfeb599632dbd616f673175cc7b70a8fc90de"
+  },
+  "total_accepted": 3,
+  "totals": {
+    "accepted": 3,
+    "calls": 42,
+    "completed": 3,
+    "failed": 0,
+    "free_settlements": 42,
+    "input_tokens": 2386586,
+    "internal_rub": "271.5495",
+    "output_tokens": 69441,
+    "provider_reported_usd": "1.82294360",
+    "wallet_charges": 0
+  },
+  "usage": [
+    {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_rub": "9.9058",
+      "created_at": "2026-10-04 07:46:32.737188+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.07627700",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "build_plan",
+      "tokens_in": 29883,
+      "tokens_out": 157
+    },
+    {
+      "cache_read_tokens": 29882,
+      "cache_write_tokens": 0,
+      "cost_rub": "1.1952",
+      "created_at": "2026-10-04 07:46:35.583720+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.00762040",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "native_agent",
+      "tokens_in": 30324,
+      "tokens_out": 54
+    },
+    {
+      "cache_read_tokens": 30322,
+      "cache_write_tokens": 0,
+      "cost_rub": "1.3247",
+      "created_at": "2026-10-04 07:46:39.959192+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.00842340",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "native_agent",
+      "tokens_in": 30766,
+      "tokens_out": 125
+    },
+    {
+      "cache_read_tokens": 30764,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.7492",
+      "created_at": "2026-10-04 07:46:47.259404+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01860180",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "native_agent",
+      "tokens_in": 33924,
+      "tokens_out": 455
+    },
+    {
+      "cache_read_tokens": 1771,
+      "cache_write_tokens": 0,
+      "cost_rub": "17.1326",
+      "created_at": "2026-10-04 07:47:06.845551+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.13134370",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "build_plan",
+      "tokens_in": 52291,
+      "tokens_out": 469
+    },
+    {
+      "cache_read_tokens": 52290,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.1560",
+      "created_at": "2026-10-04 07:47:11.027592+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01381950",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "native_agent",
+      "tokens_in": 53231,
+      "tokens_out": 101
+    },
+    {
+      "cache_read_tokens": 1771,
+      "cache_write_tokens": 0,
+      "cost_rub": "24.3071",
+      "created_at": "2026-10-04 07:47:17.094989+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.17547870",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "build_plan",
+      "tokens_in": 51713,
+      "tokens_out": 5027
+    },
+    {
+      "cache_read_tokens": 53229,
+      "cache_write_tokens": 0,
+      "cost_rub": "3.1586",
+      "created_at": "2026-10-04 07:47:22.575596+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01979980",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "native_agent",
+      "tokens_in": 53715,
+      "tokens_out": 794
+    },
+    {
+      "cache_read_tokens": 51712,
+      "cache_write_tokens": 0,
+      "cost_rub": "4.4119",
+      "created_at": "2026-10-04 07:47:33.442249+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.02736640",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "native_agent",
+      "tokens_in": 51810,
+      "tokens_out": 1678
+    },
+    {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_rub": "15.1254",
+      "created_at": "2026-10-04 07:47:33.985718+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.11498900",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "native_agent",
+      "tokens_in": 42678,
+      "tokens_out": 830
+    },
+    {
+      "cache_read_tokens": 53713,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.9720",
+      "created_at": "2026-10-04 07:47:35.340015+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01846660",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "native_agent",
+      "tokens_in": 53843,
+      "tokens_out": 740
+    },
+    {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "cost_rub": "17.2156",
+      "created_at": "2026-10-04 07:47:38.687291+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.13300650",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "native_agent",
+      "tokens_in": 52829,
+      "tokens_out": 94
+    },
+    {
+      "cache_read_tokens": 52817,
+      "cache_write_tokens": 0,
+      "cost_rub": "3.6944",
+      "created_at": "2026-10-04 07:47:49.103115+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.02303690",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "native_agent",
+      "tokens_in": 53158,
+      "tokens_out": 1163
+    },
+    {
+      "cache_read_tokens": 33922,
+      "cache_write_tokens": 0,
+      "cost_rub": "5.4297",
+      "created_at": "2026-10-04 07:48:40.773825+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.03975840",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "verification",
+      "tokens_in": 46200,
+      "tokens_out": 228
+    },
+    {
+      "cache_read_tokens": 46198,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.3662",
+      "created_at": "2026-10-04 07:49:01.838864+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01478860",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "verification",
+      "tokens_in": 46474,
+      "tokens_out": 486
+    },
+    {
+      "cache_read_tokens": 46472,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.1693",
+      "created_at": "2026-10-04 07:49:07.529196+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01402840",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "native_agent",
+      "tokens_in": 47666,
+      "tokens_out": 175
+    },
+    {
+      "cache_read_tokens": 51808,
+      "cache_write_tokens": 0,
+      "cost_rub": "5.5158",
+      "created_at": "2026-10-04 07:49:17.935161+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.03888310",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 61269,
+      "tokens_out": 487
+    },
+    {
+      "cache_read_tokens": 47664,
+      "cache_write_tokens": 0,
+      "cost_rub": "1.9856",
+      "created_at": "2026-10-04 07:49:26.873116+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01254180",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "native_agent",
+      "tokens_in": 48160,
+      "tokens_out": 177
+    },
+    {
+      "cache_read_tokens": 61267,
+      "cache_write_tokens": 0,
+      "cost_rub": "4.3226",
+      "created_at": "2026-10-04 07:49:35.621037+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.02681740",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 61373,
+      "tokens_out": 1430
+    },
+    {
+      "cache_read_tokens": 61371,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.2404",
+      "created_at": "2026-10-04 07:49:40.769615+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01394570",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 61520,
+      "tokens_out": 130
+    },
+    {
+      "cache_read_tokens": 61518,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.2173",
+      "created_at": "2026-10-04 07:49:47.798950+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01378510",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 61631,
+      "tokens_out": 120
+    },
+    {
+      "cache_read_tokens": 53841,
+      "cache_write_tokens": 0,
+      "cost_rub": "8.5653",
+      "created_at": "2026-10-04 07:49:52.984155+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.05470470",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 57180,
+      "tokens_out": 3559
+    },
+    {
+      "cache_read_tokens": 61629,
+      "cache_write_tokens": 0,
+      "cost_rub": "4.5895",
+      "created_at": "2026-10-04 07:49:54.142383+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.03183230",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 68460,
+      "tokens_out": 243
+    },
+    {
+      "cache_read_tokens": 68458,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.7687",
+      "created_at": "2026-10-04 07:50:01.273872+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01719310",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 68559,
+      "tokens_out": 325
+    },
+    {
+      "cache_read_tokens": 68557,
+      "cache_write_tokens": 0,
+      "cost_rub": "3.1043",
+      "created_at": "2026-10-04 07:50:08.739735+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01933790",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 68792,
+      "tokens_out": 504
+    },
+    {
+      "cache_read_tokens": 68790,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.8669",
+      "created_at": "2026-10-04 07:50:16.179312+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01787700",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 69042,
+      "tokens_out": 349
+    },
+    {
+      "cache_read_tokens": 69040,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.5711",
+      "created_at": "2026-10-04 07:50:20.636616+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01603700",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 69276,
+      "tokens_out": 164
+    },
+    {
+      "cache_read_tokens": 48158,
+      "cache_write_tokens": 0,
+      "cost_rub": "3.7658",
+      "created_at": "2026-10-04 07:50:27.114404+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.02362810",
+      "retry_count": 0,
+      "run_id": "233fb23d-2394-4401-99f5-cc336fb5ae1d",
+      "stage": "verification",
+      "tokens_in": 48781,
+      "tokens_out": 1244
+    },
+    {
+      "cache_read_tokens": 69274,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.6875",
+      "created_at": "2026-10-04 07:50:41.275095+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01684630",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 69687,
+      "tokens_out": 196
+    },
+    {
+      "cache_read_tokens": 69685,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.5015",
+      "created_at": "2026-10-04 07:51:00.328276+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01560850",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 69926,
+      "tokens_out": 107
+    },
+    {
+      "cache_read_tokens": 57178,
+      "cache_write_tokens": 0,
+      "cost_rub": "11.5029",
+      "created_at": "2026-10-04 07:51:11.555421+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.07147210",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 57673,
+      "tokens_out": 5880
+    },
+    {
+      "cache_read_tokens": 69924,
+      "cache_write_tokens": 0,
+      "cost_rub": "3.4107",
+      "created_at": "2026-10-04 07:51:20.700445+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.02215130",
+      "retry_count": 0,
+      "run_id": "748096d3-6009-452d-8c0c-914f10bb8dd4",
+      "stage": "verification",
+      "tokens_in": 71991,
+      "tokens_out": 300
+    },
+    {
+      "cache_read_tokens": 57671,
+      "cache_write_tokens": 0,
+      "cost_rub": "5.2946",
+      "created_at": "2026-10-04 07:51:50.951489+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.03294820",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 58001,
+      "tokens_out": 2059
+    },
+    {
+      "cache_read_tokens": 57999,
+      "cache_write_tokens": 0,
+      "cost_rub": "4.6063",
+      "created_at": "2026-10-04 07:52:30.059602+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.02869630",
+      "retry_count": 1,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 58350,
+      "tokens_out": 1622
+    },
+    {
+      "cache_read_tokens": 58348,
+      "cache_write_tokens": 0,
+      "cost_rub": "6.3653",
+      "created_at": "2026-10-04 07:53:20.095109+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.03963610",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 58795,
+      "tokens_out": 2685
+    },
+    {
+      "cache_read_tokens": 58793,
+      "cache_write_tokens": 0,
+      "cost_rub": "12.5758",
+      "created_at": "2026-10-04 07:54:40.875735+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.07929510",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 61648,
+      "tokens_out": 6040
+    },
+    {
+      "cache_read_tokens": 61646,
+      "cache_write_tokens": 0,
+      "cost_rub": "10.9005",
+      "created_at": "2026-10-04 07:55:55.685535+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.06763320",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 61924,
+      "tokens_out": 5461
+    },
+    {
+      "cache_read_tokens": 61922,
+      "cache_write_tokens": 0,
+      "cost_rub": "22.6692",
+      "created_at": "2026-10-04 07:58:09.427057+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.14275590",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 66703,
+      "tokens_out": 11842
+    },
+    {
+      "cache_read_tokens": 66701,
+      "cache_write_tokens": 0,
+      "cost_rub": "20.6504",
+      "created_at": "2026-10-04 08:00:01.444621+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.12847670",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 67924,
+      "tokens_out": 11208
+    },
+    {
+      "cache_read_tokens": 67922,
+      "cache_write_tokens": 0,
+      "cost_rub": "3.0753",
+      "created_at": "2026-10-04 08:01:15.022834+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01988340",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 69606,
+      "tokens_out": 209
+    },
+    {
+      "cache_read_tokens": 69604,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.6423",
+      "created_at": "2026-10-04 08:01:36.151670+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01645480",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "verification",
+      "tokens_in": 69794,
+      "tokens_out": 206
+    },
+    {
+      "cache_read_tokens": 69792,
+      "cache_write_tokens": 0,
+      "cost_rub": "2.8402",
+      "created_at": "2026-10-04 08:01:59.540730+00:00",
+      "model_id": "claude-sonnet-5",
+      "provider_cost_usd": "0.01769740",
+      "retry_count": 0,
+      "run_id": "24a027a7-a60c-4a94-88e7-d0251c1a1885",
+      "stage": "native_agent",
+      "tokens_in": 70016,
+      "tokens_out": 318
+    }
+  ],
+  "window_start": "2026-10-04 07:45:00+00:00"
+}

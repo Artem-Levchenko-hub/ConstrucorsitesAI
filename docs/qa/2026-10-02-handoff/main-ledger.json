@@ -898,22 +898,23 @@
     "/workspace/ConstrucorsitesAI/docs/qa/2026-10-02-handoff/status.json"
   ],
   "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
-  "updated_at": "2026-10-03T05:27:47.646884+00:00",
-  "delivery_candidate_status": "UTF-8 fixture portability locally verified; next exact CI/push/deploy recorded by serial owner",
-  "current_runtime_baseline": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
+  "updated_at": "2026-10-04T08:40:23.605580+00:00",
+  "delivery_candidate_status": "Joint SDK owner-preview actor-preflight renewal fix and G10/G11 evidence pending commit, exact CI and canonical delivery; browser activation/live expiry acceptance remains separate",
+  "current_runtime_baseline": "31538bff0433e81fb8376a7771bab841defebe46",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
   "latest_delivery": {
-    "platform_sha": "2d3224542a86e5d9fcbb5d67493e620441068fed",
-    "verified_utc": "2026-10-03T06:10:10Z",
-    "ci_run_id": 37100697877,
+    "platform_sha": "31538bff0433e81fb8376a7771bab841defebe46",
+    "web_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+    "ci_run_id": 37182290954,
     "ci_jobs_success": 10,
     "backup_exit": 0,
+    "backup_databases_ok": 32,
+    "backup_stamp": "20261004-063319",
     "canonical_deploy_exit": 0,
-    "actual_api_web_health": "200/ok exact revision",
-    "actual_managed_kit": 26,
     "actual_source_hashes_verified": true,
     "admission_fences_clear": true,
-    "generated_support_live_retest": false
+    "evidence": "evidence/g09-write-progress-production-receipt.json",
+    "scope": "Last completed source delivery; joint SDK preview fix and this ledger update pending separate delivery receipt"
   },
   "pilot_release_gate": {
     "scope": "FREE_PILOT_NO_PAYMENT",
@@ -927,10 +928,15 @@
       "Concurrent write/idempotent retry and least-privilege project database regressions pass"
     ],
     "open_dependencies": [
-      "Pilot entitlement policy: selected participants via admin or automatic new registrations; answer pending",
-      "Provider public/moderation readiness and Coffee MoySklad missing token lifecycle cause",
-      "Two genuine MAX actors and owner analytics live proof",
-      "T06.2/T06.3/T11.4 fixes and current production retests"
+      "Visible A density and C persisted theme implementation; green gates do not close missing UI",
+      "Ordinary owner preview->publish->correct actual MAX actor CRUD/reopen on exact accepted C release; protected PAR-B bot target preserved/restored",
+      "Native own-account MoySklad/amoCRM synthetic provider E2E and reconnect; connected labels/code-claim are scoped evidence, public/one-click onboarding unaccepted",
+      "Published exact-source lost-update/ETag and response-loss stable-key retry retests T06.2/T06.3",
+      "Actual runtime least privilege, neighboring DB denial and signed cross-owner/MAX-actor isolation",
+      "Provider request-level reconciliation, including same-key G09 extra24 and repeated provider/internal RUB gaps",
+      "Owner analytics implementation and real event/foreign-owner denial",
+      "Real5–10 user capacity, detection/observability and tested backup restore; health-only traffic is not capacity proof",
+      "Pilot participant entitlement policy (selected participants vs automatic registration) remains unconfirmed; build-rate steering does not decide access policy"
     ],
     "customer_versioning_required": false,
     "customer_flow": "generation -> edit requests -> current preview -> publish",
@@ -938,6 +944,34 @@
       "version selection",
       "publication/version history",
       "restoration/adaptation of historical versions"
+    ],
+    "build_rate_policy": "About80% backend completion accepted by user for now; functional/data/security gates remain required",
+    "prioritized_remaining_gates": [
+      {
+        "priority": 1,
+        "gate": "Requested product behavior and normal owner/MAX launch",
+        "acceptance": "A density controls actually change list/board spacing and survive reload; C visible theme control survives reload without storing PII. Owner publishes exact accepted app, real MAX receives intended release and own CRUD persists after reopen."
+      },
+      {
+        "priority": 2,
+        "gate": "Data, concurrency, idempotency and isolation",
+        "acceptance": "Preserve physical A3/B7; old rows/IDs remain. Exact published concurrent same-ETag returns200/412 and visible conflict; response-loss POST same operation key yields one record after reload. Actual runtime flags/neighbor DB denial and signed foreign owner/actor tests pass."
+      },
+      {
+        "priority": 3,
+        "gate": "Native own-account provider E2E",
+        "acceptance": "Correct Coffee project/bot identity, own-account reconnect and one labeled synthetic lead/order readback; restore order reserve/stock baseline, no payment/shipment/customer mutations. Public installation/automatic handoff remains separate."
+      },
+      {
+        "priority": 4,
+        "gate": "Financial and analytical correctness",
+        "acceptance": "Reconcile actual provider expense and request identity; preserve all failed/retry costs. Ordinary MAX event appears in owner analytics; foreign owner cannot read it. Payment gateway deferred for free pilot."
+      },
+      {
+        "priority": 5,
+        "gate": "Operational readiness",
+        "acceptance": "Measure5–10 actual distinct user flows, failure detection and bounded capacity; complete independent backup restore proof. Ten concurrent health GETs do not satisfy this gate."
+      }
     ]
   },
   "scoped_parallel_evidence": [
@@ -997,6 +1031,19 @@
       "failure_evidence": "project_cell ok; worker provider_failed RuntimeError; gateway read timed out/502 in bounded time window; old logs lack exact run correlation. No usage rows does not prove no upstream charge.",
       "diagnostic_change": "This commit keeps a static safe provider timeout message in durable history and adds UUID/error-class/stage correlation; timeout, retry and billing policy unchanged. Production receipt/live activation must be checked separately.",
       "task_conflict_retry_fix": "Exact-source local fix verified; not applied or published by failed attempt. T06.2/T06.3 remain FAIL.",
+      "new_full_original_PASS": 0
+    },
+    {
+      "date": "2026-10-04",
+      "source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
+      "scope": "G10/G11 native frontend acceptance and independent published PAR-B reopen; C owner-preview catalog denial",
+      "C_owner_catalog_utc": "08:13–08:16",
+      "C_owner_catalog_UI": "No access; open app inside MAX",
+      "canonical_source_policy": "Trusted integration proxy rejects a non-numeric preview actor before provider fetch; exact live HTTP/actor correlation remains pending",
+      "provider_failure_proven": false,
+      "valid_provider_business_writes": 0,
+      "local_original_artifacts_transferred": false,
+      "raw_local_artifacts": "Existing qa-20261003/public and prior checkpoint/yleum-release-evidence; do not claim repository-delivered raw screenshots",
       "new_full_original_PASS": 0
     }
   ],
@@ -1063,7 +1110,7 @@
       "Keep actual active publication address separate from latest candidate/attempt"
     ],
     "original_67_counts_unchanged": true,
-    "next": "G10 HOLD: exact B nominal-write classifier and no-progress repair, review/CI, fresh backup canonical delivery/health, B7 strict physical PASS and explicit CLEAR. QA only sends normal existing-project prompts.",
+    "next": "G12 has not been sent. Preserve A3/B7 and closed C form; use concrete mounted UI corrections for A density and C theme before semantic acceptance. Local QA alone submits paid cohorts after serial release/CLEAR.",
     "local_qa_support": {
       "source_sha": "bc38e290c55a8794ba4b94434d6d3a82d7bd3d9a",
       "reported_bounded_offline_passes": 164,
@@ -1088,17 +1135,111 @@
       "failure": "Old provider fake ignored request timeout and hard-coded previous210s window; corrected regression models remaining I/O/backoff for both210s and270s. Follow-up ownership classification fix requires new exact CI and deployment."
     },
     "latest_terminal": {
-      "accepted": 27,
-      "completed": 21,
+      "accepted": 33,
+      "completed": 27,
       "failed": 6,
       "cancelled": 0,
-      "calls": 493,
-      "internal_rub": "2617.7061",
-      "provider_reported_usd": "17.71016830",
-      "completion_rate_percent": "77.7778",
-      "scope": "Terminal completion separately from actual feature/provider acceptance; failures and failed-run costs retained."
+      "running": 0,
+      "calls": 606,
+      "internal_rub": "3285.9541",
+      "provider_reported_usd": "22.19309160",
+      "completion_rate_percent": "81.8181818182",
+      "scope": "Backend completion only; source/UI omissions retained separately, not full app/security/provider readiness"
     },
-    "latest_cohort": "G09",
-    "latest_evidence": "evidence/generation-G09-20261004.json"
+    "latest_cohort": "G11",
+    "latest_evidence": "evidence/generation-G11-20261004.json",
+    "build_rate_target_steering": {
+      "user_accepts_approx_80_percent_now": true,
+      "relaxes_only_build_completion_rate": true,
+      "does_not_relax": [
+        "requested working features",
+        "business data preservation",
+        "auth and isolation",
+        "provider identity and real E2E",
+        "financial correctness"
+      ]
+    },
+    "G10": {
+      "accepted": 3,
+      "completed": 3,
+      "evidence": "evidence/generation-G10-20261004.json",
+      "calls": 71,
+      "internal_rub": "396.6985",
+      "provider_reported_usd": "2.65997970",
+      "free_settlements": 71,
+      "wallet_charges": 0,
+      "physical_A3_B7": "strict full PASS",
+      "semantic": "A density missing; B due/overdue PASS, requested purple FAIL; C focus/draft scoped PASS",
+      "provider_aggregate_delta_calls_and_tokens_match": true,
+      "provider_rub": "457.46",
+      "provider_rub_gap": "60.7615",
+      "gap_cause_and_request_level_join": "UNKNOWN"
+    },
+    "G11": {
+      "accepted": 3,
+      "completed": 3,
+      "evidence": "evidence/generation-G11-20261004.json",
+      "calls": 42,
+      "internal_rub": "271.5495",
+      "provider_reported_usd": "1.82294360",
+      "free_settlements": 42,
+      "wallet_charges": 0,
+      "physical_A3_B7": "strict full PASS; IDs, all current values/counts and schema match baseline",
+      "semantic": "A density handler/spacing unconsumed; C dark CSS without mounted control/selection/persistence; B actual purple/date/overdue/full owner reload/390px scoped PASS",
+      "source_matches_actual_dev_workspace_A_C": true,
+      "browser_named_chunks_found_and_hashed": true,
+      "browser_response_body_hash_match_proven": false,
+      "model_call_overlap": "UNKNOWN",
+      "lifecycle_triple_overlap_seconds": 476.946625
+    }
+  },
+  "current_runtime_baseline_scope": "Last independently observed pre-commit API/source baseline; this client-fix and ledger update needs its separate final delivery identity/receipt",
+  "owner_preview_sdk_preflight_fix": {
+    "status": "LOCAL_REGRESSION_PASS_DELIVERY_PENDING",
+    "base": "31538bff0433e81fb8376a7771bab841defebe46",
+    "reproduction": "Installed preview fetch guard plus expired preview SDK createMaxAction: SESSION GET401 throws before business guard; renewal0/write0",
+    "change": "Guard external same-origin SESSION GET; internal probes use captured native fetch. Non-GET session and bootstrap exclusions remain. No business401 replay; no403 renewal/actor change/write",
+    "red": {
+      "tests": 23,
+      "passed": 19,
+      "failed": 4
+    },
+    "green": {
+      "tests": 23,
+      "passed": 23,
+      "failed": 0
+    },
+    "starter_locked_checks": {
+      "tests_pass": 6,
+      "typecheck_exit": 0,
+      "pnpm": "9.15.0",
+      "drizzle": "0.45.2"
+    },
+    "web_checks": {
+      "tests_pass": 883,
+      "test_files": 104,
+      "lint_exit": 0
+    },
+    "initial_local_harness_failures": "Global pnpm11 no-TTY dependency removal abort; installed drizzle0.36.4 differed from locked0.45.2; initial starter3/6 failed. Fresh isolated locked dependencies and pinned nested pnpm pass without changing package/lock. Preview-auth needs prepare.mjs trusted tree and was not accepted from unprepared starter",
+    "scope": "Joint actual shipped TS in-memory HTTP/editor tests, no DB/provider/model calls or live credentials. Existing apps need ordinary managed SDK adoption/build; platform health is not browser activation or signed live expiry proof",
+    "trusted_prepare_preview_auth": {
+      "tests": 19,
+      "passed": 19,
+      "failed": 0,
+      "scope": "Trusted prepare.mjs isolated build-tree overlay; initial unprepared19 run9pass10fail was harness misuse, retained in execution log, not product evidence"
+    },
+    "independent_review": "SOURCE_CLEAR; reviewer independently executed23/23 memory-only, no edits/provider/liveDB"
+  },
+  "analytics_source_confirmation": {
+    "source_thread": "01a10600-af87-7a80-82be-44ee8bf4694b",
+    "deployed_web": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+    "deployed_python": "31538bff0433e81fb8376a7771bab841defebe46",
+    "findings": [
+      "MaxPostLaunchDashboard has no analytics/statistics view",
+      "integration_generation counter ID does not prove event installation",
+      "integration_runtime exposes configured counter only"
+    ],
+    "acceptance": "Actual MAX event, owner dashboard and foreign-owner denial remain unaccepted",
+    "external_artifacts": "analytics-fast-20261004.json and financial-fast-20261004.json remain in original Local QA environment; no raw transfer claim"
   }
 }

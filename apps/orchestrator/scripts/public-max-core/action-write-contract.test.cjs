@@ -159,3 +159,59 @@ test('legacy client module create uses the same retry-safe managed helper and ac
  const legacy=context.exports;await assert.rejects(legacy.createMaxAction(input.actionType,input.payload));await legacy.createMaxAction(input.actionType,input.payload);
  assert.equal(typeof sent[0].operationKey,'string');assert.equal(sent[1].operationKey,sent[0].operationKey);assert.equal(legacy.createMaxAction,canonical.createMaxAction);
 });
+
+// Execute the shipped browser SDK and renewal wrapper together. The HTTP/editor
+// boundary is in memory; no database, real provider or signed cookie is used.
+function previewActionFixture({sessionStatus=401,changedActor=false,loseFirstResponse=false,writeStatus=201}={}) {
+ const sent=[], listeners=new Set(), saved=new Map();let expired=true, renewals=0;
+ const origin='https://test.invalid';
+ const preview=()=>Response.json({mode:'preview',user:{id:'preview'}});
+ const native=async(input,init)=>{
+  const url=String(input);
+  if(url==='/api/max/session') {
+   if(changedActor)return Response.json({mode:'max',user:{id:'123'}});
+   return expired?Response.json({error:'Session unavailable'},{status:sessionStatus}):preview();
+  }
+  if(url.includes('/api/omnia/preview-session?')){renewals++;expired=false;return preview();}
+  assert.equal(url,'/api/omnia/actions');sent.push({body:JSON.parse(init.body),actor:init.headers['X-Omnia-Actor']});
+  if(loseFirstResponse&&sent.length===1){expired=true;throw new TypeError('synthetic response loss after commit');}
+  return writeStatus===401?Response.json({error:'Denied'},{status:401}):Response.json({action:{id:'saved-action'}},{status:201});
+ };
+ const parent={postMessage(message){queueMicrotask(()=>listeners.forEach(fn=>fn({source:parent,origin:'https://yleum.ru',data:{type:'omnia:preview-session:result',nonce:message.nonce,url:origin+'/api/omnia/preview-session?signature=synthetic'}})));}};
+ const window={fetch:native,location:{origin,href:origin+'/'},parent,crypto:require('node:crypto').webcrypto,
+  sessionStorage:{getItem:key=>saved.get(key)||null,setItem:(key,value)=>saved.set(key,value),removeItem:key=>saved.delete(key)},
+  setTimeout,clearTimeout,addEventListener:(_type,fn)=>listeners.add(fn),removeEventListener:(_type,fn)=>listeners.delete(fn)};
+ function load(relative,modules={}) {
+  const context={exports:{},require:name=>{assert.ok(name in modules,`Unexpected import ${name}`);return modules[name];},
+   window,fetch:(...args)=>window.fetch(...args),crypto:window.crypto,TextEncoder,URLSearchParams,URL,Request,Response,AbortController};
+  vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,relative),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
+  return context.exports;
+ }
+ const stop=load('src/lib/max/owner-preview-renewal.ts').installOwnerPreviewFetch(window);
+ const sdk=load('src/lib/omnia/integration-client.ts',{'@/lib/max/bridge':{getMaxWebApp:()=>null}});
+ return {sdk,stop,sent,saved,renewals:()=>renewals};
+}
+test('SDK create renews expired owner preview before actor preflight and dispatches one unchanged action',async()=>{
+ const f=previewActionFixture();const operationKey=randomUUID();
+ try {
+  const result=await f.sdk.createMaxAction(input.actionType,input.payload,{operationKey});
+  assert.equal(result.action.id,'saved-action');assert.equal(f.renewals(),1);assert.equal(f.sent.length,1);
+  assert.equal(f.sent[0].actor,'preview');assert.equal(f.sent[0].body.operationKey,operationKey);assert.deepEqual(f.sent[0].body.payload,input.payload);
+ } finally {f.stop();}
+});
+test('SDK lost-response retry through renewed preview keeps its operation identity without automatic write replay',async()=>{
+ const f=previewActionFixture({loseFirstResponse:true});
+ try {
+  await assert.rejects(f.sdk.createMaxAction(input.actionType,input.payload));assert.equal(f.sent.length,1);assert.equal(f.saved.size,1);
+  await f.sdk.createMaxAction(input.actionType,input.payload);assert.equal(f.renewals(),2);assert.equal(f.sent.length,2);
+  assert.equal(f.sent[1].body.operationKey,f.sent[0].body.operationKey);assert.equal(f.saved.size,0);
+ } finally {f.stop();}
+});
+for(const options of [{sessionStatus:403},{changedActor:true}])test('SDK renewal refuses '+JSON.stringify(options)+' before any business write',async()=>{
+ const f=previewActionFixture(options);
+ try {await assert.rejects(f.sdk.createMaxAction(input.actionType,input.payload));assert.equal(f.renewals(),0);assert.equal(f.sent.length,0);assert.equal(f.saved.size,0);} finally {f.stop();}
+});
+test('SDK dispatched action401 is returned without replay or clearing its uncertain identity',async()=>{
+ const f=previewActionFixture({writeStatus:401});
+ try {await assert.rejects(f.sdk.createMaxAction(input.actionType,input.payload));assert.equal(f.renewals(),1);assert.equal(f.sent.length,1);assert.equal(f.saved.size,1);} finally {f.stop();}
+});
