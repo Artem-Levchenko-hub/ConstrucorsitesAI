@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowUpRight, Check, CircleAlert, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
+import { MaxOwnerAnalytics } from "@/components/max/MaxOwnerAnalytics";
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { Button } from "@/components/ui/button";
 import { getMaxIntegration } from "@/lib/api/max-integration";
@@ -102,6 +103,8 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           <p className="max-dashboard-monitoring-note">Приложение проверяется при каждой публикации. Постоянного наблюдения за доступностью пока нет: если приложение перестанет открываться между публикациями, мы не узнаем об этом сами — напишите нам.</p>
         </section>
       </div>
+
+      <MaxOwnerAnalytics projectId={projectId} />
 
       <section className="max-dashboard-system" aria-labelledby="max-system-heading">
         <header><div><h2 id="max-system-heading">Состояние и подключения</h2><p>Данные среды разработки и связи с MAX</p></div><Button variant="outline" onClick={refreshStatus} disabled={runtime.isFetching || integration.isFetching || readiness.isFetching || deploy.isFetching}><RefreshCw className="size-4" />Обновить</Button></header>

@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+import { analyticsEventId, forwardMaxAnalytics } from "@/lib/omnia/analytics";
+
 import { schema, withMaxUser } from "@/lib/db";
 import {
   createMaxSession,
@@ -87,6 +89,12 @@ export async function POST(request: Request) {
         .values({ maxUserId: user.id, firstName: "" })
         .onConflictDoNothing({ target: schema.maxUsers.maxUserId }),
     );
+    const eventId = analyticsEventId(`open:${user.id}:${initData}`);
+    if (process.env.OMNIA_PUBLIC_APP_ORIGIN) {
+      await withMaxUser(user.id, (tx) => tx.insert(schema.maxAnalyticsEvents).values({
+        id: eventId, maxUserId: user.id, eventName: "app_open", properties: {},
+      }).onConflictDoNothing({ target: schema.maxAnalyticsEvents.id }));
+    }
     const session = createMaxSession(user);
     const response = NextResponse.json({ user, startParam: launch.startParam });
     response.cookies.set(MAX_SESSION_COOKIE, session.value, {
@@ -99,6 +107,7 @@ export async function POST(request: Request) {
       path: "/",
       maxAge: session.maxAge,
     });
+    await forwardMaxAnalytics(user.id, eventId, "open");
     return response;
   } catch (error) {
     console.error("[max-auth] session persistence failed", {

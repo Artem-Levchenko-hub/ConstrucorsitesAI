@@ -35,6 +35,7 @@ from yleum_api.models.hero_media_brief import HeroMediaBrief
 from yleum_api.models.hero_media_render import HeroMediaRender
 from yleum_api.models.integration_operation import IntegrationOperation
 from yleum_api.models.lead import Lead
+from yleum_api.models.max_analytics import MaxAnalyticsEvent
 from yleum_api.models.max_integration import MaxIntegration
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.message import Message
@@ -91,6 +92,7 @@ __all__ = [
     "IntegrationOperation",
     "Lead",
     "LegalAcceptance",
+    "MaxAnalyticsEvent",
     "MaxIntegration",
     "MaxProjectConfig",
     "Message",

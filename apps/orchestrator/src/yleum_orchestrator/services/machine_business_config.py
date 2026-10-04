@@ -153,6 +153,9 @@ def apply_public_core_overlay(core: Any) -> None:
         "src/app/api/omnia/integrations/[...path]/route.ts",
         "src/app/api/max/session/route.ts",
         "src/lib/max/session.ts",
+        "src/lib/omnia/analytics.ts",
+        "src/app/api/omnia/actions/route.ts",
+        "src/app/api/omnia/events/route.ts",
     )
     _upload_changed_files(
         core, {relative: (template / relative).read_bytes() for relative in paths},

@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { schema, withMaxUser } from "@/lib/db";
+import { forwardMaxAnalytics } from "@/lib/omnia/analytics";
 import { getMaxUser } from "@/lib/max/session";
 
 const DEFAULT_ACTION_LIMIT = 250;
@@ -167,6 +168,10 @@ export async function POST(request: Request) {
     });
     return { status: 201, body: { action: { ...created, revision: actionRevision(created) }, probeUserCreated: createdUsers.length === 1 } };
   });
+  if (result.status === 201 && "action" in result.body && result.body.action &&
+      !input.actionType.startsWith("omnia_health_")) {
+    await forwardMaxAnalytics(user.id, result.body.action.id, "action");
+  }
   return NextResponse.json(result.body, { status: result.status,
     headers: { "Cache-Control": "no-store", ...("action" in result.body && result.body.action ? { ETag: result.body.action.revision } : {}) } });
 }
