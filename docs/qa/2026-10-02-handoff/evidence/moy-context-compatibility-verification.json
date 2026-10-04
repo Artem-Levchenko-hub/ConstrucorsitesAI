@@ -1,0 +1,32 @@
+{
+  "base": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+  "source_hashes": {
+    "apps/api/src/yleum_api/routers/moysklad_vendor.py": "e59457a97b78187a67e675d1d4724d4d78b600359a3fda751139997a6dc7990b",
+    "apps/api/tests/test_moysklad_iframe_bridge.py": "71c5aca2a679acd07f837e2d3e14812de139f4dd2f6ab0b78e7f72c08efecdb9"
+  },
+  "verification": {
+    "cross_window_red": "Node actual0 expected1 before source fix",
+    "diagnostic_red": "Node metadata0 expected1 before logging",
+    "final_scoped_checks": 78,
+    "real_db_test_deferred_to_ci": "test_vendor_install_requires_signature_and_uninstall_revokes_token",
+    "full_api_types": "260 source files clean",
+    "ruff": "passed",
+    "diff": "passed",
+    "review": "SOURCE_CLEAR final exact two files"
+  },
+  "diagnostic_keys": [
+    "name",
+    "origin",
+    "source_is_parent",
+    "source_is_top",
+    "correlation_matches",
+    "message_id_matches",
+    "nonce_matches"
+  ],
+  "secret_values_logged": false,
+  "live_cause": "unproven pending metadata; narrow source compatibility defect verified",
+  "paid_provider_calls": 0,
+  "business_provider_writes": 0,
+  "full_ci": "pending",
+  "production_delivery": "pending"
+}

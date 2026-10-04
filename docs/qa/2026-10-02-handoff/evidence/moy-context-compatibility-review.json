@@ -1,0 +1,58 @@
+{
+  "verdict": "SOURCE_CLEAR",
+  "scope": "Read-only final two-file context-window compatibility plus explicitly requested diagnostic metadata review; no live runtime cause or provider acceptance claim",
+  "base_revision_as_supplied": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+  "worktree": "/workspace/qa-worktrees/moy-context-c19",
+  "source_hashes": {
+    "apps/api/src/yleum_api/routers/moysklad_vendor.py": "e59457a97b78187a67e675d1d4724d4d78b600359a3fda751139997a6dc7990b",
+    "apps/api/tests/test_moysklad_iframe_bridge.py": "71c5aca2a679acd07f837e2d3e14812de139f4dd2f6ab0b78e7f72c08efecdb9"
+  },
+  "reference_router_sha256": "71c7726537e3906c3636914a3a94d736d92f8355ba0fdc52697cfd8f294cbffe",
+  "findings": [],
+  "checks": [
+    {
+      "file": "apps/api/src/yleum_api/routers/moysklad_vendor.py",
+      "line": 697,
+      "result": "Only setup context callback drops e.source===window.parent. Exact https://online.moysklad.ru origin, exact response name and numeric correlation equality remain. String/nonempty token check and original server token schema/admin/installed/account validation remain."
+    },
+    {
+      "file": "apps/api/src/yleum_api/routers/moysklad_vendor.py",
+      "line": 530,
+      "result": "Popup origin/captured-opener/nonce/project/action guards unchanged. AST comparison confirms every existing router function except setup is identical to reviewed reference, including native_connect, session marker, signed lifecycle, vendor context, claim and settings."
+    },
+    {
+      "file": "apps/api/tests/test_moysklad_iframe_bridge.py",
+      "line": 157,
+      "result": "Actual generated setup script regression accepts a trusted-origin correlated response from another window; hostile origin and wrong correlation execute zero context requests and leave auth disabled. Mock initial auth disabled state now matches existing HTML, not a product relaxation."
+    },
+    {
+      "file": "apps/api/src/yleum_api/routers/moysklad_vendor.py",
+      "line": 698,
+      "result": "Before-filter console diagnostic is restricted to two known message names and browser-supplied origin plus five boolean comparisons. No token/code/payload/nonce/message-id/correlation-id values or URL paths are emitted; no browser storage persistence is added. Existing exact origin guard remains unchanged."
+    },
+    {
+      "file": "apps/api/tests/test_moysklad_iframe_bridge.py",
+      "line": 168,
+      "result": "Actual-script diagnostic regression asserts exact seven keys, boolean comparison types, known message name/origin and absence of synthetic token/code values. DOM initial disabled state matches product HTML."
+    }
+  ],
+  "evidence": {
+    "official_sdk_reference_supplied_by_root": "70d838c12eb8365c29010e46a95ef4b8f4f2a768; src/core.js159-195 correlation-based compatibility; README142 domain variation. Source was not independently fetched during this review.",
+    "red_log": "/workspace/qa-evidence/platform-feature-proof-20261004/moy-context-host-window-red.log",
+    "red_log_sha256": "fe5c97b0f13fce6754d5927f0ee323a597d7080f8a0387ea672ef7f2065f43e5",
+    "red_observation": "Actual-script context-host-window failed: actual context calls0, expected1.",
+    "configured_green_log": "/workspace/qa-evidence/platform-feature-proof-20261004/moy-context-host-window-green-configured.log",
+    "configured_green_log_sha256": "d694f55e3a18070a9015b828031b2e930d54611112fbc19ca151c668e19820c6",
+    "configured_green_observation": "Recorded complete progress without failures; final author/Root test exit remains authoritative.",
+    "reviewer_execution": "Source hashes, exact textual delta and AST-only unchanged-function comparison; no test rerun, browser/server, DB, Git, model/provider, edit or deployment.",
+    "diagnostic_red_log_sha256": "b188b365e951f15d0a9f7c935880f1bd5125b82808f793af669aec507bad633d",
+    "final_diagnostic_green_log": "/workspace/qa-evidence/platform-feature-proof-20261004/moy-context-compatibility-diagnostic-green.log",
+    "final_diagnostic_green_log_sha256": "38ef6a330499a0009f601a68b85c4f6e978852024d127968ac4efaa4b8f2df7a",
+    "final_diagnostic_green_observation": "Recorded full78-case progress without failures; Root final test exit remains authoritative. Reviewer did not rerun tests."
+  },
+  "limitations": [
+    "Source-compatible narrow fix; actual deployed sender origin/window/correlation metadata remains pending, so current live timeout cause and end-to-end resolution are not proven.",
+    "The origin allowlist is deliberately unchanged. A different actual vendor origin requires separate official allowlist evidence, not removal of the origin guard.",
+    "Cross-window acceptance trusts the exact official origin plus correlation and original server-validated admin context; it adds no popup claim authority and does not make existing pending claims universally exactly once."
+  ]
+}

@@ -109,7 +109,8 @@ class Element {
  replaceChildren(){this.children=[];this.value='';}
 }
 const elements=new Map();
-const document={getElementById:id=>{if(!elements.has(id))elements.set(id,new Element());
+const document={getElementById:id=>{if(!elements.has(id)){
+ const element=new Element();if(id==='auth')element.disabled=true;elements.set(id,element);}
  return elements.get(id);},createElement:()=>new Element()};
 const popupDocument={getElementById:()=>new Element()};
 let correlation; let ready; let pendingClaim;let opens=0;
@@ -143,8 +144,10 @@ const popupFetch=async(url,init={})=>{
  if(url.endsWith('/settings'))return{ok:true,json:async()=>({status:'saved'})};
  throw Error('unapproved fetch path');
 };
-const deadlines=[];
-const common={console,Math,JSON,Date,Map,Set,URL,AbortSignal,
+const deadlines=[];const contextLogs=[];
+const safeConsole={...console,info:(label,value)=>{
+ assert.equal(label,'yleum:moy-context:v1');contextLogs.push(JSON.parse(value));}};
+const common={console:safeConsole,Math,JSON,Date,Map,Set,URL,AbortSignal,
  setTimeout:(h,ms)=>{deadlines.push({h,ms})},
  setInterval:h=>{timers.push(h);return timers.length},clearInterval:()=>{}};
 let contextCalls=0;
@@ -156,9 +159,27 @@ vm.runInNewContext(DATA.setup,{...common,window:frame,document,fetch:setupFetch}
 const settle=async()=>{for(let i=0;i<8;i++)await new Promise(resolve=>setImmediate(resolve));};
 const el=id=>document.getElementById(id);
 (async()=>{
- await send('frame',{name:'UserContextResponse',correlationId:correlation,token:'QA_CONTEXT'},
- 'https://online.moysklad.ru',CASE==='context-source'?{}:frame.parent);
- if(CASE==='context-source'){assert.equal(contextCalls,0);return;}
+ await send('frame',{name:'UserContextResponse',
+ correlationId:CASE==='context-correlation'?correlation+1:correlation,token:'QA_CONTEXT'},
+ CASE==='context-origin'?'https://attacker.invalid':'https://online.moysklad.ru',
+ CASE==='context-host-window'?{}:frame.parent);
+ if(['context-origin','context-correlation'].includes(CASE)){
+  assert.equal(contextCalls,0);assert.equal(el('auth').disabled,true);return;}
+ if(CASE==='context-diagnostic'){
+  assert.equal(contextLogs.length,1);
+  const log=contextLogs[0];assert.deepEqual(Object.keys(log).sort(),
+   ['correlation_matches','message_id_matches','name','nonce_matches','origin',
+    'source_is_parent','source_is_top'].sort());
+  assert.equal(log.name,'UserContextResponse');
+  assert.equal(log.origin,'https://online.moysklad.ru');
+  assert.equal(log.correlation_matches,true);assert.equal(log.source_is_parent,true);
+  for(const key of ['correlation_matches','message_id_matches','nonce_matches',
+   'source_is_parent','source_is_top'])assert.equal(typeof log[key],'boolean');
+  assert.ok(!JSON.stringify(log).includes('QA_CONTEXT'));
+  assert.ok(!JSON.stringify(log).includes('QA_NATIVE_CODE'));return;}
+ if(CASE==='context-host-window'){
+  assert.equal(contextCalls,1,'official host response must reach server token verification');
+  assert.equal(el('auth').disabled,false);return;}
  assert.equal(typeof el('auth').onclick,'function');
  el('auth').onclick();await settle();
  if(CASE==='blocked'){
@@ -269,7 +290,10 @@ const el=id=>document.getElementById(id);
         "auth-changed",
         "cancel-inflight",
         "expired",
-        "context-source",
+        "context-host-window",
+        "context-diagnostic",
+        "context-origin",
+        "context-correlation",
     ],
 )
 async def test_actual_two_way_bridge_boundaries_and_native_controls(bridge, case):

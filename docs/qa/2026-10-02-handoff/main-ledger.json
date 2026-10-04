@@ -1253,7 +1253,7 @@
   "current_delivery_preparation": {
     "base_python": "121900fd95a13e1ade122057abe19d6c22468621",
     "base_web": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
-    "state": "SOURCE_FROZEN_REVIEWED_PENDING_EXACT_CI_BACKUP_PRODUCTION",
+    "state": "DELIVERED_C19_NATIVE_CONTEXT_BLOCKER_FIX_PENDING_CI",
     "scope": [
       "success-only aggregate generation billing with durable accepted snapshot and exactly-once settlement",
       "integration request cards preserve exact seven original prompts",
@@ -1282,7 +1282,7 @@
     "paid_provider_calls": 0,
     "business_provider_writes": 0,
     "application_publications": 0,
-    "production_delivered": false,
+    "production_delivered": true,
     "generation_cohorts": {
       "accepted": 33,
       "completed": 27,
@@ -1298,7 +1298,7 @@
       "public_solution": "Draft v0; moderation/public install URL unverified",
       "test_reinstall_approved": true,
       "protected_PAR_B_separate_connection": "unchanged; do not transfer",
-      "code_state": "Native authenticated popup for owner confirmation; own-project/org/store selection and explicit existing claim/settings in main Moy iframe, no codepaste primary. Exact source reviewed, not production-delivered yet. Session preflight is continuity check, final original APIs remain authority.",
+      "code_state": "Native iframe controls actually served on c19; installed-solution live host-context timed out before auth/claim. No successful native bind claimed. Cross-window compatibility fix and requested safe message diagnostics pending exact CI/deploy.",
       "installation_token_present": true,
       "installation_updated_utc": "2026-10-04T11:30:21.248559Z",
       "reinstall_observation": "Actual Vendor Install accepted; latest read-only receipt says installed token present; C prior revoked connection remains error pending explicit native claim",
@@ -1329,7 +1329,23 @@
         "run": 37198369951,
         "result": "failed",
         "cause": "Original publication expectation and cancellation fake Session compatibility; both corrections now independently SOURCE_CLEAR20+18 ownPG. Await native iframe freeze and next exact CI."
+      },
+      {
+        "sha": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+        "run": 37200069869,
+        "result": "success",
+        "jobs_success": 10
       }
-    ]
+    ],
+    "deployed_python": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+    "deployed_web": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+    "production_receipt": "evidence/native-iframe-production-release.json",
+    "physical_receipt": "evidence/native-iframe-physical-after.json",
+    "native_live_blocker": {
+      "observed": "Twice actual installed-solution setup timed out before context confirmation, auth button disabled; no codepaste/claim",
+      "cause_status": "c19 source-parent restriction reproduces protocol compatibility failure; exact live response metadata not available yet. Provider gwtReactInterop initialization error cause unproved",
+      "fix_scope": "Remove only parent-source equality for vendor UserContextResponse; preserve exact online origin/correlation, server signed token/admin/install validation and captured-popup nonce guard. Requested pre-filter logger emits known name/origin and five boolean fields only; no values/tokens/codes/payload.",
+      "tests": "78 scoped backend/actual JS VM checks PASS, one existing real-DB lifecycle test deferred to full CI. Both compatibility and diagnostic regressions RED observed before implementation."
+    }
   }
 }

@@ -695,7 +695,19 @@ rel="noopener noreferrer">Открыть кабинет Yleum</a></p>
   if(popup&&nonce)popup.postMessage({name:'MoyBridgeCancel',nonce},origin);
  });
  const h=async e=>{
-  if(e.origin!=='https://online.moysklad.ru'||e.source!==window.parent||
+  if(['UserContextResponse','InvalidMessageError'].includes(e.data?.name)){
+   // Diagnostic metadata only: never log payload, token, code or ID values.
+   console.info('yleum:moy-context:v1',JSON.stringify({
+    name:e.data.name,origin:e.origin,source_is_parent:e.source===window.parent,
+    source_is_top:e.source===window.top,correlation_matches:e.data.correlationId===id,
+    message_id_matches:typeof e.data.messageId==='number'&&e.data.messageId===id,
+    nonce_matches:typeof nonce==='string'&&e.data.nonce===nonce
+   }));
+  }
+  // MoySklad may answer from another host window; the official SDK does not
+  // require parent identity. Keep exact host origin/correlation and exchange
+  // the one-use context token through the original signed Vendor API.
+  if(e.origin!=='https://online.moysklad.ru'||
      e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
   window.removeEventListener('message',h);
   try{
