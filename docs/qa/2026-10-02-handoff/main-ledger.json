@@ -1228,7 +1228,15 @@
       "failed": 0,
       "scope": "Trusted prepare.mjs isolated build-tree overlay; initial unprepared19 run9pass10fail was harness misuse, retained in execution log, not product evidence"
     },
-    "independent_review": "SOURCE_CLEAR; reviewer independently executed23/23 memory-only, no edits/provider/liveDB"
+    "independent_review": "SOURCE_CLEAR; reviewer independently executed23/23 memory-only, no edits/provider/liveDB",
+    "first_ci": {
+      "sha": "2f7c435a61a44b584335565851b77c9aca7d51d6",
+      "run": 37189794738,
+      "image_build": "FAILED_verify_shared_public_export",
+      "cause": "Explicit preview renewal override retained old helper SHA; same script reproduced exact helper hash assertion locally",
+      "remediation": "Only approved helper SHA updated; same full tree export validator passes. No validator/gate weakening, server/runtime bytes unchanged",
+      "followup_ci": "PENDING"
+    }
   },
   "analytics_source_confirmation": {
     "source_thread": "01a10600-af87-7a80-82be-44ee8bf4694b",
