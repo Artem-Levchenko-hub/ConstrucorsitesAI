@@ -1347,5 +1347,34 @@
       "fix_scope": "Remove only parent-source equality for vendor UserContextResponse; preserve exact online origin/correlation, server signed token/admin/install validation and captured-popup nonce guard. Requested pre-filter logger emits known name/origin and five boolean fields only; no values/tokens/codes/payload.",
       "tests": "78 scoped backend/actual JS VM checks PASS, one existing real-DB lifecycle test deferred to full CI. Both compatibility and diagnostic regressions RED observed before implementation."
     }
+  },
+  "mvp_completion_execution": {
+    "target_date_moscow": "2026-10-06",
+    "release_ready": false,
+    "source_owner": "root; serial main and canonical deployment",
+    "current_production_python": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+    "current_production_web": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+    "delivery": {
+      "CI": 37204027324,
+      "jobs": 10,
+      "backup_databases": 32,
+      "active_generations": 0,
+      "physical": "PASS_STRICT_FULL_A3_B7",
+      "live_native_bind_pass": false
+    },
+    "moy_public_status": "submitted after explicit offer approval; provider On moderation, approval pending",
+    "amo_public_status": "technical-support request sent, specialist escalation accepted; NOT formal On moderation proof",
+    "amo_server_readiness": "owner matches, active+ready, access/refresh present, not expired, configured HTTPS callback; fresh current published MAX E2E not proven",
+    "auth_recovery": "SOURCE_CLEAR and913 local web tests; CI/deployment/live pending",
+    "parallel_implementation": [
+      "real MAX event owner analytics",
+      "bounded signed U/V custom-route acceptance runner"
+    ],
+    "next": [
+      "live existing installed native Moy bind/org/store/reload",
+      "exact Coffee accepted publication/bot mapping and test-account synthetic provider flows",
+      "actual owner analytics event and foreign-owner deny",
+      "close remaining acceptance by evidence; do not mark mixed cohorts as full MVP"
+    ]
   }
 }

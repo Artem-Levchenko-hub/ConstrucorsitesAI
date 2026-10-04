@@ -1,0 +1,202 @@
+{
+  "candidate": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+  "checks": {
+    "actualApiModuleHashes": {
+      "yleum_api.routers.moysklad_vendor": "e59457a97b78187a67e675d1d4724d4d78b600359a3fda751139997a6dc7990b",
+      "yleum_api.services.generation_billing": "c221b8991febbfd9120399c3a7ce3f55517ade87b3f3e9abf43232c9b8092ce2"
+    },
+    "actualRuntimeModuleHashes": {
+      "yleum_api.routers.moysklad_vendor": "e59457a97b78187a67e675d1d4724d4d78b600359a3fda751139997a6dc7990b",
+      "yleum_api.services.agent_native": "4180b0e5ea910cd8b6b41748fdea658d16f3e69e64afa30bde4a8ff5aebd13f6",
+      "yleum_api.services.billing_cycle": "85e26853ffabd7fbf0b27897b120727749bfe231619428c38548c68b3cc491e4",
+      "yleum_api.services.generation.agent_finalization": "1d969d412c6e3d596540e940051be3442e610caa2688371d54ca60ac4f1344bd",
+      "yleum_api.services.generation.agent_generation": "0f6ed72b5cf83e786ad3412f868c7e4b1d2381ae0ab479eedc37b6fe9a378cf4",
+      "yleum_api.services.generation.agent_pipeline": "415bcc65a6896a2474938f561675517dcfaf60db76f829d6cf87b1b1989ef0d0",
+      "yleum_api.services.generation.agent_prompt": "88965927adadf698a10711a4bce76449ba7de82b84e3700b456d1f2e631644d6",
+      "yleum_api.services.generation.agent_recovery": "009432e6c74de1996f3754ca108558819cd598d243356e28b87f060356d72b35",
+      "yleum_api.services.generation.lifecycle": "709af0ce5026ab6a4094beff2e056ab711ec9295c1fc7df0633ea82fe2bf6099",
+      "yleum_api.services.generation.supervisor": "a8af16bdd9ad1104a6ec4934002a0550a465030c9865a8abf35e786d7211e289",
+      "yleum_api.services.generation_billing": "c221b8991febbfd9120399c3a7ce3f55517ade87b3f3e9abf43232c9b8092ce2",
+      "yleum_api.services.generation_runs": "7b1c3347b882586d7bf5461e7d9d3c8c44472c1f1b4430941351df68e1813348",
+      "yleum_api.services.max_finalization": "7df3a6cd0988fe57101dd1aa939f11791020f80771df9a0f9b45c0a9c6616bba",
+      "yleum_api.services.max_project_kit": "a8e2ea64338c5751282b1f548c0f5aea2d33423bec6540f6dec2197e6db9adeb",
+      "yleum_api.services.project_cell_proofs": "62ec79f1f8a2f6384fd1c8a9fb88adef000fee8e6aea3a6542d4ba82ad10e606",
+      "yleum_api.workers.generation": "b4fe4dfb98a5c7d76f313800ff83ef48cbd160bb10518ed1063a85292f4cef2c"
+    },
+    "actualWorkerTemplateSHA256": "25ee5fe68433de2a9b235da64320ac17f10a43d328a74d39a444cab51d4bd706",
+    "backupExitCode": 0,
+    "backupOperatorReaderSHA256": "f84da3f79db560b01d8678f33f17a3a20413ae15e0bd419afa086a9d4b477e02",
+    "candidateDisposableAcceptance": "PASS_LOCAL_DISPOSABLE_PG_HTTP_RESTORE",
+    "candidatePaths": 8,
+    "canonicalExitCode": 0,
+    "canonicalSourceSHA256": "31267b190fb02dd88bcf313c011f0d35f68427615939ad7aaa4468bcfbc4aa5a",
+    "ciConclusion": "success",
+    "ciRunId": 37204027324,
+    "commerceControllerHealth": {
+      "release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+      "status": "ok"
+    },
+    "commerceLockClassification": "Historical Sep29 release superseded by verified Oct1 release; no active deploy/build/rsync; preserved unchanged",
+    "commerceLockPresent": true,
+    "commerceLockRecognized": true,
+    "commerceNativePreviewRenewalImage": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf",
+    "commerceProtectedPaths": 184,
+    "compiledSupportFourCases": {
+      "cases": [
+        {
+          "case": "null",
+          "return_to_application": true,
+          "status": 200,
+          "visible_contact": true
+        },
+        {
+          "case": "empty",
+          "return_to_application": true,
+          "status": 200,
+          "visible_contact": true
+        },
+        {
+          "case": "whitespace",
+          "return_to_application": true,
+          "status": 200,
+          "visible_contact": true
+        },
+        {
+          "case": "custom",
+          "return_to_application": true,
+          "status": 200,
+          "visible_contact": true
+        }
+      ],
+      "compiled_server": true,
+      "exit_code": 0,
+      "passed": true,
+      "provider_or_database_writes": 0
+    },
+    "coreControllerHealth": {
+      "release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+      "status": "ok"
+    },
+    "coreProtectedPaths": 175,
+    "existingBrowserActivation": "Pending normal managed SDK adoption/build and live expiry acceptance; no app publication or model request by this release",
+    "expectedGatewayBillingModuleSHA256": "31a6cce6b3318f188b2ce809356688ac1496aa71a3bf20247091595c999b36ea",
+    "freshCellsCompleteness": {
+      "busy": 0,
+      "databases": 32,
+      "deferred": 0,
+      "failed": 0,
+      "manifestSHA256": "9b01484055e4dcd9649d320c4eeabb4e43bf6b60583100981722772c37beb690",
+      "ok": 32,
+      "stamp": "20261004-130923"
+    },
+    "gatewayBillingModuleSHA256": "31a6cce6b3318f188b2ce809356688ac1496aa71a3bf20247091595c999b36ea",
+    "nativeSetupHttp": {
+      "controls_present": true,
+      "manual_code_primary": false,
+      "provider_or_claim_dispatch": false
+    },
+    "oldLiveHealth": {
+      "checks": {
+        "database": "ok",
+        "deploy_control_plane": "ok",
+        "generation_worker": "ok",
+        "preview_storage": "ok",
+        "redis": "ok",
+        "worker": "ok"
+      },
+      "dependencies": {
+        "billing_worker": "ok",
+        "billing_worker_release_sha": "c19a605bd6fb",
+        "generation_worker_configured_limit": "8",
+        "generation_worker_effective_limit": "8",
+        "generation_worker_load": "0/8",
+        "generation_worker_other": "0",
+        "generation_worker_release_sha": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+        "generation_worker_running": "0",
+        "generation_worker_waiting_capacity": "0",
+        "orchestrator_release_sha": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+        "worker_release_sha": "c19a605bd6fb250f08a8307417eeb1576eea744b"
+      },
+      "release_sha": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+      "service": "api",
+      "status": "ok"
+    },
+    "pinConfiguration": {
+      "changed": false,
+      "commerce": {
+        "CELL_PREVIEW_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf",
+        "CELL_PUBLIC_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf"
+      },
+      "core": {
+        "CELL_PREVIEW_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf",
+        "CELL_PUBLIC_CORE_IMAGE": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf"
+      }
+    },
+    "postDrainStatus": {
+      "active": {
+        "generations": 0,
+        "leases": 0,
+        "operations": 0,
+        "restorations": 0
+      },
+      "bootstrap_readonly": false,
+      "drained": false,
+      "release_sha": null
+    },
+    "postIngressStatus": {
+      "activeState": false,
+      "mapPresent": false,
+      "vhostMarkerPresent": false
+    },
+    "preDrainStatus": {
+      "active": {
+        "generations": 0,
+        "leases": 0,
+        "operations": 0,
+        "restorations": 0
+      },
+      "bootstrap_readonly": false,
+      "drained": false,
+      "release_sha": null
+    },
+    "previewRenewalCandidateImage": "sha256:bf53b18ac71072376119bcfc24f895eea397abe6f84d08ccd36ab99b019f36cf",
+    "protectedRsyncOverwrites": 0,
+    "publicHealth": {
+      "checks": {
+        "database": "ok",
+        "deploy_control_plane": "ok",
+        "generation_worker": "ok",
+        "preview_storage": "ok",
+        "redis": "ok",
+        "worker": "ok"
+      },
+      "dependencies": {
+        "billing_worker": "ok",
+        "billing_worker_release_sha": "be9d4c91d0d3",
+        "generation_worker_configured_limit": "8",
+        "generation_worker_effective_limit": "8",
+        "generation_worker_load": "0/8",
+        "generation_worker_other": "0",
+        "generation_worker_release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+        "generation_worker_running": "0",
+        "generation_worker_waiting_capacity": "0",
+        "orchestrator_release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+        "worker_release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe"
+      },
+      "release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+      "service": "api",
+      "status": "ok"
+    },
+    "webHealth": {
+      "release_sha": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+      "service": "web",
+      "status": "ok"
+    }
+  },
+  "ciRunId": 37204027324,
+  "parent": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+  "phase": "complete",
+  "started": "2026-10-04T13:09:18.052997+00:00",
+  "withGateway": false,
+  "withWeb": false
+}

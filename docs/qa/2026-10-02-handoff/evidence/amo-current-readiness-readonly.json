@@ -1,0 +1,39 @@
+{
+  "observed_utc": "2026-10-04T13:26:16.630016+00:00",
+  "project": {
+    "access_expired_at_observation": false,
+    "access_token_present": true,
+    "auth_mode": "oauth",
+    "binding_status": "ready",
+    "callback_host_is_yleum": true,
+    "callback_https": true,
+    "callback_path": "/api/integrations/oauth/amocrm/callback",
+    "credentials_ciphertext_present": true,
+    "credentials_decrypt_ok": true,
+    "current_snapshot_id": "e8a6b491-ba7a-4142-976d-52cf7ead71fe",
+    "enabled": true,
+    "has_last_error": false,
+    "id": "e604e5ee-d699-46ae-be44-9975af011207",
+    "last_checked_at": "2026-10-04 08:53:15.714736+00:00",
+    "last_tested_at": "2026-10-03 23:46:31.931323+00:00",
+    "oauth_configured": true,
+    "oauth_state_history": {
+      "last_consumed_at": null,
+      "total": 0,
+      "used": 0
+    },
+    "operation_status_counts": [
+      {
+        "count": 4,
+        "last_finished_at": "2026-10-01 00:48:38.391452+00:00",
+        "status": "succeeded"
+      }
+    ],
+    "owner_matches": true,
+    "refresh_token_present": true,
+    "status": "active",
+    "token_expires_at": "2026-10-05 08:52:15.713600+00:00"
+  },
+  "readonly": true,
+  "scope": "Database readiness and existing receipts only; no fresh callback, token refresh or provider request; not current published/MAX E2E proof"
+}

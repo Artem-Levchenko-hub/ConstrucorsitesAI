@@ -1,0 +1,23 @@
+{
+  "scope": "Auth forms recover recognized stale server action without replay; source-level delivery preparation, not live fix claim",
+  "base": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+  "full_web_tests": {
+    "files": 108,
+    "passed": 913
+  },
+  "typecheck": "PASS",
+  "lint": "PASS",
+  "independent_review": "SOURCE_CLEAR Next action Promise, redirect propagation, OAuth one-shot semantics",
+  "reproduction": "QA old action UnrecognizedActionError; fresh reload same credentials succeeds; two local error regressions RED then GREEN",
+  "constraints": [
+    "single action call",
+    "no credential/ticket storage",
+    "no automatic replay",
+    "recognized missing-action errors only",
+    "existing open old JavaScript cannot acquire fix until reload"
+  ],
+  "source_sha256": {
+    "apps/web/src/lib/auth-action-recovery.ts": "f89526017958c8382549120cf0024e821f66584583ed80cd419f248078a30563",
+    "apps/web/src/components/auth/AuthPageRefresh.tsx": "2557449dcf8750707bcd329a0c7fcaf32330d819a7751fe6416f1638a6e18b65"
+  }
+}

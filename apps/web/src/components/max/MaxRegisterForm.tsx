@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
+import { recoverAuthAction } from "@/lib/auth-action-recovery";
+import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
 import { ArrowRight, Building2, Check, ShieldCheck } from "lucide-react";
 
 import { maxRegisterAction } from "@/app/(auth)/actions";
@@ -9,8 +11,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+const recoverableAction = recoverAuthAction(maxRegisterAction);
+
 export function MaxRegisterForm() {
-  const [state, action, pending] = useActionState(maxRegisterAction, {
+  const [state, action, pending] = useActionState(recoverableAction, {
     error: null,
   });
 
@@ -118,8 +122,10 @@ export function MaxRegisterForm() {
         </p>
       )}
 
+      {state.refreshRequired && <AuthPageRefresh />}
+
       <Button
-        disabled={pending}
+        disabled={pending || state.refreshRequired}
         className="h-12 w-full rounded-lg bg-accent text-base text-fg-on-accent hover:bg-accent-hover"
       >
         {pending ? "Создаём аккаунт…" : "Продолжить"}

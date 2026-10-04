@@ -1,0 +1,28 @@
+{
+  "helper_sha256": "17ded4158c924f98fad879a49a56a5175ff98e9492b26de1dd71ad101708b50c",
+  "observed_utc": "2026-10-04T13:17:09.845531+00:00",
+  "projects": [
+    {
+      "all_ids_sha256": "c3c0e0fad5a118f5dee93fe43aeb375b172f7304794d75a22151ac5ee62b27aa",
+      "cohort": "A",
+      "count": 3,
+      "observed_utc": "2026-10-04T13:15:00.115941+00:00",
+      "row_sha256": "01e6499a8489c4fde96dad2193f53e6225594cc2ef14c0efae509e5175989e0a",
+      "schema_sha256": "0e6420fd39887e907d8d2f9ab4e08957263c12f45874511c4e6a8f51ea7fd0bb",
+      "status": "captured"
+    },
+    {
+      "all_ids_sha256": "92fa9254de61a36a960c8102703a6a5f044d19c2adf7b89a0adbb516f1b44bf4",
+      "cohort": "B",
+      "count": 7,
+      "observed_utc": "2026-10-04T13:15:02.793503+00:00",
+      "row_sha256": "357c8a3f94ba88061fd2e4557cedef84f24e4d87968d25ad429d02c10593cf85",
+      "schema_sha256": "d8987d952fd0c9ed3f2f50530d41c8138557d91b06388599a99cbdc7f0f22ea9",
+      "status": "captured"
+    }
+  ],
+  "readonly": true,
+  "release_sha": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
+  "scope": "all current columns/values, row counts and IDs, schema equal authorized 02:21 full baselines; no new-row exception",
+  "status": "PASS_STRICT_FULL_A3_B7"
+}

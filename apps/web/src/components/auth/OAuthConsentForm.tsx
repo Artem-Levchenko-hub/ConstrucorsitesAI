@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
+import { recoverAuthAction } from "@/lib/auth-action-recovery";
+import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
 import { ArrowRight } from "lucide-react";
 
 import { oauthCompleteAction } from "@/app/(auth)/actions";
@@ -12,6 +14,8 @@ import { Button } from "@/components/ui/button";
  * VK ID / Яндекс ID. Те же три обязательных согласия, что и в обычной
  * регистрации Yleum; аккаунт создаётся только после отправки формы.
  */
+const recoverableAction = recoverAuthAction(oauthCompleteAction);
+
 export function OAuthConsentForm({
   ticket,
   email,
@@ -25,7 +29,7 @@ export function OAuthConsentForm({
   next: string;
   documentVersion: string;
 }) {
-  const [state, action, pending] = useActionState(oauthCompleteAction, {
+  const [state, action, pending] = useActionState(recoverableAction, {
     error: null,
   });
 
@@ -107,8 +111,10 @@ export function OAuthConsentForm({
         </p>
       )}
 
+      {state.refreshRequired && <AuthPageRefresh />}
+
       <Button
-        disabled={pending}
+        disabled={pending || state.refreshRequired}
         className="h-12 w-full rounded-lg bg-accent text-base text-fg-on-accent hover:bg-accent-hover"
       >
         {pending ? "Создаём аккаунт…" : "Создать аккаунт"}

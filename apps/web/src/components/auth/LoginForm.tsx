@@ -2,14 +2,18 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
+import { recoverAuthAction } from "@/lib/auth-action-recovery";
+import { AuthPageRefresh } from "@/components/auth/AuthPageRefresh";
 import { useTranslations } from "next-intl";
 import { loginAction } from "@/app/(auth)/actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+const recoverableAction = recoverAuthAction(loginAction);
+
 export function LoginForm({ next }: { next?: string }) {
-  const [state, formAction, pending] = useActionState(loginAction, {
+  const [state, formAction, pending] = useActionState(recoverableAction, {
     error: null,
   });
   const t = useTranslations("auth.form");
@@ -47,12 +51,14 @@ export function LoginForm({ next }: { next?: string }) {
 
       {state.error && <p role="alert" className="text-xs text-danger">{state.error}</p>}
 
+      {state.refreshRequired && <AuthPageRefresh />}
+
       <Button
         type="submit"
         variant="primary"
         size="lg"
         className="w-full rounded-[8px]"
-        disabled={pending}
+        disabled={pending || state.refreshRequired}
       >
         {pending ? t("loginPending") : t("loginButton")}
       </Button>
