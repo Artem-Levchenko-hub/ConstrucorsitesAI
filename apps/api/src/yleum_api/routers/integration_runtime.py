@@ -661,7 +661,18 @@ async def create_runtime_lead(
         ))).one()
         receipt.result = result
         await session.commit()
-    return RuntimeLeadPublic.model_validate(result)
+    public = RuntimeLeadPublic.model_validate(result)
+    from yleum_api.services.max_integration_analytics import record_confirmed_action
+
+    await record_confirmed_action(
+        session,
+        project_id=project_id,
+        user_id=context.max_user_id,
+        provider=connection.provider,
+        kind="lead",
+        client_key=operation_key,
+    )
+    return public
 
 
 async def _send_runtime_lead(
@@ -828,7 +839,18 @@ async def create_runtime_order(
             "МойСклад временно недоступен",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
-    return RuntimeOrderPublic.model_validate(result)
+    public = RuntimeOrderPublic.model_validate(result)
+    from yleum_api.services.max_integration_analytics import record_confirmed_action
+
+    await record_confirmed_action(
+        session,
+        project_id=project_id,
+        user_id=context.max_user_id,
+        provider=connection.provider,
+        kind="customer_order",
+        client_key=payload.idempotency_key,
+    )
+    return public
 
 
 @router.get("/{project_id}/catalog", response_model=RuntimeCatalogPublic)
