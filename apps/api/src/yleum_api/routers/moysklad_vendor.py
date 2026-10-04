@@ -23,6 +23,7 @@ from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from yleum_api.models.moysklad import MoyskladInstallation, MoyskladVendorReceipt
+from yleum_api.models.project import Project
 from yleum_api.routers import app_integrations
 from yleum_api.services.entitlements import assert_integrations_allowed
 from yleum_api.services.integration_credentials import load_credentials
@@ -435,71 +436,289 @@ async def pairing_code(payload: ContextRequest, session: SessionDep) -> dict[str
     return {"code": code, "account_name": installation.account_name}
 
 
-@router.get("/api/integrations/moysklad/setup", response_class=HTMLResponse)
-async def setup() -> HTMLResponse:
+def _iframe_page(page: str, *, frame_ancestors: str) -> HTMLResponse:
     nonce = secrets.token_urlsafe(18)
-    page = """<!doctype html>
-<html lang=ru><meta charset=utf-8>
-<meta name=viewport content="width=device-width, initial-scale=1">
-<title>Подключить МойСклад к Yleum</title>
-<style>
-body{font:16px system-ui;margin:2rem;max-width:38rem;color:#172034}
-p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
-</style>
-<h1>Подключить МойСклад к Yleum</h1>
-<p id=status>Подтверждаем аккаунт…</p>
-<div id=result hidden>
-<p>Скопируйте код и вставьте в Yleum: Интеграции → МойСклад. Код действует 10 минут.</p>
-<code id=code></code>
-<p><a href="/api/integrations/moysklad/return" target=_blank
-rel="noopener noreferrer">Открыть Yleum</a></p>
-</div>
-<script nonce="NONCE">
-(()=>{
-  const id=Math.floor(Math.random()*2147483647);
-  const s=document.getElementById('status');
-  const h=async e=>{
-    // Host responses may come from a different MoySklad window; the official
-    // widget SDK correlates by messageId and validates the token on the server.
-    if(e.origin!=='https://online.moysklad.ru'||
-       e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
-    window.removeEventListener('message',h);
-    try{
-      if(typeof e.data.token!=='string'||!e.data.token)throw Error();
-      const r=await fetch('/api/integrations/moysklad/context',{
-        method:'POST',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({token:e.data.token}),credentials:'omit'
-      });
-      const v=await r.json();
-      if(!r.ok)throw Error();
-      document.getElementById('code').textContent=v.code;
-      document.getElementById('result').hidden=false;
-      s.textContent='Аккаунт «'+v.account_name+'» подтверждён.';
-    }catch{s.textContent='Не удалось подтвердить аккаунт. Переоткройте решение.'}
-  };
-  window.addEventListener('message',h);
-  window.parent.postMessage({name:'UserContextRequest',messageId:id},
-                            'https://online.moysklad.ru');
-  setTimeout(()=>{
-    if(document.getElementById('result').hidden){
-      s.textContent='МойСклад не ответил. Переоткройте решение.';
-    }
-  },12000);
-})();
-</script></html>""".replace("NONCE", nonce)
     return HTMLResponse(
-        page,
+        page.replace("SCRIPT_NONCE", nonce),
         headers={
             "Cache-Control": "no-store",
             "Referrer-Policy": "no-referrer",
             "Content-Security-Policy": (
                 f"default-src 'none'; script-src 'nonce-{nonce}'; "
                 "style-src 'unsafe-inline'; connect-src 'self'; "
-                "frame-ancestors https://online.moysklad.ru; "
-                "base-uri 'none'; form-action 'none'"
+                f"frame-ancestors {frame_ancestors}; base-uri 'none'; form-action 'none'"
             ),
         },
     )
+
+
+def _bridge_session_marker(owner: UUID, version: int) -> str:
+    return hmac.digest(
+        _return_signing_key(), f"native-connect:{owner}:{version}".encode(), "sha256"
+    ).hex()
+
+
+@router.get("/api/integrations/moysklad/connect/session")
+async def native_connect_session(
+    response: Response, current_user: CurrentUserDep
+) -> dict[str, str]:
+    require_max_studio_access(current_user)
+    _navigation_headers(response)
+    return {"session_marker": _bridge_session_marker(current_user.id, current_user.session_version)}
+
+
+@router.get("/api/integrations/moysklad/connect", response_model=None)
+async def native_connect(session: SessionDep, current_user: OptionalUserDep) -> Response:
+    if current_user is None:
+        response = RedirectResponse(
+            "/login?next=%2Fapi%2Fintegrations%2Fmoysklad%2Fconnect", status_code=303
+        )
+        _navigation_headers(response)
+        return response
+    require_max_studio_access(current_user)
+    rows = (
+        await session.execute(
+            select(Project.id, Project.name, Project.owner_id)
+            .where(Project.owner_id == current_user.id, Project.template == "max_miniapp")
+            .order_by(Project.created_at.desc(), Project.id)
+            .limit(100)
+        )
+    ).all()
+    projects = [
+        {"id": str(row.id), "name": row.name[:200]}
+        for row in rows
+        if row.owner_id == current_user.id
+    ]
+    email = current_user.email or ""
+    local, _, domain = email.partition("@")
+    label = f"{local[:1]}***@{domain}" if domain else "Аккаунт Yleum"
+    bootstrap = json.dumps(
+        {
+            "nonce": secrets.token_urlsafe(24),
+            "projects": projects,
+            "account_label": label[:254],
+            "session_marker": _bridge_session_marker(current_user.id, current_user.session_version),
+        },
+        ensure_ascii=True,
+    ).replace("<", "\\u003c")
+    page = """<!doctype html><html lang=ru><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>Вход в Yleum для МойСклад</title>
+<style>body{font:16px system-ui;margin:2rem;max-width:38rem}p{line-height:1.5}</style>
+<h1>Подключение Yleum</h1>
+<p id="status">Выберите миниапп и настройте склад в окне МойСклад.
+Не закрывайте это окно до сохранения настроек.</p>
+<script nonce="SCRIPT_NONCE">
+(()=>{
+ const bridge=BOOTSTRAP;
+ const origin=window.location.origin;
+ const opener=window.opener;
+ const s=document.getElementById('status');
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+ const offered=new Set(bridge.projects.map(p=>p.id));
+ const seen=new Set();let busy=false,cancelled=false,claimStarted=false,bound=null,options=null;
+ const reply=(id,status,extra={})=>{
+  if(opener)opener.postMessage({name:'MoyBridgeResult',nonce:bridge.nonce,
+   request_id:id,status,...extra},origin);
+ };
+ setTimeout(()=>{cancelled=true;s.textContent='Срок окна входа истёк. Переоткройте решение.';
+  if(opener)opener.postMessage({name:'MoyBridgeExpired',nonce:bridge.nonce},origin);},600000);
+ const validOptions=v=>v&&['organizations','stores'].every(key=>Array.isArray(v[key])&&
+  v[key].length<=1000&&v[key].every(x=>x&&typeof x.id==='string'&&uuid.test(x.id)&&
+   typeof x.name==='string'&&x.name.length<=200));
+ window.addEventListener('message',async e=>{
+  if(e.origin!==origin||e.source!==opener||!e.data||e.data.nonce!==bridge.nonce)return;
+  const d=e.data;
+  if(d.name==='MoyBridgeCancel'){
+   cancelled=true;s.textContent='Подключение отменено. Откройте решение снова.';return;
+  }
+  if(cancelled||d.name!=='MoyBridgeRequest'||busy||!Number.isInteger(d.request_id)||
+     d.request_id<1||d.request_id>32||seen.has(d.request_id)||
+     typeof d.project_id!=='string'||!uuid.test(d.project_id)||!offered.has(d.project_id))return;
+  if(!['claim','options','save'].includes(d.action))return;
+  if(d.action==='claim'&&(claimStarted||typeof d.code!=='string'||
+     !/^[A-Za-z0-9_-]{20,64}$/.test(d.code)))return;
+  if(d.action!=='claim'&&bound!==d.project_id)return;
+  if(d.action==='save'&&(!options||
+    !options.organizations.some(x=>x.id===d.organization_id)||
+    !options.stores.some(x=>x.id===d.store_id)))return;
+  seen.add(d.request_id);busy=true;
+  const base='/api/projects/'+d.project_id+'/app-integrations/moysklad/';
+  let path=base+'options',init={credentials:'same-origin',redirect:'error',
+  signal:AbortSignal.timeout(12000)};
+  if(d.action==='claim'){
+   claimStarted=true;path=base+'claim';
+   init={...init,method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:d.code})};
+  }else if(d.action==='save'){
+   path=base+'settings';init={...init,method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({organization_id:d.organization_id,store_id:d.store_id})};
+  }
+  try{
+   const check=await fetch('/api/integrations/moysklad/connect/session',{
+    credentials:'same-origin',redirect:'error',signal:AbortSignal.timeout(12000)});
+   const session=check.ok?await check.json():null;
+   if(session?.session_marker!==bridge.session_marker){
+    cancelled=true;reply(d.request_id,'auth_changed');return;
+   }
+   if(cancelled){reply(d.request_id,'unknown');return;}
+   const r=await fetch(path,init);const v=await r.json();
+   if(!r.ok){reply(d.request_id,'error');return;}
+   if(cancelled){reply(d.request_id,'unknown');return;}
+   if(d.action==='claim'){
+    if(!['connected','vendor_sync_pending'].includes(v?.status))throw Error();
+    bound=d.project_id;reply(d.request_id,v.status);
+   }else if(d.action==='options'){
+    if(!validOptions(v))throw Error();options=v;
+    reply(d.request_id,'options',{organizations:v.organizations,stores:v.stores});
+   }else{
+    if(v?.status!=='saved')throw Error();reply(d.request_id,'saved');
+   }
+  }catch{reply(d.request_id,'unknown');}
+  finally{busy=false;}
+ });
+ if(!opener){s.textContent='Откройте вход из решения Yleum в МойСклад.';return;}
+ opener.postMessage({name:'MoyBridgeReady',nonce:bridge.nonce,projects:bridge.projects,
+  account_label:bridge.account_label},origin);
+})();
+</script></html>""".replace("BOOTSTRAP", bootstrap)
+    return _iframe_page(page, frame_ancestors="'none'")
+
+
+@router.get("/api/integrations/moysklad/setup", response_class=HTMLResponse)
+async def setup() -> HTMLResponse:
+    page = """<!doctype html><html lang=ru><meta charset=utf-8>
+<meta name=viewport content="width=device-width, initial-scale=1">
+<title>Подключить МойСклад к Yleum</title>
+<style>
+body{font:16px system-ui;margin:2rem;max-width:38rem;color:#172034}
+p{line-height:1.5}label,select,button{display:block;margin:.75rem 0}
+select,button{font:inherit;padding:.6rem;max-width:100%}
+</style>
+<h1>Подключить МойСклад к Yleum</h1>
+<p id="status" role="status">Подтверждаем аккаунт…</p>
+<button id="auth" disabled>Войти в Yleum</button>
+<div id="result" hidden>
+<p id="account"></p>
+<label for="project">Ваш миниапп Yleum</label><select id="project"></select>
+<button id="connect" disabled>Подключить выбранный миниапп</button>
+</div>
+<div id="settings" hidden>
+<label for="organization">Организация</label><select id="organization"></select>
+<label for="store">Склад</label><select id="store"></select>
+<button id="save" disabled>Сохранить настройки</button>
+</div>
+<p><a href="/api/integrations/moysklad/return" target=_blank
+rel="noopener noreferrer">Открыть кабинет Yleum</a></p>
+<script nonce="SCRIPT_NONCE">
+(()=>{
+ const id=Math.floor(Math.random()*2147483647);
+ const origin=window.location?.origin;
+ const el=id=>document.getElementById(id);
+ const s=el('status');
+ let code=null,popup=null,nonce=null,projects=[],bound=null,pending=null,counter=0;
+ let claimStarted=false,contextConfirmed=false;
+ const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+ const list=(items,max)=>Array.isArray(items)&&items.length<=max&&items.every(x=>x&&
+  typeof x.id==='string'&&uuid.test(x.id)&&typeof x.name==='string'&&x.name.length<=200);
+ const render=(id,items)=>{
+  const select=el(id);select.replaceChildren();
+  for(const item of items){const option=document.createElement('option');
+   option.value=item.id;option.textContent=item.name;select.appendChild(option);}
+ };
+ const request=(action,extra={})=>{
+  if(!popup||!nonce||pending||counter>=32||(action==='claim'&&claimStarted))return;
+  const project=action==='claim'?el('project').value:bound;
+  if(!projects.some(x=>x.id===project))return;
+  pending={id:++counter,action,project_id:project};
+  if(action==='claim'){claimStarted=true;code=null;el('project').disabled=true;}
+  el('connect').disabled=true;el('save').disabled=true;
+  popup.postMessage({name:'MoyBridgeRequest',nonce,request_id:pending.id,action,
+   project_id:project,...extra},origin);
+ };
+ el('auth').onclick=()=>{
+  if(claimStarted||!code||!origin||(popup&&!popup.closed))return;
+  popup=window.open('/api/integrations/moysklad/connect','_blank');
+  if(!popup){s.textContent='Браузер заблокировал окно входа. Разрешите его и повторите вход.';
+   return;}
+  nonce=null;projects=[];bound=null;pending=null;counter=0;
+  el('auth').disabled=true;s.textContent='Войдите в Yleum в открытом окне.';
+  const observer=setInterval(()=>{
+   if(!popup||popup.closed){clearInterval(observer);popup=null;nonce=null;pending=null;
+    el('connect').disabled=true;el('save').disabled=true;el('auth').disabled=claimStarted;
+    s.textContent='Окно входа закрыто. Проверьте подключение перед повтором.';}
+  },1000);
+ };
+ el('connect').onclick=()=>{if(code)request('claim',{code});};
+ el('save').onclick=()=>request('save',{organization_id:el('organization').value,
+  store_id:el('store').value});
+ window.addEventListener('message',e=>{
+  if(!origin||!popup||popup.closed||e.origin!==origin||e.source!==popup||!e.data)return;
+  const d=e.data;
+  if(d.name==='MoyBridgeReady'){
+   if(nonce||typeof d.nonce!=='string'||!/^[A-Za-z0-9_-]{20,64}$/.test(d.nonce)||
+     !list(d.projects,100)||new Set(d.projects.map(x=>x.id)).size!==d.projects.length||
+     typeof d.account_label!=='string'||d.account_label.length>254)return;
+   nonce=d.nonce;projects=d.projects;render('project',projects);
+   el('account').textContent='Аккаунт Yleum: '+d.account_label;
+   el('result').hidden=false;el('connect').disabled=projects.length===0;
+   s.textContent=projects.length?'Выберите миниапп и нажмите «Подключить».':
+    'В этом аккаунте нет миниаппов. Создайте миниапп в Yleum и переоткройте решение.';return;
+  }
+  if(d.name==='MoyBridgeExpired'&&d.nonce===nonce){
+   code=null;claimStarted=true;pending=null;el('auth').disabled=true;
+   el('connect').disabled=true;el('save').disabled=true;
+   s.textContent='Срок окна истёк. Проверьте исход действия и переоткройте решение.';return;
+  }
+  if(d.name!=='MoyBridgeResult'||d.nonce!==nonce||!pending||d.request_id!==pending.id)return;
+  const action=pending.action,target=pending.project_id;pending=null;
+  if(action==='claim'&&['connected','vendor_sync_pending'].includes(d.status)){
+   bound=target;code=null;el('project').disabled=true;
+   s.textContent=d.status==='connected'?'Миниапп подключён. Выберите организацию и склад.':
+    'Миниапп связан; подтверждение МойСклад задержалось. Выберите организацию и склад.';
+   request('options');return;
+  }
+  if(action==='options'&&d.status==='options'&&list(d.organizations,1000)&&list(d.stores,1000)){
+   render('organization',d.organizations);render('store',d.stores);el('settings').hidden=false;
+   el('save').disabled=!d.organizations.length||!d.stores.length;return;
+  }
+  if(action==='save'&&d.status==='saved'){
+   s.textContent='Настройки организации и склада сохранены.';el('save').disabled=false;return;
+  }
+  if(d.status==='auth_changed'){code=null;claimStarted=true;
+   el('auth').disabled=true;
+   s.textContent='Аккаунт или сеанс Yleum изменился. Переоткройте решение.';return;}
+  s.textContent=d.status==='error'?'Не удалось выполнить действие. Переоткройте решение.':
+   'Исход действия неизвестен. Проверьте подключение перед повтором.';
+ });
+ window.addEventListener('pagehide',()=>{
+  if(popup&&nonce)popup.postMessage({name:'MoyBridgeCancel',nonce},origin);
+ });
+ const h=async e=>{
+  if(e.origin!=='https://online.moysklad.ru'||e.source!==window.parent||
+     e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
+  window.removeEventListener('message',h);
+  try{
+   if(typeof e.data.token!=='string'||!e.data.token)throw Error();
+   const r=await fetch('/api/integrations/moysklad/context',{
+    method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({token:e.data.token}),credentials:'omit',redirect:'error',
+    signal:globalThis.AbortSignal?.timeout?.(12000)
+   });const v=await r.json();
+   if(!r.ok||typeof v.code!=='string'||!/^[A-Za-z0-9_-]{20,64}$/.test(v.code))throw Error();
+   code=v.code;contextConfirmed=true;el('auth').disabled=false;
+   s.textContent='МойСклад подтверждён. Войдите в Yleum, чтобы выбрать свой миниапп.';
+   setTimeout(()=>{code=null;el('connect').disabled=true;
+    if(!bound)s.textContent='Срок подтверждения истёк. Переоткройте решение.';},600000);
+  }catch{s.textContent='Не удалось подтвердить аккаунт. Переоткройте решение.';}
+ };
+ window.addEventListener('message',h);
+ window.parent.postMessage({name:'UserContextRequest',messageId:id},'https://online.moysklad.ru');
+ setTimeout(()=>{if(!contextConfirmed){
+  s.textContent='МойСклад не ответил. Переоткройте решение.';}},12000);
+})();
+</script></html>"""
+    return _iframe_page(page, frame_ancestors="https://online.moysklad.ru")
 
 
 class ClaimRequest(BaseModel):

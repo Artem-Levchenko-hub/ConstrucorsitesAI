@@ -460,14 +460,18 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
             <h3 className="text-sm font-semibold">Подключить свой аккаунт МойСклад</h3>
             {moyskladInstall.isPending && <p className="text-xs text-fg-secondary">Проверяем доступность решения…</p>}
             {moyskladInstall.isError && <p role="alert" className="text-xs text-danger-fg">Не удалось проверить доступность решения. <button type="button" className="underline" onClick={() => void moyskladInstall.refetch()}>Повторить проверку</button></p>}
-            {moyskladInstall.data && !moyskladInstall.data.available && <p className="text-xs leading-5 text-fg-secondary">Публикация решения в каталоге МойСклад ещё ожидается. Если решение уже установлено в вашем аккаунте, откройте его и получите одноразовый код.</p>}
+            {moyskladInstall.data && !moyskladInstall.data.available && <p className="text-xs leading-5 text-fg-secondary">Публикация решения в каталоге МойСклад ещё ожидается. Если решение уже доступно в вашем аккаунте, откройте его настройки для подключения.</p>}
             {moyskladInstall.data?.available && moyskladInstall.data.install_url && <Button disabled={installMoysklad.isPending} onClick={startMoyskladInstallation} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{installMoysklad.isPending && <Loader2 className="size-4 animate-spin" />}Установить решение в МойСклад <ExternalLink className="size-3.5" /></Button>}
             {installMoysklad.isError && <p role="alert" className="text-xs text-danger-fg">Не удалось начать установку. Попробуйте снова.</p>}
             {moyskladInstallLink?.projectId === projectId && <a href={moyskladInstallLink.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center text-xs text-accent underline">Открыть страницу установки, если новая вкладка не появилась</a>}
-            <p className="text-xs leading-5 text-fg-secondary">Администратор склада устанавливает решение Yleum, подтверждает доступ в МойСклад и открывает решение. После установки вернитесь к этому проекту и подтвердите подключение одноразовым кодом. Пароль и токен сюда вводить не нужно.</p>
-            <Label htmlFor="moysklad-pairing-code">Код из решения Yleum в МойСклад</Label>
-            <Input id="moysklad-pairing-code" value={moyskladCode} autoComplete="off" onChange={(event) => setMoyskladCode(event.target.value.trim())} placeholder="Вставьте одноразовый код" className="h-11 border-border-default bg-surface" />
-            <Button disabled={moyskladCode.length < 20 || claimMoysklad.isPending} onClick={() => claimMoysklad.mutate(moyskladCode)} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{claimMoysklad.isPending && <Loader2 className="size-4 animate-spin" />}Подключить склад</Button>
+            <p className="text-xs leading-5 text-fg-secondary">Администратор склада устанавливает решение Yleum, подтверждает доступ в МойСклад и открывает решение. В решении войдите в Yleum, выберите своё мини-приложение и нажмите «Подключить выбранный миниапп». Затем выберите организацию и склад и нажмите «Сохранить настройки». Пароль и токен МойСклад вводить в Yleum не нужно.</p>
+            <details id="moysklad-code-fallback" className="space-y-3 rounded-[10px] border border-border-default p-3">
+              <summary className="cursor-pointer text-xs text-fg-tertiary">Одноразовый код из прежнего решения</summary>
+              <p className="text-xs leading-5 text-fg-secondary">Если ранее установленное решение выдало одноразовый код, можно подтвердить его здесь для этого проекта.</p>
+              <Label htmlFor="moysklad-pairing-code">Код из решения Yleum в МойСклад</Label>
+              <Input id="moysklad-pairing-code" value={moyskladCode} autoComplete="off" onChange={(event) => setMoyskladCode(event.target.value.trim())} placeholder="Вставьте одноразовый код" className="h-11 border-border-default bg-surface" />
+              <Button disabled={moyskladCode.length < 20 || claimMoysklad.isPending} onClick={() => claimMoysklad.mutate(moyskladCode)} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{claimMoysklad.isPending && <Loader2 className="size-4 animate-spin" />}Подключить склад</Button>
+            </details>
           </div>
         )}
         {selected.key === "moysklad" && moyskladConnection?.status === "active" && (

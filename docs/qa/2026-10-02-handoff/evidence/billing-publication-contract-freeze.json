@@ -1,0 +1,42 @@
+{
+  "scope": "test-only caller publication contract; billing v3 source unchanged",
+  "base": "614016c43ac0bb1587cad3b5e6c3daa43b696717",
+  "worktree": "/workspace/qa-worktrees/platform-feature-proof-121900",
+  "files": {
+    "apps/api/tests/test_generation_artifacts.py": {
+      "before_sha256": "86b2fd442df312c9fd6d679b120a7c68dfefbd8ac8fd334bba4006f9651c1196",
+      "after_sha256": "dc51ec21c5952a93924586cdb53ae7e3a71074e11348ce0545b48d7d87ce95f3"
+    }
+  },
+  "patch": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-publication-contract.patch",
+  "patch_sha256": "792520a30d3222a7ead88f6e781b3d1e4799a5d433d1f3d1dbca05296110d7ba",
+  "red": {
+    "log": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-publication-contract-red.log",
+    "failed": 1,
+    "passed": 19,
+    "failure": "exact publication operation order missing two billing reads"
+  },
+  "green": {
+    "log": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-publication-contract-green.log",
+    "passed": 20,
+    "failed": 0
+  },
+  "database": "fresh random owned qa_test_generation_billing_* database per run; both cleaned",
+  "checks": {
+    "ruff_check": "PASS",
+    "git_diff_check": "PASS",
+    "ruff_format_check": "pre-existing two formatting differences outside changed lines; unchanged"
+  },
+  "assertions": [
+    "exact original Git/snapshot/Message/quota ordering retained plus locked run/policy reads",
+    "real prospective admission; exact accepted marker bound to real permit/new snapshot",
+    "before commit: new marker and snapshot invisible to independent connection",
+    "commit fault: prior snapshot, message, quota, run state remain intact and no marker committed",
+    "repeat publication: marker binds each newly created snapshot; existing non-idempotent contract preserved"
+  ],
+  "no_actions": [
+    "no product source changes",
+    "no commit/push/deploy",
+    "no production/provider/wallet operations"
+  ]
+}

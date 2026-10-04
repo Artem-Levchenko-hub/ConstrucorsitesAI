@@ -6,6 +6,7 @@ exclude with -k 'not disposable_db' locally.
 
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -15,12 +16,20 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yleum_api.core import config
+from yleum_api.models.generation_billing import (
+    GenerationBillingIntent,
+    GenerationBillingOutbox,
+    GenerationBillingPolicy,
+)
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.models.usage import Usage
 from yleum_api.models.user import User
+from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.services import generation_runs, project_memory
+from yleum_api.services.generation_billing import admit_policy
 
 MARKER = "[Отменено пользователем]"
 
@@ -56,6 +65,12 @@ class Session:
     def __init__(self, run, message, operations):
         self.run, self.message, self.operations = run, message, operations
         self.trace = []
+
+    async def get(self, model, key):
+        # These characterization rows predate prospective billing admission.
+        assert model is GenerationBillingPolicy and key == self.run.id
+        self.trace.append("billing-policy")
+        return None
 
     async def scalar(self, statement):
         compiled = statement.compile(dialect=postgresql.dialect())
@@ -140,7 +155,7 @@ async def test_full_helper_message_contract(
     )
     assert run.status == "cancelled" and run.finished_at.tzinfo is UTC
     assert run.error == "preserve diagnostic" and run.agent_state == {"keep": "yes"}
-    assert session.trace == ["message-lock", "operation-locks", "memory"]
+    assert session.trace == ["message-lock", "operation-locks", "billing-policy", "memory"]
     assert memory_spy == [("cancelled", run.finished_at)]
 
 
@@ -279,6 +294,17 @@ async def test_disposable_db_full_helper_caller_transaction(
         capacity_reason="budget",
         next_attempt_at=datetime(2020, 1, 1, tzinfo=UTC),
     )
+    usage = Usage(
+        id=uuid4(),
+        user_id=owner.id,
+        project_id=project.id,
+        message_id=message.id,
+        run_id=run.id,
+        model_id="fixture",
+        tokens_in=7,
+        tokens_out=2,
+        cost_rub=Decimal("12.3456"),
+    )
     async with factory() as session:
         session.add(owner)
         await session.flush()
@@ -286,9 +312,12 @@ async def test_disposable_db_full_helper_caller_transaction(
         await session.flush()
         session.add(message)
         await session.flush()
+        run.status = "running"
         session.add_all([run, workspace])
         await session.flush()
-        session.add(op)
+        await admit_policy(session, run.id, is_free=False)
+        run.status = "cancel_requested"
+        session.add_all([op, usage])
         await session.commit()
     async with factory() as session:
         locked = await session.scalar(
@@ -303,6 +332,11 @@ async def test_disposable_db_full_helper_caller_transaction(
         saved_run = await session.get(GenerationRun, run.id)
         saved_op = await session.get(ProjectCellOperation, op.id)
         saved_message = await session.get(Message, message.id)
+        intent = await session.get(GenerationBillingIntent, run.id)
+        assert (await session.get(GenerationBillingPolicy, run.id)).is_free is False
+        assert await session.get(GenerationBillingOutbox, run.id) is None
+        assert (await session.scalars(select(WalletCharge))).all() == []
+        assert (await session.get(Usage, usage.id)).cost_rub == Decimal("12.3456")
         if commit:
             assert saved_run.status == saved_op.status == "cancelled"
             assert saved_run.finished_at == saved_op.finished_at
@@ -311,7 +345,16 @@ async def test_disposable_db_full_helper_caller_transaction(
                 "Partial" if foreign_message else f"Partial\n\n{MARKER}"
             )
             assert saved_message.tokens_out == (None if foreign_message else 0)
+            assert saved_run.agent_state == {
+                "generation_billing": {"outcome": "waived", "amount_rub": "0", "payment": "waived"}
+            }
+            assert intent.outcome == "waived" and intent.amount_rub == 0
+            assert intent.user_id == owner.id and intent.billing_account_id is None
+            assert intent.accepted_snapshot_id is None
+            assert intent.usage_ids == [str(usage.id)]
+            assert intent.receipt == {"reason": "cancelled"}
         else:
             assert saved_run.status == "cancel_requested" and saved_run.finished_at is None
             assert saved_op.status == operation_status and saved_op.capacity_reason == "budget"
             assert saved_message.content == "Partial" and saved_message.tokens_out is None
+            assert saved_run.agent_state == {} and intent is None

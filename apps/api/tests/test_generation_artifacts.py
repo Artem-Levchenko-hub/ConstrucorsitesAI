@@ -6,13 +6,14 @@ import copy
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from functools import partial
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yleum_api.core.config import get_settings
+from yleum_api.models.generation_billing import GenerationBillingPolicy
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
@@ -28,6 +29,7 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.publication import consume_free_generation
+from yleum_api.services.generation_billing import admit_policy
 
 
 def records():
@@ -334,6 +336,8 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
         "flush",
         "get:Project",
         "get:GenerationRun",
+        "get:GenerationRun",
+        "get:GenerationBillingPolicy",
         "get:Message",
         "get:User",
         "commit",
@@ -423,7 +427,23 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
         await session.flush()
         project.current_snapshot_id = parent.id
         session.add(run)
+        await session.flush()
+        await admit_policy(session, run.id, is_free=env["is_free"])
         await session.commit()
+
+    def expected_marker(snapshot):
+        permit = env["_promotion_permit"]
+        return {
+            "snapshot_id": str(snapshot.id),
+            "commit_sha": snapshot.commit_sha,
+            "permit_digest": permit.permit_digest,
+            "proof_key": permit.proof_key,
+            "artifact_digest": permit.artifact_digest,
+            "build_contract": permit.build_contract_version,
+            "release_contract": permit.proof_contract_version,
+        }
+
+    staged_markers = []
 
     class FaultSession:
         def __init__(self, session):
@@ -438,6 +458,24 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
             await self.session.flush()
 
         async def commit(self):
+            staged_run = await self.session.get(GenerationRun, run.id)
+            staged_snapshot = await self.session.get(
+                Snapshot, UUID(staged_run.agent_state["snapshot_id"])
+            )
+            assert staged_snapshot is not None
+            marker = staged_run.agent_state["billing_accepted_candidate"]
+            assert marker == expected_marker(staged_snapshot)
+            assert (await self.session.get(Message, message.id)).snapshot_id == staged_snapshot.id
+            assert (
+                await self.session.get(Project, project.id)
+            ).current_snapshot_id == staged_snapshot.id
+            # The accepted marker and snapshot remain invisible outside this
+            # publication transaction until its one commit succeeds.
+            async with factory() as observer:
+                prior_run = await observer.get(GenerationRun, run.id)
+                assert prior_run.agent_state.get("billing_accepted_candidate") != marker
+                assert await observer.get(Snapshot, staged_snapshot.id) is None
+            staged_markers.append(marker)
             if fault == "commit":
                 raise RuntimeError("fixture commit failure")
             await self.session.commit()
@@ -471,6 +509,8 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
             assert (await session.get(User, owner.id)).free_generations_used == 3
             saved_run = await session.get(GenerationRun, run.id)
             assert saved_run.agent_state == {"changed_files": ["prior.txt"], "keep": "yes"}
+            assert (await session.get(GenerationBillingPolicy, run.id)).is_free is True
+        assert len(staged_markers) == (1 if fault == "commit" else 0)
         assert repo.read_files(project.id, parent.commit_sha) == original
         return
     result = await execute(path, env)
@@ -481,6 +521,8 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
         assert (await session.get(Message, message.id)).snapshot_id == saved.id
         saved_run = await session.get(GenerationRun, run.id)
         assert saved_run.agent_state["snapshot_id"] == str(saved.id)
+        assert saved_run.agent_state["billing_accepted_candidate"] == expected_marker(saved)
+        assert staged_markers == [expected_marker(saved)]
         assert (await session.get(User, owner.id)).free_generations_used == 4
         assert len((await session.scalars(select(Snapshot))).all()) == 2
     assert repo.read_files(project.id, parent.commit_sha) == original
@@ -492,6 +534,14 @@ async def test_disposable_db_caller_publication(path, fault, test_engine, monkey
         assert (await session.get(User, owner.id)).free_generations_used == 5
         saved_project = await session.get(Project, project.id)
         assert saved_project.current_snapshot_id == repeated["snapshot"].id
+        saved_run = await session.get(GenerationRun, run.id)
+        assert saved_run.agent_state["billing_accepted_candidate"] == expected_marker(
+            repeated["snapshot"]
+        )
+        assert staged_markers == [
+            expected_marker(result["snapshot"]),
+            expected_marker(repeated["snapshot"]),
+        ]
     assert repo.read_files(project.id, parent.commit_sha) == original
 
 

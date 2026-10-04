@@ -1,0 +1,19 @@
+{
+  "scope": "exact isolated release verification before commit",
+  "api_types": "260 source files PASS",
+  "api_lint": "all src plus changed tests PASS",
+  "native_moy_checks": {
+    "passed": 75,
+    "deselected": "existing DB lifecycle; mandatory CI owns isolated DB test",
+    "log": "exact-native-moy75-configured.log",
+    "initial_root_attempt": "required local synthetic Settings env absent; 27 environmental failures, no code change; configured exact repeat75PASS"
+  },
+  "publication_cancellation": {
+    "passed": 38,
+    "actual_pg": true,
+    "owned_database_dropped": true
+  },
+  "frontend_checks_recorded": 52,
+  "independent_review": "SOURCE_CLEAR exact backend+frontend copy+test-only financial deltas",
+  "no_live_provider_model_or_wallet_actions": true
+}

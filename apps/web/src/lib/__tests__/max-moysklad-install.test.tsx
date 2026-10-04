@@ -76,6 +76,10 @@ it("keeps a failed install honest and does not launch a new tab", async () => {
 });
 it("retains explicit pairing-code claim for the selected project", async () => {
   boundary.claim.mockResolvedValue({ status: "vendor_sync_pending" }); await render();
+  const fallback = container.querySelector<HTMLDetailsElement>("#moysklad-code-fallback")!;
+  expect(fallback).not.toBeNull();
+  expect(fallback.open).toBe(false);
+  await act(async () => { fallback.open = true; fallback.dispatchEvent(new Event("toggle")); });
   const input = container.querySelector<HTMLInputElement>("#moysklad-pairing-code")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "synthetic-one-time-code-0001");
@@ -84,6 +88,16 @@ it("retains explicit pairing-code claim for the selected project", async () => {
   await click("Подключить склад");
   expect(boundary.claim).toHaveBeenCalledWith("selected-project", "synthetic-one-time-code-0001");
   expect(input.value).toBe("synthetic-one-time-code-0001"); expect(boundary.connect).not.toHaveBeenCalled();
+});
+it("explains native in-solution login and owned app selection while keeping old code claim optional", async () => {
+  await render();
+  expect(container.textContent).toContain("В решении войдите в Yleum, выберите своё мини-приложение и нажмите «Подключить выбранный миниапп»");
+  expect(container.textContent).toContain("Затем выберите организацию и склад и нажмите «Сохранить настройки»");
+  expect(container.textContent).not.toContain("вернитесь к этому проекту и подтвердите подключение одноразовым кодом");
+  expect(container.querySelector<HTMLDetailsElement>("#moysklad-code-fallback")?.open).toBe(false);
+  expect(boundary.claim).not.toHaveBeenCalled();
+  expect(boundary.start).not.toHaveBeenCalled();
+  expect(boundary.connect).not.toHaveBeenCalled();
 });
 it("retains legacy credentials only as an explicit closed manual alternative", async () => {
   await render("credentials");

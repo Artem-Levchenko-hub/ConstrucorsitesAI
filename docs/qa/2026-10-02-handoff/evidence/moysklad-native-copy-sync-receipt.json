@@ -1,0 +1,18 @@
+{
+  "files": {
+    "apps/web/src/components/max/FigmaIntegrationHub.tsx": "18ed725e06e0d93488a933ca07b604c5a61065a74f7d60e245ba16f889eae3d6",
+    "apps/web/src/lib/__tests__/max-moysklad-install.test.tsx": "4dded2d52fda57497b9ab04785ec826f290a60fec1f0f83e1758e210a652e3f3"
+  },
+  "patch_sha256": "29abe9650234b518db83f07d8cdb881dd4c5c2e2f03eb91e0883a4ffb372bce6",
+  "scope": "Native onboarding copy and collapsed legacy code only; callback/API/rights/prompt unchanged",
+  "red_tests_failed": 2,
+  "red_tests_passed": 7,
+  "focused_tests_passed": 52,
+  "focused_files": 4,
+  "eslint_exit": 0,
+  "tsc_exit": 0,
+  "builtin_payloads_unchanged": 7,
+  "live_actions": 0,
+  "committed": false,
+  "deployed": false
+}

@@ -1,0 +1,24 @@
+{
+  "verdict": "SOURCE_CLEAR",
+  "reviewer": "c_preview_cross_release_review",
+  "scope": "exact frozen three-file native iframe bridge and two-file UI copy",
+  "backend_patch_sha256": "64e76edda8e0ad26573a375aa0b6cdad58883ec3fc7b8204c7d38c69e6f49703",
+  "router_sha256": "71c7726537e3906c3636914a3a94d736d92f8355ba0fdc52697cfd8f294cbffe",
+  "ui_sha256": "18ed725e06e0d93488a933ca07b604c5a61065a74f7d60e245ba16f889eae3d6",
+  "race_findings_fixed": [
+    "captured dispatched project and locked selection",
+    "iframe-lifetime one-shot code latch across close/reopen/unknown"
+  ],
+  "reviewed_recorded_tests": {
+    "backend": 75,
+    "ui": 52
+  },
+  "reviewer_tests_rerun": false,
+  "live_effects": 0,
+  "boundaries": "Same owner retry vendor_sync_pending unchanged; nonce not server grant; session marker not atomic authority; original claim/settings revalidate",
+  "remaining": [
+    "exact CI and canonical delivery",
+    "actual browser popup/login/cookie/provider acceptance",
+    "public moderation/public listing"
+  ]
+}

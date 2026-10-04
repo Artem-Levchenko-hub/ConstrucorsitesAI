@@ -1,0 +1,44 @@
+{
+  "scope": "test-only cancellation fixture compatibility and actual paid-policy waiver/rollback assertions",
+  "base": "614016c43ac0bb1587cad3b5e6c3daa43b696717",
+  "worktree": "/workspace/qa-worktrees/platform-feature-proof-121900",
+  "files": {
+    "apps/api/tests/test_generation_cancellation.py": {
+      "before_sha256": "9a993da70a8ec32ee11111f20cc69053e6efb8136cd2265180c7a42e5155b69f",
+      "after_sha256": "c9baf1f0cba357d66f091f7ebc0a00d910639019eb6e46af4a8da04f18bf139b"
+    }
+  },
+  "patch": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-cancellation-contract.patch",
+  "patch_sha256": "aac25e5204398b614ebd4551cc284315f14116301ded34b6f9684b9f019e0225",
+  "red": {
+    "log": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-cancellation-contract-red.log",
+    "failed": 10,
+    "passed": 8,
+    "reason": "Session fake lacks policy get after real billing seal hook"
+  },
+  "intermediate": {
+    "log": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-cancellation-contract-green.log",
+    "failed": 4,
+    "passed": 14,
+    "reason": "new rollback assertion initially assumed null agent_state; actual ORM default is empty dict; corrected to exact persisted default"
+  },
+  "green": {
+    "log": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-cancellation-contract-green-final.log",
+    "failed": 0,
+    "passed": 18
+  },
+  "checks": {
+    "ruff_check": "PASS",
+    "ruff_format": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "database": "three new random owned qa_test_generation_billing_* databases only; all dropped after tests",
+  "assertions": [
+    "historical fake reads only exact same-run policy and returns absent; existing message/operations/savepoint semantics preserved",
+    "real paid prospective admission and retained nonzero provider receipt",
+    "committed cancellation seals immutable waived zero intent with exact usage IDs and cancelled reason",
+    "no accepted-candidate marker, payment outbox or walletcharge",
+    "rollback removes cancellation intent/marker and preserves prior message/run/operation state"
+  ],
+  "limitations": "test-only; billing product v3 unchanged; no CI-wide/full suite claim; no live/Git/provider/wallet operations"
+}

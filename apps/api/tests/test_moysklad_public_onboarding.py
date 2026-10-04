@@ -245,7 +245,7 @@ const document={getElementById:id=>{
  if(!elements.has(id))elements.set(id,{hidden:true,textContent:''});
  return elements.get(id);
 }};
-const window={addEventListener:(_n,h)=>{handler=h},removeEventListener:()=>{},
+const window={location:{origin:'https://yleum.ru'},addEventListener:(_n,h)=>{handler=h},removeEventListener:()=>{},
  parent:{postMessage:p=>{globalThis.correlation=p.messageId}}};
 const fetch=async()=>{calls++;return{ok:true,
  json:async()=>({code:'QA_ONE_TIME_CODE_ONLY',account_name:'QA'})}};
@@ -253,7 +253,7 @@ vm.runInNewContext(SCRIPT,{document,window,fetch,Math,setTimeout:()=>{}});
 (async()=>{
  await handler({origin:'https://attacker.invalid',data:{name:'UserContextResponse',correlationId:globalThis.correlation,token:'QA_CONTEXT'}});
  if(calls!==0)throw Error('hostile origin reached context');
- await handler({origin:'https://online.moysklad.ru',data:{name:'UserContextResponse',correlationId:globalThis.correlation,token:'QA_CONTEXT'}});
+ await handler({origin:'https://online.moysklad.ru',source:window.parent,data:{name:'UserContextResponse',correlationId:globalThis.correlation,token:'QA_CONTEXT'}});
  if(calls!==1)throw Error('trusted context not checked');
 })();
 """.replace("SCRIPT", json.dumps(script))

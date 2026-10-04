@@ -1,0 +1,14 @@
+{
+  "status": "SOURCE_CLEAR",
+  "effects": 0,
+  "files": {
+    "apps/api/tests/test_generation_artifacts.py": "dc51ec21c5952a93924586cdb53ae7e3a71074e11348ce0545b48d7d87ce95f3",
+    "apps/api/tests/test_generation_cancellation.py": "c9baf1f0cba357d66f091f7ebc0a00d910639019eb6e46af4a8da04f18bf139b"
+  },
+  "report_sha256": "acc88ede3dae7b0ea05bdcb5dce1e2bd388e2aa6d29cd98ce5fd7abb14a659ef",
+  "billing_v3_product_file_mismatches": [],
+  "passed_results_read_not_rerun": [
+    20,
+    18
+  ]
+}

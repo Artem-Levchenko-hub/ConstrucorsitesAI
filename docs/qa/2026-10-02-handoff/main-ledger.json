@@ -898,7 +898,7 @@
     "/workspace/ConstrucorsitesAI/docs/qa/2026-10-02-handoff/status.json"
   ],
   "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
-  "updated_at": "2026-10-04T08:40:23.605580+00:00",
+  "updated_at": "2026-10-04T11:49:00Z",
   "delivery_candidate_status": "Joint SDK owner-preview actor-preflight renewal fix and G10/G11 evidence pending commit, exact CI and canonical delivery; browser activation/live expiry acceptance remains separate",
   "current_runtime_baseline": "31538bff0433e81fb8376a7771bab841defebe46",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
@@ -1253,11 +1253,11 @@
   "current_delivery_preparation": {
     "base_python": "121900fd95a13e1ade122057abe19d6c22468621",
     "base_web": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
-    "state": "LOCAL_REVIEWED_PENDING_EXACT_CI_BACKUP_PRODUCTION",
+    "state": "SOURCE_FROZEN_REVIEWED_PENDING_EXACT_CI_BACKUP_PRODUCTION",
     "scope": [
       "success-only aggregate generation billing with durable accepted snapshot and exactly-once settlement",
       "integration request cards preserve exact seven original prompts",
-      "native public Moy install/start/owned return; public moderation external"
+      "native Moy main iframe owned-project bind/configuration; public partner moderation remains external"
     ],
     "verification": {
       "billing_actual_postgres": 41,
@@ -1268,9 +1268,16 @@
       "promotion_pure": 30,
       "claim_actual_postgres": 3,
       "web_full": 898,
-      "independent_billing_review": "SOURCE_CLEAR exact v2; no production wallet changes",
+      "independent_billing_review": "SOURCE_CLEAR exact v3; 41 actual PG tests and 26 root exact-release paid PG tests; no production wallet mutation",
       "live_feature_replay": "UNPROVEN at network boundary; C exact historical proof epoch55 matches, A current source and served epoch differ from historical proof. Do not mark historical semantic RED/GREEN.",
-      "mandatory_behavior_gate": "HELD outside urgent commit: actual C legitimate platform scripts/foreign SDK/font requests blocked; A custom qa_tasks GET also denied. Preserve strict network safety, redesign before mandatory gate; no false promotion"
+      "mandatory_behavior_gate": "HELD outside urgent commit: actual C legitimate platform scripts/foreign SDK/font requests blocked; A custom qa_tasks GET also denied. Preserve strict network safety, redesign before mandatory gate; no false promotion",
+      "publication_contract": "CI exact 52 failure reproduced RED 1/19; test-only atomic marker checks GREEN20 on unique owned PostgreSQL",
+      "cancellation_contract": "CI exact52 RED10failed/8passed; fixture compatibility plus paid waiver/rollback checks GREEN18 on unique owned PostgreSQL",
+      "ci_test_delta_review": "SOURCE_CLEAR both exact test-only patches; 16 frozen billing/gate product files unchanged",
+      "root_exact_release_ci_contracts": "38/38 publication+cancellation actual disposable PostgreSQL, exact isolated release imports with held behavior gate excluded, owned DB dropped; no product mutation",
+      "native_onboarding_web": "52/52 focused tests, full TypeScript/ESLint; 7 builtin full prompts unchanged; native instructions and collapsed legacy code SOURCE_CLEAR",
+      "native_iframe_bridge": "75 backend/actualJS VM checks, Ruff/type checks; exact three-file freeze SOURCE_CLEAR. Live popup/login/cookie/provider acceptance not proven by source/tests",
+      "native_iframe_source": "71c7726537e3906c3636914a3a94d736d92f8355ba0fdc52697cfd8f294cbffe"
     },
     "paid_provider_calls": 0,
     "business_provider_writes": 0,
@@ -1284,14 +1291,22 @@
       "scope": "mixed deployed SHAs; completion is not semantic readiness"
     },
     "moy_native": {
-      "current_C_installation": "uninstalled",
+      "current_C_installation": "installed",
       "credential_token_present": false,
       "official_uninstall_utc": "2026-10-04T08:51:47Z",
       "initiator": "unknown",
       "public_solution": "Draft v0; moderation/public install URL unverified",
-      "test_reinstall_approved": false,
+      "test_reinstall_approved": true,
       "protected_PAR_B_separate_connection": "unchanged; do not transfer",
-      "code_state": "Reviewed backend native install/start/owned return and strict official setup-message origin, absent marketplace URL intentionally unavailable; no installation/grant/moderation by code delivery"
+      "code_state": "Native authenticated popup for owner confirmation; own-project/org/store selection and explicit existing claim/settings in main Moy iframe, no codepaste primary. Exact source reviewed, not production-delivered yet. Session preflight is continuity check, final original APIs remain authority.",
+      "installation_token_present": true,
+      "installation_updated_utc": "2026-10-04T11:30:21.248559Z",
+      "reinstall_observation": "Actual Vendor Install accepted; latest read-only receipt says installed token present; C prior revoked connection remains error pending explicit native claim",
+      "public_moderation_constraints": [
+        "Configuration must occur in main Moy window; external-only setup does not satisfy official vendor criteria",
+        "Free listing with required external subscription needs vendor pricing decision/coordination; no tariff change or email sent"
+      ],
+      "free_plan_scope": "Source active Freev2 integrations=true, migration0070; no mandatory paid subscription added by native bind, no pricing change. Public free approval remains vendor-owned."
     },
     "remaining_acceptance": [
       "actual requested A density and C theme",
@@ -1301,6 +1316,20 @@
       "actual analytics events and owner view",
       "bounded real capacity and isolated full restore",
       "official public Moy moderation and two independent owner accounts"
+    ],
+    "ci_history": [
+      {
+        "sha": "614016c43ac0bb1587cad3b5e6c3daa43b696717",
+        "run": 37198158000,
+        "result": "failed",
+        "cause": "joint API/gateway pytest path precedence; corrected in52"
+      },
+      {
+        "sha": "52aeae8ad373fc339e6242fc7fac87a08add9ddc",
+        "run": 37198369951,
+        "result": "failed",
+        "cause": "Original publication expectation and cancellation fake Session compatibility; both corrections now independently SOURCE_CLEAR20+18 ownPG. Await native iframe freeze and next exact CI."
+      }
     ]
   }
 }
