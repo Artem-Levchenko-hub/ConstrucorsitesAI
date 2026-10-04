@@ -13,6 +13,28 @@ const code = ts.transpileModule(source, {
 const secret = 'disposable-unit-test-secret';
 const project = '11111111-1111-4111-8111-111111111111';
 
+test('compiled bootstrap referrer policy survives the Next global header layer', async () => {
+  const configCode = ts.transpileModule(readFileSync('next.config.ts', 'utf8'), {
+    compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
+  }).outputText;
+  const configContext = { exports: {} };
+  vm.runInNewContext(configCode, configContext);
+  const rules = await configContext.exports.default.headers();
+  function referrerPolicy(path) {
+    let value;
+    for (const rule of rules) {
+      if (rule.source !== '/(.*)' && rule.source !== path) continue;
+      for (const header of rule.headers) {
+        if (header.key.toLowerCase() === 'referrer-policy') value = header.value;
+      }
+    }
+    return value;
+  }
+  assert.equal(referrerPolicy('/api/omnia/preview-session'), 'no-referrer');
+  assert.equal(referrerPolicy('/api/max/session'), 'strict-origin-when-cross-origin');
+  assert.equal(referrerPolicy('/support'), 'strict-origin-when-cross-origin');
+});
+
 async function bootstrap(env, { expired = false, badSignature = false, wrongProject = false,
   resume = false, corruptCookie = false, resumeEnv = {}, json = false, actorChanged = false } = {}) {
   let writes = 0, cookie, cookieSets = 0;

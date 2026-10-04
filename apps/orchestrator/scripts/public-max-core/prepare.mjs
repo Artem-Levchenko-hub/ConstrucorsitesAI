@@ -64,6 +64,21 @@ export function GET() {
 `);
 
 // Bound build parallelism without changing any template used by the agent.
-edit("next.config.ts", (source) => source.replace(
-  'output: "standalone",', 'output: "standalone",\n  experimental: { cpus: 1 },',
-));
+edit("next.config.ts", (source) => {
+  if (source.split("    ];").length !== 2
+      || source.split('output: "standalone",').length !== 2
+      || !source.includes('source: "/(.*)"')
+      || !source.includes('value: "strict-origin-when-cross-origin"')) {
+    throw new Error("Unexpected trusted header configuration");
+  }
+  // Next applies config headers before route responses and preserves an
+  // existing Referrer-Policy. Override the default for signed bootstrap URLs
+  // here as well as in the route; keep every other route's default unchanged.
+  return source.replace(
+    'output: "standalone",', 'output: "standalone",\n  experimental: { cpus: 1 },',
+  ).replace("    ];", `      {
+        source: "/api/omnia/preview-session",
+        headers: [{ key: "Referrer-Policy", value: "no-referrer" }],
+      },
+    ];`);
+});
