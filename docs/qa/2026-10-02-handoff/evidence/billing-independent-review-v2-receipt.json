@@ -1,0 +1,14 @@
+{
+  "status": "SOURCE_CLEAR",
+  "effects": 0,
+  "freeze_sha256": "6e7f057f06d14596d2be1912ca64ab726449d87c01ab9d6201e72a8834c4f89d",
+  "patch_sha256": "2ff32595c0664a8bce64389b2f8a68917f9a7c5cad66cc087108a7fb62a796c0",
+  "source_hash_mismatches": [],
+  "files_reviewed": 19,
+  "report_sha256": "52533cedd37be8e4ad6be6f0e54ac373da8f4970474052d0666d8bf8f0e4e18b",
+  "delta_source_files": {
+    "apps/api/src/yleum_api/services/generation_runs.py": "ad5996feff0b31e968f2f223de914e114e56b62edc586030f970b1235cca01ba",
+    "apps/api/src/yleum_api/services/generation_billing.py": "c221b8991febbfd9120399c3a7ce3f55517ade87b3f3e9abf43232c9b8092ce2",
+    "apps/api/src/yleum_api/services/billing_cycle.py": "85e26853ffabd7fbf0b27897b120727749bfe231619428c38548c68b3cc491e4"
+  }
+}

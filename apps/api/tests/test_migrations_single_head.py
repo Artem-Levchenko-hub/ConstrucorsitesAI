@@ -205,7 +205,8 @@ def test_usage_settlements_is_the_only_head() -> None:
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0074_usage_settlements"]
+    assert heads == ["0075_generation_billing"]
+    assert chain["0075_generation_billing"] == "0074_usage_settlements"
     assert chain["0074_usage_settlements"] == "0073_generation_deployment_drain"
     assert chain["0073_generation_deployment_drain"] == "0072_moysklad_vendor"
     assert chain["0072_moysklad_vendor"] == "0071_oauth_login"
@@ -233,10 +234,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database = project_cell_migration_database
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
-    assert (
-        database.fetchval("SELECT version_num FROM alembic_version")
-        == "0074_usage_settlements"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == "0075_generation_billing"
     assert (
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
@@ -264,7 +262,7 @@ def test_restoration_adaptation_migrations_roundtrip(
             "WHERE conrelid = 'usage_settlements'::regclass AND contype = 'c'"
         )
     } == {
-        "CHECK ((status = ANY (ARRAY['settled', 'free', 'unpaid'])))",
+        "CHECK ((status = ANY (ARRAY['settled', 'free', 'unpaid', 'deferred'])))",
         "CHECK (((status = 'settled') = (wallet_charge_id IS NOT NULL)))",
     }
     assert {
@@ -375,10 +373,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_installations')") is None
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
-    assert (
-        database.fetchval("SELECT version_num FROM alembic_version")
-        == "0074_usage_settlements"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == "0075_generation_billing"
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
 

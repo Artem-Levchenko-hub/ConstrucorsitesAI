@@ -290,6 +290,10 @@ async def terminalize_generation_run_locked(
             ),
         }
 
+    from yleum_api.services.generation_billing import seal_terminal_locked
+
+    await seal_terminal_locked(session, run)
+
 
 async def record_generation_product_failure(
     session: AsyncSession, run_id: UUID, error: str,
@@ -832,10 +836,15 @@ async def set_generation_run_status(
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
-        run = await session.get(GenerationRun, run_id)
+        run = await session.get(
+            GenerationRun, run_id, with_for_update=True, populate_existing=True
+        )
         if run is None:
             return
         if run.status in {"completed", "failed", "cancelled"}:
+            await session.rollback()
+            return
+        if run.status == "cancel_requested" and new_status not in {"cancelled", "failed"}:
             await session.rollback()
             return
         now = datetime.now(UTC)
@@ -917,19 +926,30 @@ async def _reconcile_completed_build_runs(session: AsyncSession) -> int:
     runs = list(
         (
             await session.execute(
-                select(GenerationRun).where(
+                select(GenerationRun)
+                .where(
                     GenerationRun.status == "completed",
                     GenerationRun.response_mode == "build",
                 )
+                .execution_options(populate_existing=True)
+                .with_for_update()
             )
         )
         .scalars()
         .all()
     )
     changed = 0
+    from yleum_api.models.generation_billing import GenerationBillingIntent
+
     for run in runs:
+        intent = await session.get(GenerationBillingIntent, run.id, populate_existing=True)
+        if intent is not None and intent.outcome == "billable":
+            # Sealed acceptance survives later chat/snapshot deletion. Any
+            # financial contradiction requires explicit reconciliation, never
+            # rewriting a proven accepted run as a failed original build.
+            continue
         message = (
-            await session.get(Message, run.assistant_message_id)
+            await session.get(Message, run.assistant_message_id, populate_existing=True)
             if run.assistant_message_id is not None
             else None
         )

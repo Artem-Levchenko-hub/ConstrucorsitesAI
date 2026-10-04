@@ -96,6 +96,12 @@ async def run_billing_tick(
 ) -> tuple[int, int]:
     """(subscriptions processed, open orders changed) for one pass."""
     current = now or datetime.now(UTC)
+    from yleum_api.services.generation_billing import reconcile_generation_billing
+
+    # Commit this independent payment transaction even on a quiet cycle.
+    # begin() also refuses to commit an unrelated caller-owned transaction.
+    async with session.begin():
+        await reconcile_generation_billing(session)
     subscriptions = await process_subscription_cycle(session, now=current)
     payments = await reconcile_pending_payments(session, now=current)
     return subscriptions, payments

@@ -53,6 +53,8 @@ async def stream_completion(
     temperature: float | None,
     max_tokens: int | None,
     free: bool = False,
+    run_id: UUID | None = None,
+    stage: str | None = None,
 ) -> AsyncIterator[str]:
     """Generate the SSE stream + bill at end.
 
@@ -174,6 +176,8 @@ async def stream_completion(
                     user_id=user_id,
                     project_id=project_id,
                     message_id=message_id,
+                    run_id=run_id,
+                    stage=stage,
                     model_id=actual_model,
                     tokens_in=tokens_in_final,
                     tokens_out=tokens_out_final,

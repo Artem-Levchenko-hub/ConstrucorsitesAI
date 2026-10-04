@@ -4,6 +4,7 @@ import ast
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -20,7 +21,7 @@ def pool_program():
 
 
 async def migrate_settlements(test_engine):
-    """Apply the actual 0074 migration with the real Alembic naming convention."""
+    """Apply the actual 0074/0075 migrations with the real Alembic naming convention."""
     import importlib.util
 
     from alembic.migration import MigrationContext
@@ -38,14 +39,25 @@ async def migrate_settlements(test_engine):
         context = MigrationContext.configure(connection, opts={"target_metadata": Base.metadata})
         with Operations.context(context):
             module.upgrade()
+            next_path = migration.with_name("0075_generation_billing.py")
+            next_spec = importlib.util.spec_from_file_location("cutover_migration_0075", next_path)
+            next_module = importlib.util.module_from_spec(next_spec)
+            next_spec.loader.exec_module(next_module)
+            next_module.upgrade()
 
     async with test_engine.begin() as connection:
-        await connection.execute(text("DROP TABLE usage_settlements"))
+        for table in [
+            "generation_billing_outbox",
+            "generation_billing_intents",
+            "generation_billing_policies",
+            "usage_settlements",
+        ]:
+            await connection.execute(text("DROP TABLE " + table))
         await connection.run_sync(upgrade)
         await connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
         await connection.execute(text("CREATE TABLE alembic_version (version_num varchar(64))"))
         await connection.execute(
-            text("INSERT INTO alembic_version VALUES ('0074_usage_settlements')")
+            text("INSERT INTO alembic_version VALUES ('0075_generation_billing')")
         )
 
 
@@ -256,6 +268,10 @@ def test_gateway_build_failure_is_not_hidden_by_log_filter():
         "unvalidated_status",
         "unvalidated_charge",
         "permission",
+        "missing_policy",
+        "missing_outbox_binding",
+        "weak_intent_amount",
+        "wallet_not_nullable",
     ],
 )
 async def test_real_gateway_pool_rejects_incomplete_or_weakened_schema(test_engine, mutation):
@@ -264,6 +280,7 @@ async def test_real_gateway_pool_rejects_incomplete_or_weakened_schema(test_engi
     await migrate_settlements(test_engine)
     status_name = "ck_usage_settlements_ck_usage_settlements_status"
     charge_name = "ck_usage_settlements_ck_usage_settlements_charge"
+    role = "qa_cutover_" + uuid4().hex
     statements = {
         "missing_marker": ["DELETE FROM alembic_version"],
         "missing_table": ["DROP TABLE usage_settlements"],
@@ -284,12 +301,12 @@ async def test_real_gateway_pool_rejects_incomplete_or_weakened_schema(test_engi
         "weak_status": [
             f"ALTER TABLE usage_settlements DROP CONSTRAINT {status_name}",
             f"ALTER TABLE usage_settlements ADD CONSTRAINT {status_name} "
-            "CHECK (status IN ('settled','free','unpaid') OR true)",
+            "CHECK (status IN ('settled','free','unpaid','deferred') OR true)",
         ],
         "extra_status": [
             f"ALTER TABLE usage_settlements DROP CONSTRAINT {status_name}",
             f"ALTER TABLE usage_settlements ADD CONSTRAINT {status_name} "
-            "CHECK (status IN ('settled','free','unpaid','pending'))",
+            "CHECK (status IN ('settled','free','unpaid','deferred','pending'))",
         ],
         "weak_charge": [
             f"ALTER TABLE usage_settlements DROP CONSTRAINT {charge_name}",
@@ -299,26 +316,35 @@ async def test_real_gateway_pool_rejects_incomplete_or_weakened_schema(test_engi
         "unvalidated_status": [
             f"ALTER TABLE usage_settlements DROP CONSTRAINT {status_name}",
             f"ALTER TABLE usage_settlements ADD CONSTRAINT {status_name} "
-            "CHECK (status IN ('settled','free','unpaid')) NOT VALID",
+            "CHECK (status IN ('settled','free','unpaid','deferred')) NOT VALID",
         ],
         "unvalidated_charge": [
             f"ALTER TABLE usage_settlements DROP CONSTRAINT {charge_name}",
             f"ALTER TABLE usage_settlements ADD CONSTRAINT {charge_name} "
             "CHECK ((status='settled') = (wallet_charge_id IS NOT NULL)) NOT VALID",
         ],
+        "missing_policy": ["DROP TABLE generation_billing_policies"],
+        "missing_outbox_binding": [
+            "ALTER TABLE generation_billing_outbox DROP CONSTRAINT "
+            "fk_generation_billing_outbox_run_id_generation_billing_intents"
+        ],
+        "weak_intent_amount": [
+            "ALTER TABLE generation_billing_intents DROP CONSTRAINT "
+            "ck_generation_billing_intents_amount"
+        ],
+        "wallet_not_nullable": [
+            "ALTER TABLE generation_billing_intents ALTER COLUMN billing_account_id SET NOT NULL"
+        ],
         "permission": [
-            "DROP ROLE IF EXISTS qa_cutover_reader",
-            "CREATE ROLE qa_cutover_reader LOGIN",
-            "GRANT SELECT ON alembic_version TO qa_cutover_reader",
+            f"CREATE ROLE {role} LOGIN",
+            f"GRANT SELECT ON alembic_version TO {role}",
         ],
     }
     async with test_engine.begin() as connection:
         for statement in statements[mutation]:
             await connection.execute(text(statement))
     try:
-        result = run_real_pool_program(
-            test_engine, role="qa_cutover_reader" if mutation == "permission" else None
-        )
+        result = run_real_pool_program(test_engine, role=role if mutation == "permission" else None)
         assert result.returncode != 0
         assert result.stderr.strip() == (
             "gateway settlement schema unavailable; admission remains fenced"
@@ -326,8 +352,8 @@ async def test_real_gateway_pool_rejects_incomplete_or_weakened_schema(test_engi
     finally:
         if mutation == "permission":
             async with test_engine.begin() as connection:
-                await connection.execute(text("DROP OWNED BY qa_cutover_reader"))
-                await connection.execute(text("DROP ROLE qa_cutover_reader"))
+                await connection.execute(text(f"DROP OWNED BY {role}"))
+                await connection.execute(text(f"DROP ROLE {role}"))
 
 
 @pytest.mark.asyncio

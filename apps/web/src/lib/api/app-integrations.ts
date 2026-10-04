@@ -26,6 +26,23 @@ export function connectAppIntegration(
   });
 }
 
+export type MoyskladInstallInfo = {
+  available: boolean;
+  install_url: string | null;
+};
+
+export function getMoyskladInstall(projectId: Uuid): Promise<MoyskladInstallInfo> {
+  return apiFetch(`${path(projectId)}/moysklad/install`);
+}
+
+export function startMoyskladInstall(
+  projectId: Uuid,
+): Promise<{ install_url: string }> {
+  return apiFetch(`${path(projectId)}/moysklad/install/start`, {
+    method: "POST",
+  });
+}
+
 export function claimMoyskladIntegration(
   projectId: Uuid,
   code: string,

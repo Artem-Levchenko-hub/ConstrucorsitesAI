@@ -1,8 +1,9 @@
 import hashlib
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlsplit
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -209,6 +210,32 @@ class Settings(BaseSettings):
     integration_moysklad_app_id: str | None = Field(default=None)
     integration_moysklad_app_uid: str | None = Field(default=None)
     integration_moysklad_secret_key: SecretStr | None = Field(default=None)
+    # Full official public listing URL, enabled only after publication review.
+    # App IDs/UIDs and test-store grants must never synthesize this URL.
+    integration_moysklad_public_install_url: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("integration_moysklad_public_install_url")
+    @classmethod
+    def validate_moysklad_public_install_url(cls, value: str | None) -> str | None:
+        if value is None or value == "":
+            return None
+        if "\\" in value or any(char.isspace() or ord(char) < 32 for char in value):
+            raise ValueError("Expected an official HTTPS MoySklad public listing URL")
+        try:
+            parsed = urlsplit(value)
+            valid = (
+                parsed.scheme == "https"
+                and parsed.hostname in {"online.moysklad.ru", "www.moysklad.ru", "moysklad.ru"}
+                and parsed.port in {None, 443}
+                and parsed.username is None
+                and parsed.password is None
+                and not parsed.fragment
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ValueError("Expected an official HTTPS MoySklad public listing URL")
+        return value
 
     @property
     def admin_emails_set(self) -> set[str]:
@@ -349,7 +376,6 @@ class Settings(BaseSettings):
     # burn thousands per build (review 2026-07-17). Env: VIDEO_GEN_MAX_UNIQUE.
     video_gen_max_unique: int = Field(default=3)
 
-
     # Phase M — per-role model override. Empty = use ROLE_MODEL_MAP (topmix-v1)
     # below. CSV of `role=model_id` pairs, e.g.
     # "director=claude-opus-4-7,polish=deepseek-chat,audit=claude-sonnet-4-6".
@@ -455,7 +481,6 @@ class Settings(BaseSettings):
     # scoping). Advisory by default; flip on to BLOCK ship on a raw-DB escape.
     use_backend_guardrail: bool = Field(default=False)
 
-
     # Transport-surface security gate (G005) — WIRED on the agentic path (realtime +
     # drizzle) via security_gate.run_security_gate through the blocking heal loop.
     # Captures the main route's response headers and BLOCKS only on product
@@ -482,7 +507,6 @@ class Settings(BaseSettings):
     # gate behaviour and can never fail a build. The foundation for "deploy ↔
     # proven"; DB-persist + deploy-gating land in a follow-up. Env: USE_BUILD_ATTESTATION.
     use_build_attestation: bool = Field(default=True)
-
 
     # Wallet self-top-up (MVP stub) — POST /api/wallet/topup credits the caller's
     # OWN wallet by a user-supplied amount with NO payment. Fine for closed beta
@@ -603,7 +627,6 @@ class Settings(BaseSettings):
     # (instant rollback, R-10). Env: USE_ERROR_CARDS=false.
     use_error_cards: bool = Field(default=True)
 
-
     # Area C (b2) — Chromium host-resolver rule so the gate's headless browser can
     # reach a generated app's PUBLIC preview host (its canonical Auth.js AUTH_URL,
     # where secure cookies work) from inside the worker network. The worker can only
@@ -631,7 +654,6 @@ class Settings(BaseSettings):
     # for instant rollback to the prior single-shot freeform path (R-10).
     use_art_director_freeform: bool = Field(default=True)
 
-
     # Real-backend default (2026-06-27, owner: «мне ентитиз не нужны, нужен реальный
     # бэкенд»). When ON, a `web_app` result-type (accounts + saved data) routes to
     # the REAL full-stack stack (`fullstack` → nextjs-postgres-drizzle: Next API
@@ -657,7 +679,6 @@ class Settings(BaseSettings):
     # It adds no model call, phase or completion loop. USE_DESIGN_INTELLIGENCE_PLUGIN=0
     # restores the legacy design-mood-only path immediately.
     use_design_intelligence_plugin: bool = Field(default=True)
-
 
     # Ship-green-on-abort (2026-06-27, harness-hardening). A loop-guard abort
     # (cycle / repeat / explore / budget) used to ALWAYS return done=False →
@@ -856,7 +877,6 @@ class Settings(BaseSettings):
     # that were really committed. Kill per-env: USE_CLEAN_CHAT_CONTENT=false.
     use_clean_chat_content: bool = Field(default=True)
 
-
     # ── Testing escape hatch — remove ALL generation gating ───────────────
     # When true: every generation is treated as free (is_free=True), so the
     # api wallet-floor check is skipped AND the gateway debit is skipped
@@ -864,7 +884,6 @@ class Settings(BaseSettings):
     # neither the 3-free-gen limit nor the wallet balance may block a
     # generation. Flip UNLIMITED_GENERATIONS=false to restore normal billing.
     unlimited_generations: bool = Field(default=False)
-
 
     @property
     def cors_origins_list(self) -> list[str]:

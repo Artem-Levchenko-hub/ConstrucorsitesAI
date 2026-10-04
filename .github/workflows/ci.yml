@@ -79,6 +79,18 @@ jobs:
       - name: Lint and typecheck API
         working-directory: apps/api
         run: uv run ruff check . && uv run mypy src
+      - name: Install the locked gateway environment for joint billing contracts
+        working-directory: apps/llm-gateway
+        run: uv sync --frozen --extra dev
+      - name: Verify paid generation settlement on disposable PostgreSQL
+        working-directory: apps/api
+        env:
+          QA_BILLING_POSTGRES_ADMIN_URL: postgresql://omnia:omnia@127.0.0.1:5432/postgres
+          PYTHONPATH: src:../llm-gateway/src
+        run: |
+          test -n "$QA_BILLING_POSTGRES_ADMIN_URL"
+          gateway_packages=$(../llm-gateway/.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+          PYTHONPATH="src:../llm-gateway/src:$gateway_packages" uv run --frozen pytest -o addopts='' -q ../llm-gateway/integration_tests/test_generation_billing_postgres.py
       - name: Verify exact edits through both executors on disposable PostgreSQL
         working-directory: apps/api
         run: uv run --frozen pytest -o addopts='' -q tests/test_exact_edit_contract.py

@@ -18,7 +18,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from yleum_gateway.core.errors import GatewayError, WalletEmptyError
+from yleum_gateway.core.errors import (
+    BillingReconciliationRequiredError,
+    GatewayError,
+    WalletEmptyError,
+)
 from yleum_gateway.services import billing, cache, file_logger, safety, streaming
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.pricing import calculate_cost_rub
@@ -39,6 +43,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatMetadata(BaseModel):
+    run_id: UUID | None = None
     project_id: UUID | None = None
     message_id: UUID | None = None
     # First-N free generations: skip balance precheck + wallet debit. Usage is
@@ -169,6 +174,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 user_id=req.user,
                 project_id=meta.project_id,
                 message_id=meta.message_id,
+                run_id=meta.run_id,
+                stage=meta.stage,
                 temperature=req.temperature,
                 max_tokens=req.max_tokens,
                 free=meta.free,
@@ -252,6 +259,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 user_id=req.user,
                 project_id=meta.project_id,
                 message_id=meta.message_id,
+                run_id=meta.run_id,
                 model_id=actual_model,
                 tokens_in=tokens_in,
                 tokens_out=tokens_out,
@@ -261,12 +269,15 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 stage=meta.stage,
                 cache_read_tokens=cache_read,
                 cache_write_tokens=cache_write,
+                provider_request_id=str(response.get("id") or "") or None,
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc
+        except BillingReconciliationRequiredError as exc:
+            raise _gateway_error_to_http(exc) from exc
         except Exception as exc:
             log.exception("charge_failed", user=str(req.user), model=actual_model)
-            if meta.require_billing:
+            if meta.require_billing or meta.run_id is not None:
                 # Never expose or cache an answer whose wallet debit failed.
                 raise _billing_unavailable() from exc
 

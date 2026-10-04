@@ -1,0 +1,37 @@
+{
+  "scope": "local UI only; not committed or deployed",
+  "worktree": "/workspace/qa-worktrees/platform-feature-proof-121900",
+  "files": {
+    "apps/web/src/components/workspace/ChatMessage.tsx": "6ca6a056b38577f46949c28e898c1fad2a1045c35ed3b5dbad97d7f06ae85912",
+    "apps/web/src/components/max/FigmaIntegrationHub.tsx": "a3fe0e5b5a1435176e2836ca2f7980549d200da6d5566e7718c9f7c384321dfc",
+    "apps/web/src/lib/__tests__/max-integration-hub-embedded.test.tsx": "13e42a2a93a8c2a71a0f4b0e22d344092f792ba6503f6ae6ba8b5e7962ed1cec",
+    "apps/web/src/lib/builtin-integration-prompts.ts": "9fa99334ced22b6690470928a75dd586ac69c15e090342a00be4ba9e7a5e57b9",
+    "apps/web/src/components/workspace/IntegrationRequestCard.tsx": "3e1170685f17a93b7af9d1d1e511cb2e41597d811d079ab6ff8becee00bcd937",
+    "apps/web/src/lib/__tests__/builtin-integration-prompts.test.tsx": "ef01c88fc61f13c2529c61ef44d7dd90af1afecb5d71d4644a3b472f242ded47"
+  },
+  "patch_sha256": "d7bd735d7213969bf03281a9509923be421e06b2c1a24161a8db60d3b46a5438",
+  "builtin_payloads_byte_identical": 7,
+  "focused_tests_passed": 43,
+  "web_full_suite": {
+    "files_passed": 105,
+    "tests_passed": 898,
+    "exit_code": 0
+  },
+  "eslint_exit": 0,
+  "typecheck_exit": 0,
+  "browser_proof": "integration-prompt-browser-proof.json",
+  "verification": {
+    "focused_tests": 43,
+    "full_web_tests": 898,
+    "eslint_exit": 0,
+    "tsc_exit": 0,
+    "diff_check_exit": 0,
+    "local_browser_widths": [
+      1000,
+      360
+    ],
+    "keyboard_enter_and_space": true,
+    "external_calls": 0,
+    "fixture_server_stopped": true
+  }
+}

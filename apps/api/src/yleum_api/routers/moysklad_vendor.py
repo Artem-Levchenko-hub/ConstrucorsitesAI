@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import secrets
 import time
@@ -11,14 +12,14 @@ from uuid import UUID
 
 import httpx
 import jwt
-from fastapi import APIRouter, Header, Request
-from fastapi.responses import HTMLResponse
+from fastapi import APIRouter, Header, Request, Response
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.crypto import encrypt_strong
-from yleum_api.core.deps import CurrentUserDep, SessionDep
+from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep
 from yleum_api.core.errors import ApiError
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from yleum_api.models.moysklad import MoyskladInstallation, MoyskladVendorReceipt
@@ -30,6 +31,149 @@ from yleum_api.services.max_access import require_max_studio_access
 router = APIRouter(tags=["moysklad-vendor"])
 RESOURCE = "https://api.moysklad.ru/api/remap/1.2"
 VENDOR_BASE = "https://apps-api.moysklad.ru/api/vendor/1.0"
+
+RETURN_COOKIE = "__Host-moysklad-return"
+RETURN_PATH = "/api/integrations/moysklad/return"
+RETURN_PURPOSE = "moysklad-native-return"
+RETURN_TTL = 15 * 60
+
+
+class PublicInstallInfo(BaseModel):
+    available: bool
+    install_url: str | None
+
+
+class PublicInstallStart(BaseModel):
+    install_url: str
+
+
+def _return_signing_key() -> bytes:
+    # Separate key and audience: routing cookies cannot become auth/vendor JWTs.
+    return hmac.digest(
+        get_settings().jwt_secret.get_secret_value().encode(),
+        RETURN_PURPOSE.encode(),
+        "sha256",
+    )
+
+
+def _return_intent(raw: str | None) -> tuple[UUID, UUID, int] | None:
+    if not raw or len(raw) > 2048:
+        return None
+    try:
+        claims = jwt.decode(
+            raw,
+            _return_signing_key(),
+            algorithms=["HS256"],
+            audience=RETURN_PURPOSE,
+            options={
+                "require": ["iat", "exp", "owner", "project", "ver", "aud"],
+                "verify_exp": False,
+                "verify_iat": False,
+            },
+        )
+        issued, expiry, version = claims["iat"], claims["exp"], claims["ver"]
+        if any(type(value) is not int for value in (issued, expiry, version)):
+            return None
+        now = int(time.time())
+        if issued > now + 30 or expiry <= now or not 0 < expiry - issued <= RETURN_TTL:
+            return None
+        if version < 0:
+            return None
+        return UUID(claims["owner"]), UUID(claims["project"]), version
+    except (jwt.PyJWTError, ValueError, TypeError, AttributeError):
+        return None
+
+
+def _navigation_headers(response: Response) -> None:
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Referrer-Policy"] = "no-referrer"
+
+
+@router.get(
+    "/api/projects/{project_id}/app-integrations/moysklad/install", response_model=PublicInstallInfo
+)
+async def public_install_info(
+    project_id: UUID, response: Response, session: SessionDep, current_user: CurrentUserDep
+) -> PublicInstallInfo:
+    await app_integrations._owned_max_project(session, project_id, current_user.id)
+    require_max_studio_access(current_user)
+    url = get_settings().integration_moysklad_public_install_url
+    _navigation_headers(response)
+    return PublicInstallInfo(available=bool(url), install_url=url)
+
+
+@router.post(
+    "/api/projects/{project_id}/app-integrations/moysklad/install/start",
+    response_model=PublicInstallStart,
+)
+async def start_public_install(
+    project_id: UUID, response: Response, session: SessionDep, current_user: CurrentUserDep
+) -> PublicInstallStart:
+    await app_integrations._owned_max_project(session, project_id, current_user.id)
+    require_max_studio_access(current_user)
+    await assert_integrations_allowed(session, current_user.id)
+    url = get_settings().integration_moysklad_public_install_url
+    if not url:
+        raise ApiError(
+            "moysklad_unavailable",
+            "Публичная установка решения МойСклад пока недоступна",
+            503,
+        )
+    now = int(time.time())
+    intent = jwt.encode(
+        {
+            "owner": str(current_user.id),
+            "project": str(project_id),
+            "ver": current_user.session_version,
+            "iat": now,
+            "exp": now + RETURN_TTL,
+            "aud": RETURN_PURPOSE,
+        },
+        _return_signing_key(),
+        algorithm="HS256",
+    )
+    response.set_cookie(
+        RETURN_COOKIE,
+        intent,
+        max_age=RETURN_TTL,
+        secure=True,
+        httponly=True,
+        samesite="lax",
+        path="/",
+    )
+    _navigation_headers(response)
+    return PublicInstallStart(install_url=url)
+
+
+@router.get(RETURN_PATH)
+async def native_return(
+    request: Request, session: SessionDep, current_user: OptionalUserDep
+) -> RedirectResponse:
+    intent = _return_intent(request.cookies.get(RETURN_COOKIE))
+    if intent is not None and current_user is None:
+        response = RedirectResponse(
+            "/login?next=%2Fapi%2Fintegrations%2Fmoysklad%2Freturn",
+            status_code=303,
+        )
+        _navigation_headers(response)
+        return response
+    destination = "/max"
+    if intent is not None and current_user is not None:
+        owner, project, version = intent
+        if owner == current_user.id and version == current_user.session_version:
+            try:
+                await app_integrations._owned_max_project(session, project, current_user.id)
+                require_max_studio_access(current_user)
+                await assert_integrations_allowed(session, current_user.id)
+            except ApiError as exc:
+                if exc.status_code not in {401, 403, 404, 409}:
+                    raise
+            else:
+                destination = f"/max/{project}?panel=services&integration=moysklad"
+    response = RedirectResponse(destination, status_code=303)
+    response.delete_cookie(RETURN_COOKIE, secure=True, httponly=True, samesite="lax", path="/")
+    _navigation_headers(response)
+    return response
 
 
 def _config() -> tuple[UUID, str, str]:
@@ -307,7 +451,8 @@ p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
 <div id=result hidden>
 <p>Скопируйте код и вставьте в Yleum: Интеграции → МойСклад. Код действует 10 минут.</p>
 <code id=code></code>
-<p><a href="https://yleum.ru" target=_blank rel="noopener noreferrer">Открыть Yleum</a></p>
+<p><a href="/api/integrations/moysklad/return" target=_blank
+rel="noopener noreferrer">Открыть Yleum</a></p>
 </div>
 <script nonce="NONCE">
 (()=>{
@@ -316,7 +461,8 @@ p{line-height:1.5}code{font-size:1.3rem;overflow-wrap:anywhere}
   const h=async e=>{
     // Host responses may come from a different MoySklad window; the official
     // widget SDK correlates by messageId and validates the token on the server.
-    if(e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
+    if(e.origin!=='https://online.moysklad.ru'||
+       e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
     window.removeEventListener('message',h);
     try{
       if(typeof e.data.token!=='string'||!e.data.token)throw Error();

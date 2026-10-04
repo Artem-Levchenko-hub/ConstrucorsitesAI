@@ -120,6 +120,14 @@ class PromptAcceptance:
             return replay
         await self.prepare_adaptation()
         await self.check_admission()
+        from yleum_api.services.generation_billing import admit_policy
+        from yleum_api.services.llm_client import set_generation_billing_context
+
+        await admit_policy(self.session, self.generation_run.id, is_free=self.is_free)
+        await self.session.commit()
+        set_generation_billing_context(
+            self.generation_run.id, self.current_user.id, self.project_id
+        )
         await self.route_existing_project()
         await self.conduct_interview()
         await self.select_intent_and_model()

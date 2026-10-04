@@ -69,6 +69,9 @@ async def _process_prompt(
     # Mark this async context free (gateway skips wallet debit) for the whole
     # generation — the contextvar rides every stream_chat_completion call below.
     set_free_generation(is_free)
+    from yleum_api.services.llm_client import set_generation_billing_context
+
+    set_generation_billing_context(run_id, user_id, project_id)
     print(
         f"[PP] start project={project_id} asst_msg={assistant_message_id} "
         f"model={model_id} free={is_free} force={force_model} orchestrate={orchestrate}",

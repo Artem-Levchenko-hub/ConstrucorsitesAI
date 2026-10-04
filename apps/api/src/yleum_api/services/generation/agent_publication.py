@@ -98,6 +98,16 @@ async def publish_agent_candidate(
                 parent_snapshot_id=baseline.snapshot_id,
                 changed_files=list(files),
             )
+            from yleum_api.services.generation_billing import record_accepted_candidate
+
+            if _max_finalization_proof is not None:
+                await record_accepted_candidate(
+                    session,
+                    run_id=ids.run_id,
+                    snapshot_id=snapshot.id,
+                    permit=permit,
+                    proof=_max_finalization_proof,
+                )
             _agent_snap_id = snapshot.id
             msg = await session.get(Message, ids.assistant_message_id)
             if msg is not None:

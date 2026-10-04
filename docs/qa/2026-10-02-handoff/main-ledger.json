@@ -1,6 +1,6 @@
 {
   "scope": "Consolidated dated evidence, not all current-release acceptance",
-  "platform_sha": "6a7f6f4b3c07b2753dc0d842cb830f9c71523f18",
+  "platform_sha": "121900fd95a13e1ade122057abe19d6c22468621",
   "parallel_report_cutoff_msk": "2026-10-02 17:05",
   "count": 67,
   "counts": {
@@ -1249,5 +1249,58 @@
     ],
     "acceptance": "Actual MAX event, owner dashboard and foreign-owner denial remain unaccepted",
     "external_artifacts": "analytics-fast-20261004.json and financial-fast-20261004.json remain in original Local QA environment; no raw transfer claim"
+  },
+  "current_delivery_preparation": {
+    "base_python": "121900fd95a13e1ade122057abe19d6c22468621",
+    "base_web": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
+    "state": "LOCAL_REVIEWED_PENDING_EXACT_CI_BACKUP_PRODUCTION",
+    "scope": [
+      "success-only aggregate generation billing with durable accepted snapshot and exactly-once settlement",
+      "integration request cards preserve exact seven original prompts",
+      "native public Moy install/start/owned return; public moderation external"
+    ],
+    "verification": {
+      "billing_actual_postgres": 41,
+      "billing_related_api": 85,
+      "root_paid_postgres": 26,
+      "gateway_unit": 175,
+      "browser_actual_chromium": 56,
+      "promotion_pure": 30,
+      "claim_actual_postgres": 3,
+      "web_full": 898,
+      "independent_billing_review": "SOURCE_CLEAR exact v2; no production wallet changes",
+      "live_feature_replay": "UNPROVEN at network boundary; C exact historical proof epoch55 matches, A current source and served epoch differ from historical proof. Do not mark historical semantic RED/GREEN.",
+      "mandatory_behavior_gate": "HELD outside urgent commit: actual C legitimate platform scripts/foreign SDK/font requests blocked; A custom qa_tasks GET also denied. Preserve strict network safety, redesign before mandatory gate; no false promotion"
+    },
+    "paid_provider_calls": 0,
+    "business_provider_writes": 0,
+    "application_publications": 0,
+    "production_delivered": false,
+    "generation_cohorts": {
+      "accepted": 33,
+      "completed": 27,
+      "failed": 6,
+      "completion_rate": 0.8181818181818182,
+      "scope": "mixed deployed SHAs; completion is not semantic readiness"
+    },
+    "moy_native": {
+      "current_C_installation": "uninstalled",
+      "credential_token_present": false,
+      "official_uninstall_utc": "2026-10-04T08:51:47Z",
+      "initiator": "unknown",
+      "public_solution": "Draft v0; moderation/public install URL unverified",
+      "test_reinstall_approved": false,
+      "protected_PAR_B_separate_connection": "unchanged; do not transfer",
+      "code_state": "Reviewed backend native install/start/owned return and strict official setup-message origin, absent marketplace URL intentionally unavailable; no installation/grant/moderation by code delivery"
+    },
+    "remaining_acceptance": [
+      "actual requested A density and C theme",
+      "current C exact publication and genuine signed MAX/provider mapping",
+      "cross-owner and actual-role isolation",
+      "provider request-level cost reconciliation",
+      "actual analytics events and owner view",
+      "bounded real capacity and isolated full restore",
+      "official public Moy moderation and two independent owner accounts"
+    ]
   }
 }

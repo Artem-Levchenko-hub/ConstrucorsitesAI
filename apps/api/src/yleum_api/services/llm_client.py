@@ -31,6 +31,22 @@ def set_free_generation(value: bool) -> None:
     _free_generation.set(value)
 
 
+_generation_billing_context: contextvars.ContextVar[tuple[str, str, str] | None] = (
+    contextvars.ContextVar("generation_billing_context", default=None)
+)
+
+
+def set_generation_billing_context(run_id: Any, user_id: Any, project_id: Any) -> None:
+    _generation_billing_context.set((str(run_id), str(user_id), str(project_id)))
+
+
+def _billing_metadata(user_id: str | None, project_id: str | None) -> dict[str, str]:
+    context = _generation_billing_context.get()
+    if context is None or project_id != context[2] or (user_id and user_id != context[1]):
+        return {}
+    return {"run_id": context[0], "user_id": context[1]}
+
+
 def aggregate_pass_usage(*usages: dict[str, Any] | None) -> dict[str, Any]:
     """Sum tokens / cost across pass usages. None entries treated as zeros."""
     return {
@@ -71,6 +87,7 @@ async def stream_chat_completion(
         "user": user_id,
         "metadata": {
             "project_id": project_id,
+            **_billing_metadata(user_id, project_id),
             "message_id": message_id,
             "free": _free_generation.get(),
         },
@@ -208,6 +225,7 @@ async def complete_chat(
         "user": user_id,
         "metadata": {
             "project_id": project_id,
+            **_billing_metadata(user_id, project_id),
             "free": _free_generation.get() if free is None else free,
             **({"stage": stage} if stage else {}),
         },

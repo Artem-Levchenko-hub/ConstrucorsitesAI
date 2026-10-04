@@ -42,7 +42,8 @@ class UsageSettlement(Base):
             name="uq_usage_settlements_provider_receipt",
         ),
         CheckConstraint(
-            "status IN ('settled', 'free', 'unpaid')", name="ck_usage_settlements_status"
+            "status IN ('settled', 'free', 'unpaid', 'deferred')",
+            name="ck_usage_settlements_status",
         ),
         CheckConstraint(
             "(status = 'settled') = (wallet_charge_id IS NOT NULL)",

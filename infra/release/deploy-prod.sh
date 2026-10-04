@@ -162,11 +162,33 @@ async def verify():
             checks = {row['definition'] for row in constraints
                       if row['kind'] == 'c' and row['validated']}
             expected_checks = {
-                "CHECK ((status = ANY (ARRAY['settled'::text, 'free'::text, 'unpaid'::text])))",
+                "CHECK ((status = ANY (ARRAY['settled'::text, 'free'::text, 'unpaid'::text, 'deferred'::text])))",
                 "CHECK (((status = 'settled'::text) = (wallet_charge_id IS NOT NULL)))",
             }
             if not receipt_unique or not expected_checks.issubset(checks):
                 raise RuntimeError("settlement constraints missing")
+            await connection.fetch("SELECT run_id,is_free,version,created_at FROM generation_billing_policies LIMIT 0")
+            await connection.fetch("SELECT run_id,user_id,billing_account_id,outcome,amount_rub,usage_ids,accepted_snapshot_id,receipt,created_at FROM generation_billing_intents LIMIT 0")
+            await connection.fetch("SELECT run_id,next_attempt_at,settled_at FROM generation_billing_outbox LIMIT 0")
+            for table, parent in [('generation_billing_policies','generation_runs'),
+                                  ('generation_billing_intents','generation_runs'),
+                                  ('generation_billing_outbox','generation_billing_intents')]:
+                rows = await connection.fetch("SELECT c.contype::text AS kind,c.convalidated AS validated,pg_get_constraintdef(c.oid) AS definition,ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum ORDER BY k.n) AS columns FROM pg_constraint c WHERE c.conrelid=$1::regclass", table)
+                if not any(row['kind']=='p' and row['validated'] and row['columns']==['run_id'] for row in rows):
+                    raise RuntimeError("generation settlement identity missing")
+                expected_fk = 'FOREIGN KEY (run_id) REFERENCES ' + parent + ('(run_id)' if parent=='generation_billing_intents' else '(id)') + ' ON DELETE CASCADE'
+                if not any(row['kind']=='f' and row['validated'] and row['definition']==expected_fk for row in rows):
+                    raise RuntimeError("generation settlement binding missing")
+                if table=='generation_billing_intents':
+                    definitions = {row['definition'] for row in rows if row['kind']=='c' and row['validated']}
+                    if not {"CHECK ((outcome = ANY (ARRAY['billable'::text, 'waived'::text])))", "CHECK (((amount_rub >= (0)::numeric) AND ((outcome = 'billable'::text) OR (amount_rub = (0)::numeric))))", "CHECK (((outcome <> 'billable'::text) OR ((billing_account_id IS NOT NULL) AND (accepted_snapshot_id IS NOT NULL))))"}.issubset(definitions):
+                        raise RuntimeError("generation settlement financial constraint missing")
+                    for definition in ['FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE',
+                                       'FOREIGN KEY (billing_account_id) REFERENCES billing_accounts(id) ON DELETE RESTRICT']:
+                        if not any(row['kind']=='f' and row['validated'] and row['definition']==definition for row in rows):
+                            raise RuntimeError("generation settlement account binding missing")
+            if await connection.fetchval("SELECT attnotnull FROM pg_attribute WHERE attrelid='generation_billing_intents'::regclass AND attname='billing_account_id'"):
+                raise RuntimeError("waived generation without wallet cannot be represented")
     except Exception:
         raise SystemExit("gateway settlement schema unavailable; admission remains fenced") from None
     finally:

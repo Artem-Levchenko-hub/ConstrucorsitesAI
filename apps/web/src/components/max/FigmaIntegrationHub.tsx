@@ -46,9 +46,11 @@ import {
   disconnectAppIntegration,
   getAmocrmOptions,
   getIntegrationCatalog,
+  getMoyskladInstall,
   getMoyskladOptions,
   saveAmocrmSettings,
   saveMoyskladSettings,
+  startMoyskladInstall,
   startIntegrationOAuth,
   setPlatformAiEnabled,
   verifyAppIntegration,
@@ -59,6 +61,8 @@ import { sendPrompt } from "@/lib/api/messages";
 import type { AppIntegration, IntegrationCategory, IntegrationProvider } from "@/lib/api/types";
 import { containsChatSecret } from "@/lib/max-chat-credentials";
 import { cn } from "@/lib/utils";
+import { getBuiltinIntegrationRequest, recognizeBuiltinIntegrationRequest } from "@/lib/builtin-integration-prompts";
+import { IntegrationRequestCard } from "@/components/workspace/IntegrationRequestCard";
 
 const categories: Record<IntegrationCategory | "all", { label: string; icon: LucideIcon }> = {
   all: { label: "Все сервисы", icon: Plug },
@@ -86,16 +90,6 @@ const providerIcons: Record<string, LucideIcon> = {
   cdek: Truck,
 };
 
-// Static implementation briefs never interpolate account metadata or credentials.
-const implementationFeatures: Record<string, string> = {
-  yookassa: "Добавь оплату заказа через ЮKassa: создание платежа и проверку его статуса. Подтверждай оплату только по серверному статусу, а не по возврату пользователя со страницы оплаты. Возвраты не поддерживаются.",
-  iiko: "Добавь меню iiko с категориями и блюдами. Доступно только чтение меню; создание заказов не поддерживается.",
-  bitrix24: "Добавь форму заявки с созданием лида в Битрикс24 и подтверждением результата. Не повторяй отправку при неизвестном результате предыдущей попытки.",
-  amocrm: "Добавь форму заявки с созданием лида в amoCRM. Имя и телефон обязательны; e-mail и комментарий необязательны. Показывай ошибки валидации у соответствующих полей, без тихого пропуска отправки. Для одного намерения пользователя сохраняй стабильный ключ идемпотентности, блокируй повторную отправку на время запроса и при неизвестном результате не создавай новый лид: покажи неизвестный исход и предложи сверку. Создавай лид только через доступный управляемый метод интеграции. При открытии, возобновлении и обновлении формы загружай собственную историю заявок через getYleumLeads() и текущий статус CRM через getYleumLeadStatus(id); показывай ошибки загрузки и время последнего обновления. Обрабатывай результат лида с details_status: recorded | unknown и необязательным warning: при unknown покажи предупреждение, а при сбое записи комментария никогда не повторяй исходное создание лида.",
-  moysklad: "Добавь каталог товаров, цены и доступные остатки выбранного склада из МойСклад. Не показывай наличие, если актуальный остаток неизвестен. Добавь оформление заказа покупателя через управляемую интеграцию; используй ключ идемпотентности и не повторяй отправку при неизвестном результате.",
-  yandex_metrica: "Подключи счётчик Яндекс Метрики к приложению через управляемую интеграцию.",
-  llmgw: "Добавь ИИ-помощника с отправкой сообщений через встроенный LLMGW и отображением ответа. Используй requestYleumAI; расходы оплачиваются с баланса владельца приложения. Пользователю не нужны API-ключи или отдельное подключение ИИ.",
-};
 const readyForImplementation = (
   provider: IntegrationProvider | undefined,
   connection: AppIntegration | undefined,
@@ -125,11 +119,18 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   const [terminalFailure, setTerminalFailure] = useState(false);
   const [category, setCategory] = useState<IntegrationCategory | "all">("all");
   const [search, setSearch] = useState("");
-  const [selected, setSelected] = useState<IntegrationProvider | null>(null);
+  const [selectedChoice, setSelected] = useState<IntegrationProvider | null>(null);
+  const [moyskladReturnProject, setMoyskladReturnProject] = useState<string | null>(() =>
+    typeof window !== "undefined" && new URLSearchParams(window.location.search).get("integration") === "moysklad" ? projectId : null);
   const [values, setValues] = useState<Record<string, string>>({});
   const [moyskladCode, setMoyskladCode] = useState("");
   const [moyskladOrganization, setMoyskladOrganization] = useState("");
   const [moyskladStore, setMoyskladStore] = useState("");
+  const [moyskladManual, setMoyskladManual] = useState(false);
+  const [moyskladInstallLink, setMoyskladInstallLink] = useState<{ projectId: string; url: string } | null>(null);
+  const moyskladInstallSubmitting = useRef(false);
+  const currentProject = useRef(projectId);
+  useEffect(() => { currentProject.current = projectId; }, [projectId]);
   const [amocrmPipeline, setAmocrmPipeline] = useState("");
   const [amocrmStatus, setAmocrmStatus] = useState("");
   const queryKey = ["app-integrations", projectId];
@@ -138,6 +139,9 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     queryFn: () => getIntegrationCatalog(projectId),
     retry: false,
   });
+  const selected = selectedChoice ?? (moyskladReturnProject === projectId
+    ? catalog.data?.providers.find((provider) => provider.key === "moysklad") ?? null : null);
+  const closeProvider = () => { setSelected(null); setMoyskladReturnProject(null); };
 
   useEffect(() => {
     void syncMaxManagedKit(projectId).catch(() => undefined);
@@ -148,6 +152,12 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     [catalog.data?.connections],
   );
   const moyskladConnection = connections.get("moysklad");
+  const moyskladInstall = useQuery({
+    queryKey: ["moysklad-install", projectId],
+    queryFn: () => getMoyskladInstall(projectId),
+    enabled: selected?.key === "moysklad",
+    retry: false,
+  });
   const moyskladOptions = useQuery({
     queryKey: ["moysklad-options", projectId],
     queryFn: () => getMoyskladOptions(projectId),
@@ -191,7 +201,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey });
       void sync();
-      setSelected(null);
+      closeProvider();
       setValues({});
       toast.success("Доступ к сервису подтверждён");
     },
@@ -203,7 +213,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       void qc.invalidateQueries({ queryKey });
       void sync();
       if (status === "connected") {
-        setSelected(null);
+        closeProvider();
         setMoyskladCode("");
         toast.success("МойСклад подключён к проекту");
       } else {
@@ -214,6 +224,21 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     },
     onError: (error) => toast.error("Не удалось подключить МойСклад", { description: message(error) }),
   });
+  const installMoysklad = useMutation({
+    mutationFn: (targetProject: string) => startMoyskladInstall(targetProject),
+    onSuccess: ({ install_url }, targetProject) => {
+      if (currentProject.current !== targetProject) return;
+      setMoyskladInstallLink({ projectId: targetProject, url: install_url });
+      window.open(install_url, "_blank", "noopener,noreferrer");
+    },
+  });
+  const startMoyskladInstallation = () => {
+    if (moyskladInstallSubmitting.current || !moyskladInstall.data?.available || !moyskladInstall.data.install_url) return;
+    moyskladInstallSubmitting.current = true;
+    void installMoysklad.mutateAsync(projectId).catch(() => undefined)
+      .finally(() => { moyskladInstallSubmitting.current = false; });
+  };
+  const resetMoyskladInstall = installMoysklad.reset;
   const saveMoysklad = useMutation({
     mutationFn: () => saveMoyskladSettings(projectId, moyskladOrganization, moyskladStore),
     onSuccess: () => {
@@ -319,7 +344,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       onExit?.();
     },
   });
-  const busy = connect.isPending || claimMoysklad.isPending || saveMoysklad.isPending || saveAmocrm.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
+  const busy = connect.isPending || installMoysklad.isPending || claimMoysklad.isPending || saveMoysklad.isPending || saveAmocrm.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
   useEffect(() => { onBusyChange?.(busy); }, [busy, onBusyChange]);
   useEffect(() => () => { onBusyChange?.(false); }, [onBusyChange]);
 
@@ -327,7 +352,11 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     if (provider.connection_mode === "platform") return;
     const connection = connections.get(provider.key);
     setSelected(provider);
+    setMoyskladReturnProject(null);
     setMoyskladCode("");
+    setMoyskladManual(false);
+    setMoyskladInstallLink(null);
+    resetMoyskladInstall();
     if (provider.key === "moysklad") {
       setMoyskladOrganization(String(connection?.public_config.organization_id ?? ""));
       setMoyskladStore(String(connection?.public_config.store_id ?? ""));
@@ -350,13 +379,13 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     connections.get(providerKey),
   );
   const openImplementation = (providerKey: string) => {
-    const feature = implementationFeatures[providerKey];
-    if (!feature || !canUseProvider(providerKey)) return;
+    const request = getBuiltinIntegrationRequest(providerKey);
+    if (!request || !canUseProvider(providerKey)) return;
     const saved = embedded ? readAttempt(providerKey) : null;
     implementationAttempt.current = saved;
     implement.reset();
     setTerminalFailure(saved?.terminal ?? false);
-    setImplementationPrompt(saved?.prompt ?? `${feature}\nИспользуй только доступные управляемые методы интеграции. Не запрашивай и не вставляй секреты в код или сообщения. Добавь состояния загрузки, пустого результата и ошибки. Проверь сценарий и сообщи, что проверено, а что требует проверки с реальным аккаунтом.`);
+    setImplementationPrompt(saved?.prompt ?? request.prompt);
     setImplementationProvider(providerKey);
   };
   const proposalHasSecret = embedded && containsChatSecret(implementationPrompt);
@@ -380,15 +409,25 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   };
   const connectedCount = (catalog.data?.providers ?? []).filter((provider) => canUseProvider(provider.key)).length;
   const canSubmit = selected?.fields.every((field) => !field.required || Boolean(values[field.key]?.trim())) ?? false;
+  const showCredentials = selected?.key !== "moysklad" || (selected.connection_mode === "credentials" && moyskladManual);
+  const credentialFields = selected?.fields.map((field) => (
+    <div key={field.key} className="space-y-2">
+      <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>
+      <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-border-default bg-surface" />
+      {field.help && <p className="text-xs leading-5 text-fg-tertiary">{field.help}</p>}
+    </div>
+  ));
 
   const DetailTitle = embedded ? "h2" : DialogTitle;
   const DetailDescription = embedded ? "p" : DialogDescription;
+  const implementationSummary = recognizeBuiltinIntegrationRequest(implementationPrompt);
   const implementationContent = (
     <>
       {embedded && <Button variant="ghost" className="w-fit" disabled={implement.isPending} onClick={() => setImplementationProvider(null)}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
       <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
       <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
-      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; затем потребуется публикация.</p>
+      <p className="text-sm text-fg-secondary">Оплата списывается после успешной сборки приложения. Результат появится в редакторе; затем потребуется публикация.</p>
+      {implementationSummary && <IntegrationRequestCard request={implementationSummary} text={implementationPrompt} expandable={false} />}
       <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
       <Textarea id="integration-implementation-prompt" value={implementationPrompt} disabled={implement.isPending} onChange={(event) => {
         if (implementationSubmitting.current) return;
@@ -397,14 +436,14 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       {implementationProvider && !canUseProvider(implementationProvider) && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
       {proposalHasSecret && <p role="alert" className="text-sm text-danger-fg">Удалите ключи и токены из задания. Используйте защищённую форму подключения.</p>}
       {embedded && implement.error && <p role="alert" className="text-sm text-danger-fg">{message(implement.error)}</p>}
-      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Новая попытка расходует баланс владельца.</p>}
+      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку. Оплата — после успешной сборки.</p>}
       <Button disabled={!canImplement || implement.isPending} onClick={startImplementation} className="min-h-11">{implement.isPending && <Loader2 className="size-4 animate-spin" />}{embedded && terminalFailure ? "Повторить доработку" : "Запустить доработку"}</Button>
     </>
   );
   const providerContent = selected && (
     <>
       <header className={cn("shrink-0 border-b border-border-default p-5 sm:p-6", !embedded && "pr-16 sm:pr-14")}>
-        {embedded && <Button variant="ghost" className="mb-4 w-fit" disabled={connect.isPending} onClick={() => { setSelected(null); setValues({}); }}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
+        {embedded && <Button variant="ghost" className="mb-4 w-fit" disabled={connect.isPending} onClick={() => { closeProvider(); setValues({}); }}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
         <div>
           <p className="omnia-kicker text-accent">Подключение</p>
           <DetailTitle className="mt-2 text-2xl font-semibold text-fg-primary">
@@ -419,7 +458,13 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
         {selected.key === "moysklad" && (
           <div className="space-y-3 rounded-[10px] border border-accent/30 bg-accent/[.06] p-4">
             <h3 className="text-sm font-semibold">Подключить свой аккаунт МойСклад</h3>
-            <p className="text-xs leading-5 text-fg-secondary">Администратор склада устанавливает решение Yleum в каталоге МойСклад, открывает его и получает одноразовый код. Пароль и токен сюда вводить не нужно.</p>
+            {moyskladInstall.isPending && <p className="text-xs text-fg-secondary">Проверяем доступность решения…</p>}
+            {moyskladInstall.isError && <p role="alert" className="text-xs text-danger-fg">Не удалось проверить доступность решения. <button type="button" className="underline" onClick={() => void moyskladInstall.refetch()}>Повторить проверку</button></p>}
+            {moyskladInstall.data && !moyskladInstall.data.available && <p className="text-xs leading-5 text-fg-secondary">Публикация решения в каталоге МойСклад ещё ожидается. Если решение уже установлено в вашем аккаунте, откройте его и получите одноразовый код.</p>}
+            {moyskladInstall.data?.available && moyskladInstall.data.install_url && <Button disabled={installMoysklad.isPending} onClick={startMoyskladInstallation} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{installMoysklad.isPending && <Loader2 className="size-4 animate-spin" />}Установить решение в МойСклад <ExternalLink className="size-3.5" /></Button>}
+            {installMoysklad.isError && <p role="alert" className="text-xs text-danger-fg">Не удалось начать установку. Попробуйте снова.</p>}
+            {moyskladInstallLink?.projectId === projectId && <a href={moyskladInstallLink.url} target="_blank" rel="noopener noreferrer" className="inline-flex min-h-11 items-center text-xs text-accent underline">Открыть страницу установки, если новая вкладка не появилась</a>}
+            <p className="text-xs leading-5 text-fg-secondary">Администратор склада устанавливает решение Yleum, подтверждает доступ в МойСклад и открывает решение. После установки вернитесь к этому проекту и подтвердите подключение одноразовым кодом. Пароль и токен сюда вводить не нужно.</p>
             <Label htmlFor="moysklad-pairing-code">Код из решения Yleum в МойСклад</Label>
             <Input id="moysklad-pairing-code" value={moyskladCode} autoComplete="off" onChange={(event) => setMoyskladCode(event.target.value.trim())} placeholder="Вставьте одноразовый код" className="h-11 border-border-default bg-surface" />
             <Button disabled={moyskladCode.length < 20 || claimMoysklad.isPending} onClick={() => claimMoysklad.mutate(moyskladCode)} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{claimMoysklad.isPending && <Loader2 className="size-4 animate-spin" />}Подключить склад</Button>
@@ -485,19 +530,17 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
             <Button onClick={() => oauth.mutate(selected.key)} disabled={oauth.isPending} className="mt-4 bg-accent text-fg-on-accent hover:bg-accent-hover">Войти и разрешить доступ <ExternalLink className="size-3.5" /></Button>
           </div>
         )}
-        {selected.key === "moysklad" && <p className="text-xs text-fg-tertiary">Если решение недоступно, можно подключить собственный API-токен вручную:</p>}
-        {selected.fields.map((field) => (
-          <div key={field.key} className="space-y-2">
-            <Label htmlFor={`integration-${field.key}`}>{field.label}</Label>
-            <Input id={`integration-${field.key}`} type={field.secret ? "password" : "text"} autoComplete="off" value={values[field.key] ?? ""} onChange={(event) => setValues((current) => ({ ...current, [field.key]: event.target.value }))} placeholder={field.placeholder} className="h-11 border-border-default bg-surface" />
-            {field.help && <p className="text-xs leading-5 text-fg-tertiary">{field.help}</p>}
-          </div>
-        ))}
-        <div className="rounded-[10px] bg-surface-base p-4 text-xs leading-5 text-fg-secondary"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>
+        {selected.key === "moysklad" && selected.connection_mode === "credentials" ? (
+          <details onToggle={(event) => setMoyskladManual(event.currentTarget.open)} className="space-y-3 rounded-[10px] border border-border-default p-4">
+            <summary className="cursor-pointer text-xs text-fg-tertiary">Ранее настроенное ручное подключение</summary>
+            {moyskladManual && credentialFields}
+          </details>
+        ) : selected.key !== "moysklad" && credentialFields}
+        {showCredentials && selected.fields.length > 0 && <div className="rounded-[10px] bg-surface-base p-4 text-xs leading-5 text-fg-secondary"><ShieldCheck className="mb-2 size-4 text-success-fg" />Секреты сохраняются зашифрованно и не показываются повторно.</div>}
       </div>
       <footer className="flex shrink-0 flex-col-reverse items-stretch gap-3 border-t border-border-default p-5 pb-[max(1rem,env(safe-area-inset-bottom))] sm:flex-row sm:items-center sm:justify-between">
         <a href={selected.docs_url} target="_blank" rel="noreferrer" className="inline-flex min-h-11 items-center text-xs text-fg-tertiary">Документация сервиса</a>
-        {selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
+        {showCredentials && selected.fields.length > 0 && <Button disabled={!canSubmit || connect.isPending} onClick={() => connect.mutate({ provider: selected.key, payload: values })} className="min-h-11 bg-accent text-fg-on-accent hover:bg-accent-hover">{connect.isPending && <Loader2 className="size-4 animate-spin" />}Проверить и подключить</Button>}
       </footer>
     </>
   );
@@ -607,13 +650,13 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                       {platform ? (
                         provider.key === "llmgw" && provider.available ? (
                           <>
-                            {connected && implementationFeatures[provider.key] && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                            {connected && getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
                             <Button size="sm" variant="outline" className="h-11 sm:h-8" disabled={platformAi.isPending} onClick={() => platformAi.mutate(!connected)}>{connected ? "Выключить ИИ" : "Включить ИИ"}</Button>
                           </>
                         ) : null
                       ) : connected ? (
                         <>
-                          {implementationFeatures[provider.key] && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
+                          {getBuiltinIntegrationRequest(provider.key) && <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openImplementation(provider.key)}>Добавить в приложение</Button>}
                           <button onClick={() => verify.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-secondary hover:bg-surface-base sm:size-8" aria-label={`Проверить ${provider.name}`}><RefreshCw className="size-3.5" /></button>
                           <button onClick={() => disconnect.mutate(provider.key)} className="grid size-11 place-items-center rounded-[8px] text-fg-tertiary hover:bg-danger/10 hover:text-danger-fg sm:size-8" aria-label={`Отключить ${provider.name}`}><Trash2 className="size-3.5" /></button>
                           <Button size="sm" variant="outline" className="h-11 sm:h-8" onClick={() => openProvider(provider)}>Настроить</Button>
@@ -671,7 +714,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       <Dialog
         open={Boolean(selected)}
         onOpenChange={(open) => {
-          if (!open && !connect.isPending) setSelected(null);
+          if (!open && !connect.isPending) closeProvider();
         }}
       >
         {selected && (

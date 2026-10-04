@@ -1,0 +1,128 @@
+{
+  "phase": "frozen_source",
+  "base": "121900fd95a13e1ade122057abe19d6c22468621",
+  "worktree": "/workspace/qa-worktrees/platform-feature-proof-121900",
+  "files": {
+    "apps/api/src/yleum_api/models/generation_billing.py": {
+      "before_sha256": null,
+      "after_sha256": "2f4e83d02f0f399550c206c7c0d6e835fe8bcf238e4ba6d3ac85b98dc67eea15",
+      "bytes": 2947
+    },
+    "apps/api/src/yleum_api/models/__init__.py": {
+      "before_sha256": "fd1e82bb7abceef733a67281adadd088fd8571aa89a64e21771a6b461d775cf3",
+      "after_sha256": "8641f7c91a5abb4d3d4f47d853fb6a42d53d2518d3f56adc89a96b9c9720d77d",
+      "bytes": 3754
+    },
+    "apps/api/src/yleum_api/models/usage_settlement.py": {
+      "before_sha256": "4acfc4e2447b9df4e54abdf80a68c0e280a5551337e0fcb35b1aaa9f0d16232d",
+      "after_sha256": "61a1c92a5cfcd35afda7f9509dc20bb61fc51a95c1fac5d9033c3b49b074ef4e",
+      "bytes": 2047
+    },
+    "apps/api/migrations/versions/0075_generation_billing.py": {
+      "before_sha256": null,
+      "after_sha256": "f45dcc0d1f34e7d6c6bfbbbf01688c5975351489ea505fb50bc63215f1e7c433",
+      "bytes": 3995
+    },
+    "apps/api/src/yleum_api/services/generation_billing.py": {
+      "before_sha256": null,
+      "after_sha256": "c221b8991febbfd9120399c3a7ce3f55517ade87b3f3e9abf43232c9b8092ce2",
+      "bytes": 16624
+    },
+    "apps/api/src/yleum_api/services/generation/acceptance.py": {
+      "before_sha256": "1ecb472fc7e0ec5efcb8c3d8a6ce7d91effa082ada5fcdab939a9141972f0510",
+      "after_sha256": "037319bace8e9a2a7b1c61bc7a9915da14055cee5f3a2055f74cce75c48daeb4",
+      "bytes": 32926
+    },
+    "apps/api/src/yleum_api/services/generation/agent_publication.py": {
+      "before_sha256": "9f856d9f26e9dc9fc4de8d5bd0f7ae056a062fa88047a54b42c2159c2c9d6452",
+      "after_sha256": "5608bf2d84b38521bbabb36e3f43029972b5245aa9f0649891e1c733a7e8a51d",
+      "bytes": 6934
+    },
+    "apps/api/src/yleum_api/services/generation/lifecycle.py": {
+      "before_sha256": "d85ea6415067a2773cc16ad2e790efd5308f7ae4c5aca8cd5de711e39a75ba86",
+      "after_sha256": "709af0ce5026ab6a4094beff2e056ab711ec9295c1fc7df0633ea82fe2bf6099",
+      "bytes": 11901
+    },
+    "apps/api/src/yleum_api/services/generation_runs.py": {
+      "before_sha256": "0f1bc01b7128cc4e66ed73af01d69fa3f500b5a9a94fc34102337d16b9dd1fc1",
+      "after_sha256": "7b1c3347b882586d7bf5461e7d9d3c8c44472c1f1b4430941351df68e1813348",
+      "bytes": 36083
+    },
+    "apps/api/src/yleum_api/services/billing_cycle.py": {
+      "before_sha256": "a9ae9c202cb58c911434c17f01bd1babfc5f30ef253794a952c643e172abca4a",
+      "after_sha256": "85e26853ffabd7fbf0b27897b120727749bfe231619428c38548c68b3cc491e4",
+      "bytes": 6728
+    },
+    "apps/api/src/yleum_api/services/restorations.py": {
+      "before_sha256": "18a0d99376ec2275d34220774ab88d5e0027b40287b0ef6c07cc97d44470ae94",
+      "after_sha256": "e2d5119a2e72e119e1c24432b89d69d3c483ff238f780cd406dd2d958e92a466",
+      "bytes": 102764
+    },
+    "apps/api/src/yleum_api/services/llm_client.py": {
+      "before_sha256": "2962e6f389646f22f77aa44586df6aa6bfffb26838fc73312134c01566b3d4a6",
+      "after_sha256": "58b55682a88ca222aade64f3233085c3631195d3a09492d88d60237b4de8f1ad",
+      "bytes": 11632
+    },
+    "apps/llm-gateway/src/yleum_gateway/services/billing.py": {
+      "before_sha256": "6f255b96aa942060f924efacbc9c3d84582415e20fd051b53510ca964e84a7ae",
+      "after_sha256": "31a6cce6b3318f188b2ce809356688ac1496aa71a3bf20247091595c999b36ea",
+      "bytes": 13001
+    },
+    "apps/llm-gateway/src/yleum_gateway/services/streaming.py": {
+      "before_sha256": "d0ed6c73758aa18629dd3c7ed5e75851f3100cb313951920417c7b34addfff04",
+      "after_sha256": "7bdd80864367944b7b43c9be6c01c3b6272ed30ce03ff4c27c93a3fb3e24b612",
+      "bytes": 7582
+    },
+    "apps/llm-gateway/src/yleum_gateway/routers/chat.py": {
+      "before_sha256": "575278618f1d94f2d4de760fba827d27e9bbe70ab32d0e91aa8a3300a6cfe20b",
+      "after_sha256": "34c5e2aa3424b9ee9dfc9e6a31258c85dc9c8902c59cf9f6e8441797b024982f",
+      "bytes": 11867
+    },
+    "apps/llm-gateway/integration_tests/test_generation_billing_postgres.py": {
+      "before_sha256": null,
+      "after_sha256": "2132593a273cf6a2e5d45b3d95fdab1024ae805da345c0bb0454cf1ea66a78cb",
+      "bytes": 47874
+    },
+    "apps/api/tests/test_migrations_single_head.py": {
+      "before_sha256": "7e443a40a19c016bdac8d3dd3a6977b1c92d5c9a199a0e42e46c9237ff58f06c",
+      "after_sha256": "da5f85cb0930c4c63acd458befa8f6c4caf3ac977812d47437cf6cad1dfceee1",
+      "bytes": 27269
+    },
+    "apps/api/tests/test_gateway_billing_cutover_release.py": {
+      "before_sha256": "ec2be460e88ae556b6c79cc8c5385dff1532aafab7dadbd592a7d561ade61c56",
+      "after_sha256": "80394ca0481182c6280f3c2d346757d1e9c7fc5ba7d774cccf0cd90610447275",
+      "bytes": 15538
+    },
+    "infra/release/deploy-prod.sh": {
+      "before_sha256": "106d9b35bb6fe4eb9b9e028c184f3564b065783af85a16a2b1e1f17ce31724ac",
+      "after_sha256": "31267b190fb02dd88bcf313c011f0d35f68427615939ad7aaa4468bcfbc4aa5a",
+      "bytes": 32759
+    }
+  },
+  "patch_sha256": "34804ddec06d7e6fd56f6c5711fcc06c985575041822c7da281fd3436bf5f3f0",
+  "patch_path": "/workspace/qa-evidence/platform-feature-proof-20261004/billing-frozen-v3.patch",
+  "supersedes": "billing-source-freeze-v2.json",
+  "not_deployed": true,
+  "tests": {
+    "physical_postgres": "41 PASS",
+    "related_api": "85 PASS",
+    "gateway_unit": "175 PASS",
+    "api_mypy": "9 source files PASS",
+    "gateway_mypy": "3 source files PASS",
+    "ruff": "18 owned Python files PASS",
+    "shell_syntax": "PASS",
+    "v3_targeted_api": "38 PASS",
+    "v3_api_mypy": "1 source file PASS"
+  },
+  "full_api_suite": "not run by child; root integration/CI required",
+  "v2_delta_paths": [
+    "apps/api/src/yleum_api/services/generation_runs.py",
+    "apps/llm-gateway/integration_tests/test_generation_billing_postgres.py"
+  ],
+  "evidence": {
+    "physical": "billing-all-postgres-frozen-v3-final.log",
+    "api": "billing-api-reconciler-v3.log",
+    "targeted_green": "billing-stale-reconciler-green-v3.log",
+    "red": "billing-stale-reconciler-red.log"
+  }
+}

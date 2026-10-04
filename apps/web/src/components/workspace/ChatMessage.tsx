@@ -35,6 +35,8 @@ import { AgentTranscript } from "./AgentTranscript";
 import { RemixRecapCard } from "./RemixRecapCard";
 import { Markdown } from "./Markdown";
 import { GenerationFailureCard } from "./GenerationFailureCard";
+import { IntegrationRequestCard } from "./IntegrationRequestCard";
+import { recognizeBuiltinIntegrationRequest } from "@/lib/builtin-integration-prompts";
 
 // The onboarding quiz folds its answers into the user prompt after this marker
 // (see OnboardingQuiz.compile). We split on it to render the answers as chips
@@ -221,6 +223,10 @@ export function ChatMessage({
 /** The user's words in a soft accent-tinted speech bubble. */
 function UserBubble({ text, plain = false }: { text: string; plain?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const integrationRequest = recognizeBuiltinIntegrationRequest(text);
+  if (integrationRequest) {
+    return <IntegrationRequestCard request={integrationRequest} text={text} />;
+  }
   if (plain) {
     const collapsible = text.length > 700;
     return (

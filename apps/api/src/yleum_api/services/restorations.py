@@ -771,6 +771,9 @@ async def _complete_restoration_adaptation_activation(
     operation.fencing_epoch = offer.target_fencing_epoch
     operation.state = "completed"
     operation.phase = "activation_complete"
+    from yleum_api.services.generation_billing import seal_terminal_locked
+
+    await seal_terminal_locked(session, run)
     operation.error = None
     operation.applied_snapshot_id = snapshot.id
     operation.applied_version_id = version.id

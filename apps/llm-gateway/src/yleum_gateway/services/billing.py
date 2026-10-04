@@ -94,30 +94,87 @@ async def charge(
         raise ValueError("Provider cost must be finite and nonnegative")
     if not provider_scope or provider_request_id == "":
         raise ValueError("Settlement provider scope and receipt ID must be nonempty")
-    receipt_hash = hashlib.sha256(
-        json.dumps(
-            [
-                str(user_id),
-                str(project_id),
-                str(run_id),
-                model_id,
-                tokens_in,
-                tokens_out,
-                str(cost_rub.normalize()),
-                free,
-                stage,
-                max(0, cache_read_tokens),
-                max(0, cache_write_tokens),
-                str(provider_cost_usd.normalize()) if provider_cost_usd is not None else None,
-            ],
-            separators=(",", ":"),
-        ).encode()
-    ).hexdigest()
     pool = get_pool()
     charge_id = uuid4()
     usage_id = uuid4()
     unpaid = False
     async with pool.acquire() as conn, conn.transaction():
+        deferred = False
+        if run_id is None and message_id is not None and stage != "runtime_ai":
+            matches = await conn.fetch(
+                "SELECT id FROM generation_runs WHERE user_id=$1 AND project_id=$2 "
+                "AND (assistant_message_id=$3 OR user_message_id=$3) LIMIT 2",
+                user_id,
+                project_id,
+                message_id,
+            )
+            if len(matches) > 1:
+                raise BillingReconciliationRequiredError("Ambiguous generation message binding")
+            if matches:
+                run_id = matches[0]["id"]
+            elif await conn.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM generation_runs WHERE "
+                "assistant_message_id=$1 OR user_message_id=$1)",
+                message_id,
+            ):
+                raise BillingReconciliationRequiredError("Generation message owner binding changed")
+        if run_id is None and stage in {
+            "native_agent",
+            "build_plan",
+            "verification",
+            "source_repair",
+        }:
+            raise BillingReconciliationRequiredError("Generation receipt requires a trusted run")
+        if run_id is not None:
+            run = await conn.fetchrow(
+                "SELECT r.user_id,r.project_id,r.assistant_message_id,r.user_message_id,"
+                "r.status,p.is_free,p.version FROM generation_runs r "
+                "LEFT JOIN generation_billing_policies p ON p.run_id=r.id "
+                "WHERE r.id=$1 FOR UPDATE OF r",
+                run_id,
+            )
+            if (
+                stage == "runtime_ai"
+                or run is None
+                or run["user_id"] != user_id
+                or run["project_id"] != project_id
+            ):
+                raise BillingReconciliationRequiredError("Generation billing owner binding changed")
+            if message_id is not None and message_id not in {
+                run["assistant_message_id"],
+                run["user_message_id"],
+            }:
+                raise BillingReconciliationRequiredError(
+                    "Generation billing message binding changed"
+                )
+            if run["version"] is not None:
+                if run["version"] != "accepted-build-v1":
+                    raise BillingReconciliationRequiredError("Unknown generation billing policy")
+                free = bool(run["is_free"])
+                deferred = True
+            else:
+                # Missing trusted policy is never permission to charge a build.
+                # Historical debits remain immutable; new/late expense is ours.
+                deferred = True
+        receipt_hash = hashlib.sha256(
+            json.dumps(
+                [
+                    str(user_id),
+                    str(project_id),
+                    str(run_id),
+                    model_id,
+                    tokens_in,
+                    tokens_out,
+                    str(cost_rub.normalize()),
+                    free,
+                    stage,
+                    max(0, cache_read_tokens),
+                    max(0, cache_write_tokens),
+                    str(provider_cost_usd.normalize()) if provider_cost_usd is not None else None,
+                ],
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
         if provider_request_id is not None:
             # Lock before reading: concurrent deliveries observe the first commit.
             # Hash collisions only serialize unrelated receipts; uniqueness is exact.
@@ -158,7 +215,7 @@ async def charge(
                 )
         if not unpaid:
             billing_account_id = await conn.fetchval(_RESOLVED_ACCOUNT, user_id)
-            if not free:
+            if not free and not deferred:
                 debit = await conn.fetchrow(
                     f"""
                     WITH account AS ({_RESOLVED_ACCOUNT})
@@ -232,8 +289,8 @@ async def charge(
                 provider_request_id,
                 receipt_hash,
                 usage_id,
-                charge_id if not free and not unpaid else None,
-                "unpaid" if unpaid else "free" if free else "settled",
+                charge_id if not free and not unpaid and not deferred else None,
+                "unpaid" if unpaid else "deferred" if deferred else "free" if free else "settled",
             )
 
     if unpaid:

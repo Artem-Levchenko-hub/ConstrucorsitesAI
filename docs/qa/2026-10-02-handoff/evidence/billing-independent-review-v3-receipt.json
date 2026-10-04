@@ -1,0 +1,10 @@
+{
+  "status": "SOURCE_CLEAR",
+  "effects": 0,
+  "freeze_sha256": "2e872646188c3e87f01de03ed32e2e8cf495a58a3a110afd0eb8fb3031a2dbe7",
+  "patch_sha256": "34804ddec06d7e6fd56f6c5711fcc06c985575041822c7da281fd3436bf5f3f0",
+  "source_hash_mismatches": [],
+  "files_reviewed": 19,
+  "unchanged_v2_files": 17,
+  "report_sha256": "f0e4b56c710e35db0d37aa985969f34e40e0931f1660b8d0a3dfb5ef73ee47b0"
+}
