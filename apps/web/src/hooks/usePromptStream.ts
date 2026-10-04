@@ -23,6 +23,8 @@ import {
   sendPrompt,
 } from "@/lib/api/messages";
 import { ApiError } from "@/lib/api/client";
+import { describeApiError } from "@/lib/api/errors";
+import { isFreeChatRefusal, OWNER_PROFILE_QUERY_KEY, refreshOwnerAfterAcceptedPrompt } from "@/lib/owner-chat-quota";
 import {
   isActiveGenerationForMessage,
   streamEventMessageId,
@@ -922,6 +924,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           selections,
           opts,
         );
+        refreshOwnerAfterAcceptedPrompt(qc);
         message_id = resp.message_id;
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         activeGenerationRunRef.current = resp.run_id;
@@ -990,6 +993,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (isFreeChatRefusal(e)) {
+          void qc.invalidateQueries({ queryKey: OWNER_PROFILE_QUERY_KEY });
+          _failPrompt(describeApiError(e), false);
+          return false;
+        }
         if (e instanceof ApiError && e.status === 401) {
           // This POST was not accepted. Keep the caller's draft (false below)
           // and the visible queued text; login/manual retry must precede any

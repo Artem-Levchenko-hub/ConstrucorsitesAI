@@ -1,4 +1,4 @@
-"""Public export of the latest *encrypted* disaster-recovery bundle.
+"""Machine-only export of the latest *encrypted* disaster-recovery bundle.
 
 The endpoint deliberately exposes only a CMS envelope encrypted to an offline
 RSA key. Raw PostgreSQL dumps, project sources, MinIO objects and the private
@@ -14,6 +14,7 @@ empty never hides a bundle that is on disk.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import re
@@ -21,9 +22,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from minio.error import S3Error
 from pydantic import BaseModel
@@ -33,7 +34,21 @@ from yleum_api.core.minio import get_minio_client
 
 log = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/backups/offhost", tags=["meta"])
+async def require_offhost_backup_reader(
+    x_offhost_backup_token: Annotated[str | None, Header()] = None,
+) -> None:
+    configured = get_settings().offhost_backup_read_token
+    expected = configured.get_secret_value() if configured is not None else ""
+    if not expected or x_offhost_backup_token is None or not hmac.compare_digest(
+        x_offhost_backup_token.encode("utf-8"), expected.encode("utf-8")
+    ):
+        raise HTTPException(status_code=403, detail="off-host backup reader access required")
+
+
+router = APIRouter(
+    prefix="/api/backups/offhost", tags=["meta"],
+    dependencies=[Depends(require_offhost_backup_reader)],
+)
 
 _TIMESTAMP_RE = re.compile(r"^\d{8}-\d{6}$")
 _CMS_RE = re.compile(r"^omnia-backup-(\d{8}-\d{6})\.cms$")

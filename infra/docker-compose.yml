@@ -76,7 +76,7 @@ services:
         mc alias set omnia http://minio:9000 "$$MINIO_ROOT_USER" "$$MINIO_ROOT_PASSWORD"
         mc mb --ignore-existing "omnia/$$MINIO_BUCKET_PROJECTS"
         mc mb --ignore-existing "omnia/$$MINIO_BUCKET_PREVIEWS"
-        mc anonymous set download "omnia/$$MINIO_BUCKET_PREVIEWS"
+        mc anonymous set none "omnia/$$MINIO_BUCKET_PREVIEWS"
         echo "MinIO buckets ready: $$MINIO_BUCKET_PROJECTS (private), $$MINIO_BUCKET_PREVIEWS (public read)"
     restart: "no"
     networks:

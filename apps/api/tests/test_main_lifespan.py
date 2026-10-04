@@ -45,6 +45,11 @@ async def test_lifespan_recovers_cell_operations_before_serving(
     monkeypatch.setattr(main, "get_engine", lambda: events.append("get_engine"))
     monkeypatch.setattr(
         main,
+        "reconcile_public_bucket_policies",
+        lambda: events.append("storage_policy"),
+    )
+    monkeypatch.setattr(
+        main,
         "recover_interrupted_generation_runs",
         recover_generation_runs,
     )
@@ -63,6 +68,7 @@ async def test_lifespan_recovers_cell_operations_before_serving(
         events.append("serving")
 
     assert events == [
+        "storage_policy",
         "get_engine",
         "recover_generation_runs",
         "recover_cell_operations",
@@ -73,6 +79,19 @@ async def test_lifespan_recovers_cell_operations_before_serving(
         "dispose_redis",
         "dispose_engine",
     ]
+
+
+async def test_lifespan_refuses_to_serve_when_storage_policy_reconciliation_fails(monkeypatch):
+    def denied() -> None:
+        raise RuntimeError("storage policy installation failed")
+
+    monkeypatch.setattr(main, "reconcile_public_bucket_policies", denied)
+    engine = []
+    monkeypatch.setattr(main, "get_engine", lambda: engine.append(True))
+    with pytest.raises(RuntimeError, match="storage policy installation failed"):
+        async with main.lifespan(FastAPI()):
+            pytest.fail("API served despite unreconciled anonymous storage policy")
+    assert engine == []
 
 
 async def test_owner_wake_monitor_cannot_block_generation_capacity_recovery(

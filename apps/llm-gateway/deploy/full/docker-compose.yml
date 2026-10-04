@@ -112,10 +112,10 @@ services:
         mc mb --ignore-existing "m/omnia-videos"
         mc mb --ignore-existing "m/backups"
         mc anonymous set none "m/backups"
-        mc anonymous set download "m/$$MINIO_BUCKET_PREVIEWS"
-        mc anonymous set download "m/$$MINIO_BUCKET_PHOTOS"
-        mc anonymous set download "m/omnia-images"
-        mc anonymous set download "m/omnia-videos"
+        mc anonymous set none "m/$$MINIO_BUCKET_PREVIEWS"
+        mc anonymous set none "m/$$MINIO_BUCKET_PHOTOS"
+        mc anonymous set none "m/omnia-images"
+        mc anonymous set none "m/omnia-videos"
         mc anonymous set none "m/$$MINIO_BUCKET_TASK_BOARD"
         echo "MinIO buckets ready"
     restart: "no"
@@ -226,7 +226,10 @@ services:
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
       MINIO_BUCKET_TASK_BOARD: ${MINIO_BUCKET_TASK_BOARD:-task-board}
+      MINIO_PUBLIC_LEGACY_MEDIA_KEYS: ${MINIO_PUBLIC_LEGACY_MEDIA_KEYS:-}
       BACKUP_EXPORT_ROOT: /opt/omnia-runtime/backups
+      # Dedicated encrypted off-host reader credential; never sent to browsers.
+      OFFHOST_BACKUP_READ_TOKEN: ${OFFHOST_BACKUP_READ_TOKEN:-}
       # Pexels stock-photo backgrounds (data-omnia-photo / hero.v6). PHOTO_SOURCE
       # =pexels + PEXELS_API_KEY in .env turn it on; off => tags stripped to mesh.
       PHOTO_SOURCE: ${PHOTO_SOURCE:-off}
@@ -418,6 +421,8 @@ services:
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
     environment:
       <<: *api_environment
+      # Only the HTTP API serves encrypted off-host backup reads.
+      OFFHOST_BACKUP_READ_TOKEN: ""
       # Owner-login OAuth credentials belong to the api container only.
       VK_ID_CLIENT_ID: ""
       VK_ID_CLIENT_SECRET: ""
@@ -465,6 +470,7 @@ services:
       MINIO_BUCKET_PREVIEWS: ${MINIO_BUCKET_PREVIEWS:-previews}
       MINIO_BUCKET_PHOTOS: ${MINIO_BUCKET_PHOTOS:-omnia-photos}
       MINIO_BUCKET_TASK_BOARD: ${MINIO_BUCKET_TASK_BOARD:-task-board}
+      MINIO_PUBLIC_LEGACY_MEDIA_KEYS: ${MINIO_PUBLIC_LEGACY_MEDIA_KEYS:-}
       PHOTO_SOURCE: ${PHOTO_SOURCE:-off}
       PEXELS_API_KEY: ${PEXELS_API_KEY:-}
       PEXELS_PROXY: ${PEXELS_PROXY:-}

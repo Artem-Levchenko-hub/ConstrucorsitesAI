@@ -255,8 +255,16 @@ async def logout(
 
 
 @router.get("/me", response_model=UserPublic)
-async def me(current_user: CurrentUserDep) -> User:
-    return current_user
+async def me(current_user: CurrentUserDep, session: SessionDep) -> UserPublic:
+    from yleum_api.services.entitlements import free_chat_allowance
+
+    limit, remaining = await free_chat_allowance(session, current_user.id)
+    return UserPublic.model_validate(current_user).model_copy(
+        update={
+            "user_chat_messages_limit": limit,
+            "user_chat_messages_remaining": remaining,
+        }
+    )
 
 
 @router.post(

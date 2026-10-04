@@ -25,6 +25,8 @@ export function PromptInput({
   ariaLabel = "Опишите изменение проекта",
   draftRef,
   toolbarAction,
+  sendDisabled = false,
+  quotaNotice,
 }: {
   onSubmit: (
     text: string,
@@ -43,6 +45,8 @@ export function PromptInput({
   textareaRef?: React.RefObject<HTMLTextAreaElement | null>;
   draftRef?: Ref<PromptInputHandle>;
   toolbarAction?: ReactNode;
+  sendDisabled?: boolean;
+  quotaNotice?: ReactNode;
 }) {
   const [value, setValue] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -83,7 +87,7 @@ export function PromptInput({
   }, [value, ref]);
 
   const send = useCallback(async () => {
-    if (sendLockRef.current) return;
+    if (sendLockRef.current || sendDisabled) return;
     const text = value.trim();
     // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
     const picks = useInspectorStore.getState().selections;
@@ -112,7 +116,7 @@ export function PromptInput({
         sendLockRef.current = false;
       });
     }
-  }, [clearSelections, onSubmit, value]);
+  }, [clearSelections, onSubmit, sendDisabled, value]);
 
   // Cmd/Ctrl+Enter from anywhere submits — даже во время стрима (отправка
   // в этом случае ставится в очередь хуком).
@@ -156,6 +160,7 @@ export function PromptInput({
         className,
       )}
     >
+      {quotaNotice}
       <AnimatePresence initial={false}>
         {pendingPrompt && (
           <motion.div
@@ -289,7 +294,7 @@ export function PromptInput({
                 void send();
               }}
               disabled={
-                isSubmitting || (!value.trim() && selections.length === 0)
+                sendDisabled || isSubmitting || (!value.trim() && selections.length === 0)
               }
               className="h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={

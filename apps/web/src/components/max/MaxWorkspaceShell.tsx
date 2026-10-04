@@ -8,7 +8,6 @@ import { toast } from "sonner";
 
 import { MaxEditorLayout } from "./MaxEditorLayout";
 import { ChatPanel, type ChatPanelAdaptationHandle } from "@/components/workspace/ChatPanel";
-import { DownloadButton } from "@/components/workspace/DownloadButton";
 import { listProjects } from "@/lib/api/projects";
 import { listProjectVersions, listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
@@ -289,7 +288,6 @@ export function MaxWorkspaceShell({
       tools={
         <>
           <MaxUsageBreakdown projectId={project.id} />
-          {versions.length > 0 && <DownloadButton projectId={project.id} projectSlug={project.slug} />}
           <Link className="max-editor-nav-link" href={`/max/${project.id}?panel=services`}>Интеграции</Link>
         </>
       }

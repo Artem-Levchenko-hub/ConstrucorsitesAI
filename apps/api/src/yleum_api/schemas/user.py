@@ -56,6 +56,9 @@ class UserPublic(BaseModel):
     email_verified_at: datetime | None = None
     status: str = "active"
     role: Literal["user", "admin"] = "user"
+    # Filled only for the authenticated owner by GET /api/auth/me.
+    user_chat_messages_limit: int | None = Field(default=None, ge=0, le=1)
+    user_chat_messages_remaining: int | None = Field(default=None, ge=0, le=1)
 
 
 class EmailTokenRequest(BaseModel):

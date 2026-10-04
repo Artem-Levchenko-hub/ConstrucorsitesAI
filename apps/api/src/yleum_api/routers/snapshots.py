@@ -15,8 +15,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.core.minio import get_minio_client
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
-from yleum_api.schemas.snapshot import SnapshotPublic, SnapshotWithFiles, snapshot_public_dict
-from yleum_api.services import repo as repo_svc
+from yleum_api.schemas.snapshot import SnapshotPublic, snapshot_public_dict
 
 router = APIRouter(prefix="/api/projects", tags=["snapshots"])
 
@@ -45,20 +44,19 @@ async def list_snapshots(
     return [SnapshotPublic.model_validate(_public_dict(s)) for s in res.scalars().all()]
 
 
-@router.get("/{project_id}/snapshots/{snapshot_id}", response_model=SnapshotWithFiles)
+@router.get("/{project_id}/snapshots/{snapshot_id}", response_model=SnapshotPublic)
 async def get_snapshot(
     project_id: UUID,
     snapshot_id: UUID,
     session: SessionDep,
     current_user: CurrentUserDep,
-) -> SnapshotWithFiles:
+) -> SnapshotPublic:
+    """Owner-scoped version metadata; source files remain platform-internal."""
     await _project_owned_by(session, project_id, current_user.id)
     snapshot = await session.get(Snapshot, snapshot_id)
     if snapshot is None or snapshot.project_id != project_id:
         raise ApiError("not_found", "snapshot not found", status.HTTP_404_NOT_FOUND)
-    files = await asyncio.to_thread(repo_svc.read_files, project_id, snapshot.commit_sha)
-    payload = _public_dict(snapshot) | {"files": files}
-    return SnapshotWithFiles.model_validate(payload)
+    return SnapshotPublic.model_validate(_public_dict(snapshot))
 
 
 @router.get("/{project_id}/snapshots/{snapshot_id}/previews/{image_index}")

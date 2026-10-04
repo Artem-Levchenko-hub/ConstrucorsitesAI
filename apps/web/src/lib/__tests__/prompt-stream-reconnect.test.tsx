@@ -3,7 +3,8 @@ import { act, useEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { usePromptStream } from "@/hooks/usePromptStream";
-import { cancelGeneration, getLatestGeneration } from "@/lib/api/messages";
+import { OWNER_PROFILE_QUERY_KEY } from "@/lib/owner-chat-quota";
+import { cancelGeneration, getLatestGeneration, sendPrompt } from "@/lib/api/messages";
 import type { GenerationRun, Message, WsEvent } from "@/lib/api/types";
 
 vi.mock("@/lib/api/messages", () => ({
@@ -96,4 +97,12 @@ describe("prompt stream reconnect", () => {
     await act(async () => vi.advanceTimersByTime(25_000));
     expect(Socket.instances).toHaveLength(1); expect(first.send).not.toHaveBeenCalled();
   });
+});
+
+it("exhausted Free still resumes the accepted run and reconnects internally without a new user prompt",async()=>{
+ client.setQueryDefaults(OWNER_PROFILE_QUERY_KEY,{gcTime:Infinity});
+ client.setQueryData(OWNER_PROFILE_QUERY_KEY,{id:"owner",user_chat_messages_limit:1,user_chat_messages_remaining:0});
+ await mount();expect(Socket.instances).toHaveLength(1);await act(async()=>Socket.instances[0].close());
+ await act(async()=>vi.advanceTimersByTime(1000));expect(Socket.instances).toHaveLength(2);
+ expect(sendPrompt).not.toHaveBeenCalled();expect(client.getQueryData(OWNER_PROFILE_QUERY_KEY)).toMatchObject({user_chat_messages_remaining:0});
 });

@@ -20,8 +20,12 @@ set -euo pipefail
 ADMIN_USER=$1 CORE_WG_IP=$2 COMMERCE_WG_IP=$3 COMMERCE_POD_CIDR=$4 PG_PORT=${5:-5432}
 FULL=/opt/omnia/apps/llm-gateway/deploy/full
 PLATFORM_ENV=$FULL/.env
+BILLING_GRANTS_SQL=/opt/omnia/infra/max-k3s/commerce/remote/billing-generation-grants.sql
 SECRETS=/etc/max-studio
 [ -f "$PLATFORM_ENV" ] || { echo "нет $PLATFORM_ENV — платформа на этом хосте не развёрнута"; exit 1; }
+[ -f "$BILLING_GRANTS_SQL" ] && [ ! -L "$BILLING_GRANTS_SQL" ] || {
+  echo "generation billing grant helper missing or unsafe" >&2; exit 1;
+}
 install -d -m 711 "$SECRETS"  # 711: the orchestrator (zeuszcz) must traverse to runtime-kubeconfig.yaml
 envval() { sed -n "s/^$1=//p" "$2" | tail -1; }
 # Имя базы — из PLATFORM_DATABASE_URL (хостовый режим), иначе POSTGRES_DB, иначе omnia.
@@ -81,6 +85,7 @@ GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO max_billing;
 GRANT SELECT, UPDATE ON TABLE projects TO max_billing;
 GRANT SELECT ON TABLE users TO max_billing;
 SQL
+psql_admin -v billing_role=max_billing -f "$BILLING_GRANTS_SQL"
 echo "  роль max_billing: права выданы"
 
 echo "== 4. $SECRETS/billing-worker.env"

@@ -29,7 +29,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import json
 import logging
 import shutil
 import subprocess
@@ -43,7 +42,7 @@ from minio import Minio
 from minio.error import S3Error
 
 from yleum_api.core.config import get_settings
-from yleum_api.core.minio import get_minio_client
+from yleum_api.core.minio import ensure_public_bucket, get_minio_client
 from yleum_api.services import image_resolver
 
 log = logging.getLogger(__name__)
@@ -59,44 +58,13 @@ _VIDEO_CLIENT_TIMEOUT = 360.0
 Emit = Callable[[str, dict[str, object]], Awaitable[None]]
 
 
-def _public_read_policy(bucket: str) -> str:
-    """Anonymous ``s3:GetObject`` policy JSON for ``bucket`` — the browser must be
-    able to GET a clip by its plain public URL (no presign)."""
-    return json.dumps(
-        {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {"AWS": ["*"]},
-                    "Action": ["s3:GetObject"],
-                    "Resource": [f"arn:aws:s3:::{bucket}/*"],
-                }
-            ],
-        }
-    )
-
-
 def _ensure_video_bucket(client: Minio, bucket: str) -> bool:
-    """Make ``bucket`` if absent and (RE)ASSERT its public-read policy EVERY call.
-
-    Re-asserting on every upload (not only at creation) self-heals a bucket that
-    was pre-created without a policy or whose one-time policy-set transiently
-    failed — otherwise every clip would 403 in the browser forever with no repair
-    (review 2026-07-17). Returns False only if the bucket itself is unusable."""
+    """Reassert shared media-only policy; refuse upload on a policy failure."""
     try:
-        if not client.bucket_exists(bucket):
-            client.make_bucket(bucket)
-    except S3Error as exc:
+        ensure_public_bucket(client, bucket)
+    except (S3Error, ValueError) as exc:
         log.warning("agent_media: video bucket-ensure failed %s err=%r", bucket, exc)
         return False
-    try:
-        client.set_bucket_policy(bucket, _public_read_policy(bucket))
-    except S3Error as exc:
-        # A failed policy re-assert is non-fatal for THIS upload (bucket may
-        # already be public from infra/minio-init); log so a genuine 403 is
-        # traceable, but still let the upload proceed.
-        log.warning("agent_media: video bucket policy re-assert failed %s err=%r", bucket, exc)
     return True
 
 

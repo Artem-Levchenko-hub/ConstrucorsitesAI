@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { usePromptStream } from "@/hooks/usePromptStream";
 import { getLatestGeneration, sendPrompt } from "@/lib/api/messages";
 import type { Message } from "@/lib/api/types";
+import { OWNER_PROFILE_QUERY_KEY } from "@/lib/owner-chat-quota";
 import { ApiError } from "@/lib/api/client";
 import { toast } from "sonner";
 
@@ -218,4 +219,24 @@ it("keeps the generic safe network error message for non401 transport failures",
   }));
   expect(getLatestGeneration).not.toHaveBeenCalled();
   expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("NEVER_PUBLISH");
+});
+
+it("accepted first Free prompt refreshes owner profile to0; stable terminal replay remains server-adjudicated", async()=>{
+ client.setQueryData(OWNER_PROFILE_QUERY_KEY,{id:"owner",user_chat_messages_limit:1,user_chat_messages_remaining:1});
+ vi.mocked(sendPrompt).mockResolvedValue({run_id:"existing",message_id:"m",snapshot_id:null,replayed:true,run_status:"completed"});
+ await mount();const invalidate=vi.spyOn(client,"invalidateQueries");
+ await act(async()=>{expect(await stream.submit("Первое описание","model",[],{idempotencyKey:"stable-first"})).toBe(true);});
+ expect(client.getQueryData(OWNER_PROFILE_QUERY_KEY)).toMatchObject({user_chat_messages_remaining:0});
+ expect(invalidate).toHaveBeenCalledWith({queryKey:OWNER_PROFILE_QUERY_KEY});
+ await act(async()=>{expect(await stream.submit("Первое описание","model",[],{idempotencyKey:"stable-first"})).toBe(true);});
+ expect(vi.mocked(sendPrompt)).toHaveBeenCalledTimes(2);
+ expect(vi.mocked(sendPrompt).mock.calls[1][4]).toMatchObject({idempotencyKey:"stable-first"});
+});
+it("Free entitlement402 keeps draft unaccepted, reports upgrade and does not automatically drain another prompt", async()=>{
+ client.setQueryData(OWNER_PROFILE_QUERY_KEY,{id:"owner",user_chat_messages_limit:1,user_chat_messages_remaining:0});
+ vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402,{code:"entitlement_exceeded",message:"Выберите тариф",details:{entitlement:"free_chat_messages",plan_code:"free",limit:1,used:1}}));
+ await mount();await act(async()=>{expect(await stream.submit("Второе пожелание","model")).toBe(false);});
+ expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась",expect.objectContaining({description:expect.stringContaining("одно сообщение на весь аккаунт")}));
+ expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена",expect.anything());
+ await act(async()=>vi.advanceTimersByTime(60000));expect(sendPrompt).toHaveBeenCalledOnce();
 });

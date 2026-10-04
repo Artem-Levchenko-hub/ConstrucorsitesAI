@@ -146,10 +146,9 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     assert entry["external_ref"] == f"payment:{payment_id}"
 
     exported = await client.get("/api/account/export")
-    assert exported.status_code == 200
-    [exported_subscription] = exported.json()["subscriptions"]
-    assert exported_subscription["plan"]["code"] == "free"
-    assert exported_subscription["plan"]["version"] == 2
-    [exported_entry] = exported.json()["wallet_ledger"]
-    assert exported_entry["type"] == "payment"
-    assert exported_entry["external_ref"] == f"payment:{payment_id}"
+    assert exported.status_code == 403
+    assert exported.json()["error"]["code"] == "forbidden"
+    subscription = await client.get("/api/billing/subscription")
+    assert subscription.status_code == 200
+    assert subscription.json()["plan"]["code"] == "free"
+    assert subscription.json()["plan"]["version"] == 2

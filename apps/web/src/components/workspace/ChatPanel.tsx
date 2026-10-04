@@ -38,6 +38,9 @@ import {
   resolveChatCredential,
 } from "@/lib/max-chat-credentials";
 import { MaxChatComposer } from "@/components/max/MaxChatComposer";
+import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
+import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
+import { OwnerChatQuotaNotice } from "./OwnerChatQuotaNotice";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
@@ -84,6 +87,8 @@ export function ChatPanel({
   // The client no longer picks a model; this label is just sent through for
   // the optimistic chat row and is ignored by the backend.
   const modelId = "topmix-v1";
+  const quota = useOwnerChatQuota();
+  const authoredPending = useRef(false);
   const { submit, cancel, cancelPending, pendingPrompt } = usePromptStream(
     projectId,
     projectSlug,
@@ -126,13 +131,22 @@ export function ChatPanel({
       selections: SelectedElement[],
       opts?: PromptSubmitOptions,
     ): Promise<boolean> => {
+      // An explicit stable key may be an already accepted request whose response
+      // was lost; only the server can adjudicate that replay. Fresh manual sends
+      // must not become a second queued message on Free.
+      if (!opts?.idempotencyKey && (quota.exhausted || (quota.limited && authoredPending.current))) {
+        toast.info(FREE_CHAT_UPGRADE_MESSAGE);
+        return false;
+      }
       const selectionText = selections
         .flatMap((selection) => Object.values(selection))
         .filter((value): value is string => typeof value === "string")
         .join("\n");
       const credentialSource = [text, selectionText].filter(Boolean).join("\n");
       if (!containsChatSecret(credentialSource)) {
-        return submit(text, modelId, selections, opts);
+        if (quota.limited) authoredPending.current = true;
+        try { return await submit(text, modelId, selections, opts); }
+        finally { authoredPending.current = false; }
       }
       if (credentialSubmitPending.current) {
         toast.info("Ключ уже подключается");
@@ -206,7 +220,7 @@ export function ChatPanel({
         credentialSubmitPending.current = false;
       }
     },
-    [modelId, projectId, qc, submit],
+    [modelId, projectId, qc, submit, quota.exhausted, quota.limited],
   );
 
   const handleSubmit = (text: string, selections: SelectedElement[]) =>
@@ -315,7 +329,7 @@ export function ChatPanel({
       qc.getQueryData<SurveyQuestion[]>(["onboarding-survey", projectId]) ?? null,
     staleTime: Infinity,
   });
-  const showSurvey = !!survey && survey.length > 0 && !surveyDismissed;
+  const showSurvey = !!survey && survey.length > 0 && !surveyDismissed && !quota.exhausted;
 
   const { data: currentConfig } = useQuery({
     queryKey: ["max-config", projectId],
@@ -425,15 +439,15 @@ export function ChatPanel({
             message={m}
             streaming={m.id === streamingId}
             projectId={projectId}
-            onFix={handleFix}
-            onRetry={m.id === messages?.at(-1)?.id && !isPending && !pendingPrompt
+            onFix={quota.exhausted ? undefined : handleFix}
+            onRetry={!quota.exhausted && m.id === messages?.at(-1)?.id && !isPending && !pendingPrompt
               ? () => submitWithCredentialIntake("Попробуй ещё раз", []) : undefined}
-            onSuggest={handleSuggest}
+            onSuggest={quota.exhausted ? undefined : handleSuggest}
             presentation="studio"
           />
         ))}
 
-        {!showSurvey && chips && chips.choices.length > 0 && (
+        {!quota.exhausted && !showSurvey && chips && chips.choices.length > 0 && (
           <DiscoveryFrame
             key={lastAssistantId}
             niche={chips.niche ?? null}
@@ -465,6 +479,8 @@ export function ChatPanel({
           snapshotId={adviceSnapshotId}
           contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
+          sendDisabled={quota.exhausted || (quota.limited && isStreaming)}
+          quotaNotice={<OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />}
           onCancel={cancel}
           onCancelPending={cancelPending}
           isStreaming={isStreaming}
@@ -477,7 +493,7 @@ export function ChatPanel({
       </div>
 
       {/* Onboarding survey popup — all planned questions at once (owner 2026-06-19). */}
-      <AnimatePresence>
+      {!quota.exhausted && <AnimatePresence>
         {showSurvey && survey && (
           <OnboardingSurvey
             questions={survey}
@@ -485,7 +501,7 @@ export function ChatPanel({
             onSkip={handleSurveySkip}
           />
         )}
-      </AnimatePresence>
+      </AnimatePresence>}
     </div>
   );
 }

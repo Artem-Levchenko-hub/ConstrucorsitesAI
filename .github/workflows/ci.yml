@@ -90,7 +90,7 @@ jobs:
         run: |
           test -n "$QA_BILLING_POSTGRES_ADMIN_URL"
           gateway_packages=$(../llm-gateway/.venv/bin/python -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
-          PYTHONPATH="src:../llm-gateway/src" uv run --frozen python -c 'import runpy, site, sys; site.addsitedir(sys.argv.pop(1)); runpy.run_module("pytest", run_name="__main__")' "$gateway_packages" -o addopts='' -q ../llm-gateway/integration_tests/test_generation_billing_postgres.py
+          PYTHONPATH="src:../llm-gateway/src" uv run --frozen python -c 'import runpy, site, sys; site.addsitedir(sys.argv.pop(1)); runpy.run_module("pytest", run_name="__main__")' "$gateway_packages" -o addopts='' -q ../llm-gateway/integration_tests/test_generation_billing_postgres.py ../llm-gateway/integration_tests/test_billing_worker_access_postgres.py
       - name: Verify exact edits through both executors on disposable PostgreSQL
         working-directory: apps/api
         run: uv run --frozen pytest -o addopts='' -q tests/test_exact_edit_contract.py

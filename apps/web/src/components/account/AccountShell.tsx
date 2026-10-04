@@ -27,7 +27,7 @@ const navigation = [
 
 const copy: Record<AccountView, { eyebrow: string; title: string; lead: string }> = {
   all: { eyebrow: "10 / Account", title: "Аккаунт", lead: "Профиль, безопасность и биллинг. Аккаунт — это email и пароль, реквизиты не нужны." },
-  profile: { eyebrow: "10 / Account", title: "Профиль", lead: "Основные данные аккаунта, экспорт информации и управление удалением." },
+  profile: { eyebrow: "10 / Account", title: "Профиль", lead: "Основные данные аккаунта и управление удалением." },
   security: { eyebrow: "10 / Account", title: "Безопасность", lead: "Активные сессии, устройства и отзыв доступа." },
   billing: { eyebrow: "10 / Billing", title: "Баланс и пополнение", lead: "Пакеты использования и безопасная оплата на стороне ЮKassa." },
   transactions: { eyebrow: "10 / Billing", title: "Операции", lead: "История платежей, начислений и статусов." },

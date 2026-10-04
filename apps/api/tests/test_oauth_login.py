@@ -587,15 +587,14 @@ async def test_platform_keeps_only_identifier_and_email(
     for secret in ("Иван", "Петров", "+79990000000", "avatar.png", "vk-access"):
         assert secret not in stored
 
-    # Выгрузка аккаунта показывает связку целиком — и в ней тоже только id и email.
+    # User exports are forbidden; the retained identity still stores only the
+    # same minimal provider binding, available to trusted account operations.
     exported = await client.get("/api/account/export")
-    assert exported.status_code == 200
-    [identity] = exported.json()["identities"]
-    assert set(identity) == {"provider", "provider_user_id", "email", "created_at"}
-    assert (identity["provider"], identity["provider_user_id"], identity["email"]) == (
-        "vk",
-        "4242",
-        "owner@example.com",
+    assert exported.status_code == 403
+    assert exported.json()["error"]["code"] == "forbidden"
+    identity = (await db_session.scalars(select(UserIdentity))).one()
+    assert (identity.provider, identity.provider_user_id, identity.email) == (
+        "vk", "4242", "owner@example.com"
     )
 
 

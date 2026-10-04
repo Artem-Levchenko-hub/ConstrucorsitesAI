@@ -7,7 +7,8 @@ import { MaxProjectDataApplyDialog } from "@/components/max/MaxProjectDataApplyD
 import { ApiError } from "@/lib/api/client";
 import type { MaxProjectConfig } from "@/lib/api/types";
 
-const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn() }));
+const mocks = vi.hoisted(() => ({ get: vi.fn(), save: vi.fn(), success: vi.fn(), error: vi.fn(), info: vi.fn(), send: vi.fn(), push: vi.fn(), profile: vi.fn() }));
+vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: () => mocks.profile() ?? Promise.resolve({id:"owner",user_chat_messages_limit:null,user_chat_messages_remaining:null}) }));
 vi.mock("@/lib/api/max-studio", () => ({
   getMaxProjectConfig: mocks.get, saveMaxProjectConfig: mocks.save,
 }));
@@ -84,6 +85,7 @@ it.each(["stale", "lost-response"])("keeps failed application review open: %s", 
     expect(mocks.push).not.toHaveBeenCalled();
     if (failure === "stale") {
       expect(mocks.send).not.toHaveBeenCalled();
+      expect(sessionStorage.getItem("omnia:max-config-apply-qa-1")).toBeNull();
       expect(document.querySelector('[role="alert"]')?.textContent).toContain("Данные приложения изменились");
     } else {
       expect(mocks.send).toHaveBeenCalledTimes(1);
@@ -412,5 +414,118 @@ it.each([
     expect(mocks.save).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(mocks.save.mock.calls[0][1])).toBe(submitted);
     expect(mocks.send).not.toHaveBeenCalled();
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
+it.each(["fresh-Free0","saved-Free0","paid"])("saved data refinement quota keeps configuration usable: %s",async(mode)=>{
+ Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});
+ const exhausted=mode!=="paid";mocks.profile.mockResolvedValue({id:"owner",user_chat_messages_limit:exhausted?1:null,user_chat_messages_remaining:exhausted?0:null});
+ mocks.get.mockResolvedValue(record);mocks.send.mockResolvedValue({run_id:"existing",message_id:"m",replayed:true,run_status:"pending"});
+ if(mode==="saved-Free0")sessionStorage.setItem("omnia:max-config-apply-qa-1","existing-saved-key");
+ const close=vi.fn();const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});const container=document.createElement("div");document.body.append(container);const root=createRoot(container);
+ const button=(label:string)=>[...document.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.trim()===label)!;
+ try {
+  await act(async()=>root.render(<QueryClientProvider client={client}><MaxProjectDataApplyDialog config={record} onClose={close}/></QueryClientProvider>));
+  await act(async()=>{await vi.waitFor(()=>expect(mocks.profile).toHaveBeenCalled());await new Promise(resolve=>setTimeout(resolve,0));});
+  expect(button("Пока только сохранить").disabled).toBe(false);
+  const launch=button("Запустить доработку");expect(launch.disabled).toBe(mode==="fresh-Free0");
+  if(mode==="fresh-Free0"){
+   expect(document.body.textContent).toContain("Осталось сообщений: 0 из 1 на весь аккаунт");
+   await act(async()=>launch.click());expect(mocks.send).not.toHaveBeenCalled();await act(async()=>button("Пока только сохранить").click());expect(close).toHaveBeenCalledOnce();
+  }else{
+   await act(async()=>launch.click());await act(async()=>{await vi.waitFor(()=>expect(mocks.send).toHaveBeenCalledOnce());});
+   if(mode==="saved-Free0")expect(mocks.send.mock.calls[0][4].idempotencyKey).toBe("existing-saved-key");
+   else expect(document.body.textContent).not.toContain("Осталось сообщений");
+  }
+ }finally{await act(async()=>root.unmount());client.clear();container.remove();}
+});
+it("Free accepted saved-data attempt refreshes owner to0 and terminal new attempt is blocked",async()=>{
+ Object.assign(globalThis,{IS_REACT_ACT_ENVIRONMENT:true});let remaining=1;
+ mocks.profile.mockImplementation(async()=>({id:"owner",user_chat_messages_limit:1,user_chat_messages_remaining:remaining}));mocks.get.mockResolvedValue(record);
+ mocks.send.mockImplementation(async()=>{remaining=0;return{run_id:"terminal",message_id:"m",replayed:true,run_status:"failed"};});
+ const client=new QueryClient({defaultOptions:{queries:{retry:false,gcTime:0}}});const container=document.createElement("div");document.body.append(container);const root=createRoot(container);
+ const button=(label:string)=>[...document.querySelectorAll<HTMLButtonElement>("button")].find(b=>b.textContent?.trim()===label)!;
+ try{
+  await act(async()=>root.render(<QueryClientProvider client={client}><MaxProjectDataApplyDialog config={record} onClose={()=>{}}/></QueryClientProvider>));
+  await act(async()=>{await vi.waitFor(()=>expect(document.body.textContent).toContain("Осталось сообщений: 1"));});
+  await act(async()=>button("Запустить доработку").click());
+  await act(async()=>{await vi.waitFor(()=>expect(document.body.textContent).toContain("Осталось сообщений: 0"));});
+  expect(mocks.profile.mock.calls.length).toBeGreaterThan(1);expect(button("Повторить доработку").disabled).toBe(true);expect(mocks.send).toHaveBeenCalledOnce();
+ }finally{await act(async()=>root.unmount());client.clear();container.remove();}
+});
+
+
+it.each(["pending", "error"])("persists first saved-data dispatch with %s profile and reopens its lost acceptance at Free0", async (profileState) => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.profile.mockImplementation(() => profileState === "pending"
+    ? new Promise(() => {}) : Promise.reject(new Error("Профиль недоступен")));
+  mocks.get.mockResolvedValue(record);
+  const close = vi.fn();
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const storageKey = "omnia:max-config-apply-qa-1";
+  const button = () => [...document.querySelectorAll<HTMLButtonElement>("button")]
+    .find(b => b.textContent?.trim() === "Запустить доработку")!;
+  const render = () => <QueryClientProvider client={client}><MaxProjectDataApplyDialog config={record} onClose={close} /></QueryClientProvider>;
+  let markerAtDispatch: string | null = null;
+  mocks.send.mockImplementationOnce(async () => {
+    markerAtDispatch = sessionStorage.getItem(storageKey);
+    throw new Error("Ответ потерян после принятия");
+  }).mockResolvedValue({ run_id: "accepted", message_id: "m", run_status: "pending", replayed: true });
+  try {
+    await act(async () => root.render(render()));
+    await act(async () => { await vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe(profileState)); });
+    await act(async () => button().click());
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Ответ потерян после принятия")); });
+    const key = mocks.send.mock.calls[0][4].idempotencyKey;
+    expect(markerAtDispatch).toBe(key);
+    expect(sessionStorage.getItem(storageKey)).toBe(key);
+    expect(close).not.toHaveBeenCalled();
+    await act(async () => root.render(null));
+    client.removeQueries({ queryKey: ["owner-profile"] });
+    mocks.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
+    await act(async () => root.render(render()));
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Осталось сообщений: 0")); });
+    expect(button().disabled).toBe(false);
+    await act(async () => button().click());
+    await act(async () => { await vi.waitFor(() => expect(close).toHaveBeenCalledOnce()); });
+    expect(mocks.send).toHaveBeenCalledTimes(2);
+    expect(mocks.send.mock.calls[1][4].idempotencyKey).toBe(key);
+  } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
+});
+
+
+it("clears the first dispatch marker after a definitive Free quota refusal", async () => {
+  Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  mocks.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 1 });
+  mocks.get.mockResolvedValue(record);
+  const storageKey = "omnia:max-config-apply-qa-1";
+  let markerAtDispatch: string | null = null;
+  mocks.send.mockImplementation(async () => {
+    markerAtDispatch = sessionStorage.getItem(storageKey);
+    mocks.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
+    throw new ApiError(402, { code: "entitlement_exceeded", message: "Выберите тариф", details: { entitlement: "free_chat_messages" } });
+  });
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const container = document.createElement("div"); document.body.append(container);
+  const root = createRoot(container);
+  const close = vi.fn();
+  const render = () => <QueryClientProvider client={client}><MaxProjectDataApplyDialog config={record} onClose={close} /></QueryClientProvider>;
+  const launch = () => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.trim() === "Запустить доработку")!;
+  try {
+    await act(async () => root.render(render()));
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Осталось сообщений: 1")); });
+    await act(async () => launch().click());
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Осталось сообщений: 0")); });
+    expect(markerAtDispatch).toBe("max-config-apply-qa-1");
+    expect(sessionStorage.getItem(storageKey)).toBeNull();
+    expect(launch().disabled).toBe(true);
+    await act(async () => root.render(null));
+    await act(async () => root.render(render()));
+    expect(launch().disabled).toBe(true);
+    await act(async () => launch().click());
+    expect(mocks.send).toHaveBeenCalledOnce();
+    expect(close).not.toHaveBeenCalled();
   } finally { await act(async () => root.unmount()); client.clear(); container.remove(); }
 });

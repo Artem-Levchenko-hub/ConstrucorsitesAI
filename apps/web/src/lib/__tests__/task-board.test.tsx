@@ -1,6 +1,6 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TaskBoard } from "@/components/task-board/TaskBoard";
 import type {
@@ -326,7 +326,7 @@ describe("team task board", () => {
     await settle();
   });
 
-  it("shows an HTML attachment as a downloadable file", async () => {
+  it("retains attachment metadata without exposing a download or preparing its URL", async () => {
     const attachment: TaskBoardAttachment = {
       id: "attachment-html",
       filename: "landing.html",
@@ -334,23 +334,28 @@ describe("team task board", () => {
       size: 1536,
       created_at: "2026-08-30T10:00:00Z",
     };
+    const api = memoryApi([task({ attachments: [attachment] })]);
+    const downloadUrl = vi.spyOn(api, "attachmentDownloadUrl");
     await act(async () => {
       root.render(
         <TaskBoard
-          api={memoryApi([task({ attachments: [attachment] })])}
+          api={api}
           refreshIntervalMs={0}
         />,
       );
     });
     await settle();
 
-    const link = container.querySelector<HTMLAnchorElement>(
+    const link = container.querySelector<HTMLElement>(
       "[data-attachment-id='attachment-html']",
     );
     expect(link?.textContent).toContain("landing.html");
     expect(link?.textContent).toContain("1,5 КБ");
-    expect(link?.getAttribute("download")).toBe("landing.html");
-    expect(link?.getAttribute("href")).toContain("attachment-html");
+    expect(link?.tagName).not.toBe("A");
+    expect(link?.hasAttribute("download")).toBe(false);
+    expect(link?.hasAttribute("href")).toBe(false);
+    expect(container.querySelector("a[download]")).toBeNull();
+    expect(downloadUrl).not.toHaveBeenCalled();
   });
 
   it("uploads an HTML file from the task card", async () => {

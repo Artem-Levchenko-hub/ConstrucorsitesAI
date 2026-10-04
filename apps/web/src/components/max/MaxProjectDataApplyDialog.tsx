@@ -8,6 +8,10 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
+import { FREE_CHAT_UPGRADE_MESSAGE, isFreeChatRefusal, refreshOwnerAfterAcceptedPrompt } from "@/lib/owner-chat-quota";
+import { describeApiError } from "@/lib/api/errors";
+import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotice";
 import { sendPrompt } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import type { MaxProjectConfig } from "@/lib/api/types";
@@ -18,6 +22,7 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
   onReturnFocus?: () => void;
 }) {
   const router = useRouter();
+  const quota = useOwnerChatQuota();
   const qc = useQueryClient();
   const submitting = useRef(false);
   const [terminalFailure, setTerminalFailure] = useState(false);
@@ -29,9 +34,14 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
     try { return sessionStorage.getItem(storageKey) || baseKey; }
     catch { return baseKey; }
   });
+  const [attemptDispatched, setAttemptDispatched] = useState(() => {
+    try { return Boolean(sessionStorage.getItem(storageKey)); } catch { return false; }
+  });
+  const quotaBlocksNewAttempt = quota.exhausted && (!attemptDispatched || terminalFailure);
   const prompt = `Примени сохранённые данные приложения, версия ${config.config_version}, к его экранам и поведению. Прочти актуальную конфигурацию в src/lib/omnia/max-config.ts. Используй название, описание, главное действие, аудиторию, возможности и оформление из раздела «Основное». Покажи активные элементы раздела «Контент» в подходящем каталоге, сохрани их id, названия, описания, цены и подписи действий. У позиции есть раздел (category), фотография (image_url), наличие (availability) и варианты выбора (options): группируй каталог по непустым разделам, показывай фото когда оно задано и нейтральную заглушку когда нет, честно отмечай наличие (позицию out_of_stock нельзя заказать), а при непустых options требуй выбрать вариант перед главным действием. Не придумывай фотографии, цены и размеры, которых владелец не вводил. Для данных, редактируемых владельцем, используй getYleumAppConfig из @/lib/omnia/integration-client: загружай их при открытии экрана и обновляй при возвращении в приложение; не копируй каталог в константы. Сохрани существующие пользовательские данные и работающие функции. Данные владельца и политики используй через управляемые страницы поддержки, конфиденциальности и условий; не переписывай защищённые файлы. Учти выбранные требования к согласиям в пользовательских сценариях. Галочка оплаты не означает подключённую платёжную систему: не имитируй оплату, рассылки или другие внешние операции без подключённого сервиса. Проверь сборку и сообщи, что изменилось и что требует подключения интеграции.`;
   const start = useMutation({
     mutationFn: async (retryTerminal: boolean) => {
+      if (quota.exhausted && (!attemptDispatched || retryTerminal)) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const latest = await getMaxProjectConfig(config.project_id);
       if (latest.config_version !== config.config_version) {
         qc.setQueryData(["max-config", config.project_id], latest);
@@ -46,11 +56,17 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
         setAttemptKey(key);
         setTerminalFailure(false);
       }
+      // Retain the first dispatch too: an unknown outcome may already have
+      // consumed Free, and its same-key replay must remain available even
+      // when the owner profile was pending or unavailable at dispatch.
+      sessionStorage.setItem(storageKey, key);
+      setAttemptDispatched(true);
       return sendPrompt(config.project_id, prompt, "topmix-v1", [], {
         skipClarify: true, idempotencyKey: key, maxConfigVersion: config.config_version,
       });
     },
     onSuccess: (result) => {
+      refreshOwnerAfterAcceptedPrompt(qc);
       for (const key of ["messages", "generation", "project-versions"]) {
         void qc.invalidateQueries({ queryKey: [key, config.project_id] });
       }
@@ -61,6 +77,13 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
       toast.success(result.replayed ? "Открываем результат применения данных" : "Задание передано в чат приложения");
       onClose();
       router.push(`/max/${config.project_id}`);
+    },
+    onError: error => {
+      if (isFreeChatRefusal(error)) {
+        setAttemptDispatched(false);
+        try { sessionStorage.removeItem(storageKey); } catch { /* Quota remains server-enforced. */ }
+        void quota.refresh();
+      }
     },
   });
 
@@ -76,11 +99,12 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
       </DialogHeader>
       <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>
       <p className="text-sm text-fg-secondary">После привязки названия и каталог смогут обновляться из настроек. Изменение функций и дизайна каждый раз требует запуска доработки.</p>
-      {start.error && <p role="alert" className="text-sm text-danger-fg">{start.error instanceof Error ? start.error.message : "Не удалось передать задание. Повторите попытку."}</p>}
+      <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
+      {start.error && <p role="alert" className="text-sm text-danger-fg">{describeApiError(start.error, "Не удалось передать задание. Повторите попытку.")}</p>}
       {terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по этим же данным; она расходует баланс.</p>}
       <div className="flex flex-wrap justify-end gap-3">
         <Button variant="secondary" disabled={start.isPending} onClick={onClose}>Пока только сохранить</Button>
-        <Button disabled={start.isPending} onClick={() => {
+        <Button disabled={start.isPending || quotaBlocksNewAttempt} onClick={() => {
           if (submitting.current) return;
           submitting.current = true;
           void start.mutateAsync(terminalFailure).catch(() => undefined).finally(() => { submitting.current = false; });

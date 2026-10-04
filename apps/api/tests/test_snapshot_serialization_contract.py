@@ -213,11 +213,15 @@ async def test_actual_list_and_get_consumers(modules, monkeypatch, case):
             return_value=SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [row]))
         ),
     )
-    monkeypatch.setattr(module.repo_svc, "read_files", Mock(return_value={"index.html": "fixture"}))
+    from yleum_api.services import repo
+
+    storage = Mock(side_effect=AssertionError("user metadata must not read source"))
+    monkeypatch.setattr(repo, "read_files", storage)
     listed = await module.list_snapshots(PROJECT, session, SimpleNamespace(id=OWNER))
     detailed = await module.get_snapshot(PROJECT, NEW, session, SimpleNamespace(id=OWNER))
     assert listed[0].model_dump() == expected(row)
-    assert detailed.model_dump() == {**expected(row), "files": {"index.html": "fixture"}}
+    assert detailed.model_dump() == expected(row)
+    storage.assert_not_called()
 
 
 @pytest.mark.parametrize("case", [CASES[0], CASES[2]])

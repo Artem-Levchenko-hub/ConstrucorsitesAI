@@ -30,9 +30,15 @@ jobs:
         id: backup
         env:
           BACKUP_BASE_URL: https://yleum.ru/api/backups/offhost
+          OFFHOST_BACKUP_READ_TOKEN: ${{ secrets.OFFHOST_BACKUP_READ_TOKEN }}
         run: |
           set -euo pipefail
+          if [[ -z "${OFFHOST_BACKUP_READ_TOKEN}" ]]; then
+            echo "::error::Off-host backup read credential is not configured"
+            exit 1
+          fi
           curl --fail --silent --show-error --retry 4 --retry-all-errors \
+            --header "X-Offhost-Backup-Token: ${OFFHOST_BACKUP_READ_TOKEN}" \
             "${BACKUP_BASE_URL}/status" \
             --output status.json
 
@@ -61,6 +67,7 @@ jobs:
           fi
 
           curl --fail --silent --show-error --retry 4 --retry-all-errors \
+            --header "X-Offhost-Backup-Token: ${OFFHOST_BACKUP_READ_TOKEN}" \
             "${BACKUP_BASE_URL}/latest" \
             --output omnia-backup.cms
 

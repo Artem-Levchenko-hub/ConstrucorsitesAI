@@ -44,6 +44,7 @@ export function describeEntitlementError(
   fallback: string,
 ): string {
   const key = typeof details?.entitlement === "string" ? details.entitlement : "";
+  if (key === "free_chat_messages") return "На Free доступно одно сообщение на весь аккаунт. Для новых запросов выберите Pro или Business. Готовое приложение можно настроить и опубликовать. Сменить тариф можно в разделе «Аккаунт → Тариф».";
   const names = ENTITLEMENT_NAMES[key];
   const plan = planLabel(details?.plan_code);
   if (code === "subscription_entitlement_required") {

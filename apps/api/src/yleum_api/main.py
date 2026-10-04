@@ -16,6 +16,7 @@ from yleum_api.core.errors import (
     unhandled_error_handler,
     validation_error_handler,
 )
+from yleum_api.core.minio import reconcile_public_bucket_policies
 from yleum_api.core.redis import dispose_redis
 from yleum_api.core.release import normalize_release_sha
 from yleum_api.routers import account as account_router
@@ -105,6 +106,7 @@ async def _monitor_terminal_generation_cleanup() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    await asyncio.to_thread(reconcile_public_bucket_policies)
     get_engine()
     recovered = await recover_interrupted_generation_runs()
     if recovered:

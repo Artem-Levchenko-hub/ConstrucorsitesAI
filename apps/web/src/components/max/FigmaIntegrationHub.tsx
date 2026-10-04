@@ -55,6 +55,9 @@ import {
   setPlatformAiEnabled,
   verifyAppIntegration,
 } from "@/lib/api/app-integrations";
+import { useOwnerChatQuota } from "@/hooks/useOwnerChatQuota";
+import { FREE_CHAT_UPGRADE_MESSAGE, isFreeChatRefusal, refreshOwnerAfterAcceptedPrompt } from "@/lib/owner-chat-quota";
+import { OwnerChatQuotaNotice } from "@/components/workspace/OwnerChatQuotaNotice";
 import { describeApiError } from "@/lib/api/errors";
 import { syncMaxManagedKit } from "@/lib/api/max-studio";
 import { sendPrompt } from "@/lib/api/messages";
@@ -112,10 +115,12 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
 }) {
   const qc = useQueryClient();
   const router = useRouter();
+  const quota = useOwnerChatQuota();
   const [implementationProvider, setImplementationProvider] = useState<string | null>(null);
   const [implementationPrompt, setImplementationPrompt] = useState("");
   const implementationSubmitting = useRef(false);
   const implementationAttempt = useRef<ImplementationAttempt | null>(null);
+  const [replayCandidate, setReplayCandidate] = useState<ImplementationAttempt | null>(null);
   const [terminalFailure, setTerminalFailure] = useState(false);
   const [category, setCategory] = useState<IntegrationCategory | "all">("all");
   const [search, setSearch] = useState("");
@@ -317,6 +322,8 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     mutationFn: async ({ provider, prompt }: { provider: string; prompt: string }) => {
       if (containsChatSecret(prompt)) throw new Error("Удалите ключи и токены из задания. Используйте защищённую форму подключения.");
       const previous = implementationAttempt.current;
+      const replay = previous?.provider === provider && previous.prompt === prompt && !previous.terminal;
+      if (quota.exhausted && !replay) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const attempt = previous?.provider === provider && previous.prompt === prompt && !previous.terminal
         ? previous : { provider, prompt, key: `max-integration-${projectId}-${crypto.randomUUID()}`, terminal: false };
       // Persist the logical request before dispatch so a lost response or modal
@@ -324,10 +331,12 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       try { sessionStorage.setItem(attemptStorageKey(provider), JSON.stringify(attempt)); }
       catch { throw new Error("Не удалось сохранить попытку. Разрешите хранилище браузера и повторите попытку."); }
       implementationAttempt.current = attempt;
+      setReplayCandidate({ ...attempt });
       setTerminalFailure(false);
       return sendPrompt(projectId, prompt, "topmix-v1", [], { skipClarify: true, idempotencyKey: attempt.key });
     },
     onSuccess: result => {
+      refreshOwnerAfterAcceptedPrompt(qc);
       for (const key of ["messages", "generation", "project-versions"]) {
         void qc.invalidateQueries({ queryKey: [key, projectId] });
       }
@@ -335,6 +344,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
         const attempt = implementationAttempt.current;
         if (attempt) {
           attempt.terminal = true;
+          setReplayCandidate({ ...attempt });
           try { sessionStorage.setItem(attemptStorageKey(attempt.provider), JSON.stringify(attempt)); } catch { /* The saved key still safely replays the terminal result. */ }
         }
         setTerminalFailure(true);
@@ -342,6 +352,15 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       }
       toast.success("Задание передано в чат приложения");
       onExit?.();
+    },
+    onError: error => {
+      if (isFreeChatRefusal(error)) {
+        const attempt = implementationAttempt.current;
+        if (attempt) { try { sessionStorage.removeItem(attemptStorageKey(attempt.provider)); } catch { /* Server still rejects new requests. */ } }
+        implementationAttempt.current = null;
+        setReplayCandidate(null);
+        void quota.refresh();
+      }
     },
   });
   const busy = connect.isPending || installMoysklad.isPending || claimMoysklad.isPending || saveMoysklad.isPending || saveAmocrm.isPending || bind.isPending || pack.isPending || platformAi.isPending || oauth.isPending || verify.isPending || disconnect.isPending || implement.isPending;
@@ -383,13 +402,17 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     if (!request || !canUseProvider(providerKey)) return;
     const saved = embedded ? readAttempt(providerKey) : null;
     implementationAttempt.current = saved;
+    setReplayCandidate(saved);
     implement.reset();
     setTerminalFailure(saved?.terminal ?? false);
     setImplementationPrompt(saved?.prompt ?? request.prompt);
     setImplementationProvider(providerKey);
   };
   const proposalHasSecret = embedded && containsChatSecret(implementationPrompt);
-  const canImplement = Boolean(implementationProvider && canUseProvider(implementationProvider) && implementationPrompt.trim() && !proposalHasSecret);
+  const replayableAttempt = embedded && replayCandidate?.provider === implementationProvider
+    && replayCandidate.prompt === implementationPrompt.trim() && !replayCandidate.terminal;
+  const quotaBlocksImplementation = quota.exhausted && !replayableAttempt;
+  const canImplement = !quotaBlocksImplementation && Boolean(implementationProvider && canUseProvider(implementationProvider) && implementationPrompt.trim() && !proposalHasSecret);
   const startImplementation = () => {
     if (!canImplement || implementationSubmitting.current) return;
     if (embedded && implementationProvider) {
@@ -427,6 +450,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
       <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
       <p className="text-sm text-fg-secondary">Оплата списывается после успешной сборки приложения. Результат появится в редакторе; затем потребуется публикация.</p>
+      <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
       {implementationSummary && <IntegrationRequestCard request={implementationSummary} text={implementationPrompt} expandable={false} />}
       <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
       <Textarea id="integration-implementation-prompt" value={implementationPrompt} disabled={implement.isPending} onChange={(event) => {

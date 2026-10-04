@@ -25,6 +25,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
 from yleum_api.models.billing_usage_event import BillingUsageEvent
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
 from yleum_api.models.usage import Usage
 from yleum_api.models.user import User
 from yleum_api.models.wallet_charge import WalletCharge
@@ -113,8 +114,20 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
 ) -> None:
     user = await _register(client, db_session, "usage@example.com")
     first = await _create_project(client, "Первое приложение")
+    assert first.status_code == 201, first.text
     second = await _create_project(client, "Второе приложение")
-    assert (first.status_code, second.status_code) == (201, 201), second.text
+    assert second.status_code == 402
+    assert second.json()["error"]["details"]["entitlement"] == "max_projects"
+    # Historical Free accounts may already own multiple apps; preserve and
+    # report those rows rather than allowing a new creation past today's cap.
+    db_session.add(
+        Project(
+            owner_id=user.id,
+            name="Второе историческое приложение",
+            slug=uuid4().hex,
+            template="max_miniapp",
+        )
+    )
     project_id = first.json()["id"]
     account = (
         await db_session.execute(
@@ -252,9 +265,9 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     }
     assert report["free_generations"] == {"limit": 3, "used": 0, "left": 3, "unlimited": False}
     projects = _entitlement(report, "max_projects")
-    assert (projects["limit"], projects["used"], projects["exceeded"]) == (None, 2, False)
+    assert (projects["limit"], projects["used"], projects["exceeded"]) == (1, 2, True)
     published = _entitlement(report, "static_publish_slots")
-    assert (published["limit"], published["used"]) == (None, 1)
+    assert (published["limit"], published["used"]) == (1, 1)
     integrations = _entitlement(report, "integrations")
     assert (integrations["kind"], integrations["enabled"], integrations["used"]) == (
         "flag",

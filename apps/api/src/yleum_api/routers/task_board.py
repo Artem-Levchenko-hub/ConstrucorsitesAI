@@ -8,7 +8,6 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, Depends, Request, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import case, func, select, text
-from starlette.background import BackgroundTask
 
 from yleum_api.core.deps import SessionDep
 from yleum_api.core.errors import ApiError
@@ -384,32 +383,9 @@ async def download_task_board_attachment(
     attachment_id: UUID,
     session: SessionDep,
 ) -> StreamingResponse:
-    attachment = await _get_attachment(session, task_id, attachment_id)
-    try:
-        stream = await asyncio.to_thread(_load_attachment, attachment.object_key)
-    except attachment_storage.AttachmentStorageError as exc:
-        raise ApiError(
-            "upload_failed",
-            "Хранилище вложений временно недоступно",
-            status.HTTP_502_BAD_GATEWAY,
-        ) from exc
-    if stream is None:
-        raise ApiError(
-            "not_found",
-            "Файл вложения не найден",
-            status.HTTP_404_NOT_FOUND,
-        )
-    return StreamingResponse(
-        stream,
-        media_type=attachment.content_type,
-        headers={
-            "Content-Disposition": _content_disposition(attachment.filename),
-            "Content-Length": str(attachment.size),
-            "X-Content-Type-Options": "nosniff",
-            "Cache-Control": "private, no-store",
-            "Content-Security-Policy": "sandbox; default-src 'none'",
-        },
-        background=BackgroundTask(_close_attachment_stream, stream),
+    """User downloads are unavailable; metadata/upload/delete remain supported."""
+    raise ApiError(
+        "forbidden", "Скачивание файлов недоступно.", status.HTTP_403_FORBIDDEN
     )
 
 

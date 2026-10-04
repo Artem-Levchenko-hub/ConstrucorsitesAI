@@ -2,16 +2,108 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from functools import lru_cache
 
 from minio import Minio
-from minio.error import S3Error
 
 from yleum_api.core.config import get_settings
 
 log = logging.getLogger(__name__)
 
-_EXE_CONTENT_TYPE = "application/vnd.microsoft.portable-executable"
+# S3 resource wildcards: fixed-length writer keys, with no unrestricted '*'.
+_UUID_KEY = "????????-????-????-????-????????????"
+_CONTENT_HASH = "?" * 32
+_IMAGE_SUFFIXES = ("jpg", "png", "webp", "gif")
+_LEGACY_IMAGE_SUFFIXES = frozenset((*_IMAGE_SUFFIXES, "jpeg"))
+_RESERVED_LEGACY_TOKENS = frozenset(
+    {
+        "source",
+        "sources",
+        "src",
+        "archive",
+        "archives",
+        "exe",
+        "executables",
+        "export",
+        "exports",
+        "repo",
+        "repos",
+        "backup",
+        "backups",
+        "zip",
+        "tar",
+        "gz",
+        "tgz",
+        "bz2",
+        "xz",
+        "7z",
+        "rar",
+        "zst",
+        "msi",
+        "dll",
+        "py",
+        "js",
+        "ts",
+        "tsx",
+        "jsx",
+        "json",
+        "sql",
+        "env",
+        "sh",
+        "html",
+        "htm",
+        "svg",
+        "wasm",
+        "map",
+    }
+)
+
+
+def _legacy_public_media_keys(raw: str, allowed_buckets: set[str]) -> dict[str, set[str]]:
+    """Validate operator-approved literal keys without inspecting stored objects.
+
+    No key, bucket input or raw configuration is included in validation errors.
+    Exact resources grant no sibling key access; namespace/UUID shapes are not
+    inferred from unproven historical observations.
+    """
+    invalid = "invalid legacy public media configuration"
+    if not raw.strip():
+        return {}
+    try:
+        document = json.loads(raw)
+    except (ValueError, TypeError):
+        raise ValueError(invalid) from None
+    if not isinstance(document, dict):
+        raise ValueError(invalid)
+    result: dict[str, set[str]] = {}
+    for bucket, keys in document.items():
+        if bucket not in allowed_buckets or not isinstance(keys, list):
+            raise ValueError(invalid)
+        approved: set[str] = set()
+        for key in keys:
+            # Accepted paths are ASCII below, so character and byte limits agree.
+            if not isinstance(key, str) or not 0 < len(key) <= 1024:
+                raise ValueError(invalid)
+            segments = key.split("/")
+            if any(
+                segment in {"", ".", ".."}
+                or re.fullmatch(r"[A-Za-z0-9_.-]+", segment) is None
+                or any(
+                    token.lower() in _RESERVED_LEGACY_TOKENS
+                    for token in re.split(r"[._-]", segment)
+                )
+                for segment in segments
+            ):
+                raise ValueError(invalid)
+            if (
+                "." not in segments[-1]
+                or segments[-1].rsplit(".", 1)[1].lower() not in _LEGACY_IMAGE_SUFFIXES
+            ):
+                raise ValueError(invalid)
+            approved.add(key)
+        result[bucket] = approved
+    return result
 
 
 @lru_cache(maxsize=1)
@@ -25,27 +117,53 @@ def get_minio_client() -> Minio:
     )
 
 
-def ensure_public_bucket(client: Minio, bucket: str) -> None:
-    """Create ``bucket`` if absent and (re)assert an anonymous ``s3:GetObject``
-    policy so its objects load by their plain public URL (no presign).
+def _public_media_keys() -> dict[str, set[str]]:
+    """Only configured public buckets; never publish private storage aliases."""
+    settings = get_settings()
+    roles = (
+        (
+            settings.minio_bucket_previews,
+            # Historical writer contract: previews/{snapshot_id}.png.
+            {f"{_UUID_KEY}.png"},
+        ),
+        (
+            settings.minio_bucket_images,
+            {f"{_UUID_KEY}/{_CONTENT_HASH}.png"}
+            | {f"max-content/{_UUID_KEY}/{_CONTENT_HASH}.{ext}" for ext in _IMAGE_SUFFIXES},
+        ),
+        (settings.minio_bucket_photos, {f"{_UUID_KEY}/{_CONTENT_HASH}.jpg"}),
+        (settings.minio_bucket_videos, {f"{_UUID_KEY}/{_CONTENT_HASH}.mp4"}),
+    )
+    private = {
+        settings.minio_bucket_projects,
+        settings.minio_bucket_backups,
+        settings.minio_bucket_task_board,
+    }
+    result: dict[str, set[str]] = {}
+    for bucket, keys in roles:
+        if bucket in private:
+            raise ValueError("public media bucket aliases private storage")
+        result.setdefault(bucket, set()).update(keys)
+    legacy = _legacy_public_media_keys(
+        settings.minio_public_legacy_media_keys,
+        {settings.minio_bucket_images, settings.minio_bucket_photos},
+    )
+    for bucket, keys in legacy.items():
+        result[bucket].update(keys)
+    return result
 
-    Self-heals the previews bucket: minio-init only ``set download``s it, never
-    ``mb``s it, so when the app lazily created ``previews`` the bucket stayed
-    PRIVATE — every snapshot thumbnail + project-card photo 403'd forever with no
-    repair (owner report 2026-07-18). Re-asserting on every upload fixes that the
-    same way ``agent_media._ensure_video_bucket`` self-heals the video bucket.
 
-    GetObject-only (NO ``ListBucket``): the ``exe/*`` artifacts that share the
-    previews bucket stay unlistable — only fetchable by their exact unguessable
-    key. Fail-soft (R-10): a policy hiccup is logged, never raised — the upload
-    still proceeds (the bucket may already be public from minio-init)."""
-    try:
-        if not client.bucket_exists(bucket):
-            client.make_bucket(bucket)
-    except S3Error as exc:
-        log.warning("minio: bucket-ensure failed %s err=%r", bucket, exc)
-        return
-    policy = json.dumps(
+def public_media_bucket_policy(bucket: str) -> str:
+    """Replace broad anonymous access with approved media keys only.
+
+    Archive/source keys (including historical exe/*) receive no anonymous Allow.
+    No explicit Deny is installed: authenticated repository, publication and DR
+    clients retain their own permissions. This grants neither listing nor writes.
+    """
+    keys = _public_media_keys()
+    if bucket not in keys:
+        raise ValueError("bucket is not configured for public media")
+    return json.dumps(
         {
             "Version": "2012-10-17",
             "Statement": [
@@ -53,15 +171,37 @@ def ensure_public_bucket(client: Minio, bucket: str) -> None:
                     "Effect": "Allow",
                     "Principal": {"AWS": ["*"]},
                     "Action": ["s3:GetObject"],
-                    "Resource": [f"arn:aws:s3:::{bucket}/*"],
+                    "Resource": [f"arn:aws:s3:::{bucket}/{key}" for key in sorted(keys[bucket])],
                 }
             ],
         }
     )
-    try:
-        client.set_bucket_policy(bucket, policy)
-    except S3Error as exc:
-        log.warning("minio: public-policy re-assert failed %s err=%r", bucket, exc)
+
+
+def ensure_public_bucket(client: Minio, bucket: str) -> None:
+    """Create a configured media bucket and strictly reassert its read policy.
+
+    Policy errors propagate: an upload must not silently retain an old policy
+    that exposes source archives. Validate aliases before any storage operation.
+    """
+    policy = public_media_bucket_policy(bucket)
+    if not client.bucket_exists(bucket):
+        client.make_bucket(bucket)
+    client.set_bucket_policy(bucket, policy)
+
+
+def reconcile_public_bucket_policies(client: Minio | None = None) -> None:
+    """Repair existing policies before serving, including buckets without uploads.
+
+    This changes bucket configuration only, never reads, lists, alters or deletes
+    objects. Missing public buckets are prepared for image/photo writers that do
+    not set a policy themselves. Failures deliberately block API startup.
+    """
+    buckets = _public_media_keys()  # Check every private collision first.
+    client = client if client is not None else get_minio_client()
+    for bucket in buckets:
+        ensure_public_bucket(client, bucket)
+        log.info("minio: reconciled public media policy bucket=%s", bucket)
 
 
 def preview_public_url(preview_key: str | None) -> str | None:

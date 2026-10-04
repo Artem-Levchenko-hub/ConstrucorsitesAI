@@ -145,7 +145,7 @@ async def test_task_board_rejects_creates_after_capacity(
     assert overflow.json()["error"]["code"] == "conflict"
 
 
-async def test_task_board_uploads_downloads_and_deletes_html_attachment(
+async def test_task_board_uploads_denies_download_and_deletes_html_attachment(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -206,13 +206,9 @@ async def test_task_board_uploads_downloads_and_deletes_html_attachment(
     assert listed.json()[0]["attachments"] == [attachment]
 
     downloaded = await client.get(f"/api/task-board/tasks/{task_id}/attachments/{attachment['id']}")
-    assert downloaded.status_code == 200
-    assert downloaded.content == html
-    assert downloaded.headers["content-type"].startswith("text/html")
-    assert downloaded.headers["content-disposition"].startswith("attachment;")
-    assert "landing.html" in downloaded.headers["content-disposition"]
-    assert downloaded.headers["x-content-type-options"] == "nosniff"
-    assert downloaded.headers["content-security-policy"] == "sandbox; default-src 'none'"
+    assert downloaded.status_code == 403
+    assert downloaded.json()["error"]["code"] == "forbidden"
+    assert html not in downloaded.content
 
     deleted = await client.delete(f"/api/task-board/tasks/{task_id}/attachments/{attachment['id']}")
     assert deleted.status_code == 204
@@ -309,12 +305,11 @@ async def test_task_board_enforces_per_task_and_board_attachment_quotas(
     assert board_overflow.json()["error"]["code"] == "conflict"
 
 
-async def test_task_board_reports_storage_download_failures(
+async def test_task_board_denies_download_before_unavailable_storage(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from yleum_api.routers import task_board
-    from yleum_api.services.task_board_attachments import AttachmentStorageError
 
     monkeypatch.setattr(
         task_board,
@@ -334,15 +329,15 @@ async def test_task_board_reports_storage_download_failures(
     )
 
     def fail_load(_object_key: str) -> None:
-        raise AttachmentStorageError("offline")
+        raise AssertionError("denied download must not reach storage")
 
     monkeypatch.setattr(task_board, "_load_attachment", fail_load)
     response = await client.get(
         f"/api/task-board/tasks/{created.json()['id']}/attachments/{uploaded.json()['id']}"
     )
 
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "upload_failed"
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "forbidden"
 
 
 async def test_task_board_queues_object_deletion_in_durable_cleanup_outbox(

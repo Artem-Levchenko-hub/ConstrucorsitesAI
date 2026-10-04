@@ -118,6 +118,11 @@ class PromptAcceptance:
         replay = await self.reserve_or_replay()
         if replay is not None:
             return replay
+        from yleum_api.services.entitlements import admit_free_chat_message
+
+        self.free_chat_limited = await admit_free_chat_message(
+            self.session, user_id=self.current_user.id, run_id=self.generation_run.id
+        )
         await self.prepare_adaptation()
         await self.check_admission()
         from yleum_api.services.generation_billing import admit_policy
@@ -297,8 +302,10 @@ class PromptAcceptance:
         # Free-tier gate: every project spends the owner's personal allowance.
         # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
         # free → skips this wallet-floor check AND the gateway debit (metadata.free).
-        self.is_free = get_settings().unlimited_generations or (
-            (self.current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT
+        self.is_free = (
+            get_settings().unlimited_generations
+            or getattr(self, "free_chat_limited", False)
+            or ((self.current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT)
         )
         if not self.is_free and not self.credential_redirect and not self.explain_failed_build:
             account = await resolve_billing_account(self.session, self.current_user.id)
@@ -358,6 +365,7 @@ class PromptAcceptance:
         self.effective_prompt = self.payload.prompt
         interview_eligible = (
             self.is_first_build
+            and not getattr(self, "free_chat_limited", False)
             and not self.payload.skip_clarify
             and not self.selected_dump
             and not self.credential_redirect

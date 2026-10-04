@@ -898,25 +898,25 @@
     "/workspace/ConstrucorsitesAI/docs/qa/2026-10-02-handoff/status.json"
   ],
   "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
-  "updated_at": "2026-10-04T15:15:25.455887+00:00",
+  "updated_at": "2026-10-04T18:30:09.595227+00:00",
   "delivery_candidate_status": "203 delivered; signed first-party MAX analytics and bounded GET actor isolation probe source-reviewed and locally verified; exact merged CI/core rollout/live acceptance pending",
   "current_runtime_baseline": "20382350beccf2da361db1f6c9e9425a91b9267c",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
   "latest_delivery": {
-    "platform_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
-    "web_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
-    "ci_run_id": 37208441693,
+    "platform_sha": "8c0d41158ba65a07708b94c83d97c08c40d9e3da",
+    "web_sha": "8c0d41158ba65a07708b94c83d97c08c40d9e3da",
+    "ci_run_id": 37214793578,
     "ci_jobs_success": 10,
     "backup_exit": 0,
     "backup_databases_ok": 32,
-    "backup_stamp": "20261004-143015",
+    "backup_stamp": "20261004-172649",
     "canonical_deploy_exit": 0,
+    "phase": "complete",
     "actual_source_hashes_verified": true,
     "admission_fences_clear": true,
-    "evidence": "evidence/mvp-auth-production-release.json",
-    "receipt_blob": "dca8e464ea7ce2e206948394d65ba8a6bb194f86",
-    "independent_http_evidence": "evidence/mvp-auth-independent-http-health.json",
-    "scope": "Actual auth recovery API/web delivery; stale predeploy pages obtain new client recovery only after reload"
+    "receipt_blob": "6ce86d0f6b4949eb6230fe1f68a82587a27f6ee0",
+    "evidence": "evidence/mvp-analytics-8c0-production-release.json",
+    "scope": "API/web/controllers/workers8c exact; compiled core image both hosts staged and normal pins configured; ordinary existingapp activation/customerE2E remains scopedpending"
   },
   "pilot_release_gate": {
     "scope": "FREE_PILOT_NO_PAYMENT",
@@ -1416,5 +1416,50 @@
     "actual_schema_diff": "NOT_READ",
     "migration_path": "NOT_ACCEPTED",
     "guard_bypass": false
+  },
+  "latest_delivery_history": {
+    "auth_203": {
+      "platform_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
+      "web_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
+      "ci_run_id": 37208441693,
+      "ci_jobs_success": 10,
+      "backup_exit": 0,
+      "backup_databases_ok": 32,
+      "backup_stamp": "20261004-143015",
+      "canonical_deploy_exit": 0,
+      "actual_source_hashes_verified": true,
+      "admission_fences_clear": true,
+      "evidence": "evidence/mvp-auth-production-release.json",
+      "receipt_blob": "dca8e464ea7ce2e206948394d65ba8a6bb194f86",
+      "independent_http_evidence": "evidence/mvp-auth-independent-http-health.json",
+      "scope": "Actual auth recovery API/web delivery; stale predeploy pages obtain new client recovery only after reload"
+    }
+  },
+  "user_paas_policy_candidate": {
+    "base": "8c0d41158ba65a07708b94c83d97c08c40d9e3da",
+    "status": "verified_source_pending_delivery",
+    "Free": "one owner lifetime human chat message and one retained final app/publication; same request replay/internalrepair not another message",
+    "customer_download": "alltiers/admin API source/archive/account/task attachment denial, snapshot metadata only and UI removal",
+    "ProBusiness_limits": "unchanged",
+    "production_activation": false,
+    "evidence": "evidence/user-paas-policy-verification-20261004.json",
+    "QA_hold": true
+  },
+  "ordinary_owner_coffee_e2e_20261004": {
+    "run_id": "89f14ef7-614d-4e5e-9393-969c0374f897",
+    "backend": "completed",
+    "snapshot_id": "540f484b-2d25-4411-9e88-a2eb04d6cd51",
+    "commit_sha": "bd66d8e34250b48a8c4e90b1b728821b038bd769",
+    "build_runtime_release": [
+      true,
+      true,
+      true
+    ],
+    "admin_scope_only": true,
+    "actual_feature": "FAIL_requested_button_absent_after_native_refresh_and_standalone",
+    "publication": "UI_foreign_publication_status_error_on_one_attempt; servercorrelation_pending",
+    "bot_target": "oldPAR_B_no_main_switch",
+    "evidence": "evidence/qa-e2e-existing-coffee-8c0-terminal.json",
+    "release_project_bot_hold": true
   }
 }

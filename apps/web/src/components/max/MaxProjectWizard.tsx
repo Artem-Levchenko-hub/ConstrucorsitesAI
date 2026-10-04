@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Check, Eye, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
@@ -26,12 +26,14 @@ type WizardValues = {
 const titles = ["Что создаём?", "Для кого приложение?", "Функции и оформление", "Проверьте описание"];
 
 /** Presentation only: the parent owns all answers and the real creation mutation. */
-export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending, onSubmit }: {
+export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending, onSubmit, submitDisabled = false, quotaNotice }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   values: WizardValues;
   onChange: (patch: Partial<WizardValues>) => void;
   pending: boolean;
+  submitDisabled?: boolean;
+  quotaNotice?: ReactNode;
   onSubmit: () => Promise<unknown>;
 }) {
   const [step, setStep] = useState(0);
@@ -48,7 +50,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
   useEffect(() => { if (open) heading.current?.focus(); }, [step, open]);
 
   async function submit() {
-    if (submitLock.current || busy || !ready) return;
+    if (submitLock.current || busy || submitDisabled || !ready) return;
     submitLock.current = true;
     setSubmitting(true);
     try {
@@ -76,6 +78,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
             <DialogDescription className="mt-2">{step === 0 ? "Название и идея станут основой первой сборки." : step === 3 ? "После подтверждения создадим проект и откроем редактор для первой сборки." : "Можно оставить эти поля пустыми и уточнить их позже."}</DialogDescription>
             <progress className="max-wizard-progress" max={4} value={step + 1} aria-label={`Шаг ${step + 1} из 4`} />
           </div>
+          {quotaNotice}
           <div className="max-wizard-body">
             {step === 0 && <>
               <div className="space-y-2">
@@ -137,7 +140,7 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
           </div>
           <footer className="max-wizard-footer">
             <Button type="button" variant="outline" disabled={busy} onClick={() => step === 0 ? onOpenChange(false) : setStep(step - 1)}>{step === 0 ? "Отмена" : "Назад"}</Button>
-            <Button type="submit" disabled={busy || ((step === 0 || step === 3) && !ready)}>
+            <Button type="submit" disabled={busy || (step === 3 && submitDisabled) || ((step === 0 || step === 3) && !ready)}>
               {step === 3 && (busy ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />)}
               {step === 3 ? "Создать проект" : "Далее"}
             </Button>

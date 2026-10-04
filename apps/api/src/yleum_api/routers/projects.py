@@ -1,6 +1,4 @@
 import asyncio
-import io
-import zipfile
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -10,7 +8,6 @@ from slugify import slugify
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
-from yleum_api.core.config import get_settings
 from yleum_api.core.crypto import decrypt_strong
 from yleum_api.core.deps import (
     CurrentUserDep,
@@ -46,7 +43,6 @@ from yleum_api.services.max_access import require_max_studio_access
 from yleum_api.services.preset_classifier import classify_preset_sync
 from yleum_api.services.project_cell_access import admit_new_project_cell
 from yleum_api.services.project_cell_deletion import teardown_project_cell
-from yleum_api.services.run_bundle import build_launchers
 
 _UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
 
@@ -205,65 +201,9 @@ async def get_project(
 async def download_project(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> StreamingResponse:
-    """Download ALL files of the project's current snapshot as a single .zip.
-
-    Owner directive 2026-06-19: one obvious button, zero thinking — the user gets a
-    real archive of their actual code/site (snake.py, requirements.txt, index.html,
-    …) straight from git, with no dependence on what the model wrote into the page.
-    Owner-scoped (404 for a foreign/unknown project); 404 when nothing's generated
-    yet. The zip is built in memory from the committed snapshot (single source of
-    truth = git), so it always matches what's live."""
-    project = await session.get(Project, project_id)
-    if project is None or project.owner_id != current_user.id:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    if project.current_snapshot_id is None:
-        raise ApiError("not_found", "nothing generated yet", status.HTTP_404_NOT_FOUND)
-    snap = await session.get(Snapshot, project.current_snapshot_id)
-    if snap is None:
-        raise ApiError("not_found", "snapshot missing", status.HTTP_404_NOT_FOUND)
-    text_files = await asyncio.to_thread(
-        repo_svc.read_files, project_id, snap.commit_sha
-    )
-    if not text_files:
-        raise ApiError("not_found", "no files to download", status.HTTP_404_NOT_FOUND)
-    # One-click run bundle (owner 2026-06-19 — «скачал → уже играешь»): add a
-    # double-click launcher (run.bat/run.sh/run.command + RU instructions) that
-    # creates a venv, installs deps and runs the entry point, so a Python/Node
-    # project goes from download → running in one more click. `setdefault` so we
-    # never clobber a launcher the project already ships. No-op for plain websites.
-    for name, launcher_content in build_launchers(text_files).items():
-        text_files.setdefault(name, launcher_content)
-    files: dict[str, str | bytes] = dict(text_files)
-    # Full runnable export (P5): for a CONTAINER stack the git snapshot is only the
-    # generated files — overlay the skeleton template UNDER them so the zip is a
-    # runnable repo (skeleton + your code + README), generated files winning. Gated
-    # + fail-soft (no skeleton on disk → unchanged snapshot-only zip).
-    if get_settings().use_full_container_export:
-        from yleum_api.schemas.project import orchestrator_template
-        from yleum_api.services import project_export
-
-        _orch = orchestrator_template(project.template)
-        if _orch:
-            files = project_export.build_runnable_export(_orch, files)
-    # A .zip drops the Unix executable bit, so a double-clicked run.command/run.sh
-    # would open in TextEdit on macOS instead of running. Stamp the exec bit on the
-    # shell launchers via ZipInfo.external_attr (S_IFREG | mode) << 16.
-    _exec_launchers = {"run.sh", "run.command"}
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for path, content in files.items():
-            data = content.encode("utf-8") if isinstance(content, str) else content
-            info = zipfile.ZipInfo(path)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            mode = 0o100755 if path in _exec_launchers else 0o100644
-            info.external_attr = mode << 16
-            zf.writestr(info, data)
-    buf.seek(0)
-    fname = (project.slug or "project") + ".zip"
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    """User code/archive exports are unavailable on every plan and role."""
+    raise ApiError(
+        "forbidden", "Скачивание и экспорт исходного кода недоступны.", status.HTTP_403_FORBIDDEN
     )
 
 

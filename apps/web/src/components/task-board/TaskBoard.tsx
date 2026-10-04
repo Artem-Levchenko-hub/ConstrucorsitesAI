@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   Circle,
   Clock3,
-  Download,
   Edit3,
   FileText,
   GripVertical,
@@ -596,9 +595,6 @@ export function TaskBoard({
                         onDeleteAttachment={(attachment) =>
                           void deleteAttachment(task, attachment)
                         }
-                        attachmentDownloadUrl={(attachmentId) =>
-                          api.attachmentDownloadUrl(task.id, attachmentId)
-                        }
                         onDragStart={(event) => {
                           if (pendingTaskIdsRef.current.has(task.id)) {
                             event.preventDefault();
@@ -744,7 +740,6 @@ function TaskCard({
   onDelete,
   onUpload,
   onDeleteAttachment,
-  attachmentDownloadUrl,
   onDragStart,
   onDragEnd,
 }: {
@@ -755,7 +750,6 @@ function TaskCard({
   onDelete: () => void;
   onUpload: (files: File[]) => void;
   onDeleteAttachment: (attachment: TaskBoardAttachment) => void;
-  attachmentDownloadUrl: (attachmentId: string) => string;
   onDragStart: (event: React.DragEvent<HTMLElement>) => void;
   onDragEnd: () => void;
 }) {
@@ -814,13 +808,9 @@ function TaskCard({
               key={attachment.id}
               className="flex min-w-0 items-center gap-1 rounded-lg border border-[#303640] bg-[#191c21] p-1"
             >
-              <a
+              <div
                 data-attachment-id={attachment.id}
-                href={attachmentDownloadUrl(attachment.id)}
-                download={attachment.filename}
-                draggable={false}
-                onClick={(event) => event.stopPropagation()}
-                className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-[#aeb7c7] transition hover:bg-[#252a32] hover:text-white"
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-[#aeb7c7]"
               >
                 <FileText className="size-3.5 shrink-0 text-[#7599ef]" />
                 <span className="min-w-0 flex-1 truncate text-[11px] font-medium">
@@ -829,8 +819,7 @@ function TaskCard({
                 <span className="shrink-0 font-mono text-[9px] text-[#666d79]">
                   {formatFileSize(attachment.size)}
                 </span>
-                <Download className="size-3 shrink-0 text-[#666d79]" />
-              </a>
+              </div>
               <button
                 type="button"
                 disabled={pending}

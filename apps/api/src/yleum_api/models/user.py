@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Integer, Text, func
+from sqlalchemy import Boolean, CheckConstraint, DateTime, Integer, Text, func
 from sqlalchemy.dialects.postgresql import CITEXT, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -63,6 +63,15 @@ class User(Base):
     # (core/config.py) the user is billed from their wallet like everyone else.
     free_generations_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
+    # Lifetime Free admission, independent of successful-build billing. Neither
+    # project deletion nor an unknown publication result releases this allowance.
+    free_chat_messages_used: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    free_publication_project_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+
     # Viral-funnel provenance (V4.2b return-edge). Set at registration from the
     # share-link return path: `signup_source` is a bounded enum ("share_link"
     # when a stranger came in via a /p/<slug> "Сделай свой" CTA, else NULL for
@@ -84,4 +93,8 @@ class User(Base):
         uselist=False,
         cascade="all, delete-orphan",
         lazy="selectin",
+    )
+
+    __table_args__ = (
+        CheckConstraint("free_chat_messages_used IN (0, 1)", name="free_chat_messages_used"),
     )

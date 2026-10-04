@@ -1,0 +1,106 @@
+{
+  "at": "2026-10-04T18:30:09.594022+00:00",
+  "base": "8c0d41158ba65a07708b94c83d97c08c40d9e3da",
+  "phase": "verified_candidate_delivery_pending",
+  "paid_or_provider_calls": false,
+  "production_rows_changed_by_tests": false,
+  "requirements": {
+    "Free": "one owner lifetime human chat message including onboarding/manual alternates; one retained final app/publication; exact request replay and internal repair do not consume again",
+    "downloads": "all tier/normal admin source/archive/account/task-attachment download denial; snapshot metadata only; internal publication/DR retained",
+    "ProBusiness": "limits unchanged"
+  },
+  "checks": [
+    {
+      "name": "api166",
+      "exit": 0,
+      "log_sha256": "dd0c42197b2f65d3bfd0865bb952b1e3d7da319403c20b422aad204f1f6290f1"
+    },
+    {
+      "name": "web944",
+      "exit": 0,
+      "log_sha256": "d5fbd7a8b6186ab7ef37c837c451ccef85b5baca3133c4346044ca05b52cd062"
+    },
+    {
+      "name": "api_mypy264",
+      "exit": 0,
+      "log_sha256": "031c9c225d29dc749dddfa46a8688859952d6600afc03ebc0e54969715e18950"
+    },
+    {
+      "name": "api_ruff",
+      "exit": 0,
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "name": "web_tsc",
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "web_eslint26",
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "compose_policy",
+      "exit": 0,
+      "log_sha256": "1acd15b2efcf6702026b99ccf742571080c722ca983dc00614d984a5bb216449"
+    },
+    {
+      "name": "billing_acl_joint_pg29",
+      "exit": 0,
+      "log_sha256": "339d15637d29bc19bc45aec64f56d570f0ad060b6369a94a2001f013b5f4ac31"
+    },
+    {
+      "name": "media_v2_joint94",
+      "exit": 0,
+      "log_sha256": "2897d7354c05ec5cadaaec8b30e7eab7faf37bd41747823c5752a48bca2b5d2e"
+    },
+    {
+      "name": "media_v2_api_mypy264",
+      "exit": 0,
+      "log_sha256": "031c9c225d29dc749dddfa46a8688859952d6600afc03ebc0e54969715e18950"
+    },
+    {
+      "name": "media_v2_api_ruff",
+      "exit": 0,
+      "log_sha256": "82b3e6a6c090a57601d22943bd23fca9218d1031dbe5a7b754092f9a156b4f18"
+    },
+    {
+      "name": "media_v2_compose",
+      "exit": 0,
+      "log_sha256": "1acd15b2efcf6702026b99ccf742571080c722ca983dc00614d984a5bb216449"
+    }
+  ],
+  "reviews": [
+    "original source denial12 SOURCE_CLEAR",
+    "activation/attachment5 SOURCE_CLEAR",
+    "FreeAPI11 SOURCE_CLEAR",
+    "FreeUIv2 P2closed",
+    "exportUI8 SOURCE_CLEAR",
+    "MinIO5 SOURCE_CLEAR before actual unmatched legacy candidates",
+    "billingACL3 SOURCE_CLEAR",
+    "exactlegacy v2 3files +Compose2 independent SOURCE_CLEAR"
+  ],
+  "pending": [
+    "privately prepare/apply exact legacy media keys before runtime policy activation",
+    "exact commit push/CI",
+    "QA E2E window holds next deployment",
+    "normal fresh backup/deploy/0077/runtime check",
+    "physical archive deny and allowed media/internal DR proof"
+  ],
+  "media_compatibility": {
+    "policy_default": "strict positive current mediawriter keys",
+    "legacy": "only privately approved four literalexisting image/photo keys; no namespace wildcard",
+    "source_patch_sha256": "2fb0911ac010dd5f3c32be40e460563e5c2f062f42cbb7646d039aba327637de",
+    "live_configuration": "pending QA CLEAR, no runtime bucket/object changes"
+  },
+  "remaining_before_commit_push": [
+    "freeze intended source hashes and normal push"
+  ],
+  "remaining_before_deploy": [
+    "user QA E2E hold release",
+    "exact candidate CI success",
+    "fresh backup/runtime migration0077, private legacy env activation",
+    "direct HTTP bans and four existing media stillservable/internal machine DR proof"
+  ]
+}

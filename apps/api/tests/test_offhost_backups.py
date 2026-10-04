@@ -64,9 +64,7 @@ async def test_download_exposes_only_fixed_encrypted_file(
     assert Path(response.path) == latest
     assert response.media_type == "application/pkcs7-mime"
     assert response.headers["cache-control"] == "no-store"
-    assert response.headers["x-backup-sha256"] == hashlib.sha256(
-        b"encrypted-cms"
-    ).hexdigest()
+    assert response.headers["x-backup-sha256"] == hashlib.sha256(b"encrypted-cms").hexdigest()
 
 
 @pytest.mark.asyncio
@@ -243,10 +241,12 @@ async def test_status_prefers_the_newest_bundle_in_minio(tmp_path: Path, monkeyp
     _write_export(tmp_path, "20260731-031500", b"host copy")  # stale disk fallback
     older = datetime(2026, 9, 24, 0, 15, tzinfo=UTC)
     newer = datetime(2026, 9, 25, 0, 15, tzinfo=UTC)
-    fake = _FakeMinio({
-        **_bundle("20260924-001500", b"older", older),
-        **_bundle("20260925-001500", b"newest-bundle", newer),
-    })
+    fake = _FakeMinio(
+        {
+            **_bundle("20260924-001500", b"older", older),
+            **_bundle("20260925-001500", b"newest-bundle", newer),
+        }
+    )
     _minio_settings(monkeypatch, tmp_path, fake)
 
     status = await backups.offhost_backup_status()
@@ -327,3 +327,116 @@ async def test_restore_verdict_is_read_from_the_bucket_next_to_the_bundle(
 
     assert status.restore_test_ok is True
     assert status.restore_tested_at == datetime(2026, 9, 21, 4, 40, tzinfo=UTC)
+
+
+@pytest.mark.parametrize("endpoint", ["status", "latest"])
+@pytest.mark.parametrize(
+    "caller",
+    [
+        "anonymous",
+        "owner",
+        "admin",
+        "query-token",
+        "wrong-token",
+        "broad-internal-token",
+        "non-ascii-token",
+    ],
+)
+async def test_offhost_http_requires_scoped_machine_token_before_storage(
+    tmp_path, monkeypatch, endpoint, caller
+):
+    from unittest.mock import Mock
+
+    import httpx
+    from fastapi import FastAPI
+    from pydantic import SecretStr
+
+    token = "synthetic-offhost-machine-token"
+    monkeypatch.setattr(
+        backups,
+        "get_settings",
+        lambda: SimpleNamespace(
+            offhost_backup_read_token=SecretStr(token), backup_export_root=str(tmp_path)
+        ),
+    )
+    storage = Mock(side_effect=AssertionError("unauthorized archive access"))
+    monkeypatch.setattr(backups, "_latest_export", storage)
+    app = FastAPI()
+    app.include_router(backups.router)
+    headers = {}
+    query = ""
+    if caller in {"owner", "admin"}:
+        headers = {
+            "Authorization": "Bearer synthetic-user-session",
+            "Cookie": "omnia_session=synthetic-user-session",
+        }
+    elif caller == "query-token":
+        query = "?token=" + token
+    elif caller == "broad-internal-token":
+        headers = {"X-Internal-Token": token}
+    elif caller == "non-ascii-token":
+        headers = {b"X-Offhost-Backup-Token": b"\xff"}
+    elif caller == "wrong-token":
+        headers = {"X-Offhost-Backup-Token": "wrong"}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get("/api/backups/offhost/" + endpoint + query, headers=headers)
+    assert response.status_code == 403
+    storage.assert_not_called()
+
+
+async def test_scoped_machine_reader_retains_encrypted_backup_and_status(tmp_path, monkeypatch):
+    import httpx
+    from fastapi import FastAPI
+    from pydantic import SecretStr
+
+    token = "synthetic-offhost-machine-token"
+    payload = b"synthetic-encrypted-cms-body"
+    latest = _write_export(tmp_path, "20260731-031500", payload)
+    (latest.parent / "project-source.tar").write_bytes(b"private-source")
+    monkeypatch.setattr(
+        backups,
+        "get_settings",
+        lambda: SimpleNamespace(
+            offhost_backup_read_token=SecretStr(token), backup_export_root=str(tmp_path)
+        ),
+    )
+    app = FastAPI()
+    app.include_router(backups.router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://testserver",
+        headers={"X-Offhost-Backup-Token": token},
+    ) as client:
+        status = await client.get("/api/backups/offhost/status")
+        downloaded = await client.get("/api/backups/offhost/latest")
+    assert status.status_code == downloaded.status_code == 200
+    assert status.json()["sha256"] == hashlib.sha256(payload).hexdigest()
+    assert status.json()["size_bytes"] == len(payload)
+    assert downloaded.content == payload
+    assert downloaded.headers["content-type"] == "application/pkcs7-mime"
+    assert downloaded.headers["cache-control"] == "no-store"
+
+
+async def test_missing_machine_reader_token_fails_closed(monkeypatch):
+    from unittest.mock import Mock
+
+    import httpx
+    from fastapi import FastAPI
+
+    monkeypatch.setattr(
+        backups, "get_settings", lambda: SimpleNamespace(offhost_backup_read_token=None)
+    )
+    storage = Mock(side_effect=AssertionError("archive access"))
+    monkeypatch.setattr(backups, "_latest_export", storage)
+    app = FastAPI()
+    app.include_router(backups.router)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://testserver"
+    ) as client:
+        response = await client.get(
+            "/api/backups/offhost/latest", headers={"X-Offhost-Backup-Token": "supplied"}
+        )
+    assert response.status_code == 403
+    storage.assert_not_called()

@@ -6,7 +6,8 @@ import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
 
-const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), catalog: vi.fn(), send: vi.fn() }));
+const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), catalog: vi.fn(), send: vi.fn(), profile: vi.fn() }));
+vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: boundary.profile }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: boundary.push }) }));
 vi.mock("@/lib/api/messages", () => ({ sendPrompt: boundary.send }));
 vi.mock("@/lib/api/max-studio", () => ({
@@ -63,6 +64,7 @@ describe("Integration Hub inside the editor modal", () => {
   beforeEach(() => {
     Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
     vi.resetAllMocks();
+    boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: null, user_chat_messages_remaining: null });
     boundary.send.mockResolvedValue({ run_id: "run-1", message_id: "message-1", snapshot_id: null, run_status: "pending" });
     window.sessionStorage.clear();
     container = document.createElement("div");
@@ -297,4 +299,68 @@ describe("Integration Hub inside the editor modal", () => {
     await act(async () => root.render(null));
     expect(onBusyChange).toHaveBeenLastCalledWith(false);
   });
+  it("Free0 can connect credentials but cannot start a new authored integration refinement", async () => {
+    boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
+    const dialog = await render([]);
+    await click("Подключить");
+    await act(async () => input(dialog.querySelector('#integration-secret_key')!, "private-synthetic-key"));
+    boundary.connect.mockResolvedValue(connection);boundary.catalog.mockResolvedValue(catalog([connection]));
+    await click("Проверить и подключить");await settleMutation();
+    expect(boundary.connect).toHaveBeenCalledOnce();
+    await click("Добавить в приложение");await settleMutation();
+    expect(dialog.textContent).toContain("Осталось сообщений: 0 из 1 на весь аккаунт");
+    expect(button("Запустить доработку")?.disabled).toBe(true);expect(boundary.send).not.toHaveBeenCalled();
+    await click("Назад к сервисам");expect(dialog.querySelector('input[aria-label="Найти сервис"]')).not.toBeNull();
+  });
+  it("Free0 preserves same-key unknown-response integration replay, while editing creates a blocked new message", async () => {
+    boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
+    sessionStorage.setItem("omnia:max:integration-attempt:project-1:yookassa", JSON.stringify({provider:"yookassa",prompt:"Добавь сохранённую оплату",key:"existing-unknown-key",terminal:false}));
+    const dialog=await render([connection]);await click("Добавить в приложение");await settleMutation();
+    expect(button("Запустить доработку")?.disabled).toBe(false);
+    await click("Запустить доработку");await settleMutation();
+    expect(boundary.send.mock.calls[0][4].idempotencyKey).toBe("existing-unknown-key");
+    await act(async()=>input(dialog.querySelector("textarea")!,"Новый запрос на оплату"));
+    expect(button("Запустить доработку")?.disabled).toBe(true);expect(boundary.send).toHaveBeenCalledOnce();
+  });
+  it("Free0 terminal result cannot allocate a new integration refinement attempt", async () => {
+    boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
+    sessionStorage.setItem("omnia:max:integration-attempt:project-1:yookassa", JSON.stringify({provider:"yookassa",prompt:"Добавь сохранённую оплату",key:"terminal-key",terminal:true}));
+    await render([connection]);await click("Добавить в приложение");await settleMutation();
+    expect(button("Повторить доработку")?.disabled).toBe(true);expect(boundary.send).not.toHaveBeenCalled();
+  });
+
+  it.each(["pending", "error"])("preserves first integration attempt with %s profile after lost acceptance and reopen at Free0", async (profileState) => {
+    boundary.profile.mockImplementation(() => profileState === "pending"
+      ? new Promise(() => {}) : Promise.reject(new Error("Профиль недоступен")));
+    const storageKey = "omnia:max:integration-attempt:project-1:yookassa";
+    let markerAtDispatch: { key: string } | null = null;
+    boundary.send.mockImplementationOnce(async () => {
+      markerAtDispatch = JSON.parse(sessionStorage.getItem(storageKey)!);
+      throw new Error("Ответ потерян после принятия");
+    });
+    await render([connection]);
+    await act(async () => { await vi.waitFor(() => expect(client.getQueryState(["owner-profile"])?.status).toBe(profileState)); });
+    await click("Добавить в приложение");
+    await click("Запустить доработку");
+    await settleMutation();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain("Ответ потерян после принятия");
+    const key = boundary.send.mock.calls[0][4].idempotencyKey;
+    expect(markerAtDispatch).toMatchObject({ key });
+    expect(JSON.parse(sessionStorage.getItem(storageKey)!)).toMatchObject({ key, terminal: false });
+    await act(async () => root.render(null));
+    client.removeQueries({ queryKey: ["owner-profile"] });
+    boundary.profile.mockResolvedValue({ id: "owner", user_chat_messages_limit: 1, user_chat_messages_remaining: 0 });
+    const dialog = await render([connection]);
+    await click("Добавить в приложение");
+    await settleMutation();
+    expect(dialog.textContent).toContain("Осталось сообщений: 0");
+    expect(button("Запустить доработку")?.disabled).toBe(false);
+    await click("Запустить доработку");
+    await settleMutation();
+    expect(boundary.send).toHaveBeenCalledTimes(2);
+    expect(boundary.send.mock.calls[1][4].idempotencyKey).toBe(key);
+    await act(async () => input(dialog.querySelector("textarea")!, "Другое пожелание"));
+    expect(button("Запустить доработку")?.disabled).toBe(true);
+  });
+
 });

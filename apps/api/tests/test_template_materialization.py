@@ -4,13 +4,11 @@ The four static scaffolds (blank / landing / portfolio / blog) and the fullstack
 one left with the site builder together with their golden byte fixture: a MAX
 project has no api-side scaffold at all — `init_repo` is handed a directory that
 does not exist and must produce an empty first commit. What stayed is the shared
-kit the cell preview serves over `/api/kit/<file>`, and the export/rollback path
-the owner uses to download a project.
+kit the cell preview serves over `/api/kit/<file>`, and the internal rollback path.
+User source downloads are forbidden.
 """
 
 import hashlib
-import io
-import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -124,10 +122,13 @@ async def test_kit_http_contract_serves_the_shipped_bytes() -> None:
         assert missing.json()["error"]["code"] == "not_found"
 
 
-async def test_committed_files_survive_http_export_and_rollback(tmp_path: Path) -> None:
-    """Real Git and HTTP ZIP; only identity/metadata and object storage are fixtures."""
+async def test_internal_committed_files_survive_user_download_denial_and_rollback(
+    tmp_path: Path,
+) -> None:
+    """User download denial leaves trusted Git/history/rollback bytes intact."""
     from yleum_api.core.db import get_session
     from yleum_api.core.deps import get_current_user
+    from yleum_api.core.errors import ApiError, api_error_handler
     from yleum_api.models.project import Project
     from yleum_api.models.snapshot import Snapshot
     from yleum_api.routers.projects import router
@@ -157,32 +158,31 @@ async def test_committed_files_survive_http_export_and_rollback(tmp_path: Path) 
 
     app = FastAPI()
     app.include_router(router)
+    app.add_exception_handler(ApiError, api_error_handler)
     app.dependency_overrides[get_session] = lambda: MetadataSession()
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=owner_id)
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://testserver",
     ) as client:
-        async def exported_files() -> dict[str, bytes]:
+        async def assert_denied() -> None:
             response = await client.get(f"/api/projects/{project_id}/download")
-            assert response.status_code == 200, response.text
-            assert response.headers["content-type"] == "application/zip"
-            with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
-                assert all(info.external_attr >> 16 == 0o100644 for info in archive.infolist())
-                return {name: archive.read(name) for name in archive.namelist()}
+            assert response.status_code == 403
+            assert response.json()["error"]["code"] == "forbidden"
 
-        edited_export = await exported_files()
+        await assert_denied()
+        edited_files = repo.read_files(project_id, edited)
         for path, content in custom.items():
-            assert edited_export[path] == content.encode("utf-8")
-        # A MAX export also carries the orchestrator's app template, so the
-        # owner's files are a subset, not the whole archive.
-        assert set(starter) | {".owner-config"} <= set(edited_export)
+            assert edited_files[path] == content
+        assert set(starter) | {".owner-config"} == set(edited_files)
 
         snapshot.commit_sha = repo.checkout(project_id, initial)
-        restored = await exported_files()
+        await assert_denied()
+        restored = repo.read_files(project_id, snapshot.commit_sha)
         assert ".owner-config" not in restored
-        assert {path: restored[path].decode("utf-8") for path in starter} == starter
-        # Restoring old output neither rewrites history nor loses the newer edits.
+        assert restored == starter
+        # Internal restoration neither rewrites history nor loses newer edits.
         preserved = repo.read_files(project_id, edited)
         assert all(preserved[path] == value for path, value in custom.items())
         snapshot.commit_sha = repo.checkout(project_id, edited)
-        assert await exported_files() == edited_export
+        await assert_denied()
+        assert repo.read_files(project_id, snapshot.commit_sha) == edited_files

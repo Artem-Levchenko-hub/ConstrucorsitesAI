@@ -37,6 +37,8 @@ trap 'rm -f "${rendered}" "${blank_env}"' EXIT
     INTEGRATION_MOYSKLAD_APP_ID="00000000-0000-0000-0000-000000000001" \
     INTEGRATION_MOYSKLAD_APP_UID="compose-policy-moysklad" \
     INTEGRATION_MOYSKLAD_SECRET_KEY="compose-policy-moysklad-secret" \
+    OFFHOST_BACKUP_READ_TOKEN="compose-policy-offhost-reader" \
+    MINIO_PUBLIC_LEGACY_MEDIA_KEYS='{"omnia-images":["uploads/00000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002.png"]}' \
     OAUTH_LOGIN_REDIRECT_BASE_URL="https://compose-policy.example" \
     docker compose --env-file "${blank_env}" -f "${compose_file}" config --format json
 ) >"${rendered}"
@@ -93,6 +95,15 @@ for service in services.values():
     assert "TELEGRAM_BOT_TOKEN" not in environment
     assert "TELEGRAM_CHAT_ID" not in environment
 
+# Initialization must never re-open legacy executable/source objects. The API
+# startup installs the narrower approved-media policy after this job completes.
+init_script = services["minio-init"]["entrypoint"][-1].replace("$$", "$")
+assert "mc anonymous set download" not in init_script
+assert "mc anonymous set public" not in init_script
+for bucket in ("m/$MINIO_BUCKET_PREVIEWS", "m/$MINIO_BUCKET_PHOTOS", "m/omnia-images", "m/omnia-videos"):
+    assert f'mc anonymous set none "{bucket}"' in init_script, bucket
+assert services["api"]["depends_on"]["minio-init"]["condition"] == "service_completed_successfully"
+
 # Owner login through VK ID / Яндекс ID: the credentials reach the api container and
 # ONLY it. Until 25.09.2026 compose did not pass them at all, so values in .env never
 # enabled the button; the generation worker inherits the api map and must blank them.
@@ -107,6 +118,11 @@ for key, value in oauth_login.items():
     assert generation_worker.get(key, "") == "", key
 assert api["INTEGRATION_MOYSKLAD_APP_UID"] == "compose-policy-moysklad"
 assert api["INTEGRATION_MOYSKLAD_SECRET_KEY"] == "compose-policy-moysklad-secret"
+assert api["OFFHOST_BACKUP_READ_TOKEN"] == "compose-policy-offhost-reader"
+legacy_media = api["MINIO_PUBLIC_LEGACY_MEDIA_KEYS"]
+assert legacy_media
+for name in ("generation-worker", "worker"):
+    assert services[name]["environment"]["MINIO_PUBLIC_LEGACY_MEDIA_KEYS"] == legacy_media
 assert generation_worker.get("INTEGRATION_MOYSKLAD_SECRET_KEY", "") == ""
 for name, service in services.items():
     if name == "api":
@@ -116,6 +132,7 @@ for name, service in services.items():
         "YANDEX_ID_CLIENT_SECRET",
         "VK_ID_CLIENT_SECRET",
         "INTEGRATION_MOYSKLAD_SECRET_KEY",
+        "OFFHOST_BACKUP_READ_TOKEN",
     ):
         assert not environment.get(key), f"{name} carries {key}"
 PY
