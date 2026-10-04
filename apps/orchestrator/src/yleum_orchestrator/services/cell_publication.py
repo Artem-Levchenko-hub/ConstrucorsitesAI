@@ -46,6 +46,10 @@ from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
 )
+from yleum_orchestrator.services.publication_http_diagnostics import (
+    http_failure_from_exception,
+    validate_http_failure,
+)
 from yleum_orchestrator.services.publication_identity import (
     classify_publication,
     fingerprint_key,
@@ -467,6 +471,19 @@ class CellPublicationService:
             import structlog
 
             failed_stage = trace.current_stage()
+            http_failure = None
+            # A rollback may raise a second ApiException. Prefer the primary
+            # failure journaled before rollback over that different response.
+            try:
+                matching = next(
+                    item for item in self._read(request.project_id)["history"]
+                    if item["response"]["run_id"] == run_id
+                )
+                http_failure = validate_http_failure(matching["response"].get("http_failure"))
+            except Exception:
+                pass
+            if http_failure is None:
+                http_failure = http_failure_from_exception(exc)
             structlog.get_logger("cell_publication").warning(
                 "public_release_failed",
                 project_id=str(request.project_id),
@@ -474,6 +491,7 @@ class CellPublicationService:
                 error_type=type(exc).__name__,
                 stage=failed_stage,
                 reason_code=reason_code(exc),
+                http_failure=http_failure,
                 frames=[
                     {
                         "module": Path(frame.filename).name,
@@ -498,6 +516,7 @@ class CellPublicationService:
                 finished_at=_now(),
                 error_stage=failed_stage,
                 reason_code=reason_code(exc),
+                **({"http_failure": http_failure} if http_failure is not None else {}),
                 **trace.snapshot(),
             )
             if isinstance(exc, asyncio.CancelledError):
@@ -1953,6 +1972,12 @@ class CellPublicationService:
             recovery_required = str(error) == "publication startup changed database schema"
             failed = self._read(project_id)
             failed["recovery_required"] = recovery_required
+            http_failure = http_failure_from_exception(error)
+            if http_failure is not None:
+                for item in failed["history"]:
+                    if item["response"]["run_id"] == release["release_id"]:
+                        item["response"]["http_failure"] = http_failure
+                        break
             self._write(project_id, failed)
             # Rolling the cluster back re-applies the previous release's objects and
             # waits for them; it needs its own reserve beyond the work deadline.

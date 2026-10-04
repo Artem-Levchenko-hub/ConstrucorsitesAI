@@ -43,6 +43,7 @@ from yleum_orchestrator.services.project_database_roles import (
     bootstrap_project_roles_sql,
     project_role_hba,
 )
+from yleum_orchestrator.services.publication_http_diagnostics import capture_boundary_http_failure
 from yleum_orchestrator.services.restoration_database import TRUSTED_ADMIN_PGOPTIONS
 
 log = structlog.get_logger(__name__)
@@ -1467,14 +1468,21 @@ class KubernetesClusterApi:
     ) -> tuple[int, bytes]:
         path = path.lstrip("/")
         url = f"/api/v1/namespaces/{namespace}/services/{service}:{port}/proxy/{path}"
-        response = self._api_client.call_api(
-            url,
-            "GET",
-            response_type="str",
-            _preload_content=False,
-            _request_timeout=timeout_seconds,
-            auth_settings=["BearerToken"],
-        )
+        from kubernetes.client.exceptions import ApiException
+
+        try:
+            response = self._api_client.call_api(
+                url,
+                "GET",
+                response_type="str",
+                _preload_content=False,
+                _request_timeout=timeout_seconds,
+                auth_settings=["BearerToken"],
+            )
+        except ApiException as error:
+            if service == "boundary" and port == BOUNDARY_PORT and path == "api/omnia/health":
+                capture_boundary_http_failure(error)
+            raise
         raw = response[0] if isinstance(response, tuple) else response
         return int(getattr(raw, "status", 200)), bytes(getattr(raw, "data", b"") or b"")
 
