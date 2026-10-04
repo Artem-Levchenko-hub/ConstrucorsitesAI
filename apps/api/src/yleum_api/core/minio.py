@@ -178,6 +178,37 @@ def public_media_bucket_policy(bucket: str) -> str:
     )
 
 
+def public_media_read_boundary_map() -> str:
+    """Render the public nginx read allowlist from the same approved media keys.
+
+    Bucket policies govern anonymous reads, not root/IAM presigned requests.
+    The public /minio/ edge must therefore reject every other object path,
+    independently of query signatures or Authorization headers. Internal S3
+    clients do not traverse that edge. This only prepares text; it performs no
+    storage calls and neither installs nor reloads nginx.
+
+    nginx's normalized $uri is also used by its URI-bearing proxy_pass. The
+    anchored ASCII patterns reject remaining percent escapes after one decode,
+    including double-encoded slashes. No query parameter grants path access.
+    """
+    lines = ["map $uri $yleum_public_media_readable {", "    default 0;"]
+    for bucket, keys in sorted(_public_media_keys().items()):
+        if re.fullmatch(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]", bucket) is None:
+            raise ValueError("invalid public media boundary configuration")
+        for key in sorted(keys):
+            if re.fullmatch(r"[A-Za-z0-9_./?-]+", key) is None:
+                raise ValueError("invalid public media boundary configuration")
+            # Current writer placeholders match one ASCII path character, never
+            # '/' or a remaining '%' escape; literal legacy keys have no '?'.
+            pattern = "".join(
+                "[A-Za-z0-9_.-]" if char == "?" else re.escape(char)
+                for char in f"/minio/{bucket}/{key}"
+            )
+            lines.append(f"    ~^{pattern}$ 1;")
+    lines.append("}")
+    return "\n".join(lines) + "\n"
+
+
 def ensure_public_bucket(client: Minio, bucket: str) -> None:
     """Create a configured media bucket and strictly reassert its read policy.
 

@@ -401,7 +401,10 @@ async def admit_free_chat_message(session: AsyncSession, *, user_id: UUID, run_i
     owner = await session.scalar(
         select(User)
         .where(User.id == user_id)
-        .with_for_update()
+        # Reserving a run first holds an FK KEY SHARE lock on this owner.
+        # Serialize this non-key counter without upgrading those concurrent
+        # FK locks to conflicting FOR UPDATE locks (which can deadlock).
+        .with_for_update(key_share=True)
         .execution_options(populate_existing=True)
     )
     if owner is None:

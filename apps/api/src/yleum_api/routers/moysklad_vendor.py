@@ -597,6 +597,7 @@ select,button{font:inherit;padding:.6rem;max-width:100%}
 </style>
 <h1>Подключить МойСклад к Yleum</h1>
 <p id="status" role="status">Подтверждаем аккаунт…</p>
+<button id="retry" disabled hidden>Повторить запрос к МойСклад</button>
 <button id="auth" disabled>Войти в Yleum</button>
 <div id="result" hidden>
 <p id="account"></p>
@@ -612,12 +613,12 @@ select,button{font:inherit;padding:.6rem;max-width:100%}
 rel="noopener noreferrer">Открыть кабинет Yleum</a></p>
 <script nonce="SCRIPT_NONCE">
 (()=>{
- const id=Math.floor(Math.random()*2147483647);
+ let id=Math.floor(Math.random()*2147483647);
  const origin=window.location?.origin;
  const el=id=>document.getElementById(id);
  const s=el('status');
  let code=null,popup=null,nonce=null,projects=[],bound=null,pending=null,counter=0;
- let claimStarted=false,contextConfirmed=false;
+ let claimStarted=false,contextState='idle',contextRequests=0;
  const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
  const list=(items,max)=>Array.isArray(items)&&items.length<=max&&items.every(x=>x&&
   typeof x.id==='string'&&uuid.test(x.id)&&typeof x.name==='string'&&x.name.length<=200);
@@ -692,6 +693,7 @@ rel="noopener noreferrer">Открыть кабинет Yleum</a></p>
    'Исход действия неизвестен. Проверьте подключение перед повтором.';
  });
  window.addEventListener('pagehide',()=>{
+  contextState='closed';
   if(popup&&nonce)popup.postMessage({name:'MoyBridgeCancel',nonce},origin);
  });
  const h=async e=>{
@@ -707,8 +709,15 @@ rel="noopener noreferrer">Открыть кабинет Yleum</a></p>
   // MoySklad may answer from another host window; the official SDK does not
   // require parent identity. Keep exact host origin/correlation and exchange
   // the one-use context token through the original signed Vendor API.
-  if(e.origin!=='https://online.moysklad.ru'||
-     e.data?.name!=='UserContextResponse'||e.data.correlationId!==id)return;
+  if(e.origin!=='https://online.moysklad.ru'||contextState!=='waiting'||
+     e.data?.correlationId!==id)return;
+  if(e.data.name==='InvalidMessageError'){
+   contextState='rejected';el('retry').disabled=true;
+   s.textContent='МойСклад отклонил запрос. Переоткройте решение или обратитесь в поддержку.';
+   return;
+  }
+  if(e.data.name!=='UserContextResponse')return;
+  contextState='exchanging';el('retry').disabled=true;
   window.removeEventListener('message',h);
   try{
    if(typeof e.data.token!=='string'||!e.data.token)throw Error();
@@ -718,16 +727,27 @@ rel="noopener noreferrer">Открыть кабинет Yleum</a></p>
     signal:globalThis.AbortSignal?.timeout?.(12000)
    });const v=await r.json();
    if(!r.ok||typeof v.code!=='string'||!/^[A-Za-z0-9_-]{20,64}$/.test(v.code))throw Error();
-   code=v.code;contextConfirmed=true;el('auth').disabled=false;
+   if(contextState!=='exchanging')return;
+   code=v.code;contextState='confirmed';el('auth').disabled=false;
    s.textContent='МойСклад подтверждён. Войдите в Yleum, чтобы выбрать свой миниапп.';
    setTimeout(()=>{code=null;el('connect').disabled=true;
     if(!bound)s.textContent='Срок подтверждения истёк. Переоткройте решение.';},600000);
-  }catch{s.textContent='Не удалось подтвердить аккаунт. Переоткройте решение.';}
+  }catch{if(contextState==='closed')return;contextState='failed';
+   s.textContent='Не удалось подтвердить аккаунт. Переоткройте решение.';}
  };
+ const requestContext=()=>{
+  if(!['idle','timed_out'].includes(contextState)||contextRequests>=3||claimStarted)return;
+  id=(id+1)%2147483647;const requestId=id;contextRequests++;contextState='waiting';
+  el('retry').disabled=true;s.textContent='Подтверждаем аккаунт…';
+  window.parent.postMessage({name:'UserContextRequest',messageId:id},'https://online.moysklad.ru');
+  setTimeout(()=>{if(id===requestId&&contextState==='waiting'){
+   contextState='timed_out';el('retry').hidden=false;el('retry').disabled=contextRequests>=3;
+   s.textContent=contextRequests<3?'МойСклад не ответил. Повторите запрос после загрузки решения.':
+    'МойСклад не ответил. Переоткройте решение.';}},12000);
+ };
+ el('retry').onclick=requestContext;
  window.addEventListener('message',h);
- window.parent.postMessage({name:'UserContextRequest',messageId:id},'https://online.moysklad.ru');
- setTimeout(()=>{if(!contextConfirmed){
-  s.textContent='МойСклад не ответил. Переоткройте решение.';}},12000);
+ requestContext();
 })();
 </script></html>"""
     return _iframe_page(page, frame_ancestors="https://online.moysklad.ru")

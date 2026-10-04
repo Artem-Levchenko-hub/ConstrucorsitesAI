@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_free_owner_allowance_is_the_only_head() -> None:
+def test_usage_cost_provenance_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0077_free_owner_allowance"]
+    assert heads == ["0078_usage_cost_provenance"]
+    assert chain["0078_usage_cost_provenance"] == "0077_free_owner_allowance"
     assert chain["0077_free_owner_allowance"] == "0076_max_analytics"
     assert chain["0076_max_analytics"] == "0075_generation_billing"
     assert chain["0075_generation_billing"] == "0074_usage_settlements"
@@ -237,8 +238,16 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version") == "0077_free_owner_allowance"
+        database.fetchval("SELECT version_num FROM alembic_version") == "0078_usage_cost_provenance"
     )
+    assert [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT data_type, is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'usage' "
+            "AND column_name = 'cost_provenance'"
+        )
+    ] == [("jsonb", "YES")]
     assert (
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
@@ -387,7 +396,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version") == "0077_free_owner_allowance"
+        database.fetchval("SELECT version_num FROM alembic_version") == "0078_usage_cost_provenance"
     )
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
