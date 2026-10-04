@@ -8,10 +8,16 @@ import { getMaxLaunchErrorDescription } from "@/lib/max-launch-error";
 import { isMaxDeployActive, shouldStartMaxDeploy } from "@/lib/max-launch-state";
 import { runMaxLaunchSingleFlight } from "@/lib/max-launch-single-flight";
 import { toast } from "sonner";
+import { getMaxPublicationGuard } from "@/lib/max-publication-guard";
+import { PUBLICATION_REASON_LABELS } from "@/lib/max-publication-progress";
 import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 
 const LAUNCH_TIMEOUT_MS = 20 * 60_000;
 const deadlineMessage = "Проверка публикации превысила время ожидания. Откройте статус публикации или повторите проверку.";
+
+export class MaxLaunchCheckpointError extends Error {
+  constructor(message: string) { super(message); this.name = "MaxLaunchCheckpointError"; }
+}
 
 type SavedLaunch = {
   version: 1;
@@ -86,6 +92,15 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
     checkDeadline();
     // A queued response without an ID is the old no-deployment sentinel.
     const active = isMaxDeployActive(deployment.phase, deployment.run_id);
+    if (["new", "requesting"].includes(state.phase) && deployment.phase === "failed" && deployment.reason_code === "migration_required") {
+      const project = await apiFetch<Project>(`/api/projects/${projectId}`, { signal });
+      const guard = getMaxPublicationGuard(deployment, project, projectId);
+      if (guard !== "none") {
+        discardCheckpoint = state.phase === "new";
+        throw new Error(guard === "migration_required" ? PUBLICATION_REASON_LABELS.migration_required
+          : "Сервер не подтвердил версию, для которой требуется миграция. Обновите статус публикации.");
+      }
+    }
     if (shouldStartMaxDeploy(state.phase, deployment.phase, deployment.run_id)
       || (state.phase === "requesting" && !active)) {
       let pendingRestoration = false;
@@ -127,7 +142,7 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
       // Never activate another run implicitly or retain an unrecoverable identity.
       // Clearing the checkpoint lets only the next explicit click create a new key.
       discardCheckpoint = true;
-      throw new Error("Статус относится к другой публикации. Проверьте её результат или опубликуйте приложение заново.");
+      throw new MaxLaunchCheckpointError("Сохранённая проверка относится к другой публикации. Проверьте текущий статус и подтвердите публикацию заново.");
     }
     state.runId = deployment.run_id;
     state.phase = "deploying";
@@ -136,7 +151,7 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
       checkDeadline();
       if (deployment.run_id !== state.runId || deployment.phase === "idle") {
         discardCheckpoint = true;
-        throw new Error("Сервер больше не возвращает выбранную публикацию. Проверьте её статус или запустите публикацию заново.");
+        throw new MaxLaunchCheckpointError("Сервер больше не возвращает сохранённую публикацию. Проверьте текущий статус и подтвердите публикацию заново.");
       }
       onStatus(deployment);
       if (deployment.phase === "failed" || deployment.phase === "cancelled") {
@@ -177,7 +192,9 @@ export function launchMaxProject(
       });
       return result;
     } catch (error) {
-      toast.error("Публикация не завершена", {
+      if (error instanceof MaxLaunchCheckpointError) {
+        toast.info("Проверьте текущую публикацию", { id: `max-launch-result:${projectId}`, description: error.message });
+      } else toast.error("Публикация не завершена", {
         id: `max-launch-result:${projectId}`,
         description: getMaxLaunchErrorDescription(error),
       });

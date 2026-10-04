@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from decimal import Decimal
+from typing import Any
 from uuid import UUID, uuid4
 
 import structlog
@@ -12,6 +13,7 @@ import structlog
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
 from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
+from yleum_gateway.services.pricing import validate_cost_provenance
 
 log = structlog.get_logger(__name__)
 
@@ -77,6 +79,7 @@ async def charge(
     provider_request_id: str | None = None,
     provider_cost_usd: Decimal | None = None,
     provider_scope: str = "llmgw",
+    cost_provenance: dict[str, Any] | None = None,
 ) -> UUID:
     """Commit usage even when unpaid, then raise 402 outside the transaction.
 
@@ -94,6 +97,10 @@ async def charge(
         raise ValueError("Provider cost must be finite and nonnegative")
     if not provider_scope or provider_request_id == "":
         raise ValueError("Settlement provider scope and receipt ID must be nonempty")
+    provenance_json = (
+        json.dumps(validate_cost_provenance(cost_provenance, cost_rub=cost_rub))
+        if cost_provenance is not None else None
+    )
     pool = get_pool()
     charge_id = uuid4()
     usage_id = uuid4()
@@ -257,9 +264,9 @@ async def charge(
                     (id, user_id, project_id, message_id, run_id, model_id,
                      tokens_in, tokens_out, cost_rub, stage, cache_read_tokens,
                      cache_write_tokens, retry_count, provider_request_id,
-                     provider_cost_usd)
+                     provider_cost_usd, cost_provenance)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                        $13, $14, $15)
+                        $13, $14, $15, $16::jsonb)
                 """,
                 usage_id,
                 user_id,
@@ -276,6 +283,7 @@ async def charge(
                 max(0, retry_count),
                 provider_request_id,
                 provider_cost_usd,
+                provenance_json,
             )
 
             await conn.execute(

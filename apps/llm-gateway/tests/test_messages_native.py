@@ -513,6 +513,14 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert kwargs["cache_write_tokens"] == 200
     assert str(kwargs["provider_cost_usd"]) == "0.125"
     assert kwargs["cost_rub"] == Decimal(expected_cost)
+    provenance = kwargs["cost_provenance"]
+    assert Decimal(provenance["effective_cost_rub"]) == Decimal(expected_cost)
+    assert provenance["provider_cost_usd"] == "0.125"
+    assert provenance["cache_read_tokens"] == 600
+    assert provenance["cache_write_tokens"] == 200
+    assert provenance["basis"] == (
+        "provider_reported_rub" if provenance["reported_cost_rub"] is not None else "token_tariff"
+    )
     assert Decimal(response.json()["metadata"]["cost_rub"]) == Decimal(expected_cost)
 
 

@@ -16,7 +16,7 @@ vi.mock("@/lib/api/messages", () => ({
   sendPrompt: vi.fn(),
 }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), dismiss: vi.fn() } }));
 
 function run(status: GenerationRun["status"]): GenerationRun {
   return {
@@ -270,4 +270,29 @@ describe("message cache update contracts", () => {
     expect(rows[0]).toBe(user);
     expect(rows[1]).toMatchObject({ generation_status: "cancelled", tokens_in: 0, tokens_out: 0 });
   });
+});
+
+
+it("dismisses only a superseded generation toast after accepted replacement, preserving durable old failure and other notices", async () => {
+  const socket = TestSocket.instances.at(-1)!;
+  await act(async () => socket.emit({ type: "app.error", data: { message_id: "message-1", title: "Ошибка провайдера", category: "provider", detail: "Сохранённая ошибка" } } as WsEvent));
+  await act(async () => socket.emit({ type: "llm.error", data: { message_id: "message-1", error: "failed" } }));
+  expect(toast.error).toHaveBeenCalledWith("Генерация прервалась", expect.objectContaining({ id: "generation-error:project-1:message-1" }));
+  const historicalFailure = message();
+  vi.mocked(sendPrompt).mockRejectedValueOnce(new Error("Admission unavailable"));
+  await act(async () => { await stream.submit("Новое пожелание", "model"); });
+  expect(toast.dismiss).not.toHaveBeenCalled();
+  vi.mocked(sendPrompt).mockResolvedValueOnce({ run_id: "replacement", message_id: "replacement-message", snapshot_id: null });
+  await act(async () => { await stream.submit("Новое пожелание", "model"); });
+  expect(toast.dismiss).toHaveBeenCalledWith("generation-error:project-1:message-1");
+  expect(vi.mocked(toast.dismiss).mock.calls.every(([id]) => typeof id === "string" && id.startsWith("generation-error:project-1:"))).toBe(true);
+  expect(message()).toEqual(historicalFailure);
+  expect(message().generation_status).toBe("failed");
+});
+it("keeps the same failed run's notice when accepted idempotency replay returns that exact message", async () => {
+  await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.error", data: { message_id: "message-1", error: "failed" } }));
+  vi.mocked(sendPrompt).mockResolvedValueOnce({ run_id: "run-1", message_id: "message-1", snapshot_id: null, run_status: "failed", replayed: true });
+  await act(async () => { await stream.submit("То же пожелание", "model", [], { idempotencyKey: "original" }); });
+  expect(toast.dismiss).not.toHaveBeenCalled();
+  expect(message().generation_status).toBe("failed");
 });

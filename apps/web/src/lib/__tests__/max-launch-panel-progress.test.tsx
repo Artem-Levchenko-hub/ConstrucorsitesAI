@@ -6,10 +6,11 @@ import { MaxLaunchPanel } from "@/components/max/MaxLaunchPanel";
 import type { DeployStatus, MaxReadiness, Project } from "@/lib/api/types";
 import { formatElapsed, heartbeatStale, observeHeartbeat, publicationBytesLabel, publicationElapsedMs, publicationFailureText, publicationStageLabel } from "@/lib/max-publication-progress";
 
-const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn(), launch: vi.fn() }));
+const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn(), launch: vi.fn(), project: vi.fn() }));
 vi.mock("@/lib/api/max-studio", async (original) => ({ ...await original<object>(), getMaxReadiness: api.readiness }));
 vi.mock("@/lib/api/runtime", async (original) => ({ ...await original<object>(), getLastDeploy: api.deploy, getDeployHistory: api.history, getRuntime: api.runtime }));
 vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<object>(), getMaxIntegration: api.integration }));
+vi.mock("@/lib/api/projects", async (original) => ({ ...await original<object>(), getProject: api.project }));
 vi.mock("@/lib/max-launch-runner", async (original) => ({ ...await original<object>(), launchMaxProject: api.launch }));
 
 const project = { id: "project-progress", name: "Прогресс", template: "max_miniapp" } as Project;
@@ -26,6 +27,7 @@ beforeEach(() => {
   vi.useRealTimers();
   localStorage.clear();
   api.readiness.mockResolvedValue(readiness());
+  api.project.mockResolvedValue({ ...project, current_snapshot_id: "current-snapshot" });
   api.history.mockResolvedValue([]);
   api.runtime.mockResolvedValue({ state: "running", container_name: "preview", port: 3000, dev_url: "https://preview.example.com", last_active_at: null, hibernate_after_seconds: 600, keep_alive: false });
   api.integration.mockResolvedValue({ eligible: true, connected: true, status: "verified", bot_id: "1", bot_name: "bot", bot_username: "bot", app_url: null, webhook_url: null, deep_link: null, last_error: null, verified_at: "2026-09-18T00:00:00Z", published_at: null });
@@ -123,4 +125,32 @@ it("helpers never turn missing data into progress", () => {
   expect(heartbeatStale(first, 46_001)).toBe(true);
   expect(heartbeatStale(observeHeartbeat(first, "b", 46_001), 46_002)).toBe(false);
   expect(heartbeatStale(observeHeartbeat(null, null, 0), 999_999)).toBe(false);
+});
+
+
+it("does not claim three prerequisites ready or enable publication when latest failure requires migration for current snapshot", async () => {
+  api.deploy.mockResolvedValue({ ...base, phase: "failed", snapshot_id: "current-snapshot", reason_code: "migration_required", error: "publication_migration_required", finished_at: "2026-10-04T18:42:00Z" });
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.textContent).toContain("Нужна миграция данных"));
+  await settle(() => expect(container.querySelector('[aria-label="Готово 2 из 3"]')).not.toBeNull());
+  expect(container.textContent).not.toContain("Всё готово к публикации");
+  expect(container.textContent).not.toContain("Можно публиковать");
+  expect(container.querySelector<HTMLButtonElement>('[data-testid="max-one-click-launch"]')?.disabled ?? true).toBe(true);
+  expect(api.launch).not.toHaveBeenCalled();
+});
+it("retains a real start-app failure and permits explicit retry rather than treating it as a migration block", async () => {
+  api.readiness.mockResolvedValue({ ...readiness(), ready_to_launch: false });
+  api.deploy.mockResolvedValue({ ...base, phase: "failed", snapshot_id: "current-snapshot", reason_code: "service_readiness_failed", error_stage: "start_app", error: "actual process start failed", finished_at: "2026-10-04T18:42:00Z" });
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.textContent).toContain("actual process start failed"));
+  expect(container.textContent).toContain("Приложение не ответило на проверку готовности");
+  expect(container.querySelector<HTMLButtonElement>('[data-testid="max-one-click-launch"]')?.disabled).toBe(false);
+  expect(api.launch).not.toHaveBeenCalled();
+});
+it("does not transfer historical migration failure onto a newer current snapshot", async () => {
+  api.deploy.mockResolvedValue({ ...base, phase: "failed", snapshot_id: "older-snapshot", reason_code: "migration_required", error: "historical migration failure" });
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.querySelector('[aria-label="Готово 3 из 3"]')).not.toBeNull());
+  expect(container.textContent).toContain("Всё готово к публикации");
+  expect(container.textContent).toContain("historical migration failure");
 });

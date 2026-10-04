@@ -226,7 +226,7 @@ it("refuses to activate a different release while resuming a saved operation", a
   expect(calls.some(call => call.path.endsWith("/activate"))).toBe(false);
   expect(posts()).toHaveLength(0);
   expect(button().disabled).toBe(false);
-  expect(container.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+  expect(container.querySelector('[role="status"]')?.textContent).toContain("Сохранённая проверка относится к другой публикации");
 });
 
 it.each([false, true])("recovers from a superseded operation only after an explicit new launch (during polling=%s)", async (duringPolling) => {
@@ -269,4 +269,31 @@ it.each(["prepare", "reprepare"])("publishes current app despite retired local %
   expect(calls.filter(call => call.path.includes("/restorations") && call.method === "POST")).toHaveLength(0);
   expect(calls.some(call => call.path.endsWith("/activate"))).toBe(true);
   expect(localStorage.getItem(`omnia:max:launch:${projectId}`)).toBeNull();
+});
+
+
+it("reports a stale saved checkpoint as reconciliation, without claiming a new publication failed or activating a foreign run", async () => {
+  const error = vi.spyOn(toast, "error");
+  const info = vi.spyOn(toast, "info");
+  status = deploy("done", "latest-release");
+  localStorage.setItem(`omnia:max:launch:${projectId}`, JSON.stringify({ version: 1, phase: "deploying", runId: "september-release", idempotencyKey: "old-key", deadlineAt: Date.now() + 60_000, paused: false }));
+  await mount();
+  expect(posts()).toHaveLength(0);
+  expect(calls.some(call => call.path.endsWith("/activate"))).toBe(false);
+  expect(error).not.toHaveBeenCalled();
+  expect(info).toHaveBeenCalledWith("Проверьте текущую публикацию", expect.objectContaining({ id: `max-launch-result:${projectId}` }));
+  expect(localStorage.getItem(`omnia:max:launch:${projectId}`)).toBeNull();
+  expect(button().disabled).toBe(false);
+  await click();
+  expect(posts()).toHaveLength(1);
+});
+it("blocks manual and resumed publication on explicit migration evidence for the same current snapshot", async () => {
+  status = { ...deploy("failed", "migration-release"), snapshot_id: "current", reason_code: "migration_required" };
+  localStorage.setItem(`omnia:max:launch:${projectId}`, JSON.stringify({ version: 1, phase: "new", runId: null, idempotencyKey: "not-dispatched", deadlineAt: Date.now() + 60_000, paused: false }));
+  await mount();
+  expect(button().disabled).toBe(true);
+  await act(async () => { await vi.waitFor(() => expect(container.textContent).toContain("Нужна миграция данных")); });
+  await click();
+  expect(posts()).toHaveLength(0);
+  expect(calls.some(call => call.path.endsWith("/activate"))).toBe(false);
 });

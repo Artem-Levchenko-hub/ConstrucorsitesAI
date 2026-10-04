@@ -14,6 +14,7 @@ describe("agentTranscriptTitle", () => {
   it("keeps running and completed labels distinct", () => {
     expect(agentTranscriptTitle(true, "running")).toBe("Собираю приложение");
     expect(agentTranscriptTitle(false, "completed")).toBe("Изменения готовы");
+    expect(agentTranscriptTitle(false, "completed", true)).toBe("Изменения готовы");
   });
 
   it("shows capacity waiting as recoverable active work", () => {

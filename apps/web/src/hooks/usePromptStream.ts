@@ -66,6 +66,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   // blocks one browser event from bubbling twice; this second guard prevents
   // the same payload from being mistaken for an intentional queued follow-up.
   const activeSubmitSignatureRef = useRef<string | null>(null);
+  const generationErrorToastsRef = useRef(new Map<string, string>());
   // Resumable-stream bookkeeping. `sendRef` lets `apply` ask the server to
   // replay the buffer (resync) when it spots a seq-gap. `streamMetaRef` holds
   // per-message {lastSeq, resyncing} so we dedup buffered deltas and drop live
@@ -622,7 +623,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         // Loud surface so the user notices: silent inline-error in the chat
         // tab was getting overlooked while the preview placeholder kept
         // shimmering — they thought generation was still in progress.
+        const toastId = `generation-error:${projectId}:${event.data.message_id}`;
+        generationErrorToastsRef.current.set(toastId, event.data.message_id);
         toast.error("Генерация прервалась", {
+          id: toastId,
           description: "Подробности и доступные действия появятся в сообщении генерации.",
           duration: 8_000,
         });
@@ -908,7 +912,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         activeSubmitSignatureRef.current = null;
         cancelRef.current?.();
         cancelRef.current = null;
+        const toastId = `generation-error:${projectId}:${tempAssistantId}`;
+        generationErrorToastsRef.current.set(toastId, tempAssistantId);
         toast.error("Генерация не запустилась", {
+          id: toastId,
           description: reason,
           duration: 10_000,
         });
@@ -925,6 +932,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           opts,
         );
         refreshOwnerAfterAcceptedPrompt(qc);
+        // Only an accepted replacement supersedes generation notices. A rejected
+        // POST or a replay of the same failed message must retain its notice.
+        for (const [toastId, failedMessageId] of generationErrorToastsRef.current) {
+          if (!toastId.startsWith(`generation-error:${projectId}:`) || failedMessageId === resp.message_id) continue;
+          toast.dismiss(toastId);
+          generationErrorToastsRef.current.delete(toastId);
+        }
         message_id = resp.message_id;
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         activeGenerationRunRef.current = resp.run_id;

@@ -153,6 +153,11 @@ async def verify():
                 raise RuntimeError("settlement table missing")
             # Feature gate accepts later migration heads without assuming head is forever 0074.
             await connection.fetch("SELECT id,user_id,billing_account_id,provider_scope,provider_request_id,receipt_hash,usage_id,wallet_charge_id,status FROM usage_settlements LIMIT 0")
+            # New cost writers require the additive schema before admission resumes.
+            provenance_column = await connection.fetchrow("SELECT data_type,is_nullable,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='usage' AND column_name='cost_provenance'")
+            if provenance_column is None or dict(provenance_column) != {'data_type': 'jsonb', 'is_nullable': 'YES', 'column_default': None}:
+                raise RuntimeError("cost provenance schema missing")
+            await connection.fetch("SELECT cost_provenance FROM usage LIMIT 0")
             # Alembic's check naming convention expands explicitly named checks.
             # Require the actual validated definitions, independent of their names.
             constraints = await connection.fetch("SELECT c.contype::text AS kind,c.convalidated AS validated,pg_get_constraintdef(c.oid) AS definition,ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum ORDER BY k.n) AS columns FROM pg_constraint c WHERE c.conrelid='public.usage_settlements'::regclass AND c.contype IN ('u','c')")

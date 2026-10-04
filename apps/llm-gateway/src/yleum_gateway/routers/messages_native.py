@@ -38,7 +38,7 @@ from yleum_gateway.core.runner_auth import (
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
-from yleum_gateway.services.pricing import calculate_cost_rub
+from yleum_gateway.services.pricing import calculate_cost_rub, cost_provenance, read_reported_cost
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -515,7 +515,8 @@ async def _native_messages_impl(
     tokens_out = int(usage.get("output_tokens") or 0)
     cache_read = int(usage.get("cache_read_input_tokens") or 0)
     cache_write = int(usage.get("cache_creation_input_tokens") or 0)
-    reported_rub, provider_cost_usd = _reported_cost(upstream_data, upstream)
+    reported = read_reported_cost(upstream_data, upstream.headers)
+    reported_rub, provider_cost_usd = reported.cost_rub, reported.cost_usd
     try:
         calculated_rub = calculate_cost_rub(
             actual_model,
@@ -548,6 +549,11 @@ async def _native_messages_impl(
                 retry_count=retry_count,
                 provider_request_id=provider_request_id,
                 provider_cost_usd=provider_cost_usd,
+                cost_provenance=cost_provenance(
+                    actual_model, calculated_rub, reported,
+                    tokens_in=tokens_in, tokens_out=tokens_out,
+                    cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+                ),
             )
         except WalletEmptyError as exc:
             log.warning(

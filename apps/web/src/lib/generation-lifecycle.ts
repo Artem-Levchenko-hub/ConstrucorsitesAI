@@ -1,6 +1,7 @@
 import type {
   GenerationRun,
   GenerationRunStatus,
+  Message,
   Uuid,
   WsEvent,
 } from "@/lib/api/types";
@@ -63,4 +64,13 @@ export function isMaxBuildReady({
   return !(
     generation?.response_mode === "build" && generation.status === "failed"
   );
+}
+
+
+/** Bind latest server truth for display without rewriting historical chat rows. */
+export function bindMessageGeneration(message: Message, generation: GenerationRun | null | undefined, projectId: string): Message {
+  if (message.role !== "assistant" || message.project_id !== projectId || generation?.project_id !== projectId
+    || generation.assistant_message_id !== message.id) return message;
+  return { ...message, generation_status: generation.status,
+    generation_started_at: generation.started_at, generation_finished_at: generation.finished_at };
 }

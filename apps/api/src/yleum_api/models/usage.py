@@ -1,9 +1,10 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, Numeric, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from yleum_api.models.base import Base
@@ -43,6 +44,8 @@ class Usage(Base):
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     provider_request_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(18, 8), nullable=True)
+    # Unknown historical provenance stays NULL; never inferred from today's tariff.
+    cost_provenance: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

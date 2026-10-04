@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type Ref } from "react";
 import { AnimatePresence } from "framer-motion";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, PanelLeftClose } from "lucide-react";
@@ -9,7 +9,7 @@ import {
   connectAppIntegration,
   getIntegrationCatalog,
 } from "@/lib/api/app-integrations";
-import { listMessages } from "@/lib/api/messages";
+import { getLatestGeneration, listMessages } from "@/lib/api/messages";
 import { getMaxProjectConfig } from "@/lib/api/max-studio";
 import {
   getProductAdviceSnapshotId,
@@ -43,6 +43,7 @@ import { FREE_CHAT_UPGRADE_MESSAGE } from "@/lib/owner-chat-quota";
 import { OwnerChatQuotaNotice } from "./OwnerChatQuotaNotice";
 import { useChatScroll } from "@/hooks/useChatScroll";
 import { Button } from "@/components/ui/button";
+import { bindMessageGeneration } from "@/lib/generation-lifecycle";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { readMaxLaunch } from "@/lib/max-launch-runner";
 import type { MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
@@ -101,10 +102,14 @@ export function ChatPanel({
   const acceptedAdaptations = useRef(new Set<string>());
   const qc = useQueryClient();
 
-  const { data: messages, isPending } = useQuery({
+  const { data: history, isPending } = useQuery({
     queryKey: ["messages", projectId],
     queryFn: () => listMessages(projectId),
   });
+  // AgentTranscript owns the fetch/poll; observe its project cache so the whole
+  // message (failure card, streaming state and timer) uses the same exact run.
+  const latest = useQuery({ queryKey: ["generation", projectId], queryFn: () => getLatestGeneration(projectId), enabled: false });
+  const messages = useMemo(() => history?.map(message => bindMessageGeneration(message, latest.data, projectId)), [history, latest.data, projectId]);
 
   // Re-hydrate the agentic transcript from history: the backend persists each
   // assistant reply's steps on `message.agent_steps`, so after a reload we seed

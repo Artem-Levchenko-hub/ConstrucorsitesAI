@@ -25,6 +25,8 @@ import {
   Lightbulb,
   ShieldCheck,
 } from "lucide-react";
+import { getLatestGeneration } from "@/lib/api/messages";
+import { isGenerationActive } from "@/lib/generation-lifecycle";
 import type { AgentStep, GenerationRunStatus } from "@/lib/api/types";
 import { agentElapsedSeconds } from "@/lib/agent-elapsed";
 import { collapseAgentSteps } from "@/lib/agent-steps";
@@ -133,11 +135,11 @@ const TONE_CLASS: Record<StepTone, string> = {
 export function AgentTranscript({
   projectId,
   messageId,
-  streaming,
+  streaming: messageStreaming,
   initialSteps,
-  startedAt,
-  finishedAt,
-  generationStatus,
+  startedAt: messageStartedAt,
+  finishedAt: messageFinishedAt,
+  generationStatus: messageStatus,
 }: {
   projectId?: string;
   messageId: string;
@@ -148,6 +150,18 @@ export function AgentTranscript({
   generationStatus?: GenerationRunStatus | null;
 }) {
   const qc = useQueryClient();
+  const latest = useQuery({ queryKey: ["generation", projectId],
+    queryFn: () => getLatestGeneration(projectId!), enabled: Boolean(projectId), retry: false,
+    refetchInterval: query => query.state.data?.project_id === projectId && query.state.data?.assistant_message_id === messageId
+      && isGenerationActive(query.state.data) ? 5_000 : false });
+  // Latest is project-wide; it may update only its exact assistant message.
+  // Older failure cards and tool records retain their own durable outcome.
+  const boundRun = latest.data?.project_id === projectId && latest.data?.assistant_message_id === messageId
+    ? latest.data : undefined;
+  const generationStatus = boundRun?.status ?? messageStatus;
+  const startedAt = boundRun?.started_at ?? messageStartedAt;
+  const finishedAt = boundRun?.finished_at ?? messageFinishedAt;
+  const streaming = generationStatus ? isGenerationActive({ status: generationStatus }) : Boolean(messageStreaming);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const capacityWaiting = generationStatus === "queued_for_capacity";
   const open = Boolean(streaming) || capacityWaiting || detailsOpen;
@@ -206,7 +220,7 @@ export function AgentTranscript({
     !streaming &&
     (generationStatus === "failed" ||
       generationStatus === "cancelled" ||
-      visibleSteps.at(-1)?.ok === false);
+      (!generationStatus && visibleSteps.at(-1)?.ok === false));
 
   return (
     <div data-agent-transcript={streaming || capacityWaiting ? "working" : "idle"} className="overflow-hidden rounded-xl border border-border-subtle bg-surface-raised/60">

@@ -25,7 +25,7 @@ from yleum_gateway.core.errors import (
 )
 from yleum_gateway.services import billing, cache, file_logger, safety, streaming
 from yleum_gateway.services import model_router as router_module
-from yleum_gateway.services.pricing import calculate_cost_rub
+from yleum_gateway.services.pricing import calculate_cost_rub, cost_provenance
 from yleum_gateway.services.token_counter import count_message_tokens
 
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -270,6 +270,10 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 cache_read_tokens=cache_read,
                 cache_write_tokens=cache_write,
                 provider_request_id=str(response.get("id") or "") or None,
+                cost_provenance=cost_provenance(
+                    actual_model, cost_rub, tokens_in=tokens_in, tokens_out=tokens_out,
+                    cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+                ),
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc

@@ -18,7 +18,7 @@ vi.mock("@/lib/api/messages", () => ({
   cancelGeneration: vi.fn(), getLatestGeneration: vi.fn(), sendPrompt: vi.fn(),
 }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
-vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn() } }));
+vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), dismiss: vi.fn() } }));
 class Socket {
   static OPEN = 1; static CONNECTING = 0;
   static instances: Socket[] = [];

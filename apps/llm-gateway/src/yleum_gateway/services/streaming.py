@@ -25,7 +25,7 @@ from yleum_gateway.core.errors import GatewayError
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
 from yleum_gateway.services import model_router as router_module
-from yleum_gateway.services.pricing import calculate_cost_rub
+from yleum_gateway.services.pricing import calculate_cost_rub, cost_provenance
 from yleum_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
 log = structlog.get_logger(__name__)
@@ -184,6 +184,10 @@ async def stream_completion(
                     cost_rub=cost_rub_final,
                     description=f"Streamed completion via {actual_model}",
                     free=free,
+                    cost_provenance=cost_provenance(
+                        actual_model, cost_rub_final, tokens_in=tokens_in_final,
+                        tokens_out=tokens_out_final, estimated_tokens=True,
+                    ),
                 )
             except Exception:
                 log.exception("stream.charge_failed", user_id=str(user_id), model=actual_model)
