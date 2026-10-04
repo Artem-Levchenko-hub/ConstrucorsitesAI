@@ -100,7 +100,8 @@ def requested_source_edit(prompt: str) -> bool:
     """Recognize unquoted change commands, including after context/preservation clauses.
 
     This is a conservative write requirement, not an intent classifier: an
-    explanation, investigation or continuation without a command stays optional.
+    explanation, investigation or continuation stays optional. An explicit
+    desired product state can require a write without an imperative verb.
     """
     text = re.sub(
         r'```.*?```|`[^`]*`|«[^»]*»|“[^”]*”|"[^"]*"|(?<!\w)\'[^\']*\'',
@@ -124,6 +125,36 @@ def requested_source_edit(prompt: str) -> bool:
         r"сделай|обнови|доработай|"
         r"fix|add|change|modify|edit|replace|remove|delete|implement|update)\b"
     )
+    # Nominal requests ("Нужно поле даты", "Нужна сортировка") are ordinary
+    # change requests too. Keep their entire clause so commas/colons do not
+    # detach the requirement from its analysis or preservation scope.
+    for clause in re.split(r"[.!?;\n]", text):
+        need = re.search(r"\bнуж(?:но|на|ен|ны)\s*,?\s*", clause)
+        if need is None:
+            continue
+        prefix, requirement = clause[:need.start()], clause[need.end():]
+        if re.search(
+            r"\b(?:не|как|почему|объясни|расскажи|проверь|исследуй|проанализируй|"
+            r"продолжи|обзор|анализ|ревью|review|inspect|continue|explain|investigate|"
+            r"check|analy[sz]e|how|why|whether)\b", prefix,
+        ) or re.match(
+            r"(?:только\s+)?(?:(?:провести|сделать|выполнить)\s+)?"
+            r"(?:обзор|анализ|ревью|проверка|проверку|исследование|объяснение)\b",
+            requirement,
+        ) or re.match(
+            r"(?:только\s+)?(?:не|ли|объяснить|рассказать|проверить|исследовать|понять|"
+            r"узнать|оценить|изучить|сохранить|сохранение)\b", requirement,
+        ) or re.search(
+            r"^чтобы\b.*\bне\s+(?:менял\w*|изменял\w*|менять|изменять)\b",
+            requirement,
+        ):
+            continue
+        if re.search(
+            r"\b(?:интерфейс\w*|поле|поля|кноп\w*|дата|даты|дату|карточ\w*|"
+            r"сортиров\w*|фильтр\w*|форм\w*|бейдж\w*|цвет\w*|сч[её]тчик\w*)\b",
+            requirement,
+        ):
+            return True
     for clause in re.split(r"[.!?;,:\n]|\b(?:затем|then)\b", text):
         clause = re.sub(
             r"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?",

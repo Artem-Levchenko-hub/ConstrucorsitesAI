@@ -2086,7 +2086,13 @@ async def _run_native_segments(
             return combined
 
         file_progress = cumulative_files != files_before
-        evidence_progress = cumulative_evidence != evidence_before
+        # Read/shell counters are observations, not new readiness proof. Repeated
+        # successful exploration must not authorize another paid segment.
+        evidence_progress = any(
+            cumulative_evidence.get(f"{name}_after_write", 0) > 0
+            and evidence_before.get(f"{name}_after_write", 0) <= 0
+            for name in ("build", "runtime_check", "probe", "verify_isolation")
+        )
         if not file_progress and not evidence_progress:
             combined.summary = (
                 "Автономная генерация остановлена: целый сегмент не изменил "

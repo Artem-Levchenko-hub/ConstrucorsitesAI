@@ -14,6 +14,32 @@ from yleum_api.services.generation.agent_finalization import (
 from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
 
 
+@pytest.mark.parametrize("prompt, expected", [
+    ("Задача: срок выполнения. Нужно поле даты в форме и видимая дата в карточке.", True),
+    ("Нужно, чтобы кнопка была фиолетовой и дата отображалась в карточке.", True),
+    ("Нужна сортировка задач в списке. API и данные не меняй.", True),
+    ("Нужно исправление интерфейса срока выполнения, без изменений API.", True),
+    ("Нужно объяснить, почему поле даты не работает.", False),
+    ("Нужно проверить интерфейс и рассказать результат, без правок.", False),
+    ("Нужно сохранить существующие поля, больше ничего не меняй.", False),
+    ("Не нужна новая кнопка в интерфейсе.", False),
+    ("Объясни требование: нужна сортировка задач.", False),
+    ("Исследуй, почему нужно поле даты в форме.", False),
+    ('Объясни запрос «Нужно поле даты в форме», ничего не меняй.', False),
+    ("Нужно понять, как изменить цвет кнопки.", False),
+    ("Нужно не менять интерфейс.", False),
+    ("Нужен анализ формы.", False),
+    ("Нужно только провести анализ поля даты.", False),
+    ("Нужна проверка даты в форме.", False),
+    ("Нужно, чтобы интерфейс не менялся.", False),
+    ("Нужно поле даты в форме без изменений API.", True),
+    ("Explain the requirement: нужна сортировка задач.", False),
+    ("Нужно ли поле даты в форме?", False),
+])
+def test_nominal_feature_requests_require_write_but_analysis_does_not(prompt, expected):
+    assert agent_generation.requested_source_edit(prompt) is expected
+
+
 def turn(name, args):
     return {"content": [{"type": "tool_use", "id": str(uuid4()), "name": name,
                          "input": args}], "stop_reason": "tool_use"}
@@ -64,6 +90,23 @@ def edit_workspace(monkeypatch):
         )
 
     return run, initial, workspace, executed
+
+
+async def test_nominal_existing_task_enables_mutation_gate(edit_workspace):
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(kwargs)
+        return turn("read_file", {"path": "src/app/page.tsx"})
+
+    with pytest.raises(RuntimeError, match="edit produced no source changes"):
+        await run(provider, prompt_text="Задача: срок выполнения. Нужно поле даты в форме.")
+    assert len(calls) == 6
+    assert executed == ["read_file"] * 4
+    assert workspace == initial
+    assert {tool["name"] for tool in calls[4]["tools"]} == {"write_file", "edit_file"}
+    assert calls[5]["tool_choice"] == {"type": "tool", "name": "edit_file"}
 
 
 @pytest.mark.parametrize("command", ["Сделай", "Обнови", "Доработай"])

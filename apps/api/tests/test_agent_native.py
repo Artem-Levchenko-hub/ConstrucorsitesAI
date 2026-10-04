@@ -663,6 +663,57 @@ async def test_native_segments_stop_after_proven_no_progress() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("tool", ["read_file", "grep", "list_dir", "bash", "docs"])
+async def test_native_segments_observations_do_not_authorize_paid_continuation(tool: str) -> None:
+    calls = 0
+
+    async def run_segment(
+        _task: str, _check: Any, _initial_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        return AgentResult(
+            done=False, summary="still exploring", files={}, steps=12,
+            stop_reason="exploring", evidence={tool: calls},
+        )
+
+    result = await agent_native._run_native_segments(
+        task="Change the card UI", completion_check=lambda _files, _proof: "missing change",
+        max_segments=4, run_segment=run_segment,
+    )
+
+    assert calls == 1
+    assert result.stop_reason == "no_progress"
+    assert result.files == {}
+    assert result.evidence == {tool: 1}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proof", ["build", "runtime_check", "probe", "verify_isolation"])
+async def test_native_segments_continue_for_new_proof_but_not_repeat_counters(proof: str) -> None:
+    calls = 0
+
+    async def run_segment(
+        _task: str, _check: Any, _initial_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        return AgentResult(
+            done=False, summary="more proof needed", files={}, steps=12,
+            stop_reason="max_steps", evidence={f"{proof}_after_write": calls},
+        )
+
+    result = await agent_native._run_native_segments(
+        task="Finish verification", completion_check=lambda _files, _proof: "missing proof",
+        max_segments=4, run_segment=run_segment,
+    )
+
+    assert calls == 2
+    assert result.stop_reason == "no_progress"
+    assert result.evidence == {f"{proof}_after_write": 2}
+
+
+@pytest.mark.asyncio
 async def test_native_segments_honour_cancellation_between_segments() -> None:
     calls = 0
     owner_task = asyncio.current_task()

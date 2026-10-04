@@ -1005,7 +1005,7 @@
     "scope": "Real production generations on existing QA projects; user-authorized8cohorts×3; no new projects or bot changes during cohorts",
     "target_runs": 24,
     "max_parallel": 3,
-    "first_cohort_started": false,
+    "first_cohort_started": true,
     "historical_census": {
       "window_days": 7,
       "observed_release": "bc38e290c55a8794ba4b94434d6d3a82d7bd3d9a",
@@ -1063,7 +1063,7 @@
       "Keep actual active publication address separate from latest candidate/attempt"
     ],
     "original_67_counts_unchanged": true,
-    "next": "Exact pushedCIgreen canonicaldeploy health, then cohort3 actualUI requests and workingpreview checks; successful cohort immediately followed by next; failures fixed/deployed before next",
+    "next": "G10 HOLD: exact B nominal-write classifier and no-progress repair, review/CI, fresh backup canonical delivery/health, B7 strict physical PASS and explicit CLEAR. QA only sends normal existing-project prompts.",
     "local_qa_support": {
       "source_sha": "bc38e290c55a8794ba4b94434d6d3a82d7bd3d9a",
       "reported_bounded_offline_passes": 164,
@@ -1086,6 +1086,19 @@
       "production_deployed": false,
       "ci_run": 37118331045,
       "failure": "Old provider fake ignored request timeout and hard-coded previous210s window; corrected regression models remaining I/O/backoff for both210s and270s. Follow-up ownership classification fix requires new exact CI and deployment."
-    }
+    },
+    "latest_terminal": {
+      "accepted": 27,
+      "completed": 21,
+      "failed": 6,
+      "cancelled": 0,
+      "calls": 493,
+      "internal_rub": "2617.7061",
+      "provider_reported_usd": "17.71016830",
+      "completion_rate_percent": "77.7778",
+      "scope": "Terminal completion separately from actual feature/provider acceptance; failures and failed-run costs retained."
+    },
+    "latest_cohort": "G09",
+    "latest_evidence": "evidence/generation-G09-20261004.json"
   }
 }
