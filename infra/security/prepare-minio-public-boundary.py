@@ -149,7 +149,8 @@ def parse(value: str) -> list[Node]:
             else:
                 word.append(char)
             index += 1
-        if quote is not None or not word:
+        empty_quoted = value[start:index] in {'""', "''"}
+        if quote is not None or (not word and not empty_quoted):
             raise ValueError("nginx_token_shape_changed")
         tokens.append(("".join(word), start, False))
 

@@ -451,3 +451,49 @@ def test_cli_is_no_effect_by_default_and_writes_one_private_exclusive_candidate(
     )
     with pytest.raises(SystemExit, match="vhost_changed"):
         module.main()
+
+
+@pytest.mark.parametrize("empty", ['""', "''"])
+def test_closed_empty_quoted_argument_is_data_in_real_nginx_grammar(empty):
+    module = helper()
+    nodes = module.parse(f"map $header $value {{ default {empty}; }}")
+    assert nodes[0].words == ("map", "$header", "$value")
+    assert nodes[0].children[0].words == ("default", "")
+
+
+@pytest.mark.parametrize("token", ['"', "'", "\"\"''", '""""', "''''", '"bad\\value"'])
+def test_empty_argument_support_keeps_unknown_quote_and_escape_shapes_denied(token):
+    with pytest.raises(ValueError):
+        helper().parse(f"proxy_set_header Header {token};")
+
+
+@pytest.mark.parametrize(
+    "source", ['"";', "'';", 'server { location /minio/ { proxy_pass ""; } }']
+)
+def test_empty_directive_or_empty_destination_never_produces_candidate(source):
+    with pytest.raises(ValueError):
+        helper().prepare(source)
+
+
+@pytest.mark.parametrize("empty", ['""', "''"])
+def test_empty_passive_header_data_preserves_other_routes_and_candidate_bytes(empty):
+    module = helper()
+    source = VHOST.replace(
+        "location /api/ { proxy_pass http://127.0.0.1:8200; }",
+        f"location /api/ {{ proxy_pass http://127.0.0.1:8200; proxy_set_header Connection {empty}; }}",
+    )
+    candidate = module.prepare(source)
+    assert f"proxy_set_header Connection {empty};" in candidate
+    assert "proxy_pass http://127.0.0.1:8200;" in candidate
+    assert "proxy_pass http://127.0.0.1:9000/;" in candidate
+    assert candidate.count("location ^~ /minio/ {") == 1
+    assert module.prepare(candidate) == candidate
+
+
+def test_empty_argument_does_not_allow_unknown_header_inside_minio_boundary():
+    source = VHOST.replace(
+        "proxy_pass http://127.0.0.1:9000/;",
+        'proxy_pass http://127.0.0.1:9000/; proxy_set_header Arbitrary "";',
+    )
+    with pytest.raises(ValueError, match="public_minio_body_shape_changed"):
+        helper().prepare(source)
