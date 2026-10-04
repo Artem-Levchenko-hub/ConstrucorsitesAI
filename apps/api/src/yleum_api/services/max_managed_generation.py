@@ -7,6 +7,7 @@ INTEGRATION_SDK_PATH = "src/lib/omnia/integration-client.ts"
 MANAGED_BROWSER_PATHS = (
     INTEGRATION_SDK_PATH, "src/lib/omnia/client.ts",
     "src/components/MaxAppProvider.tsx", "src/components/YleumCompliance.tsx",
+    "src/lib/max/owner-preview-renewal.ts",
     "src/app/support/page.tsx",
 )
 

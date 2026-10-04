@@ -10,6 +10,7 @@ from yleum_api.services.max_project_kit import _template_file
 SDK_PATH = "src/lib/omnia/integration-client.ts"
 LEGACY_CLIENT_PATH = "src/lib/omnia/client.ts"
 PROVIDER_PATH = "src/components/MaxAppProvider.tsx"
+RENEWAL_PATH = "src/lib/max/owner-preview-renewal.ts"
 FOOTER_PATH = "src/components/YleumCompliance.tsx"
 SUPPORT_PATH = "src/app/support/page.tsx"
 CONFIG_PATH = "src/lib/omnia/max-config.ts"
@@ -40,6 +41,7 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         assert tree[SDK_PATH] == _template_file(SDK_PATH)
         assert tree[LEGACY_CLIENT_PATH] == _template_file(LEGACY_CLIENT_PATH)
         assert tree[PROVIDER_PATH] == _template_file(PROVIDER_PATH)
+        assert tree.get(RENEWAL_PATH) == _template_file(RENEWAL_PATH)
         assert tree[SUPPORT_PATH] == _template_file(SUPPORT_PATH)
         return None
 
@@ -57,12 +59,15 @@ async def test_generation_delivers_sdk_before_reading_agent_seed(monkeypatch, fa
         assert tree[SDK_PATH] == "old SDK"
         assert tree[LEGACY_CLIENT_PATH] == "old legacy SDK"
         assert tree[PROVIDER_PATH] == "old session bootstrap"
+        assert RENEWAL_PATH not in tree
         return
     for _ in range(2):
         await runtime._build_agent_seed_parts(handle, refresh_managed_sdk=True)
     canonical = {
         path: _template_file(path)
-        for path in (SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, FOOTER_PATH, SUPPORT_PATH)
+        for path in (
+            SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+        )
     }
     assert writes == [(canonical, ())]
     assert tree["src/app/page.tsx"] == "existing product"
@@ -75,7 +80,9 @@ async def test_generation_retires_encrypted_crud_files_from_existing_projects():
 
     canonical = {
         path: _template_file(path)
-        for path in (SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, FOOTER_PATH, SUPPORT_PATH)
+        for path in (
+            SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+        )
     }
     tree = {
         **canonical,
@@ -139,7 +146,9 @@ async def test_sdk_delivery_uses_current_generation_revision_and_is_exported(
     await refresh_integration_sdk(handle, max_config_source=saved_source)
     canonical = {
         path: _template_file(path)
-        for path in (SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, FOOTER_PATH, SUPPORT_PATH)
+        for path in (
+            SDK_PATH, LEGACY_CLIENT_PATH, PROVIDER_PATH, RENEWAL_PATH, FOOTER_PATH, SUPPORT_PATH
+        )
     }
     canonical[CONFIG_PATH] = saved_source
     assert await handle.snapshot_files() == {**original, **canonical}
