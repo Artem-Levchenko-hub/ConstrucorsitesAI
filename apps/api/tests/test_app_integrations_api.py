@@ -19,6 +19,7 @@ from yleum_api.models.app_integration import (
     ProjectIntegrationBinding,
 )
 from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.models.project import Project
 from yleum_api.routers import projects as projects_router
 from yleum_api.services import integration_oauth, integration_providers
 from yleum_api.services import repo as repo_svc
@@ -125,15 +126,29 @@ async def test_catalog_and_connection_never_expose_provider_secrets(
         "/api/projects",
         json={"name": "Second MAX app", "template": "max_miniapp"},
     )
-    assert second.status_code == 201
-    second_id = second.json()["id"]
+    assert second.status_code == 402
+    assert second.json()["error"]["code"] == "entitlement_exceeded"
+    assert second.json()["error"]["details"]["entitlement"] == "max_projects"
+    # Account-scoped credentials remain reusable for existing multi-app owners.
+    # Seed a synthetic legacy app without changing Free admission policy.
+    legacy_project = Project(
+        owner_id=stored.user_id,
+        name="Second MAX app",
+        slug="integration-unbound-legacy-app",
+        template="max_miniapp",
+    )
+    db_session.add(legacy_project)
+    await db_session.commit()
+    second_id = legacy_project.id
     reusable = await client.get(f"/api/projects/{second_id}/app-integrations")
     assert reusable.status_code == 200
+    assert "live_secret_value" not in reusable.text
     assert reusable.json()["connections"][0]["bound_to_project"] is False
     bound = await client.post(
         f"/api/projects/{second_id}/app-integrations/yookassa/bind"
     )
     assert bound.status_code == 200
+    assert "live_secret_value" not in bound.text
     assert bound.json()["bound_to_project"] is True
     bindings = list(
         (

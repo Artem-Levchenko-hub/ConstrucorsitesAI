@@ -10,6 +10,7 @@ from tests.test_integration_runtime_contracts import connect, headers, upstream
 from yleum_api.core.crypto import encrypt_strong
 from yleum_api.models.app_integration import AccountIntegration, ProjectIntegrationBinding
 from yleum_api.models.integration_operation import IntegrationOperation
+from yleum_api.models.project import Project
 
 PIPELINES = {
     "_embedded": {
@@ -147,9 +148,22 @@ async def test_status_roundtrip_checks_user_project_and_account_before_provider(
             "template": "max_miniapp",
         },
     )
-    assert foreign_project.status_code == 201
+    assert foreign_project.status_code == 402
+    assert foreign_project.json()["error"]["code"] == "entitlement_exceeded"
+    assert foreign_project.json()["error"]["details"]["entitlement"] == "max_projects"
+    assert len(calls) == before
+    # Existing multi-project owners must still be isolated at runtime. Seed a
+    # synthetic legacy project; Free admission remains enforced above.
+    unbound_project = Project(
+        owner_id=connection.user_id,
+        name="Another project",
+        slug="amocrm-unbound-legacy-project",
+        template="max_miniapp",
+    )
+    db_session.add(unbound_project)
+    await db_session.commit()
     denied = await client.post(
-        f"/api/runtime/projects/{foreign_project.json()['id']}/leads/status",
+        f"/api/runtime/projects/{unbound_project.id}/leads/status",
         headers=headers(),
         json={"lead_id": "123"},
     )

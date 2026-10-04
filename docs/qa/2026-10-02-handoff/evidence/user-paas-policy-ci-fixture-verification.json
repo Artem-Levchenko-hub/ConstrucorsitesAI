@@ -1,0 +1,35 @@
+{
+  "base": "7697003f1efb9fe0d7a47be06f50108d98a554e0",
+  "scope": "Test-only CI compatibility. Quota/auth/provider/product source unchanged. Historical fixtures create only synthetic legacy projects in disposable DB. No production model/provider/wallet/customer-row change.",
+  "observed_utc": "2026-10-04T19:04:54.589518+00:00",
+  "source_hashes": {
+    "apps/web/src/lib/__tests__/max-project-config-save.test.tsx": "c7ecb3a924da3836655f953fba7ebd374f67d347069c3e176d10e2601f49e1e3",
+    "apps/api/tests/test_amocrm_native_api.py": "ee23dae068a709ab96856109408e4c128d247583109efef7309858b5563779ce",
+    "apps/api/tests/test_app_integrations_api.py": "611435b367fc5ca39618cba4a675b7a9c7ea2d818370c4a2da03039ea50ddab1",
+    "apps/api/tests/test_max_account.py": "d92667ac24c0b1385a4a863dd7ba299a60b2a84358474b6392a8c27c6667e27a"
+  },
+  "root_web_focused": {
+    "tests": 24,
+    "pass": true,
+    "log_sha256": "b02b88e3d71d9a27471d5d514c6e4da11d3374c37559ec7688137440ec23710b"
+  },
+  "root_three_api_modules": {
+    "tests": 39,
+    "pass": true,
+    "actual_disposable_postgres": true,
+    "owned_database_cleaned": true,
+    "log_sha256": "993f2c90911d15ab4e43ee509a59b05a84bfc4e8b15328d12d47e17b34b71d11"
+  },
+  "independent_reviews": "SOURCE_CLEAR all three patches; original security/replay/secret checks retained",
+  "ruff": true,
+  "diff_check": true,
+  "parent_CI": {
+    "run": 37224767921,
+    "success": 6,
+    "failed": 4,
+    "failures_preserved": true
+  },
+  "successor_CI": "NOT_RUN",
+  "production_revision": "8c0d41158ba65a07708b94c83d97c08c40d9e3da",
+  "new_policies_deployed": false
+}

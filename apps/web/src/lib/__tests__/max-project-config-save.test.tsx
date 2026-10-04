@@ -523,6 +523,7 @@ it("clears the first dispatch marker after a definitive Free quota refusal", asy
     expect(launch().disabled).toBe(true);
     await act(async () => root.render(null));
     await act(async () => root.render(render()));
+    await act(async () => { await vi.waitFor(() => expect(document.body.textContent).toContain("Осталось сообщений: 0")); });
     expect(launch().disabled).toBe(true);
     await act(async () => launch().click());
     expect(mocks.send).toHaveBeenCalledOnce();

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import FREE_GENERATION_LIMIT, get_settings
+from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.user import User
 from yleum_api.models.wallet import Wallet
 from yleum_api.routers import auth as auth_router
@@ -179,7 +180,23 @@ async def test_max_free_generation_limit_belongs_to_the_user(
         },
     )
     assert blocked.status_code == 402
-    assert blocked.json()["error"]["code"] == "wallet_empty"
+    assert blocked.json()["error"]["code"] == "entitlement_exceeded"
+    assert blocked.json()["error"]["details"]["entitlement"] == "free_chat_messages"
+    # Match the production request-session rollback before retrying the same key.
+    await db_session.rollback()
+    retry = await client.post(
+        f"/api/projects/{project.json()['id']}/prompt",
+        json={
+            "prompt": "Собери приложение",
+            "skip_clarify": True,
+            "idempotency_key": "max-user-quota-1",
+        },
+    )
+    assert retry.status_code == 402
+    assert retry.json()["error"]["code"] == "entitlement_exceeded"
+    assert retry.json()["error"]["details"]["entitlement"] == "free_chat_messages"
+    await db_session.rollback()
+    assert (await db_session.scalars(select(GenerationRun))).all() == []
 
 
 async def test_admin_access_flag_requires_the_admin_role(
