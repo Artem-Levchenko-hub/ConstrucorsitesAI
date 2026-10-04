@@ -1394,5 +1394,27 @@
       "live_analytics": "NOT_RUN",
       "primary_provider_failure_unchanged": true
     }
+  },
+  "analytics_compiled_contract_followup": {
+    "previous_candidate": "4ca775927b106f7afa84a7b97f17b86a1906b4d7",
+    "CI": {
+      "run": 37212367936,
+      "all_jobs": 10,
+      "conclusion": "success"
+    },
+    "actual_core_build": "blocked missing explicit VM analytics module mock; pins unchanged",
+    "local_repaired_tests": "24/24 PASS",
+    "production": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "delivery": "PENDING exact successor CI+immutable core/disposable+both hosts+backup+canonical production",
+    "evidence": "evidence/mvp-analytics-compiled-contract-verification.json"
+  },
+  "publication_A_followup": {
+    "project_id": "afe27034-ab68-48cd-be9f-8883702c6bd3",
+    "reported_error": "publication_migration_required",
+    "UI_ready_contradiction": true,
+    "source_guard": "strict schema digest plus data contract; readiness excludes this preflight",
+    "actual_schema_diff": "NOT_READ",
+    "migration_path": "NOT_ACCEPTED",
+    "guard_bypass": false
   }
 }

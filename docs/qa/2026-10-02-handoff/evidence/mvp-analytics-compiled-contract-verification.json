@@ -1,0 +1,58 @@
+{
+  "Git_push": "NOT_RUN",
+  "base_revision": "4ca775927b106f7afa84a7b97f17b86a1906b4d7",
+  "dependency_root": "/tmp/mvp-analytics-test-deps",
+  "diff_check": "PASS",
+  "existing_23_tests": "preserved",
+  "green": {
+    "fail": 0,
+    "pass": 24,
+    "tests": 24
+  },
+  "green_log_sha256": "70f2686be33b1d2450ed86fd7d7ce7767edc1f6c72c6f6a9c6e760b50ab22a40",
+  "next": "Root reviews/integrates, then re-freezes canonical core bundle/operator hashes because shipped build test is part of source closure.",
+  "node_version": "v24.19.0",
+  "owned_files": [
+    "apps/orchestrator/scripts/public-max-core/action-write-contract.test.cjs"
+  ],
+  "patch_sha256": "b0a1f3212c1bc42cf0fa549e46c51e4a569db421925907e6741bf4f819e37f39",
+  "production_build": "NOT_RERUN",
+  "red": {
+    "cause": "Unexpected import @/lib/omnia/analytics",
+    "fail": 7,
+    "pass": 16,
+    "tests": 23
+  },
+  "red_log_sha256": "ba7f39f35642416252bf020850e8f131350068e24934cde27be090aac6224c63",
+  "server_actions": 0,
+  "source_file_sha256": "b0bbd069e2d52e1cbc5611f051841dc32376e795e0aeb88fec4db6d2ca4aa605",
+  "syntax": "PASS",
+  "typescript_version": "5.9.3",
+  "worktree": "/tmp/qa-worktrees/mvp-analytics-contract-4ca",
+  "zod_version": "3.25.76",
+  "actual_Core_build": {
+    "revision": "4ca775927b106f7afa84a7b97f17b86a1906b4d7",
+    "build_root": "/tmp/mvp-analytics-build-4ca-a",
+    "exit": 1,
+    "primary": "Unexpected import @/lib/omnia/analytics",
+    "contract_tests": {
+      "total": 23,
+      "pass": 16,
+      "fail": 7
+    },
+    "production_pins_changed": false
+  },
+  "root_recheck": {
+    "tests": 24,
+    "pass": 24,
+    "fail": 0,
+    "log_sha256": "8027c6c494bba4a65d72a93ba0818dacce38c17c65634ea6d072946b8a5dfbc2"
+  },
+  "production": {
+    "observed_utc": "2026-10-04T15:47:04Z",
+    "revision": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "API_web": "200/ok",
+    "running": 0
+  },
+  "scope": "Only executable VM fixture; all23previous assertions preserved plus receipt timing/exclusion proof. Not repeated canonical Docker/HTTP acceptance, nor new production delivery."
+}

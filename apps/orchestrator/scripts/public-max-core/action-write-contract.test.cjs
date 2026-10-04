@@ -14,7 +14,8 @@ const qaRequire=createRequire(resolve(process.env.OMNIA_TEST_NODE_ROOT || root,'
 const ts=qaRequire('typescript');
 let zod; try {zod=qaRequire('zod');} catch {zod=qaRequire('next/dist/compiled/zod');}
 function fixture() {
-  const rows=[], audits=[];
+  const rows=[], audits=[], forwarded=[];
+  let inTransaction=false;
   const tables={maxUsers:{maxUserId:'maxUserId'},maxBusinessActions:{id:'id',maxUserId:'maxUserId'},maxAuditLog:{id:'id',details:'details',maxUserId:'maxUserId'}};
   function match(row,c){if(!c)return true;if(c.kind==='and')return c.values.every(x=>match(row,x));if(c.kind==='json')return row.details[c.field]===c.value;return row[c.column]===c.value;}
   const tx={
@@ -28,18 +29,46 @@ function fixture() {
     'node:crypto':require('node:crypto'), 'zod':zod,
     'drizzle-orm':{eq:(column,value)=>({kind:'eq',column,value}),and:(...values)=>({kind:'and',values}),sql:(strings,...values)=>({kind:'json',field:strings.join('').includes('operationKey')?'operationKey':'actionId',value:values[1]})},
     'next/server':{NextResponse:{json:(data,init)=>Response.json(data,init)}},
-    '@/lib/db':{schema:tables,withMaxUser:async(actor,run)=>{assert.equal(actor,'test-actor');return run(tx);}},
+    '@/lib/db':{schema:tables,withMaxUser:async(actor,run)=>{assert.equal(actor,'test-actor');inTransaction=true;try{return await run(tx);}finally{inTransaction=false;}}},
+    // Receipt boundary only: real signature/transport/dedupe is covered by
+    // disposable HTTP and platform tests; never send network requests here.
+    '@/lib/omnia/analytics':{forwardMaxAnalytics:async(...args)=>{
+      assert.equal(inTransaction,false,'analytics must follow transaction completion');
+      assert.equal(args.length,3);const [actor,eventId,kind]=args;
+      assert.equal(actor,'test-actor');assert.equal(kind,'action');
+      assert.ok(rows.some(row=>row.id===eventId && row.maxUserId===actor));
+      assert.ok(audits.some(receipt=>receipt.maxUserId===actor && receipt.details.actionId===eventId && receipt.details.healthProbe===false));
+      forwarded.push(args);
+    }},
     '@/lib/max/session':{getMaxUser:async()=>({id:'test-actor'})},
   };
   const load=(relative)=>{const context={exports:{},require:name=>{assert.ok(name in modules,`Unexpected import ${name}`);return modules[name];},TextEncoder,Date};vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,relative),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);return context.exports;};
   const item=load('src/app/api/omnia/actions/[id]/route.ts');
-  return {rows,audits,post:load('src/app/api/omnia/actions/route.ts').POST,patch:item.PATCH,get:item.GET,remove:item.DELETE};
+  return {rows,audits,forwarded,post:load('src/app/api/omnia/actions/route.ts').POST,patch:item.PATCH,get:item.GET,remove:item.DELETE};
 }
 function request(body,headers={}){return new Request('https://test.invalid/api/omnia/actions',{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});}
 const input={actionType:'booking',payload:{slot:'2026-10-20T10:00:00Z'}};
 test('create rejects a missing operation identity before any durable insert',async()=>{const f=fixture();const response=await f.post(request(input));assert.equal(response.status,428);assert.equal(f.rows.length,0);});
 test('same operation identity replays the original server ID after a lost response',async()=>{const f=fixture(),operationKey=randomUUID();const first=await f.post(request({...input,operationKey}));const original=await first.json();const replay=await f.post(request({...input,operationKey}));assert.equal(replay.status,201);assert.equal((await replay.json()).action.id,original.action.id);assert.equal(f.rows.length,1);});
 test('reusing an operation identity for changed payload returns conflict',async()=>{const f=fixture(),operationKey=randomUUID();await f.post(request({...input,operationKey}));const response=await f.post(request({...input,payload:{slot:'2026-10-20T11:00:00Z'},operationKey}));assert.equal(response.status,409);assert.equal(f.rows.length,1);});
+test('analytics forwards the durable successful receipt after commit; retries keep its UUID and denied/health/update/delete writes do not forward',async()=>{
+ const f=fixture(),operationKey=randomUUID();
+ const saved=await(await f.post(request({...input,operationKey}))).json();
+ assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action']]);
+ const replay=await f.post(request({...input,operationKey}));assert.equal(replay.status,201);
+ assert.equal((await replay.json()).action.id,saved.action.id);
+ assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action'],['test-actor',saved.action.id,'action']]);
+ assert.equal(f.rows.length,1);assert.equal(f.audits.length,1);
+ assert.equal((await f.post(request({...input,operationKey,payload:{slot:'changed'}}))).status,409);
+ assert.equal((await f.post(request(input))).status,428);
+ assert.equal((await f.post(request({...input,operationKey:randomUUID()},{'X-Omnia-Actor':'different-actor'}))).status,409);
+ assert.equal((await f.post(request({actionType:'omnia_health_analytics',operationKey:randomUUID(),payload:{}}))).status,201);
+ const context={params:Promise.resolve({id:saved.action.id})};
+ assert.equal((await f.patch(request({status:'done'},{'If-Match':saved.action.revision}),context)).status,200);
+ assert.equal((await f.remove(request({}),context)).status,200);
+ assert.equal((await f.post(request({...input,operationKey}))).status,410);
+ assert.equal(f.forwarded.length,2);
+});
 test('legacy full-payload PATCH without expected baseline cannot overwrite a saved record',async()=>{const f=fixture();const saved=await(await f.post(request({...input,operationKey:randomUUID()}))).json();const response=await f.patch(request({payload:{slot:'changed'}}),{params:Promise.resolve({id:saved.action.id})});assert.equal(response.status,428);assert.equal(f.rows[0].payload.slot,input.payload.slot);});
 
 function clientFixture(fetch, saved=new Map(), storageOverride, sessionActor=()=>'test-actor') {
