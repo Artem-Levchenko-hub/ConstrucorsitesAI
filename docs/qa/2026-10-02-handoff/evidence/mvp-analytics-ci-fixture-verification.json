@@ -1,0 +1,28 @@
+{
+  "base": "b71cd26a44c619feb763d87b5b7ffd447e1d288f",
+  "status": "LOCAL_VERIFIED_NOT_PUSHED_OR_DEPLOYED",
+  "local_api": {
+    "passed": 61,
+    "real_disposable_postgres_migration_roundtrip": true
+  },
+  "local_orchestrator": {
+    "passed": 12
+  },
+  "ruff": "PASS",
+  "diff_check": "PASS",
+  "old_ci_run": 37210570733,
+  "old_ci_failure": "Frozen template output and rendered-source hashes/head expect pre-analytics tree; full remaining failed-job summaries checked",
+  "source_hashes": {
+    ".github/workflows/ci.yml": "408fbabb3e3801ee83812675b64d26544a4e9f5a16b53db36e54a03d6bf31d3b",
+    "apps/api/scripts/verify_shared_public_export.py": "b30fde198c4f6c73aea5f0457be0b13723a99c553c512dad709c02d374d8c8c2",
+    "apps/api/tests/fixtures/max_config_render_legacy_analytics.json": "ed62cb1033c5512a1970bf74b8a3150aac396cfa9a077cdee65d703747d9594b",
+    "apps/api/tests/test_max_config_render_contract.py": "7b2e980f8b66f1a4a13ede42c572e25bbc7716c45727bc930f9355fe6ca5f4d6",
+    "apps/api/tests/test_migrations_single_head.py": "ae3ffb71b0eaca1ea9311abd42e45ed182aa20523f13f7aded557f6732b74ad7",
+    "apps/api/tests/test_shared_public_export.py": "bff067bbf3c72647b214f57be8d324873d6b79085dd2a338db321964669649ff",
+    "apps/orchestrator/tests/fixtures/max_template_analytics_overrides.json": "b77ce9ed81e2473423eb515accf7e9a1310b957ea0d267c9418e4e53dea04477",
+    "apps/orchestrator/tests/test_template_materialization.py": "e62533bc9101d098793d34b4a19f45f80687def7c0ac2a9b05e8d02a6976d207"
+  },
+  "unchanged_historical_goldens": true,
+  "production_revision": "20382350beccf2da361db1f6c9e9425a91b9267c",
+  "checked_at": "2026-10-04T15:10:05.920520+00:00"
+}

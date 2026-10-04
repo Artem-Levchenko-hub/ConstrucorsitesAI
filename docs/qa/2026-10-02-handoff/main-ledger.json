@@ -898,7 +898,7 @@
     "/workspace/ConstrucorsitesAI/docs/qa/2026-10-02-handoff/status.json"
   ],
   "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
-  "updated_at": "2026-10-04T14:43:25.124404+00:00",
+  "updated_at": "2026-10-04T15:15:25.455887+00:00",
   "delivery_candidate_status": "203 delivered; signed first-party MAX analytics and bounded GET actor isolation probe source-reviewed and locally verified; exact merged CI/core rollout/live acceptance pending",
   "current_runtime_baseline": "20382350beccf2da361db1f6c9e9425a91b9267c",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
@@ -1049,7 +1049,7 @@
       "new_full_original_PASS": 0
     }
   ],
-  "analytics_implementation_status": "Implemented source-reviewed signed core event receipts, owner-only Moscow aggregates/dashboard and managed old-tree import closure. Source11 newAPI/86regression/87orchestrator/911web; root merged917web/tsc and probe10 pass. No live event/dashboard acceptance yet; compiled image/pins/republication required. Forwarding bounded, no outage backfill.",
+  "analytics_implementation_status": "Source-reviewed signed core receipts and owner-only Moscow aggregates/dashboard, plus confirmed durable CRM lead/Moy order receipts; failures in telemetry cannot alter primary provider transaction. Generic actions and confirmed provider creations covered, custom qa_tasks not counted. Source17 ownedPG integration checks, root61API+12orchestrator fixture guards,917web/tsc; corrected CI still pending. Build/compiled HTTP/adoption/live MAX and dashboard remain required.",
   "generation_stability_cohorts_20261003": {
     "scope": "Real production generations on existing QA projects; user-authorized8cohorts×3; no new projects or bot changes during cohorts",
     "target_runs": 24,
@@ -1378,6 +1378,21 @@
       "exact Coffee accepted publication/bot mapping and test-account synthetic provider flows",
       "actual owner analytics event and foreign-owner deny",
       "close remaining acceptance by evidence; do not mark mixed cohorts as full MVP"
-    ]
+    ],
+    "analytics_next_delivery": {
+      "source_parent": "2c4ae1a5",
+      "compiled_source": "b71cd26a44c619feb763d87b5b7ffd447e1d288f",
+      "old_CI": "failed; all failed job test causes traced to old template/render hash fixtures and old migration head, corrected without dropping guards",
+      "local_contract_tests": {
+        "API": 61,
+        "orchestrator": 12,
+        "integration_owned_PG": 17
+      },
+      "review": "SOURCE_CLEAR exact718be474 and89115406",
+      "production_delivery": "NOT_RUN",
+      "compiled_build_and_HTTP": "NOT_RUN",
+      "live_analytics": "NOT_RUN",
+      "primary_provider_failure_unchanged": true
+    }
   }
 }

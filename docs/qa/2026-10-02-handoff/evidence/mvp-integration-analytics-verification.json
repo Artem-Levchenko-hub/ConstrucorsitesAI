@@ -1,0 +1,24 @@
+{
+  "status": "SOURCE_PREPARED_NOT_DEPLOYED",
+  "base": "b71cd26a44c619feb763d87b5b7ffd447e1d288f",
+  "commit": "89115406745a3a77ad59ece13ff446b5e6a03fa5",
+  "files": {
+    "apps/api/src/yleum_api/routers/integration_runtime.py": "e5c60a4c327406f04e23a7cc14f12a221aa923a60d2fa57552298a43f42de50c",
+    "apps/api/src/yleum_api/services/max_integration_analytics.py": "6f1f7d87f8fe5180349abf171cc76e04a1f25bedeb78fcf8b5651f004229dda9",
+    "apps/api/tests/test_max_integration_analytics.py": "5b6f962a9f4de42b047ce9ccc3f30f50c30ad006cc1c1af1a3fc4945198972cc"
+  },
+  "patch_sha256": "14ccad343739b751534fc732ee59490e4464d97cf922105f187d1af9cccffbb1",
+  "checks": {
+    "focused_pg_tests": 17,
+    "new_tests": 8,
+    "existing_lead_note_cases": 3,
+    "existing_order_cases": 6,
+    "ruff": "PASS",
+    "mypy": "PASS 2 source files",
+    "diff_check": "PASS"
+  },
+  "fixture": "unique owned loopback PostgreSQL :55432, private DSN, mocked provider HTTP, real signed MAX test actor",
+  "live_effects": false,
+  "review": "SOURCE_CLEAR exact frozen3files; merged CI/live pending",
+  "cleanup": "PASS: exact owned QA database absent; no forced session termination"
+}
