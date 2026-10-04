@@ -1,6 +1,6 @@
 {
   "scope": "Consolidated dated evidence, not all current-release acceptance",
-  "platform_sha": "121900fd95a13e1ade122057abe19d6c22468621",
+  "platform_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
   "parallel_report_cutoff_msk": "2026-10-02 17:05",
   "count": 67,
   "counts": {
@@ -898,23 +898,25 @@
     "/workspace/ConstrucorsitesAI/docs/qa/2026-10-02-handoff/status.json"
   ],
   "new_local_finding_source_thread": "01a0dc56-1bec-7102-807d-d64dbd6b2724",
-  "updated_at": "2026-10-04T11:49:00Z",
-  "delivery_candidate_status": "Joint SDK owner-preview actor-preflight renewal fix and G10/G11 evidence pending commit, exact CI and canonical delivery; browser activation/live expiry acceptance remains separate",
-  "current_runtime_baseline": "31538bff0433e81fb8376a7771bab841defebe46",
+  "updated_at": "2026-10-04T14:43:25.124404+00:00",
+  "delivery_candidate_status": "203 delivered; signed first-party MAX analytics and bounded GET actor isolation probe source-reviewed and locally verified; exact merged CI/core rollout/live acceptance pending",
+  "current_runtime_baseline": "20382350beccf2da361db1f6c9e9425a91b9267c",
   "source_scope": "Consolidated root ledger; separate historical parallel status.json is retained unchanged",
   "latest_delivery": {
-    "platform_sha": "31538bff0433e81fb8376a7771bab841defebe46",
-    "web_sha": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
-    "ci_run_id": 37182290954,
+    "platform_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "web_sha": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "ci_run_id": 37208441693,
     "ci_jobs_success": 10,
     "backup_exit": 0,
     "backup_databases_ok": 32,
-    "backup_stamp": "20261004-063319",
+    "backup_stamp": "20261004-143015",
     "canonical_deploy_exit": 0,
     "actual_source_hashes_verified": true,
     "admission_fences_clear": true,
-    "evidence": "evidence/g09-write-progress-production-receipt.json",
-    "scope": "Last completed source delivery; joint SDK preview fix and this ledger update pending separate delivery receipt"
+    "evidence": "evidence/mvp-auth-production-release.json",
+    "receipt_blob": "dca8e464ea7ce2e206948394d65ba8a6bb194f86",
+    "independent_http_evidence": "evidence/mvp-auth-independent-http-health.json",
+    "scope": "Actual auth recovery API/web delivery; stale predeploy pages obtain new client recovery only after reload"
   },
   "pilot_release_gate": {
     "scope": "FREE_PILOT_NO_PAYMENT",
@@ -1047,7 +1049,7 @@
       "new_full_original_PASS": 0
     }
   ],
-  "analytics_implementation_status": "Source audit on 15f5e4fb: post-launch owner dashboard has no visitor/user/event aggregates; template event helper has no automatic ordinary callers. MVP implementation and live owner/foreign-owner acceptance pending.",
+  "analytics_implementation_status": "Implemented source-reviewed signed core event receipts, owner-only Moscow aggregates/dashboard and managed old-tree import closure. Source11 newAPI/86regression/87orchestrator/911web; root merged917web/tsc and probe10 pass. No live event/dashboard acceptance yet; compiled image/pins/republication required. Forwarding bounded, no outage backfill.",
   "generation_stability_cohorts_20261003": {
     "scope": "Real production generations on existing QA projects; user-authorized8cohorts×3; no new projects or bot changes during cohorts",
     "target_runs": 24,
@@ -1193,7 +1195,7 @@
       "lifecycle_triple_overlap_seconds": 476.946625
     }
   },
-  "current_runtime_baseline_scope": "Last independently observed pre-commit API/source baseline; this client-fix and ledger update needs its separate final delivery identity/receipt",
+  "current_runtime_baseline_scope": "Actual canonical API/web/workers/controllers delivery; historical67 scenario classifications retained",
   "owner_preview_sdk_preflight_fix": {
     "status": "LOCAL_REGRESSION_PASS_DELIVERY_PENDING",
     "base": "31538bff0433e81fb8376a7771bab841defebe46",
@@ -1253,7 +1255,7 @@
   "current_delivery_preparation": {
     "base_python": "121900fd95a13e1ade122057abe19d6c22468621",
     "base_web": "a0e2677746ee955ea6aab3cb5d30cd8c394a6796",
-    "state": "DELIVERED_C19_NATIVE_CONTEXT_BLOCKER_FIX_PENDING_CI",
+    "state": "AUTH203_DELIVERED_ANALYTICS_SOURCE_PREPARED",
     "scope": [
       "success-only aggregate generation billing with durable accepted snapshot and exactly-once settlement",
       "integration request cards preserve exact seven original prompts",
@@ -1295,10 +1297,10 @@
       "credential_token_present": false,
       "official_uninstall_utc": "2026-10-04T08:51:47Z",
       "initiator": "unknown",
-      "public_solution": "Draft v0; moderation/public install URL unverified",
+      "public_solution": "Existingv0 On moderation after explicit developer-offer approval; approval pending",
       "test_reinstall_approved": true,
       "protected_PAR_B_separate_connection": "unchanged; do not transfer",
-      "code_state": "Native iframe controls actually served on c19; installed-solution live host-context timed out before auth/claim. No successful native bind claimed. Cross-window compatibility fix and requested safe message diagnostics pending exact CI/deploy.",
+      "code_state": "Native controls plus reviewed host-context compatibility metadata delivered onBE9, preserved203; actual signed-context bind/org/store/browser acceptance pending, no successful claim asserted.",
       "installation_token_present": true,
       "installation_updated_utc": "2026-10-04T11:30:21.248559Z",
       "reinstall_observation": "Actual Vendor Install accepted; latest read-only receipt says installed token present; C prior revoked connection remains error pending explicit native claim",
@@ -1337,10 +1339,10 @@
         "jobs_success": 10
       }
     ],
-    "deployed_python": "c19a605bd6fb250f08a8307417eeb1576eea744b",
-    "deployed_web": "c19a605bd6fb250f08a8307417eeb1576eea744b",
-    "production_receipt": "evidence/native-iframe-production-release.json",
-    "physical_receipt": "evidence/native-iframe-physical-after.json",
+    "deployed_python": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "deployed_web": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "production_receipt": "evidence/mvp-auth-production-release.json",
+    "physical_receipt": "evidence/mvp-auth-physical-after.json",
     "native_live_blocker": {
       "observed": "Twice actual installed-solution setup timed out before context confirmation, auth button disabled; no codepaste/claim",
       "cause_status": "c19 source-parent restriction reproduces protocol compatibility failure; exact live response metadata not available yet. Provider gwtReactInterop initialization error cause unproved",
@@ -1352,23 +1354,24 @@
     "target_date_moscow": "2026-10-06",
     "release_ready": false,
     "source_owner": "root; serial main and canonical deployment",
-    "current_production_python": "be9d4c91d0d37cba46b6c0f3b665eb293430eabe",
-    "current_production_web": "c19a605bd6fb250f08a8307417eeb1576eea744b",
+    "current_production_python": "20382350beccf2da361db1f6c9e9425a91b9267c",
+    "current_production_web": "20382350beccf2da361db1f6c9e9425a91b9267c",
     "delivery": {
-      "CI": 37204027324,
+      "CI": 37208441693,
       "jobs": 10,
       "backup_databases": 32,
       "active_generations": 0,
       "physical": "PASS_STRICT_FULL_A3_B7",
-      "live_native_bind_pass": false
+      "live_native_bind_pass": false,
+      "physical_evidence": "evidence/mvp-auth-physical-after.json"
     },
     "moy_public_status": "submitted after explicit offer approval; provider On moderation, approval pending",
     "amo_public_status": "technical-support request sent, specialist escalation accepted; NOT formal On moderation proof",
     "amo_server_readiness": "owner matches, active+ready, access/refresh present, not expired, configured HTTPS callback; fresh current published MAX E2E not proven",
-    "auth_recovery": "SOURCE_CLEAR and913 local web tests; CI/deployment/live pending",
+    "auth_recovery": "DELIVERED actual203 API+web/health;913 source checks and10/10CI; fresh live login and stale-action acceptance separate",
     "parallel_implementation": [
-      "real MAX event owner analytics",
-      "bounded signed U/V custom-route acceptance runner"
+      "signed first-party analytics source frozen180b92fd; merged917 web tests,11API/86regression/87runtime, SOURCE_CLEAR; migration/core rollout/live acceptance pending",
+      "GET-only actor isolation runner10/10local; actual signed U/V and effective-role proof NOT_RUN"
     ],
     "next": [
       "live existing installed native Moy bind/org/store/reload",

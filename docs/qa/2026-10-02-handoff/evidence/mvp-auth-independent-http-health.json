@@ -1,0 +1,13 @@
+{
+  "observed_utc": "2026-10-04T14:38:28.161840+00:00",
+  "api": {
+    "http": 200,
+    "status": "ok",
+    "release_sha": "20382350beccf2da361db1f6c9e9425a91b9267c"
+  },
+  "web": {
+    "http": 200,
+    "status": "ok",
+    "release_sha": "20382350beccf2da361db1f6c9e9425a91b9267c"
+  }
+}
