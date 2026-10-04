@@ -1,0 +1,18 @@
+{
+  "src/app/api/max/session/route.ts": {
+    "sha256": "8574fb957de0f9e98b7a81832f139670282eac029f9a643b361ea97e380badc7",
+    "mode": "100644"
+  },
+  "src/app/api/omnia/preview-session/route.ts": {
+    "sha256": "5fe3625f6f6dabc3a9bfcc9113fd9f509818b2245ede6c66dc6a5585510c3992",
+    "mode": "100644"
+  },
+  "src/components/MaxAppProvider.tsx": {
+    "sha256": "9e895332a2a9f79716cceaeaf3060ae08a389ff35ccf88e7d642a0ca0a371576",
+    "mode": "100644"
+  },
+  "src/lib/max/owner-preview-renewal.ts": {
+    "sha256": "aa503330814457fa8a323266ab8fe675eca7ac416c7b9fc461c77cda971d945a",
+    "mode": "100644"
+  }
+}

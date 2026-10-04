@@ -3,6 +3,7 @@
 import builtins
 import hashlib
 import json
+import re
 import socket
 from pathlib import Path
 from types import SimpleNamespace
@@ -50,6 +51,62 @@ _LEGACY_DEPENDENCY_HASHES = {
 }
 
 
+_LEGACY_PREVIEW_HASHES = {
+    "src/app/api/max/session/route.ts": (
+        "e7fa8b1280e174af0a31586a0cd81008dc3b42dd94bbad9999533f7d3a4161a3"
+    ),
+    "src/app/api/omnia/preview-session/route.ts": (
+        "2b0413098b44e778c2d317d46895b7d4b5e9452a3a819dd733e8de32148ff507"
+    ),
+    "src/components/MaxAppProvider.tsx": (
+        "c0cc8a4e4dd384e4074afc8b41e0ae70395264f28e3ae2841ab0ac37e2500333"
+    ),
+}
+
+
+def _normalize_preview_renewal(files):
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    overrides = json.loads(
+        (fixtures / "max_template_preview_renewal_overrides.json").read_text(encoding="utf-8")
+    )
+    added = "src/lib/max/owner-preview-renewal.ts"
+    assert set(overrides) == set(_LEGACY_PREVIEW_HASHES) | {added}
+    legacy = json.loads(
+        (
+            Path(__file__).parent / "fixtures/max_config_render_legacy_preview_renewal.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert legacy["revision"] == "de9800fc2dccaf614cb9ca97c530629f3f0485c2"
+    assert set(legacy["files"]) == set(_LEGACY_PREVIEW_HASHES)
+    normalized = dict(files)
+    preview_path = "src/app/api/omnia/preview-session/route.ts"
+    sentinel = 'const MANAGED_PROJECT_ID: string = "__OMNIA_PROJECT_ID__";'
+    for path, entry in overrides.items():
+        actual = files[path]
+        declaration = None
+        if path == preview_path:
+            match = re.search(r'^const MANAGED_PROJECT_ID: string = ("[^"\n]*");$', actual, re.M)
+            assert match is not None
+            literal = match.group(1)
+            identity = json.loads(literal)
+            assert identity == "" or str(UUID(identity)) == identity
+            declaration = match.group(0)
+            actual = actual.replace(declaration, sentinel, 1)
+        assert hashlib.sha256(actual.encode("utf-8")).hexdigest() == entry["sha256"], path
+        if path == added:
+            normalized.pop(path)
+        else:
+            baseline = legacy["files"][path]["source"]
+            assert (
+                hashlib.sha256(baseline.encode("utf-8")).hexdigest()
+                == (_LEGACY_PREVIEW_HASHES[path])
+            ), path
+            normalized[path] = (
+                baseline.replace(sentinel, declaration, 1) if declaration else baseline
+            )
+    return normalized
+
+
 def _assert_render_golden(files, expected):
     """Check reviewed changed files, then the unchanged original full SDK golden."""
     fixture_root = Path(__file__).parent / "fixtures"
@@ -65,7 +122,7 @@ def _assert_render_golden(files, expected):
     overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
     # Project only these two verified dependency blobs back to the old baseline;
     # all other rendered bytes must still match the unchanged original golden.
-    original_dependencies = dict(files)
+    original_dependencies = _normalize_preview_renewal(files)
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
         assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
         baseline = legacy["files"][path]
@@ -76,8 +133,9 @@ def _assert_render_golden(files, expected):
         (overrides_path.parent / "max_template_support_overrides.json").read_text(encoding="utf-8")
     )
     assert set(support_override) == {support_path}
-    assert hashlib.sha256(files[support_path].encode()).hexdigest() == (
-        support_override[support_path]["sha256"]
+    assert (
+        hashlib.sha256(files[support_path].encode()).hexdigest()
+        == (support_override[support_path]["sha256"])
     ), support_path
     legacy_support = json.loads(
         (fixture_root / "max_config_render_legacy_support.json").read_text(encoding="utf-8")
@@ -91,7 +149,7 @@ def _assert_render_golden(files, expected):
     digest = hashlib.sha256(
         json.dumps(original_dependencies, sort_keys=True, ensure_ascii=False).encode()
     ).hexdigest()
-    assert {"files": len(files), "sha256": digest} == expected
+    assert {"files": len(original_dependencies), "sha256": digest} == expected
     return digest
 
 
@@ -230,6 +288,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     monkeypatch.setattr(progress, "generation_event_envelope", lambda event: {})
     monkeypatch.setattr(lifecycle, "set_generation_run_status", AsyncMock())
     monkeypatch.setattr(agent_preparation, "_build_agent_seed_parts", AsyncMock(return_value=[]))
+
     async def apply_files(*, files, **kwargs):
         for path, content in files.items():
             if content == "":
@@ -368,7 +427,16 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
 
 @pytest.mark.parametrize(
     "changed",
-    ["src/lib/max/session.ts", "package.json", "pnpm-lock.yaml", "src/app/support/page.tsx"],
+    [
+        "src/lib/max/session.ts",
+        "package.json",
+        "pnpm-lock.yaml",
+        "src/app/support/page.tsx",
+        "src/lib/max/owner-preview-renewal.ts",
+        "src/components/MaxAppProvider.tsx",
+        "src/app/api/max/session/route.ts",
+        "src/app/api/omnia/preview-session/route.ts",
+    ],
 )
 def test_config_render_golden_rejects_sdk_or_unreviewed_dependency_drift(changed):
     config = MaxProjectConfigPayload(

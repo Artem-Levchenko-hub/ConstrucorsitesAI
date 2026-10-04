@@ -42,6 +42,14 @@ _ACTION_WRITE_OVERRIDE_PATHS = {
 }
 
 
+_PREVIEW_RENEWAL_OVERRIDE_PATHS = {
+    "src/app/api/max/session/route.ts",
+    "src/app/api/omnia/preview-session/route.ts",
+    "src/components/MaxAppProvider.tsx",
+    "src/lib/max/owner-preview-renewal.ts",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
@@ -49,6 +57,7 @@ def main() -> None:
     parser.add_argument("dependency_overrides", type=Path)
     parser.add_argument("action_write_overrides", type=Path)
     parser.add_argument("support_overrides", type=Path)
+    parser.add_argument("preview_renewal_overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -64,9 +73,15 @@ def main() -> None:
     assert set(support_overrides) == {"src/app/support/page.tsx"}, (
         "unexpected support override paths"
     )
+    preview_renewal_overrides = json.loads(
+        args.preview_renewal_overrides.read_text(encoding="utf-8")
+    )
+    assert set(preview_renewal_overrides) == _PREVIEW_RENEWAL_OVERRIDE_PATHS, (
+        "unexpected MAX preview renewal override paths"
+    )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
-            complete_tree = complete_tree | dependency_overrides
+            complete_tree = complete_tree | dependency_overrides | preview_renewal_overrides
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
         expected = {path: entry for path, entry in complete_tree.items() if path not in omissions}

@@ -18,24 +18,48 @@ from yleum_orchestrator.core import template_materialization as materialization
 from yleum_orchestrator.services.provisioner import _copy_template
 
 TEMPLATES = Path(__file__).resolve().parents[1] / "templates"
-GOLDEN = json.loads((Path(__file__).parent / "fixtures/shared_public_git_golden.json").read_text())
+GOLDEN = json.loads(
+    (Path(__file__).parent / "fixtures/shared_public_git_golden.json").read_text(encoding="utf-8")
+)
 README_OVERRIDES = json.loads(
-    (Path(__file__).parent / "fixtures/shared_public_readme_overrides.json").read_text()
+    (Path(__file__).parent / "fixtures/shared_public_readme_overrides.json").read_text(
+        encoding="utf-8"
+    )
 )
 DEPENDENCY_OVERRIDES = json.loads(
-    (Path(__file__).parent / "fixtures/max_template_dependency_overrides.json").read_text()
+    (Path(__file__).parent / "fixtures/max_template_dependency_overrides.json").read_text(
+        encoding="utf-8"
+    )
 )
 ACTION_WRITE_OVERRIDES = json.loads(
-    (Path(__file__).parent / "fixtures/max_template_action_write_overrides.json").read_text()
+    (Path(__file__).parent / "fixtures/max_template_action_write_overrides.json").read_text(
+        encoding="utf-8"
+    )
 )
 assert set(ACTION_WRITE_OVERRIDES) == {
-    "src/app/api/omnia/actions/route.ts", "src/app/api/omnia/actions/[id]/route.ts",
-    "src/lib/omnia/integration-client.ts", "src/lib/omnia/client.ts", "tests/starter.test.mjs",
+    "src/app/api/omnia/actions/route.ts",
+    "src/app/api/omnia/actions/[id]/route.ts",
+    "src/lib/omnia/integration-client.ts",
+    "src/lib/omnia/client.ts",
+    "tests/starter.test.mjs",
 }
 SUPPORT_OVERRIDES = json.loads(
-    (Path(__file__).parent / "fixtures/max_template_support_overrides.json").read_text()
+    (Path(__file__).parent / "fixtures/max_template_support_overrides.json").read_text(
+        encoding="utf-8"
+    )
 )
 assert set(SUPPORT_OVERRIDES) == {"src/app/support/page.tsx"}
+PREVIEW_RENEWAL_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_preview_renewal_overrides.json").read_text(
+        encoding="utf-8"
+    )
+)
+assert set(PREVIEW_RENEWAL_OVERRIDES) == {
+    "src/app/api/max/session/route.ts",
+    "src/app/api/omnia/preview-session/route.ts",
+    "src/components/MaxAppProvider.tsx",
+    "src/lib/max/owner-preview-renewal.ts",
+}
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
@@ -43,7 +67,10 @@ assert set(README_OVERRIDES) == {
     "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
 }
 assert set(DEPENDENCY_OVERRIDES) == {
-    "Dockerfile.dev", "package.json", "pnpm-lock.yaml", "tests/dependency-install.test.mjs",
+    "Dockerfile.dev",
+    "package.json",
+    "pnpm-lock.yaml",
+    "tests/dependency-install.test.mjs",
     "tests/database-compatibility.test.mjs",
 }
 
@@ -54,6 +81,7 @@ def assert_golden(name: str, root: Path) -> None:
         # Keep historical materialization hashes; pin only this dependency fix
         # and its real install-regression input as deliberate output changes.
         expected.update(DEPENDENCY_OVERRIDES)
+        expected.update(PREVIEW_RENEWAL_OVERRIDES)
     actual = {
         p.relative_to(root).as_posix(): p
         for p in root.rglob("*")
@@ -288,9 +316,7 @@ async def test_concurrent_provisions_build_shared_context_only_once(
 
 
 @pytest.mark.parametrize("failure", [False, True])
-def test_shell_builds_materialized_contexts_and_cleans_after_failure(
-    tmp_path, failure
-):
+def test_shell_builds_materialized_contexts_and_cleans_after_failure(tmp_path, failure):
     bash = shutil.which("bash") if os.name != "nt" else "C:/Program Files/Git/bin/bash.exe"
     if not bash or not Path(bash).is_file():
         pytest.skip("bash unavailable")

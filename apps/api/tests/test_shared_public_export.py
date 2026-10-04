@@ -14,7 +14,7 @@ GOLDEN = json.loads(
     (
         Path(__file__).resolve().parents[2]
         / "orchestrator/tests/fixtures/shared_public_git_golden.json"
-    ).read_text()
+    ).read_text(encoding="utf-8")
 )
 
 
@@ -22,14 +22,21 @@ DEPENDENCY_OVERRIDES = json.loads(
     (
         Path(__file__).resolve().parents[2]
         / "orchestrator/tests/fixtures/max_template_dependency_overrides.json"
-    ).read_text()
+    ).read_text(encoding="utf-8")
+)
+
+PREVIEW_RENEWAL_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_preview_renewal_overrides.json"
+    ).read_text(encoding="utf-8")
 )
 
 SOURCE_MAPPING = json.loads(
     (
         Path(__file__).resolve().parents[2]
         / "orchestrator/tests/fixtures/shared_source_git_mapping.json"
-    ).read_text()
+    ).read_text(encoding="utf-8")
 )
 
 
@@ -80,6 +87,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         expected = dict(frozen)
         if template == "max-miniapp-nextjs":
             expected.update(DEPENDENCY_OVERRIDES)
+            expected.update(PREVIEW_RENEWAL_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -114,6 +122,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_dependency_overrides.json"),
             str(fixtures / "max_template_action_write_overrides.json"),
             str(fixtures / "max_template_support_overrides.json"),
+            str(fixtures / "max_template_preview_renewal_overrides.json"),
         ],
         cwd=tmp_path,
         env=env,
@@ -129,7 +138,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
     bad_overrides = dict(DEPENDENCY_OVERRIDES)
     sdk_relative = "src/lib/omnia/integration-client.ts"
     bad_overrides[sdk_relative] = {"sha256": "0" * 64, "mode": "100644"}
-    untrusted.write_text(json.dumps(bad_overrides))
+    untrusted.write_text(json.dumps(bad_overrides), encoding="utf-8")
     args = [
         sys.executable,
         str(script),
@@ -138,6 +147,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(untrusted),
         str(fixtures / "max_template_action_write_overrides.json"),
         str(fixtures / "max_template_support_overrides.json"),
+        str(fixtures / "max_template_preview_renewal_overrides.json"),
     ]
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
@@ -147,21 +157,50 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
 
     # Action overrides are bounded to the five deliberately changed source/test paths.
     untrusted_actions = tmp_path / "untrusted-action-overrides.json"
-    bad_actions = json.loads((fixtures / "max_template_action_write_overrides.json").read_text())
+    bad_actions = json.loads(
+        (fixtures / "max_template_action_write_overrides.json").read_text(encoding="utf-8")
+    )
     bad_actions["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64, "mode": "100644"}
-    untrusted_actions.write_text(json.dumps(bad_actions))
-    bad_args = [*args[:-3], str(fixtures / "max_template_dependency_overrides.json"),
-                str(untrusted_actions), str(fixtures / "max_template_support_overrides.json")]
+    untrusted_actions.write_text(json.dumps(bad_actions), encoding="utf-8")
+    bad_args = args.copy()
+    bad_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+    bad_args[5] = str(untrusted_actions)
     rejected = subprocess.run(
         bad_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
     )
     assert rejected.returncode != 0
     assert "unexpected MAX action write override paths" in rejected.stderr
 
+    # Preview overrides admit exactly four reviewed paths and retain byte equality.
+    for extra_path in ("src/lib/omnia/unreviewed.ts", None):
+        bad_preview = dict(PREVIEW_RENEWAL_OVERRIDES)
+        if extra_path:
+            bad_preview[extra_path] = {"sha256": "0" * 64, "mode": "100644"}
+        else:
+            bad_preview["src/lib/max/owner-preview-renewal.ts"] = {
+                "sha256": "0" * 64,
+                "mode": "100644",
+            }
+        invalid_preview = tmp_path / "untrusted-preview-overrides.json"
+        invalid_preview.write_text(json.dumps(bad_preview), encoding="utf-8")
+        invalid_args = args.copy()
+        invalid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+        invalid_args[7] = str(invalid_preview)
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+        )
+        assert rejected.returncode != 0
+        expected_error = (
+            "unexpected MAX preview renewal override paths"
+            if extra_path
+            else "max-miniapp-nextjs/src/lib/max/owner-preview-renewal.ts"
+        )
+        assert expected_error in rejected.stderr
+
     # The actual shared SDK bytes must still match the reviewed immutable hash.
     sdk_source = mounted / "max-miniapp-nextjs" / sdk_relative
     sdk_source.write_bytes(sdk_source.read_bytes() + b"\n// qa-invalid-sdk-drift\n")
-    args[-3] = str(fixtures / "max_template_dependency_overrides.json")
+    args[4] = str(fixtures / "max_template_dependency_overrides.json")
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
     )
