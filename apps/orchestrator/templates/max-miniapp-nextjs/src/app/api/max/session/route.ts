@@ -27,7 +27,19 @@ export async function GET() {
         { error: "MAX authentication required" }, { status: 401, headers },
       );
     }
-    return NextResponse.json({ user, ...(ownerPreview ? { mode: "preview" } : {}) }, { headers });
+    let editorOrigins: string[] | undefined;
+    if (ownerPreview && process.env.OMNIA_OWNER_PREVIEW_ORIGINS) {
+      const configured: unknown = JSON.parse(process.env.OMNIA_OWNER_PREVIEW_ORIGINS);
+      if (!Array.isArray(configured)) throw new Error("Invalid preview origins");
+      editorOrigins = configured.filter((value): value is string => {
+        if (typeof value !== "string") return false;
+        try {
+          const url = new URL(value);
+          return url.protocol === "https:" && url.origin === value;
+        } catch { return false; }
+      });
+    }
+    return NextResponse.json({ user, ...(ownerPreview ? { mode: "preview", ...(editorOrigins ? { editor_origins: editorOrigins } : {}) } : {}) }, { headers });
   } catch {
     return NextResponse.json(
       { error: "Temporary session failure" }, { status: 503, headers },

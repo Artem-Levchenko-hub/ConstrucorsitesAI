@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
+import { installOwnerPreviewFetch } from "@/lib/max/owner-preview-renewal";
 import type { MaxSessionUser } from "@/lib/max/session";
 import { YleumCompliance } from "@/components/YleumCompliance";
 
@@ -23,6 +24,7 @@ type MaxContextValue = {
   mode: "loading" | "max" | "preview" | "error";
   user: MaxSessionUser | null;
   error: string | null;
+  previewOrigins?: string[];
 };
 
 const MaxContext = createContext<MaxContextValue>({
@@ -189,6 +191,7 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         user?: MaxSessionUser;
         code?: string;
         mode?: string;
+        editor_origins?: string[];
       };
       const ownerPreview = !webApp?.initData && body.mode === "preview" && body.user?.id === "preview";
       const validUser = body.user && (
@@ -210,7 +213,9 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         }
         throw new Error("Не удалось завершить безопасный вход. Попробуйте ещё раз.");
       }
-      setState({ mode: ownerPreview ? "preview" : "max", user: body.user, error: null });
+      setState({ mode: ownerPreview ? "preview" : "max", user: body.user, error: null,
+        ...(ownerPreview && body.editor_origins ? { previewOrigins: body.editor_origins } : {}),
+      });
     } catch (error) {
       setState({
         mode: "error",
@@ -226,6 +231,10 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void authenticate();
   }, [authenticate]);
+
+  useEffect(() => {
+    if (state.mode === "preview") return installOwnerPreviewFetch(window, state.previewOrigins);
+  }, [state.mode, state.previewOrigins]);
 
   const value = useMemo(() => state, [state]);
   return (

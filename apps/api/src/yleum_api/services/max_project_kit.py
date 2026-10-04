@@ -15,7 +15,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 26
+MAX_MANAGED_KIT_VERSION = 27
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
 # platform-owned paths. v20 materializes trusted gateway subjects in the
 # isolated product DB before business tables can enforce max_users FKs. v21
@@ -155,6 +155,7 @@ def render_max_managed_files(
         "src/lib/db/index.ts": _template_file("src/lib/db/index.ts"),
         "src/lib/max/bot-api.ts": _template_file("src/lib/max/bot-api.ts"),
         "src/lib/max/bridge.ts": _template_file("src/lib/max/bridge.ts"),
+        "src/lib/max/owner-preview-renewal.ts": _template_file("src/lib/max/owner-preview-renewal.ts"),
         "src/lib/max/validate-init-data.ts": _template_file("src/lib/max/validate-init-data.ts"),
         "src/app/api/max/session/route.ts": _template_file("src/app/api/max/session/route.ts"),
         "src/app/api/max/webhook/route.ts": _template_file("src/app/api/max/webhook/route.ts"),
@@ -314,6 +315,7 @@ MAX_SECURITY_LOCKED_FILES = frozenset(
         "src/lib/db/index.ts",
         "src/lib/max/bot-api.ts",
         "src/lib/max/bridge.ts",
+        "src/lib/max/owner-preview-renewal.ts",
         "src/lib/max/validate-init-data.ts",
         "src/app/api/max/session/route.ts",
         "src/app/api/max/webhook/route.ts",

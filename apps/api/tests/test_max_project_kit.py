@@ -95,7 +95,7 @@ def test_catalog_item_refuses_a_photo_address_that_is_not_https() -> None:
 
 def test_kit_v24_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 26
+    assert MAX_MANAGED_KIT_VERSION == 27
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     # v22: no managed server file reads or persists the MAX visitor profile.
@@ -156,6 +156,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/lib/db/index.ts",
         "src/lib/max/bot-api.ts",
         "src/lib/max/bridge.ts",
+        "src/lib/max/owner-preview-renewal.ts",
         "src/lib/max/validate-init-data.ts",
         "src/app/api/max/session/route.ts",
         "src/app/api/max/webhook/route.ts",

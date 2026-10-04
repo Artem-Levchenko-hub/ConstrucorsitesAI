@@ -26,6 +26,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { installPreviewSessionRenewal } from "@/lib/max-preview-session-renewal";
 import { ApiError } from "@/lib/api/client";
 import {
   createMaxPreviewSession,
@@ -401,6 +402,16 @@ export function MaxLivePreview({
 
   const previewUrl = firstBuildTerminal ? null : previewSession.data?.url ?? null;
   const displayPreviewUrl = firstBuildTerminal ? null : previewUrl ?? lastWorkingUrl;
+  useEffect(() => {
+    if (!displayPreviewUrl || viewingHistorical) return;
+    return installPreviewSessionRenewal({
+      window,
+      origin: new URL(displayPreviewUrl).origin,
+      frame: () => previewFrame.current?.contentWindow,
+      mint: () => createMaxPreviewSession(project.id),
+    });
+  }, [project.id, activity, displayPreviewUrl, viewingHistorical]);
+
   const connected = Boolean(displayPreviewUrl);
   const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "Сборка не завершена" : "Запускается";
   // A cold provision can outlive an earlier start request. Once polling sees

@@ -1002,7 +1002,10 @@ class MachineAdapter:
                     "DATABASE_URL": runtime_dsn,
                     **({"NODE_OPTIONS": public_options, "NODE_ENV": "production",
                         "HOSTNAME": "0.0.0.0", "PORT": "3000"} if compiled_core else {}),
-                    **({"OMNIA_OWNER_PREVIEW": "1"} if not public_mode else {}),
+                    **({
+                        "OMNIA_OWNER_PREVIEW": "1",
+                        "OMNIA_OWNER_PREVIEW_ORIGINS": json.dumps(studio_origins()),
+                    } if not public_mode else {}),
                 },
                 mem_limit=self._max_core_memory_bytes(),
                 memswap_limit=self._max_core_memory_bytes(),

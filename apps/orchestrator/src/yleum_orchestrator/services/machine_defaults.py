@@ -73,6 +73,7 @@ def next_machine_seed(template: dict[str, str]) -> dict[str, str]:
         "src/components/MaxAppProvider.tsx",
         "src/components/YleumCompliance.tsx",
         "src/lib/max/bridge.ts",
+        "src/lib/max/owner-preview-renewal.ts",
         "src/lib/omnia/client.ts",
         "src/lib/omnia/max-config.ts",
     }

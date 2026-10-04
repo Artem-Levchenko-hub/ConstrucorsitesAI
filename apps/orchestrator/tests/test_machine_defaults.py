@@ -43,6 +43,7 @@ def test_default_max_environment_is_next_with_extensible_dependencies_not_produc
     assert "src/app/page.tsx" not in seeded
     assert "src/app/api/omnia/health/route.ts" in seeded
     assert "src/components/MaxAppProvider.tsx" in seeded
+    assert "src/lib/max/owner-preview-renewal.ts" in seeded
     assert "src/lib/db/index.ts" not in seeded
     assert "Dockerfile.dev" not in seeded
     # Platform image-recipe tests cannot run in a product without that recipe.

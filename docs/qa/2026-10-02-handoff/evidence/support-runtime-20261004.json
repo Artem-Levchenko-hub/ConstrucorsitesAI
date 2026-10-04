@@ -1,0 +1,91 @@
+{
+  "scope": "managed trusted-core support refresh, not a product source publication or complete MAX acceptance",
+  "source_sha": "de9800fc2dccaf614cb9ca97c530629f3f0485c2",
+  "image": "sha256:67ed15059379eb5628a83877184c91bd20cd4d08dbe01b459b1c76ff2c07c0a4",
+  "delivery": {
+    "backup_stamp": "20261004-014833",
+    "project_databases": 32,
+    "failed_databases": 0,
+    "canonical_exit": 0,
+    "evidence_git_blob": "3afed722b9235276b9ec6794af89fdb2e2d4f9fb"
+  },
+  "published_upgrade_evidence_git_blob": "6a01a8f5bc1cbd8d8a73e033a255ac81151ccc51",
+  "published_https": {
+    "readonly": true,
+    "observed_utc": "2026-10-04T02:39:55.337435+00:00",
+    "targets": [
+      {
+        "host": "par-20261002-b-zadachi-a65cc1.apps.yleum.ru",
+        "status": 200,
+        "mailto": true,
+        "return": true,
+        "body_sha256": "64900fce61b385bf348e36cdfbc8fdd9fb1a4f21788c1fc64f2333e6228291ec"
+      },
+      {
+        "host": "kofe-riadom-amocrm-83060d.apps.yleum.ru",
+        "status": 200,
+        "mailto": true,
+        "return": true,
+        "body_sha256": "40ada302f594183be410e8bacadd10b7f08825d6db63a32246ccec3fa4405daa"
+      }
+    ]
+  },
+  "clear_health": {
+    "observed_utc": "2026-10-04T02:41:35.760427+00:00",
+    "release_sha": "de9800fc2dccaf614cb9ca97c530629f3f0485c2",
+    "api_web_ok": true,
+    "generation_running": 0,
+    "generation_waiting": 0,
+    "worker_orchestrator_sha_match": true,
+    "support_targets": [
+      {
+        "core_business_rows_hash": "3bab96b0e0f92bf5f6733a7a917d0ba0be78cb04dcc8063a3b1bb4180ae6f0a5",
+        "core_image_manifest_sha256": "67ed15059379eb5628a83877184c91bd20cd4d08dbe01b459b1c76ff2c07c0a4",
+        "host": "core",
+        "managed_core_business_records_preserved": true,
+        "phase": "verified",
+        "product_and_project_database_preserved": true,
+        "project_database_row_hash": "fe6f913f1c3ec850dee6b18ef13e4ea816544ad7a76269cda5521042e473e782",
+        "project_database_schema_hash": "da28c72d42c2020b4c7ba8323cd04ddc68eef0620493abd935bd7f1b14a98d4b",
+        "put_attempted": true,
+        "put_confirmed": true,
+        "request_release_snapshot_config_preserved": true,
+        "support_fallback_mailto_and_return": true
+      },
+      {
+        "core_business_rows_hash": "0c843a8f03a156e1fc09db256c6b80d18651de734415f60df0b2f49cf4927625",
+        "core_image_manifest_sha256": "67ed15059379eb5628a83877184c91bd20cd4d08dbe01b459b1c76ff2c07c0a4",
+        "host": "commerce",
+        "managed_core_business_records_preserved": true,
+        "phase": "verified",
+        "product_and_project_database_preserved": true,
+        "project_database_row_hash": "0c6275108a2fb779e519603a70c4cdae0749252ecd4d5a6fa5b89cb003b60993",
+        "project_database_schema_hash": "c0c8413da0e9ac02fd46a3fe33bb200e49921f0524e4e8110fe6203413459957",
+        "put_attempted": true,
+        "put_confirmed": true,
+        "request_release_snapshot_config_preserved": true,
+        "support_fallback_mailto_and_return": true
+      }
+    ]
+  },
+  "data_baseline": {
+    "A_count": 3,
+    "B_count": 7,
+    "old_B_six_preserved": true,
+    "B_seventh_authorized_updates_acknowledged": true,
+    "B_seventh_final_due_date": "2026-10-02",
+    "earlier_all_seven_full_hash_preserved": false,
+    "baseline_evidence_git_blob": "c9b59222009ca268d029ecb50b37a10890b76a16"
+  },
+  "B_clear_restore": {
+    "clear_ui_utc": "2026-10-04T00:20:04.224Z",
+    "clear_correlated_http_status": 200,
+    "clear_physical_null_snapshot_captured": false,
+    "restore_ui_utc": "2026-10-04T00:22:44.073Z",
+    "restore_correlated_http_status": 200,
+    "restore_physical_due_date": "2026-10-02",
+    "earlier_failed_HTTP_401_retained": true,
+    "expired_session_resilience": "OPEN"
+  },
+  "live_MAX_contact_and_return_retest": "PENDING"
+}

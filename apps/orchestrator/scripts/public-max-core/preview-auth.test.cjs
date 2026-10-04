@@ -14,7 +14,7 @@ const secret = 'disposable-unit-test-secret';
 const project = '11111111-1111-4111-8111-111111111111';
 
 async function bootstrap(env, { expired = false, badSignature = false, wrongProject = false,
-  resume = false, corruptCookie = false, resumeEnv = {} } = {}) {
+  resume = false, corruptCookie = false, resumeEnv = {}, json = false, actorChanged = false } = {}) {
   let writes = 0, cookie, cookieSets = 0;
   class NextResponse extends Response {
     constructor(body, options) {
@@ -53,10 +53,13 @@ async function bootstrap(env, { expired = false, badSignature = false, wrongProj
   const signature = badSignature ? 'invalid' : createHmac('sha256', secret)
     .update(`omnia:max-preview-session:v1\n${wrongProject ? 'other-project' : project}\n${expires}`)
     .digest('base64url');
+  if (actorChanged) cookie = load('@/lib/max/session').createMaxSession({ id: '123' }).value;
   const result = await context.exports.GET(new Request(
     `https://preview.example.test/api/omnia/preview-session?expires=${expires}&signature=${signature}`,
+    { headers: { Accept: json ? "application/json" : "text/html" } },
   ));
   const resultSummary = { status: result.status, location: result.headers.get('Location'), writes };
+  if (json) return { ...resultSummary, body: result.status === 404 ? null : await result.json(), cookieSets };
   if (!resume) return resultSummary;
   if (corruptCookie) cookie += 'bad';
   Object.assign(context.process.env, resumeEnv);
@@ -126,4 +129,39 @@ test('only an unconfigured private preview can use initial metadata', () => {
   assert.throws(() => load({ OMNIA_OWNER_PREVIEW: '1', OMNIA_PUBLIC_APP_ORIGIN: 'https://public.example.test' }), /missing/);
   assert.equal(load({ OMNIA_OWNER_PREVIEW: '1' }, '{"app_name":"Saved"}').app_name, 'Saved');
   assert.throws(() => load({ OMNIA_OWNER_PREVIEW: '1' }, 'corrupted'));
+});
+
+
+test('compiled JSON renewal sets the same preview cookie without navigation', async () => {
+  assert.deepEqual(await bootstrap({ OMNIA_OWNER_PREVIEW: '1' }, { json: true }), {
+    status: 200, location: null, writes: 1, body: { user: { id: 'preview' }, mode: 'preview' }, cookieSets: 1,
+  });
+});
+test('compiled JSON renewal refuses to replace an actual MAX actor', async () => {
+  assert.deepEqual(await bootstrap({ OMNIA_OWNER_PREVIEW: '1' }, { json: true, actorChanged: true }), {
+    status: 401, location: null, writes: 0, body: { code: 'preview_actor_changed' }, cookieSets: 0,
+  });
+});
+test('compiled preview resume exposes only configured HTTPS cabinet origins', async () => {
+  const result = await bootstrap({ OMNIA_OWNER_PREVIEW: '1' }, {
+    resume: true,
+    resumeEnv: { OMNIA_OWNER_PREVIEW_ORIGINS: JSON.stringify([
+      'https://custom-cabinet.example', 'https://cabinet.example/path', 'http://bad.example',
+    ]) },
+  });
+  assert.equal(result.resumeStatus, 200);
+  assert.deepEqual(result.body.editor_origins, ['https://custom-cabinet.example']);
+  assert.equal(result.writesAfterResume, 1);
+  assert.equal(result.cookieSets, 1);
+});
+for (const options of [{ badSignature: true }, { expired: true }, { wrongProject: true }]) {
+  test(`compiled JSON renewal retains signed capability guards ${JSON.stringify(options)}`, async () => {
+    const result = await bootstrap({ OMNIA_OWNER_PREVIEW: '1' }, { ...options, json: true });
+    assert.equal(result.status, 404); assert.equal(result.writes, 0);
+  });
+}
+
+test('compiled public core rejects JSON bootstrap regardless of its valid signature', async () => {
+  const result = await bootstrap({ OMNIA_OWNER_PREVIEW: '1', OMNIA_PUBLIC_APP_ORIGIN: 'https://public.example.test' }, { json: true });
+  assert.equal(result.status, 404); assert.equal(result.writes, 0); assert.equal(result.cookieSets, 0);
 });

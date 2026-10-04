@@ -2,7 +2,7 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { schema, withMaxUser } from "@/lib/db";
-import { createMaxSession, MAX_SESSION_COOKIE, type MaxSessionUser } from "@/lib/max/session";
+import { getMaxUser, createMaxSession, MAX_SESSION_COOKIE, type MaxSessionUser } from "@/lib/max/session";
 
 const BOOTSTRAP_TTL_SECONDS = 120;
 const PREVIEW_SESSION_MAX_AGE_SECONDS = 15 * 60;
@@ -54,6 +54,17 @@ export async function GET(request: Request) {
   if (!validSignature(providedSignature, expectedSignature)) return unavailable();
 
   try {
+    const renewal = request.headers.get("Accept") === "application/json";
+    // Renewal must not replace an actual MAX actor that appeared while the
+    // editor was minting a capability. Navigation retains its existing flow.
+    if (renewal) {
+      const current = await getMaxUser();
+      if (current && current.id !== PREVIEW_USER.id) {
+        return NextResponse.json({ code: "preview_actor_changed" }, {
+          status: 401, headers: { "Cache-Control": "no-store" },
+        });
+      }
+    }
     await withMaxUser(PREVIEW_USER.id, (tx) =>
       tx
         .insert(schema.maxUsers)
@@ -66,10 +77,9 @@ export async function GET(request: Request) {
     // Keep the redirect relative to the public preview origin. Next.js exposes
     // its container listen address in request.url behind nginx, which would
     // otherwise send the browser to https://0.0.0.0:3000/.
-    const response = new NextResponse(null, {
-      status: 307,
-      headers: { Location: "/" },
-    });
+    const response = renewal
+      ? NextResponse.json({ user: PREVIEW_USER, mode: "preview" })
+      : new NextResponse(null, { status: 307, headers: { Location: "/" } });
     response.headers.set("Cache-Control", "no-store");
     response.headers.set("Referrer-Policy", "no-referrer");
     response.cookies.set(MAX_SESSION_COOKIE, session.value, {

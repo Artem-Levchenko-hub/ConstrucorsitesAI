@@ -5,6 +5,7 @@ import { act, createElement, type ComponentType, type ReactNode } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { createRoot, type Root } from "react-dom/client";
 import ts from "typescript";
+import { installOwnerPreviewFetch } from "../../../../orchestrator/templates/max-miniapp-nextjs/src/lib/max/owner-preview-renewal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const source = readFileSync(resolve(process.cwd(), "../orchestrator/templates/max-miniapp-nextjs/src/components/MaxAppProvider.tsx"), "utf8");
@@ -13,25 +14,27 @@ const compiled = ts.transpileModule(source, { compilerOptions: {
 } }).outputText;
 const user = { id: "123", firstName: "Мария", lastName: null, username: null, languageCode: "ru", photoUrl: null };
 
-function loadProvider(fetch: ReturnType<typeof vi.fn>, initData = "", hostname = "app.example.com") {
+function loadProvider(fetch: ReturnType<typeof vi.fn>, initData = "", hostname = "app.example.com", override?: Window) {
   const exports = {} as {
     MaxAppProvider: ComponentType<{ children: ReactNode }>;
     useMaxApp: () => { mode: string; user: typeof user | null };
   };
-  const windowBoundary = { fetch, location: { hostname, href: `https://${hostname}/`, origin: `https://${hostname}` } };
+  const windowBoundary = (override ?? { fetch, parent: window.parent, crypto: window.crypto, addEventListener: window.addEventListener.bind(window), removeEventListener: window.removeEventListener.bind(window), setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window), location: { hostname, href: `https://${hostname}/`, origin: `https://${hostname}` } }) as Window;
   const imports: Record<string, unknown> = {
     react: React, "react/jsx-runtime": jsxRuntime,
     "next/dynamic": { default: () => ({ children }: { children: ReactNode }) => children },
     "@/lib/max/bridge": { getMaxWebApp: () => ({ initData, platform: "ios" }), configureMaxShell: vi.fn() },
+    "@/lib/max/owner-preview-renewal": { installOwnerPreviewFetch },
     "@/components/YleumCompliance": { YleumCompliance: () => null },
   };
   new Function("exports", "require", "fetch", "window", compiled)(exports, (id: string) => {
     if (!(id in imports)) throw new Error(`Unexpected import ${id}`);
     return imports[id];
-  }, fetch, windowBoundary);
+  }, (...args: Parameters<typeof window.fetch>) => windowBoundary.fetch(...args), windowBoundary);
   function Product() {
     const context = exports.useMaxApp();
-    return <div data-product>{context.mode}:{context.user?.firstName}</div>;
+    const [draft, setDraft] = React.useState("original");
+    return <><div data-product>{context.mode}:{context.user?.firstName}</div><input aria-label="draft" value={draft} onInput={event => setDraft(event.currentTarget.value)} /><button data-save onClick={() => void windowBoundary.fetch("/api/tasks/own", { method: "PATCH", body: draft, headers: { "If-Match": "revision-7" } })}>Save</button></>;
   }
   return createElement(exports.MaxAppProvider, { children: createElement(Product) });
 }
@@ -124,4 +127,31 @@ describe("canonical MAX provider session recovery", () => {
     expect(container.querySelector("[data-product]")).toBeNull();
     expect(fetch.mock.calls.map(call => call[1].method)).toEqual(["POST"]);
   });
+  it("keeps the same mounted form and draft through expired-session renewal", async () => {
+    let expired = false;
+    const listeners = new Set<(event: MessageEvent) => void>();
+    const parent = { postMessage: vi.fn(message => queueMicrotask(() => listeners.forEach(fn => fn({
+      source: parent, origin: "https://yleum.ru", data: { type: "omnia:preview-session:result", nonce: message.nonce,
+        url: "https://qa-dev.dev2.yleum.ru/api/omnia/preview-session?signature=opaque" },
+    } as unknown as MessageEvent)))) };
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/max/session") return expired ? new Response(null, { status: 401 }) : Response.json({ mode: "preview", user: { id: "preview" } });
+      if (String(input).includes("preview-session?")) { expired = false; return Response.json({ mode: "preview", user: { id: "preview" } }); }
+      return Response.json({ saved: true });
+    });
+    const boundary = { fetch, parent, crypto, location: { origin: "https://qa-dev.dev2.yleum.ru", href: "https://qa-dev.dev2.yleum.ru/" },
+      setTimeout, clearTimeout, addEventListener: (_: string, fn: (e: MessageEvent) => void) => listeners.add(fn),
+      removeEventListener: (_: string, fn: (e: MessageEvent) => void) => listeners.delete(fn),
+    } as unknown as Window;
+    await act(async () => root.render(loadProvider(fetch, "", "qa-dev.dev2.yleum.ru", boundary)));
+    const input = container.querySelector<HTMLInputElement>("input")!;
+    await act(async () => { input.value = "unsaved personal draft"; input.dispatchEvent(new Event("input", { bubbles: true })); });
+    expired = true;
+    await act(async () => container.querySelector<HTMLButtonElement>("[data-save]")!.click());
+    expect(container.querySelector("input")).toBe(input);
+    expect(input.value).toBe("unsaved personal draft");
+    expect(container.querySelector('[role="status"]')).toBeNull();
+    expect(fetch.mock.calls.filter(c => c[0] === "/api/tasks/own")).toEqual([["/api/tasks/own", { method: "PATCH", body: "unsaved personal draft", headers: { "If-Match": "revision-7" } }]]);
+  });
+
 });
