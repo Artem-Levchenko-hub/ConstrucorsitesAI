@@ -50,6 +50,14 @@ _PREVIEW_RENEWAL_OVERRIDE_PATHS = {
 }
 
 
+_ANALYTICS_OVERRIDE_PATHS = {
+    "src/app/api/max/session/route.ts",
+    "src/app/api/omnia/actions/route.ts",
+    "src/app/api/omnia/events/route.ts",
+    "src/lib/omnia/analytics.ts",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
@@ -58,6 +66,7 @@ def main() -> None:
     parser.add_argument("action_write_overrides", type=Path)
     parser.add_argument("support_overrides", type=Path)
     parser.add_argument("preview_renewal_overrides", type=Path)
+    parser.add_argument("analytics_overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -79,9 +88,18 @@ def main() -> None:
     assert set(preview_renewal_overrides) == _PREVIEW_RENEWAL_OVERRIDE_PATHS, (
         "unexpected MAX preview renewal override paths"
     )
+    analytics_overrides = json.loads(args.analytics_overrides.read_text(encoding="utf-8"))
+    assert set(analytics_overrides) == _ANALYTICS_OVERRIDE_PATHS, (
+        "unexpected MAX analytics override paths"
+    )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
-            complete_tree = complete_tree | dependency_overrides | preview_renewal_overrides
+            complete_tree = (
+                complete_tree
+                | dependency_overrides
+                | preview_renewal_overrides
+                | analytics_overrides
+            )
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
         expected = {path: entry for path, entry in complete_tree.items() if path not in omissions}
@@ -93,6 +111,7 @@ def main() -> None:
             if name == "max-miniapp-nextjs":
                 entry = action_write_overrides.get(relative, entry)
                 entry = support_overrides.get(relative, entry)
+                entry = analytics_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

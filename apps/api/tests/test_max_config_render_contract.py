@@ -64,6 +64,54 @@ _LEGACY_PREVIEW_HASHES = {
 }
 
 
+_LEGACY_ANALYTICS_HASHES = {
+    "src/app/api/max/session/route.ts": (
+        "8574fb957de0f9e98b7a81832f139670282eac029f9a643b361ea97e380badc7"
+    ),
+    "src/app/api/omnia/actions/route.ts": (
+        "7a367d6f19e6bc53e1c6ca28b30c9c335f894f36a7d716af5479196103e83dda"
+    ),
+    "src/app/api/omnia/events/route.ts": (
+        "28b7c7c84d10335b7f7bee5ba4726c362b24da2b5c7d050d39bd1e8b3de7341a"
+    ),
+}
+
+
+def _normalize_analytics(files):
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    overrides = json.loads(
+        (fixtures / "max_template_analytics_overrides.json").read_text(encoding="utf-8")
+    )
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_legacy_analytics.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    added = "src/lib/omnia/analytics.ts"
+    assert legacy["revision"] == "20382350beccf2da361db1f6c9e9425a91b9267c"
+    assert set(overrides) == set(_LEGACY_ANALYTICS_HASHES) | {added}
+    assert set(legacy["files"]) == set(_LEGACY_ANALYTICS_HASHES)
+    normalized = dict(files)
+    for path, entry in overrides.items():
+        actual = files[path]
+        if path == added:
+            match = re.search(r'^  const project = ("[^"\n]*");$', actual, re.M)
+            assert match is not None
+            identity = json.loads(match.group(1))
+            assert identity == "" or str(UUID(identity)) == identity
+            actual = actual.replace(
+                match.group(0), '  const project = process.env.OMNIA_PROJECT_ID || "";', 1
+            )
+        assert hashlib.sha256(actual.encode()).hexdigest() == entry["sha256"], path
+        if path == added:
+            normalized.pop(path)
+        else:
+            baseline = legacy["files"][path]["source"]
+            assert hashlib.sha256(baseline.encode()).hexdigest() == _LEGACY_ANALYTICS_HASHES[path]
+            normalized[path] = baseline
+    return normalized
+
+
 def _normalize_preview_renewal(files):
     fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
     overrides = json.loads(
@@ -122,7 +170,7 @@ def _assert_render_golden(files, expected):
     overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
     # Project only these two verified dependency blobs back to the old baseline;
     # all other rendered bytes must still match the unchanged original golden.
-    original_dependencies = _normalize_preview_renewal(files)
+    original_dependencies = _normalize_preview_renewal(_normalize_analytics(files))
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
         assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
         baseline = legacy["files"][path]
@@ -436,6 +484,9 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/components/MaxAppProvider.tsx",
         "src/app/api/max/session/route.ts",
         "src/app/api/omnia/preview-session/route.ts",
+        "src/app/api/omnia/actions/route.ts",
+        "src/app/api/omnia/events/route.ts",
+        "src/lib/omnia/analytics.ts",
     ],
 )
 def test_config_render_golden_rejects_sdk_or_unreviewed_dependency_drift(changed):

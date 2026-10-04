@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_usage_settlements_is_the_only_head() -> None:
+def test_max_analytics_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0075_generation_billing"]
+    assert heads == ["0076_max_analytics"]
+    assert chain["0076_max_analytics"] == "0075_generation_billing"
     assert chain["0075_generation_billing"] == "0074_usage_settlements"
     assert chain["0074_usage_settlements"] == "0073_generation_deployment_drain"
     assert chain["0073_generation_deployment_drain"] == "0072_moysklad_vendor"
@@ -234,7 +235,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database = project_cell_migration_database
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == "0075_generation_billing"
+    assert database.fetchval("SELECT version_num FROM alembic_version") == "0076_max_analytics"
     assert (
         database.fetchval(
             "SELECT count(*) FROM information_schema.columns "
@@ -242,6 +243,15 @@ def test_restoration_adaptation_migrations_roundtrip(
         )
         == 1
     )
+    # 0076: durable privacy-safe receipts retain exact replay identity.
+    assert database.fetchval("SELECT to_regclass('max_analytics_events')") is not None
+    assert {
+        _normalized_catalog_sql(str(row["definition"]))
+        for row in database.fetch(
+            "SELECT pg_get_constraintdef(oid) AS definition FROM pg_constraint "
+            "WHERE conrelid = 'max_analytics_events'::regclass AND contype = 'u'"
+        )
+    } == {"UNIQUE (project_id, actor_key, event_id)"}
     # 0074: exact owner/provider identity and financial references survive replay.
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
     assert {
@@ -373,7 +383,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_installations')") is None
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == "0075_generation_billing"
+    assert database.fetchval("SELECT version_num FROM alembic_version") == "0076_max_analytics"
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
 

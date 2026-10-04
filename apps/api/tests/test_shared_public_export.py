@@ -32,6 +32,13 @@ PREVIEW_RENEWAL_OVERRIDES = json.loads(
     ).read_text(encoding="utf-8")
 )
 
+ANALYTICS_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_analytics_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+
 SOURCE_MAPPING = json.loads(
     (
         Path(__file__).resolve().parents[2]
@@ -88,6 +95,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         if template == "max-miniapp-nextjs":
             expected.update(DEPENDENCY_OVERRIDES)
             expected.update(PREVIEW_RENEWAL_OVERRIDES)
+            expected.update(ANALYTICS_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -123,6 +131,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_action_write_overrides.json"),
             str(fixtures / "max_template_support_overrides.json"),
             str(fixtures / "max_template_preview_renewal_overrides.json"),
+            str(fixtures / "max_template_analytics_overrides.json"),
         ],
         cwd=tmp_path,
         env=env,
@@ -148,6 +157,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_action_write_overrides.json"),
         str(fixtures / "max_template_support_overrides.json"),
         str(fixtures / "max_template_preview_renewal_overrides.json"),
+        str(fixtures / "max_template_analytics_overrides.json"),
     ]
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
@@ -196,6 +206,45 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             else "max-miniapp-nextjs/src/lib/max/owner-preview-renewal.ts"
         )
         assert expected_error in rejected.stderr
+
+    # New receipt helper and changed routes remain an explicit four-file contract.
+    for extra_path in ("src/lib/omnia/unreviewed.ts", None):
+        bad_analytics = dict(ANALYTICS_OVERRIDES)
+        if extra_path:
+            bad_analytics[extra_path] = {"sha256": "0" * 64, "mode": "100644"}
+        else:
+            bad_analytics["src/lib/omnia/analytics.ts"] = {
+                "sha256": "0" * 64,
+                "mode": "100644",
+            }
+        invalid_analytics = tmp_path / "untrusted-analytics-overrides.json"
+        invalid_analytics.write_text(json.dumps(bad_analytics), encoding="utf-8")
+        invalid_args = args.copy()
+        invalid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+        invalid_args[8] = str(invalid_analytics)
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+        )
+        assert rejected.returncode != 0
+        expected_error = (
+            "unexpected MAX analytics override paths"
+            if extra_path
+            else "max-miniapp-nextjs/src/lib/omnia/analytics.ts"
+        )
+        assert expected_error in rejected.stderr
+
+    # A missing newly managed helper must fail the same baked-export gate.
+    helper = mounted / "max-miniapp-nextjs/src/lib/omnia/analytics.ts"
+    helper_bytes = helper.read_bytes()
+    helper.unlink()
+    valid_args = args.copy()
+    valid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+    rejected = subprocess.run(
+        valid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+    )
+    assert rejected.returncode != 0
+    assert "incomplete standalone export" in rejected.stderr
+    helper.write_bytes(helper_bytes)
 
     # The actual shared SDK bytes must still match the reviewed immutable hash.
     sdk_source = mounted / "max-miniapp-nextjs" / sdk_relative
