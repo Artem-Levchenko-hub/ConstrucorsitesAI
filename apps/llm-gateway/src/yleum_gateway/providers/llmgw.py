@@ -24,7 +24,7 @@ import json
 import re
 import threading
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, Mapping
 from typing import Any, cast
 from uuid import uuid4
 
@@ -33,14 +33,9 @@ import httpx
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
 
-# Transient transport faults worth one retry (a TLS handshake to a reseller edge
-# can intermittently stall inside a long-lived process).
-_TRANSIENT = (
-    httpx.ConnectError,
-    httpx.ConnectTimeout,
-    httpx.ReadTimeout,
-    httpx.RemoteProtocolError,
-)
+# Retry only failures before the POST can be accepted. A missing response can
+# still mean a paid generation; replaying it may create a second provider bill.
+_SAFE_TO_RETRY = (httpx.ConnectError, httpx.ConnectTimeout)
 
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
@@ -86,6 +81,19 @@ def native_slug(model_id: str) -> str:
 def slug_to_omnia(slug: str) -> str | None:
     """Map an upstream response `model` back to the Omnia id; None if unknown."""
     return _SLUG_TO_OMNIA.get(slug)
+
+
+def resolve_response_model(reported: str, requested: str, provider_request_id: str | None) -> str:
+    """An unknown actual model must not inherit the requested model's tariff."""
+    if not reported:
+        return requested
+    mapped = slug_to_omnia(reported)
+    if mapped is None:
+        raise UpstreamProviderError(
+            "llmgw returned an unsupported model",
+            details={"provider_charge_ambiguous": True, "provider_request_id": provider_request_id},
+        )
+    return mapped
 
 
 def _is_vision(model_id: str) -> bool:
@@ -167,6 +175,41 @@ def _key_and_url() -> tuple[str, str]:
     return key, url
 
 
+def _receipt_headers(headers: Mapping[str, str]) -> dict[str, str]:
+    return {key: headers[key] for key in (
+        "x-llmgw-cost-rub", "x-cost-rub", "x-cost-usd", "x-llmgw-request-id",
+    ) if key in headers}
+
+
+def normalize_usage(
+    usage: dict[str, Any], fallback_input: int, fallback_output: int,
+) -> tuple[dict[str, Any], bool]:
+    """Keep provider usage/details, replacing only absent or invalid counters."""
+    estimated = False
+
+    def count(key: str, fallback: int) -> int:
+        nonlocal estimated
+        value = usage.get(key)
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+        estimated = True
+        return fallback
+
+    tokens_in = count("prompt_tokens", fallback_input)
+    tokens_out = count("completion_tokens", fallback_output)
+    cache_read = min(tokens_in, _cached_tokens(usage))
+    cache_write = min(tokens_in - cache_read, _cache_token_count(
+        usage, "cache_creation_tokens", "cache_creation_input_tokens",
+    ))
+    return {
+        **usage,
+        "prompt_tokens": tokens_in, "completion_tokens": tokens_out,
+        "total_tokens": tokens_in + tokens_out,
+        "prompt_cache_hit_tokens": cache_read,
+        "cache_creation_input_tokens": cache_write,
+    }, estimated
+
+
 async def astream(
     model: str,
     messages: list[dict[str, Any]],
@@ -174,13 +217,14 @@ async def astream(
     temperature: float = 0.5,
     max_tokens: int = _DEFAULT_MAX_TOKENS,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
-) -> AsyncIterator[tuple[str, str]]:
+    receipt: dict[str, Any] | None = None,
+) -> AsyncGenerator[tuple[str, str], None]:
     """TRUE token streaming from llmgw — the page builds live in the preview.
 
     A sync ``httpx.Client`` on a worker thread reads the SSE incrementally and
     bridges each delta to the async caller through an ``asyncio.Queue``. Yields
-    ``(delta, omnia_id)``. Retries once on a transient fault that hits BEFORE the
-    first delta; mid-stream faults propagate.
+    ``(delta, omnia_id)``. The optional receipt collects provider usage, cost
+    headers and request identity. Only connection establishment is retried.
     """
     slug = _MODEL_SLUG.get(model)
     if slug is None:
@@ -193,8 +237,7 @@ async def astream(
         "temperature": temperature,
         "max_tokens": max_tokens,
         "stream": True,
-        # Ask for a final usage chunk so we can LOG cache-hit tokens on the big
-        # stable system prefix (billing stays gateway-token-counted).
+        # The final chunk is the provider's usage receipt, including cache/reasoning.
         "stream_options": {"include_usage": True},
     }
     headers = {
@@ -206,9 +249,10 @@ async def astream(
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[Any] = asyncio.Queue()
     _DONE = object()
+    stopped = threading.Event()
+    receipt = receipt if receipt is not None else {}
 
     def _produce() -> None:
-        emitted = False
         for attempt in range(2):
             try:
                 with (
@@ -220,70 +264,92 @@ async def astream(
                     client.stream("POST", url, json=payload, headers=headers) as r,
                 ):
                     if r.status_code >= 400:
-                        body = r.read().decode("utf-8", "replace")[:300]
                         loop.call_soon_threadsafe(
                             queue.put_nowait,
-                            ("err", f"llmgw HTTP {r.status_code}: {body}"),
+                            ("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}")),
                         )
                         loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                         return
+                    loop.call_soon_threadsafe(queue.put_nowait, ("receipt", {
+                        "headers": _receipt_headers(r.headers),
+                        "provider_request_id": r.headers.get("x-llmgw-request-id"),
+                    }))
                     for raw in r.iter_lines():
+                        if stopped.is_set():
+                            return
                         if not raw or not raw.startswith("data:"):
                             continue
                         data = raw[5:].strip()
                         if data == "[DONE]":
+                            loop.call_soon_threadsafe(queue.put_nowait, ("receipt", {"complete": True}))
                             loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                             return
                         try:
                             obj = json.loads(data)
                         except ValueError:
                             continue
-                        usage = obj.get("usage")
-                        if usage:
-                            print(
-                                f"[LLMGW] stream usage model={model} "
-                                f"prompt={usage.get('prompt_tokens')} "
-                                f"completion={usage.get('completion_tokens')} "
-                                f"cache_hit={_cached_tokens(usage)}",
-                                flush=True,
-                            )
+                        if not isinstance(obj, dict):
+                            continue
+                        if obj.get("error"):
+                            raise UpstreamProviderError("llmgw stream returned an error")
+                        loop.call_soon_threadsafe(queue.put_nowait, ("receipt", {
+                            key: obj[key] for key in ("usage", "model", "id", "metadata")
+                            if obj.get(key) is not None
+                        }))
                         try:
                             delta = obj["choices"][0].get("delta", {}).get("content", "")
                         except (KeyError, IndexError, TypeError):
                             delta = ""
                         if delta:
-                            emitted = True
                             loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
-                return
-            except _TRANSIENT as exc:
-                if not emitted and attempt == 0:
+                raise UpstreamProviderError(
+                    "llmgw stream ended without completion",
+                    details={"provider_charge_ambiguous": True},
+                )
+            except httpx.HTTPError as exc:
+                if isinstance(exc, _SAFE_TO_RETRY) and attempt == 0:
                     time.sleep(0.5)
                     continue
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
-                    ("err", f"llmgw stream transport: {type(exc).__name__}: {exc}"),
+                    ("err", UpstreamProviderError(
+                        f"llmgw stream transport: {type(exc).__name__}",
+                        details={"provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY)},
+                    )),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                 return
             except Exception as exc:  # noqa: BLE001 — surface as a clean error event
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
-                    ("err", f"llmgw stream error: {type(exc).__name__}: {exc}"),
+                    ("err", exc if isinstance(exc, UpstreamProviderError) else
+                     UpstreamProviderError(f"llmgw stream error: {type(exc).__name__}")),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
                 return
 
     threading.Thread(target=_produce, daemon=True).start()
 
-    while True:
-        item = await queue.get()
-        if item is _DONE:
-            break
-        kind, val = item
-        if kind == "err":
-            raise UpstreamProviderError(val)
-        yield val, model
+    try:
+        while True:
+            item = await queue.get()
+            if item is _DONE:
+                break
+            kind, val = item
+            if kind == "err":
+                if receipt.get("provider_request_id") or receipt.get("id"):
+                    val.details["provider_request_id"] = receipt.get("provider_request_id") or receipt["id"]
+                raise val
+            if kind == "receipt":
+                receipt.update(val)
+                resolve_response_model(
+                    receipt.get("model", ""), model,
+                    receipt.get("provider_request_id") or receipt.get("id"),
+                )
+                continue
+            yield val, slug_to_omnia(receipt.get("model", "")) or model
+    finally:
+        stopped.set()
 
 
 async def acompletion(
@@ -320,7 +386,7 @@ async def acompletion(
 
     def _completion_sync() -> dict[str, Any]:
         # trust_env=False + no-op mounts: ignore the container's HTTPS_PROXY so the
-        # provider endpoint is hit DIRECT. Retry a transient transport fault once.
+        # provider endpoint is hit DIRECT. Retry connection establishment only.
         last: Exception | None = None
         for attempt in range(2):
             try:
@@ -331,8 +397,10 @@ async def acompletion(
                 ) as client:
                     r = client.post(url, json=payload, headers=headers)
                     r.raise_for_status()
-                    return cast(dict[str, Any], r.json())
-            except _TRANSIENT as exc:
+                    result = cast(dict[str, Any], r.json())
+                    result["_provider_headers"] = _receipt_headers(r.headers)
+                    return result
+            except _SAFE_TO_RETRY as exc:
                 last = exc
                 if attempt == 0:
                     time.sleep(0.5)
@@ -343,36 +411,31 @@ async def acompletion(
     try:
         data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
-        print(
-            f"[LLMGW] HTTP {exc.response.status_code}: {exc.response.text[:300]!r}",
-            flush=True,
-        )
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
-            details={"body": exc.response.text[:500]},
+            details={"provider_request_id": exc.response.headers.get("x-llmgw-request-id")},
         ) from exc
     except httpx.HTTPError as exc:
-        raise UpstreamProviderError(f"llmgw transport error: {type(exc).__name__}: {exc}") from exc
+        raise UpstreamProviderError(
+            f"llmgw transport error: {type(exc).__name__}",
+            details={"provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY)},
+        ) from exc
 
     try:
         choice = (data.get("choices") or [])[0]
         content = (choice.get("message") or {}).get("content") or ""
     except (IndexError, AttributeError, KeyError) as exc:
         raise UpstreamProviderError(
-            "llmgw: malformed response", details={"body": str(data)[:500]}
+            "llmgw: malformed response",
+            details={"provider_charge_ambiguous": True,
+                     "provider_request_id": data["_provider_headers"].get("x-llmgw-request-id") or data.get("id")},
         ) from exc
     content = _strip_reasoning(content)
 
-    usage = data.get("usage") or {}
-    tokens_in = int(
-        usage.get("prompt_tokens")
-        or _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages))
-    )
-    tokens_out = int(usage.get("completion_tokens") or _approx_tokens(content))
-    cache_hit_tokens = min(max(0, tokens_in), _cached_tokens(usage))
-    cache_write_tokens = min(
-        max(0, tokens_in - cache_hit_tokens),
-        _cache_token_count(usage, "cache_creation_tokens", "cache_creation_input_tokens"),
+    usage, estimated = normalize_usage(
+        data.get("usage") or {},
+        _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages)),
+        _approx_tokens(content),
     )
 
     # Normalize to OpenAI shape with `model` = the Omnia id so chat.py bills against
@@ -381,7 +444,16 @@ async def acompletion(
         "id": data.get("id") or f"llmgw-{uuid4()}",
         "object": "chat.completion",
         "created": int(data.get("created") or time.time()),
-        "model": model,
+        "model": resolve_response_model(
+            data.get("model", ""), model,
+            data["_provider_headers"].get("x-llmgw-request-id") or data.get("id"),
+        ),
+        "_provider_headers": data["_provider_headers"],
+        "metadata": {
+            **(data.get("metadata") or {}),
+            "provider_request_id": data["_provider_headers"].get("x-llmgw-request-id") or data.get("id"),
+            "estimated_tokens": estimated,
+        },
         "choices": [
             {
                 "index": 0,
@@ -389,11 +461,5 @@ async def acompletion(
                 "finish_reason": (choice.get("finish_reason") or "stop"),
             }
         ],
-        "usage": {
-            "prompt_tokens": tokens_in,
-            "completion_tokens": tokens_out,
-            "total_tokens": tokens_in + tokens_out,
-            "prompt_cache_hit_tokens": cache_hit_tokens,
-            "cache_creation_input_tokens": cache_write_tokens,
-        },
+        "usage": usage,
     }

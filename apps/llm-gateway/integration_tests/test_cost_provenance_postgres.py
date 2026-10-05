@@ -3,6 +3,7 @@
 import asyncio
 import json
 from decimal import Decimal
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import test_billing_settlement_postgres as fixture_source
@@ -16,6 +17,31 @@ from yleum_gateway.services import billing, pricing
 database_url = fixture_source.database_url
 pool = fixture_source.pool
 MODEL = "gemini-3.1-pro-preview-customtools"
+
+
+async def test_catalog_estimate_and_usd_survive_real_settlement(pool, monkeypatch):
+    user, project, messages = await _owner(pool)
+    monkeypatch.setattr(pricing, "_catalog_prices", AsyncMock(return_value={
+        MODEL: (Decimal("349.9153"), Decimal("2099.4918"), Decimal("34.9915"))}))
+    cost, evidence = await pricing.resolve_request_cost(MODEL, tokens_in=1000, tokens_out=100,
+        cache_read_tokens=600, reported=pricing.ReportedCost(cost_usd=Decimal(".0123"),
+                                                           usd_source="usage:cost"))
+    args = dict(user_id=user, project_id=project, message_id=messages[0], model_id=MODEL,
+        tokens_in=1000, tokens_out=100, cache_read_tokens=600, cost_rub=cost,
+        provider_cost_usd=Decimal(".0123"), cost_provenance=evidence,
+        provider_request_id="catalog-" + str(uuid4()), description="Synthetic catalog quote")
+    first = await billing.charge(**args)
+    assert await billing.charge(**args) == first
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT cost_rub,provider_cost_usd,cost_provenance FROM usage WHERE user_id=$1", user)
+        assert len(rows) == 1
+        assert rows[0]["cost_rub"] == cost == Decimal(".3709")
+        assert rows[0]["provider_cost_usd"] == Decimal(".0123")
+        assert json.loads(rows[0]["cost_provenance"]) == evidence
+        assert evidence["basis"] == "provider_catalog_estimate"
+        assert evidence["reported_cost_rub"] is None
+        assert await conn.fetchval("SELECT balance_rub FROM wallets WHERE user_id=$1", user) == 100 - cost
+        assert await conn.fetchval("SELECT count(*) FROM wallet_charges WHERE user_id=$1", user) == 1
 
 
 async def test_nullable_migration_preserves_old_usage_and_old_writer(pool):

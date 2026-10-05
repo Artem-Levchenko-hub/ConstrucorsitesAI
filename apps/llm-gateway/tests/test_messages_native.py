@@ -524,6 +524,30 @@ def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     assert Decimal(response.json()["metadata"]["cost_rub"]) == Decimal(expected_cost)
 
 
+def test_native_endpoint_uses_provider_catalog_snapshot(client, monkeypatch):
+    from yleum_gateway.services import pricing
+
+    charge = AsyncMock(return_value=UUID("55555555-5555-5555-5555-555555555555"))
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native.file_logger, "log_request", lambda payload: None)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("test-key", "https://api.llmgw.ru/v1"))
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices", AsyncMock(return_value={
+        "claude-sonnet-5": (Decimal("349.9153"), Decimal("1749.5765"), Decimal("34.9915"))}))
+    monkeypatch.setattr(messages_native, "_post_llmgw", lambda *args: httpx.Response(200, json={
+        "id": "catalog-native-test", "model": "anthropic/claude-sonnet-5",
+        "choices": [{"finish_reason": "stop", "message": {"content": "OK"}}],
+        "usage": {"prompt_tokens": 1000, "completion_tokens": 100,
+                  "prompt_tokens_details": {"cached_tokens": 600}, "cost": ".001"}}))
+    response = client.post("/v1/messages", json={"model": "claude-sonnet-5", "max_tokens": 100,
+        "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "test"}]})
+    assert response.status_code == 200
+    assert charge.await_args.kwargs["cost_rub"] == Decimal(".3359")
+    assert charge.await_args.kwargs["cost_provenance"]["basis"] == "provider_catalog_estimate"
+
+
 @pytest.mark.parametrize(
     ("reported", "actual", "fallback"),
     [

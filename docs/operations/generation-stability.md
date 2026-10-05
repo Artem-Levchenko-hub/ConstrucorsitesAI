@@ -303,3 +303,34 @@ claims or manually patch the generated app to conceal a generator failure.
   restore is still required; existing Docker-cell restore tests do not cover
   published K3s databases or code PVCs. A logical restore alone must not be called
   full published-application recovery.
+
+### Provider cost accounting — 2026-10-06
+
+Acceptance is request-level equality with the provider's RUB balance ledger,
+not a match between unrelated dashboard totals. Use the same API key, model,
+Moscow date boundaries and request identities. Separate direct diagnostic calls,
+local response-cache hits, generation refunds and subscriptions from provider spend.
+
+- The fixed 2026-09-28 through 2026-10-05 Moscow cohort shows provider
+  1,679 calls / 10,413.43 RUB versus platform 1,648 rows / 8,872.0413 RUB.
+  The provider includes 1,674 Sonnet calls and five Gemini calls; platform rows
+  are Sonnet only. These unequal cohorts cannot establish a per-request delta.
+- Chat, native messages and streaming now retain monetary provenance and actual
+  token/model identity. Actual finite reported RUB, including zero, takes priority;
+  USD remains a separate observation. Local cache replay returns zero current cost.
+- Without reported RUB, the public LLMGW RUB-per-million catalog supplies an
+  explicitly labelled `provider_catalog_estimate`, with the selected tariff
+  persisted. Unknown/tiered rates, missing cache-write prices or unavailable
+  catalog fall back to an explicit legacy estimate. Never reprice historical rows.
+- Ambiguous read/protocol failures must not replay a possibly accepted paid POST.
+  A completed stream settles before final usage/DONE. Disconnect cleanup awaits
+  the same protected settlement task; an EOF retains receipts already received.
+- A direct 26-input/4-output diagnostic call returned USD 0.000092 but no
+  documented RUB header. Therefore exact historical/future RUB reconciliation
+  still requires the provider's per-request balance ledger or restored RUB receipt.
+  Estimates must not be represented as confirmed provider debits.
+
+Release gates: gateway tests/lint/types; independent defect-first review;
+joint disposable-PostgreSQL billing contracts; exact pushed gateway revision on
+canonical production Compose; healthy services; ordinary generation canary and
+live request/usage/provenance proof. Aggregate or health-only proof is insufficient.

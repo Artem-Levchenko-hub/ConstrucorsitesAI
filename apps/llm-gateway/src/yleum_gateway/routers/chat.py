@@ -25,7 +25,11 @@ from yleum_gateway.core.errors import (
 )
 from yleum_gateway.services import billing, cache, file_logger, safety, streaming
 from yleum_gateway.services import model_router as router_module
-from yleum_gateway.services.pricing import calculate_cost_rub, cost_provenance
+from yleum_gateway.services.pricing import (
+    calculate_cost_rub,
+    read_reported_cost,
+    resolve_request_cost,
+)
 from yleum_gateway.services.token_counter import count_message_tokens
 
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -200,6 +204,12 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     if cached is not None:
         cached.setdefault("metadata", {})
         cached["metadata"]["cache_hit"] = True
+        cached["metadata"]["cost_rub"] = "0"
+        # A Redis replay is a new, zero-cost request, not a second provider bill.
+        for key in ("cost_provenance", "provider_request_id", "cost_usd"):
+            cached["metadata"].pop(key, None)
+        for key in ("cost", "cost_rub", "cost_usd"):
+            (cached.get("usage") or {}).pop(key, None)
         try:
             file_logger.log_request(
                 {
@@ -247,9 +257,14 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     fallback_used = actual_model != req.model
 
     cache_read, cache_write = _cache_token_counts(usage, tokens_in)
-    cost_rub = calculate_cost_rub(
-        actual_model, tokens_in, tokens_out,
-        cached_tokens=cache_read, cache_write_tokens=cache_write,
+    reported = read_reported_cost(response, response.pop("_provider_headers", {}))
+    response_meta = response.setdefault("metadata", {})
+    provider_request_id = response_meta.get("provider_request_id", response.get("id"))
+    cost_rub, provenance = await resolve_request_cost(
+        actual_model, reported=reported,
+        tokens_in=tokens_in, tokens_out=tokens_out,
+        cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+        estimated_tokens=bool(response_meta.get("estimated_tokens")),
     )
 
     # Bill (atomic): user only — service-account requests skip billing.
@@ -269,11 +284,9 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 stage=meta.stage,
                 cache_read_tokens=cache_read,
                 cache_write_tokens=cache_write,
-                provider_request_id=str(response.get("id") or "") or None,
-                cost_provenance=cost_provenance(
-                    actual_model, cost_rub, tokens_in=tokens_in, tokens_out=tokens_out,
-                    cache_read_tokens=cache_read, cache_write_tokens=cache_write,
-                ),
+                provider_request_id=str(provider_request_id or "") or None,
+                provider_cost_usd=reported.cost_usd,
+                cost_provenance=provenance,
             )
         except WalletEmptyError as exc:
             raise _gateway_error_to_http(exc) from exc
@@ -289,6 +302,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     response["metadata"]["actual_model_used"] = actual_model
     response["metadata"]["fallback_used"] = fallback_used
     response["metadata"]["cost_rub"] = str(cost_rub)
+    response["metadata"]["cost_provenance"] = provenance
     response["metadata"]["cache_hit"] = False
 
     try:

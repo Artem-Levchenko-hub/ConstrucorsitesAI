@@ -1,20 +1,20 @@
-"""RUB pricing for supported models.
+"""Provider receipts first; public RUB quotes and legacy tariffs are estimates.
 
-Single source of truth — `/v1/models`, billing math, and tests all read from
-`PRICE_TABLE` here. To revise prices: edit this map (or, in a later iteration,
-load it from env / a config file).
-
-Numbers: AGENT-C-LLM-GATEWAY.md, May 2026 (CBR rate × 1.20 markup).
+Historical receipts are immutable. USD observations never imply an FX conversion.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
+
+import httpx
 
 from yleum_gateway.core.errors import ModelNotFoundError
 
@@ -156,7 +156,7 @@ def validate_cost_provenance(
     tariff_keys = {"rub_per_1k_in", "rub_per_1k_out", "cache_read_factor", "cache_write_factor", "quantum_rub"}
     if set(evidence) != keys or type(evidence["schema_version"]) is not int or evidence["schema_version"] != 1:
         raise ValueError("Invalid cost provenance shape")
-    if evidence["basis"] not in {"provider_reported_rub", "token_tariff", "local_token_estimate"}:
+    if evidence["basis"] not in {"provider_reported_rub", "token_tariff", "local_token_estimate", "provider_catalog_estimate"}:
         raise ValueError("Invalid cost provenance basis")
     if evidence["rub_source"] not in (*_RUB_SOURCES, None) or evidence["usd_source"] not in (*_USD_SOURCES, None):
         raise ValueError("Invalid cost provenance source")
@@ -191,6 +191,128 @@ def validate_cost_provenance(
     if len(serialized) > 4096:
         raise ValueError("Cost provenance too large")
     return cast(dict[str, Any], json.loads(serialized))
+
+
+_CATALOG_URL = "https://app.llmgw.ru/api/v1/models/models-with-pricing"
+_CATALOG_TTL = 15.0
+_catalog_cache: tuple[float, dict[str, tuple[Decimal, Decimal, Decimal]]] | None = None
+_catalog_lock: asyncio.Lock | None = None
+
+
+def _parse_catalog_prices(data: Any) -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+    """Accept only exact, non-tiered text quotes in RUB per million tokens."""
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        return {}
+    quotes: dict[str, tuple[Decimal, Decimal, Decimal]] = {}
+    for item in data["items"]:
+        if not isinstance(item, dict) or not isinstance(item.get("model_name"), str):
+            continue
+        model = item["model_name"].split("/", 1)[-1]
+        slugs = {"claude-sonnet-5": "anthropic/claude-sonnet-5",
+                 "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools"}
+        if model not in PRICE_TABLE or item["model_name"] != slugs[model]:
+            continue
+        price = item.get("pricing")
+        if not isinstance(price, dict) or price.get("currency") != "RUB" or price.get("unit") != "1M_tokens":
+            continue
+        fields = ("input_rub_per_mtok", "output_rub_per_mtok", "cached_input_rub_per_mtok")
+        amounts = [_finite_cost(price.get(key)) for key in fields]
+        if any(v is None or v > Decimal("1000000000") or len(str(v)) > 60 or
+               cast(int, v.as_tuple().exponent) < -12
+               for v in amounts):
+            continue
+        input_rate, output_rate, cached_rate = cast(tuple[Decimal, Decimal, Decimal], tuple(amounts))
+        if cached_rate > input_rate or not isinstance(price.get("rates"), list):
+            continue
+        expected = dict(zip(("input_text", "output_text", "cached_input"), (input_rate, output_rate, cached_rate), strict=True))
+        seen: set[str] = set()
+        valid = True
+        for rate in price["rates"]:
+            if not isinstance(rate, dict):
+                valid = False
+                break
+            kind = rate.get("billable")
+            if not isinstance(kind, str):
+                valid = False
+                break
+            if kind not in expected:
+                continue  # Non-token modalities do not enter text billing.
+            if (kind in seen or rate.get("unit") != "token" or
+                _finite_cost(rate.get("quantity")) != Decimal("1000000") or
+                rate.get("variant") != "" or rate.get("is_from_price") is not False or
+                _finite_cost(rate.get("price_rub")) != expected[kind]):
+                valid = False
+                break
+            seen.add(kind)
+        if valid and seen == set(expected):
+            quotes[model] = (input_rate, output_rate, cached_rate)
+    return quotes
+
+
+async def _fetch_catalog_prices() -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+    """Public endpoint only: no API key, redirects, unbounded body or wait."""
+    try:
+        async with asyncio.timeout(3):
+            async with httpx.AsyncClient(timeout=3, follow_redirects=False) as client:
+                async with client.stream("GET", _CATALOG_URL, params={"limit": 200}) as response:
+                    response.raise_for_status()
+                    body = bytearray()
+                    async for chunk in response.aiter_bytes():
+                        body.extend(chunk)
+                        if len(body) > 1024 * 1024:
+                            return {}
+        return _parse_catalog_prices(json.loads(body))
+    except (httpx.HTTPError, TimeoutError, ValueError):
+        return {}
+
+
+async def _catalog_prices() -> dict[str, tuple[Decimal, Decimal, Decimal]]:
+    global _catalog_cache, _catalog_lock
+    if _catalog_lock is None:
+        _catalog_lock = asyncio.Lock()
+    async with _catalog_lock:
+        if _catalog_cache is not None and time.monotonic() - _catalog_cache[0] < _CATALOG_TTL:
+            return _catalog_cache[1]
+        quotes = await _fetch_catalog_prices()
+        _catalog_cache = (time.monotonic(), quotes)
+        return quotes
+
+
+async def resolve_request_cost(
+    model_id: str, *, tokens_in: int, tokens_out: int,
+    cache_read_tokens: int = 0, cache_write_tokens: int = 0,
+    reported: ReportedCost | None = None, estimated_tokens: bool = False,
+) -> tuple[Decimal, dict[str, Any]]:
+    """Select an actual receipt or a transparently identified immutable estimate."""
+    local = calculate_cost_rub(model_id, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)
+    evidence = cost_provenance(model_id, local, reported, tokens_in=tokens_in,
+        tokens_out=tokens_out, cache_read_tokens=cache_read_tokens,
+        cache_write_tokens=cache_write_tokens, estimated_tokens=estimated_tokens)
+    if reported is not None and reported.cost_rub is not None:
+        return reported.cost_rub, evidence
+    # The catalog has no cache-write rate; never invent one from another provider.
+    if estimated_tokens or cache_write_tokens:
+        return local, evidence
+    quote = (await _catalog_prices()).get(model_id)
+    if quote is None:
+        return local, evidence
+    input_rate, output_rate, cached_rate = quote
+    cached = min(cache_read_tokens, tokens_in)
+    cost = ((Decimal(tokens_in - cached) * input_rate + Decimal(cached) * cached_rate +
+             Decimal(tokens_out) * output_rate) / Decimal("1000000")).quantize(_QUANT)
+    tariff = {
+        "rub_per_1k_in": str(input_rate / _PER_1K),
+        "rub_per_1k_out": str(output_rate / _PER_1K),
+        "cache_read_factor": str(cached_rate / input_rate if input_rate else Decimal(0)),
+        "cache_write_factor": "0",  # Unused: requests with writes were excluded above.
+        "quantum_rub": str(_QUANT),
+    }
+    evidence.update(basis="provider_catalog_estimate", effective_cost_rub=str(cost),
+                    calculated_cost_rub=str(cost), tariff=tariff,
+                    tariff_revision=hashlib.sha256(json.dumps({"source": _CATALOG_URL,
+                        "formula": "public-rub-mtok-v1", "tariff": tariff},
+                        sort_keys=True, separators=(",", ":")).encode()).hexdigest())
+    return cost, validate_cost_provenance(evidence, cost_rub=cost)
 
 
 def calculate_cost_rub(

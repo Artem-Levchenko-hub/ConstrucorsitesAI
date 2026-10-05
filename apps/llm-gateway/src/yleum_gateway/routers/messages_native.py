@@ -38,7 +38,11 @@ from yleum_gateway.core.runner_auth import (
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
-from yleum_gateway.services.pricing import calculate_cost_rub, cost_provenance, read_reported_cost
+from yleum_gateway.services.pricing import (
+    calculate_cost_rub,
+    read_reported_cost,
+    resolve_request_cost,
+)
 
 log = structlog.get_logger(__name__)
 router = APIRouter()
@@ -516,18 +520,11 @@ async def _native_messages_impl(
     cache_read = int(usage.get("cache_read_input_tokens") or 0)
     cache_write = int(usage.get("cache_creation_input_tokens") or 0)
     reported = read_reported_cost(upstream_data, upstream.headers)
-    reported_rub, provider_cost_usd = reported.cost_rub, reported.cost_usd
-    try:
-        calculated_rub = calculate_cost_rub(
-            actual_model,
-            tokens_in,
-            tokens_out,
-            cached_tokens=cache_read,
-            cache_write_tokens=cache_write,
-        )
-    except Exception:
-        calculated_rub = Decimal("0")
-    cost_rub = reported_rub if reported_rub is not None else calculated_rub
+    provider_cost_usd = reported.cost_usd
+    cost_rub, provenance = await resolve_request_cost(
+        actual_model, tokens_in=tokens_in, tokens_out=tokens_out,
+        cache_read_tokens=cache_read, cache_write_tokens=cache_write, reported=reported,
+    )
     provider_request_id = str(upstream_data.get("id") or "") or None
 
     if user_id is not None:
@@ -549,11 +546,7 @@ async def _native_messages_impl(
                 retry_count=retry_count,
                 provider_request_id=provider_request_id,
                 provider_cost_usd=provider_cost_usd,
-                cost_provenance=cost_provenance(
-                    actual_model, calculated_rub, reported,
-                    tokens_in=tokens_in, tokens_out=tokens_out,
-                    cache_read_tokens=cache_read, cache_write_tokens=cache_write,
-                ),
+                cost_provenance=provenance,
             )
         except WalletEmptyError as exc:
             log.warning(
@@ -592,6 +585,7 @@ async def _native_messages_impl(
         "model_identity_confirmed": bool(reported_model),
         "fallback_used": fallback_used,
         "cost_rub": str(cost_rub),
+        "cost_provenance": provenance,
         "provider_cost_usd": str(provider_cost_usd) if provider_cost_usd is not None else None,
         "cache_read_tokens": cache_read,
         "cache_write_tokens": cache_write,

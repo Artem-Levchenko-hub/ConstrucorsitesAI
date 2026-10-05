@@ -15,6 +15,16 @@ from uuid import uuid4
 import pytest
 
 from yleum_gateway.core.config import reset_settings_cache
+from yleum_gateway.services import pricing
+
+
+@pytest.fixture(autouse=True)
+def _isolate_catalog(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """No pricing network in tests; catalog tests use their own MockTransport."""
+    monkeypatch.setattr(pricing, "_catalog_cache", None)
+    monkeypatch.setattr(pricing, "_catalog_lock", None)
+    if not request.module.__name__.endswith("test_provider_catalog_pricing"):
+        monkeypatch.setattr(pricing, "_fetch_catalog_prices", AsyncMock(return_value={}))
 
 
 @pytest.fixture(autouse=True)

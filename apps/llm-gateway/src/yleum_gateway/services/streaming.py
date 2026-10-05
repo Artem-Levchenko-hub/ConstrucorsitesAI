@@ -1,8 +1,7 @@
 """SSE event-stream generator for chat completions.
 
-Bills only for tokens actually delivered to the wire. If the client disconnects
-mid-stream, the loop short-circuits and the bill reflects the partial output —
-never the un-streamed tail (per AGENT-C-LLM-GATEWAY.md, M1 cancellation rule).
+Completed streams settle the provider receipt before reporting success.
+Interrupted streams retain received provider evidence and estimate only missing usage.
 
 There is exactly one chat model (`gemini-3.1-pro-preview-customtools`) and one upstream
 (llmgw), so the stream source is always `providers/llmgw.astream`.
@@ -19,13 +18,14 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import structlog
+from anyio import CancelScope
 from fastapi import Request
 
-from yleum_gateway.core.errors import GatewayError
+from yleum_gateway.core.errors import BillingReconciliationRequiredError, GatewayError
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
 from yleum_gateway.services import model_router as router_module
-from yleum_gateway.services.pricing import calculate_cost_rub, cost_provenance
+from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
 from yleum_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
 log = structlog.get_logger(__name__)
@@ -63,151 +63,133 @@ async def stream_completion(
     """
     response_id = f"chatcmpl-{uuid4()}"
     created = int(time.time())
-
     accumulated: list[str] = []
     actual_model = model
-    fallback_used = False
     cancelled = False
     upstream_error: GatewayError | None = None
+    settlement_error: GatewayError | None = None
+    receipt: dict[str, Any] = {}
+    settlement_task: asyncio.Task[None] | None = None
+    usage: dict[str, Any] = {}
+    cost_rub = Decimal("0")
+    provenance: dict[str, Any] = {}
+    provider_request_id: str | None = None
 
-    # TRUE token streaming from llmgw — the page builds live in the preview.
-    source: AsyncIterator[tuple[str, str]] = llmgw.astream(
-        model,
-        messages,
+    source = llmgw.astream(
+        model, messages,
         temperature=0.5 if temperature is None else temperature,
+        receipt=receipt,
         **({"max_tokens": max_tokens} if max_tokens is not None else {}),
     )
+
+    async def settle() -> None:
+        nonlocal usage, cost_rub, provenance, actual_model, provider_request_id
+        provider_request_id = receipt.get("provider_request_id") or receipt.get("id")
+        actual_model = llmgw.resolve_response_model(
+            receipt.get("model", ""), actual_model, provider_request_id,
+        )
+        output_text = "".join(accumulated)
+        usage, estimated = llmgw.normalize_usage(
+            receipt.get("usage") or {},
+            count_message_tokens(actual_model, messages) if output_text else 0,
+            count_text_tokens(actual_model, output_text) if output_text else 0,
+        )
+        tokens_in, tokens_out = usage["prompt_tokens"], usage["completion_tokens"]
+        cache_read = usage["prompt_cache_hit_tokens"]
+        cache_write = usage["cache_creation_input_tokens"]
+        # A lost DONE means transport failure, not invalidation of a monetary
+        # receipt or token counters already received from the provider.
+        reported = read_reported_cost(receipt, receipt.get("headers", {}))
+        cost_rub, provenance = await resolve_request_cost(
+            actual_model, reported=reported, tokens_in=tokens_in, tokens_out=tokens_out,
+            cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+            estimated_tokens=estimated,
+        )
+        if user_id is not None and (output_text or receipt):
+            try:
+                await billing.charge(
+                    user_id=user_id, project_id=project_id, message_id=message_id,
+                    run_id=run_id, stage=stage, model_id=actual_model,
+                    tokens_in=tokens_in, tokens_out=tokens_out, cost_rub=cost_rub,
+                    cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+                    provider_request_id=provider_request_id, cost_provenance=provenance,
+                    provider_cost_usd=reported.cost_usd,
+                    description=f"Streamed completion via {actual_model}", free=free,
+                )
+            except GatewayError:
+                raise
+            except Exception as exc:
+                raise BillingReconciliationRequiredError(
+                    "Stream completed but billing could not be confirmed",
+                    details={"provider_request_id": provider_request_id},
+                ) from exc
 
     try:
         try:
             async for delta, slug in source:
-                if slug:
-                    mapped = router_module.slug_to_omnia(slug)
-                    if mapped and mapped != actual_model:
-                        fallback_used = True
-                        actual_model = mapped
+                actual_model = router_module.slug_to_omnia(slug) or actual_model
                 if delta:
                     accumulated.append(delta)
-                    yield _sse(
-                        {
-                            "id": response_id,
-                            "object": "chat.completion.chunk",
-                            "created": created,
-                            "model": actual_model,
-                            "choices": [
-                                {
-                                    "index": 0,
-                                    "delta": {"content": delta},
-                                    "finish_reason": None,
-                                }
-                            ],
-                        }
-                    )
+                    yield _sse({
+                        "id": response_id, "object": "chat.completion.chunk",
+                        "created": created, "model": actual_model,
+                        "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
+                    })
         except GatewayError as exc:
             upstream_error = exc
-        except asyncio.CancelledError:
-            cancelled = True
-            raise
-
-        # Normal completion: emit final usage chunk + [DONE].
-        output_text = "".join(accumulated)
-        tokens_in = count_message_tokens(actual_model, messages) if output_text else 0
-        tokens_out = count_text_tokens(actual_model, output_text) if output_text else 0
+        settlement_task = asyncio.create_task(settle())
         try:
-            cost_rub = (
-                calculate_cost_rub(actual_model, tokens_in, tokens_out)
-                if tokens_out
-                else Decimal("0")
-            )
-        except Exception:
-            cost_rub = Decimal("0")
-
-        if upstream_error is not None:
-            yield _sse(
-                {
-                    "error": {
-                        "code": upstream_error.code,
-                        "message": upstream_error.message,
-                    }
-                }
-            )
-        else:
-            yield _sse(
-                {
-                    "id": response_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": actual_model,
-                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
-                    "usage": {
-                        "prompt_tokens": tokens_in,
-                        "completion_tokens": tokens_out,
-                        "total_tokens": tokens_in + tokens_out,
-                    },
-                    "metadata": {
-                        "actual_model_used": actual_model,
-                        "fallback_used": fallback_used,
-                        "cost_rub": str(cost_rub),
-                    },
-                }
-            )
+            await asyncio.shield(settlement_task)
+        except GatewayError as exc:
+            settlement_error = exc
+        error = settlement_error or upstream_error
+        if error is not None:
+            yield _sse({"error": {
+                "code": error.code, "message": error.message, "details": error.details,
+            }})
+            return
+        yield _sse({
+            "id": response_id, "object": "chat.completion.chunk", "created": created,
+            "model": actual_model,
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "usage": usage,
+            "metadata": {
+                "actual_model_used": actual_model, "fallback_used": actual_model != model,
+                "cost_rub": str(cost_rub), "provider_request_id": provider_request_id,
+                "cost_provenance": provenance,
+            },
+        })
         yield _sse("[DONE]")
+    except asyncio.CancelledError:
+        cancelled = True
+        raise
     finally:
-        # Bookkeeping based on what actually went out to the wire — runs
-        # regardless of cancellation / error / clean exit.
-        output_text = "".join(accumulated)
-        if output_text:
-            tokens_in_final = count_message_tokens(actual_model, messages)
-            tokens_out_final = count_text_tokens(actual_model, output_text)
-        else:
-            tokens_in_final, tokens_out_final = 0, 0
-        try:
-            cost_rub_final = (
-                calculate_cost_rub(actual_model, tokens_in_final, tokens_out_final)
-                if tokens_out_final
-                else Decimal("0")
-            )
-        except Exception:
-            cost_rub_final = Decimal("0")
-
-        if user_id is not None and tokens_out_final > 0:
+        # SSE disconnects cancel their AnyIO scope repeatedly. Protect cleanup
+        # from that scope and wait for the SAME owned task: never abort a debit
+        # mid-transaction and never replay one whose commit is ambiguous.
+        with CancelScope(shield=True):
+            await source.aclose()
+            if settlement_task is None:
+                settlement_task = asyncio.create_task(settle())
             try:
-                await billing.charge(
-                    user_id=user_id,
-                    project_id=project_id,
-                    message_id=message_id,
-                    run_id=run_id,
-                    stage=stage,
-                    model_id=actual_model,
-                    tokens_in=tokens_in_final,
-                    tokens_out=tokens_out_final,
-                    cost_rub=cost_rub_final,
-                    description=f"Streamed completion via {actual_model}",
-                    free=free,
-                    cost_provenance=cost_provenance(
-                        actual_model, cost_rub_final, tokens_in=tokens_in_final,
-                        tokens_out=tokens_out_final, estimated_tokens=True,
-                    ),
-                )
+                await asyncio.shield(settlement_task)
+            except GatewayError as exc:
+                if settlement_error is None:
+                    log.exception("stream.charge_failed", user_id=str(user_id), model=actual_model)
+                settlement_error = exc
             except Exception:
                 log.exception("stream.charge_failed", user_id=str(user_id), model=actual_model)
-
         try:
-            file_logger.log_request(
-                {
-                    "user_id": user_id,
-                    "project_id": project_id,
-                    "message_id": message_id,
-                    "model": actual_model,
-                    "tokens_in": tokens_in_final,
-                    "tokens_out": tokens_out_final,
-                    "cost_rub": cost_rub_final,
-                    "cache_hit": False,
-                    "fallback_used": fallback_used,
-                    "stream": True,
-                    "cancelled": cancelled,
-                    "error": upstream_error.code if upstream_error else None,
-                }
-            )
+            logged_error = settlement_error or upstream_error
+            file_logger.log_request({
+                "user_id": user_id, "project_id": project_id, "message_id": message_id,
+                "model": actual_model, "tokens_in": usage.get("prompt_tokens", 0),
+                "tokens_out": usage.get("completion_tokens", 0), "cost_rub": cost_rub,
+                "cache_hit": False, "fallback_used": actual_model != model,
+                "stream": True, "cancelled": cancelled,
+                "error": logged_error.code if logged_error else None,
+                "provider_request_id": provider_request_id,
+                "provider_charge_ambiguous": bool(upstream_error and upstream_error.details.get("provider_charge_ambiguous")),
+            })
         except Exception:
             log.exception("stream.file_log_failed")
