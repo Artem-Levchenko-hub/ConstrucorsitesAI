@@ -23,8 +23,10 @@ from yleum_gateway.core.errors import (
     GatewayError,
     WalletEmptyError,
 )
+from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, cache, file_logger, safety, streaming
 from yleum_gateway.services import model_router as router_module
+from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.pricing import (
     calculate_cost_rub,
     read_reported_cost,
@@ -97,27 +99,8 @@ def _billing_unavailable() -> HTTPException:
 
 
 def _cache_token_counts(usage: dict[str, Any], tokens_in: int) -> tuple[int, int]:
-    details = usage.get("prompt_tokens_details")
-    details = details if isinstance(details, dict) else {}
-
-    def count(value: Any) -> int:
-        try:
-            return max(0, int(value or 0))
-        except (TypeError, ValueError, OverflowError):
-            return 0
-
-    # OpenAI-compatible prompt totals include cache reads and writes. Match the
-    # native adapter's aliases, and persist the same bounded counts we price.
-    total = max(0, tokens_in)
-    read = min(total, count(
-        details.get("cached_tokens")
-        or usage.get("prompt_cache_hit_tokens")
-        or usage.get("cache_read_input_tokens")
-    ))
-    write = min(total - read, count(
-        details.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens")
-    ))
-    return read, write
+    normalized, _ = llmgw.normalize_usage({**usage, "prompt_tokens": max(0, tokens_in)}, 0, 0)
+    return normalized["prompt_cache_hit_tokens"], normalized["cache_creation_input_tokens"]
 
 
 def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
@@ -265,6 +248,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         tokens_in=tokens_in, tokens_out=tokens_out,
         cache_read_tokens=cache_read, cache_write_tokens=cache_write,
         estimated_tokens=bool(response_meta.get("estimated_tokens")),
+        cache_write_factor=anthropic_cache_write_factor(actual_model, {"messages": filtered_messages}),
     )
 
     # Bill (atomic): user only — service-account requests skip billing.

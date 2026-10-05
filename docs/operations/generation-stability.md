@@ -320,8 +320,11 @@ local response-cache hits, generation refunds and subscriptions from provider sp
   USD remains a separate observation. Local cache replay returns zero current cost.
 - Without reported RUB, the public LLMGW RUB-per-million catalog supplies an
   explicitly labelled `provider_catalog_estimate`, with the selected tariff
-  persisted. Unknown/tiered rates, missing cache-write prices or unavailable
-  catalog fall back to an explicit legacy estimate. Never reprice historical rows.
+  persisted. Sonnet cache writes use the documented Anthropic multiplier only
+  for homogeneous explicit cache controls actually sent upstream: default/5m
+  is 1.25x input, 1h is 2x input. Unknown/mixed cache policies, unsupported
+  models, tiered rates or unavailable catalog retain an explicit legacy estimate.
+  Never reprice historical rows.
 - Ambiguous read/protocol failures must not replay a possibly accepted paid POST.
   A completed stream settles before final usage/DONE. Disconnect cleanup awaits
   the same protected settlement task; an EOF retains receipts already received.
@@ -329,6 +332,17 @@ local response-cache hits, generation refunds and subscriptions from provider sp
   documented RUB header. Therefore exact historical/future RUB reconciliation
   still requires the provider's per-request balance ledger or restored RUB receipt.
   Estimates must not be represented as confirmed provider debits.
+- The first production canary completed in 8m20s/31 steps and exposed a second
+  defect: `prompt_tokens_details.cache_write_tokens` was omitted in the adapter,
+  chat and native parsers. Eight generation requests recorded 533,704 input /
+  1,699 output tokens, 460,300 cache reads and zero cache writes at 44.7644 RUB;
+  the provider's matching day cohort (after three diagnostics) was about
+  51.19 RUB. The counter fix preserves explicit zero, canonical/legacy aliases
+  and clamps read + write to total input. Pricing uses actual counters, never
+  infers writes or exchange rates from USD. This is a reproduced accounting
+  defect; exact per-request RUB parity still needs fresh live verification.
+  Anthropic cache policy reference:
+  https://openrouter.ai/docs/guides/best-practices/prompt-caching
 
 Release gates: gateway tests/lint/types; independent defect-first review;
 joint disposable-PostgreSQL billing contracts; exact pushed gateway revision on

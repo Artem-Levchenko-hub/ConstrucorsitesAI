@@ -25,6 +25,7 @@ from yleum_gateway.core.errors import BillingReconciliationRequiredError, Gatewa
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
 from yleum_gateway.services import model_router as router_module
+from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
 from yleum_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
@@ -104,6 +105,11 @@ async def stream_completion(
             actual_model, reported=reported, tokens_in=tokens_in, tokens_out=tokens_out,
             cache_read_tokens=cache_read, cache_write_tokens=cache_write,
             estimated_tokens=estimated,
+            cache_write_factor=anthropic_cache_write_factor(actual_model, {
+                # The chat adapter transmits content, but drops message-level
+                # cache_control and has no top-level controls or tools.
+                "messages": [{"content": message.get("content", "")} for message in messages],
+            }),
         )
         if user_id is not None and (output_text or receipt):
             try:

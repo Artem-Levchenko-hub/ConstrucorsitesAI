@@ -108,6 +108,7 @@ def cost_provenance(
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
     estimated_tokens: bool = False,
+    cache_write_factor: Decimal = _CACHE_WRITE_RATE,
 ) -> dict[str, Any]:
     """Record the selected calculation; a USD observation never implies FX."""
     reported = reported or ReportedCost()
@@ -116,14 +117,14 @@ def cost_provenance(
         "rub_per_1k_in": str(price.rub_per_1k_in),
         "rub_per_1k_out": str(price.rub_per_1k_out),
         "cache_read_factor": str(_CACHE_HIT_RATE),
-        "cache_write_factor": str(_CACHE_WRITE_RATE),
+        "cache_write_factor": str(cache_write_factor),
         "quantum_rub": str(_QUANT),
     }
     revision = {
         "formula": "token-cache-rub-v1",
         "prices": {k: [str(v.rub_per_1k_in), str(v.rub_per_1k_out)] for k, v in PRICE_TABLE.items()},
         "cache_read_factor": str(_CACHE_HIT_RATE),
-        "cache_write_factor": str(_CACHE_WRITE_RATE),
+        "cache_write_factor": str(cache_write_factor),
         "quantum_rub": str(_QUANT),
     }
     evidence = {
@@ -282,35 +283,48 @@ async def resolve_request_cost(
     model_id: str, *, tokens_in: int, tokens_out: int,
     cache_read_tokens: int = 0, cache_write_tokens: int = 0,
     reported: ReportedCost | None = None, estimated_tokens: bool = False,
+    cache_write_factor: Decimal | None = None,
 ) -> tuple[Decimal, dict[str, Any]]:
     """Select an actual receipt or a transparently identified immutable estimate."""
-    local = calculate_cost_rub(model_id, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)
+    # Anthropic documents 5m writes at 1.25x and 1h writes at 2x. The caller
+    # selects a factor only from the cache controls actually sent upstream;
+    # mixed/unknown policies do not acquire a fabricated current quote.
+    known_write_factor = (
+        cache_write_factor if model_id == "claude-sonnet-5"
+        and isinstance(cache_write_factor, Decimal) and cache_write_factor.is_finite()
+        and cache_write_factor in {Decimal("1.25"), Decimal("2")} else None
+    )
+    write_factor = known_write_factor or _CACHE_WRITE_RATE
+    local = calculate_cost_rub(model_id, tokens_in, tokens_out, cache_read_tokens, cache_write_tokens,
+                               cache_write_factor=write_factor)
     evidence = cost_provenance(model_id, local, reported, tokens_in=tokens_in,
         tokens_out=tokens_out, cache_read_tokens=cache_read_tokens,
-        cache_write_tokens=cache_write_tokens, estimated_tokens=estimated_tokens)
+        cache_write_tokens=cache_write_tokens, estimated_tokens=estimated_tokens,
+        cache_write_factor=write_factor)
     if reported is not None and reported.cost_rub is not None:
         return reported.cost_rub, evidence
-    # The catalog has no cache-write rate; never invent one from another provider.
-    if estimated_tokens or cache_write_tokens:
+    if estimated_tokens or (cache_write_tokens and known_write_factor is None):
         return local, evidence
     quote = (await _catalog_prices()).get(model_id)
     if quote is None:
         return local, evidence
     input_rate, output_rate, cached_rate = quote
     cached = min(cache_read_tokens, tokens_in)
-    cost = ((Decimal(tokens_in - cached) * input_rate + Decimal(cached) * cached_rate +
+    writes = min(cache_write_tokens, tokens_in - cached)
+    cost = ((Decimal(tokens_in - cached - writes) * input_rate + Decimal(cached) * cached_rate +
+             Decimal(writes) * input_rate * write_factor +
              Decimal(tokens_out) * output_rate) / Decimal("1000000")).quantize(_QUANT)
     tariff = {
         "rub_per_1k_in": str(input_rate / _PER_1K),
         "rub_per_1k_out": str(output_rate / _PER_1K),
         "cache_read_factor": str(cached_rate / input_rate if input_rate else Decimal(0)),
-        "cache_write_factor": "0",  # Unused: requests with writes were excluded above.
+        "cache_write_factor": str(write_factor) if writes else "0",
         "quantum_rub": str(_QUANT),
     }
     evidence.update(basis="provider_catalog_estimate", effective_cost_rub=str(cost),
                     calculated_cost_rub=str(cost), tariff=tariff,
                     tariff_revision=hashlib.sha256(json.dumps({"source": _CATALOG_URL,
-                        "formula": "public-rub-mtok-v1", "tariff": tariff},
+                        "formula": "public-rub-mtok-v2-cache-ttl", "tariff": tariff},
                         sort_keys=True, separators=(",", ":")).encode()).hexdigest())
     return cost, validate_cost_provenance(evidence, cost_rub=cost)
 
@@ -321,6 +335,7 @@ def calculate_cost_rub(
     tokens_out: int,
     cached_tokens: int = 0,
     cache_write_tokens: int = 0,
+    *, cache_write_factor: Decimal = _CACHE_WRITE_RATE,
 ) -> Decimal:
     """RUB cost for a request, quantized to 4 decimal places.
 
@@ -343,7 +358,7 @@ def calculate_cost_rub(
     cost = (
         Decimal(fresh_in) * price.rub_per_1k_in
         + Decimal(cached) * price.rub_per_1k_in * _CACHE_HIT_RATE
-        + Decimal(cache_write) * price.rub_per_1k_in * _CACHE_WRITE_RATE
+        + Decimal(cache_write) * price.rub_per_1k_in * cache_write_factor
         + Decimal(tokens_out) * price.rub_per_1k_out
     ) / _PER_1K
     return cost.quantize(_QUANT)

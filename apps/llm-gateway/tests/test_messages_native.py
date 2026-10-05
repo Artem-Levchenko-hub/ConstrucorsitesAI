@@ -301,6 +301,7 @@ def test_anthropic_response_preserves_tool_id_and_arguments() -> None:
 @pytest.mark.parametrize("finish", ["length", "tool_calls"])
 def test_incomplete_tool_arguments_are_marked_without_echoing_raw(arguments, finish) -> None:
     adapted = messages_native._anthropic_response({
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         "choices": [{"finish_reason": finish, "message": {"tool_calls": [{
             "id": "partial", "function": {"name": "write_file", "arguments": arguments},
         }]}}],
@@ -315,6 +316,7 @@ def test_incomplete_tool_arguments_are_marked_without_echoing_raw(arguments, fin
 
 def test_length_takes_precedence_even_with_complete_tool_json() -> None:
     adapted = messages_native._anthropic_response({
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         "choices": [{"finish_reason": "length", "message": {"tool_calls": [{
             "id": "complete", "function": {"name": "bash", "arguments": '{"cmd":"touch x"}'},
         }]}}],

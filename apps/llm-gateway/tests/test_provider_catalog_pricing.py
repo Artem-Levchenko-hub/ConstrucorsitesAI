@@ -69,6 +69,80 @@ async def test_no_invented_cache_write_or_token_receipt(monkeypatch, estimated, 
     assert evidence["basis"] == ("local_token_estimate" if estimated else "token_tariff")
 
 
+@pytest.mark.parametrize("factor,expected", [(Decimal("1.25"), ".3534"), (Decimal("2"), ".4059")])
+async def test_known_anthropic_cache_writes_use_current_catalog(monkeypatch, factor, expected):
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices",
+        AsyncMock(return_value=pricing._parse_catalog_prices(catalog())))
+    cost, evidence = await pricing.resolve_request_cost("claude-sonnet-5", tokens_in=1000,
+        tokens_out=100, cache_read_tokens=600, cache_write_tokens=200,
+        cache_write_factor=factor)
+    assert cost == Decimal(expected)
+    assert evidence["basis"] == "provider_catalog_estimate"
+    assert evidence["tariff"]["cache_write_factor"] == str(factor)
+    assert evidence["cache_write_tokens"] == 200
+    assert evidence["reported_cost_rub"] is None
+    assert pricing.validate_cost_provenance(evidence, cost_rub=cost) == evidence
+
+
+async def test_one_hour_cache_write_fallback_has_correct_explicit_tariff(monkeypatch):
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices", AsyncMock(return_value={}))
+    cost, evidence = await pricing.resolve_request_cost("claude-sonnet-5", tokens_in=1000,
+        tokens_out=0, cache_write_tokens=1000, cache_write_factor=Decimal("2"))
+    assert cost == Decimal(".6460")
+    assert evidence["basis"] == "token_tariff"
+    assert evidence["tariff"]["cache_write_factor"] == "2"
+
+
+@pytest.mark.parametrize("factor", [Decimal("0"), Decimal("NaN"), Decimal("Infinity"), Decimal("1.5")])
+async def test_unknown_cache_write_factor_cannot_select_catalog(monkeypatch, factor):
+    fetch = AsyncMock(side_effect=AssertionError("unknown cache policy must not select quote"))
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices", fetch)
+    cost, evidence = await pricing.resolve_request_cost("claude-sonnet-5", tokens_in=1000,
+        tokens_out=0, cache_write_tokens=1000, cache_write_factor=factor)
+    assert cost == Decimal(".4038")
+    assert evidence["basis"] == "token_tariff"
+    fetch.assert_not_awaited()
+
+
+async def test_actual_zero_rubles_overrides_cache_write_quote(monkeypatch):
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices", AsyncMock(side_effect=AssertionError))
+    cost, evidence = await pricing.resolve_request_cost("claude-sonnet-5", tokens_in=1000,
+        tokens_out=0, cache_write_tokens=1000, cache_write_factor=Decimal("2"),
+        reported=pricing.ReportedCost(cost_rub=Decimal("0"), rub_source="usage:cost_rub"))
+    assert cost == 0
+    assert evidence["basis"] == "provider_reported_rub"
+
+
+async def test_real_native_first_request_cache_creation_cost(monkeypatch):
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices",
+        AsyncMock(return_value=pricing._parse_catalog_prices(catalog())))
+    cost, evidence = await pricing.resolve_request_cost("claude-sonnet-5", tokens_in=54176,
+        tokens_out=166, cache_write_tokens=54175, cache_write_factor=Decimal("1.25"),
+        reported=pricing.ReportedCost(cost_usd=Decimal(".1370995"), usd_source="usage:cost"))
+    assert cost == Decimal("23.9866")
+    assert evidence["provider_cost_usd"] == "0.1370995"
+
+
+async def test_cache_writes_never_double_count_prompt_tokens(monkeypatch):
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices",
+        AsyncMock(return_value=pricing._parse_catalog_prices(catalog())))
+    cost, _ = await pricing.resolve_request_cost("claude-sonnet-5", tokens_in=1000,
+        tokens_out=0, cache_read_tokens=800, cache_write_tokens=1000,
+        cache_write_factor=Decimal("2"))
+    assert cost == Decimal(".1680")
+
+
+async def test_anthropic_write_multiplier_not_used_for_other_models(monkeypatch):
+    fetch = AsyncMock(side_effect=AssertionError("Anthropic rates do not apply to Gemini"))
+    monkeypatch.setattr(pricing, "_fetch_catalog_prices", fetch)
+    cost, evidence = await pricing.resolve_request_cost("gemini-3.1-pro-preview-customtools",
+        tokens_in=1000, tokens_out=0, cache_write_tokens=1000,
+        cache_write_factor=Decimal("2"))
+    assert cost == Decimal("1.8750")
+    assert evidence["basis"] == "token_tariff"
+    fetch.assert_not_awaited()
+
+
 def test_tiered_prices_rejected():
     data = catalog()
     data["items"][0]["pricing"]["rates"][0]["variant"] = "long-context"

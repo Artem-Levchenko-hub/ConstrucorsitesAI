@@ -37,6 +37,7 @@ from yleum_gateway.core.runner_auth import (
 )
 from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger
+from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
 from yleum_gateway.services.pricing import (
     calculate_cost_rub,
@@ -213,6 +214,28 @@ def _openai_tool_choice(raw: Any) -> Any:
     return "auto"
 
 
+class _InvalidUsageReceipt(ValueError):
+    """A paid response has no trustworthy token totals for settlement."""
+
+
+def _native_usage(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise _InvalidUsageReceipt("Missing provider token receipt")
+    usage = dict(raw)
+    for field in ("prompt_tokens", "completion_tokens"):
+        value = usage.get(field)
+        if isinstance(value, str) and value.isascii() and value.isdecimal():
+            try:
+                value = int(value)
+            except ValueError as exc:
+                raise _InvalidUsageReceipt("Invalid provider token receipt") from exc
+        if type(value) is not int or value < 0:
+            raise _InvalidUsageReceipt("Invalid provider token receipt")
+        usage[field] = value
+    normalized, _ = llmgw.normalize_usage(usage, 0, 0)
+    return normalized
+
+
 def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any]:
     try:
         choice = (data.get("choices") or [])[0]
@@ -257,8 +280,7 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
     else:
         stop_reason = "end_turn"
 
-    usage = data.get("usage") or {}
-    prompt_details = usage.get("prompt_tokens_details") or {}
+    usage = _native_usage(data.get("usage"))
     return {
         "id": data.get("id") or f"msg_{uuid4().hex}",
         "type": "message",
@@ -271,19 +293,10 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
         } else None,
         "stop_sequence": None,
         "usage": {
-            "input_tokens": int(usage.get("prompt_tokens") or 0),
-            "output_tokens": int(usage.get("completion_tokens") or 0),
-            "cache_read_input_tokens": int(
-                prompt_details.get("cached_tokens")
-                or usage.get("prompt_cache_hit_tokens")
-                or usage.get("cache_read_input_tokens")
-                or 0
-            ),
-            "cache_creation_input_tokens": int(
-                prompt_details.get("cache_creation_tokens")
-                or usage.get("cache_creation_input_tokens")
-                or 0
-            ),
+            "input_tokens": usage["prompt_tokens"],
+            "output_tokens": usage["completion_tokens"],
+            "cache_read_input_tokens": usage["prompt_cache_hit_tokens"],
+            "cache_creation_input_tokens": usage["cache_creation_input_tokens"],
         },
     }
 
@@ -511,6 +524,10 @@ async def _native_messages_impl(
         actual_model = actual_model or model
         fallback_used = actual_model != model
         adapted = _anthropic_response(upstream_data, actual_model)
+    except _InvalidUsageReceipt:
+        # The API already treats this code as non-replayable: the provider may
+        # have charged, so neither a guessed zero debit nor a retry is safe.
+        return _err(503, "billing_unavailable", "Provider token usage could not be confirmed")
     except (ValueError, TypeError) as exc:
         log.warning("native_messages.malformed_response", model=model, error=str(exc))
         return _err(502, "api_error", "llmgw returned a malformed response")
@@ -524,6 +541,7 @@ async def _native_messages_impl(
     cost_rub, provenance = await resolve_request_cost(
         actual_model, tokens_in=tokens_in, tokens_out=tokens_out,
         cache_read_tokens=cache_read, cache_write_tokens=cache_write, reported=reported,
+        cache_write_factor=anthropic_cache_write_factor(actual_model, payload),
     )
     provider_request_id = str(upstream_data.get("id") or "") or None
 

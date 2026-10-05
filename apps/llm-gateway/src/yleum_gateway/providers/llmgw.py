@@ -141,14 +141,17 @@ def _approx_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _cache_token_count(usage: dict[str, Any], detail_key: str, *aliases: str) -> int:
+def _cache_token_count(
+    usage: dict[str, Any], detail_key: str | tuple[str, ...], *aliases: str,
+) -> int:
     details = usage.get("prompt_tokens_details")
     details = details if isinstance(details, dict) else {}
-    value = details.get(detail_key)
-    for alias in aliases:
-        if value:
-            break
-        value = usage.get(alias)
+    keys = (detail_key,) if isinstance(detail_key, str) else detail_key
+    candidates = [details.get(key) for key in keys] + [usage.get(key) for key in aliases]
+    # An explicit zero is an observation, not permission to use a legacy alias.
+    value = next((value for value in candidates if value is not None), None)
+    if isinstance(value, bool):
+        return 0
     try:
         return max(0, int(value or 0))
     except (TypeError, ValueError, OverflowError):
@@ -199,7 +202,7 @@ def normalize_usage(
     tokens_out = count("completion_tokens", fallback_output)
     cache_read = min(tokens_in, _cached_tokens(usage))
     cache_write = min(tokens_in - cache_read, _cache_token_count(
-        usage, "cache_creation_tokens", "cache_creation_input_tokens",
+        usage, ("cache_write_tokens", "cache_creation_tokens"), "cache_creation_input_tokens",
     ))
     return {
         **usage,

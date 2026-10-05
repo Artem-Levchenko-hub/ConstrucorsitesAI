@@ -394,3 +394,154 @@ def test_unknown_actual_model_cannot_be_billed_as_requested_model(client, monkey
     assert error["details"]["provider_charge_ambiguous"] is True
     assert error["details"]["provider_request_id"] == "unknown-model-receipt"
     assert chat.billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("flow", ["chat", "stream", "native"])
+@pytest.mark.parametrize("reported,expected_read,expected_write", [
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 200}}, 600, 200),
+    ({"prompt_tokens_details": {"cached_tokens": "600", "cache_write_tokens": "200"}}, 600, 200),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 0,
+                               "cache_creation_tokens": 200}, "cache_creation_input_tokens": 300}, 600, 0),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": -10,
+                               "cache_creation_tokens": 200}}, 600, 0),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": True,
+                               "cache_creation_tokens": 200}}, 600, 0),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": False,
+                               "cache_creation_tokens": 200}}, 600, 0),
+    ({"prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 200},
+      "cache_read_input_tokens": 600}, 0, 200),
+    ({"prompt_tokens_details": {"cached_tokens": True, "cache_write_tokens": 200}}, 0, 200),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 900}}, 600, 400),
+    ({"prompt_tokens_details": {"cached_tokens": 2000, "cache_write_tokens": 900}}, 1000, 0),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_creation_tokens": 200}}, 600, 200),
+    ({"cache_read_input_tokens": 600, "cache_creation_input_tokens": 200}, 600, 200),
+    ({"prompt_tokens_details": {"cached_tokens": 600, "cache_creation_tokens": True}}, 600, 0),
+    ({"cache_read_input_tokens": -10, "cache_creation_input_tokens": -20}, 0, 0),
+])
+def test_reported_cache_write_counters_reach_all_billing_paths(
+    client, monkeypatch, flow, reported, expected_read, expected_write,
+):
+    provider(monkeypatch, streaming=flow == "stream", cost="0", usage={
+        "prompt_tokens": 1000, "completion_tokens": 100, **reported,
+    })
+    if flow == "native":
+        result = client.post("/v1/messages", json={
+            "model": MODEL, "max_tokens": 256, "user": str(uuid4()),
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+    else:
+        result = post(client, flow == "stream")
+    assert result.status_code == 200, result.text
+    body = json.loads(events(result)[-2]) if flow == "stream" else result.json()
+    assert body["usage"]["cache_creation_input_tokens"] == expected_write
+    read_key = "cache_read_input_tokens" if flow == "native" else "prompt_cache_hit_tokens"
+    assert body["usage"][read_key] == expected_read
+    billed = chat.billing.charge.await_args.kwargs
+    assert billed["tokens_in"] == 1000
+    assert billed["tokens_out"] == 100
+    assert billed["cache_read_tokens"] == expected_read
+    assert billed["cache_write_tokens"] == expected_write
+    assert billed["cost_provenance"]["cache_write_tokens"] == expected_write
+
+
+@pytest.mark.parametrize("flow", ["chat", "stream", "native"])
+@pytest.mark.parametrize("control_mode", ["default", "1h", "mixed", "unused_top", "tool"])
+def test_write_factor_uses_only_transmitted_cache_controls(client, monkeypatch, flow, control_mode):
+    from yleum_gateway.routers import messages_native
+    from yleum_gateway.services import streaming
+
+    target = streaming if flow == "stream" else messages_native if flow == "native" else chat
+    original = target.resolve_request_cost
+    factors = []
+    transmitted = []
+
+    async def resolve(*args, **kwargs):
+        factors.append(kwargs.get("cache_write_factor", "missing"))
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(target, "resolve_request_cost", resolve)
+    blocks = [{"type": "text", "text": "hello"}]
+    if control_mode in ("default", "1h", "mixed"):
+        blocks[0]["cache_control"] = {"type": "ephemeral"}
+    if control_mode == "1h":
+        blocks[0]["cache_control"]["ttl"] = "1h"
+    if control_mode == "mixed":
+        blocks.append({"type": "text", "text": "second", "cache_control": {"type": "ephemeral", "ttl": "1h"}})
+    body = {"model": "claude-sonnet-5", "max_tokens": 256, "user": str(uuid4()),
+            "messages": [{"role": "user", "content": blocks}]}
+    if control_mode == "unused_top":
+        body["cache_control"] = {"type": "ephemeral", "ttl": "1h"}
+    if control_mode == "tool":
+        body["tools"] = [{"name": "lookup", "input_schema": {"type": "object"},
+                          "cache_control": {"type": "ephemeral", "ttl": "1h"}}]
+    if flow == "stream":
+        body["stream"] = True
+
+    def reply(request):
+        transmitted.append(json.loads(request.content))
+        response = {"id": "control-receipt", "model": "anthropic/claude-sonnet-5", "usage": USAGE,
+                    "choices": [{"message": {"content": "answer"}, "delta": {"content": "answer"}}]}
+        if flow == "stream":
+            return httpx.Response(200, content=f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n")
+        return httpx.Response(200, json=response)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    result = client.post("/v1/messages" if flow == "native" else "/v1/chat/completions", json=body)
+    assert result.status_code == 200, result.text
+    expected = Decimal("1.25") if control_mode == "default" else (
+        Decimal("2") if control_mode == "1h" or (control_mode == "tool" and flow == "native") else None
+    )
+    assert factors == [expected]
+    billed = chat.billing.charge.await_args.kwargs
+    assert billed["cost_rub"] == (Decimal("0.3747") if expected == Decimal("2") else Decimal("0.3262"))
+    assert len(transmitted) == 1
+    if control_mode == "unused_top":
+        assert "cache_control" not in transmitted[0]
+    if control_mode == "tool":
+        assert ("tools" in transmitted[0]) == (flow == "native")
+    if control_mode in ("default", "1h"):
+        assert transmitted[0]["messages"][0]["content"][0]["cache_control"] == blocks[0]["cache_control"]
+
+
+@pytest.mark.parametrize("counts", [("1000", "100"), ("0", "0"), (0, 0)])
+def test_native_preserves_integer_string_token_receipts(client, monkeypatch, counts):
+    provider(monkeypatch, streaming=False, cost="0", usage={
+        "prompt_tokens": counts[0], "completion_tokens": counts[1],
+        "prompt_tokens_details": {"cached_tokens": 600, "cache_write_tokens": 200},
+    })
+    result = client.post("/v1/messages", json={
+        "model": MODEL, "max_tokens": 256, "user": str(uuid4()),
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    assert result.status_code == 200, result.text
+    billed = chat.billing.charge.await_args.kwargs
+    assert billed["tokens_in"] == int(counts[0])
+    assert billed["tokens_out"] == int(counts[1])
+    assert billed["cache_read_tokens"] == (600 if int(counts[0]) else 0)
+    assert billed["cache_write_tokens"] == (200 if int(counts[0]) else 0)
+
+
+@pytest.mark.parametrize("bad", [None, True, False, -1, 1.5, "-1", "1.5", "", {}])
+@pytest.mark.parametrize("field", ["prompt_tokens", "completion_tokens"])
+def test_invalid_native_usage_never_reports_successful_zero_charge(client, monkeypatch, field, bad):
+    calls = []
+    usage = {"prompt_tokens": 1000, "completion_tokens": 100}
+    if bad is None:
+        usage.pop(field)
+    else:
+        usage[field] = bad
+
+    def reply(request):
+        calls.append(True)
+        return httpx.Response(200, json={"id": "invalid-usage", "model": MODEL,
+                                       "choices": [{"message": {"content": "answer"}}], "usage": usage})
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    result = client.post("/v1/messages", json={
+        "model": MODEL, "max_tokens": 256, "user": str(uuid4()),
+        "messages": [{"role": "user", "content": "hello"}],
+    })
+    assert result.status_code == 503
+    assert result.json()["error"]["type"] == "billing_unavailable"
+    assert len(calls) == 1
+    assert chat.billing.charge.await_count == 0
