@@ -226,6 +226,7 @@ class WorkspaceAgentExecResponse(BaseModel):
     after_identity: WorkspaceIdentityDigest
     environment_mutated: bool
     project_migration_receipt: dict[str, Any] | None = None
+    compiled_asset_receipt: dict[str, Any] | None = None
 
 
 class WorkspaceAgentOperationStatusResponse(BaseModel):

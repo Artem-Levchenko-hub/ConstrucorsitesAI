@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     # sessions never authorize these endpoints; absent configuration denies.
     offhost_backup_read_token: SecretStr | None = Field(default=None)
 
+    # Platform-only named behavior driver. Empty configuration leaves named
+    # promotion unresolved; selectors/asset pins never come from agent state.
+    max_behavior_browser_executable: str = Field(default="", repr=False)
+    max_behavior_browser_sha256: str = Field(default="", repr=False)
+    max_behavior_adapter_registry: str = Field(default="", repr=False)
+    max_behavior_vendor_asset_registry: str = Field(default="", repr=False)
+
     # Stock photography for `<img data-omnia-photo="keywords">` tags — real
     # thematic photos, not AI-generated. "off" (default) leaves the feature
     # dormant: the resolver strips unresolved photo tags so the section's flat /

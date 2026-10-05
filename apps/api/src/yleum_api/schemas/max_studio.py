@@ -150,10 +150,24 @@ class MaxReadinessItem(BaseModel):
     action: str | None = None
 
 
+class MaxPublicationMigration(BaseModel):
+    """A blocking diagnostic, never permission or a receipt for applying SQL."""
+
+    status: Literal["verification_required", "identity_unconfirmed"]
+    snapshot_id: UUID | None
+    source_revision: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
+    execution_available: Literal[False] = False
+    required_evidence: Literal["bound_catalog_diff_and_verified_backup"] = (
+        "bound_catalog_diff_and_verified_backup"
+    )
+
+
+
 class MaxReadinessPublic(BaseModel):
     ready_to_launch: bool
     progress: int
     items: list[MaxReadinessItem]
+    publication_migration: MaxPublicationMigration | None = None
 
 
 class MaxPreviewSessionUpstream(BaseModel):

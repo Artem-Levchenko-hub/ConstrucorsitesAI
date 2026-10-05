@@ -212,6 +212,10 @@ async def execute_agent_turn(
     plan: AgentPromptPlan,
     operations: AgentOperations,
 ) -> tuple[agent_builder.AgentResult, str | None]:
+    if runtime.coordinator is not None:
+        from yleum_api.services.max_behavior_proof import freeze_for_turn
+
+        await freeze_for_turn(runtime.coordinator, prompt_text, template=project_info.template)
     edit_source_changed: Callable[[], bool] | None = None
     if _agent_res is None and get_settings().use_native_agent:
         # Native tool-use path (owner «как Claude Code, только на сервере»): one

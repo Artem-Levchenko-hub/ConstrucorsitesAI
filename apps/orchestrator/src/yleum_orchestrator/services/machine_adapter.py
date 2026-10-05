@@ -556,6 +556,14 @@ class MachineAdapter:
         if role == "full_build":
             try:
                 receipt = await self._project_migrations(state, request, verify_applied=True)
+                from yleum_orchestrator.services.next_compilation_capture import (
+                    capture_next_compilation,
+                )
+
+                _machine, compiler_backend = self.parts(state)
+                compilation = await machine_effect(
+                    capture_next_compilation, compiler_backend, request, manifest,
+                )
                 await self._activate_runtime(state, manifest, request)
             except (MachineServiceFailed, CellResourceError) as exc:
                 # A failed product start is command evidence, not a transport
@@ -567,6 +575,11 @@ class MachineAdapter:
                 return await finish(exit_code=1, output=f"{failure}\n{task_tail}")
             output.append(RECEIPT_PREFIX + json.dumps(receipt, sort_keys=True))
             self._store_migration_receipt(state, request.operation_id, receipt)
+            if compilation is not None:
+                saved = _machine.state()
+                stored_operation = saved["operations"][str(request.operation_id)]
+                stored_operation["compiled_asset_receipt"] = compilation
+                write_controller_json(_machine.path, saved)
         return await finish(exit_code=0, output="\n".join(output))
 
     def _store_migration_receipt(
@@ -582,6 +595,12 @@ class MachineAdapter:
         return cast(dict[str, Any] | None, machine.state().get("operations", {}).get(
             str(operation_id), {}
         ).get("project_migration_receipt"))
+
+    def compilation_receipt(self, state: Any, operation_id: UUID) -> dict[str, Any] | None:
+        machine, _backend = self.parts(state)
+        return cast(dict[str, Any] | None, machine.state().get("operations", {}).get(
+            str(operation_id), {}
+        ).get("compiled_asset_receipt"))
 
     async def _migration_inventory(self, backend: Any) -> dict[str, str]:
         from yleum_orchestrator.routers.workspace import _read_agent_workspace_files

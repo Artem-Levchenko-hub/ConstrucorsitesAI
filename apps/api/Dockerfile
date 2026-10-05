@@ -15,7 +15,8 @@ FROM python:3.12-slim AS base
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
-    UV_LINK_MODE=copy
+    UV_LINK_MODE=copy \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/omnia/playwright
 # UV_COMPILE_BYTECODE intentionally disabled — on small VPS the parallel .pyc
 # compilation step regularly timed out (>60s on a single .py file). Cold start
 # is a bit slower without precompiled .pyc, but each module is bytecoded on
@@ -58,7 +59,11 @@ RUN uv sync --frozen --no-install-project
 
 # Browser dependencies depend on the lockfile, not application source. Keep
 # this expensive layer cached when shipping a Python-only runtime fix.
-RUN .venv/bin/playwright install chromium --with-deps || .venv/bin/playwright install chromium
+COPY src/yleum_api/services/behavior_browser_installation.py /tmp/behavior_browser_installation.py
+RUN (.venv/bin/playwright install chromium --with-deps || .venv/bin/playwright install chromium) \
+    && chmod -R a+rX,go-w /opt/omnia/playwright \
+    && .venv/bin/python /tmp/behavior_browser_installation.py --write-image-manifest \
+    && rm /tmp/behavior_browser_installation.py
 
 COPY . ./
 RUN uv sync --frozen
@@ -83,4 +88,5 @@ ENV PATH="/app/.venv/bin:${PATH}"
 
 EXPOSE 8000
 
+ENTRYPOINT ["/app/.venv/bin/python", "-m", "yleum_api.services.behavior_browser_installation", "--exec"]
 CMD ["uv", "run", "uvicorn", "yleum_api.main:app", "--host", "0.0.0.0", "--port", "8000"]

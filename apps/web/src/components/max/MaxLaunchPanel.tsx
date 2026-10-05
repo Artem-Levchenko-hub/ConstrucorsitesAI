@@ -66,11 +66,14 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
   const currentStage = available ? journey.currentStage : undefined;
   const stateError = readiness.isError || deploy.isError;
   const publication = getMaxPublicationState(available ? effectiveReadiness : undefined, deploy.data?.phase);
-  const published = !stateError && deploy.isSuccess && !busyDeploy && publication === "published";
+  const published = !stateError && deploy.isSuccess && !busyDeploy && guard !== "migration_required" && !effectiveReadiness?.publication_migration && publication === "published";
   const failed = !deploy.isError && deploy.data?.phase === "failed";
+  const migrationPending = !busyDeploy && !stateError && (guard === "migration_required" || Boolean(effectiveReadiness?.publication_migration));
+  const [migrationReviewOpen, setMigrationReviewOpen] = useState(false);
   const productionUrl = published ? deploy.data?.prod_url ?? (integration.isSuccess ? integration.data?.app_url : null) : null;
   const title = stateError ? MAX_STATUS_COPY.readiness.title
     : busyDeploy ? "Публикация продолжается"
+    : migrationPending ? "Нужна проверка изменения данных"
     : !available ? "Проверяем готовность…"
     : deploy.isPending ? "Проверяем публикацию…"
     : published ? "Приложение опубликовано"
@@ -94,7 +97,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
         <section aria-live="polite" role={stateError ? "alert" : undefined} data-testid="max-launch-current-step" className="max-launch-focus">
           <span className="max-project-eyebrow">{busyDeploy ? "Публикуем" : published ? "Публикация" : "Следующий шаг"}</span>
           <h2>{stateError && <CircleAlert className="size-5 shrink-0 text-danger-fg" />}{busyDeploy && <Loader2 className="size-5 animate-spin" />}{title}</h2>
-          <p>{stateError ? MAX_STATUS_COPY.readiness.hint : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Приложение доступно пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
+          <p>{stateError ? MAX_STATUS_COPY.readiness.hint : busyDeploy ? stageLabel || "Публикация выполняется на сервере." : migrationPending ? "Перед публикацией нужны проверка изменения структуры данных и резервная копия." : !available ? "Статусы появятся после ответа сервера." : deploy.isPending ? "Уточняем статус публикации и постоянный адрес приложения." : published ? "Приложение доступно пользователям по постоянному адресу." : currentStage?.description ?? "Проверьте данные приложения перед запуском."}</p>
           {busyDeploy && <div data-testid="max-launch-publication-progress" className="max-launch-publication-progress" aria-live="polite">
             <strong>{stageLabel || "Публикуем"}</strong>
             {elapsedMs !== null && <span>идёт {formatElapsed(elapsedMs)}</span>}
@@ -105,10 +108,16 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
           {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "already_current" && <p className="max-launch-notice" data-testid="max-launch-noop">Приложение уже опубликовано — повторная сборка не потребовалась.</p>}
           {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "config_only" && <p className="max-launch-notice" data-testid="max-launch-noop">Обновлены только настройки — приложение не пересобиралось.</p>}
           {failed && <div role="alert" className="text-sm text-danger-fg"><p>{failure.title}</p>{failure.detail && <p className="max-launch-failure-detail">{failure.detail}</p>}</div>}
+          {migrationPending && migrationReviewOpen && <section data-testid="max-migration-review" role="status" className="max-launch-notice">
+            <h3>Проверка перед миграцией</h3>
+            <p>Нужны точная схема опубликованной базы, изменения полей текущей версии и проверенная резервная копия. Применение изменений пока недоступно.</p>
+            <p>Проверка должна подтвердить сохранение записей, связей и файлов. После этого будет доступно отдельное подтверждение изменений для этой версии.</p>
+          </section>}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">
             {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>{MAX_STATUS_COPY.readiness.retry}</Button>
               : deploy.isPending ? <Button disabled><Loader2 className="size-4 animate-spin" />Проверяем публикацию…</Button>
+              : migrationPending ? <Button data-testid="max-migration-review-open" onClick={() => setMigrationReviewOpen(true)}>Проверить изменения данных</Button>
               : published ? productionUrl && <Button asChild><a href={productionUrl} target="_blank" rel="noreferrer">Открыть приложение <ExternalLink className="size-4" /></a></Button>
               : busyDeploy || currentStage?.id === "publish" || !available ? <MaxLaunchButton projectId={project.id} />
               : currentStage && <Button asChild><Link href={currentStage.href} onClick={onClose}>{currentStage.actionLabel}<ChevronRight className="size-4" /></Link></Button>}

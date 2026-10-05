@@ -26,6 +26,7 @@ from yleum_api.services.generation.runtime import (
     _project_cell_runtime_check,
     _require_project_cell,
 )
+from yleum_api.services.max_behavior_proof import ControllerBehaviorDriver
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -98,6 +99,7 @@ async def prepare_agent_runtime(
     _design_contract: Any,
     _agent_res: agent_builder.AgentResult | None,
     capacity_dispatch_token: UUID | None,
+    behavior_driver: ControllerBehaviorDriver | None = None,
 ) -> tuple[AgentRuntimeBindings, agent_builder.AgentResult | None]:
     _agent_emit = progress.emit_agent_event
     _vision_context = _design_contract.vision_context if _design_contract else prompt_text
@@ -183,6 +185,20 @@ async def prepare_agent_runtime(
                 run_generation_deadline_watchdog,
             )
 
+            if behavior_driver is None:
+                from yleum_api.services.behavior_driver_configuration import (
+                    configured_behavior_driver,
+                )
+                from yleum_api.services.max_behavior_proof import BehaviorProofError
+
+                try:
+                    behavior_driver = configured_behavior_driver(runtime.handle, get_settings())
+                except BehaviorProofError:
+                    # Invalid operator setup cannot become a model fallback.
+                    # Generic/API-only requests keep their ordinary path; named
+                    # promotion fails closed with the existing missing driver gate.
+                    behavior_driver = None
+
             runtime.coordinator = MaxFinalizationCoordinator(
                 session_factory=factory,
                 generation_run_id=ids.run_id,
@@ -190,6 +206,7 @@ async def prepare_agent_runtime(
                 project_slug=project_info.slug,
                 executor=runtime.handle,
                 emit=progress.record_generation_event,
+                behavior_driver=behavior_driver,
             )
 
             if get_settings().use_project_cell_activity_watchdog:

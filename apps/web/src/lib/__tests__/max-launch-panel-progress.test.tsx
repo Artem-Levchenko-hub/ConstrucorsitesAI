@@ -138,6 +138,17 @@ it("does not claim three prerequisites ready or enable publication when latest f
   expect(container.querySelector<HTMLButtonElement>('[data-testid="max-one-click-launch"]')?.disabled ?? true).toBe(true);
   expect(api.launch).not.toHaveBeenCalled();
 });
+
+it("offers a read-only data verification step without launching or implying migration execution", async () => {
+  api.deploy.mockResolvedValue({ ...base, phase: "failed", snapshot_id: "current-snapshot", reason_code: "migration_required", error: "publication_migration_required" });
+  await mount(<MaxLaunchPanel project={project} />);
+  await settle(() => expect(container.querySelector('[data-testid="max-migration-review-open"]')).not.toBeNull());
+  const action = container.querySelector<HTMLButtonElement>('[data-testid="max-migration-review-open"]')!;
+  await act(async () => { action.click(); action.click(); });
+  expect(container.querySelector('[data-testid="max-migration-review"]')?.textContent).toContain("проверенная резервная копия");
+  expect(container.textContent).not.toContain("Применить миграцию");
+  expect(api.launch).not.toHaveBeenCalled();
+});
 it("retains a real start-app failure and permits explicit retry rather than treating it as a migration block", async () => {
   api.readiness.mockResolvedValue({ ...readiness(), ready_to_launch: false });
   api.deploy.mockResolvedValue({ ...base, phase: "failed", snapshot_id: "current-snapshot", reason_code: "service_readiness_failed", error_stage: "start_app", error: "actual process start failed", finished_at: "2026-10-04T18:42:00Z" });

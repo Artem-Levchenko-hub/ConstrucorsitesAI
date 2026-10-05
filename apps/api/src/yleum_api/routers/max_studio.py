@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import datetime
 from uuid import UUID
 
@@ -24,6 +25,7 @@ from yleum_api.schemas.max_studio import (
     MaxPreviewSessionPublic,
     MaxProjectConfigPayload,
     MaxProjectConfigPublic,
+    MaxPublicationMigration,
     MaxReadinessItem,
     MaxReadinessPublic,
     MaxUrlAttachedPayload,
@@ -571,6 +573,30 @@ async def get_max_readiness(
             and active_publication.get("snapshot_id") == str(current_snapshot.id)
             and active_publication.get("commit_sha") == current_snapshot.commit_sha
         )
+    migration = None
+    if (
+        deployment.get("phase") == "failed"
+        and deployment.get("reason_code") == "migration_required"
+    ):
+        failed_snapshot = deployment.get("snapshot_id")
+        current_id = str(current_snapshot.id) if current_snapshot else None
+        # An explicitly older attempt cannot block a newer accepted snapshot.
+        if not failed_snapshot or not current_id or failed_snapshot == current_id:
+            revision = current_snapshot.commit_sha if current_snapshot else None
+            valid_revision = isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{40}", revision)
+            confirmed = bool(
+                current_id
+                and failed_snapshot == current_id
+                and valid_revision
+                and deployment.get("commit_sha") == revision
+            )
+            migration = MaxPublicationMigration(
+                status="verification_required" if confirmed else "identity_unconfirmed",
+                snapshot_id=current_snapshot.id if current_snapshot else None,
+                source_revision=revision if valid_revision else None,
+            )
+            build_ready = False
+            published = False
     # No owner requisites are asked for anywhere: a Yleum account is an email and
     # a way to sign in; the business behind a bot is verified by MAX itself.
     items = [
@@ -610,6 +636,7 @@ async def get_max_readiness(
         ready_to_launch=done == len(items),
         progress=round(done / len(items) * 100),
         items=items,
+        publication_migration=migration,
     )
 
 

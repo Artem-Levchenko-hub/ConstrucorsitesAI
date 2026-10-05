@@ -7,7 +7,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import cast
@@ -47,6 +47,13 @@ from yleum_api.services.generation_metrics import (
     record_terminal_reason,
 )
 from yleum_api.services.generation_runs import terminalize_generation_run_locked
+from yleum_api.services.max_behavior_proof import (
+    BehaviorProofError,
+    ControllerBehaviorDriver,
+    freeze_for_finalization,
+    require_candidate_behavior,
+    require_saved_candidate_behavior,
+)
 from yleum_api.services.max_generation_contract import max_source_completion_gap
 from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
 from yleum_api.services.orchestrator_client import RestorationAdaptationProof
@@ -261,6 +268,7 @@ class MaxFinalizationCoordinator:
         project_slug: str,
         executor: ProjectCellExecutorHandle,
         emit: Callable[[str, Mapping[str, object]], Awaitable[None]] | None = None,
+        behavior_driver: ControllerBehaviorDriver | None = None,
     ) -> None:
         if executor.current_identity is None or executor.run_role is None:
             raise ValueError("identity-aware Project Cell executor is required")
@@ -273,6 +281,7 @@ class MaxFinalizationCoordinator:
         self.project_id = project_id
         self.project_slug = project_slug
         self.executor = executor
+        self.behavior_driver = behavior_driver
         self.emit = emit or _discard_event
         self._last_files: dict[str, str] | None = None
         self._last_prompt: str | None = None
@@ -387,6 +396,22 @@ class MaxFinalizationCoordinator:
         prompt: str,
     ) -> MaxFinalizationOutcome:
         await self._raise_persisted_infrastructure_failure()
+        try:
+            behavior_contract = await freeze_for_finalization(self, prompt)
+            if (
+                self.executor.prove_restoration_adaptation is not None
+                and behavior_contract is not None
+            ):
+                raise BehaviorProofError("BEHAVIOR_ADAPTATION_ADAPTER_UNSUPPORTED")
+        except BehaviorProofError as error:
+            identity = await self._identity()
+            proof = await self._proof(identity)
+            return await self._outcome(
+                MaxFinalizationStatus.FAILED,
+                self._checkpoint(identity, GenerationPhase.RUNTIME_PROBE),
+                ProofBundle(identity=proof),
+                error.code,
+            )
         if self.executor.prove_restoration_adaptation is not None:
             return await self._finalize_adaptation(files=files, prompt=prompt)
         self._last_files = dict(files)
@@ -543,7 +568,19 @@ class MaxFinalizationCoordinator:
             release=release,
             permit=permit,
         )
-        candidate = await self._prepare_and_promote(identity, build, release, permit)
+        try:
+            candidate = await self._prepare_and_promote(identity, build, release, permit)
+        except BehaviorProofError as error:
+            return await self._outcome(
+                (
+                    MaxFinalizationStatus.NEEDS_EDIT
+                    if error.status == "NEEDS_CHANGES"
+                    else MaxFinalizationStatus.FAILED
+                ),
+                self._checkpoint(identity, GenerationPhase.RUNTIME_PROBE),
+                replace(bundle, permit=None),
+                error.code,
+            )
         complete = self._checkpoint(
             identity,
             GenerationPhase.COMPLETE,
@@ -1545,6 +1582,10 @@ class MaxFinalizationCoordinator:
                 await self._load_bundle(proof) if build_is_current else ProofBundle(identity=proof)
             )
             if bundle.permit is not None:
+                assert build is not None and build.artifact_ref is not None
+                await require_saved_candidate_behavior(
+                    self, candidate, identity, build.artifact_ref
+                )
                 return await self._outcome(
                     MaxFinalizationStatus.COMPLETE,
                     checkpoint,
@@ -1988,6 +2029,12 @@ class MaxFinalizationCoordinator:
             candidate_id = candidate.id
         await self._finish_activity(snapshot_operation, ActivityState.COMPLETED, "prepared")
         await self._phase_finished(GenerationPhase.SNAPSHOT)
+
+        # Named UI behavior is observed against this actual prepared candidate.
+        # Generic/API-only requests have no contract and keep their existing path.
+        require_promotion_permit(permit, current_identity=await self._identity())
+        await require_candidate_behavior(self, candidate, identity, build_ref)
+        require_promotion_permit(permit, current_identity=await self._identity())
 
         promotion_operation = uuid5(
             self.generation_run_id,

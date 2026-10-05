@@ -1,0 +1,48 @@
+{
+  "verdict": "SOURCE_CLEAR",
+  "scope": "Combined integration only; no broad re-review of prior approved implementation",
+  "base": "d9e4957c81424dbcd3b2ecbf19bce0ba9a692174",
+  "approved_freezes": {
+    "semantic": "3bc33c85c265091a33b2566c06cea65be8f917a1c687c6911761ff0aa0fee1c6",
+    "analytics": "c7b661bc6e5061b098df653f8dea144b0bb061cc884e64b5b275c2186d40655b",
+    "migration_typmod_v2": "59dba3bdb98dbf47e7630df83891bb11f4ddb80df52b36ae9a9271a45606d859"
+  },
+  "evidence_bindings": {
+    "/workspace/qa-evidence/root-readiness-d9-20261005/combined-source-inputs.json": "3981c575f7aad898286a4461a94aeef9f6f9986b1d1dc2012e5a10ba5105eb4a",
+    "/workspace/qa-evidence/root-readiness-d9-20261005/combined-checks.json": "172374d5da23c141236259a13f9e0214fb4424e1b79143fb8d041caee879c317",
+    "/workspace/qa-evidence/root-readiness-d9-next-20261005/receipt.json": "46f1d03dd1c32e7c0449fcc6f35c5f233bfad6ac6dec21cf0b8b5bc647fe6db6"
+  },
+  "combined_source_files": 47,
+  "all_files_exact_approved_union": true,
+  "conflicting_overlaps": 0,
+  "compiled_core_inputs_checked": 45,
+  "changed_core_inputs": [
+    "apps/orchestrator/templates/max-miniapp-nextjs/src/lib/omnia/client.ts"
+  ],
+  "new_core_build_required": true,
+  "findings": [],
+  "interactions": [
+    "Driver installation/configuration identical approved source; blank defaults unavailable and named proof cannot bypass missingdriver",
+    "Compiled source/request/run/fence binding unchanged; changed SDK bytes require fresh candidate-bound build and retained compilation receipt",
+    "Analytics actor-scoped receipt retries do not alter publication/finalization authority",
+    "Migration readiness remains blocked-only; typed resolver preparation not executor or runtime data bypass",
+    "Template README exact analytics freeze append; no merge/conflict rewrite"
+  ],
+  "recorded_combined_evidence": {
+    "API_actual_PG_browser_items": 223,
+    "orch_pure": 127,
+    "orch_actual_PG": 5,
+    "web": 11,
+    "Ruff_files": 39,
+    "actual_Next_compile_serve_browser": 1
+  },
+  "reviewer_rerun_suites": false,
+  "reviewer_live_effects": false,
+  "limitations": [
+    "Not committed/deployed at review",
+    "Actual image browser pin/operator configuration/adapters unresolved",
+    "Matching newly built compiledcore mandatory; old853 reuse not authorized",
+    "No customer-app replay/realMAX/physicalDockercapture/durableCoffeeauthority acceptance",
+    "Physical migration catalog/backup/executor/durable reconciliation absent"
+  ]
+}

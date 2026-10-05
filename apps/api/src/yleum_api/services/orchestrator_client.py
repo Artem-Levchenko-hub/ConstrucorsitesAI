@@ -797,6 +797,7 @@ class ProjectCellAgentExecResponse:
     after_identity: ProjectCellWorkspaceIdentity | None = None
     environment_mutated: bool = False
     project_migration_receipt: dict[str, object] | None = None
+    compiled_asset_receipt: dict[str, object] | None = None
 
     def __post_init__(self) -> None:
         _validate_workspace_revision(self.workspace_revision)
@@ -824,6 +825,8 @@ class ProjectCellAgentExecResponse:
         expected = transport if is_transport else legacy
         if "project_migration_receipt" in payload:
             expected = expected | {"project_migration_receipt"}
+        if "compiled_asset_receipt" in payload:
+            expected = expected | {"compiled_asset_receipt"}
         unexpected = set(payload) - expected
         if unexpected or set(payload) != expected:
             raise OrchestratorUnavailable(
@@ -839,6 +842,7 @@ class ProjectCellAgentExecResponse:
         after_identity = payload.get("after_identity")
         environment_mutated = payload.get("environment_mutated", False)
         receipt = payload.get("project_migration_receipt")
+        compiled = payload.get("compiled_asset_receipt")
         if (
             type(ok) is not bool
             or type(exit_code) is not int
@@ -848,6 +852,7 @@ class ProjectCellAgentExecResponse:
             or (is_transport and type(operation_id) is not str)
             or (is_transport and type(environment_mutated) is not bool)
             or (receipt is not None and type(receipt) is not dict)
+            or (compiled is not None and type(compiled) is not dict)
         ):
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell exec response"
@@ -870,6 +875,7 @@ class ProjectCellAgentExecResponse:
                 ),
                 environment_mutated=cast(bool, environment_mutated),
                 project_migration_receipt=cast(dict[str, object] | None, receipt),
+                compiled_asset_receipt=cast(dict[str, object] | None, compiled),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(

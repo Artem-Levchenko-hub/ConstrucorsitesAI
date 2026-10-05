@@ -11,12 +11,34 @@ async function post(path: string, payload: unknown): Promise<Response> {
   });
 }
 
+/** Reuse eventId only when retrying the same logical event, including reloads. */
 export async function trackMaxEvent(
   eventName: string,
   properties: Record<string, unknown> = {},
+  options: { eventId?: string } = {},
 ): Promise<void> {
-  const response = await post("/api/omnia/events", { eventName, properties });
-  if (!response.ok && response.status !== 401) throw new Error("Analytics event failed");
+  const eventId = options.eventId === undefined ? crypto.randomUUID() : options.eventId;
+  if (typeof eventId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventId)) {
+    throw new Error("Analytics event failed");
+  }
+  // Snapshot once so delivery retries cannot create a second receipt or change
+  // an event's body. No actor, launch data, token or browser storage is added.
+  const body = JSON.stringify({ eventName, properties, eventId: eventId.toLowerCase() });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch("/api/omnia/events", {
+        method: "POST", credentials: "include", signal: controller.signal,
+        headers: { "Content-Type": "application/json" }, body,
+      });
+      if (response.ok || response.status === 401) return;
+      if (response.status < 500 && response.status !== 429) break;
+    } catch { /* Unknown delivery outcome: retry only the same receipt. */ }
+    finally { clearTimeout(timeout); }
+  }
+  throw new Error("Analytics event failed");
 }
 
 export async function saveMaxConsent(

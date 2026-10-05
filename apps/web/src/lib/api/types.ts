@@ -682,6 +682,13 @@ export type MaxProjectConfig = {
 export type MaxReadiness = {
   ready_to_launch: boolean;
   progress: number;
+  publication_migration?: {
+    status: "verification_required" | "identity_unconfirmed";
+    snapshot_id: string | null;
+    source_revision: string | null;
+    execution_available: false;
+    required_evidence: "bound_catalog_diff_and_verified_backup";
+  } | null;
   items: {
     id: string;
     label: string;

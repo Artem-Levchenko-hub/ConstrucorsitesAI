@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import uuid
 from collections.abc import Callable
@@ -14,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
@@ -266,11 +268,18 @@ async def _new_harness(
     )
     session.add(project)
     await session.flush()
+    # The durable run and original user message share an actual request identity.
+    # Later synthetic repair/adaptation context recovers this authoritative turn.
+    original_prompt = "Build tracker"
+    user_message = Message(project_id=project.id, role="user", content=original_prompt)
+    session.add(user_message)
+    await session.flush()
     run = GenerationRun(
         project_id=project.id,
         user_id=owner.id,
         idempotency_key=f"finalization:{uuid.uuid4().hex}",
-        prompt_hash="a" * 64,
+        prompt_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
+        user_message_id=user_message.id,
         status="running",
         agent_state={},
     )

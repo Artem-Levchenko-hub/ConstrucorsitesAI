@@ -1,0 +1,47 @@
+{
+  "observed_at_utc": "2026-10-05T01:16:48.426470+00:00",
+  "candidate": "d9e4957c81424dbcd3b2ecbf19bce0ba9a692174",
+  "phase": "complete",
+  "canonical_exit": 0,
+  "state_sha256": "c9af2031beed0c17c575bdf11ec1f627242ca352d5d4386980fd409d701340d6",
+  "wrapper_sha256": "5407873511b2f1f0b256117a9659f58bc412b2ddd4809a89a52c20b4f231308c",
+  "prepared_state_sha256": "163cfdc16229683677db0b07d6f12df742912fdeb379ebf2ea091b3ae86e46e7",
+  "backup_stamp": "20261005-005018",
+  "backup_databases": 32,
+  "backup_ok": 32,
+  "schema_head": "0078_usage_cost_provenance",
+  "usage_cost_provenance_nullable_jsonb": true,
+  "analytics_table_present": true,
+  "free_owner_columns_present": true,
+  "full_A3_B7_preserved": true,
+  "publication_journals_preserved": true,
+  "protected_environment_preserved": true,
+  "foreign_files_preserved": true,
+  "compiled_core_pins_changed": false,
+  "post_drain": {
+    "active": {
+      "generations": 0,
+      "leases": 0,
+      "operations": 0,
+      "restorations": 0
+    },
+    "bootstrap_readonly": false,
+    "drained": false,
+    "release_sha": null
+  },
+  "root_native_terminal_observed": true,
+  "verified_inside_frozen_wrapper": [
+    "canonical_API_web_gateway_release",
+    "Core_and_Commerce_loaded_controller_identity",
+    "actual_gateway_provenance_modules",
+    "actual_API_and_generation_worker_modules",
+    "old_gateway_retirement",
+    "current_ingress_drain_absent",
+    "full_A3_B7_row_and_schema_hash_equality",
+    "all_parent_artifacts_unchanged"
+  ],
+  "Coffee_feature_or_publication_accepted": false,
+  "Coffee_Commerce_backup_proven": false,
+  "MinIO_external_perimeter_accepted": false,
+  "transcription_correction": "Initial65char hash rejected locally before authority; enlarged native screenshot confirms64char ending340d6"
+}

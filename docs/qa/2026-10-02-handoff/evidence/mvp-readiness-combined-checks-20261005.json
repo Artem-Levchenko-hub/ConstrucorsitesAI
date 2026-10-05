@@ -1,0 +1,15 @@
+{
+  "verified_at_utc": "2026-10-05T01:12:11.447336+00:00",
+  "source_files": 47,
+  "API_real_PG_and_browser_passed_items": 223,
+  "API_exit": 0,
+  "API_own_database_cleaned": true,
+  "orchestrator_pure_passed": 127,
+  "orchestrator_actual_PG_passed": 5,
+  "actual_Next_compile_serve_browser_passed": 1,
+  "web_passed": 11,
+  "ruff_files": 39,
+  "ruff_exit": 0,
+  "new_core_build_required": true,
+  "production_acceptance": false
+}
