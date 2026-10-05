@@ -27,6 +27,7 @@ from yleum_api.services import max_behavior_browser as browser
 from yleum_api.services import max_behavior_proof as b
 from yleum_api.services.behavior_compilation_resolver import compilation_operation_id
 from yleum_api.services.behavior_driver_configuration import configured_behavior_driver
+from yleum_api.services.max_behavior_ui_contract import COFFEE_UI_PRESET
 from yleum_api.services.orchestrator_client import (
     ProjectCellAgentExecResponse,
     ProjectCellWorkspaceIdentity,
@@ -78,11 +79,14 @@ def test_actual_next_compilation_transport_resolver_private_driver_and_served_ra
 import {useState} from 'react';
 export default function Page(){
 const [name,setName]=useState('');const [summary,setSummary]=useState('');
-return <main><form id="form" onSubmit={e=>e.preventDefault()}><label>Name
-<input id="name" name="name" value={name} onChange={e=>setName(e.target.value)}/></label>
-<button id="check" type="button" style={{minWidth:180,minHeight:48}}
+return <main><form id="form" data-omnia-behavior="coffee-request-form"
+onSubmit={e=>e.preventDefault()}><label>Name
+<input id="name" name="name" data-omnia-behavior="coffee-request-text" value={name}
+onChange={e=>setName(e.target.value)}/></label>
+<button id="check" type="button" data-omnia-behavior="coffee-summary-button"
+style={{minWidth:180,minHeight:48}}
 onClick={()=>setSummary('Summary '+name)}>Проверить заявку</button></form>
-<section id="summary">{summary}</section></main>}
+<section id="summary" data-omnia-behavior="coffee-request-summary">{summary}</section></main>}
 """,
         "app/fixture/bootstrap/route.js": """export function GET(request){return new Response(null,{status:303,headers:{Location:'/', 'Set-Cookie':'fixture=private; Path=/; HttpOnly'}})}""",  # noqa: E501
     }
@@ -166,12 +170,7 @@ onClick={()=>setSummary('Summary '+name)}>Проверить заявку</butto
         max_behavior_adapter_registry=json.dumps(
             {
                 "max-miniapp-nextjs": {
-                    "coffee_summary": {
-                        "button": "#check",
-                        "form": "#form",
-                        "text_input": "#name",
-                        "summary": "#summary",
-                    }
+                    "preset": COFFEE_UI_PRESET,
                 }
             }
         ),

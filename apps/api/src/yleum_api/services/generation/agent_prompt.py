@@ -173,6 +173,20 @@ async def prepare_agent_prompt(
     _agent_model = model_for_role("agent", override=force_model)
     # Stall recovery resolves through the same role registry.
     _escalate_model = model_for_role("agent_escalation", override=force_model)
+    from yleum_api.services.max_behavior_proof import freeze_for_turn, required_contract
+    from yleum_api.services.max_behavior_ui_contract import named_ui_guidance
+
+    coordinator = getattr(runtime, "coordinator", None)
+    named_contract = (
+        await freeze_for_turn(coordinator, prompt_text, template=project_info.template)
+        if coordinator is not None
+        else required_contract(prompt_text, template=project_info.template)
+    )
+    # Use the authoritative frozen request for controller-backed turns, including
+    # synthesized adaptation context. This same immutable plan is used by repair.
+    guidance = named_ui_guidance(named_contract)
+    if guidance:
+        _agent_user += "\n\n" + guidance
     _prompt_plan = AgentPromptPlan(
         system=_agent_system,
         user=_agent_user,

@@ -352,29 +352,15 @@ def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, .
 def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
     """Human/model-readable checklist appended to a full MAX build task."""
 
-    from yleum_api.services.max_behavior_proof import required_contract
-
-    behavior = required_contract(prompt, template='max_miniapp')
-    behavior_guidance = (
-        '\nPLATFORM NAMED BEHAVIOR CONTRACT: ' + ', '.join(behavior.capabilities)
-        + '. Actual candidate-bound browser measurements and compiled assets '
-        'are required before promotion. Density/header theme require local preference/reload; '
-        'Coffee summary requires the painted exact requested button, input-driven local summary, '
-        'unchanged form values and no business/provider sending. Source text and model claims '
-        'cannot prove PASS. Unsupported adapter or unavailable controller browser is '
-        'NEEDS_REVIEW; do not fabricate receipts.'
-        if behavior is not None else ''
-    )
     capabilities = requested_max_capabilities(prompt)
     if portable:
         return (
             "PORTABLE MAX PRODUCT ACCEPTANCE: implement the complete requested product, "
             "declare real build/test/service commands, then pass build and signed runtime_check. "
             "Do not fabricate user data or integration success. Explicit brief coverage: "
-            + ", ".join(label for _key, label, _needles in capabilities) + behavior_guidance
+            + ", ".join(label for _key, label, _needles in capabilities)
         )
     lines = [
-        *([behavior_guidance] if behavior_guidance else []),
         "MAX PRODUCT ACCEPTANCE CONTRACT (done is rejected until this is true):",
         "- No product home page or visual template exists initially. Create "
         "src/app/page.tsx, product styling, screens and navigation from scratch.",

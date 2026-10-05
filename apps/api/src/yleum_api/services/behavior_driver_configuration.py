@@ -86,6 +86,12 @@ def _pin(path: str, expected: str) -> None:
 
 
 def _adapter(raw: Any) -> PlatformBrowserAdapter:
+    if type(raw) is dict and "preset" in raw:
+        from yleum_api.services.max_behavior_ui_contract import COFFEE_SELECTORS, COFFEE_UI_PRESET
+
+        if set(raw) - {"preset", "read_paths"} or raw["preset"] != COFFEE_UI_PRESET:
+            raise ValueError
+        raw = {"coffee_summary": dict(COFFEE_SELECTORS), "read_paths": raw.get("read_paths", [])}
     if type(raw) is not dict or set(raw) - {"density", "theme", "coffee_summary", "read_paths"}:
         raise ValueError
     parsed = dict(raw)

@@ -8,6 +8,8 @@ import pytest
 
 from yleum_api.services import max_behavior_browser as browser
 from yleum_api.services import max_behavior_proof as b
+from yleum_api.services.behavior_driver_configuration import _adapter
+from yleum_api.services.max_behavior_ui_contract import COFFEE_UI_PRESET
 
 from .behavior_browser_fixture import installed_chromium
 from .test_max_behavior_browser import local_fixture as local_fixture
@@ -16,9 +18,11 @@ from .test_max_behavior_proof import coordinator_harness
 REQUEST = "Добавь кнопку «Проверить заявку»: клиентское резюме без отправки."
 HTML = """<!doctype html><html><head><meta charset="UTF-8">
 <link rel="stylesheet" href="/_next/static/css/a.css"></head>
-<body><form id="request"><input type="text" id="input" value="synthetic existing">
-<button type="button" id="check">Проверить заявку</button></form>
-<section id="summary"></section>
+<body><form id="request" data-omnia-behavior="coffee-request-form">
+<input type="text" id="input" data-omnia-behavior="coffee-request-text" value="synthetic existing">
+<button type="button" id="check" data-omnia-behavior="coffee-summary-button">
+Проверить заявку</button></form>
+<section id="summary" data-omnia-behavior="coffee-request-summary"></section>
 <script src="/_next/static/chunks/a.js"></script></body></html>""".encode()
 
 CSS = b"button,input{min-width:44px;min-height:44px}body{margin:12px}#summary{min-height:44px}"
@@ -68,9 +72,7 @@ def register(server, mutation):
 
     return browser.make_private_browser_driver(
         executable_path=installed_chromium(),
-        adapter=browser.PlatformBrowserAdapter(
-            coffee_summary=browser.CoffeeSummaryAdapter("#check", "#request", "#input", "#summary")
-        ),
+        adapter=_adapter({"preset": COFFEE_UI_PRESET}),
         resolve_candidate_compilation=resolver,
         launch_args=("--no-sandbox",),
     )

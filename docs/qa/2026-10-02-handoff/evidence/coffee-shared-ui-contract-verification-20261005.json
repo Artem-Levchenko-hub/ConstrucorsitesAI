@@ -1,0 +1,63 @@
+{
+  "base": "9d7b28e47d1bd9e17f43263a9e96b05aa16baaeb",
+  "source_freeze_sha256": "fec474eb984bbe2e7915e93a0c252feefbc1b7e1b0e98ef3e630394921a25f9f",
+  "patch_sha256": "8cfe1abb46e6956af5407f3f1f3762003b417a97bfc593ad5804e32b29794d55",
+  "files": [
+    {
+      "path": "apps/api/src/yleum_api/services/max_behavior_ui_contract.py",
+      "before_sha256": null,
+      "after_sha256": "4892930f3658b94555334a73acc6f1ac2f0423d351ee7b35c8b949214247ffd6",
+      "bytes": 2323
+    },
+    {
+      "path": "apps/api/src/yleum_api/services/behavior_driver_configuration.py",
+      "before_sha256": "cdf59b9275f1061fa6c5593f142516f8ab55ebe59605346de4e49f499797fd68",
+      "after_sha256": "213468d55505d6f26e1805d9808d74c329cb5bdcd79da99410f95a17ad4b10c3",
+      "bytes": 8145
+    },
+    {
+      "path": "apps/api/src/yleum_api/services/generation/agent_prompt.py",
+      "before_sha256": "88965927adadf698a10711a4bce76449ba7de82b84e3700b456d1f2e631644d6",
+      "after_sha256": "85dbe9e6765234e92c5f46fd82ab307bf30902d725990ac1008928e982881959",
+      "bytes": 11814
+    },
+    {
+      "path": "apps/api/src/yleum_api/services/max_generation_contract.py",
+      "before_sha256": "248b7defc732c42c82c0c9db45db0fab3ca66d659012a6146a9d8b5cbd113679",
+      "after_sha256": "4d1bb135bc34addde220d0b71d09f243fa6b294a018516b7bb304435f60c2468",
+      "bytes": 25137
+    },
+    {
+      "path": "apps/api/tests/test_coffee_ui_contract.py",
+      "before_sha256": null,
+      "after_sha256": "42ef3fc83f516e00520627b93b8cc905f4ee4979e8ec2427c0be832847cfd7c1",
+      "bytes": 8828
+    },
+    {
+      "path": "apps/api/tests/test_coffee_local_summary_behavior.py",
+      "before_sha256": "79f5a7005b7844a5011500f5188cfa33204a64b3fcc3da19ebdb9b5f13d268d7",
+      "after_sha256": "0917facbbf9c25b4df428e900291b513c37dbd96a6c72825bff72aca7b9786f8",
+      "bytes": 7028
+    },
+    {
+      "path": "apps/api/tests/test_actual_next_behavior_driver.py",
+      "before_sha256": "46a408683e1f74787c96ae694b35af2952975fa46fa9e961d52dc56d60c26955",
+      "after_sha256": "75fee9206cc5ee5214d1c3b18da681c5d735d91f95bb38e79c3db51d03986228",
+      "bytes": 9249
+    }
+  ],
+  "independent_review_sha256": "460fa910d073977c9a2c5bc40d9a2c0fec5374dfbd6e1c0569182428d9e3b546",
+  "root_merged_verification": {
+    "related_tests": 282,
+    "local_browser_and_actual_next": 17,
+    "log_sha256": "d2ffdf76984d3849855c8fb8877f2dc05b417ba4bb5495fe161ef13bb2bc5e2c",
+    "ruff_changed7": "PASS",
+    "mypy_changed4": "PASS"
+  },
+  "preserved_preconditions": "First Root run 282 PASS,16 browser PASS,1 fixture parent directory setup error; only own missing parent created, same test rerun.",
+  "production_activation": "NOT_RUN",
+  "actual_core_browser_acceptance": "NOT_RUN",
+  "customer_feature_acceptance": "NOT_RUN",
+  "density_theme": "UNSUPPORTED_BY_COFFEE_PRESET",
+  "provider_model_calls": 0
+}
