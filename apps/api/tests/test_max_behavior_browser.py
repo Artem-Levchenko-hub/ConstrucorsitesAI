@@ -12,9 +12,8 @@ import pytest
 from yleum_api.services import max_behavior_browser as browser
 from yleum_api.services import max_behavior_proof as b
 
+from .behavior_browser_fixture import installed_chromium
 from .test_max_behavior_proof import REQUEST, THEME, binding, coordinator_harness
-
-CHROME = "/workspace/qa-tools/playwright/chromium-1234/chrome-linux64/chrome"
 
 
 def adapter():
@@ -136,7 +135,7 @@ def registered(server, mutation="", *, invalid_asset=False, unsupported=False):
         )
 
     return browser.make_private_browser_driver(
-        executable_path=CHROME,
+        executable_path=installed_chromium(),
         adapter=browser.PlatformBrowserAdapter() if unsupported else adapter(),
         resolve_candidate_compilation=resolver,
         launch_args=("--no-sandbox",),

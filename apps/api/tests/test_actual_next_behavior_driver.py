@@ -33,10 +33,10 @@ from yleum_api.services.orchestrator_client import (
 )
 from yleum_api.services.project_cell_proofs import ProofIdentity
 
+from .behavior_browser_fixture import installed_chromium
 from .test_max_behavior_proof import binding
 
 CACHE = os.environ.get("NEXT_BEHAVIOR_TEST_MODULES", "")
-CHROME = "/workspace/qa-tools/playwright/chromium-1234/chrome-linux64/chrome"
 REQUEST = "Добавь кнопку «Проверить заявку» для резюме без отправки данных."
 
 
@@ -161,8 +161,8 @@ onClick={()=>setSummary('Summary '+name)}>Проверить заявку</butto
         ),
     )
     config = NS(
-        max_behavior_browser_executable=CHROME,
-        max_behavior_browser_sha256=hashlib.sha256(Path(CHROME).read_bytes()).hexdigest(),
+        max_behavior_browser_executable=installed_chromium(),
+        max_behavior_browser_sha256=hashlib.sha256(Path(installed_chromium()).read_bytes()).hexdigest(),
         max_behavior_adapter_registry=json.dumps(
             {
                 "max-miniapp-nextjs": {

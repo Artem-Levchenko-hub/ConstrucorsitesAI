@@ -1,0 +1,70 @@
+{
+  "base_commit": "528f19c87ce19ca0e77a841ce7dce9adc96887c1",
+  "bounded_changes": [
+    "Historical fixture normalization verifies exact approved platform bytes; original frozen goldens retained",
+    "Durable runtime receipt protocol represented in test doubles; product source guard unchanged",
+    "CI installs locked Playwright and disposable PostgreSQL; isolated nonce DB cleanup guarded",
+    "Uncached default browser discovery occurs outside asyncio; no fallback or skip",
+    "Exact observed Certbot IPv6 TLS listener accepted; other unexpected listener directives still denied"
+  ],
+  "customer_runtime_mutations": 0,
+  "failed_ci_run_preserved": 37251012010,
+  "held_browser_v1_preserved": "Uncached default Playwright Sync API in asyncio discovered and fixed in v2 with regression",
+  "not_proven": [
+    "Exact successor CI",
+    "Production delivery",
+    "Customer DOM/reload feature fulfillment",
+    "Coffee Commerce retained backup",
+    "MinIO live perimeter",
+    "Signed MAX U/V and provider E2E"
+  ],
+  "phase": "ROOT_MERGED_LOCAL_VERIFIED_PENDING_EXACT_CI",
+  "prior_root_api_failure_preserved": "193 pass/1 fail: test LLM_GATEWAY_URL differs from original localhost8001 expectation; environment corrected only",
+  "prior_unmodified_source_hashes_preserved": true,
+  "production_commit": "d9e4957c81424dbcd3b2ecbf19bce0ba9a692174",
+  "provider_model_actions": 0,
+  "publication_actions": 0,
+  "references_sha256": {
+    "browser_native_v2_freeze": "845688426f20ce13be5e1b17c79a7e1c6f6300ddf066b99ac863a6a3ac5a939d",
+    "browser_native_v2_review": "a8b49f831468e5ffdebdcf3ff2877fc311a4cdda673d8a14d2e5283f1f6e7e78",
+    "golden_fixture_freeze": "50e39fa0d55177b2941379d1524901ce02320df024b82e4e06863d5c37ac9da3",
+    "pg_ci_fixture_freeze": "24e8f068cd226a9257938afd3a685ad9f66c2a451e4c784e8303cbc8ff990943",
+    "root_api_log": "a98b7413928e39e32afef4c0e3b4597ad54c83bddbe5591776eaf72f96fa1167",
+    "root_api_result": "626131adcfc542dc08777dfdb15bf0674f3e8cde1a95abb82007f3aaf9b08627",
+    "root_orchestrator_log": "e9529c1dbb3349e94017b8b02a3d8d39a74a364f064ec8bcdffbc5c8430327a6",
+    "root_tls_format": "b0cf1df99a7d6ba8a931d6c194ea3dd50f866a9b86844851fc5a3eaf9300edfb",
+    "tls_freeze": "7f35d6217b38ff9de8a8904b0213ef961b93b57f62b19c1ca8d5791a2a19dfc9",
+    "tls_review": "013786ee2d35929f68168a227936bff37b8aa514073da17ee0c61da7c887b16c"
+  },
+  "root_checks": {
+    "api_selected_passed": 194,
+    "counts_are_overlapping_not_unique": true,
+    "git_diff_check_exit": 0,
+    "orchestrator_selected_passed": 26,
+    "ruff_changed_python_files": 14,
+    "ruff_exit": 0,
+    "tls_selected_passed": 101
+  },
+  "source_hashes": {
+    ".github/workflows/ci.yml": "68e7e242b83ae42ba076bd5758be72e75a6e5d61154024d93fdee9bd8609cdae",
+    "apps/api/tests/behavior_browser_fixture.py": "82615be97e753f7045cbee0e21292792c05597ae24bb12260629595b5c891cc6",
+    "apps/api/tests/fixtures/max_config_render_legacy_client.json": "e7046272407c69697235bc8a4d7ef3f2fb51cb4c16a40dd39dea404121575de0",
+    "apps/api/tests/test_actual_next_behavior_driver.py": "46a408683e1f74787c96ae694b35af2952975fa46fa9e961d52dc56d60c26955",
+    "apps/api/tests/test_agent_native.py": "9d49d22b9e9ebd27124754e15e4b4d89978146aa81e0b893fa52fe65ab9108ea",
+    "apps/api/tests/test_agent_pipeline_terminal.py": "39a87b0396e1024d1f5686994341228958317f924be977d3a9f714198ccde4ca",
+    "apps/api/tests/test_behavior_browser_fixture.py": "6520734436b6db5965a8965826b8017884310d1e0a05ed82356af57d420fcbf7",
+    "apps/api/tests/test_behavior_browser_watchdog.py": "88f9a0db587734b6905a29bdd00d747eda55916b74fa9daf90f59c3ae064a2f1",
+    "apps/api/tests/test_coffee_local_summary_behavior.py": "79f5a7005b7844a5011500f5188cfa33204a64b3fcc3da19ebdb9b5f13d268d7",
+    "apps/api/tests/test_max_behavior_browser.py": "64af0185776b769f279e2521b79e9466c3c9b134d5ce4bdd3c116278f7b40435",
+    "apps/api/tests/test_max_config_render_contract.py": "d863245e54d8097775a9cf91e624b70e4bffcac042a1aa15725701f98b82bf8b",
+    "apps/api/tests/test_public_minio_read_boundary.py": "f577051b917debff5dc9948e24495e4bca578c4d0b31535c3ccdffde96c15a62",
+    "apps/orchestrator/tests/fixtures/max_template_action_write_overrides.json": "8d62a620f1b65e832ae6b0645baa5742801dfb6b27b081ec7cb02c350e43e96b",
+    "apps/orchestrator/tests/fixtures/shared_public_readme_overrides.json": "69f96272a64ca921b5e9e207d7beb795ccfc354d85b65a24c5f6798ae68f9a6e",
+    "apps/orchestrator/tests/test_machine_workspace_dispatch.py": "525cc264519e8fd7402f83ea90d93c28e31240ff848a30c8b3fedf8aa5b0d93c",
+    "apps/orchestrator/tests/test_publication_additive_resolver_postgres.py": "fcfad9055769fa33eafcdbf5b86ebdc3b7985e31d9bf54f75f40b5dac4802306",
+    "apps/orchestrator/tests/test_template_materialization.py": "b536876c447ecd9295c16e34a20261aa241468358a29448320e7be3da25599a3",
+    "infra/security/prepare-minio-public-boundary.py": "781f9a8220def1b4180a8a3f51bca5bb4851d217c91cdf4a26ea0262a11d02c9"
+  },
+  "test_browser": "Explicit hash-pinned local Chromium1234; CI default must use locked registry1223",
+  "unchanged_prior_source_files": 42
+}

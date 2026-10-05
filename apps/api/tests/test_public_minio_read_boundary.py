@@ -467,9 +467,7 @@ def test_empty_argument_support_keeps_unknown_quote_and_escape_shapes_denied(tok
         helper().parse(f"proxy_set_header Header {token};")
 
 
-@pytest.mark.parametrize(
-    "source", ['"";', "'';", 'server { location /minio/ { proxy_pass ""; } }']
-)
+@pytest.mark.parametrize("source", ['"";', "'';", 'server { location /minio/ { proxy_pass ""; } }'])
 def test_empty_directive_or_empty_destination_never_produces_candidate(source):
     with pytest.raises(ValueError):
         helper().prepare(source)
@@ -498,3 +496,40 @@ def test_empty_argument_does_not_allow_unknown_header_inside_minio_boundary():
     )
     with pytest.raises(ValueError, match="public_minio_body_shape_changed"):
         helper().prepare(source)
+
+
+@pytest.mark.parametrize(
+    "tls",
+    [
+        "listen [::]:443 ssl ipv6only=on;\n    listen 443 ssl;",
+        "listen 443 ssl;\n    listen [::]:443 ssl ipv6only=on;",
+    ],
+)
+def test_actual_certbot_ipv6_only_on_tls_candidate_keeps_ssl_and_routes(tls):
+    source = VHOST.replace("listen 443 ssl;", tls)
+    candidate = helper().prepare(source)
+    assert "listen [::]:443 ssl ipv6only=on;" in candidate
+    assert "listen 443 ssl;" in candidate
+    assert "proxy_pass http://127.0.0.1:9000/;" in candidate
+    assert "proxy_pass http://127.0.0.1:8200;" in candidate
+    assert candidate.count("location ^~ /minio/ {") == 1
+    assert helper().prepare(candidate) == candidate
+
+
+@pytest.mark.parametrize(
+    "listener",
+    [
+        "listen [::]:443 ipv6only=on;",
+        "listen 443 ssl ipv6only=on;",
+        "listen [::]:443 ssl ipv6only=off;",
+        "listen [::]:443 ssl ipv6only=on default_server;",
+        "listen [::]:443 ssl default_server;",
+        "listen [::]:443 ssl ipv6only=on http2;",
+        "listen [::]:443 ssl reuseport;",
+        "listen [::]:80 ipv6only=on;",
+        "listen [::]:444 ssl ipv6only=on;",
+    ],
+)
+def test_certbot_ipv6_exception_never_allows_other_listener_or_missing_tls(listener):
+    with pytest.raises(ValueError):
+        helper().prepare(VHOST.replace("listen 443 ssl;", listener))

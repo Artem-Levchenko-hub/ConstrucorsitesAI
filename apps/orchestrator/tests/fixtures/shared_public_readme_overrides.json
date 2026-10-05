@@ -10,5 +10,10 @@
     "git_blob": "28a3019f839e689be663f8a8b463326971f21e82",
     "bytes": 9973,
     "sha256": "0f41d59c1e2cbfa0b804a4c40cdb01dd5f5d5e083a303aaae840fe1b995643e3"
+  },
+  "max-miniapp-nextjs/README.md": {
+    "mode": "100644",
+    "bytes": 2288,
+    "sha256": "d8b54b419b6356b7fbc9dcd185a31a368d6d0dbe134cefa5cefc855840f56f97"
   }
 }

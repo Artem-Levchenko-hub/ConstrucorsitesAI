@@ -77,6 +77,31 @@ _LEGACY_ANALYTICS_HASHES = {
 }
 
 
+def _normalize_reviewed_client(files):
+    """Pin the new managed client, then keep every historical render golden exact."""
+    path = "src/lib/omnia/client.ts"
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    overrides = json.loads(
+        (fixtures / "max_template_action_write_overrides.json").read_text(encoding="utf-8")
+    )
+    assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_legacy_client.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(legacy) == {"revision", "path", "sha256", "source"}
+    assert legacy["revision"] == "d9e4957c81424dbcd3b2ecbf19bce0ba9a692174"
+    assert legacy["path"] == path
+    assert legacy["sha256"] == (
+        "b693c0330619fea290dce6dfb82e7e6b0bc36f8ed63460903ecb483f07d1697a"
+    )
+    assert hashlib.sha256(legacy["source"].encode()).hexdigest() == legacy["sha256"], path
+    normalized = dict(files)
+    normalized[path] = legacy["source"]
+    return normalized
+
+
 def _normalize_analytics(files):
     fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
     overrides = json.loads(
@@ -170,7 +195,9 @@ def _assert_render_golden(files, expected):
     overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
     # Project only these two verified dependency blobs back to the old baseline;
     # all other rendered bytes must still match the unchanged original golden.
-    original_dependencies = _normalize_preview_renewal(_normalize_analytics(files))
+    original_dependencies = _normalize_preview_renewal(
+        _normalize_analytics(_normalize_reviewed_client(files))
+    )
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
         assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
         baseline = legacy["files"][path]
@@ -476,6 +503,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
 @pytest.mark.parametrize(
     "changed",
     [
+        "src/lib/omnia/client.ts",
         "src/lib/max/session.ts",
         "package.json",
         "pnpm-lock.yaml",

@@ -74,6 +74,7 @@ assert set(ANALYTICS_OVERRIDES) == {
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
+    "max-miniapp-nextjs/README.md",
     "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts",
     "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
 }

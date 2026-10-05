@@ -9,7 +9,7 @@ import pytest
 from yleum_api.services import max_behavior_browser as browser
 from yleum_api.services import max_behavior_proof as b
 
-from .test_max_behavior_browser import CHROME
+from .behavior_browser_fixture import installed_chromium
 from .test_max_behavior_browser import local_fixture as local_fixture
 from .test_max_behavior_proof import coordinator_harness
 
@@ -67,7 +67,7 @@ def register(server, mutation):
         )
 
     return browser.make_private_browser_driver(
-        executable_path=CHROME,
+        executable_path=installed_chromium(),
         adapter=browser.PlatformBrowserAdapter(
             coffee_summary=browser.CoffeeSummaryAdapter("#check", "#request", "#input", "#summary")
         ),

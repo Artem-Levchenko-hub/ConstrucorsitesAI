@@ -3,8 +3,11 @@
 import hashlib
 import json
 import os
+import re
+from contextlib import asynccontextmanager
 from dataclasses import replace
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
+from uuid import uuid4
 
 import asyncpg
 import pytest
@@ -20,6 +23,186 @@ from yleum_orchestrator.services.publication_additive_resolver import (
 )
 
 from .test_publication_additive_resolver import binding
+
+
+def additive_admin_dsn(value):
+    url = urlsplit(value)
+    assert url.scheme in {"postgres", "postgresql"}
+    assert url.hostname in {"127.0.0.1", "localhost"} and url.port == 55432
+    assert url.path == "/postgres" and not url.query and not url.fragment
+    return url
+
+
+async def drop_owned_database(admin, name, marker, oid=None, creation_pending=False):
+    # Never terminate another session or use DROP DATABASE FORCE.
+    assert re.fullmatch(r"qa_pub_additive_[0-9a-f]{32}", name)
+    assert marker == "owned-additive-ci:" + name
+    row = await admin.fetchrow(
+        "SELECT oid, pg_catalog.shobj_description(oid,'pg_database') AS marker, "
+        "datdba=(SELECT oid FROM pg_catalog.pg_roles WHERE rolname=current_user) AS own "
+        "FROM pg_catalog.pg_database WHERE datname=$1",
+        name,
+    )
+    if row is None:
+        return
+    assert row["own"]
+    assert oid is None or row["oid"] == oid
+    assert row["marker"] == marker or (creation_pending and row["marker"] is None)
+    assert (
+        await admin.fetchval(
+            "SELECT count(*) FROM pg_catalog.pg_stat_activity WHERE datname=$1", name
+        )
+        == 0
+    )
+    await admin.execute('DROP DATABASE "' + name + '"')
+    assert not await admin.fetchval(
+        "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)", name
+    )
+
+
+@asynccontextmanager
+async def owned_additive_database(admin_dsn):
+    # CI supplies only the job-owned PG16 administrator. Each test owns a new DB.
+    url = additive_admin_dsn(admin_dsn)
+    admin = await asyncpg.connect(urlunsplit(url), timeout=5, command_timeout=8)
+    name = "qa_pub_additive_" + uuid4().hex
+    marker = "owned-additive-ci:" + name
+    creation_pending = False
+    oid = None
+    try:
+        assert 160000 <= int(await admin.fetchval("SHOW server_version_num")) < 170000
+        assert not await admin.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)", name
+        )
+        # Record intent before submission: a timeout can occur after daemon commit.
+        creation_pending = True
+        await admin.execute('CREATE DATABASE "' + name + '"')
+        oid = await admin.fetchval("SELECT oid FROM pg_catalog.pg_database WHERE datname=$1", name)
+        # Both values consist solely of fixed literals and the local UUID nonce.
+        await admin.execute('COMMENT ON DATABASE "' + name + "\" IS '" + marker + "'")
+        yield urlunsplit(url._replace(path="/" + name))
+    finally:
+        try:
+            if creation_pending:
+                await drop_owned_database(admin, name, marker, oid, creation_pending=True)
+        finally:
+            await admin.close()
+
+
+@pytest.fixture
+async def additive_database_url():
+    async with owned_additive_database(os.environ["QA_ADDITIVE_POSTGRES_ADMIN_URL"]) as dsn:
+        yield dsn
+
+
+@pytest.mark.parametrize(
+    "dsn",
+    [
+        "postgresql://test@example.com:55432/postgres",
+        "postgresql://test@127.0.0.1:5432/postgres",
+        "postgresql://test@127.0.0.1:55432/customer",
+        "postgresql://test@127.0.0.1:55432/postgres?options=anything",
+        "postgresql://test@127.0.0.1:55432/postgres#anything",
+        "http://test@127.0.0.1:55432/postgres",
+    ],
+)
+def test_additive_fixture_rejects_non_disposable_admin_address(dsn):
+    with pytest.raises(AssertionError):
+        additive_admin_dsn(dsn)
+
+
+@pytest.mark.asyncio
+async def test_owned_fixture_removes_database_after_body_failure():
+    admin_dsn = os.environ["QA_ADDITIVE_POSTGRES_ADMIN_URL"]
+    name = None
+    with pytest.raises(RuntimeError, match="owned_fixture_failure"):
+        async with owned_additive_database(admin_dsn) as dsn:
+            name = urlsplit(dsn).path[1:]
+            conn = await asyncpg.connect(dsn, timeout=5, command_timeout=8)
+            try:
+                await conn.execute("CREATE TABLE public.owned_failure(id int PRIMARY KEY)")
+                await conn.execute("INSERT INTO public.owned_failure VALUES(1)")
+            finally:
+                await conn.close()
+            raise RuntimeError("owned_fixture_failure")
+    admin = await asyncpg.connect(admin_dsn, timeout=5, command_timeout=8)
+    try:
+        assert name is not None
+        assert not await admin.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)", name
+        )
+    finally:
+        await admin.close()
+
+
+@pytest.mark.asyncio
+async def test_committed_create_timeout_reconciles_without_second_create(monkeypatch):
+    admin_dsn = os.environ["QA_ADDITIVE_POSTGRES_ADMIN_URL"]
+    connect = asyncpg.connect
+    names = []
+
+    class LostCreateReply:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def __getattr__(self, key):
+            return getattr(self.connection, key)
+
+        async def execute(self, statement, *args):
+            result = await self.connection.execute(statement, *args)
+            if statement.startswith('CREATE DATABASE "'):
+                names.append(statement.split('"')[1])
+                raise TimeoutError("synthetic_reply_lost_after_real_create")
+            return result
+
+    async def connect_with_lost_reply(*args, **kwargs):
+        return LostCreateReply(await connect(*args, **kwargs))
+
+    with monkeypatch.context() as patch:
+        patch.setattr(asyncpg, "connect", connect_with_lost_reply)
+        with pytest.raises(TimeoutError, match="synthetic_reply_lost_after_real_create"):
+            async with owned_additive_database(admin_dsn):
+                pytest.fail("unacknowledged CREATE must not reach test body")
+    assert len(names) == 1
+    admin = await connect(admin_dsn, timeout=5, command_timeout=8)
+    try:
+        assert not await admin.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)", names[0]
+        )
+    finally:
+        await admin.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("guard", ["foreign_marker", "changed_oid", "active_connection"])
+async def test_cleanup_refuses_foreign_identity_or_active_database(guard):
+    admin_dsn = os.environ["QA_ADDITIVE_POSTGRES_ADMIN_URL"]
+    async with owned_additive_database(admin_dsn) as dsn:
+        name = urlsplit(dsn).path[1:]
+        marker = "owned-additive-ci:" + name
+        admin = await asyncpg.connect(admin_dsn, timeout=5, command_timeout=8)
+        active = None
+        try:
+            oid = await admin.fetchval(
+                "SELECT oid FROM pg_catalog.pg_database WHERE datname=$1", name
+            )
+            if guard == "foreign_marker":
+                await admin.execute('COMMENT ON DATABASE "' + name + "\" IS 'foreign-marker'")
+            elif guard == "changed_oid":
+                oid += 1
+            else:
+                active = await asyncpg.connect(dsn, timeout=5, command_timeout=8)
+            with pytest.raises(AssertionError):
+                await drop_owned_database(admin, name, marker, oid)
+            assert await admin.fetchval(
+                "SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_database WHERE datname=$1)", name
+            )
+        finally:
+            if active is not None:
+                await active.close()
+            if guard == "foreign_marker":
+                await admin.execute('COMMENT ON DATABASE "' + name + "\" IS '" + marker + "'")
+            await admin.close()
 
 
 def digest(value):
@@ -106,8 +289,10 @@ async def catalog(conn):
 
 
 @pytest.mark.asyncio
-async def test_real_pg_nullable_addition_preserves_nine_rows_and_blocks_stale_replay():
-    dsn = os.environ["QA_ADDITIVE_DB_URL"]
+async def test_real_pg_nullable_addition_preserves_nine_rows_and_blocks_stale_replay(
+    additive_database_url,
+):
+    dsn = additive_database_url
     u = urlsplit(dsn)
     assert u.hostname in {"127.0.0.1", "localhost"} and u.port == 55432
     assert u.path.startswith("/qa_pub_additive_")
@@ -189,8 +374,8 @@ async def test_real_pg_nullable_addition_preserves_nine_rows_and_blocks_stale_re
 @pytest.mark.parametrize(
     "case", ["existing_varchar", "existing_numeric", "new_varchar", "new_numeric"]
 )
-async def test_physical_type_modifiers_never_authorize_additive_plan(case):
-    dsn = os.environ["QA_ADDITIVE_DB_URL"]
+async def test_physical_type_modifiers_never_authorize_additive_plan(case, additive_database_url):
+    dsn = additive_database_url
     u = urlsplit(dsn)
     assert u.hostname in {"127.0.0.1", "localhost"} and u.port == 55432
     assert u.path.startswith("/qa_pub_additive_")

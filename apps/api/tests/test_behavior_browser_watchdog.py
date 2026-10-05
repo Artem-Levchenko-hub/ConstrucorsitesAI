@@ -12,7 +12,9 @@ import pytest
 from yleum_api.services import max_behavior_browser as browser
 from yleum_api.services import max_behavior_proof as b
 
-from .test_max_behavior_browser import CHROME, adapter, fixture_files
+from .behavior_browser_fixture import installed_chromium
+from .test_behavior_browser_fixture import registry as registry
+from .test_max_behavior_browser import adapter, fixture_files
 from .test_max_behavior_browser import local_fixture as local_fixture
 from .test_max_behavior_proof import binding, contract
 
@@ -42,7 +44,7 @@ def watched(server, mutation, *, seconds=3):
         return witness
 
     registered = browser.make_private_browser_driver(
-        executable_path=CHROME,
+        executable_path=installed_chromium(),
         adapter=adapter(),
         launch_args=("--no-sandbox",),
         resolve_candidate_compilation=resolver,
@@ -168,7 +170,11 @@ def test_actual_guardian_pre_payload_stdin_has_its_own_deadline():
 
 
 @pytest.mark.parametrize("stuck", ["postkill-reap", "final-pipe"])
-def test_unconfirmed_fake_transport_cleanup_is_bounded_and_never_pass(stuck, monkeypatch):
+def test_unconfirmed_fake_transport_cleanup_is_bounded_and_never_pass(
+    stuck, monkeypatch, registry
+):
+    executable_path = installed_chromium()
+
     class Pipe:
         closing = False
 
@@ -230,7 +236,7 @@ def test_unconfirmed_fake_transport_cleanup_is_bounded_and_never_pass(stuck, mon
                 request,
                 witness,
                 True,
-                executable_path=CHROME,
+                executable_path=executable_path,
                 launch_args=(),
                 adapter=adapter(),
                 timeout_seconds=35,

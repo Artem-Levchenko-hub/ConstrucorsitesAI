@@ -258,7 +258,11 @@ def is_tls(server: Node) -> bool:
         if len(words) < 2 or words[1] not in {"80", "[::]:80", "443", "[::]:443"}:
             raise ValueError("unreviewed_platform_listener")
         if words[1] in {"443", "[::]:443"} and (
-            "ssl" not in words[2:] or set(words[2:]) - {"ssl", "http2"}
+            "ssl" not in words[2:]
+            or (
+                set(words[2:]) - {"ssl", "http2"}
+                and words != ("listen", "[::]:443", "ssl", "ipv6only=on")
+            )
         ):
             raise ValueError("platform_tls_listener_missing")
         if words[1] in {"80", "[::]:80"} and len(words) != 2:

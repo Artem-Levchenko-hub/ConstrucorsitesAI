@@ -1530,6 +1530,8 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
 
     async def call(client, url, convo, system, **kwargs):
         nonlocal calls, feedback
+        if coordinated:
+            assert request_locks == [ids.run_id]
         calls += 1
         feedback = feedback or "EDIT SOURCE CHANGE REQUIRED" in str(convo)
         names = {tool["name"] for tool in kwargs.get("tools") or agent_native._TOOLS}
@@ -1581,19 +1583,57 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
     prompt = (
         "В текущем приложении устаревшая история. Устрани вкладку История. SQL и auth не меняй."
     )
+    # The coordinator's durable request identity is a real input of this turn.
+    # Keep the actual freeze hook: this fixture supplies its narrow session/run
+    # interface rather than replacing request-integrity validation.
+    import hashlib
+
+    from yleum_api.models.generation_run import GenerationRun
+
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    run_row = GenerationRun(
+        id=ids.run_id, project_id=ids.project_id, user_id=ids.user_id,
+        user_message_id=ids.user_message_id,
+        prompt_hash=hashlib.sha256(prompt.encode()).hexdigest(),
+        status="running", agent_state={},
+    )
+    request_locks = []
+
+    class RequestSession:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def get(self, *_args):
+            pytest.fail("matching durable request hash must not require message recovery")
+
+        async def commit(self):
+            pytest.fail("this ordinary contextual edit has no named behavior contract")
+
+    async def locked_run(session):
+        assert isinstance(session, RequestSession)
+        request_locks.append(run_row.id)
+        return run_row
+
+    coordinator = SimpleNamespace(
+        source_edit_deadline=deadline, session_factory=RequestSession, _locked_run=locked_run,
+        project_id=ids.project_id, generation_run_id=ids.run_id,
+    ) if coordinated else None
 
     async def run():
         return await agent_generation.execute_agent_turn(
             _agent_res=None, _is_edit=True, _max_has_generated_snapshot=True,
             _max_seed_files={}, _max_shell_enabled=True,
             baseline=SourceBaseline(uuid4(), "baseline", initial),
-            ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+            ids=ids, is_free=False,
             project_info=SimpleNamespace(template="max_miniapp"), prompt_text=prompt,
             runtime=SimpleNamespace(
                 handle=SimpleNamespace(
                     is_portable=lambda: True, export_files=export, snapshot_files=export,
                 ),
-                coordinator=SimpleNamespace(source_edit_deadline=deadline) if coordinated else None,
+                coordinator=coordinator,
             ),
             plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=24),
             operations=SimpleNamespace(execute=execute, emit=None),

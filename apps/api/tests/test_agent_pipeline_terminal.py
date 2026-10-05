@@ -59,7 +59,7 @@ async def test_first_max_output_limit_reaches_safe_core_restoration():
         is_free=False,
         project_info=None,
         prompt_text="",
-        runtime=SimpleNamespace(handle=None),
+        runtime=GenerationRuntime(),
         plan=None,
         operations=None,
     )

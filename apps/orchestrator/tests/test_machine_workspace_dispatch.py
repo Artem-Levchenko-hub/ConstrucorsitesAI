@@ -223,11 +223,17 @@ async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
             super().__init__()
             self.started = asyncio.Event()
             self.release_command = asyncio.Event()
+            self.compilation_receipt_requests = []
 
         async def execute(self, state, manifest, request):
             self.started.set()
             await self.release_command.wait()
             return DockerCommandResult(exit_code=0, output="done", timed_out=False)
+
+        def compilation_receipt(self, state, operation_id):
+            assert state.workspace_id == workspace_id
+            self.compilation_receipt_requests.append(operation_id)
+            return None  # Journal-readability fixture has no compiled asset proof.
 
         def migration_receipt(self, state, operation_id):
             return None  # This test exercises journal readability, not database execution.
@@ -272,6 +278,8 @@ async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
         runtime.release_command.set()
         response = await command
         assert response.status_code == 200, response.text
+        assert response.json()["compiled_asset_receipt"] is None
+        assert runtime.compilation_receipt_requests == [operation_id]
 
 
 @pytest.mark.usefixtures("_internal_settings")
