@@ -611,10 +611,18 @@ async def test_chat_and_stream_missing_run_id_bind_real_owner_message_without_ea
             "id": "qa-chat-" + str(r),
             "model": model,
             "choices": [],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "2"},
         }
 
     async def fake_stream(*args, **kwargs):
+        kwargs["receipt"].update(
+            {
+                "id": "qa-stream-" + str(r),
+                "model": model,
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "3"},
+                "complete": True,
+            }
+        )
         yield "synthetic", model
 
     monkeypatch.setattr(chat.router_module, "acompletion", fake_provider)
@@ -623,10 +631,6 @@ async def test_chat_and_stream_missing_run_id_bind_real_owner_message_without_ea
     monkeypatch.setattr(chat.cache, "set", AsyncMock())
     monkeypatch.setattr(chat.file_logger, "log_request", lambda *args: None)
     monkeypatch.setattr(streaming.file_logger, "log_request", lambda *args: None)
-    monkeypatch.setattr(chat, "calculate_cost_rub", lambda *args, **kwargs: Decimal("2"))
-    monkeypatch.setattr(streaming, "calculate_cost_rub", lambda *args, **kwargs: Decimal("3"))
-    monkeypatch.setattr(streaming, "count_message_tokens", lambda *args: 2)
-    monkeypatch.setattr(streaming, "count_text_tokens", lambda *args: 1)
     # Real HTTP handlers + real billing/pool; only provider/cache/files stubbed.
     app = FastAPI()
     app.include_router(chat.router)
@@ -793,10 +797,18 @@ async def test_api_llm_client_paid_run_and_platform_preliminary_attribution(
             "id": "client-" + str(len(seen)) + "-" + str(r),
             "model": model,
             "choices": [{"message": {"content": "synthetic"}}],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 1},
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "2"},
         }
 
     async def provider_stream(*args, **kwargs):
+        kwargs["receipt"].update(
+            {
+                "id": "client-stream-" + str(r),
+                "model": model,
+                "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "3"},
+                "complete": True,
+            }
+        )
         yield "synthetic", model
 
     monkeypatch.setattr(chat.router_module, "acompletion", provider)
@@ -804,7 +816,6 @@ async def test_api_llm_client_paid_run_and_platform_preliminary_attribution(
     monkeypatch.setattr(chat.cache, "get", AsyncMock(return_value=None))
     monkeypatch.setattr(chat.cache, "set", AsyncMock())
     monkeypatch.setattr(chat.file_logger, "log_request", lambda *args: None)
-    monkeypatch.setattr(chat, "calculate_cost_rub", lambda *args, **kwargs: Decimal("2"))
     app = FastAPI()
     app.include_router(chat.router)
     original = httpx.AsyncClient
