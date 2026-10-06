@@ -113,3 +113,80 @@ async def test_acompletion_missing_key_raises() -> None:
     # conftest clears LLMGW_API_KEY → _key_and_url raises UpstreamProviderError.
     with pytest.raises(UpstreamProviderError):
         await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+
+
+@pytest.mark.parametrize("money", ["valid", "invalid"])
+@pytest.mark.parametrize("failure", ["unknown_model", "malformed_choices"])
+async def test_failed_adapter_preserves_safe_reported_receipt(monkeypatch, money, failure):
+    from yleum_gateway.core.config import reset_settings_cache
+
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+    data = {
+        "id": "completion-id", "model": "unknown/provider-model",
+        "choices": [{"message": {"content": "private answer"}}],
+        "usage": {"prompt_tokens": 100, "completion_tokens": 10,
+                  "cost_rub": "2.50" if money == "valid" else "NaN",
+                  "cost_usd": ".025" if money == "valid" else {"private": "data"}},
+    }
+    if failure == "malformed_choices":
+        data["choices"] = []
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(
+        lambda request: httpx.Response(200, json=data, headers={"x-llmgw-request-id": "canonical-id"}),
+    ))
+    with pytest.raises(UpstreamProviderError) as raised:
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    details = raised.value.details
+    assert details["provider_request_id"] == "canonical-id"
+    assert details["provider_cost_rub"] == ("2.50" if money == "valid" else None)
+    assert details["provider_cost_usd"] == ("0.025" if money == "valid" else None)
+    assert "private" not in repr(details)
+
+
+@pytest.mark.parametrize("failure", ["invalid_json", "list_json", "null_json", "dict_content",
+                                     "list_content", "bad_created", "bad_metadata", "bad_usage",
+                                     "bad_model", "http_400", "http_500"])
+async def test_any_received_malformed_response_keeps_header_receipt_without_retry(monkeypatch, failure):
+    from yleum_gateway.core.config import reset_settings_cache
+
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+    data = {"id": "completion-id", "model": _MODEL,
+            "choices": [{"message": {"content": "private answer"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2}}
+    if failure == "dict_content":
+        data["choices"][0]["message"]["content"] = {}
+    elif failure == "list_content":
+        data["choices"][0]["message"]["content"] = ["private content"]
+    elif failure == "bad_created":
+        data["created"] = {"private": "value"}
+    elif failure == "bad_metadata":
+        data["metadata"] = ["private metadata"]
+    elif failure == "bad_usage":
+        data["usage"] = ["private usage"]
+    elif failure == "bad_model":
+        data["model"] = {"private": "model"}
+    headers = {"x-llmgw-request-id": "canonical-header-id", "x-llmgw-cost-rub": "2.50",
+               "x-cost-usd": ".025"}
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        if failure == "invalid_json":
+            return httpx.Response(200, content=b"private-invalid-json", headers=headers)
+        if failure == "list_json":
+            return httpx.Response(200, json=["private response"], headers=headers)
+        if failure == "null_json":
+            return httpx.Response(200, content=b"null", headers=headers)
+        status = int(failure[5:]) if failure.startswith("http_") else 200
+        return httpx.Response(status, json=data, headers=headers)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    with pytest.raises(UpstreamProviderError) as raised:
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+    assert len(calls) == 1
+    details = raised.value.details
+    assert details["provider_request_id"] == "canonical-header-id"
+    assert details["provider_cost_rub"] == "2.50"
+    assert details["provider_cost_usd"] == "0.025"
+    assert "private" not in repr(details)

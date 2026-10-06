@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -14,6 +15,7 @@ from typing import Any
 from unittest.mock import AsyncMock
 from uuid import UUID
 
+import anyio
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -23,6 +25,7 @@ from yleum_gateway.core import runner_auth
 from yleum_gateway.core.errors import WalletEmptyError
 from yleum_gateway.main import create_app
 from yleum_gateway.routers import messages_native
+from yleum_gateway.services import provider_calls
 
 _RUNNER_SECRET = "runner-secret"
 _RUNNER_ISSUER = "omnia-agent-runner"
@@ -32,6 +35,17 @@ _RUNNER_RUN_ID = "33333333-3333-3333-3333-333333333333"
 _RUNNER_SESSION_ID = "66666666-6666-6666-6666-666666666666"
 _RUNNER_WORKSPACE_ID = "77777777-7777-7777-7777-777777777777"
 _RUNNER_MESSAGE_ID = "88888888-8888-4888-8888-888888888888"
+
+
+@pytest.fixture(autouse=True)
+def native_journal(monkeypatch):
+    journal = SimpleNamespace(
+        start=AsyncMock(return_value=UUID("99999999-9999-4999-8999-999999999999")),
+        finish=AsyncMock(),
+    )
+    monkeypatch.setattr(provider_calls, "start_call", journal.start)
+    monkeypatch.setattr(provider_calls, "finish_call", journal.finish)
+    return journal
 
 
 @pytest.fixture
@@ -983,7 +997,7 @@ def test_project_cell_endpoint_fails_closed_when_replay_fence_unavailable(
 
 
 def test_project_cell_endpoint_calls_upstream_with_valid_runner_identity(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, native_journal,
 ) -> None:
     fake_redis = _install_runner_auth(monkeypatch)
     monkeypatch.setattr(
@@ -1042,6 +1056,13 @@ def test_project_cell_endpoint_calls_upstream_with_valid_runner_identity(
     assert captured["payload"]["model"] == "anthropic/claude-sonnet-5"
     precheck.assert_not_awaited()
     charge.assert_not_awaited()
+    assert native_journal.start.await_args.kwargs["route"] == "/v1/project-cell/messages"
+    assert native_journal.start.await_args.kwargs["user_id"] is None
+    assert native_journal.start.await_args.kwargs["free"] is True
+    assert native_journal.finish.await_args.kwargs["provider_request_id"] == "chatcmpl-cell-1"
+    assert native_journal.finish.await_args.kwargs["tokens_in"] == 3
+    assert native_journal.finish.await_args.kwargs["tokens_out"] == 2
+    assert native_journal.finish.await_args.kwargs["calculated_cost_rub"] > 0
     metadata = response.json()["metadata"]
     assert metadata["message_id"] == _RUNNER_MESSAGE_ID
     assert metadata["run_id"] == _RUNNER_RUN_ID
@@ -1144,9 +1165,393 @@ def test_transport_failure_logs_safe_class_and_correlation(client, monkeypatch, 
             "metadata": {"run_id": _RUNNER_RUN_ID, "project_id": _RUNNER_PROJECT_ID,
                          "message_id": _RUNNER_MESSAGE_ID, "stage": stage, "retry_count": 0},
         })
-    assert response.status_code == 502
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
     event = next(row for row in logs if row["event"] == "native_messages.transport_error")
     assert event["error_type"] == "ReadTimeout"
     assert event["run_id"] == _RUNNER_RUN_ID and event["project_id"] == _RUNNER_PROJECT_ID
     assert event["stage"] == expected_stage and event["retry_count"] == 0
     assert "synthetic-private" not in str(logs) + response.text
+
+
+@pytest.mark.parametrize("error_class,status,error_type", [
+    (httpx.ConnectError, 502, "api_error"),
+    (httpx.ConnectTimeout, 502, "api_error"),
+    (httpx.PoolTimeout, 502, "api_error"),
+    (httpx.ReadTimeout, 503, "billing_unavailable"),
+    (httpx.ReadError, 503, "billing_unavailable"),
+    (httpx.WriteTimeout, 503, "billing_unavailable"),
+    (httpx.WriteError, 503, "billing_unavailable"),
+    (httpx.RemoteProtocolError, 503, "billing_unavailable"),
+    (httpx.DecodingError, 503, "billing_unavailable"),
+    (httpx.TransportError, 503, "billing_unavailable"),
+    (httpx.TimeoutException, 503, "billing_unavailable"),
+    (httpx.HTTPError, 503, "billing_unavailable"),
+])
+def test_native_transport_only_allows_replay_before_provider_acceptance(
+    client, monkeypatch, error_class, status, error_type,
+):
+    charge = AsyncMock()
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+
+    def failed_post(*args):
+        raise error_class("synthetic-private-upstream-detail")
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", failed_post)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5",
+        "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == status
+    assert response.json()["error"]["type"] == error_type
+    assert "synthetic-private" not in response.text
+    charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("response_body", [
+    b"synthetic-private-not-json",
+    b"[]",
+    b'{"choices": []}',
+    b'{"choices": {"synthetic-private-key": 1}}',
+    b'{"choices": [{"message": "synthetic-private-message"}]}',
+    b'{"choices": [{"message": {}, "finish_reason": []}],'
+    b'"usage": {"prompt_tokens": 1, "completion_tokens": 1}}',
+])
+def test_native_malformed_success_stops_replay_without_charge(
+    client, monkeypatch, response_body,
+):
+    from structlog.testing import capture_logs
+
+    charge = AsyncMock()
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "_post_llmgw",
+                        lambda *args: httpx.Response(200, content=response_body))
+    with capture_logs() as logs:
+        response = client.post("/v1/messages", json={
+            "model": "claude-sonnet-5",
+            "user": "11111111-1111-1111-1111-111111111111",
+            "messages": [{"role": "user", "content": "synthetic"}],
+        })
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+    assert "synthetic-private" not in str(logs) + response.text
+    charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"prompt_tokens": 1},
+                                       {"prompt_tokens": -1, "completion_tokens": 1},
+                                       {"prompt_tokens": 1, "completion_tokens": True}])
+def test_native_unconfirmed_usage_stops_replay_without_charge(client, monkeypatch, usage):
+    charge = AsyncMock()
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "_post_llmgw", lambda *args: httpx.Response(200, json={
+        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        "usage": usage,
+    }))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5",
+        "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+    charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("failed_stage,connect_fails", [("start", False), ("finish", False),
+                                                       ("finish", True)])
+def test_native_journal_failure_prevents_unaccounted_spending(
+    client, monkeypatch, native_journal, failed_stage, connect_fails,
+):
+    charge = AsyncMock()
+    provider_requests = []
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    getattr(native_journal, failed_stage).side_effect = RuntimeError("synthetic-private-db-detail")
+
+    def provider_reply(*args):
+        provider_requests.append(args)
+        if connect_fails:
+            raise httpx.ConnectError("private")
+        return httpx.Response(200, json={
+            "id": "journal-test",
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", provider_reply)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+    assert "synthetic-private" not in response.text
+    assert len(provider_requests) == (0 if failed_stage == "start" else 1)
+    charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("charge_fails", [False, True])
+@pytest.mark.parametrize("cached,written,calculated", [(0, 0, "0.0129"), (10, 5, "0.0104")])
+def test_native_provider_receipt_precedes_and_survives_customer_billing(
+    client, monkeypatch, native_journal, charge_fails, cached, written, calculated,
+):
+    events = []
+
+    async def precheck(*args):
+        events.append("precheck")
+
+    async def start(**kwargs):
+        events.append("start")
+        return UUID("99999999-9999-4999-8999-999999999999")
+
+    async def finish(*args, **kwargs):
+        events.append("finish")
+
+    async def charge(**kwargs):
+        events.append("charge")
+        if charge_fails:
+            raise RuntimeError("synthetic billing unavailable")
+
+    def provider_reply(*args):
+        events.append("provider")
+        return httpx.Response(200, headers={"x-cost-rub": "2.50", "x-cost-usd": "0.025"}, json={
+            "id": "journal-receipt", "model": "anthropic/claude-sonnet-5",
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 30, "completion_tokens": 2,
+                      "prompt_tokens_details": {"cached_tokens": cached, "cache_creation_tokens": written}},
+        })
+
+    native_journal.start.side_effect = start
+    native_journal.finish.side_effect = finish
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", precheck)
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "_post_llmgw", provider_reply)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == (503 if charge_fails else 200)
+    assert events == ["precheck", "start", "provider", "finish", "charge"]
+    assert native_journal.start.await_args.kwargs["route"] == "/v1/messages"
+    receipt = native_journal.finish.await_args.kwargs
+    assert receipt["actual_model"] == "claude-sonnet-5"
+    assert receipt["provider_request_id"] == "journal-receipt"
+    assert receipt["tokens_in"] == 30 and receipt["tokens_out"] == 2
+    assert receipt["cache_read_tokens"] == cached and receipt["cache_write_tokens"] == written
+    assert receipt["calculated_cost_rub"] == Decimal(calculated)
+    assert receipt["provider_cost_rub"] == Decimal("2.50")
+    assert receipt["provider_cost_usd"] == Decimal("0.025")
+    assert receipt["cost_provenance"]["basis"] == "provider_reported_rub"
+    assert native_journal.finish.await_count == 1
+
+
+@pytest.mark.parametrize("outcome,expected_status,error_type,http_status", [
+    (httpx.ConnectError("private"), "failed", "ConnectError", 502),
+    (httpx.ReadTimeout("private"), "ambiguous", "ReadTimeout", 503),
+    (httpx.Response(200, content=b"invalid"), "ambiguous", "JSONDecodeError", 503),
+    (httpx.Response(500, json={"error": {"message": "private"}}), "ambiguous", "HTTPStatusError", 503),
+    (httpx.Response(400, json={"error": {"message": "invalid request"}}), "failed", "HTTPStatusError", 400),
+])
+def test_native_journal_keeps_unknown_expense_null(
+    client, monkeypatch, native_journal, outcome, expected_status, error_type, http_status,
+):
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+
+    def provider_reply(*args):
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", provider_reply)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == http_status
+    receipt = native_journal.finish.await_args.kwargs
+    assert receipt["status"] == expected_status
+    assert receipt["error_type"] == error_type
+    assert receipt.get("calculated_cost_rub") is None
+    assert receipt.get("provider_cost_rub") is None
+    assert receipt.get("provider_cost_usd") is None
+
+
+def test_native_pricing_failure_quarantines_receipt_without_replay(
+    client, monkeypatch, native_journal,
+):
+    charge = AsyncMock()
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "resolve_request_cost",
+                        AsyncMock(side_effect=RuntimeError("synthetic-private-pricing")))
+    monkeypatch.setattr(messages_native, "_post_llmgw", lambda *args: httpx.Response(200, json={
+        "id": "pricing-failure-receipt",
+        "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+    }))
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "user": "11111111-1111-1111-1111-111111111111",
+        "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+    assert "synthetic-private" not in response.text
+    receipt = native_journal.finish.await_args.kwargs
+    assert receipt["status"] == "ambiguous"
+    assert receipt["provider_request_id"] == "pricing-failure-receipt"
+    assert receipt["tokens_in"] == 3 and receipt["tokens_out"] == 2
+    assert receipt.get("calculated_cost_rub") is None
+    charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("kind", ["missing_usage", "unknown_model", "malformed", "http_error", "bad_json"])
+def test_native_rejected_response_preserves_reported_expense(client, monkeypatch, native_journal, kind):
+    data = {"id": "known-receipt", "model": "anthropic/claude-sonnet-5",
+            "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
+    if kind == "unknown_model":
+        data["model"] = "unrecognized/provider-model"
+    if kind == "malformed":
+        data["choices"] = []
+    headers = {"x-cost-rub": "2.50", "x-cost-usd": "0.025", "x-request-id": "known-receipt"}
+    upstream = (httpx.Response(200, content=b"invalid-json", headers=headers) if kind == "bad_json"
+                else httpx.Response(500 if kind == "http_error" else 200, json=data, headers=headers))
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "_post_llmgw", lambda *args: upstream)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code in {409, 503}
+    receipt = native_journal.finish.await_args.kwargs
+    assert receipt["status"] == "ambiguous"
+    assert receipt["provider_request_id"] == "known-receipt"
+    assert receipt["provider_cost_rub"] == Decimal("2.50")
+    assert receipt["provider_cost_usd"] == Decimal("0.025")
+    assert receipt.get("calculated_cost_rub") is None
+
+
+@pytest.mark.parametrize("cancel_stage", ["pricing", "finish"])
+@pytest.mark.parametrize("cancel_kind", ["task", "scope"])
+async def test_native_cancellation_finishes_same_provider_receipt(
+    monkeypatch, native_journal, cancel_stage, cancel_kind,
+):
+    from starlette.requests import Request
+
+    reached = asyncio.Event()
+    release = asyncio.Event()
+    completed = []
+    original_pricing = messages_native.resolve_request_cost
+
+    async def price(*args, **kwargs):
+        if cancel_stage == "pricing":
+            reached.set()
+            await release.wait()
+        return await original_pricing(*args, **kwargs)
+
+    async def finish(*args, **kwargs):
+        if cancel_stage == "finish":
+            reached.set()
+            await release.wait()
+        completed.append(kwargs)
+
+    body = json.dumps({"model": "claude-sonnet-5",
+                       "user": "11111111-1111-1111-1111-111111111111",
+                       "messages": [{"role": "user", "content": "synthetic"}]}).encode()
+
+    async def receive():
+        return {"type": "http.request", "body": body}
+
+    provider_requests = []
+
+    def provider_reply(*args):
+        provider_requests.append(args)
+        return httpx.Response(200, json={
+            "id": "cancelled-receipt", "choices": [{"message": {"content": "ok"}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        })
+
+    charge = AsyncMock()
+    monkeypatch.setattr(messages_native.billing, "precheck_balance", AsyncMock())
+    monkeypatch.setattr(messages_native.billing, "charge", charge)
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "_post_llmgw", provider_reply)
+    monkeypatch.setattr(messages_native, "resolve_request_cost", price)
+    native_journal.finish.side_effect = finish
+    scopes = []
+
+    async def handle_request():
+        request = Request({"type": "http", "method": "POST", "path": "/v1/messages", "headers": []}, receive)
+        if cancel_kind == "scope":
+            with anyio.CancelScope() as scope:
+                scopes.append(scope)
+                await messages_native._native_messages_impl(request)
+        else:
+            await messages_native._native_messages_impl(request)
+
+    task = asyncio.create_task(handle_request())
+    await asyncio.wait_for(reached.wait(), 2)
+    if cancel_kind == "scope":
+        scopes[0].cancel()
+        # A level-cancelled scope must not repeatedly cancel our request while
+        # its one owned settlement task is still blocked on the database.
+        for _ in range(8):
+            await asyncio.sleep(0)
+        cancellation_count = task.cancelling()
+    else:
+        task.cancel()
+        await asyncio.sleep(0)
+        task.cancel()
+    release.set()
+    if cancel_kind == "scope":
+        await task
+        assert scopes[0].cancelled_caught
+        assert cancellation_count == 1
+    else:
+        with pytest.raises(asyncio.CancelledError):
+            await task
+    assert len(completed) == 1
+    assert completed[0]["provider_request_id"] == "cancelled-receipt"
+    assert completed[0].get("status", "completed") == "completed"
+    assert len(provider_requests) == 1
+    native_journal.finish.assert_awaited_once()
+    charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("body", [b"invalid-json", b'{"choices":[{"message":{"content":"ok"}}]}'])
+def test_native_incomplete_receipt_keeps_canonical_llmgw_header_id(
+    client, monkeypatch, native_journal, body,
+):
+    upstream = httpx.Response(200, content=body, headers={
+        "x-llmgw-request-id": "canonical-provider-receipt",
+        "x-request-id": "generic-proxy-request",
+        "x-cost-rub": "2.50", "x-cost-usd": "0.025",
+    })
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://gateway.test/v1"))
+    monkeypatch.setattr(messages_native, "_post_llmgw", lambda *args: upstream)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == 503
+    receipt = native_journal.finish.await_args.kwargs
+    assert receipt["provider_request_id"] == "canonical-provider-receipt"
+    assert receipt["provider_cost_rub"] == Decimal("2.50")
+    assert receipt["provider_cost_usd"] == Decimal("0.025")

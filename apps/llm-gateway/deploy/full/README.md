@@ -86,6 +86,30 @@ location /llm/ {
 Never use `docker compose down -v` during an update: it removes production
 volumes.
 
+## Provider expense accounting
+
+Migration `0079_provider_calls` adds an independent journal for LLMGW chat,
+native messages and streaming requests. Deploy the API and confirm migration
+completion before activating the gateway revision that writes this journal.
+Customer `usage`, generation settlement and wallets remain separate: platform
+requests and waived work must not become customer charges.
+
+Each cache miss commits a `started` attempt before contacting the provider.
+The gateway saves the receipt before customer billing. `completed` means the
+receipt was recorded; `failed` is a confirmed failure; `ambiguous` and unfinished
+`started` rows require reconciliation and must not trigger automatic paid replay.
+Missing prices stay NULL; an explicitly reported zero is a real zero. Calculated
+RUB, reported RUB and reported USD are distinct fields. A calculated catalog
+price is an estimate until matched to a provider receipt or balance-ledger entry.
+
+Release checks cover database admission failure, concurrent duplicate receipts,
+request cancellation, incomplete receipts, streaming disconnect and unchanged
+customer settlement. PostgreSQL integration tests run against a disposable
+database. After rollout, verify a real generation's request IDs and token counts
+against the provider export, inspect journal terminal states and check the
+customer settlement independently. Reconcile historical differences by request
+ID; do not rewrite historical wallets or bill unmatched platform requests.
+
 ## Production smoke
 
 `.github/workflows/production-smoke.yml` запускает внешнюю проверку каждые пять

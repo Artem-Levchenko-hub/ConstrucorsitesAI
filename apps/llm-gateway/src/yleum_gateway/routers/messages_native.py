@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Coroutine
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import UUID, uuid4
 
+import anyio
 import httpx
 import structlog
 from fastapi import APIRouter, Request, Response
@@ -36,10 +38,11 @@ from yleum_gateway.core.runner_auth import (
     verify_runner_bearer_header,
 )
 from yleum_gateway.providers import llmgw
-from yleum_gateway.services import billing, file_logger
+from yleum_gateway.services import billing, file_logger, provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
 from yleum_gateway.services.pricing import (
+    ReportedCost,
     calculate_cost_rub,
     read_reported_cost,
     resolve_request_cost,
@@ -394,6 +397,83 @@ def _post_llmgw(url: str, payload: dict[str, Any], headers: dict[str, str]) -> h
         return client.post(url, json=payload, headers=headers)
 
 
+async def _await_provider_receipt[ReceiptResult](
+    operation: Coroutine[Any, Any, ReceiptResult],
+) -> ReceiptResult:
+    # Own one settlement task through repeated client cancellation. Never start
+    # the provider or its receipt write again while waiting for this task.
+    task = asyncio.create_task(operation)
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError as cancelled:
+        if task.cancelled():
+            raise
+        # ASGI uses level cancellation: shield cleanup from the cancelled
+        # AnyIO scope, while still tolerating repeated direct task.cancel().
+        with anyio.CancelScope(shield=True):
+            while True:
+                try:
+                    await asyncio.shield(task)
+                    break
+                except asyncio.CancelledError:
+                    if task.cancelled():
+                        raise cancelled from None
+                except Exception as exc:
+                    log.warning("native_messages.provider_receipt_failed", error_type=type(exc).__name__)
+                    break
+        raise cancelled
+
+
+async def _finish_provider_call(call_id: UUID, **receipt: Any) -> bool:
+    try:
+        await _await_provider_receipt(provider_calls.finish_call(call_id, **receipt))
+    except Exception as exc:
+        log.warning("native_messages.provider_receipt_failed", error_type=type(exc).__name__)
+        return False
+    return True
+
+
+def _known_response_evidence(upstream: httpx.Response) -> dict[str, Any]:
+    try:
+        data = upstream.json()
+    except (ValueError, UnicodeError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    reported = read_reported_cost(data, upstream.headers)
+    raw_id = (data.get("id") or upstream.headers.get("x-llmgw-request-id")
+              or upstream.headers.get("x-request-id"))
+    request_id = raw_id if (
+        isinstance(raw_id, str) and raw_id.strip() and len(raw_id) <= 512
+        and all(ord(char) >= 32 for char in raw_id)
+    ) else None
+    return {"provider_request_id": request_id, "provider_cost_rub": reported.cost_rub,
+            "provider_cost_usd": reported.cost_usd}
+
+
+async def _settle_native_cost(
+    call_id: UUID, actual_model: str, payload: dict[str, Any],
+    receipt: dict[str, Any], reported: ReportedCost,
+) -> tuple[Decimal, dict[str, Any]] | None:
+    try:
+        cost_rub, provenance = await resolve_request_cost(
+            actual_model, tokens_in=receipt["tokens_in"], tokens_out=receipt["tokens_out"],
+            cache_read_tokens=receipt["cache_read_tokens"],
+            cache_write_tokens=receipt["cache_write_tokens"], reported=reported,
+            cache_write_factor=anthropic_cache_write_factor(actual_model, payload),
+        )
+        calculated_cost_rub = Decimal(provenance["calculated_cost_rub"])
+    except Exception as exc:
+        await _finish_provider_call(call_id, status="ambiguous", **receipt,
+                                    error_type=type(exc).__name__)
+        return None
+    if not await _finish_provider_call(
+        call_id, **receipt, calculated_cost_rub=calculated_cost_rub, cost_provenance=provenance,
+    ):
+        return None
+    return cost_rub, provenance
+
+
 async def _native_messages_impl(
     request: Request,
     *,
@@ -483,6 +563,16 @@ async def _native_messages_impl(
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
     try:
+        provider_call_id = await provider_calls.start_call(
+            route="/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
+            model=model, user_id=user_id, project_id=project_id, run_id=run_id,
+            message_id=message_id, stage=stage, free=free,
+        )
+    except Exception as exc:
+        log.warning("native_messages.provider_admission_failed", error_type=type(exc).__name__)
+        return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
+
+    try:
         upstream = await asyncio.to_thread(
             _post_llmgw,
             f"{api_base.rstrip('/')}/chat/completions",
@@ -499,9 +589,27 @@ async def _native_messages_impl(
             stage=stage if stage in {"build_plan", "native_agent", "verification"} else "unknown",
             retry_count=retry_count,
         )
-        return _err(502, "api_error", f"upstream transport: {type(exc).__name__}")
+        safe_to_retry = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+        recorded = await _finish_provider_call(
+            provider_call_id, status="failed" if safe_to_retry else "ambiguous",
+            error_type=type(exc).__name__,
+        )
+        if safe_to_retry and recorded:
+            # These failures occur before the request reaches the provider.
+            return _err(502, "api_error", f"upstream transport: {type(exc).__name__}")
+        # Once a request may have been accepted, replay risks a second paid call.
+        # Deployed API callers already stop on this terminal billing error.
+        return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
 
+    known_evidence = _known_response_evidence(upstream)
     if upstream.status_code >= 400:
+        ambiguous = upstream.status_code >= 500
+        recorded = await _finish_provider_call(
+            provider_call_id, status="ambiguous" if ambiguous else "failed",
+            error_type="HTTPStatusError", **known_evidence,
+        )
+        if ambiguous or not recorded:
+            return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
         try:
             upstream_error = upstream.json().get("error", {})
             message = upstream_error.get("message") or upstream.text[:300]
@@ -516,6 +624,11 @@ async def _native_messages_impl(
         reported_model = upstream_data.get("model")
         actual_model = slug_to_omnia(reported_model) if isinstance(reported_model, str) else None
         if reported_model and (actual_model is None or not is_supported(actual_model)):
+            if not await _finish_provider_call(
+                provider_call_id, status="ambiguous", error_type="ValidationFailedError",
+                **known_evidence,
+            ):
+                return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
             return _err(
                 409,
                 "model_route_mismatch",
@@ -525,12 +638,19 @@ async def _native_messages_impl(
         fallback_used = actual_model != model
         adapted = _anthropic_response(upstream_data, actual_model)
     except _InvalidUsageReceipt:
+        await _finish_provider_call(
+            provider_call_id, status="ambiguous", error_type="ValidationFailedError", **known_evidence,
+        )
         # The API already treats this code as non-replayable: the provider may
         # have charged, so neither a guessed zero debit nor a retry is safe.
         return _err(503, "billing_unavailable", "Provider token usage could not be confirmed")
-    except (ValueError, TypeError) as exc:
-        log.warning("native_messages.malformed_response", model=model, error=str(exc))
-        return _err(502, "api_error", "llmgw returned a malformed response")
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        await _finish_provider_call(
+            provider_call_id, status="ambiguous", error_type=type(exc).__name__, **known_evidence,
+        )
+        log.warning("native_messages.malformed_response", error_type=type(exc).__name__)
+        # A successful but unreadable provider response may already be charged.
+        return _err(503, "billing_unavailable", "Provider response could not be confirmed")
     usage = adapted["usage"]
     tokens_in = int(usage.get("input_tokens") or 0)
     tokens_out = int(usage.get("output_tokens") or 0)
@@ -538,12 +658,17 @@ async def _native_messages_impl(
     cache_write = int(usage.get("cache_creation_input_tokens") or 0)
     reported = read_reported_cost(upstream_data, upstream.headers)
     provider_cost_usd = reported.cost_usd
-    cost_rub, provenance = await resolve_request_cost(
-        actual_model, tokens_in=tokens_in, tokens_out=tokens_out,
-        cache_read_tokens=cache_read, cache_write_tokens=cache_write, reported=reported,
-        cache_write_factor=anthropic_cache_write_factor(actual_model, payload),
-    )
-    provider_request_id = str(upstream_data.get("id") or "") or None
+    provider_request_id = known_evidence["provider_request_id"]
+    settled = await _await_provider_receipt(_settle_native_cost(
+        provider_call_id, actual_model, payload, {
+            **known_evidence, "actual_model": actual_model,
+            "tokens_in": tokens_in, "tokens_out": tokens_out,
+            "cache_read_tokens": cache_read, "cache_write_tokens": cache_write,
+        }, reported,
+    ))
+    if settled is None:
+        return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
+    cost_rub, provenance = settled
 
     if user_id is not None:
         try:

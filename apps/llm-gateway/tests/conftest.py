@@ -15,7 +15,16 @@ from uuid import uuid4
 import pytest
 
 from yleum_gateway.core.config import reset_settings_cache
-from yleum_gateway.services import pricing
+from yleum_gateway.services import pricing, provider_calls
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_journal(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> None:
+    """Unit routes use no DB; writer tests explicitly exercise their own fake pool."""
+    if request.module.__name__.endswith("test_provider_calls"):
+        return
+    monkeypatch.setattr(provider_calls, "start_call", AsyncMock(side_effect=lambda **kw: uuid4()))
+    monkeypatch.setattr(provider_calls, "finish_call", AsyncMock(return_value=None))
 
 
 @pytest.fixture(autouse=True)

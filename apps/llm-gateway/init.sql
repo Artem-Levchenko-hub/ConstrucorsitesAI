@@ -80,3 +80,64 @@ CREATE TABLE IF NOT EXISTS usage (
 );
 CREATE INDEX IF NOT EXISTS usage_user_created_idx  ON usage(user_id,  created_at DESC);
 CREATE INDEX IF NOT EXISTS usage_model_created_idx ON usage(model_id, created_at DESC);
+
+-- Provider expenses are independent of customer billing (Alembic 0079).
+-- Attribution UUIDs intentionally have no cascading foreign keys: deleting a
+-- user/project must not delete the evidence of money spent with the provider.
+CREATE TABLE IF NOT EXISTS provider_calls (
+    id                  uuid          PRIMARY KEY,
+    provider_scope      text          NOT NULL,
+    route               text          NOT NULL,
+    requested_model     text          NOT NULL,
+    actual_model        text          NULL,
+    expense_owner       text          NOT NULL,
+    user_id             uuid          NULL,
+    project_id          uuid          NULL,
+    run_id              uuid          NULL,
+    message_id          uuid          NULL,
+    usage_id            uuid          NULL,
+    stage               text          NOT NULL,
+    free                boolean       NOT NULL,
+    status              text          NOT NULL,
+    provider_request_id text          NULL,
+    tokens_in           bigint        NULL,
+    tokens_out          bigint        NULL,
+    cache_read_tokens   bigint        NULL,
+    cache_write_tokens  bigint        NULL,
+    calculated_cost_rub numeric(24,8) NULL,
+    provider_cost_rub   numeric(24,8) NULL,
+    provider_cost_usd   numeric(24,8) NULL,
+    cost_provenance     jsonb         NULL,
+    error_type          text          NULL,
+    receipt_hash        text          NULL,
+    created_at          timestamptz   NOT NULL DEFAULT now(),
+    finished_at         timestamptz   NULL,
+    CONSTRAINT ck_provider_calls_scope CHECK (provider_scope = 'llmgw'),
+    CONSTRAINT ck_provider_calls_status
+        CHECK (status IN ('started','completed','failed','ambiguous')),
+    CONSTRAINT ck_provider_calls_owner
+        CHECK ((expense_owner='user' AND user_id IS NOT NULL) OR
+               (expense_owner='platform' AND user_id IS NULL)),
+    CONSTRAINT ck_provider_calls_finished
+        CHECK ((status='started' AND finished_at IS NULL) OR
+               (status<>'started' AND finished_at IS NOT NULL)),
+    CONSTRAINT ck_provider_calls_tokens_in
+        CHECK (tokens_in IS NULL OR tokens_in >= 0),
+    CONSTRAINT ck_provider_calls_tokens_out
+        CHECK (tokens_out IS NULL OR tokens_out >= 0),
+    CONSTRAINT ck_provider_calls_cache_read_tokens
+        CHECK (cache_read_tokens IS NULL OR cache_read_tokens >= 0),
+    CONSTRAINT ck_provider_calls_cache_write_tokens
+        CHECK (cache_write_tokens IS NULL OR cache_write_tokens >= 0),
+    CONSTRAINT ck_provider_calls_calculated_cost_rub
+        CHECK (calculated_cost_rub IS NULL OR calculated_cost_rub >= 0),
+    CONSTRAINT ck_provider_calls_provider_cost_rub
+        CHECK (provider_cost_rub IS NULL OR provider_cost_rub >= 0),
+    CONSTRAINT ck_provider_calls_provider_cost_usd
+        CHECK (provider_cost_usd IS NULL OR provider_cost_usd >= 0)
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_provider_calls_receipt
+    ON provider_calls(provider_scope, provider_request_id)
+    WHERE provider_request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_provider_calls_created_at ON provider_calls(created_at);
+CREATE INDEX IF NOT EXISTS ix_provider_calls_run_id ON provider_calls(run_id);

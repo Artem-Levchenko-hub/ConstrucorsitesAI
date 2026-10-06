@@ -25,13 +25,14 @@ import re
 import threading
 import time
 from collections.abc import AsyncGenerator, Mapping
-from typing import Any, cast
+from typing import Any
 from uuid import uuid4
 
 import httpx
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
 # still mean a paid generation; replaying it may create a second provider bill.
@@ -182,6 +183,16 @@ def _receipt_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return {key: headers[key] for key in (
         "x-llmgw-cost-rub", "x-cost-rub", "x-cost-usd", "x-llmgw-request-id",
     ) if key in headers}
+
+
+def _failure_details(data: object, headers: object = None) -> dict[str, Any]:
+    # Error details cross the HTTP boundary. Keep only validated identity and
+    # decimal text; the journal revalidates these scalars before persistence.
+    evidence = receipt_evidence(data, headers)
+    return {"provider_charge_ambiguous": True, **{
+        key: str(value) if key.startswith("provider_cost_") and value is not None else value
+        for key, value in evidence.items()
+    }}
 
 
 def normalize_usage(
@@ -399,9 +410,18 @@ async def acompletion(
                     mounts={"all://": httpx.HTTPTransport()},
                 ) as client:
                     r = client.post(url, json=payload, headers=headers)
+                    provider_headers = _receipt_headers(r.headers)
                     r.raise_for_status()
-                    result = cast(dict[str, Any], r.json())
-                    result["_provider_headers"] = _receipt_headers(r.headers)
+                    try:
+                        result = r.json()
+                        if not isinstance(result, dict):
+                            raise TypeError("Response must be an object")
+                    except (TypeError, ValueError):
+                        raise UpstreamProviderError(
+                            "llmgw: malformed response",
+                            details=_failure_details({}, provider_headers),
+                        ) from None
+                    result["_provider_headers"] = provider_headers
                     return result
             except _SAFE_TO_RETRY as exc:
                 last = exc
@@ -416,7 +436,7 @@ async def acompletion(
     except httpx.HTTPStatusError as exc:
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
-            details={"provider_request_id": exc.response.headers.get("x-llmgw-request-id")},
+            details=_failure_details({}, _receipt_headers(exc.response.headers)),
         ) from exc
     except httpx.HTTPError as exc:
         raise UpstreamProviderError(
@@ -424,45 +444,50 @@ async def acompletion(
             details={"provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY)},
         ) from exc
 
+    safe_receipt = receipt_evidence(data)
+    error_receipt = _failure_details(data)
     try:
         choice = (data.get("choices") or [])[0]
-        content = (choice.get("message") or {}).get("content") or ""
-    except (IndexError, AttributeError, KeyError) as exc:
-        raise UpstreamProviderError(
-            "llmgw: malformed response",
-            details={"provider_charge_ambiguous": True,
-                     "provider_request_id": data["_provider_headers"].get("x-llmgw-request-id") or data.get("id")},
-        ) from exc
-    content = _strip_reasoning(content)
+        content = (choice.get("message") or {}).get("content")
+        if content is None:
+            content = ""
+        if not isinstance(content, str):
+            raise TypeError("Content must be text")
+        content = _strip_reasoning(content)
+        raw_usage = data.get("usage")
+        metadata = data.get("metadata")
+        if ((raw_usage is not None and not isinstance(raw_usage, dict))
+                or (metadata is not None and not isinstance(metadata, dict))):
+            raise TypeError("Usage and metadata must be objects")
+        usage, estimated = normalize_usage(
+            raw_usage or {},
+            _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages)),
+            _approx_tokens(content),
+        )
 
-    usage, estimated = normalize_usage(
-        data.get("usage") or {},
-        _approx_tokens("".join(_flatten_content(m.get("content", "")) for m in messages)),
-        _approx_tokens(content),
-    )
-
-    # Normalize to OpenAI shape with `model` = the Omnia id so chat.py bills against
-    # PRICE_TABLE (the upstream slug maps back via _SLUG_TO_OMNIA).
-    return {
-        "id": data.get("id") or f"llmgw-{uuid4()}",
-        "object": "chat.completion",
-        "created": int(data.get("created") or time.time()),
-        "model": resolve_response_model(
-            data.get("model", ""), model,
-            data["_provider_headers"].get("x-llmgw-request-id") or data.get("id"),
-        ),
-        "_provider_headers": data["_provider_headers"],
-        "metadata": {
-            **(data.get("metadata") or {}),
-            "provider_request_id": data["_provider_headers"].get("x-llmgw-request-id") or data.get("id"),
-            "estimated_tokens": estimated,
-        },
-        "choices": [
-            {
+        actual_model = resolve_response_model(data.get("model", ""), model, safe_receipt["provider_request_id"])
+        # Keep normalization inside the same receipt-preserving guard: invalid
+        # timestamps, metadata, models or content cannot discard money evidence.
+        return {
+            "id": data.get("id") or f"llmgw-{uuid4()}",
+            "object": "chat.completion",
+            "created": int(data.get("created") or time.time()),
+            "model": actual_model,
+            "_provider_headers": data["_provider_headers"],
+            "metadata": {
+                **(metadata or {}),
+                "provider_request_id": safe_receipt["provider_request_id"],
+                "estimated_tokens": estimated,
+            },
+            "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
                 "finish_reason": (choice.get("finish_reason") or "stop"),
-            }
-        ],
-        "usage": usage,
-    }
+            }],
+            "usage": usage,
+        }
+    except UpstreamProviderError as exc:
+        exc.details.update(error_receipt)
+        raise
+    except (TypeError, ValueError, AttributeError, KeyError, IndexError, OverflowError):
+        raise UpstreamProviderError("llmgw: malformed response", details=error_receipt) from None

@@ -9,11 +9,13 @@ emits SSE chunks and bills based on what the wire actually delivered.
 
 from __future__ import annotations
 
+import asyncio
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
 import structlog
+from anyio import CancelScope
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -21,10 +23,11 @@ from sse_starlette.sse import EventSourceResponse
 from yleum_gateway.core.errors import (
     BillingReconciliationRequiredError,
     GatewayError,
+    ModelNotFoundError,
     WalletEmptyError,
 )
 from yleum_gateway.providers import llmgw
-from yleum_gateway.services import billing, cache, file_logger, safety, streaming
+from yleum_gateway.services import billing, cache, file_logger, provider_calls, safety, streaming
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.pricing import (
@@ -32,6 +35,7 @@ from yleum_gateway.services.pricing import (
     read_reported_cost,
     resolve_request_cost,
 )
+from yleum_gateway.services.receipt_evidence import receipt_evidence
 from yleum_gateway.services.token_counter import count_message_tokens
 
 router = APIRouter(prefix="/v1", tags=["chat"])
@@ -153,9 +157,20 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 # DB unavailable — allow through; the post-stream charge will surface real failures.
                 log.exception("stream.precheck_failed", user=str(req.user))
 
+        try:
+            if not llmgw.is_llmgw_model(req.model):
+                raise ModelNotFoundError(f"Unknown model: {req.model}")
+            provider_call_id = await provider_calls.start_call(
+                route="/v1/chat/completions", model=req.model, user_id=req.user,
+                project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
+                stage=meta.stage, free=meta.free,
+            )
+        except GatewayError as exc:
+            raise _gateway_error_to_http(exc) from exc
         return EventSourceResponse(
             streaming.stream_completion(
                 request=request,
+                provider_call_id=provider_call_id,
                 model=req.model,
                 messages=filtered_messages,
                 user_id=req.user,
@@ -221,6 +236,17 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         except Exception:
             log.exception("precheck.db_unavailable", user=str(req.user))
 
+    if not llmgw.is_llmgw_model(req.model):
+        raise _gateway_error_to_http(ModelNotFoundError(f"Unknown model: {req.model}"))
+    try:
+        call_id = await provider_calls.start_call(
+            route="/v1/chat/completions", model=req.model, user_id=req.user,
+            project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
+            stage=meta.stage, free=meta.free,
+        )
+    except GatewayError as exc:
+        raise _gateway_error_to_http(exc) from exc
+
     try:
         response = await router_module.acompletion(
             model=req.model,
@@ -229,87 +255,156 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             temperature=req.temperature,
             max_tokens=req.max_tokens,
         )
-    except GatewayError as exc:
-        raise _gateway_error_to_http(exc) from exc
+    except BaseException as exc:
+        details = exc.details if isinstance(exc, GatewayError) else {}
+        status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
+        with CancelScope(shield=True):
+            try:
+                await provider_calls.finish_call(
+                    call_id, status=status, error_type=type(exc.__cause__ or exc).__name__,
+                    **receipt_evidence(details),
+                )
+            except GatewayError as journal_error:
+                raise _gateway_error_to_http(journal_error) from journal_error
+        if isinstance(exc, GatewayError):
+            exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
+            raise _gateway_error_to_http(exc) from exc
+        if isinstance(exc, asyncio.CancelledError):
+            raise
+        raise _gateway_error_to_http(BillingReconciliationRequiredError(
+            "Provider response requires reconciliation",
+            details={"provider_charge_ambiguous": True},
+        )) from None
 
-    usage = response.get("usage") or {}
-    tokens_in = int(usage.get("prompt_tokens", 0))
-    tokens_out = int(usage.get("completion_tokens", 0))
-
-    actual_model = router_module.slug_to_omnia(response.get("model", "")) or req.model
-    fallback_used = actual_model != req.model
-
-    cache_read, cache_write = _cache_token_counts(usage, tokens_in)
-    reported = read_reported_cost(response, response.pop("_provider_headers", {}))
-    response_meta = response.setdefault("metadata", {})
-    provider_request_id = response_meta.get("provider_request_id", response.get("id"))
-    cost_rub, provenance = await resolve_request_cost(
-        actual_model, reported=reported,
-        tokens_in=tokens_in, tokens_out=tokens_out,
-        cache_read_tokens=cache_read, cache_write_tokens=cache_write,
-        estimated_tokens=bool(response_meta.get("estimated_tokens")),
-        cache_write_factor=anthropic_cache_write_factor(actual_model, {"messages": filtered_messages}),
-    )
-
-    # Bill (atomic): user only — service-account requests skip billing.
-    if req.user is not None:
+    async def settle_response() -> dict[str, Any]:
+        known_receipt = receipt_evidence(response)
         try:
-            await billing.charge(
-                user_id=req.user,
-                project_id=meta.project_id,
-                message_id=meta.message_id,
-                run_id=meta.run_id,
-                model_id=actual_model,
-                tokens_in=tokens_in,
-                tokens_out=tokens_out,
-                cost_rub=cost_rub,
-                description=f"Completion via {actual_model}",
-                free=meta.free,
-                stage=meta.stage,
-                cache_read_tokens=cache_read,
-                cache_write_tokens=cache_write,
-                provider_request_id=str(provider_request_id or "") or None,
-                provider_cost_usd=reported.cost_usd,
+            usage = response.get("usage") or {}
+            tokens_in = int(usage.get("prompt_tokens", 0))
+            tokens_out = int(usage.get("completion_tokens", 0))
+
+            actual_model = llmgw.resolve_response_model(
+                response.get("model", ""), req.model, known_receipt["provider_request_id"],
+            )
+            fallback_used = actual_model != req.model
+
+            cache_read, cache_write = _cache_token_counts(usage, tokens_in)
+            reported = read_reported_cost(response, response.pop("_provider_headers", {}))
+            response_meta = response.setdefault("metadata", {})
+            provider_request_id = known_receipt["provider_request_id"]
+            cost_rub, provenance = await resolve_request_cost(
+                actual_model, reported=reported,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+                cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+                estimated_tokens=bool(response_meta.get("estimated_tokens")),
+                cache_write_factor=anthropic_cache_write_factor(actual_model, {"messages": filtered_messages}),
+            )
+
+        except Exception as exc:
+            try:
+                await provider_calls.finish_call(
+                    call_id, status="ambiguous", error_type=type(exc).__name__, **known_receipt,
+                )
+            except GatewayError as journal_error:
+                raise _gateway_error_to_http(journal_error) from journal_error
+            raise _gateway_error_to_http(BillingReconciliationRequiredError(
+                "Provider receipt requires reconciliation",
+                details={"provider_charge_ambiguous": True},
+            )) from None
+
+        try:
+            await provider_calls.finish_call(
+                call_id, status="ambiguous" if response_meta.get("estimated_tokens") else "completed",
+                actual_model=actual_model, provider_request_id=provider_request_id,
+                tokens_in=tokens_in, tokens_out=tokens_out,
+                cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+                calculated_cost_rub=Decimal(provenance["calculated_cost_rub"]),
+                provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd,
                 cost_provenance=provenance,
             )
-        except WalletEmptyError as exc:
+        except GatewayError as exc:
             raise _gateway_error_to_http(exc) from exc
-        except BillingReconciliationRequiredError as exc:
-            raise _gateway_error_to_http(exc) from exc
-        except Exception as exc:
-            log.exception("charge_failed", user=str(req.user), model=actual_model)
-            if meta.require_billing or meta.run_id is not None:
-                # Never expose or cache an answer whose wallet debit failed.
-                raise _billing_unavailable() from exc
 
-    response.setdefault("metadata", {})
-    response["metadata"]["actual_model_used"] = actual_model
-    response["metadata"]["fallback_used"] = fallback_used
-    response["metadata"]["cost_rub"] = str(cost_rub)
-    response["metadata"]["cost_provenance"] = provenance
-    response["metadata"]["cache_hit"] = False
+        # Bill (atomic): user only — service-account requests skip billing.
+        if req.user is not None:
+            try:
+                await billing.charge(
+                    user_id=req.user,
+                    project_id=meta.project_id,
+                    message_id=meta.message_id,
+                    run_id=meta.run_id,
+                    model_id=actual_model,
+                    tokens_in=tokens_in,
+                    tokens_out=tokens_out,
+                    cost_rub=cost_rub,
+                    description=f"Completion via {actual_model}",
+                    free=meta.free,
+                    stage=meta.stage,
+                    cache_read_tokens=cache_read,
+                    cache_write_tokens=cache_write,
+                    provider_request_id=str(provider_request_id or "") or None,
+                    provider_cost_usd=reported.cost_usd,
+                    cost_provenance=provenance,
+                )
+            except WalletEmptyError as exc:
+                raise _gateway_error_to_http(exc) from exc
+            except BillingReconciliationRequiredError as exc:
+                raise _gateway_error_to_http(exc) from exc
+            except Exception as exc:
+                log.exception("charge_failed", user=str(req.user), model=actual_model)
+                if meta.require_billing or meta.run_id is not None:
+                    # Never expose or cache an answer whose wallet debit failed.
+                    raise _billing_unavailable() from exc
 
+        response.setdefault("metadata", {})
+        response["metadata"]["actual_model_used"] = actual_model
+        response["metadata"]["fallback_used"] = fallback_used
+        response["metadata"]["cost_rub"] = str(cost_rub)
+        response["metadata"]["cost_provenance"] = provenance
+        response["metadata"]["cache_hit"] = False
+
+        try:
+            await cache.set(cache_key, response)
+        except Exception:
+            log.exception("cache.set_failed", key=cache_key)
+
+        try:
+            file_logger.log_request(
+                {
+                    "user_id": req.user,
+                    "project_id": meta.project_id,
+                    "message_id": meta.message_id,
+                    "model": actual_model,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "cost_rub": cost_rub,
+                    "cache_hit": False,
+                    "fallback_used": fallback_used,
+                    "stream": False,
+                }
+            )
+        except Exception:
+            log.exception("file_log_failed")
+
+        return response
+
+    # The paid response is already received. Own its settlement independently
+    # of the HTTP request, then join that SAME task on disconnect: neither the
+    # provider POST nor receipt/debit may be replayed after an uncertain commit.
+    settlement_task = asyncio.create_task(settle_response())
     try:
-        await cache.set(cache_key, response)
-    except Exception:
-        log.exception("cache.set_failed", key=cache_key)
-
-    try:
-        file_logger.log_request(
-            {
-                "user_id": req.user,
-                "project_id": meta.project_id,
-                "message_id": meta.message_id,
-                "model": actual_model,
-                "tokens_in": tokens_in,
-                "tokens_out": tokens_out,
-                "cost_rub": cost_rub,
-                "cache_hit": False,
-                "fallback_used": fallback_used,
-                "stream": False,
-            }
-        )
-    except Exception:
-        log.exception("file_log_failed")
-
-    return response
+        return await asyncio.shield(settlement_task)
+    except asyncio.CancelledError:
+        with CancelScope(shield=True):
+            while True:
+                try:
+                    await asyncio.shield(settlement_task)
+                    break
+                except asyncio.CancelledError:
+                    if settlement_task.cancelled():
+                        raise
+                    # Repeated Task.cancel must not orphan the one receipt/debit.
+                except Exception as exc:
+                    log.error("chat.settlement_failed_after_cancel", error_type=type(exc).__name__)
+                    break
+        raise

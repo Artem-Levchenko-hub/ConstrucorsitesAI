@@ -21,12 +21,18 @@ import structlog
 from anyio import CancelScope
 from fastapi import Request
 
-from yleum_gateway.core.errors import BillingReconciliationRequiredError, GatewayError
+from yleum_gateway.core.errors import (
+    BillingReconciliationRequiredError,
+    GatewayError,
+    ModelNotFoundError,
+    UpstreamProviderError,
+)
 from yleum_gateway.providers import llmgw
-from yleum_gateway.services import billing, file_logger
+from yleum_gateway.services import billing, file_logger, provider_calls
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
+from yleum_gateway.services.receipt_evidence import receipt_evidence
 from yleum_gateway.services.token_counter import count_message_tokens, count_text_tokens
 
 log = structlog.get_logger(__name__)
@@ -56,6 +62,7 @@ async def stream_completion(
     free: bool = False,
     run_id: UUID | None = None,
     stage: str | None = None,
+    provider_call_id: UUID | None = None,
 ) -> AsyncIterator[str]:
     """Generate the SSE stream + bill at end.
 
@@ -76,6 +83,19 @@ async def stream_completion(
     provenance: dict[str, Any] = {}
     provider_request_id: str | None = None
 
+    try:
+        if not llmgw.is_llmgw_model(model):
+            raise ModelNotFoundError(f"Unknown model: {model}")
+        if provider_call_id is None:
+            provider_call_id = await provider_calls.start_call(
+                route="/v1/chat/completions", model=model, user_id=user_id,
+                project_id=project_id, message_id=message_id, run_id=run_id,
+                stage=stage, free=free,
+            )
+    except GatewayError as exc:
+        yield _sse({"error": {"code": exc.code, "message": exc.message, "details": exc.details}})
+        return
+    receipt_finished = False
     source = llmgw.astream(
         model, messages,
         temperature=0.5 if temperature is None else temperature,
@@ -83,9 +103,22 @@ async def stream_completion(
         **({"max_tokens": max_tokens} if max_tokens is not None else {}),
     )
 
-    async def settle() -> None:
-        nonlocal usage, cost_rub, provenance, actual_model, provider_request_id
-        provider_request_id = receipt.get("provider_request_id") or receipt.get("id")
+    async def settle_receipt() -> None:
+        nonlocal usage, cost_rub, provenance, actual_model, provider_request_id, receipt_finished
+        reported = read_reported_cost(receipt, receipt.get("headers", {}))
+        if (not accumulated and not receipt.get("usage")
+                and reported.cost_rub is None and reported.cost_usd is None):
+            receipt_finished = True
+            await provider_calls.finish_call(
+                provider_call_id,
+                status="failed" if upstream_error and upstream_error.details.get(
+                    "provider_charge_ambiguous") is False else "ambiguous",
+                **receipt_evidence(receipt),
+                error_type=type(upstream_error).__name__ if upstream_error else
+                           "CancelledError" if cancelled else None,
+            )
+            return
+        provider_request_id = receipt_evidence(receipt)["provider_request_id"]
         actual_model = llmgw.resolve_response_model(
             receipt.get("model", ""), actual_model, provider_request_id,
         )
@@ -100,7 +133,6 @@ async def stream_completion(
         cache_write = usage["cache_creation_input_tokens"]
         # A lost DONE means transport failure, not invalidation of a monetary
         # receipt or token counters already received from the provider.
-        reported = read_reported_cost(receipt, receipt.get("headers", {}))
         cost_rub, provenance = await resolve_request_cost(
             actual_model, reported=reported, tokens_in=tokens_in, tokens_out=tokens_out,
             cache_read_tokens=cache_read, cache_write_tokens=cache_write,
@@ -110,6 +142,18 @@ async def stream_completion(
                 # cache_control and has no top-level controls or tools.
                 "messages": [{"content": message.get("content", "")} for message in messages],
             }),
+        )
+        receipt_finished = True
+        await provider_calls.finish_call(
+            provider_call_id, status="ambiguous" if estimated else "completed",
+            actual_model=actual_model, provider_request_id=provider_request_id,
+            tokens_in=tokens_in, tokens_out=tokens_out,
+            cache_read_tokens=cache_read, cache_write_tokens=cache_write,
+            calculated_cost_rub=Decimal(provenance["calculated_cost_rub"]),
+            provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd,
+            cost_provenance=provenance,
+            error_type=type(upstream_error).__name__ if upstream_error else
+                       "CancelledError" if cancelled else None,
         )
         if user_id is not None and (output_text or receipt):
             try:
@@ -130,6 +174,25 @@ async def stream_completion(
                     details={"provider_request_id": provider_request_id},
                 ) from exc
 
+    async def settle() -> None:
+        nonlocal receipt_finished
+        known_receipt = receipt_evidence(receipt)
+        try:
+            await settle_receipt()
+        except Exception as exc:
+            if not receipt_finished:
+                receipt_finished = True
+                await provider_calls.finish_call(
+                    provider_call_id, status="ambiguous", error_type=type(exc).__name__,
+                    **known_receipt,
+                )
+            if isinstance(exc, GatewayError):
+                raise
+            raise BillingReconciliationRequiredError(
+                "Provider receipt requires reconciliation",
+                details={"provider_charge_ambiguous": True},
+            ) from None
+
     try:
         try:
             async for delta, slug in source:
@@ -143,6 +206,11 @@ async def stream_completion(
                     })
         except GatewayError as exc:
             upstream_error = exc
+        except Exception as exc:
+            upstream_error = UpstreamProviderError(
+                f"Provider stream failed: {type(exc).__name__}",
+                details={"provider_charge_ambiguous": True},
+            )
         settlement_task = asyncio.create_task(settle())
         try:
             await asyncio.shield(settlement_task)
@@ -166,7 +234,7 @@ async def stream_completion(
             },
         })
         yield _sse("[DONE]")
-    except asyncio.CancelledError:
+    except (asyncio.CancelledError, GeneratorExit):
         cancelled = True
         raise
     finally:
