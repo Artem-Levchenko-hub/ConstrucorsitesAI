@@ -59,11 +59,12 @@ Files: API scripts/reconcile_provider_ledger.py; operator contract/evidence docu
 
 - Base source/main: 09a9d8a4b2cf80b40b0754c0debbb9ec4430524b; isolated branch codex/provider-ledger-reconcile-20261006.
 - Watched RED then GREEN: parser, organization admission, physical import/conflicts/replay, output file protections, safe CLI arguments, reverse-order test isolation, correction-only estimate comparison, model registration.
-- Local final checks: 485 whole gateway tests; 73 physical PostgreSQL tests (57 existing billing + 16 reconciliation, not a generation-success metric); 23 focused API tests; 11 migration tests. API mypy 277 source files, gateway mypy 34 source files; Ruff/diff checks green.
+- Local final checks: 485 whole gateway tests; 75 physical PostgreSQL tests (57 existing billing + 18 reconciliation, not a generation-success metric); 23 focused API tests; 11 migration tests. API mypy 277 source files, gateway mypy 34 source files; Ruff/diff checks green.
 - Independent review P2 argument echo fixed; P3 order dependency fixed; bounded model-registration review no findings.
 - Ruling: an unverified XLSX schema is not guessed. Ship a strict normalized operator boundary, then verify the actual export adapter when the source is available.
 - Ruling: existing NULL organization cannot be backfilled from a coincident request ID. Such matches remain unresolved until authoritative account binding is supplied; no original receipt/wallet edits.
 - Ruling: register ledger metadata to prevent a later autogeneration from treating these tables as unknown/drop candidates; database immutability is still migration-owned and physically tested.
+- Additional physical proof: an already-settled customer keeps its balance, Usage and settlement across a mismatching ledger import/replay; the actual CLI imports/replays against owned PostgreSQL and writes mode-0600 reports.
 - Production access: alias max-core DNS failure; existing Serverum console script timed out waiting for the actual core VM after normal SSO. Current environment has no configured outbound identities/secrets or TCP grants. No server command/deployment ran.
 - Missing source: authorized balance-ledger operations with stable operation ID/ref_id/delta_kopecks and organization evidence. Payments XLSX is not that source.
 - Next: commit/push and exact CI; obtain approved server route plus actual source, then canonical migration/API→gateway delivery and restricted real-operation verification. No completion claim until production acceptance.

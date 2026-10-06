@@ -3,7 +3,11 @@
 import asyncio
 import hashlib
 import json
+import os
+import stat
+import sys
 from decimal import Decimal
+from pathlib import Path
 from uuid import uuid4
 
 import asyncpg
@@ -15,11 +19,12 @@ from yleum_api.services.provider_ledger import (
     report_organization,
 )
 
-from yleum_gateway.services import provider_calls
+from yleum_gateway.services import billing, provider_calls
 
 database_url = fixture_source.database_url
 pool = fixture_source.pool
 SOURCE = b"synthetic provider ledger; owned disposable database"
+CLI_SCRIPT = Path(__file__).resolve().parents[2] / "api/scripts/reconcile_provider_ledger.py"
 
 
 def statement(*rows, org="qa-org-a"):
@@ -274,3 +279,128 @@ async def test_correction_only_does_not_compare_refund_with_full_call_estimate(p
     assert result["confirmed_expense_kopecks"] == -21
     assert result["linked_estimate_rub"] is None
     assert result["estimate_difference_rub"] is None
+
+
+async def test_import_cannot_reprice_or_debit_an_already_settled_customer(pool, monkeypatch):
+    from types import SimpleNamespace
+
+    user, project, messages = await fixture_source._owner(pool)
+    org, ref = "qa-paid-org-" + uuid4().hex, "qa-paid-import-ref"
+    monkeypatch.setattr(
+        provider_calls, "get_settings", lambda: SimpleNamespace(llmgw_organization_id=org)
+    )
+    call_id = await provider_calls.start_call(
+        route="/v1/messages",
+        model="qa-no-provider",
+        user_id=user,
+        project_id=project,
+        message_id=messages[0],
+    )
+    await provider_calls.finish_call(
+        call_id,
+        actual_model="qa-no-provider",
+        provider_request_id=ref,
+        calculated_cost_rub=Decimal("12.50"),
+    )
+    settlement_id = await billing.charge(
+        user_id=user,
+        project_id=project,
+        message_id=messages[0],
+        model_id="qa-no-provider",
+        tokens_in=3,
+        tokens_out=5,
+        cost_rub=Decimal("12.50"),
+        description="synthetic already settled customer",
+        provider_request_id=ref,
+    )
+    async with pool.acquire() as conn:
+        usage_id = await conn.fetchval(
+            "SELECT usage_id FROM usage_settlements WHERE id=$1",
+            settlement_id,
+        )
+    assert usage_id is not None
+    await provider_calls.finish_call(
+        call_id,
+        actual_model="qa-no-provider",
+        provider_request_id=ref,
+        calculated_cost_rub=Decimal("12.50"),
+        usage_id=usage_id,
+    )
+    before = await fixture_source._counts(pool, user)
+    assert before == (Decimal("87.5"), 1, 1)
+    async with pool.acquire() as conn:
+        receipt_before = dict(await conn.fetchrow("SELECT * FROM usage WHERE id=$1", usage_id))
+        settlement_before = dict(
+            await conn.fetchrow("SELECT * FROM usage_settlements WHERE usage_id=$1", usage_id)
+        )
+    document = statement(operation("qa-paid-import-op", ref, -1251), org=org)
+    result = await imported(pool, document)
+    await imported(pool, document)
+    assert result["confirmed_expense_kopecks"] == 1251
+    assert Decimal(result["estimate_difference_rub"]) == Decimal("0.01")
+    assert await fixture_source._counts(pool, user) == before
+    async with pool.acquire() as conn:
+        assert (
+            dict(await conn.fetchrow("SELECT * FROM usage WHERE id=$1", usage_id)) == receipt_before
+        )
+        assert (
+            dict(await conn.fetchrow("SELECT * FROM usage_settlements WHERE usage_id=$1", usage_id))
+            == settlement_before
+        )
+
+
+async def test_operator_cli_real_database_import_and_replay_are_private_and_idempotent(
+    pool,
+    database_url,
+    monkeypatch,
+    tmp_path,
+):
+    org, ref = "qa-cli-org-" + uuid4().hex, "qa-cli-private-request"
+    await call(pool, monkeypatch, org=org, ref=ref)
+    source = tmp_path / "source.bin"
+    source.write_bytes(SOURCE)
+    normalized = tmp_path / "normalized.json"
+    normalized.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "organization_id": org,
+                "source_kind": "balance_ledger_export",
+                "source_sha256": hashlib.sha256(SOURCE).hexdigest(),
+                "operations": [operation("qa-cli-op", ref, -2398)],
+            }
+        )
+    )
+    environment = os.environ.copy()
+    environment["DATABASE_URL"] = database_url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    for index in range(2):
+        report_path = tmp_path / f"report-{index}.json"
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            str(CLI_SCRIPT),
+            "--expected-organization-id",
+            org,
+            "--normalized-statement",
+            str(normalized),
+            "--source",
+            str(source),
+            "--report-file",
+            str(report_path),
+            env=environment,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await process.communicate()
+        assert process.returncode == 0
+        assert ref.encode() not in stdout + stderr and org.encode() not in stdout + stderr
+        assert stat.S_IMODE(report_path.stat().st_mode) == 0o600
+        report_data = json.loads(report_path.read_bytes())
+        assert report_data["operations"][0]["ref_id"] == ref
+        assert report_data["confirmed_expense_kopecks"] == 2398
+    async with pool.acquire() as conn:
+        assert (
+            await conn.fetchval(
+                "SELECT count(*) FROM provider_ledger_confirmations WHERE organization_id=$1", org
+            )
+            == 1
+        )
