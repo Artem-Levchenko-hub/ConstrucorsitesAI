@@ -608,7 +608,9 @@ async def test_chat_and_stream_missing_run_id_bind_real_owner_message_without_ea
 
     async def fake_provider(**kwargs):
         return {
-            "id": "qa-chat-" + str(r),
+            # Each real upstream call has a distinct receipt, including the
+            # platform-owned preliminary after the customer's chat call.
+            "id": "qa-chat-" + str(uuid4()),
             "model": model,
             "choices": [],
             "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "2"},
@@ -655,6 +657,15 @@ async def test_chat_and_stream_missing_run_id_bind_real_owner_message_without_ea
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT balance_rub FROM wallets WHERE user_id=$1", u) == 100
         assert await conn.fetchval("SELECT count(*) FROM usage WHERE run_id=$1", r) == 2
+        assert await conn.fetchval(
+            "SELECT count(*) FROM provider_calls WHERE project_id=$1 AND status='completed'",
+            p,
+        ) == 3
+        assert await conn.fetchval(
+            "SELECT count(*) FROM provider_calls WHERE project_id=$1 "
+            "AND expense_owner='platform' AND user_id IS NULL",
+            p,
+        ) == 1
         assert (
             await conn.fetchval(
                 "SELECT count(*) FROM usage_settlements WHERE user_id=$1 AND status='deferred' AND wallet_charge_id IS NULL",
