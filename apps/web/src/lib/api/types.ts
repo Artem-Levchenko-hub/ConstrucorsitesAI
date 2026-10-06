@@ -703,9 +703,17 @@ export type MaxPreviewSession = {
   expires_at: IsoDateTime;
 };
 
+export type CostBreakdown = {
+  confirmed: { calls: number; cost_rub: string };
+  estimated: { calls: number; cost_rub: string };
+  unknown: { calls: number; cost_rub: string };
+};
+
 export type MaxUsage = {
   total_cost_rub: number;
   run_cost_rub: number;
+  total_cost_breakdown?: CostBreakdown | null;
+  run_cost_breakdown?: CostBreakdown | null;
   run_id: Uuid | null;
   run_status: string | null;
   stages: {
@@ -713,6 +721,7 @@ export type MaxUsage = {
     label: string;
     cost_rub: number;
     calls: number;
+    cost_breakdown?: CostBreakdown | null;
     tokens_in: number;
     tokens_out: number;
     cache_read_tokens: number;

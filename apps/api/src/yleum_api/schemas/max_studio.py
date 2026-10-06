@@ -6,6 +6,8 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
+from yleum_api.schemas.billing import UsageCostBreakdownPublic
+
 
 class MaxContentItem(BaseModel):
     """One catalog position: a product, service, session or lesson.
@@ -195,6 +197,7 @@ class MaxUsageStagePublic(BaseModel):
     cache_read_tokens: int
     cache_write_tokens: int
     retries: int
+    cost_breakdown: UsageCostBreakdownPublic = Field(default_factory=UsageCostBreakdownPublic)
 
 
 class MaxUsagePublic(BaseModel):
@@ -203,3 +206,5 @@ class MaxUsagePublic(BaseModel):
     run_id: UUID | None = None
     run_status: str | None = None
     stages: list[MaxUsageStagePublic]
+    run_cost_breakdown: UsageCostBreakdownPublic = Field(default_factory=UsageCostBreakdownPublic)
+    total_cost_breakdown: UsageCostBreakdownPublic = Field(default_factory=UsageCostBreakdownPublic)

@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { CostBreakdown } from "./types";
 
 export type AuthSession = {
   id: string;
@@ -64,6 +65,7 @@ export type Subscription = {
 export type UsageAIBucket = {
   calls: number;
   cost_rub: string;
+  cost_breakdown?: CostBreakdown | null;
   tokens_in: number;
   tokens_out: number;
 };
@@ -99,6 +101,7 @@ export type BillingUsage = {
   wallet: { balance_rub: string; debited_rub: string; credited_rub: string; charges: number };
   entitlements: EntitlementUsage[];
   total_ai_cost_rub: string;
+  total_ai_cost_breakdown?: CostBreakdown | null;
 };
 
 export function getBillingUsage(range?: { from?: string; to?: string }): Promise<BillingUsage> {

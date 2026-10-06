@@ -43,6 +43,7 @@ from yleum_api.schemas.billing import (
     UsageWalletPublic,
 )
 from yleum_api.services import entitlements
+from yleum_api.services.usage_cost_summary import add_cost, cost_classification, merge_costs
 
 # The gateway stamps this stage on every answer a published app's visitor gets
 # (apps/api routers/integration_runtime.py sends it as metadata.stage).
@@ -141,10 +142,12 @@ async def build_usage_report(
         (Usage.stage == RUNTIME_AI_STAGE, "app_ai"),
         else_="other",
     )
+    cost_kind = cost_classification()
     usage_rows = (
         await session.execute(
             select(
                 bucket.label("bucket"),
+                cost_kind.label("cost_kind"),
                 func.count(Usage.id),
                 func.coalesce(func.sum(Usage.cost_rub), 0),
                 func.coalesce(func.sum(Usage.tokens_in), 0),
@@ -155,17 +158,17 @@ async def build_usage_report(
                 Usage.created_at >= start,
                 Usage.created_at < end,
             )
-            .group_by(bucket)
+            .group_by(bucket, cost_kind)
         )
     ).all()
     buckets: dict[str, UsageAIBucketPublic] = {}
-    for name, calls, cost, tokens_in, tokens_out in usage_rows:
-        buckets[str(name)] = UsageAIBucketPublic(
-            calls=int(calls),
-            cost_rub=Decimal(str(cost)),
-            tokens_in=int(tokens_in),
-            tokens_out=int(tokens_out),
-        )
+    for name, kind, calls, cost, tokens_in, tokens_out in usage_rows:
+        target = buckets.setdefault(str(name), UsageAIBucketPublic())
+        target.calls += int(calls)
+        target.cost_rub += Decimal(str(cost))
+        target.tokens_in += int(tokens_in)
+        target.tokens_out += int(tokens_out)
+        add_cost(target.cost_breakdown, kind, int(calls), Decimal(str(cost)))
     generation_spend = buckets.get("generation", UsageAIBucketPublic())
     generations = generations.model_copy(
         update={
@@ -173,6 +176,7 @@ async def build_usage_report(
             "cost_rub": generation_spend.cost_rub,
             "tokens_in": generation_spend.tokens_in,
             "tokens_out": generation_spend.tokens_out,
+            "cost_breakdown": generation_spend.cost_breakdown,
         }
     )
     app_ai = buckets.get("app_ai", UsageAIBucketPublic())
@@ -272,4 +276,7 @@ async def build_usage_report(
             for item in usages
         ],
         total_ai_cost_rub=generations.cost_rub + app_ai.cost_rub + other_ai.cost_rub,
+        total_ai_cost_breakdown=merge_costs(
+            generations.cost_breakdown, app_ai.cost_breakdown, other_ai.cost_breakdown,
+        ),
     )

@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class BillingPlanPublic(BaseModel):
@@ -54,13 +54,25 @@ class UsagePeriodPublic(BaseModel):
     source: Literal["subscription", "calendar_month", "custom"]
 
 
+class UsageCostBucketPublic(BaseModel):
+    calls: int = 0
+    cost_rub: Decimal = Decimal("0")
+
+
+class UsageCostBreakdownPublic(BaseModel):
+    confirmed: UsageCostBucketPublic = Field(default_factory=UsageCostBucketPublic)
+    estimated: UsageCostBucketPublic = Field(default_factory=UsageCostBucketPublic)
+    unknown: UsageCostBucketPublic = Field(default_factory=UsageCostBucketPublic)
+
+
 class UsageAIBucketPublic(BaseModel):
-    """Gateway ledger rows of one kind: how many calls and what they cost."""
+    """Stored customer usage, with the evidence behind its recorded cost."""
 
     calls: int = 0
     cost_rub: Decimal = Decimal("0")
     tokens_in: int = 0
     tokens_out: int = 0
+    cost_breakdown: UsageCostBreakdownPublic = Field(default_factory=UsageCostBreakdownPublic)
 
 
 class UsageGenerationsPublic(UsageAIBucketPublic):
@@ -118,3 +130,6 @@ class BillingUsagePublic(BaseModel):
     wallet: UsageWalletPublic
     entitlements: list[EntitlementUsagePublic]
     total_ai_cost_rub: Decimal
+    total_ai_cost_breakdown: UsageCostBreakdownPublic = Field(
+        default_factory=UsageCostBreakdownPublic
+    )

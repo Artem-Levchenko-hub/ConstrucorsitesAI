@@ -123,9 +123,62 @@ it("restores actual costs after a failed cached refetch recovers", async () => {
   expect(container.textContent).not.toContain(unavailable);
 });
 
-it("keeps a successful real zero-cost response hidden", async () => {
-  fetchMock.mockResolvedValue(Response.json({ ...payload, run_cost_rub: 0, total_cost_rub: 0, stages: [] }));
+it("keeps empty usage explicit instead of inferring calls from zero cost", async () => {
+  const empty = { confirmed: { calls: 0, cost_rub: "0" }, estimated: { calls: 0, cost_rub: "0" }, unknown: { calls: 0, cost_rub: "0" } };
+  fetchMock.mockResolvedValue(Response.json({ ...payload, run_cost_rub: 0, total_cost_rub: 0, stages: [], run_cost_breakdown: empty, total_cost_breakdown: empty }));
   await mount();
-  await settle(() => expect(container.querySelector("details")).toBeNull());
+  await settle(() => expect(container.textContent).toContain("Нет вызовов"));
   expect(client.getQueryState(queryKey)?.status).toBe("success");
+});
+
+it.each([
+  ["Подтверждено провайдером", 1, 0, 0, "0"],
+  ["Оценочная стоимость", 0, 1, 0, "10"],
+  ["Смешанная стоимость", 1, 1, 0, "10"],
+  ["Источник стоимости неизвестен", 0, 0, 2, "10"],
+] as const)("labels %s by calls even when a confirmed charge is zero", async (label, confirmed, estimated, unknown, amount) => {
+  const breakdown = {
+    confirmed: { calls: confirmed, cost_rub: "0" },
+    estimated: { calls: estimated, cost_rub: estimated ? amount : "0" },
+    unknown: { calls: unknown, cost_rub: unknown ? amount : "0" },
+  };
+  fetchMock.mockResolvedValue(Response.json({ ...payload, run_cost_rub: Number(amount), total_cost_rub: Number(amount),
+    run_cost_breakdown: breakdown, total_cost_breakdown: breakdown,
+    stages: [{ ...payload.stages[0], cost_rub: Number(amount), calls: confirmed + estimated + unknown, cost_breakdown: breakdown }],
+  }));
+  await mount();
+  await settle(() => expect(container.querySelector('[aria-label="Источник стоимости: Текущая сборка"]')?.textContent).toContain(label));
+  expect(container.querySelector('[aria-label="Источник стоимости: За всё время"]')?.textContent).toContain(label);
+  expect(container.querySelector('[aria-label="Источник стоимости: Работа генератора"]')?.textContent).toContain(label);
+  expect(container.textContent).not.toContain("фактического gateway-ledger");
+  if (unknown) expect(container.textContent).toContain("История без подтверждённого источника: 2 вызова, 10 ₽");
+  if (confirmed && estimated) {
+    expect(container.textContent).toContain("Подтверждено провайдером: 1 вызов, 0 ₽");
+    expect(container.textContent).toContain("Оценочная стоимость: 1 вызов, 10 ₽");
+  }
+});
+
+it("marks older API costs unknown without inventing total call counts", async () => {
+  fetchMock.mockResolvedValue(Response.json(payload));
+  await mount();
+  await settle(() => expect(container.textContent).toContain("Источник стоимости неизвестен"));
+  expect(container.textContent).toContain("История без подтверждённого источника: 2 вызова, 12,34 ₽");
+  expect(container.querySelector('[aria-label="Источник стоимости: За всё время"]')?.textContent).toContain("число вызовов неизвестно");
+  expect(container.textContent).not.toContain("Подтверждено провайдером");
+});
+
+it.each([true, false])("keeps history outside a missing current run (breakdown present: %s)", async present => {
+  const empty = { confirmed: { calls: 0, cost_rub: "0" }, estimated: { calls: 0, cost_rub: "0" }, unknown: { calls: 0, cost_rub: "0" } };
+  fetchMock.mockResolvedValue(Response.json({ ...payload, run_id: null, run_status: null,
+    run_cost_rub: 0, total_cost_rub: 12.34, run_cost_breakdown: present ? empty : null,
+    total_cost_breakdown: { ...empty, unknown: { calls: 2, cost_rub: "12.34" } },
+    stages: [{ ...payload.stages[0], cost_breakdown: null }],
+  }));
+  await mount();
+  await settle(() => expect(container.querySelector('[aria-label="Источник стоимости: Текущая сборка"]')?.textContent).toContain("Нет вызовов"));
+  expect(container.querySelector('[aria-label="Источник стоимости: Текущая сборка"]')?.textContent).not.toContain("История");
+  for (const label of ["За всё время", "Работа генератора"]) {
+    expect(container.querySelector(`[aria-label="Источник стоимости: ${label}"]`)?.textContent)
+      .toContain("История без подтверждённого источника: 2 вызова, 12,34 ₽");
+  }
 });

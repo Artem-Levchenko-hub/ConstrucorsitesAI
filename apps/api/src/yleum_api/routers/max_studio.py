@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import re
 from datetime import datetime
+from decimal import Decimal
 from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, Request, Response, status
-from sqlalchemy import func, select, text
+from sqlalchemy import case, func, literal, select, text
 
 from yleum_api.core.deps import CurrentUserDep, SessionDep
 from yleum_api.core.errors import ApiError
@@ -20,6 +21,7 @@ from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.usage import Usage
+from yleum_api.schemas.billing import UsageCostBreakdownPublic
 from yleum_api.schemas.max_studio import (
     MaxContentImagePublic,
     MaxPreviewSessionPublic,
@@ -41,6 +43,7 @@ from yleum_api.services.max_project_kit import (
     render_max_managed_files,
     render_max_managed_kit_update,
 )
+from yleum_api.services.usage_cost_summary import add_cost, cost_classification
 
 router = APIRouter(prefix="/api/projects", tags=["max-studio"])
 log = structlog.get_logger(__name__)
@@ -655,7 +658,7 @@ _USAGE_STAGE_ORDER = tuple(_USAGE_STAGE_LABELS)
 async def get_max_usage(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
 ) -> MaxUsagePublic:
-    """Actual gateway ledger grouped into Studio-friendly generation stages."""
+    """Stored customer usage and its price evidence, grouped by generation stage."""
     await _owned_max_project(session, project_id, current_user.id)
     latest_run = (
         await session.execute(
@@ -665,57 +668,59 @@ async def get_max_usage(
             .limit(1)
         )
     ).scalar_one_or_none()
-    rows = list(
-        (
-            await session.execute(
-                select(Usage).where(Usage.project_id == project_id).order_by(Usage.created_at.asc())
-            )
-        ).scalars()
+    is_latest = (
+        func.coalesce(Usage.run_id == latest_run.id, False) if latest_run else literal(False)
     )
-    run_rows = [row for row in rows if latest_run is not None and row.run_id == latest_run.id]
-    visible_rows = run_rows if latest_run is not None else rows
-    empty_bucket: dict[str, int | float] = {
-        "cost_rub": 0.0,
-        "calls": 0,
-        "tokens_in": 0,
-        "tokens_out": 0,
-        "cache_read_tokens": 0,
-        "cache_write_tokens": 0,
-        "retries": 0,
-    }
+    stage_key = case(
+        (Usage.stage.in_(tuple(_USAGE_STAGE_LABELS)), Usage.stage), else_="other"
+    )
+    cost_kind = cost_classification()
+    rows = (await session.execute(
+        select(is_latest, stage_key, cost_kind, func.count(Usage.id),
+               func.sum(Usage.cost_rub), func.sum(Usage.tokens_in), func.sum(Usage.tokens_out),
+               func.sum(Usage.cache_read_tokens), func.sum(Usage.cache_write_tokens),
+               func.sum(Usage.retry_count))
+        .where(Usage.project_id == project_id)
+        .group_by(is_latest, stage_key, cost_kind)
+    )).all()
+    total_breakdown, run_breakdown = UsageCostBreakdownPublic(), UsageCostBreakdownPublic()
+    total_cost, run_cost = Decimal(0), Decimal(0)
+
+    def empty_stage(stage: str) -> MaxUsageStagePublic:
+        return MaxUsageStagePublic(
+            id=stage, label=_USAGE_STAGE_LABELS[stage], cost_rub=0, calls=0,
+            tokens_in=0, tokens_out=0, cache_read_tokens=0, cache_write_tokens=0, retries=0,
+        )
+
     # The deterministic base is intentionally visible even though it has no LLM
     # ledger row: users can see that this stage adds zero provider usage.
-    grouped = {"template": empty_bucket.copy()}
-    for row in visible_rows:
-        stage = row.stage if row.stage in _USAGE_STAGE_LABELS else "other"
-        bucket = grouped.setdefault(stage, empty_bucket.copy())
-        bucket["cost_rub"] = float(bucket["cost_rub"]) + float(row.cost_rub)
-        bucket["calls"] = int(bucket["calls"]) + 1
-        bucket["tokens_in"] = int(bucket["tokens_in"]) + row.tokens_in
-        bucket["tokens_out"] = int(bucket["tokens_out"]) + row.tokens_out
-        bucket["cache_read_tokens"] = int(bucket["cache_read_tokens"]) + row.cache_read_tokens
-        bucket["cache_write_tokens"] = int(bucket["cache_write_tokens"]) + row.cache_write_tokens
-        bucket["retries"] = int(bucket["retries"]) + row.retry_count
-
-    stages = [
-        MaxUsageStagePublic(
-            id=stage,
-            label=_USAGE_STAGE_LABELS[stage],
-            cost_rub=float(grouped[stage]["cost_rub"]),
-            calls=int(grouped[stage]["calls"]),
-            tokens_in=int(grouped[stage]["tokens_in"]),
-            tokens_out=int(grouped[stage]["tokens_out"]),
-            cache_read_tokens=int(grouped[stage]["cache_read_tokens"]),
-            cache_write_tokens=int(grouped[stage]["cache_write_tokens"]),
-            retries=int(grouped[stage]["retries"]),
-        )
-        for stage in _USAGE_STAGE_ORDER
-        if stage in grouped
-    ]
+    grouped = {"template": empty_stage("template")}
+    stage_costs: dict[str, Decimal] = {}
+    for current, stage, kind, calls, cost, tokens_in, tokens_out, reads, writes, retries in rows:
+        saved_cost = Decimal(str(cost))
+        total_cost += saved_cost
+        add_cost(total_breakdown, kind, calls, saved_cost)
+        if current:
+            run_cost += saved_cost
+            add_cost(run_breakdown, kind, calls, saved_cost)
+        if latest_run is not None and not current:
+            continue
+        target = grouped.setdefault(stage, empty_stage(stage))
+        stage_costs[stage] = stage_costs.get(stage, Decimal(0)) + saved_cost
+        target.cost_rub = float(stage_costs[stage])
+        target.calls += calls
+        target.tokens_in += tokens_in
+        target.tokens_out += tokens_out
+        target.cache_read_tokens += reads
+        target.cache_write_tokens += writes
+        target.retries += retries
+        add_cost(target.cost_breakdown, kind, calls, saved_cost)
     return MaxUsagePublic(
-        total_cost_rub=round(sum(float(row.cost_rub) for row in rows), 4),
-        run_cost_rub=round(sum(float(row.cost_rub) for row in run_rows), 4),
+        total_cost_rub=round(float(total_cost), 4),
+        run_cost_rub=round(float(run_cost), 4),
         run_id=latest_run.id if latest_run else None,
         run_status=latest_run.status if latest_run else None,
-        stages=stages,
+        stages=[grouped[stage] for stage in _USAGE_STAGE_ORDER if stage in grouped],
+        total_cost_breakdown=total_breakdown,
+        run_cost_breakdown=run_breakdown,
     )

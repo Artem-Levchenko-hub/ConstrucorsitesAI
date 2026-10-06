@@ -1,6 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { getBillingUsage, type EntitlementUsage } from "@/lib/api/account";
+import { CostSource } from "@/components/ui/CostSource";
 import { date, money, QueryError } from "./account-presentation";
 
 /**
@@ -32,11 +33,24 @@ export function AccountUsage() {
       <dl className="account-usage-grid">
         <div>
           <dt>Сборки приложений</dt>
-          <dd>{data.generations.total}<small>{money(data.generations.cost_rub)} за модели · завершено {data.generations.completed}, с ошибкой {data.generations.failed}</small></dd>
+          <dd>{data.generations.total}<small>{money(data.generations.cost_rub)} за модели · завершено {data.generations.completed}, с ошибкой {data.generations.failed}</small>
+            <CostSource label="Сборки приложений" breakdown={data.generations.cost_breakdown} calls={data.generations.calls} costRub={data.generations.cost_rub} />
+          </dd>
         </div>
         <div>
           <dt>Ответы ИИ посетителям приложений</dt>
-          <dd>{data.app_ai_answers.calls}<small>{money(data.app_ai_answers.cost_rub)}</small></dd>
+          <dd>{data.app_ai_answers.calls}<small>{money(data.app_ai_answers.cost_rub)}</small>
+            <CostSource label="Ответы ИИ посетителям приложений" breakdown={data.app_ai_answers.cost_breakdown} calls={data.app_ai_answers.calls} costRub={data.app_ai_answers.cost_rub} />
+          </dd>
+        </div>
+        {data.other_ai.calls > 0 && <div>
+          <dt>Другие обращения к ИИ</dt>
+          <dd>{money(data.other_ai.cost_rub)}<CostSource label="Другие обращения к ИИ" breakdown={data.other_ai.cost_breakdown} calls={data.other_ai.calls} costRub={data.other_ai.cost_rub} /></dd>
+        </div>}
+        <div>
+          <dt>Все расходы на ИИ</dt>
+          <dd>{money(data.total_ai_cost_rub)}<CostSource label="Все расходы на ИИ" breakdown={data.total_ai_cost_breakdown}
+            calls={data.generations.calls + data.app_ai_answers.calls + data.other_ai.calls} costRub={data.total_ai_cost_rub} /></dd>
         </div>
         <div>
           <dt>Публикации</dt>

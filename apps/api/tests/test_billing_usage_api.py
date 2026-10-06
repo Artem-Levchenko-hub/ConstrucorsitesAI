@@ -237,6 +237,10 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     assert report["period"]["source"] == "calendar_month"
     assert report["plan"]["code"] == "free" and report["plan"]["version"] == 2
     assert report["subscription_status"] == "active"
+    legacy_generations = report["generations"].pop("cost_breakdown")
+    assert legacy_generations["unknown"] == {"calls": 2, "cost_rub": "4.7500"}
+    legacy_app = report["app_ai_answers"].pop("cost_breakdown")
+    assert legacy_app["unknown"] == {"calls": 1, "cost_rub": "0.4000"}
     assert report["generations"] == {
         "calls": 2,
         "cost_rub": "4.7500",
@@ -256,6 +260,7 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     }
     assert report["other_ai"]["calls"] == 1 and report["other_ai"]["cost_rub"] == "0.0500"
     assert Decimal(report["total_ai_cost_rub"]) == Decimal("5.2000")
+    assert report["total_ai_cost_breakdown"]["unknown"] == {"calls": 4, "cost_rub": "5.2000"}
     assert report["publications"] == {"total": 2, "projects": 1}
     assert report["wallet"] == {
         "balance_rub": "100.0000",
@@ -290,6 +295,9 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     assert empty.status_code == 200
     assert empty.json()["period"]["source"] == "custom"
     assert empty.json()["generations"]["total"] == 0
+    assert empty.json()["total_ai_cost_breakdown"] == {
+        key: {"calls": 0, "cost_rub": "0"} for key in ("confirmed", "estimated", "unknown")
+    }
     assert empty.json()["publications"] == {"total": 0, "projects": 0}
     # ...but the plan and its live use do not depend on the window.
     assert _entitlement(empty.json(), "max_projects")["used"] == 2
@@ -305,6 +313,96 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
 async def test_usage_report_requires_a_signed_in_user(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/billing/usage")
     assert response.status_code == 401
+
+
+async def test_cost_evidence_breakdown_uses_saved_amounts_and_owner_period_filters(
+    client: httpx.AsyncClient, db_session: AsyncSession, git: None,
+) -> None:
+    from yleum_api.services.usage_cost_summary import classify_cost, cost_classification
+
+    user = await _register(client, db_session, "cost-evidence@example.com")
+    response = await _create_project(client, "Cost evidence")
+    assert response.status_code == 201
+    project_id = response.json()["id"]
+    foreign = User(id=uuid4(), is_anon=True)
+    db_session.add(foreign)
+    await db_session.flush()
+    foreign_project = Project(owner_id=foreign.id, name="Foreign", slug=uuid4().hex,
+                              template="max_miniapp")
+    db_session.add(foreign_project)
+    await db_session.flush()
+    evidence = [
+        ("0", {"basis": "provider_reported_rub", "reported_cost_rub": "0"}),
+        ("1.2", {"basis": "provider_reported_rub", "reported_cost_rub": "99"}),
+        (".3", {"basis": "provider_catalog_estimate", "provider_cost_usd": ".01"}),
+        (".4", None),
+        (".5", {"basis": "provider_reported_rub", "reported_cost_rub": "NaN"}),
+        (".6", {"basis": "provider_reported_rub", "reported_cost_rub": True}),
+        ("1.2345", {"basis": "provider_reported_rub", "reported_cost_rub": "1.23445"}),
+        ("1.2344", {"basis": "provider_reported_rub", "reported_cost_rub": "1.23445"}),
+        (".7", {"basis": "provider_reported_rub", "reported_cost_rub": "1e999999999999999999"}),
+        (".8", {"basis": "provider_reported_rub", "reported_cost_rub": "1e-999999999999999999"}),
+        (".9", {"basis": "provider_reported_rub", "reported_cost_rub": "1e99"}),
+        *[("0", {"basis": "provider_reported_rub", "reported_cost_rub": "0",
+                  "schema_version": version}) for version in (999, True, 1.0, None)],
+        ("0", {"basis": "provider_reported_rub", "reported_cost_rub": "0",
+               "effective_cost_rub": "1"}),
+        ("0", {"basis": "token_tariff", "calculated_cost_rub": "1"}),
+        ("0", {"basis": "provider_reported_rub", "reported_cost_rub": 0}),
+    ]
+    inserted = []
+    for cost, provenance in evidence:
+        if provenance is not None:
+            provenance = {
+                "schema_version": 1,
+                "effective_cost_rub": provenance.get("reported_cost_rub", cost),
+                "calculated_cost_rub": cost, "reported_cost_rub": None, **provenance,
+            }
+            if provenance["schema_version"] is None:
+                del provenance["schema_version"]
+        row = Usage(user_id=user.id, project_id=project_id, model_id="synthetic",
+                    tokens_in=3, tokens_out=1, cost_rub=Decimal(cost), stage="runtime_ai",
+                    cost_provenance=provenance, created_at=datetime(2026, 1, 15, tzinfo=UTC))
+        inserted.append(row)
+        db_session.add(row)
+    db_session.add_all([
+        Usage(user_id=foreign.id, project_id=foreign_project.id, model_id="foreign",
+              tokens_in=0, tokens_out=0, cost_rub=Decimal("90"), stage="runtime_ai",
+              created_at=datetime(2026, 1, 15, tzinfo=UTC)),
+        Usage(user_id=user.id, project_id=project_id, model_id="old-period",
+              tokens_in=0, tokens_out=0, cost_rub=Decimal("7"), stage="runtime_ai",
+              created_at=datetime(2025, 1, 15, tzinfo=UTC)),
+    ])
+    await db_session.commit()
+    classified = dict((await db_session.execute(
+        select(Usage.id, cost_classification()).where(Usage.id.in_([row.id for row in inserted]))
+    )).all())
+    assert [classified[row.id] for row in inserted] == [
+        classify_cost(row.cost_provenance, row.cost_rub) for row in inserted
+    ]
+    result = await client.get("/api/billing/usage", params={
+        "from": "2026-01-01T00:00:00Z", "to": "2026-02-01T00:00:00Z",
+    })
+    assert result.status_code == 200, result.text
+    report = result.json()
+    expected = {
+        "confirmed": {"calls": 2, "cost_rub": "1.2345"},
+        "estimated": {"calls": 1, "cost_rub": "0.3000"},
+        "unknown": {"calls": 15, "cost_rub": "6.3344"},
+    }
+    assert report["app_ai_answers"]["cost_breakdown"] == expected
+    assert report["total_ai_cost_breakdown"] == expected
+    assert Decimal(report["total_ai_cost_rub"]) == Decimal("7.8689")
+    assert report["wallet"]["balance_rub"] == "100.0000"
+    assert report["wallet"]["charges"] == 0
+    project = await client.get(f"/api/projects/{project_id}/max/usage")
+    assert project.status_code == 200, project.text
+    # Project totals retain all history; account totals use the requested period.
+    assert project.json()["total_cost_rub"] == 14.8689
+    assert project.json()["total_cost_breakdown"]["unknown"] == {
+        "calls": 16, "cost_rub": "13.3344",
+    }
+    assert (await client.get(f"/api/projects/{foreign_project.id}/max/usage")).status_code == 404
 
 
 async def test_project_limit_refuses_one_more_app_with_a_precise_reason(

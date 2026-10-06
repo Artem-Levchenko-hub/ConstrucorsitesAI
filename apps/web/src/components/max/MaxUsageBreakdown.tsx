@@ -5,6 +5,7 @@ import { Check, Coins, RotateCcw } from "lucide-react";
 
 import { getMaxUsage } from "@/lib/api/max-studio";
 import type { Uuid } from "@/lib/api/types";
+import { CostSource } from "@/components/ui/CostSource";
 
 function rub(value: number): string {
   return new Intl.NumberFormat("ru-RU", {
@@ -22,9 +23,6 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
   });
   const current = usage.data?.run_cost_rub ?? 0;
   const total = usage.data?.total_cost_rub ?? 0;
-  // Полоса во всю ширину ради «0,00 ₽» занимала место у того, что нужно во
-  // время сборки. Пока тратить нечего — блока нет.
-  if (!usage.isLoading && !usage.isError && current === 0 && total === 0) return null;
   const currentLabel = usage.isError ? "Недоступно" : usage.isLoading ? "…" : `${rub(current)} ₽`;
   const totalLabel = usage.isError ? "Недоступно" : usage.isLoading ? "…" : `${rub(total)} ₽`;
 
@@ -35,15 +33,18 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
         {!usage.isError && <span className="hidden sm:inline">Расход</span>}
         <span>{usage.isError ? "Данные о расходе недоступны" : currentLabel}</span>
       </summary>
-      <section className="absolute right-0 top-11 z-[80] w-[340px] max-w-[calc(100vw-24px)] rounded-[10px] border border-border-default bg-surface-raised p-4 shadow-[0_24px_70px_rgba(23,23,22,.16)]">
+      <section className="absolute right-0 top-11 z-[80] max-h-[70dvh] w-[340px] max-w-[calc(100vw-24px)] overflow-y-auto overscroll-contain rounded-[10px] border border-border-default bg-surface-raised p-4 shadow-[0_24px_70px_rgba(23,23,22,.16)]">
         <div className="flex items-start justify-between gap-4 border-b border-border-default pb-3">
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="omnia-kicker text-fg-tertiary">Текущая сборка</p>
             <p className="mt-1 text-xl font-semibold tracking-[-.03em]">{currentLabel}</p>
+            {!usage.isError && usage.data && <CostSource label="Текущая сборка" breakdown={usage.data.run_cost_breakdown}
+              calls={usage.data.run_id === null ? 0 : usage.data.stages.reduce((sum, stage) => sum + stage.calls, 0)} costRub={current} />}
           </div>
-          <div className="text-right text-[11px] text-fg-tertiary">
+          <div className="min-w-0 flex-1 text-right text-[11px] text-fg-tertiary">
             <p>За всё время</p>
             <p className="mt-1 font-semibold text-fg-secondary">{totalLabel}</p>
+            {!usage.isError && usage.data && <CostSource label="За всё время" breakdown={usage.data.total_cost_breakdown} costRub={total} />}
           </div>
         </div>
 
@@ -65,11 +66,12 @@ export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
                   {stage.cache_read_tokens > 0 && <span>из кеша {stage.cache_read_tokens.toLocaleString("ru-RU")}</span>}
                   {stage.retries > 0 && <span className="inline-flex items-center gap-1"><RotateCcw className="size-2.5" /> повторов {stage.retries}</span>}
                 </p>
+                <CostSource label={stage.label} breakdown={stage.cost_breakdown} calls={stage.calls} costRub={stage.cost_rub} />
               </div>
             ))}
           </div>
         )}
-        <p className="mt-3 text-[11px] leading-4 text-fg-tertiary">Данные берутся из фактического gateway-ledger и обновляются во время работы.</p>
+        <p className="mt-3 text-[11px] leading-4 text-fg-tertiary">Показаны расходы вашего аккаунта. Оценочные суммы рассчитаны по токенам и тарифам; списания с баланса доступны в разделе оплаты.</p>
       </section>
     </details>
   );

@@ -30,11 +30,13 @@ const usage = {
 };
 let config: unknown, payments: unknown, post: (body: Record<string, unknown>) => Promise<Response>, requests: Record<string, unknown>[];
 let sessionError = false;
+let usageResponse: unknown = usage;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   localStorage.clear(); mocks.search = ""; mocks.replace.mockReset(); sessionError = false; requests = [];
   config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888" }] };
   payments = []; post = async () => Response.json(payment);
+  usageResponse = usage;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
@@ -43,7 +45,7 @@ beforeEach(() => {
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
     if (path === "/api/billing/plans") return Response.json([freePlan, plan]);
-    if (path === "/api/billing/usage") return Response.json(usage);
+    if (path === "/api/billing/usage") return Response.json(usageResponse);
     if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: { ...plan, code: "free", id: "free", name: "Free" }, status: "active", auto_renew: false, cancel_at_period_end: false });
     if (path === "/api/auth/sessions") return sessionError ? Promise.reject(new Error("Sessions offline")) : Response.json([{ id: "current", current: true, user_agent: "Macintosh", ip_address: "127.0.0.1", created_at: "2026-09-06", last_seen_at: "2026-09-07" }]);
     return new Response(null, { status: 204 });
@@ -190,6 +192,39 @@ it("shows the period's spend and the plan's use next to each limit", async () =>
     expect(rows).toContain("Приложений2 · без ограничений");
     expect(rows).toContain("Опубликованных приложений2 из 1сверх тарифа");
     expect(rows).toContain("Интеграцииподключено: 1");
+  } finally { await app.close(); }
+});
+
+it.each([
+  ["Подтверждено провайдером", 1, 0, 0, "0"],
+  ["Оценочная стоимость", 0, 1, 0, "5"],
+  ["Смешанная стоимость", 1, 1, 1, "10"],
+  ["Источник стоимости неизвестен", 0, 0, 1, "5"],
+  ["Нет вызовов", 0, 0, 0, "0"],
+] as const)("shows account cost provenance as %s without changing wallet debits", async (label, confirmed, estimated, unknown, amount) => {
+  const breakdown = { confirmed: { calls: confirmed, cost_rub: "0" },
+    estimated: { calls: estimated, cost_rub: estimated ? "5" : "0" },
+    unknown: { calls: unknown, cost_rub: unknown ? "5" : "0" } };
+  usageResponse = { ...usage, total_ai_cost_rub: amount, total_ai_cost_breakdown: breakdown,
+    app_ai_answers: { ...usage.app_ai_answers, calls: 0, cost_rub: "0" },
+    generations: { ...usage.generations, calls: confirmed + estimated + unknown, cost_rub: amount, cost_breakdown: breakdown } };
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(app.container.querySelector('[aria-label="Источник стоимости: Сборки приложений"]')?.textContent).toContain(label));
+    expect(app.container.querySelector('[aria-label="Источник стоимости: Все расходы на ИИ"]')?.textContent).toContain(label);
+    expect(app.container.textContent).toContain("Списано с баланса51,7 ₽");
+    if (unknown) expect(app.container.textContent).toContain("История без подтверждённого источника: 1 вызов, 5 ₽");
+  } finally { await app.close(); }
+});
+
+it.each([undefined, null])("marks account history with missing/null breakdown %s as unknown", async breakdown => {
+  usageResponse = { ...usage, total_ai_cost_breakdown: breakdown,
+    generations: { ...usage.generations, cost_breakdown: breakdown } };
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(app.container.querySelector('[aria-label="Источник стоимости: Сборки приложений"]')?.textContent).toContain("Источник стоимости неизвестен"));
+    expect(app.container.textContent).toContain("История без подтверждённого источника: 12 вызовов, 48,5 ₽");
+    expect(app.container.textContent).not.toContain("Подтверждено провайдером");
   } finally { await app.close(); }
 });
 it("keeps every operation labelled and semantically tabular when mobile rows reflow", async () => {
