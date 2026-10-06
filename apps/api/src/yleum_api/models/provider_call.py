@@ -27,6 +27,7 @@ class ProviderCall(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     provider_scope: Mapped[str] = mapped_column(Text, nullable=False)
+    provider_organization_id: Mapped[str | None] = mapped_column(Text)
     route: Mapped[str] = mapped_column(Text, nullable=False)
     requested_model: Mapped[str] = mapped_column(Text, nullable=False)
     actual_model: Mapped[str | None] = mapped_column(Text)

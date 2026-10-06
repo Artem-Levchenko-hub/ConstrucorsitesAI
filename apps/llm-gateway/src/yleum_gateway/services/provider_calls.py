@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
+from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
 from yleum_gateway.core.errors import BillingReconciliationRequiredError
 from yleum_gateway.services.pricing import validate_cost_provenance
@@ -44,15 +45,23 @@ async def start_call(
                    for v in (user_id, project_id, run_id, message_id))):
         raise _error(call_id, started=False)
     try:
+        organization = get_settings().llmgw_organization_id
+        if organization is not None and (
+            not isinstance(organization, str) or not 0 < len(organization) <= 512
+            or organization != organization.strip()
+            or any(ord(c) < 32 or ord(c) == 127 for c in organization)
+        ):
+            raise ValueError
         async with get_pool().acquire() as conn, conn.transaction():
             await conn.execute(
                 "INSERT INTO provider_calls "
                 "(id,provider_scope,route,requested_model,expense_owner,user_id,project_id,"
-                "run_id,message_id,stage,free,status) "
-                "VALUES($1,'llmgw',$2,$3,$4,$5,$6,$7,$8,$9,$10,'started')",
+                "run_id,message_id,stage,free,status,provider_organization_id) "
+                "VALUES($1,'llmgw',$2,$3,$4,$5,$6,$7,$8,$9,$10,'started',$11)",
                 call_id, route, model, "user" if user_id is not None else "platform",
                 user_id, project_id, run_id, message_id,
                 stage if isinstance(stage, str) and stage in _STAGES else "unknown", free,
+                organization,
             )
     except Exception:
         raise _error(call_id, started=False) from None

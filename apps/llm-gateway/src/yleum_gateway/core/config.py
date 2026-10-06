@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import SecretStr
+from pydantic import SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,6 +31,15 @@ class Settings(BaseSettings):
     # --- llmgw.ru — text, vision, and tool-calling LLM upstream ---
     llmgw_api_key: SecretStr | None = None
     llmgw_base_url: str = "https://api.llmgw.ru/v1"
+    # Non-secret, operator-verified provider account identity. Unset means
+    # statements cannot automatically confirm this call's organization.
+    llmgw_organization_id: str | None = None
+
+    @field_validator("llmgw_organization_id", mode="before")
+    @classmethod
+    def empty_organization_is_unconfigured(cls, value: object) -> object:
+        # Compose supplies an empty default for existing deployments.
+        return None if value == "" else value
 
     # --- aitunnel.ru — optional image/video upstream only ---
     aitunnel_api_key: SecretStr | None = None

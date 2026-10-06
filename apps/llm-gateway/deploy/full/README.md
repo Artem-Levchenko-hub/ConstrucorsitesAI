@@ -110,6 +110,25 @@ against the provider export, inspect journal terminal states and check the
 customer settlement independently. Reconcile historical differences by request
 ID; do not rewrite historical wallets or bill unmatched platform requests.
 
+### Balance-ledger confirmations
+
+Migration `0080_provider_ledger` adds append-only provider statement entries,
+conflicts and confirmations. Apply API migration before activating the gateway
+that records the optional `LLMGW_ORGANIZATION_ID` on new attempts. Configure this
+non-secret value only after verifying the provider account tied to the actual
+key. Empty/unset values preserve existing calls but leave automatic organization
+reconciliation unavailable; historical NULL scope is never guessed/backfilled.
+
+Use the API operator tool `scripts/reconcile_provider_ledger.py` with an
+authorized original source and verified normalized schema. Match stable
+operation IDs/ref_ids and signed integer kopecks; no time/amount joins, browser
+credential extraction, wallet repricing or customer export endpoints. Reports
+containing IDs are exclusive mode-0600 files; stdout has aggregates only.
+Provider corrections remain separate entries. Keep migration/evidence when
+rolling back service images; never drop the ledger tables as a production rollback.
+The complete contract and remaining production/source blockers are in
+`docs/qa/2026-10-02-handoff/evidence/provider-ledger-reconciliation-20261006.md`.
+
 ## Production smoke
 
 `.github/workflows/production-smoke.yml` запускает внешнюю проверку каждые пять

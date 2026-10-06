@@ -137,6 +137,8 @@ services:
       # --- llmgw.ru — text, vision, and native-agent tool calls ---
       LLMGW_API_KEY: ${LLMGW_API_KEY:-}
       LLMGW_BASE_URL: ${LLMGW_BASE_URL:-https://api.llmgw.ru/v1}
+      # Configure only after verifying the identity in the authorized provider ledger.
+      LLMGW_ORGANIZATION_ID: ${LLMGW_ORGANIZATION_ID:-}
       # --- aitunnel.ru — optional image/video generation only ---
       AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:-}
       AITUNNEL_BASE_URL: ${AITUNNEL_BASE_URL:-https://api.aitunnel.ru/v1}
