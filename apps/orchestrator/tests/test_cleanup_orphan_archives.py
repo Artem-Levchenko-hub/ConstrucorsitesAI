@@ -129,6 +129,7 @@ def test_active_or_unknown_publication_prevents_deletion(tmp_path, monkeypatch, 
 @pytest.mark.parametrize("phase", ["done", "failed", "cancelled"])
 def test_finished_publication_does_not_block_collection(tmp_path, monkeypatch, phase):
     orphan = archive(tmp_path)
+    prepare_workspace_lock(tmp_path)
     publication = tmp_path / "cell-publications" / "another-project" / "publication.json"
     publication.parent.mkdir(parents=True)
     publication.write_text(
