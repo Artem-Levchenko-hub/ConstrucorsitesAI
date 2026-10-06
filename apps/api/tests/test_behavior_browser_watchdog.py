@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace as NS
 
@@ -20,12 +22,30 @@ from .test_max_behavior_proof import binding, contract
 
 
 def watched(server, mutation, *, seconds=3):
-    server.files = fixture_files("")
+    server.pending_evaluator = threading.Event()
+    marker = "/api/fixture/evaluator-pending"
+
+    class PendingFiles(dict):
+        def get(self, path, default=None):
+            if path == marker:
+                server.pending_evaluator.set()
+                return b"{}"
+            return super().get(path, default)
+
+    server.files = PendingFiles(fixture_files(""))
     javascript = server.files["/_next/static/chunks/a.js"]
+    # A synchronous fixture-only read proves the evaluator reached the pending
+    # operation. Append after initialization: startup getItem calls are not proof.
+    signal = (
+        b"const signal=new XMLHttpRequest();"
+        b"signal.open('GET','/api/fixture/evaluator-pending',false);signal.send();"
+    )
     if mutation == "storage":
-        javascript = b"Storage.prototype.getItem=()=>new Promise(()=>{});\n" + javascript
+        javascript += (
+            b"\nStorage.prototype.getItem=()=>{" + signal + b"return new Promise(()=>{});};"
+        )
     elif mutation == "paint":
-        javascript += b"Element.prototype.checkVisibility=()=>{while(true){}};"
+        javascript += b"\nElement.prototype.checkVisibility=()=>{" + signal + b"while(true){}};"
     server.files["/_next/static/chunks/a.js"] = javascript
     bound = binding()
     witness = b.CompiledAssetWitness(
@@ -45,7 +65,7 @@ def watched(server, mutation, *, seconds=3):
 
     registered = browser.make_private_browser_driver(
         executable_path=installed_chromium(),
-        adapter=adapter(),
+        adapter=replace(adapter(), read_paths=(marker,)),
         launch_args=("--no-sandbox",),
         resolve_candidate_compilation=resolver,
         worker_timeout_seconds=seconds,
@@ -66,11 +86,14 @@ def assert_owned_processes_gone(endings):
 
 @pytest.mark.parametrize("pending", ["storage", "paint"])
 def test_actual_pending_generated_evaluator_deadline_kills_and_reaps(local_fixture, pending):
-    registered, request, witness, endings = watched(local_fixture, pending)
+    # The worker budget includes real Chromium startup, navigation and measured
+    # controls. It must allow entry before testing a pending evaluator's deadline.
+    registered, request, witness, endings = watched(local_fixture, pending, seconds=10)
     started = time.monotonic()
     with pytest.raises(b.BehaviorProofError, match="BEHAVIOR_BROWSER_DEADLINE"):
         asyncio.run(registered.observe_browser(request, witness))
-    assert time.monotonic() - started < 8
+    assert time.monotonic() - started < 15
+    assert local_fixture.pending_evaluator.is_set()
     assert endings[0][2] is True
     assert local_fixture.reads >= 3 and local_fixture.mutations == 0
     assert endings[0][2] is True
@@ -82,11 +105,12 @@ def test_actual_pending_evaluator_cancellation_waits_for_owned_cleanup(local_fix
 
     async def cancel():
         task = asyncio.create_task(registered.observe_browser(request, witness))
-        # The generated evaluator is pending well before this fixed bounded wait.
-        await asyncio.sleep(2)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
+        try:
+            assert await asyncio.to_thread(local_fixture.pending_evaluator.wait, 20)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
     asyncio.run(cancel())
     assert local_fixture.reads >= 3 and local_fixture.mutations == 0

@@ -22,6 +22,16 @@ The user observed ledger and export URLs in the authorized dashboard. Their
 existence is not an authenticated API contract. No browser cookie/token is
 extracted and no endpoint block is bypassed by this implementation.
 
+## CI fixture verification
+
+Two pre-existing timing assumptions were reproduced and corrected only in tests:
+archive lock storage is initialized before its unchanged 100 ms acquisition
+budget; the real-browser watchdog now requires a fixture-only evaluator-entry
+witness before accepting deadline/cancellation coverage. Production locks,
+retention and browser cleanup remain unchanged. Missing entry evidence still
+fails. Independent bounded reviews found no issues; exact full CI remains the
+delivery gate.
+
 ## Data contract
 
 An operator first verifies the real source's columns and organization. The
