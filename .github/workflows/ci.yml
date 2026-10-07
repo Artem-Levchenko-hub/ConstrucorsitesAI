@@ -112,6 +112,8 @@ jobs:
           tests/test_release_identity.py
           tests/test_readiness.py
           tests/test_auth.py
+          tests/test_oauth_login.py
+          tests/test_vk_email_diagnostics.py
           tests/test_agent_native.py
           tests/test_generation_runs.py
           tests/test_generation_worker.py

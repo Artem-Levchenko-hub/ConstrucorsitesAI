@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import secrets
 from dataclasses import dataclass
 from typing import Any
@@ -41,6 +42,7 @@ PROVIDER_LABELS: dict[str, str] = {"vk": "VK ID", "yandex": "Яндекс ID"}
 PROVIDERS: tuple[str, ...] = tuple(PROVIDER_LABELS)
 
 _USER_AGENT = "MAX-Studio-Login/1.0"
+log = logging.getLogger(__name__)
 
 
 class OAuthLoginError(Exception):
@@ -192,6 +194,18 @@ def _email(value: object) -> str | None:
     return email
 
 
+def _email_state(payload: dict[str, Any]) -> str:
+    """Only a fixed diagnostic category; never return provider-supplied content."""
+    if "email" not in payload:
+        return "absent"
+    value = payload["email"]
+    if value is None:
+        return "null"
+    if isinstance(value, str) and not value.strip():
+        return "empty"
+    return "valid" if _email(value) is not None else "invalid"
+
+
 async def fetch_identity(
     provider: str,
     *,
@@ -237,10 +251,24 @@ async def fetch_identity(
                 user = profile.get("user")
                 if not isinstance(user, dict):
                     raise OAuthLoginError("VK ID user_info: нет блока user")
+                email = _email(user.get("email"))
+                if email is None:
+                    scope = token.get("scope")
+                    granted = "email" in scope.split() if isinstance(scope, str) else None
+                    # Log finite states only: no token, email, subject, raw scope,
+                    # profile keys or callback values may enter the log message.
+                    log.warning(
+                        "oauth login: vk email missing; email_scope_granted=%s "
+                        "profile_email_state=%s token_email_state=%s id_token_present=%s",
+                        granted,
+                        _email_state(user),
+                        _email_state(token),
+                        bool(token.get("id_token")),
+                    )
                 return ProviderIdentity(
                     provider="vk",
                     provider_user_id=_subject(user.get("user_id"), "VK ID user_info"),
-                    email=_email(user.get("email")),
+                    email=email,
                 )
             if provider == "yandex":
                 token = _payload(
