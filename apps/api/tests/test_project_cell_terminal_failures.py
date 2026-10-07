@@ -52,12 +52,13 @@ async def test_candidate_probe_never_turns_fatal_infra_into_unknown_green(failed
 @pytest.mark.asyncio
 async def test_first_max_core_recovery_preserves_fatal_infrastructure_error(monkeypatch):
     calls = []
+    core = {"src/lib/db/schema.ts": "safe core", "src/lib/db/empty.ts": ""}
 
     async def render():
-        return {}
+        return core
 
     async def apply(**kwargs):
-        calls.append("apply")
+        calls.append(("apply", kwargs["files"], kwargs["empty_files"]))
 
     async def build():
         calls.append("build")
@@ -67,7 +68,14 @@ async def test_first_max_core_recovery_preserves_fatal_infrastructure_error(monk
     with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
         await agent_recovery.recover_stopped_candidate(
             _agent_res=AgentResult(
-                done=False, summary="stopped", files={}, steps=1, stop_reason="max_steps_red"
+                done=False,
+                summary="stopped",
+                files={
+                    "src/lib/db/schema.ts": "broken core",
+                    "src/app/api/workouts/route.ts": "partial",
+                },
+                steps=1,
+                stop_reason="max_steps_red",
             ),
             _max_has_generated_snapshot=False,
             _max_seed_files={},
@@ -79,7 +87,14 @@ async def test_first_max_core_recovery_preserves_fatal_infrastructure_error(monk
             runtime=SimpleNamespace(handle=object()),
             operations=SimpleNamespace(probe_build=build),
         )
-    assert calls == ["apply", "apply", "build"]
+    assert calls == [
+        (
+            "apply",
+            {**core, "src/app/api/workouts/route.ts": "", "src/app/page.tsx": ""},
+            ("src/lib/db/empty.ts",),
+        ),
+        "build",
+    ]
 
 
 @pytest.mark.asyncio
@@ -146,7 +161,7 @@ async def test_finalization_fatal_skips_source_repair_and_preserves_code(monkeyp
                     prove_restoration_adaptation=None,
                     snapshot_files=AsyncMock(return_value={"src/app/page.tsx": "candidate"}),
                 ),
-                coordinator=SimpleNamespace(finalize_with_repair=finalize)
+                coordinator=SimpleNamespace(finalize_with_repair=finalize),
             ),
         )
     assert calls == []
@@ -186,7 +201,7 @@ async def test_sealed_adaptation_failure_preserves_candidate_for_forward_recover
             operations=SimpleNamespace(),
             runtime=SimpleNamespace(
                 handle=SimpleNamespace(prove_restoration_adaptation=True),
-                coordinator=SimpleNamespace(finalize_with_repair=finalize)
+                coordinator=SimpleNamespace(finalize_with_repair=finalize),
             ),
         )
     assert calls == []
@@ -229,7 +244,7 @@ async def test_terminal_adaptation_cancel_stops_pipeline_without_source_rollback
             operations=SimpleNamespace(),
             runtime=SimpleNamespace(
                 handle=SimpleNamespace(prove_restoration_adaptation=True),
-                coordinator=SimpleNamespace(finalize_with_repair=finalize)
+                coordinator=SimpleNamespace(finalize_with_repair=finalize),
             ),
         )
     assert calls == []
