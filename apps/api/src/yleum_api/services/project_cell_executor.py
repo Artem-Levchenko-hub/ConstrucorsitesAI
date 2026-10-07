@@ -380,6 +380,22 @@ def portable_selected(capabilities: dict[str, object], files: dict[str, str]) ->
     return capabilities.get("portable_machine") is True and ".omnia/cell.json" in files
 
 
+def _portable_build_role(files: dict[str, str]) -> str:
+    """Route the old build action to the manifest's current build contract.
+
+    The controller still validates the complete manifest and executes its tasks;
+    legacy manifests retain their mandatory build/test validation there.
+    """
+    try:
+        manifest = json.loads(files.get(".omnia/cell.json", ""))
+    except (ValueError, TypeError):
+        raise ValueError("Invalid portable machine manifest") from None
+    tasks = manifest.get("tasks", []) if isinstance(manifest, dict) else None
+    if not isinstance(tasks, list) or any(not isinstance(task, dict) for task in tasks):
+        raise ValueError("Invalid portable machine manifest")
+    return "full_build" if any(task.get("role") == "full_build" for task in tasks) else "build"
+
+
 def adaptation_execution_capability_gap(capabilities: dict[str, object]) -> str | None:
     """Reject adaptive agent execution until the controller proves isolation.
 
@@ -1310,7 +1326,7 @@ async def maybe_create_project_cell_executor(
                     fencing_epoch=fencing_epoch,
                     expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_BUILD_TIMEOUT_SECONDS,
-                    task_role="build" if portable else None,
+                    task_role=_portable_build_role(workspace_files) if portable else None,
                     operation_id=uuid4() if portable else None,
                 )
                 workspace_revision = result.workspace_revision

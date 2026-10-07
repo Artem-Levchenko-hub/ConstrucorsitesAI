@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
@@ -252,6 +253,31 @@ async def test_project_cell_build_uses_migrations_before_typecheck() -> None:
     assert "node scripts/apply-migrations.mjs" in command
     assert command.index("node scripts/apply-migrations.mjs") < command.index("pnpm typecheck")
     assert command.startswith("set -eu\n")
+
+
+@pytest.mark.parametrize(
+    "roles,expected",
+    [
+        (["bootstrap", "fast_check", "full_build"], "full_build"),
+        (["bootstrap", "build", "test"], "build"),
+        (["bootstrap", "build", "test", "full_build"], "full_build"),
+        ([], "build"),
+    ],
+)
+async def test_portable_build_uses_declared_modern_role_without_inventing_legacy_test(
+    roles, expected,
+):
+    files = {".omnia/cell.json": json.dumps({
+        "version": 1, "tasks": [{"name": role, "role": role} for role in roles],
+    })}
+    assert project_cell_executor._portable_build_role(files) == expected
+
+
+@pytest.mark.parametrize("manifest", [None, "{", "[]", '{"tasks": "full_build"}'])
+async def test_portable_build_role_rejects_missing_or_malformed_manifest(manifest):
+    files = {} if manifest is None else {".omnia/cell.json": manifest}
+    with pytest.raises(ValueError, match="Invalid portable machine manifest"):
+        project_cell_executor._portable_build_role(files)
 
 
 @pytest_asyncio.fixture
@@ -1227,24 +1253,44 @@ async def test_adaptation_cannot_fall_back_to_legacy_execution(
         )
 
 
+@pytest.mark.parametrize("modern", [False, True])
 async def test_portable_executor_advertises_capabilities_and_dispatches_manifest_build(
     monkeypatch,
     db_session,
     test_engine,
+    modern,
 ):
+    roles = ["bootstrap", "fast_check", "full_build"] if modern else ["bootstrap", "build", "test"]
+    manifest = {"version": 1, "tasks": [
+        {"name": role, "role": role, "argv": ["python", "-c", "pass"]} for role in roles
+    ]}
+    monkeypatch.setattr(project_cell_executor, "get_settings", lambda: get_settings().model_copy(
+        update={"use_max_finalization_coordinator": False},
+    ))
     harness = await _prepare_executor(
         monkeypatch,
         db_session,
         test_engine,
-        snapshot_files={".omnia/cell.json": '{"version":1}', "server.py": "print('python')"},
+        snapshot_files={".omnia/cell.json": json.dumps(manifest), "server.py": "print('python')"},
         capabilities={"portable_machine": True, "manifest_path": ".omnia/cell.json"},
     )
+    original_exec = project_cell_executor.project_cell_agent_exec
+
+    async def validate_role(*args, **kwargs):
+        # Match the controller's production refusal: a modern manifest has no
+        # legacy test role, so dispatching legacy build cannot succeed.
+        if kwargs["task_role"] == "build" and "test" not in roles:
+            raise ValueError("portable build requires a declared test task")
+        assert kwargs["task_role"] in roles
+        return await original_exec(*args, **kwargs)
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", validate_role)
     assert harness.handle.capabilities["portable_machine"] is True
     assert harness.handle.is_portable()
     result = await harness.handle.execute(Action(name="build", args={}))
     assert result["ok"]
     assert harness.exec_calls[0]["cmd"] == "omnia:build"
-    assert harness.exec_calls[0]["task_role"] == "build"
+    assert harness.exec_calls[0]["task_role"] == ("full_build" if modern else "build")
     assert isinstance(harness.exec_calls[0]["operation_id"], UUID)
 
 
