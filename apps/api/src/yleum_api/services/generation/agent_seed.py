@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from yleum_api.core.errors import ApiError
 from yleum_api.services import agent_builder
 from yleum_api.services.generation.contracts import (
     AgentRuntimeBindings,
@@ -74,12 +75,25 @@ async def stage_max_starter(
     if orchestrate and not _max_has_generated_snapshot:
         try:
             _starter_files = await _render_current_max_starter_files()
+            if runtime.handle is not None and runtime.handle.is_portable():
+                from yleum_api.services.max_project_kit import include_portable_manifest
+
+                _starter_files = include_portable_manifest(
+                    _starter_files, await runtime.handle.snapshot_files(),
+                )
             if _design_contract:
                 from yleum_api.services.design_plugin import seed_design_memory
 
                 # Part of the existing core seed/snapshot: no extra model
                 # call, generation phase, repair or visible version.
                 _starter_files = seed_design_memory(_starter_files, _design_contract)
+            # Keep trusted source metadata before sync: a failed runtime build can
+            # already have written these files. It must not turn the platform's
+            # own seed into an untrusted candidate or remove the portable manifest.
+            _max_seed_files = _starter_files
+            runtime.migration_baseline = {
+                **(runtime.migration_baseline or {}), **_max_seed_files,
+            }
             await _agent_emit(
                 "agent.step",
                 {
@@ -112,14 +126,6 @@ async def stage_max_starter(
                     files=_starter_patch,
                     project_cell_handle=_require_project_cell(runtime.handle),
                 )
-            _max_seed_files = _starter_files
-            if runtime.handle is not None and runtime.handle.is_portable():
-                from yleum_api.services.max_project_kit import include_portable_manifest
-
-                _max_seed_files = include_portable_manifest(
-                    _starter_files,
-                    await runtime.handle.snapshot_files(),
-                )
             _starter_build = (
                 {"ok": True, "detail": "platform core staged"}
                 if runtime.coordinator is not None
@@ -141,26 +147,10 @@ async def stage_max_starter(
                     },
                 )
             else:
-                print(
-                    "[PP] MAX starter build red; handing to bounded Google agent",
-                    flush=True,
-                )
+                raise RuntimeError("MAX platform core build failed")
         except Exception as _starter_exc:
             raise_if_terminal_cell_error(_starter_exc)
             print(f"[PP] MAX starter preparation skipped: {_starter_exc!r}", flush=True)
-            # Never spend a model call against an unverified or legacy UI
-            # base. The user can retry after infrastructure recovery without
-            # paying for a generation that was unsafe before turn one.
-            _agent_res = agent_builder.AgentResult(
-                done=False,
-                summary=(
-                    "Генерация не запускалась: не удалось подготовить чистое ядро "
-                    "MAX без продуктового шаблона. Деньги за вызов модели не списаны."
-                ),
-                files={},
-                steps=0,
-                stop_reason="core_preparation_failed",
-            )
             await _agent_emit(
                 "agent.step",
                 {
@@ -175,5 +165,16 @@ async def stage_max_starter(
                     "ok": False,
                 },
             )
+            # Stop before generation/final verification: recovering an empty
+            # agent result would misclassify a partially staged platform seed.
+            raise ApiError(
+                code="runtime_unavailable",
+                message=(
+                    "MAX_CORE_PREPARATION_FAILED: "
+                    "Генерация не запускалась: не удалось подготовить среду MAX. "
+                    "Деньги за вызов модели не списаны. Повторите после восстановления среды."
+                ),
+                status_code=503,
+            ) from _starter_exc
 
     return _max_seed_files, _agent_res

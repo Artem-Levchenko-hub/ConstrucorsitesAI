@@ -1,5 +1,33 @@
 # Generation stability delivery
 
+## Cold portable MAX seed failure (2026-10-07)
+
+Two first generations failed before a model call. The portable runtime selected
+`full_build` tasks without its declared `bootstrap` installation, then loaded the
+TypeScript AST parser from an empty workspace. API seed preparation also restored
+legacy `db:push` / `db:generate` scripts removed by the portable controller. After
+the partial seed write failed, final verification treated these platform scripts
+as model migration changes; rollback attempted to delete `.omnia/cell.json` and
+correctly received a portable-downgrade conflict. Both runs settled as waived, 0 RUB.
+
+The repair preserves the migration, manifest, isolation and AST guards:
+
+- Node `fast_check` and `full_build` run declared bootstrap, AST, then role tasks
+  under the existing request deadline and replay journal. Installation failure
+  stops later commands; a completed request is never executed again.
+- Portable API seeds match the controller package contract and include their
+  mandatory manifest before writing. Infrastructure failure stops before model
+  generation and is retained as an allowlisted `runtime_unavailable` history card.
+- Release acceptance requires focused API and Linux orchestrator regressions,
+  independent review, exact-revision CI and deployment, followed by retries of
+  the two existing projects. Verify accepted snapshots, running application,
+  retained data and final settlement; healthy services alone are insufficient.
+
+The installed provider key independently returned 401. Its replacement was
+verified through `/v1/models` without a paid request, installed after configuration
+and database backups, and returned 200 from the recreated production gateway.
+Credentials and backup contents must never enter Git or release diagnostics.
+
 This work is delivered in verified slices. The capacity/lifecycle slice does **not**
 claim resumable model execution or a complete product-database acceptance gate.
 

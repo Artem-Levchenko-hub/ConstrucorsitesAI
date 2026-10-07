@@ -156,6 +156,8 @@ async def test_controller_guard_is_scoped_and_finishes_failed_command(role, exec
             return "owned-operation"
 
         async def exec_status(self, *args):
+            if commands[-1][0] == ["sh", "install.sh"]:
+                return SimpleNamespace(state="completed", exit_code=0, output="installed")
             return SimpleNamespace(
                 state="completed", exit_code=1, output="self-cancelling React effect"
             )
@@ -181,11 +183,13 @@ async def test_controller_guard_is_scoped_and_finishes_failed_command(role, exec
         SimpleNamespace(), MachineManifest.model_validate(value), request
     )
     assert result.exit_code == 1
-    assert len(commands) == 1
     if executable == "pnpm":
-        assert commands[0] == (["node", "-e", machine_adapter.REACT_EFFECT_CONTRACT_JS], ".")
+        assert commands == [
+            (["sh", "install.sh"], "."),
+            (["node", "-e", machine_adapter.REACT_EFFECT_CONTRACT_JS], "."),
+        ]
     else:
-        assert commands[0] == ([executable, "typecheck"], ".")
+        assert commands == [([executable, "typecheck"], ".")]
     assert len(finished) == 1
     assert finished[0].state == "completed"
     assert "self-cancelling" in finished[0].output
@@ -233,7 +237,8 @@ def test_destructured_hook_parameter_is_not_react_import(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_outer_timeout_terminates_controller_child_before_finishing_request():
+@pytest.mark.parametrize("timeout_phase", ["install", "controller:react-effect-lifetime:v1"])
+async def test_outer_timeout_terminates_controller_child_before_finishing_request(timeout_phase):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
     from uuid import uuid4, uuid5
@@ -270,7 +275,10 @@ async def test_outer_timeout_terminates_controller_child_before_finishing_reques
             return child[0]
 
         async def exec_status(self, *args):
-            raise TimeoutError("owned controller command timed out")
+            if phase[0] == timeout_phase:
+                raise TimeoutError("owned controller command timed out")
+            assert phase[0] == "install"
+            return SimpleNamespace(state="completed", exit_code=0, output="installed")
 
         async def inspect_request_status(self, **kwargs):
             return SimpleNamespace(result=None, state="running", phase=phase[0])
@@ -293,8 +301,9 @@ async def test_outer_timeout_terminates_controller_child_before_finishing_reques
     result = await runtime.execute(
         SimpleNamespace(), MachineManifest.model_validate(value), request
     )
-    assert phase[0] == "controller:react-effect-lifetime:v1"
-    assert events == ["start", "terminate", "finish"]
+    assert phase[0] == timeout_phase
+    starts = 1 if timeout_phase == "install" else 2
+    assert events == [*(["start"] * starts), "terminate", "finish"]
     assert child[0] is None
     assert result.exit_code == 124 and result.timed_out
 

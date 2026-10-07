@@ -515,6 +515,12 @@ def render_max_starter_files(
     if portable:
         if project_id is None:
             raise ValueError("portable MAX starter requires a project identity")
+        # Match the portable orchestrator seed; migrations run only through the
+        # controller-owned canonical SQL runner, never legacy schema push.
+        package = json.loads(files["package.json"])
+        package["scripts"].pop("db:push", None)
+        package["scripts"].pop("db:generate", None)
+        files["package.json"] = json.dumps(package, indent=2) + "\n"
         files.update(render_portable_max_managed_files(config, project_id))
         files["src/lib/db/schema.ts"] = (
             "// PORTABLE PRODUCT DATABASE: the legacy core exports below are type-compatible\n"

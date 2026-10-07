@@ -926,3 +926,15 @@ def test_brief_limits_reject_instead_of_truncating() -> None:
         MaxProjectConfigPayload.model_validate({**_config().model_dump(), "summary": "я" * 20_001})
     with pytest.raises(ValidationError):
         PromptRequest(prompt="я" * 30_001)
+
+
+def test_portable_starter_does_not_reintroduce_legacy_database_scripts():
+    portable = max_project_kit_svc.render_max_starter_files(_config(), uuid4(), portable=True)
+    legacy = max_project_kit_svc.render_max_starter_files(_config(), uuid4())
+    portable_package = json.loads(portable["package.json"])
+    legacy_package = json.loads(legacy["package.json"])
+    assert "db:push" not in portable_package["scripts"]
+    assert "db:generate" not in portable_package["scripts"]
+    for key in ("dependencies", "devDependencies"):
+        assert portable_package[key] == legacy_package[key]
+    assert portable["pnpm-lock.yaml"] == legacy["pnpm-lock.yaml"]

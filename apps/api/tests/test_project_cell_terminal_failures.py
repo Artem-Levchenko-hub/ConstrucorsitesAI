@@ -107,7 +107,9 @@ async def test_max_seed_keeps_primary_fatal_code_instead_of_repairable_agent_res
             orchestrate=True,
             project_info=SimpleNamespace(template="max_miniapp", slug="synthetic"),
             runtime=SimpleNamespace(
-                coordinator=object(), handle=SimpleNamespace(stage_patch=stage)
+                coordinator=object(),
+                migration_baseline=None,
+                handle=SimpleNamespace(stage_patch=stage, is_portable=lambda: False),
             ),
         )
 

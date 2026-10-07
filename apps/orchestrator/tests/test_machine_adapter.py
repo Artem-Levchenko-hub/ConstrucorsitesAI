@@ -255,7 +255,9 @@ async def test_persisted_checkpoint_role_provenance_requires_current_database_pr
 
 
 @pytest.mark.parametrize("activation_fails", [False, True])
-async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activation_fails):
+async def test_full_build_bootstraps_before_ast_but_never_executes_fast_check(
+    tmp_path, activation_fails,
+):
     from unittest.mock import AsyncMock
 
     api = module()
@@ -315,10 +317,72 @@ async def test_full_build_never_executes_bootstrap_or_fast_check(tmp_path, activ
         assert "[final-test] passed" in result.output
         assert result.output.startswith("service web readiness failed: missing build")
         assert 4096 < len(result.output) <= 24000
-    assert commands[0] == ["node", "-e", api.REACT_EFFECT_CONTRACT_JS]
-    assert commands[1:] == [["pnpm", "build"], ["pnpm", "test"]]
+    assert commands[0] == ["pnpm", "install"]
+    assert commands[1] == ["node", "-e", api.REACT_EFFECT_CONTRACT_JS]
+    assert commands[2:] == [["pnpm", "build"], ["pnpm", "test"]]
     runtime._activate_runtime.assert_awaited_once()
     assert runtime._project_migrations.await_count == 2
+
+
+@pytest.mark.parametrize("install_exit", [0, 1])
+async def test_fresh_fast_check_installs_before_ast_and_replays_receipt(install_exit):
+    from unittest.mock import AsyncMock
+
+    api = module()
+    commands = []
+    stored = None
+
+    async def start(argv, cwd, mutation):
+        commands.append((argv, cwd, mutation.operation_id))
+        return str(mutation.operation_id)
+
+    async def result(operation, mutation):
+        argv = commands[-1][0]
+        if argv[0] == "pnpm" and argv[1] == "install":
+            code = install_exit
+        elif argv[0] == "node":
+            code = 0 if commands[0][0] == ["pnpm", "install", "--frozen-lockfile"] else 1
+        else:
+            code = 0
+        return SimpleNamespace(state="completed", exit_code=code, output="phase result")
+
+    async def finish(mutation, result):
+        nonlocal stored
+        stored = result
+        return result
+
+    machine = SimpleNamespace(
+        ensure=AsyncMock(), request_start=AsyncMock(side_effect=lambda *a, **kw: stored),
+        request_heartbeat=AsyncMock(), request_finish=finish, exec_start=start, exec_status=result,
+    )
+    runtime = api.MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    runtime.parts = lambda _: (machine, object())
+    runtime._migration_dependency_gap = AsyncMock(return_value=None)
+    runtime._project_migrations = AsyncMock()
+    value = payload()
+    value["tasks"] = [
+        {"name": "install", "role": "bootstrap", "argv": ["pnpm", "install", "--frozen-lockfile"]},
+        {"name": "types", "role": "fast_check", "argv": ["pnpm", "typecheck"]},
+        {"name": "build", "role": "full_build", "argv": ["pnpm", "build"]},
+    ]
+    manifest = MachineManifest.model_validate(value)
+    request = WorkspaceAgentExecRequest(
+        generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
+        cmd="omnia:fast_check", task_role="fast_check",
+    )
+    first = await runtime.execute(SimpleNamespace(), manifest, request)
+    assert first.exit_code == install_exit
+    assert [argv for argv, _, _ in commands] == (
+        [["pnpm", "install", "--frozen-lockfile"]] if install_exit else [
+            ["pnpm", "install", "--frozen-lockfile"],
+            ["node", "-e", api.REACT_EFFECT_CONTRACT_JS], ["pnpm", "typecheck"],
+        ]
+    )
+    count = len(commands)
+    replayed = await runtime.execute(SimpleNamespace(), manifest, request)
+    assert replayed == first
+    assert len(commands) == count
+    runtime._project_migrations.assert_not_awaited()
 
 
 async def test_full_build_migration_failure_never_builds_or_activates():
@@ -578,10 +642,14 @@ async def test_halt_certifies_retained_volumes_only_after_complete_capture_and_t
 
 
 @pytest.mark.parametrize("budget", [600, 900])
-async def test_sequential_install_build_share_one_request_budget(monkeypatch, budget):
+@pytest.mark.parametrize("role", ["build", "fast_check"])
+async def test_sequential_install_build_share_one_request_budget(monkeypatch, budget, role):
+    from unittest.mock import AsyncMock
+
     api = module()
     clock = [0]
     started = []
+    command_names = []
     cancelled = []
 
     class Machine:
@@ -590,10 +658,12 @@ async def test_sequential_install_build_share_one_request_budget(monkeypatch, bu
 
         async def exec_start(self, argv, cwd, mutation):
             started.append(clock[0])
+            command_names.append(argv[1])
             return len(started)
 
         async def exec_status(self, operation, mutation):
-            duration = 500 if operation == 1 else 200 if operation == 2 else 0
+            name = command_names[operation - 1]
+            duration = 500 if name == "bootstrap" else 200 if name in {"build", "fast_check"} else 0
             complete = clock[0] - started[operation - 1] >= duration
             return SimpleNamespace(
                 state="completed" if complete else "running", exit_code=0, output="real work"
@@ -620,10 +690,12 @@ async def test_sequential_install_build_share_one_request_budget(monkeypatch, bu
         SimpleNamespace(), SimpleNamespace(cell_machine_command_grace_seconds=20)
     )
     runtime.parts = lambda state: (Machine(), object())
+    runtime._migration_dependency_gap = AsyncMock(return_value=None)
     value = payload()
     value["tasks"] = [
-        {"name": role, "role": role, "argv": ["sh", role], "timeout_seconds": 900}
-        for role in ("bootstrap", "build", "test")
+        {"name": task, "role": task, "argv": ["pnpm" if role == "fast_check" else "sh", task],
+         "timeout_seconds": 900}
+        for task in ("bootstrap", role, "test")
     ]
     result = await runtime.execute(
         SimpleNamespace(),
@@ -632,18 +704,18 @@ async def test_sequential_install_build_share_one_request_budget(monkeypatch, bu
             generation_run_id=uuid4(),
             fencing_epoch=7,
             expected_revision="a" * 64,
-            cmd="omnia:build",
-            task_role="build",
+            cmd=f"omnia:{role}",
+            task_role=role,
             timeout_seconds=budget,
         ),
     )
     if budget == 600:
         assert result.timed_out and result.exit_code == 124
-        assert started == [0, 500]
+        assert started == ([0, 500] if role == "build" else [0, 500, 500])
         assert cancelled == [600]
     else:
         assert not result.timed_out and result.exit_code == 0
-        assert started == [0, 500, 700]
+        assert started == ([0, 500, 700] if role == "build" else [0, 500, 500])
         assert cancelled == []
 
 

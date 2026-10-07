@@ -494,10 +494,17 @@ class MachineAdapter:
             getattr(self.settings, "cell_machine_command_heartbeat_seconds", 15)
         )
         if role in {"fast_check", "full_build"} and node_manifest_commands(manifest):
-            commands.insert(0, (
+            # Fresh portable volumes have source but no installed dependencies.
+            # Run only the declared bootstrap under this request's existing
+            # deadline/replay journal before loading the workspace AST parser.
+            bootstrap = [
+                (task.name, task.argv, task.cwd, task.timeout_seconds)
+                for task in manifest.tasks if task.role == "bootstrap"
+            ]
+            commands = [*bootstrap, (
                 REACT_EFFECT_CHECK_PHASE,
                 ["node", "-e", REACT_EFFECT_CONTRACT_JS], ".", 30,
-            ))
+            ), *commands]
         for name, argv, cwd, timeout in commands:
             await machine.request_heartbeat(
                 mutation,

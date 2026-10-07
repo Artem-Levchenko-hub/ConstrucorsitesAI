@@ -54,6 +54,11 @@ def test_provider_timeout_is_not_reported_as_a_failed_build_check():
         ("edit produced no source changes", "no_changes", True),
         ("MAX migration contract unsafe DROP", "data_contract", True),
         ("unknown password=do-not-expose", "verification", True),
+        (
+            "MAX_CORE_PREPARATION_FAILED: timeout database token=do-not-expose",
+            "runtime_unavailable",
+            True,
+        ),
     ],
 )
 def test_history_failure_is_allowlisted_and_never_echoes_raw_error(error, code, retryable):

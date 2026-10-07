@@ -19,7 +19,13 @@ def public_generation_failure(run: GenerationRun | None) -> GenerationFailure | 
 def failure_for_error(raw_error: object, *, restoration: bool = False) -> GenerationFailure:
     error = str(raw_error).casefold()
     retryable = True
-    if any(
+    if "max_core_preparation_failed:" in error:
+        code = "runtime_unavailable"
+        message = (
+            "Генерация не запускалась: не удалось подготовить среду MAX. "
+            "Деньги за вызов модели не списаны. Повторите после восстановления среды."
+        )
+    elif any(
         value in error
         for value in (
             "provider_auth_failed",
