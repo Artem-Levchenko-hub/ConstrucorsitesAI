@@ -11,13 +11,21 @@ from pathlib import Path
 def verify(archive: Path, source: Path) -> str:
     if archive.is_symlink() or source.is_symlink() or not source.is_dir():
         raise ValueError("project sources archive or source directory is invalid")
-    # Consume gzip through EOF: tar can stop at its end marker before a corrupt
-    # gzip trailer is read. Never include archive contents in diagnostics.
+    # Tar accepts EOF after a member without its two end records. Check those
+    # records explicitly, then consume gzip through EOF to validate its trailer.
+    # Never include archive contents in diagnostics.
     with gzip.open(archive, "rb") as stream:
+        with tarfile.open(fileobj=stream, mode="r:") as tar:
+            members = tar.getmembers()
+        end = max(
+            (member.offset_data + ((member.size + 511) // 512) * 512 for member in members),
+            default=0,
+        )
+        stream.seek(end)
+        if stream.read(1024) != bytes(1024):
+            raise ValueError("project sources tar archive is incomplete")
         while stream.read(1024 * 1024):
             pass
-    with tarfile.open(archive, "r:gz") as stream:
-        members = stream.getmembers()
     roots = [member for member in members if member.name.rstrip("/") == source.name]
     if len(roots) != 1 or not roots[0].isdir():
         raise ValueError("project sources archive has no expected source directory")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import io
 import subprocess
 import sys
@@ -44,7 +45,9 @@ def test_small_archive_of_confirmed_empty_source_directory_is_valid(tmp_path: Pa
     assert "empty source directory" in result.stdout
 
 
-@pytest.mark.parametrize("problem", ["corrupt", "truncated", "wrong_root", "missing_source"])
+@pytest.mark.parametrize(
+    "problem", ["corrupt", "truncated", "inner_truncated", "wrong_root", "missing_source"]
+)
 def test_empty_source_exception_rejects_invalid_archives(tmp_path: Path, problem: str) -> None:
     source = tmp_path / "projects"
     source.mkdir()
@@ -54,6 +57,10 @@ def test_empty_source_exception_rejects_invalid_archives(tmp_path: Path, problem
         archive.write_bytes(b"private_payload_not_a_tar")
     elif problem == "truncated":
         archive.write_bytes(archive.read_bytes()[:-8])
+    elif problem == "inner_truncated":
+        entry = tarfile.TarInfo("projects")
+        entry.type = tarfile.DIRTYPE
+        archive.write_bytes(gzip.compress(entry.tobuf()))
     elif problem == "missing_source":
         source.rmdir()
     result = _run(archive, source)
