@@ -50,6 +50,10 @@ _LEGACY_DEPENDENCY_HASHES = {
     "pnpm-lock.yaml": "a91a9ccf05cbdcb8876256b780d24060b93f00c55f39557626b764d6b7866d94",
 }
 
+# Reviewed portable variant: only db:push/db:generate are removed. Keep an
+# exact package pin, rather than exempting portable scripts or dependencies.
+_PORTABLE_PACKAGE_HASH = "45181196afc31d10c92ec49543a529839ab8cc5ea1da07c0869419d89fe7c764"
+
 
 _LEGACY_PREVIEW_HASHES = {
     "src/app/api/max/session/route.ts": (
@@ -180,7 +184,7 @@ def _normalize_preview_renewal(files):
     return normalized
 
 
-def _assert_render_golden(files, expected):
+def _assert_render_golden(files, expected, *, portable=False):
     """Check reviewed changed files, then the unchanged original full SDK golden."""
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
@@ -199,7 +203,12 @@ def _assert_render_golden(files, expected):
         _normalize_analytics(_normalize_reviewed_client(files))
     )
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
-        assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
+        reviewed_hash = (
+            _PORTABLE_PACKAGE_HASH
+            if portable and path == "package.json"
+            else overrides[path]["sha256"]
+        )
+        assert hashlib.sha256(files[path].encode()).hexdigest() == reviewed_hash, path
         baseline = legacy["files"][path]
         assert hashlib.sha256(baseline.encode()).hexdigest() == frozen_hash, path
         original_dependencies[path] = baseline
@@ -496,7 +505,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         )
     )
     key = f"{caller}:{stored}:{portable}" + (f":{fallback}" if fallback != "long" else "")
-    digest = _assert_render_golden(files, golden[key])
+    digest = _assert_render_golden(files, golden[key], portable=portable)
     print(f"BASELINE {key} files={len(files)} sha256={digest}")
 
 
@@ -506,6 +515,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/lib/omnia/client.ts",
         "src/lib/max/session.ts",
         "package.json",
+        "package scripts",
         "pnpm-lock.yaml",
         "src/app/support/page.tsx",
         "src/lib/max/owner-preview-renewal.ts",
@@ -517,26 +527,43 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/lib/omnia/analytics.ts",
     ],
 )
-def test_config_render_golden_rejects_sdk_or_unreviewed_dependency_drift(changed):
+@pytest.mark.parametrize("portable", [False, True])
+def test_config_render_golden_rejects_sdk_or_unreviewed_dependency_drift(changed, portable):
     config = MaxProjectConfigPayload(
         app_name="Initial config",
         app_type="custom",
         summary="Persisted summary",
     )
-    files = max_project_kit.render_max_starter_files(config, UUID(int=1))
+    files = max_project_kit.render_max_starter_files(config, UUID(int=1), portable=portable)
     golden = json.loads(
         (Path(__file__).parent / "fixtures/max_config_render_golden.json").read_text(
             encoding="utf-8"
         )
     )
-    _assert_render_golden(files, golden["seed:True:False"])
+    expected = golden[f"seed:True:{portable}"]
+    _assert_render_golden(files, expected, portable=portable)
     if changed == "package.json":
         package = json.loads(files[changed])
         package["dependencies"]["unexpected-dependency"] = "1.0.0"
         files[changed] = json.dumps(package, indent=2) + "\n"
     elif changed == "pnpm-lock.yaml":
         files[changed] += "\n# Unexpected lockfile drift\n"
+    elif changed == "package scripts":
+        package = json.loads(files["package.json"])
+        package["scripts"]["build"] = "echo skipped"
+        files["package.json"] = json.dumps(package, indent=2) + "\n"
     else:
         files[changed] += "\n// Unexpected SDK drift\n"
     with pytest.raises(AssertionError):
-        _assert_render_golden(files, golden["seed:True:False"])
+        _assert_render_golden(files, expected, portable=portable)
+
+
+def test_portable_render_package_delta_is_only_legacy_migration_scripts():
+    config = MaxProjectConfigPayload(app_name="Contract", app_type="custom", summary="Contract")
+    legacy = max_project_kit.render_max_starter_files(config, UUID(int=1))
+    portable = max_project_kit.render_max_starter_files(config, UUID(int=1), portable=True)
+    expected = json.loads(legacy["package.json"])
+    assert expected["scripts"].pop("db:push") == "drizzle-kit push"
+    assert expected["scripts"].pop("db:generate") == "drizzle-kit generate"
+    assert json.loads(portable["package.json"]) == expected
+    assert portable["pnpm-lock.yaml"] == legacy["pnpm-lock.yaml"]
