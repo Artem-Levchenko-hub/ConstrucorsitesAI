@@ -179,20 +179,26 @@ def test_adapter_credentials_are_stable_and_missing_protocol_authority_is_reject
 async def test_adapter_quiesces_owned_preview_before_migration_and_defers_service_resume(
     tmp_path, monkeypatch
 ):
+    import json
     from unittest.mock import AsyncMock
 
     from tests.test_project_machine_manifest import payload
     from yleum_orchestrator.core.project_machine import MachineManifest
-    from yleum_orchestrator.services import machine_adapter
+    from yleum_orchestrator.services import applied_migration_sources, machine_adapter
 
     events = []
     manifest = MachineManifest.model_validate(payload())
+    operation_id = uuid4()
+    saved = {"manifest": manifest.model_dump(mode="json"), "operations": {str(operation_id): {}}}
     machine = SimpleNamespace(
-        state=lambda: {"manifest": manifest.model_dump(mode="json")},
+        state=lambda: saved,
+        path=tmp_path / "machine.json",
         assert_ready=AsyncMock(side_effect=lambda *_: events.append("fence")),
     )
     runtime = SimpleNamespace(
-        prepare_project_database_migrations=lambda epoch: events.append("quiesce")
+        prepare_project_database_migrations=lambda epoch: events.append("quiesce"),
+        metadata_path=tmp_path / "docker.json",
+        project_postgres_volume="project-database",
     )
     adapter = machine_adapter.MachineAdapter(SimpleNamespace(), SimpleNamespace())
     adapter.parts = lambda state: (machine, runtime)
@@ -200,18 +206,29 @@ async def test_adapter_quiesces_owned_preview_before_migration_and_defers_servic
     adapter._request_digest = lambda *_: "a" * 64
 
     def migrate(*args, **kwargs):
+        witness = json.loads((tmp_path / "migration-sources.json").read_text())
+        assert witness["sources"] == {"drizzle/0002.sql": "SELECT 1"}
         events.append("migrate")
         return {"contract": "project-migrations-v1"}
 
+    def catalog(*args, **kwargs):
+        events.append("catalog")
+        return json.dumps({"database_identity": "c" * 64, "journal": False,
+                           "has_relations": False, "applied": {}}).encode()
+
+    monkeypatch.setattr(applied_migration_sources, "admin_sql", catalog)
     monkeypatch.setattr(machine_adapter, "run_project_migrations", migrate)
     request = SimpleNamespace(
-        operation_id=uuid4(), fencing_epoch=7, generation_run_id=uuid4(), expected_revision=1
+        operation_id=operation_id, fencing_epoch=7, generation_run_id=uuid4(), expected_revision=1
     )
     state = SimpleNamespace(
         workspace_id=uuid4(), active_generation_run_id=request.generation_run_id, operations=()
     )
     await adapter._project_migrations(state, request, verify_applied=False)
-    assert events == ["fence", "quiesce", "migrate"]
+    assert events == ["fence", "quiesce", "catalog", "migrate"]
+    operation = json.loads(machine.path.read_text())["operations"][str(operation_id)]
+    assert operation["project_migration_receipt"]["contract"] == "project-migrations-v1"
+    assert "compiled_asset_receipt" not in operation
 
 
 def test_legacy_admin_environment_is_recreated_at_same_epoch(tmp_path):
