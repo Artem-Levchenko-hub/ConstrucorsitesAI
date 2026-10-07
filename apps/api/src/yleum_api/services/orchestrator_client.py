@@ -1706,6 +1706,9 @@ async def project_cell_agent_write_files(
             "files": files,
             "deletes": normalized_deletes,
         },
+        # The first guarded write can resume a retained machine and its database.
+        # Match the bounded cold-start allowance used by owner preview startup.
+        timeout=300.0,
     )
     return ProjectCellAgentWriteResponse.from_json(payload)
 

@@ -313,18 +313,28 @@ async def exchange_code(
                 )
                 _token_error("amoCRM", token_response)
                 token = token_response.json()
-                access = str(token.get("access_token") or "")
+                if not isinstance(token, dict):
+                    raise ValueError("invalid amoCRM token response")
+                amo_access = token.get("access_token")
+                amo_refresh = token.get("refresh_token")
+                if (
+                    not isinstance(amo_access, str) or not amo_access.strip()
+                    or not isinstance(amo_refresh, str) or not amo_refresh.strip()
+                ):
+                    raise ValueError("invalid amoCRM tokens")
                 account = await client.get(
                     f"{base_url}/api/v4/account",
-                    headers={**headers, "Authorization": f"Bearer {access}"},
+                    headers={**headers, "Authorization": f"Bearer {amo_access}"},
                 )
                 _token_error("amoCRM", account)
                 profile = account.json()
+                if not isinstance(profile, dict):
+                    raise ValueError("invalid amoCRM account response")
                 return OAuthResult(
                     public_config={"base_url": base_url},
                     secret_values={
-                        "access_token": access,
-                        "refresh_token": str(token.get("refresh_token") or ""),
+                        "access_token": amo_access,
+                        "refresh_token": amo_refresh,
                     },
                     account_label=str(profile.get("name") or host),
                     expires_at=_expires(token),

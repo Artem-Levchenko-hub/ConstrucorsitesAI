@@ -666,6 +666,7 @@ def _oauth_redirect(project_id: UUID, outcome: str) -> RedirectResponse:
 async def integration_oauth_callback(
     provider_key: str,
     session: SessionDep,
+    current_user: CurrentUserDep,
     state: str = Query(min_length=20, max_length=256),
     code: str | None = Query(default=None, max_length=4096),
     error: str | None = Query(default=None, max_length=256),
@@ -683,6 +684,7 @@ async def integration_oauth_callback(
     if (
         record is None
         or record.provider != provider_key
+        or record.user_id != current_user.id
         or record.used_at is not None
         or record.expires_at <= now
     ):

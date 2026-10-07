@@ -524,6 +524,7 @@ async def test_project_cell_agent_write_files_validates_and_calls_exact_path(
     assert observed == {
         "method": "POST",
         "path": f"/internal/workspaces/{workspace_id}/agent/write-files",
+        "timeout": 300.0,
         "json": {
             "generation_run_id": str(run_id),
             "fencing_epoch": 5,
@@ -553,6 +554,52 @@ async def test_project_cell_agent_write_files_validates_and_calls_exact_path(
             files={"same.txt": "x"},
             deletes=("same.txt",),
         )
+
+
+@pytest.mark.parametrize("outcome", ["success", "timeout", "cancelled"])
+async def test_agent_write_reserves_cold_start_time_without_retrying_or_swallowing_cancellation(
+    monkeypatch: pytest.MonkeyPatch, outcome: str,
+) -> None:
+    import asyncio
+
+    requests: list[httpx.Request] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert request.extensions["timeout"]["read"] == 300.0
+        if outcome == "timeout":
+            raise httpx.ReadTimeout("cold start timed out", request=request)
+        if outcome == "cancelled":
+            raise asyncio.CancelledError
+        return httpx.Response(200, json={
+            "written": 1, "deleted": 0, "workspace_revision": "b" * 64,
+        })
+
+    async def base_url(*_args: object) -> str:
+        return "http://orchestrator.test"
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(orchestrator_client, "_base_url", base_url)
+    monkeypatch.setattr(orchestrator_client.httpx, "AsyncClient", lambda **kwargs: real_client(
+        transport=httpx.MockTransport(respond), **kwargs,
+    ))
+    monkeypatch.setattr(orchestrator_client, "get_settings", lambda: SimpleNamespace(
+        orchestrator_internal_token=SimpleNamespace(get_secret_value=lambda: "test-internal-token"),
+    ))
+    call = orchestrator_client.project_cell_agent_write_files(
+        uuid4(), generation_run_id=uuid4(), fencing_epoch=7,
+        expected_revision="a" * 64, files={"src/app.ts": "updated"},
+    )
+    if outcome == "timeout":
+        with pytest.raises(OrchestratorUnavailable) as error:
+            await call
+        assert isinstance(error.value.__cause__, httpx.ReadTimeout)
+    elif outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await call
+    else:
+        assert (await call).workspace_revision == "b" * 64
+    assert len(requests) == 1
 
 
 async def test_project_cell_agent_exec_validates_and_calls_exact_path(
