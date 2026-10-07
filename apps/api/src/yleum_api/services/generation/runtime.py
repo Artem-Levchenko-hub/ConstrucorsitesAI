@@ -497,6 +497,7 @@ async def _apply_project_cell_preview_files(
     files: Mapping[str, str],
     project_cell_handle: ProjectCellExecutorHandle,
     empty_files: Sequence[str] = (),
+    sync_preview: bool = True,
 ) -> None:
     writes, deletes, _explicit_empty = _split_project_cell_preview_patch(
         files,
@@ -505,6 +506,8 @@ async def _apply_project_cell_preview_files(
     if not writes and not deletes:
         return
     await project_cell_handle.stage_patch(writes, deletes)
+    if not sync_preview:
+        return
     sync_result = await project_cell_handle.sync_preview()
     if sync_result.failure is not None:
         raise PreviewSyncFailed(

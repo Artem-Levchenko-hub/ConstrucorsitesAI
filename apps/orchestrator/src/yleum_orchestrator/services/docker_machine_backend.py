@@ -340,7 +340,37 @@ class DockerMachineBackend:
     def environment_volume_names(self, manifest: MachineManifest) -> tuple[str, ...]:
         return (*self.volume_mapping(manifest), self.project_postgres_volume)
 
+    def _bound_next_cache_volume(self) -> str:
+        """Checkpoint the cache mounted by the old machine, not a pending cache key."""
+        machine = self._container()
+        pattern = re.escape(self.stem) + r"-data-omnia-next-[0-9a-f]{24}"
+        if machine is not None:
+            mounts = [
+                item for item in machine.attrs.get("Mounts", [])
+                if item.get("Destination") == "/workspace/.next/cache"
+            ]
+            if len(mounts) != 1 or mounts[0].get("Type") != "volume":
+                raise CellIdentityConflict("machine cache mount identity is unavailable")
+            name = mounts[0].get("Name")
+            if not isinstance(name, str) or re.fullmatch(pattern, name) is None:
+                raise CellIdentityConflict("machine cache volume identity mismatch")
+            return name
+        reference = self._metadata().get("environment_ref") or {}
+        names: list[str] = [
+            item.get("name") for item in reference.get("volumes", [])
+            if isinstance(item.get("name"), str)
+            and re.fullmatch(pattern, item["name"]) is not None
+        ]
+        if len(names) > 1:
+            raise CellIdentityConflict("environment cache volume identity is ambiguous")
+        return names[0] if names else self.next_cache_volume
+
     def snapshot_volume_names(self, manifest: MachineManifest) -> tuple[str, ...]:
+        bound_cache = self._bound_next_cache_volume()
+        volumes = tuple(
+            bound_cache if name == self.next_cache_volume else name
+            for name in self.volume_mapping(manifest)
+        )
         # A machine created before dedicated PostgreSQL has no database volume.
         # Keep its last snapshot restorable; every post-upgrade ensure creates
         # the volume, so subsequent captures include it.
@@ -348,8 +378,8 @@ class DockerMachineBackend:
             self._lookup(self.client.volumes, self.project_postgres_volume, "project-volume")
             is None
         ):
-            return tuple(self.volume_mapping(manifest))
-        return self.environment_volume_names(manifest)
+            return volumes
+        return (*volumes, self.project_postgres_volume)
 
     def project_database_env(self) -> dict[str, str]:
         from yleum_orchestrator.services.project_database_roles import PROJECT_RUNTIME_ROLE
@@ -619,7 +649,8 @@ class DockerMachineBackend:
             unsafe_credentials = any(actual_env.get(key) != value
                                      for key, value in expected_env.items())
             if (physical_epoch != epoch or previous_manifest.digest() != manifest.digest()
-                    or unsafe_credentials):
+                    or unsafe_credentials
+                    or self._bound_next_cache_volume() != self.next_cache_volume):
                 self._checkpoint_for_recreate(previous_manifest)
                 self.remove(expected_epoch=physical_epoch)
             else:
@@ -1901,14 +1932,27 @@ class DockerMachineBackend:
         metadata["pending_image"] = image_id
         write_controller_json(self.metadata_path, metadata)
 
+    def _reference_cache_volume(self, reference: MachineEnvironmentRef) -> str | None:
+        if reference.manifest is None:
+            return None
+        pattern = re.escape(self.stem) + r"-data-omnia-next-[0-9a-f]{24}"
+        caches = [item.name for item in reference.volumes if re.fullmatch(pattern, item.name)]
+        if len(caches) != 1:
+            raise CellIdentityConflict("environment cache volume identity is ambiguous")
+        return caches[0]
+
     def validate_restore_reference(self, reference: MachineEnvironmentRef) -> None:
         if reference.workspace_id != self.workspace_id or reference.base_image != self.base_image:
             raise CellIdentityConflict("environment restore identity mismatch")
         if reference.manifest is not None:
             actual = {volume.name for volume in reference.volumes}
-            current = set(self.environment_volume_names(reference.manifest))
-            legacy = set(self.volume_mapping(reference.manifest))
-            if actual not in (current, legacy):
+            captured_cache = self._reference_cache_volume(reference)
+            current = {
+                captured_cache if name == self.next_cache_volume else name
+                for name in self.environment_volume_names(reference.manifest)
+            }
+            legacy = current - {self.project_postgres_volume}
+            if len(actual) != len(reference.volumes) or actual not in (current, legacy):
                 raise CellIdentityConflict("environment volume set differs from captured manifest")
         allowed_prefix = self.stem + "-data-"
         if any(
@@ -1939,6 +1983,12 @@ class DockerMachineBackend:
             write_controller_json(self.metadata_path, metadata)
         metadata["restore_target"] = reference.model_dump(mode="json")
         metadata.pop("pending_image", None)
+        captured_cache = self._reference_cache_volume(reference)
+        if captured_cache is not None:
+            # Bind restore checks and the eventual runtime to the checkpoint cache,
+            # even if a newer requested identity was persisted before interruption.
+            self._volume(captured_cache)
+            metadata["next_cache_key"] = captured_cache.rsplit("-", 1)[1]
         write_controller_json(self.metadata_path, metadata)
         self.remove()
         if self.project_postgres_volume not in {item.name for item in reference.volumes}:
@@ -2068,6 +2118,8 @@ class DockerMachineBackend:
             allowed: dict[str, dict[str, str]] = {
                 name: {} for name in self.environment_volume_names(manifest)
             }
+            if not writable and volume not in allowed:
+                allowed[self._bound_next_cache_volume()] = {}
             if metadata.get("restore_in_progress"):
                 allowed = {item["name"]: {} for item in metadata["restore_target"]["volumes"]}
         else:
@@ -2083,6 +2135,29 @@ class DockerMachineBackend:
             allowed[volume] = {}
         if volume not in allowed:
             raise CellIdentityConflict("volume is not owned by this machine")
+        if not writable:
+            # A read-only Docker named-volume mount still creates a missing volume.
+            # Validate its existence and full ownership before creating the helper.
+            if volume == self.workspace_volume and not re.fullmatch(
+                re.escape(self.stem) + r"-code-[0-9a-f]{32}", volume
+            ):
+                try:
+                    resource = self.client.volumes.get(volume)
+                except docker.errors.NotFound as exc:
+                    raise CellIdentityConflict("archive source volume is missing") from exc
+                expected = {
+                    "omnia.managed": "true", "omnia.project_cell": "true",
+                    "omnia.workspace_id": str(self.workspace_id),
+                    "omnia.project_id": str(self.project_id),
+                    "omnia.owner_id": str(self.owner_id),
+                    "omnia.provider": "docker_owner_canary", "omnia.resource_kind": "workspace",
+                    "omnia.profile_version": self.resource_profile_version,
+                }
+                labels = resource.attrs.get("Labels") or {}
+                if any(labels.get(key) != value for key, value in expected.items()):
+                    raise CellIdentityConflict("archive source volume identity mismatch")
+            elif self._lookup(self.client.volumes, volume, "project-volume") is None:
+                raise CellIdentityConflict("archive source volume is missing")
         return self.client.containers.create(
             self.base_image,
             ["python3", "-c", "import signal; signal.pause()"],

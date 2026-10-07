@@ -733,6 +733,8 @@ def stale_service_fixture(tmp_path, *, missing=True, stop_failure=None):
             self.labels = {**runtime.labels("development"), "omnia.fencing_epoch": "7"}
             self.attrs = {
                 "HostConfig": {"NetworkMode": "container:guard"},
+                "Mounts": [{"Type": "volume", "Destination": "/workspace/.next/cache",
+                            "Name": runtime.next_cache_volume}],
                 "Config": {"Labels": self.labels,
                            "Env": [key + "=" + value
                                    for key, value in runtime.project_database_env().items()]},
@@ -1510,7 +1512,12 @@ def test_writable_restore_helper_can_traverse_private_project_postgres_volume(tm
             created.append((args, options))
             return object()
 
-    runtime.client = SimpleNamespace(containers=Containers())
+    runtime.client = SimpleNamespace(
+        containers=Containers(),
+        volumes=SimpleNamespace(get=lambda name: SimpleNamespace(
+            attrs={"Name": name, "Labels": runtime.labels("project-volume")}
+        )),
+    )
     runtime._metadata = lambda: {
         "manifest": manifest.model_dump(mode="json"),
         "restore_in_progress": True,
@@ -1536,6 +1543,142 @@ def test_writable_restore_helper_can_traverse_private_project_postgres_volume(tm
     assert read_options["volumes"] == {
         runtime.project_postgres_volume: {"bind": "/volume", "mode": "ro"}
     }
+
+
+@pytest.mark.parametrize("machine_status", ["running", "exited", "absent"])
+def test_cache_rotation_snapshot_keeps_bound_old_cache(tmp_path, machine_status):
+    import docker
+
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    old_cache = runtime.next_cache_volume
+    write_controller_json(runtime.metadata_path, {
+        "manifest": manifest.model_dump(mode="json"),
+        "environment_ref": {"volumes": [{"name": old_cache}]},
+    })
+    machine = SimpleNamespace(status=machine_status, attrs={"Mounts": [{
+        "Type": "volume", "Destination": "/workspace/.next/cache", "Name": old_cache,
+    }]})
+    runtime._container = lambda: None if machine_status == "absent" else machine
+    volumes = {name: SimpleNamespace(attrs={"Labels": runtime.labels("project-volume")})
+               for name in (runtime.project_postgres_volume, old_cache)}
+    created = []
+
+    def get_volume(name):
+        if name not in volumes:
+            raise docker.errors.NotFound("missing")
+        return volumes[name]
+
+    def create_volume(*, name, labels):
+        assert name not in volumes
+        volumes[name] = SimpleNamespace(attrs={"Labels": labels})
+        created.append(name)
+        return volumes[name]
+
+    helpers = []
+    runtime.client = SimpleNamespace(
+        volumes=SimpleNamespace(get=get_volume, create=create_volume),
+        containers=SimpleNamespace(create=lambda *args, **kwargs: helpers.append(kwargs)),
+    )
+    runtime.configure_cache_identity(
+        dependency_digest="1" * 64, build_config_digest="2" * 64, manifest_digest="3" * 64,
+    )
+    new_cache = runtime.next_cache_volume
+    assert old_cache != new_cache
+    captured = runtime.snapshot_volume_names(manifest)
+    assert old_cache in captured
+    assert new_cache not in captured
+    assert runtime.project_postgres_volume in captured
+    assert runtime.workspace_volume in captured
+    assert runtime.pnpm_cache_volume in captured
+    assert runtime.corepack_cache_volume in captured
+    runtime._archive_helper(old_cache, writable=False)
+    assert helpers[0]["volumes"] == {old_cache: {"bind": "/volume", "mode": "ro"}}
+    assert new_cache not in volumes
+    runtime._volume(new_cache)
+    assert created == [new_cache]
+    assert volumes[new_cache].attrs["Labels"] == runtime.labels("project-volume")
+
+
+@pytest.mark.parametrize("fault", ["missing", "foreign", "unlabelled"])
+def test_readonly_archive_rejects_unowned_volume_before_helper_creation(tmp_path, fault):
+    import docker
+
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    runtime._metadata = lambda: {"manifest": manifest.model_dump(mode="json")}
+    runtime._container = lambda: None
+    created = []
+
+    def get_volume(name):
+        if fault == "missing":
+            raise docker.errors.NotFound("missing")
+        labels = runtime.labels("project-volume") if fault == "foreign" else {}
+        if fault == "foreign":
+            labels["omnia.owner_id"] = str(uuid4())
+        return SimpleNamespace(attrs={"Name": name, "Labels": labels})
+
+    runtime.client = SimpleNamespace(
+        volumes=SimpleNamespace(get=get_volume),
+        containers=SimpleNamespace(create=lambda *args, **kwargs: created.append(kwargs)),
+    )
+    with pytest.raises(CellIdentityConflict):
+        runtime._archive_helper(runtime.next_cache_volume, writable=False)
+    assert created == []
+
+
+def test_interrupted_cache_rotation_restores_exact_captured_cache(tmp_path):
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.machine_environment import (
+        MachineEnvironmentRef,
+        VolumeEnvironmentRef,
+    )
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = backend(tmp_path)
+    manifest = MachineManifest.model_validate(payload())
+    old_cache = runtime.next_cache_volume
+    target = MachineEnvironmentRef(
+        workspace_id=runtime.workspace_id, image_id="sha256:" + "d" * 64,
+        artifact_ref="a" * 32 + ".tar", sha256="b" * 64, size=1,
+        base_image=runtime.base_image, manifest_digest=manifest.digest(), manifest=manifest,
+        volumes=tuple(VolumeEnvironmentRef(
+            name=name, artifact_ref=f"{i:032x}.tar", sha256="c" * 64, size=1,
+        ) for i, name in enumerate(runtime.environment_volume_names(manifest), 1)),
+    )
+    write_controller_json(runtime.metadata_path, {
+        "manifest": manifest.model_dump(mode="json"),
+        "environment_ref": target.model_dump(mode="json"),
+    })
+    runtime.configure_cache_identity(
+        dependency_digest="1" * 64, build_config_digest="2" * 64, manifest_digest="3" * 64,
+    )
+    runtime._container = lambda: None
+    runtime._reconcile_recovery_helpers = lambda: None
+    runtime.remove = lambda: None
+    labels = runtime.labels("project-volume")
+    runtime.client = SimpleNamespace(volumes=SimpleNamespace(
+        get=lambda name: SimpleNamespace(attrs={"Labels": labels}),
+    ))
+    runtime.validate_restore_reference(target)
+    poisoned = target.model_copy(update={"volumes": (*target.volumes, target.volumes[0])})
+    with pytest.raises(CellIdentityConflict):
+        runtime.validate_restore_reference(poisoned)
+    runtime.begin_restore(target)
+    assert runtime.next_cache_volume == old_cache
+    assert set(runtime.environment_volume_names(manifest)) == {v.name for v in target.volumes}
+    metadata = runtime._metadata()
+    metadata["pending_image"] = target.image_id
+    write_controller_json(runtime.metadata_path, metadata)
+    runtime.finish_restore()
+    assert runtime.next_cache_volume == old_cache
+    labels["omnia.owner_id"] = str(uuid4())
+    with pytest.raises(CellIdentityConflict):
+        runtime.begin_restore(target)
 
 
 def test_tmpfs_command_logs_use_bounded_exec_read_not_docker_archive(tmp_path):
@@ -1660,7 +1803,7 @@ def test_is_running_reports_live_project_postgres_even_without_machine_process(t
     assert runtime.is_running() is True
 
 
-@pytest.mark.parametrize("change", ["manifest", "epoch"])
+@pytest.mark.parametrize("change", ["manifest", "epoch", "cache"])
 def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path, change):
     from types import SimpleNamespace
 
@@ -1672,7 +1815,21 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path,
     if change == "manifest":
         after.services[0].argv = ["python3", "new.py"]
     write_controller_json(runtime.metadata_path, {"manifest": before.model_dump(mode="json")})
-    runtime._container = lambda: SimpleNamespace(labels={"omnia.fencing_epoch": "7"}, attrs={})
+    old_cache = runtime.next_cache_volume
+    runtime._container = lambda: SimpleNamespace(
+        labels={"omnia.fencing_epoch": "7"}, attrs={
+            "Config": {"Env": [
+                f"{key}={value}" for key, value in runtime.project_database_env().items()
+            ]},
+            "Mounts": [{
+            "Type": "volume", "Destination": "/workspace/.next/cache", "Name": old_cache,
+        }]},
+    )
+    if change == "cache":
+        runtime.configure_cache_identity(
+            dependency_digest="1" * 64, build_config_digest="2" * 64,
+            manifest_digest=before.digest(),
+        )
     runtime._project_postgres = lambda: None
     operations = []
     runtime._checkpoint_for_recreate = lambda value: operations.append(("capture", value.digest()))
@@ -1686,7 +1843,7 @@ def test_manifest_change_checkpoints_and_removes_old_service_container(tmp_path,
 
     runtime.client = SimpleNamespace(networks=SimpleNamespace(get=network))
     with pytest.raises(ReachedCreate):
-        runtime.ensure(after, 7 if change == "manifest" else 8)
+        runtime.ensure(after, 8 if change == "epoch" else 7)
     assert operations == [("capture", before.digest()), ("remove", {"expected_epoch": 7})]
 
 

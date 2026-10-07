@@ -761,6 +761,80 @@ async def refresh_vhosts() -> int:
     return 0
 
 
+def _unavailable_preview_block(host: str, *, tls: bool) -> str:
+    # Keep only ACME and a static response: a stopped preview must not reach
+    # its former app, HMR, inspector, or wake endpoints.
+    response = '''    location / {
+        default_type text/plain;
+        add_header Cache-Control "no-store" always;
+        add_header Retry-After "30" always;
+        return 503 "Preview temporarily unavailable.\\n";
+    }'''
+    http = f"""\
+# omnia unavailable preview — {host}
+server {{
+    listen 80;
+    listen [::]:80;
+    server_name {host};
+{_acme_location()}
+{response}
+}}
+"""
+    if not tls:
+        return http
+    cert_dir = _wildcard_cert_dir(host) or f"{get_settings().acme_certs_dir}/{host}"
+    return http + f"""
+server {{
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {host};
+    ssl_certificate     {cert_dir}/fullchain.pem;
+    ssl_certificate_key {cert_dir}/privkey.pem;
+    add_header Strict-Transport-Security "max-age=31536000" always;
+{response}
+}}
+"""
+
+
+async def withdraw_preview(host: str) -> None:
+    """Temporarily detach a preview while retaining its TLS identity.
+
+    Reuse existing TLS or the configured wildcard without issuing certificates.
+    Permanent deletion continues to use unpublish.
+    """
+    _validate_host(host)
+    path = _site_path(host)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    previous = path.read_text(encoding="utf-8") if path.exists() else None
+    tls = bool(previous and "listen 443" in previous) or bool(
+        get_settings().enable_tls and _wildcard_cert_dir(host)
+    )
+    desired = _unavailable_preview_block(host, tls=tls)
+    confirmed = _tls_confirmations.get(path)
+    # A matching file alone may be a write interrupted before nginx reloaded.
+    if (confirmed is not None and previous == desired
+            and confirmed[0] == desired and confirmed[1] == path.stat().st_mtime_ns
+            and time.monotonic() - confirmed[2] < _TLS_CONFIRMATION_SECONDS):
+        return
+    _tls_confirmations.pop(path, None)
+    path.write_text(desired, encoding="utf-8")
+    res = await _reload()
+    if not res.ok:
+        if previous is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(previous, encoding="utf-8")
+        await _reload()
+        raise OrchestratorError(
+            code="container_failure",
+            message=f"nginx rejected unavailable preview for {host}: {res.stderr[-300:]}",
+            status_code=500,
+        )
+    if await _wait_live(host, tls=tls):
+        _tls_confirmations[path] = (desired, path.stat().st_mtime_ns, time.monotonic())
+    log.info("nginx.preview_withdrawn", host=host, tls=tls)
+
+
 async def unpublish(host: str, *, http_only: bool = False) -> None:
     """Remove a site; HTTP-only cleanup preserves previously working TLS."""
     path = _site_path(host)

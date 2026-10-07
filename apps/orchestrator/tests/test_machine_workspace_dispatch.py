@@ -139,7 +139,7 @@ async def test_applied_sql_refused_before_any_workspace_mutation(
 
 
 @pytest.mark.usefixtures("_internal_settings")
-async def test_machine_lifecycle_removes_dead_gateway_ingress_and_reads_service_logs(
+async def test_machine_lifecycle_withdraws_dead_gateway_and_reads_service_logs(
     tmp_path, monkeypatch
 ):
     from types import SimpleNamespace
@@ -160,6 +160,8 @@ async def test_machine_lifecycle_removes_dead_gateway_ingress_and_reads_service_
     )
     unpublish = AsyncMock()
     monkeypatch.setattr(workspace.nginx_writer, "unpublish", unpublish)
+    withdraw = AsyncMock()
+    monkeypatch.setattr(workspace.nginx_writer, "withdraw_preview", withdraw)
     await workspace._sync_lifecycle_draft_preview(
         manager,
         workspace_id,
@@ -169,7 +171,8 @@ async def test_machine_lifecycle_removes_dead_gateway_ingress_and_reads_service_
         await workspace._draft_runtime_log_tail(manager, workspace_id)
         == "web: useful runtime error"
     )
-    unpublish.assert_awaited_once()
+    withdraw.assert_awaited_once_with(workspace._draft_preview_host(workspace_id))
+    unpublish.assert_not_awaited()
 
 
 @pytest.mark.usefixtures("_internal_settings")
@@ -491,11 +494,11 @@ async def test_first_manifest_patch_retires_credentialed_legacy_before_shared_so
             )
         return await original_write(volume, files)
 
-    async def unpublish(host):
-        events.append("unpublish")
+    async def withdraw(host):
+        events.append("withdraw")
 
     monkeypatch.setattr(docker, "write_volume_files", write)
-    monkeypatch.setattr(workspace.nginx_writer, "unpublish", unpublish)
+    monkeypatch.setattr(workspace.nginx_writer, "withdraw_preview", withdraw)
     monkeypatch.setattr(
         workspace, "_publish_draft_preview", AsyncMock(return_value="https://test.invalid")
     )
@@ -518,4 +521,4 @@ async def test_first_manifest_patch_retires_credentialed_legacy_before_shared_so
             headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
         )
     assert response.status_code == 200, response.text
-    assert events == ["unpublish", ("write", False, True)]
+    assert events == ["withdraw", ("write", False, True)]

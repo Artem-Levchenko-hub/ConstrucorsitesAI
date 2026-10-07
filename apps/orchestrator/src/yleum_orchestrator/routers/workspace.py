@@ -1277,7 +1277,7 @@ async def _prepare_portable_write(
         )
     if draft is not None:
         await manager.docker.remove_container(draft.name)
-        await nginx_writer.unpublish(_draft_preview_host(state.workspace_id))
+        await nginx_writer.withdraw_preview(_draft_preview_host(state.workspace_id))
     return manifest
 
 
@@ -1343,7 +1343,7 @@ async def _sync_lifecycle_draft_preview(
             runtime = _require_portable_runtime(manager)
             preview = runtime.preview(state)
             if preview is None or preview[0] != "running":
-                await nginx_writer.unpublish(_draft_preview_host(workspace_id))
+                await nginx_writer.withdraw_preview(_draft_preview_host(workspace_id))
             else:
                 await _publish_draft_preview(manager, workspace_id)
         elif await manager.inspect_draft_runtime(workspace_id) is not None:

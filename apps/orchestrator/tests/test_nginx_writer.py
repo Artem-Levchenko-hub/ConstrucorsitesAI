@@ -671,6 +671,141 @@ async def test_failed_preview_publication_only_removes_http_site(
         assert reloads == [True]
 
 
+@pytest.mark.parametrize("existing_tls", [False, True])
+async def test_withdraw_preview_keeps_tls_without_application_routes(
+    tmp_path, monkeypatch, existing_tls,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("YLEUM_WILDCARD_CERT_ROOT", "/wildcard")
+    get_settings.cache_clear()
+    host = nginx_writer.dev_host("withdraw")
+    conf = tmp_path / f"{host}.conf"
+    if existing_tls:
+        conf.write_text(nginx_writer._https_block(
+            host, 3000, upstream_host="172.30.0.2", private_cell=True,
+        ), encoding="utf-8")
+    reload = AsyncMock(return_value=CmdResult(rc=0, stdout="", stderr=""))
+    issue_cert = AsyncMock()
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    monkeypatch.setattr(nginx_writer, "_issue_cert", issue_cert)
+    async def wait_after_reload(host, *, tls):
+        reload.assert_awaited_once()
+        return True
+
+    wait_live = AsyncMock(side_effect=wait_after_reload)
+    monkeypatch.setattr(nginx_writer, "_wait_live", wait_live)
+
+    await nginx_writer.withdraw_preview(host)
+    unavailable = conf.read_text(encoding="utf-8")
+    assert "listen 443 ssl" in unavailable
+    assert "/wildcard/preview.omniadevelop.ru/fullchain.pem" in unavailable
+    assert "return 503" in unavailable
+    assert 'Cache-Control "no-store" always' in unavailable
+    for forbidden in ("proxy_pass", "172.30.0.2", "auth_request", "omnia_waking", "inspector"):
+        assert forbidden not in unavailable
+    issue_cert.assert_not_awaited()
+    wait_live.assert_awaited_once_with(host, tls=True)
+
+    await nginx_writer.withdraw_preview(host)
+    reload.assert_awaited_once()
+    # Ordinary publication replaces the unavailable page and retains HTTPS.
+    monkeypatch.setattr(nginx_writer, "_wait_live", AsyncMock(return_value=True))
+    await nginx_writer.publish_http(host, 3000, upstream_host="172.30.0.3")
+    assert "proxy_pass http://172.30.0.3:3000" in conf.read_text(encoding="utf-8")
+    assert "listen 443 ssl" in conf.read_text(encoding="utf-8")
+    await nginx_writer.unpublish(host)
+    assert not conf.exists()
+
+
+@pytest.mark.parametrize("existing_tls", [False, True])
+async def test_withdraw_preview_reloads_unconfirmed_file_after_interruption(
+    tmp_path, monkeypatch, existing_tls,
+):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("YLEUM_WILDCARD_CERT_ROOT", "/wildcard" if existing_tls else "")
+    get_settings.cache_clear()
+    host = nginx_writer.dev_host("interrupted")
+    conf = tmp_path / f"{host}.conf"
+    # Process died after the write; nginx still serves the previous/default site.
+    conf.write_text(
+        nginx_writer._unavailable_preview_block(host, tls=existing_tls), encoding="utf-8",
+    )
+    reload = AsyncMock(return_value=CmdResult(rc=0, stdout="", stderr=""))
+    wait_live = AsyncMock(return_value=True)
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    monkeypatch.setattr(nginx_writer, "_wait_live", wait_live)
+    await nginx_writer.withdraw_preview(host)
+    reload.assert_awaited_once()
+    wait_live.assert_awaited_once_with(host, tls=existing_tls)
+
+
+@pytest.mark.parametrize("existing_tls", [False, True])
+async def test_withdraw_preview_without_wildcard_preserves_existing_tls_only(
+    tmp_path, monkeypatch, existing_tls,
+):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    monkeypatch.setenv("YLEUM_WILDCARD_CERT_ROOT", "")
+    get_settings.cache_clear()
+    host = nginx_writer.dev_host("per-host")
+    conf = tmp_path / f"{host}.conf"
+    if existing_tls:
+        conf.write_text(nginx_writer._https_block(host, 3000), encoding="utf-8")
+    monkeypatch.setattr(
+        nginx_writer, "_reload", AsyncMock(return_value=CmdResult(rc=0, stdout="", stderr="")),
+    )
+    issue_cert = AsyncMock()
+    monkeypatch.setattr(nginx_writer, "_issue_cert", issue_cert)
+    monkeypatch.setattr(nginx_writer, "_wait_live", AsyncMock(return_value=True))
+    await nginx_writer.withdraw_preview(host)
+    unavailable = conf.read_text(encoding="utf-8")
+    assert ("listen 443 ssl" in unavailable) is existing_tls
+    assert "return 503" in unavailable
+    assert "proxy_pass" not in unavailable
+    if existing_tls:
+        assert f"{get_settings().acme_certs_dir}/{host}/fullchain.pem" in unavailable
+    issue_cert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("existing_tls", [False, True])
+async def test_withdraw_preview_rolls_back_failed_reload(tmp_path, monkeypatch, existing_tls):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.config import get_settings
+    from yleum_orchestrator.core.shell import CmdResult
+
+    monkeypatch.setenv("NGINX_SITES_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    host = nginx_writer.dev_host("withdraw")
+    conf = tmp_path / f"{host}.conf"
+    previous = nginx_writer._https_block(host, 3000) if existing_tls else None
+    if previous:
+        conf.write_text(previous, encoding="utf-8")
+    reload = AsyncMock(side_effect=[
+        CmdResult(rc=1, stdout="", stderr="invalid configuration"),
+        CmdResult(rc=0, stdout="", stderr=""),
+    ])
+    monkeypatch.setattr(nginx_writer, "_reload", reload)
+    with pytest.raises(OrchestratorError, match="unavailable"):
+        await nginx_writer.withdraw_preview(host)
+    assert (conf.read_text(encoding="utf-8") if conf.exists() else None) == previous
+    assert reload.await_count == 2
+
+
 def test_tls_confirmation_outlives_the_reconcile_sweep_period() -> None:
     # The reconcile loop revisits every publication about every 5 minutes; an
     # unchanged vhost must not cost a nginx reload on each visit (C13/C15).

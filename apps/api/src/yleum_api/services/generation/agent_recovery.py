@@ -10,6 +10,7 @@ from uuid import UUID
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
+from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.contracts import (
     AgentOperations,
     AgentPromptPlan,
@@ -54,6 +55,13 @@ async def recover_stopped_candidate(
     # выше). Выкатить её безопаснее, чем выбросить готовый продукт только
     # потому, что ход провайдера закончился.
     _must_restore_previous = not _agent_res.done and not _agent_res.needs_finalization
+    _source_only = getattr(runtime, "coordinator", None) is not None
+    _stopped_cause = bounded_redacted_diagnostic(
+        f"generation stopped ({_agent_res.stop_reason or 'incomplete'}): {_agent_res.summary}",
+        max_bytes=2000,
+    )
+    _rollback_error: Exception | None = None
+    _rollback_verified = False
     _first_max_without_product = not _max_has_generated_snapshot
     if _must_restore_previous and baseline.sha and not _first_max_without_product:
         try:
@@ -65,8 +73,10 @@ async def recover_stopped_candidate(
                 baseline_sha=baseline.sha,
                 touched_files=_agent_res.files,
                 probe_build=operations.probe_build,
+                source_only=_source_only,
             )
             if _rollback_build.get("ok"):
+                _rollback_verified = True
                 _max_seed_files = {}
                 _agent_res = agent_builder.AgentResult(
                     done=False,
@@ -100,6 +110,7 @@ async def recover_stopped_candidate(
                 )
         except Exception as _rollback_exc:
             raise_if_terminal_cell_error(_rollback_exc)
+            _rollback_error = _rollback_exc
             print(f"[PP] hard-limit rollback failed: {_rollback_exc!r}", flush=True)
     elif _must_restore_previous and _first_max_without_product:
         # Config sync creates a legitimate snapshot before the first AI
@@ -115,8 +126,10 @@ async def recover_stopped_candidate(
                 touched_files=_agent_res.files,
                 render_core=_render_current_max_starter_files,
                 probe_build=operations.probe_build,
+                source_only=_source_only,
             )
             if _rollback_build.get("ok"):
+                _rollback_verified = True
                 _max_seed_files = {}
                 _agent_res = agent_builder.AgentResult(
                     done=False,
@@ -153,6 +166,7 @@ async def recover_stopped_candidate(
                 )
         except Exception as _rollback_exc:
             raise_if_terminal_cell_error(_rollback_exc)
+            _rollback_error = _rollback_exc
             print(
                 f"[PP] first-MAX safe fallback failed: {_rollback_exc!r}",
                 flush=True,
@@ -163,6 +177,13 @@ async def recover_stopped_candidate(
     # replaces the agent result with its own status message.
     if _provider_failure:
         raise RuntimeError(_provider_failure)
+
+    # A restored (or unverified) stopped tree is never a candidate for
+    # finalization. Preserve the original cause before the unchanged-tree
+    # guard can mistake the restored baseline for a failed accepted edit.
+    if _must_restore_previous and _source_only:
+        status = "rolled_back" if _rollback_verified else "rollback_unverified"
+        raise RuntimeError(f"{_stopped_cause}; {status}") from _rollback_error
 
     return _agent_res, _first_max_without_product, _max_seed_files, _seg
 
@@ -295,6 +316,7 @@ async def recover_rejected_candidate(
                     baseline_sha=baseline.sha,
                     touched_files=files,
                     probe_build=operations.probe_build,
+                    source_only=runtime.coordinator is not None,
                 )
                 _verification_rolled_back = bool(_rollback_build.get("ok"))
             else:
@@ -307,6 +329,7 @@ async def recover_rejected_candidate(
                     touched_files=files,
                     render_core=_render_current_max_starter_files,
                     probe_build=operations.probe_build,
+                    source_only=runtime.coordinator is not None,
                 )
                 _verification_rolled_back = bool(_rollback_build.get("ok"))
             if _verification_rolled_back:
@@ -380,6 +403,7 @@ async def _restore_touched_tree(
     baseline_sha: str,
     touched_files: dict[str, str],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
+    source_only: bool = False,
 ) -> dict[str, Any]:
     """Stage the complete restored tree before compiling any of its dependencies."""
     _baseline_files = await asyncio.to_thread(repo_svc.read_files, project_id, baseline_sha)
@@ -392,6 +416,7 @@ async def _restore_touched_tree(
             files={**_restore_files, **dict.fromkeys(_new_paths, "")},
             project_cell_handle=handle,
             empty_files=tuple(path for path, content in _restore_files.items() if content == ""),
+            sync_preview=not source_only,
         )
     _rollback_build = await probe_build()
     return _rollback_build
@@ -405,6 +430,7 @@ async def _restore_max_core(
     touched_files: dict[str, str],
     render_core: Callable[[], Awaitable[dict[str, str]]],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
+    source_only: bool = False,
 ) -> dict[str, Any]:
     """Restore the core and remove product importers in one fenced source patch."""
     _safe_files = await render_core()
@@ -419,6 +445,7 @@ async def _restore_max_core(
             for path, content in _safe_files.items()
             if content == "" and path not in _new_paths
         ),
+        sync_preview=not source_only,
     )
     _rollback_build = await probe_build()
     return _rollback_build
