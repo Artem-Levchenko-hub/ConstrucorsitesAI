@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { ExternalLink } from "lucide-react";
 import Link from "next/link";
 
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
@@ -7,31 +6,43 @@ import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 export const metadata: Metadata = {
   title: "Реквизиты исполнителя — Yleum",
   description:
-    "Реквизиты самозанятого исполнителя сервиса Yleum.",
+    "Реквизиты ООО «Кортэл» — исполнителя сервиса Yleum.",
 };
 
 export default function RequisitesPage() {
   return (
-    <LegalPage title="Реквизиты исполнителя">
+    <LegalPage title="Реквизиты исполнителя" updated="7 октября 2026">
       <LegalSection title="Статус">
         <p>
-          Исполнитель применяет специальный налоговый режим «Налог на
-          профессиональный доход» и оказывает услуги как самозанятый.
+          Исполнитель сервиса Yleum — ООО «Кортэл».
         </p>
       </LegalSection>
 
       <LegalSection title="Идентификационные данные">
         <dl className="overflow-hidden rounded-[12px] border border-border-default bg-surface">
           <div className="grid gap-1 border-b border-border-default p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
-            <dt className="text-sm text-fg-tertiary">Статус</dt>
+            <dt className="text-sm text-fg-tertiary">Наименование</dt>
             <dd className="font-medium text-fg-primary">
-              Самозанятый, плательщик НПД
+              ООО «Кортэл»
+            </dd>
+          </div>
+          <div className="grid gap-1 border-b border-border-default p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
+            <dt className="text-sm text-fg-tertiary">ИНН</dt>
+            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-fg-primary">
+              7816246925
+            </dd>
+          </div>
+          <div className="grid gap-1 border-b border-border-default p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
+            <dt className="text-sm text-fg-tertiary">ОГРН</dt>
+            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-fg-primary">
+              1157847049788
             </dd>
           </div>
           <div className="grid gap-1 p-5 sm:grid-cols-[180px_1fr] sm:gap-6">
-            <dt className="text-sm text-fg-tertiary">ИНН</dt>
-            <dd className="font-mono text-lg font-semibold tracking-[.04em] text-fg-primary">
-              220504676540
+            <dt className="text-sm text-fg-tertiary">Адрес</dt>
+            <dd className="font-medium text-fg-primary">
+              630099, Новосибирская область, г. Новосибирск, ул. Орджоникидзе,
+              зд. 38, офис 808
             </dd>
           </div>
         </dl>
@@ -85,15 +96,6 @@ export default function RequisitesPage() {
           </a>
           .
         </p>
-        <a
-          href="https://npd.nalog.ru/check-status/"
-          target="_blank"
-          rel="noreferrer"
-          className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-accent-secondary"
-        >
-          Проверить статус самозанятого на сайте ФНС
-          <ExternalLink className="size-4" />
-        </a>
       </LegalSection>
     </LegalPage>
   );

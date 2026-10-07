@@ -2,13 +2,14 @@ import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Политика конфиденциальности">
+    <LegalPage title="Политика конфиденциальности" updated="7 октября 2026">
       <LegalSection title="1. О документе">
         <p>
           Политика описывает обработку данных пользователей Yleum и
-          конструктора Lead Generator. До публикации реквизитов оператора приём
-          платежей остаётся отключён. Контакт оператора по вопросам данных:
-          privacy@yleum.ru.
+          конструктора Lead Generator. Оператор персональных данных — ООО
+          «Кортэл», ИНН 7816246925, ОГРН 1157847049788. Адрес: 630099,
+          Новосибирская область, г. Новосибирск, ул. Орджоникидзе, зд. 38,
+          офис 808. Контакт оператора по вопросам данных: privacy@yleum.ru.
         </p>
       </LegalSection>
       <LegalSection title="2. Какие данные обрабатываются">
