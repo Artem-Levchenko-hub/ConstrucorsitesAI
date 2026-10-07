@@ -214,7 +214,12 @@ for f in "${dir}/platform-${PLATFORM_DB}.sql.gz" "${dir}/projects-${USERS_DB}.sq
   sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
   [ "$sz" -ge 200 ] || fail "dump ${f} is only ${sz} bytes — aborting (treat as failure)"
 done
-for f in "${dir}/projects-src.tgz" "${dir}/minio-data.tgz" "${dir}/runtime-config.tgz"; do
+# A fresh MAX platform can have no legacy filesystem projects. Prove that the
+# tiny source archive contains exactly that empty directory, rather than
+# rejecting a valid backup solely because its gzip stream is below 200 bytes.
+python3 "$(dirname "$0")/verify-project-sources.py" "${dir}/projects-src.tgz" "$PROJECTS_DIR" \
+  || fail "project sources archive failed verification"
+for f in "${dir}/minio-data.tgz" "${dir}/runtime-config.tgz"; do
   sz=$(stat -c%s "$f" 2>/dev/null || echo 0)
   [ "$sz" -ge 200 ] || fail "archive ${f} is only ${sz} bytes — aborting"
 done
