@@ -404,6 +404,103 @@ class MachineAdapter:
                 timed_out=stored.timed_out,
             )
 
+    async def protect_migration_sources(
+        self, state: Any, files: dict[str, str],
+    ) -> dict[str, str]:
+        from yleum_orchestrator.services.applied_migration_sources import (
+            protected_sources,
+            require_protected_sources,
+        )
+
+        if not self.exists(state.workspace_id):
+            return {}
+        machine, backend = self.parts(state)
+        if getattr(state, "active_generation_run_id", None) is not None:
+            postgres = await machine_effect(backend._project_postgres)
+            if postgres is not None:
+                await machine_effect(postgres.reload)
+            if postgres is None or postgres.status != "running":
+                # A released environment retains its DB volume. Resume it under
+                # the validated generation lease before the first write, using
+                # its persisted manifest rather than the proposed source patch.
+                manifest = MachineManifest.model_validate(machine.state()["manifest"])
+                await machine.ensure(manifest, LifecycleMutation(
+                    uuid4(), state.fencing_epoch, manifest.digest(),
+                ))
+        protected = await machine_effect(
+            protected_sources, backend, files,
+            verify_only=adaptation_database(state, machine.state()),
+        )
+        require_protected_sources(protected, files)
+        return cast(dict[str, str], protected)
+
+    async def guarded_execute(
+        self, state: Any, manifest: MachineManifest, request: Any,
+    ) -> DockerCommandResult:
+        """Caller holds operation lock; inspect physical source even on command failure."""
+        from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
+        from yleum_orchestrator.services.applied_migration_sources import (
+            protected_sources,
+            require_protected_sources,
+        )
+
+        machine, backend = self.parts(state)
+        record = machine.state().get("operations", {}).get(str(request.operation_id), {})
+        if record.get("source_guard_failure"):
+            raise CellResourceError(
+                "this command changed applied migration source; use a new operation"
+            )
+        before = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
+        protected = await self.protect_migration_sources(state, before)
+        try:
+            return await self.execute(state, manifest, request)
+        finally:
+            # SQL may have committed before a failed build, role bootstrap or
+            # cancellation. Recover its pre-submission witness from the journal.
+            with machine_budget(None):
+                try:
+                    protected = {}  # Never restore a witness if the live DB cannot revalidate it.
+                    protected = await machine_effect(
+                        protected_sources, backend, before,
+                        verify_only=adaptation_database(state, machine.state()),
+                    )
+                    after = await _read_agent_workspace_files(
+                        self.manager, backend.workspace_volume,
+                    )
+                    require_protected_sources(protected, after)
+                except BaseException:
+                    saved = machine.state()
+                    record = saved.get("operations", {}).get(str(request.operation_id))
+                    if record is not None:
+                        record["source_guard_failure"] = True
+                        record["state"] = "failed"
+                        record["result"] = MachineOperationResult(
+                            operation_id=str(request.operation_id), state="completed", exit_code=1,
+                            output="applied migration source protection rejected this command",
+                        ).model_dump()
+                        record.pop("compiled_asset_receipt", None)
+                        record.pop("transport_response", None)
+                        write_controller_json(machine.path, saved)
+                    # Terminating the entire guest also catches daemonized children.
+                    # Never restore while a guest can still write the source volume.
+                    await machine_effect(backend.stop_machine)
+                    container = await machine_effect(backend._container)
+                    if container is not None:
+                        await machine_effect(container.reload)
+                        if container.status not in {"exited", "dead", "created"}:
+                            raise CellResourceError(
+                                "applied migration protection could not stop the source writer"
+                            ) from None
+                    if protected:
+                        await self.manager.docker.write_volume_files(backend.workspace_volume, {
+                            path: source.encode("utf-8") for path, source in protected.items()
+                        })
+                        restored = await _read_agent_workspace_files(
+                            self.manager, backend.workspace_volume,
+                        )
+                        require_protected_sources(protected, restored)
+                    raise
+
     @staticmethod
     def _request_digest(manifest: MachineManifest, request: Any) -> str:
         return hashlib.sha256(
@@ -640,6 +737,14 @@ class MachineAdapter:
         migrations = {}
         if not verify_only:
             migrations = await self._migration_inventory(backend)
+            if verify_applied:
+                from yleum_orchestrator.services.applied_migration_sources import (
+                    protected_sources,
+                    require_protected_sources,
+                )
+
+                protected = await machine_effect(protected_sources, backend, migrations)
+                require_protected_sources(protected, migrations)
         if not (verify_only or verify_applied):
             mutation = LifecycleMutation(request.operation_id, request.fencing_epoch,
                                          self._request_digest(
@@ -647,6 +752,9 @@ class MachineAdapter:
                                              request))
             await machine.assert_ready(mutation)
             await machine_effect(backend.prepare_project_database_migrations, request.fencing_epoch)
+            from yleum_orchestrator.services.applied_migration_sources import save_migration_intent
+
+            await machine_effect(save_migration_intent, backend, migrations)
         receipt: dict[str, Any] = await machine_effect(
             run_project_migrations, backend, migrations,
             verify_only=verify_only, verify_applied=verify_applied,
@@ -657,6 +765,8 @@ class MachineAdapter:
             fencing_epoch=request.fencing_epoch,
             source_revision=request.expected_revision,
         )
+        if not verify_applied:
+            self._store_migration_receipt(state, request.operation_id, receipt)
         return receipt
 
     async def _activate_runtime(self, state: Any, manifest: MachineManifest, request: Any) -> None:
@@ -845,7 +955,7 @@ class MachineAdapter:
     ) -> DockerCommandResult:
         from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
 
-        result = await self.execute(
+        result = await self.guarded_execute(
             state,
             manifest,
             WorkspaceAgentExecRequest(

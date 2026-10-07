@@ -596,7 +596,7 @@ async def exec_workspace_agent_command(
                     manifest=manifest,
                     environment_digest=await machine_effect(backend.environment_digest),
                 )
-                result = await manager.machine_runtime.execute(state, manifest, request)
+                result = await manager.machine_runtime.guarded_execute(state, manifest, request)
             except (CellResourceError, ValueError) as exc:
                 raise OrchestratorError(
                     code="container_failure", message=str(exc), status_code=409
@@ -1253,6 +1253,14 @@ async def _prepare_portable_write(
     manifest = _machine_manifest(files, manager=manager, workspace_id=state.workspace_id)
     if manifest is None:
         return None
+    if _portable_active(manager, state.workspace_id):
+        runtime = _require_portable_runtime(manager)
+        try:
+            await runtime.protect_migration_sources(state, files)
+        except CellResourceError as exc:
+            raise OrchestratorError(
+                code="container_failure", message=str(exc), status_code=409,
+            ) from exc
     _require_portable_runtime(manager)
     draft = await manager.inspect_draft_runtime(state.workspace_id)
     if draft is not None:

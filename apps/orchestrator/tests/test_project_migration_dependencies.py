@@ -55,7 +55,8 @@ def test_later_migration_parent_does_not_satisfy_earlier_fk():
 def test_applied_sql_is_not_replayed_or_used_as_current_catalog():
     applied = {"drizzle/0002.sql": hashlib.sha256(CHILD.encode()).hexdigest()}
     assert dependency_gap({"drizzle/0002.sql": CHILD}, set(), applied) is None
-    assert dependency_gap({"drizzle/0002.sql": CHILD + "--changed"}, set(), applied) is None
+    assert "checksum" in dependency_gap({"drizzle/0002.sql": CHILD + "--changed"}, set(), applied)
+    assert "missing" in dependency_gap({}, set(), applied)
 
 
 @pytest.mark.parametrize(

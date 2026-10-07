@@ -15,22 +15,23 @@ from yleum_orchestrator.services.restoration_database import admin_sql
 
 CATALOG_SQL = """
 BEGIN READ ONLY;
+SET LOCAL search_path = pg_catalog;
 SET LOCAL statement_timeout = '3s';
 SET LOCAL lock_timeout = '1s';
 DO $catalog$
 DECLARE ledger json := '{}';
 BEGIN
- IF to_regclass('public.__omnia_project_migrations') IS NOT NULL THEN
-  SELECT coalesce(json_object_agg(name, sha256), '{}'::json) INTO ledger
+ IF pg_catalog.to_regclass('public.__omnia_project_migrations') IS NOT NULL THEN
+  SELECT coalesce(pg_catalog.json_object_agg(name, sha256), '{}'::json) INTO ledger
    FROM public.__omnia_project_migrations;
  END IF;
- PERFORM set_config('omnia.pending_migration_catalog', ledger::text, true);
+ PERFORM pg_catalog.set_config('omnia.pending_migration_catalog', ledger::text, true);
 END $catalog$;
-SELECT json_build_object(
- 'relations', coalesce((SELECT json_agg(json_build_array(n.nspname,c.relname))
- FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+SELECT pg_catalog.json_build_object(
+ 'relations', coalesce((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(n.nspname,c.relname))
+ FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
  WHERE c.relkind IN ('r','p') AND n.nspname !~ '^pg_' AND n.nspname <> 'information_schema'), '[]'),
- 'applied', current_setting('omnia.pending_migration_catalog')::json);
+ 'applied', pg_catalog.current_setting('omnia.pending_migration_catalog')::json);
 COMMIT;
 """
 
@@ -58,13 +59,16 @@ def dependency_gap(
 
     This is feedback, not an SQL acceptance proof. Dynamic DDL, custom search
     paths and parser-version differences must not falsely reject valid SQL.
-    Applied checksums are enforced by the controller's final migration journal.
+    Applied SQL must match the journal before pending dependency feedback.
     """
+    for path, digest in applied.items():
+        if path not in migrations:
+            return f"Applied migration {path} is missing; restore its exact SQL."
+        if digest != hashlib.sha256(migrations[path].encode()).hexdigest():
+            return f"Applied migration {path} checksum changed; restore its exact SQL."
     statements = []
     for path, source in sorted(migrations.items()):
         if path in applied:
-            if applied[path] != hashlib.sha256(source.encode()).hexdigest():
-                return None  # A journal conflict, not a missing-parent repair.
             continue
         try:
             for raw in parse_sql(source):
@@ -111,8 +115,6 @@ def dependency_gap(
 
 
 def check_migration_dependencies(backend: Any, migrations: Mapping[str, str]) -> str | None:
-    if not migrations:
-        return None
     try:
         catalog = json.loads(
             admin_sql(backend, CATALOG_SQL, max_bytes=128 * 1024, lifetime_seconds=5)

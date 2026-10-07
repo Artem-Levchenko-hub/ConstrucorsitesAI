@@ -71,8 +71,71 @@ class PortableRuntime:
         self.commands.append((state.workspace_id, manifest.services[0].argv, request.task_role))
         return DockerCommandResult(exit_code=0, output="python tests passed", timed_out=False)
 
+    async def guarded_execute(self, state, manifest, request):
+        return await self.execute(state, manifest, request)
+
+    async def protect_migration_sources(self, state, files):
+        return {}
+
     async def apply(self, state, manifest, request):
         return await self.execute(state, manifest, type("Request", (), {"task_role": "build"})())
+
+
+@pytest.mark.usefixtures("_internal_settings")
+@pytest.mark.parametrize("endpoint", ["agent/write-files", "draft/reset", "draft/apply"])
+@pytest.mark.parametrize("delete", [False, True])
+async def test_applied_sql_refused_before_any_workspace_mutation(
+    tmp_path, monkeypatch, endpoint, delete,
+):
+    import hashlib
+    from dataclasses import replace
+
+    from yleum_orchestrator.services import applied_migration_sources as sources
+    from yleum_orchestrator.services.machine_adapter import MachineAdapter
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    workspace_id = uuid4()
+    provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+    state = manager.state_store.load(workspace_id)
+    if endpoint == "draft/reset":
+        state = replace(state, active_generation_run_id=None)
+        manager.state_store._persist_state(state)
+    sql = "CREATE TABLE coffee(id int);\n"
+    files = {".omnia/cell.json": json.dumps(payload()), "drizzle/0002.sql": sql,
+             "src/index.py": "original"}
+    volume = state.resource_names.workspace_volume
+    await docker.write_volume_files(volume, {p: s.encode() for p, s in files.items()})
+    backend = SimpleNamespace(metadata_path=tmp_path / "docker.json",
+                              project_postgres_volume="db", workspace_volume=volume,
+                              _project_postgres=lambda:
+                              SimpleNamespace(status="running", reload=lambda: None))
+    monkeypatch.setattr(sources, "admin_sql", lambda *a, **kw: json.dumps({
+        "database_identity": "a" * 64, "journal": True, "has_relations": True,
+        "applied": {"drizzle/0002.sql": hashlib.sha256(sql.encode()).hexdigest()},
+    }).encode())
+    sources.protected_sources(backend, files)
+    runtime = MachineAdapter(manager, SimpleNamespace())
+    runtime.exists = lambda _: True
+    runtime.parts = lambda _: (SimpleNamespace(state=lambda: {}), backend)
+    manager.machine_runtime = runtime
+    write_controller_json(runtime.root / str(workspace_id) / "machine.json", {})
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    body = {"expected_revision": workspace._workspace_revision(files),
+            "files": {"src/index.py": "must not be written"}, "deletes": []}
+    if delete:
+        body["deletes"] = ["drizzle/0002.sql"]
+    else:
+        body["files"]["drizzle/0002.sql"] = "rewritten"
+    if endpoint != "draft/reset":
+        body.update(generation_run_id=str(run_id), fencing_epoch=4)
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/{endpoint}", json=body,
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+        )
+    assert response.status_code == 409, response.text
+    assert "applied migration" in response.text
+    assert await workspace._read_agent_workspace_files(manager, volume) == files
 
 
 @pytest.mark.usefixtures("_internal_settings")
