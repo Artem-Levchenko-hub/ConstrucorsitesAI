@@ -190,10 +190,14 @@ async def recover_rejected_candidate(
 ) -> VerificationRecovery:
     repair_failure: Exception | None = None
     if (
-        get_settings().use_native_agent and runtime.coordinator is not None
-        and runtime.handle is not None and plan is not None and files
+        get_settings().use_native_agent
+        and runtime.coordinator is not None
+        and runtime.handle is not None
+        and plan is not None
+        and files
         and (_agent_res.done or _agent_res.needs_finalization)
-        and _runtime_ok and not _typecheck_ok
+        and _runtime_ok
+        and not _typecheck_ok
     ):
         from yleum_api.services.generation.agent_finalization import (
             run_native_source_repair,
@@ -207,27 +211,46 @@ async def recover_rejected_candidate(
             if remaining < 60:
                 raise TimeoutError("generation deadline exceeded before source repair")
             before = await runtime.handle.snapshot_files()
-            await operations.emit("agent.step", {
-                "action": "source_repair", "human": "Дорабатываю по замечаниям проверки",
-                "detail": proof.redacted_detail, "ok": False, "path": "",
-            })
+            await operations.emit(
+                "agent.step",
+                {
+                    "action": "source_repair",
+                    "human": "Дорабатываю по замечаниям проверки",
+                    "detail": proof.redacted_detail,
+                    "ok": False,
+                    "path": "",
+                },
+            )
             try:
                 async with asyncio.timeout(remaining):
                     repaired = await run_native_source_repair(
-                        task=(f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n"
-                              f"{proof.redacted_detail}\n"
-                              "Fix the existing product and keep the tested requirement. "
-                              "Preserve working features and data; do not repeat SQL effects. "
-                              "Make real source changes, run build, then done."),
-                        prompt_text=prompt_text, baseline=before, runtime=runtime, ids=ids,
-                        plan=plan, operations=operations, is_free=is_free,
-                        shell_enabled=_max_shell_enabled, edit_deadline=deadline,
+                        task=(
+                            f"{plan.user}\n\nFINAL SOURCE CHECK FEEDBACK:\n"
+                            f"{proof.redacted_detail}\n"
+                            "Fix the existing product and keep the tested requirement. "
+                            "Preserve working features and data; do not repeat SQL effects. "
+                            "Make real source changes, run build, then done."
+                        ),
+                        prompt_text=prompt_text,
+                        baseline=before,
+                        runtime=runtime,
+                        ids=ids,
+                        plan=plan,
+                        operations=operations,
+                        is_free=is_free,
+                        shell_enabled=_max_shell_enabled,
+                        edit_deadline=deadline,
                     )
                     after = await runtime.handle.snapshot_files()
-                    files = {**files, **repaired.files, **{
-                        path: after.get(path, "") for path in set(before) | set(after)
-                        if before.get(path) != after.get(path)
-                    }}
+                    files = {
+                        **files,
+                        **repaired.files,
+                        **{
+                            path: after.get(path, "")
+                            for path in set(before) | set(after)
+                            if before.get(path) != after.get(path)
+                        },
+                    }
                     _agent_res.files = files
                     if after != before and (repaired.done or repaired.needs_finalization):
                         check = await operations.probe_build()
@@ -244,10 +267,14 @@ async def recover_rejected_candidate(
                 # after a partial write. Restore via the ordinary guarded path.
                 try:
                     after = await runtime.handle.snapshot_files()
-                    files = {**files, **{
-                        path: after.get(path, "") for path in set(before) | set(after)
-                        if before.get(path) != after.get(path)
-                    }}
+                    files = {
+                        **files,
+                        **{
+                            path: after.get(path, "")
+                            for path in set(before) | set(after)
+                            if before.get(path) != after.get(path)
+                        },
+                    }
                     _agent_res.files = files
                 except Exception:
                     _log.warning("Native source repair snapshot unavailable")
@@ -354,21 +381,17 @@ async def _restore_touched_tree(
     touched_files: dict[str, str],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
-    """Reload the snapshot, restore existing touched paths, then delete new paths."""
+    """Stage the complete restored tree before compiling any of its dependencies."""
     _baseline_files = await asyncio.to_thread(repo_svc.read_files, project_id, baseline_sha)
     _restore_files = {
         path: _baseline_files[path] for path in touched_files if path in _baseline_files
     }
     _new_paths = [path for path in touched_files if path not in _baseline_files]
-    if _restore_files:
+    if _restore_files or _new_paths:
         await _apply_project_cell_preview_files(
-            files=_restore_files,
+            files={**_restore_files, **dict.fromkeys(_new_paths, "")},
             project_cell_handle=handle,
-        )
-    if _new_paths:
-        await _apply_project_cell_preview_files(
-            files={path: "" for path in _new_paths},
-            project_cell_handle=handle,
+            empty_files=tuple(path for path, content in _restore_files.items() if content == ""),
         )
     _rollback_build = await probe_build()
     return _rollback_build
@@ -383,19 +406,19 @@ async def _restore_max_core(
     render_core: Callable[[], Awaitable[dict[str, str]]],
     probe_build: Callable[[], Awaitable[dict[str, Any]]],
 ) -> dict[str, Any]:
-    """Render current config on every recovery, preserving the core write call."""
+    """Restore the core and remove product importers in one fenced source patch."""
     _safe_files = await render_core()
     _new_paths = sorted(
         {path for path in touched_files if path not in _safe_files} | {"src/app/page.tsx"}
     )
     await _apply_project_cell_preview_files(
-        files=_safe_files,
+        files={**_safe_files, **dict.fromkeys(_new_paths, "")},
         project_cell_handle=handle,
+        empty_files=tuple(
+            path
+            for path, content in _safe_files.items()
+            if content == "" and path not in _new_paths
+        ),
     )
-    if _new_paths:
-        await _apply_project_cell_preview_files(
-            files={path: "" for path in _new_paths},
-            project_cell_handle=handle,
-        )
     _rollback_build = await probe_build()
     return _rollback_build

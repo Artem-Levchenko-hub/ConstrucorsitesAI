@@ -191,9 +191,9 @@ def use_real_restore(monkeypatch, kwargs, workspace):
         lambda *_: dict(kwargs["baseline"].files),
     )
 
-    async def apply(*, files, project_cell_handle):
+    async def apply(*, files, project_cell_handle, empty_files=()):
         for path, content in files.items():
-            if content:
+            if content or path in empty_files:
                 workspace[path] = content
             else:
                 workspace.pop(path, None)

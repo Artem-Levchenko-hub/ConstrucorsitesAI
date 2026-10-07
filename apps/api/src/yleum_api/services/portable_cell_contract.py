@@ -73,6 +73,17 @@ compatibility definitions, NOT evidence of physical product tables. For own reco
 store getMaxUser().id as a text subject without a foreign key to max_users, unless
 an explicit product migration creates and maintains a local parent first. Never
 copy managed auth/session/CRM secrets or core tables into the product database.
+For the seeded MAX Next stack, src/lib/db/index.ts is a platform-owned compatibility
+module: preserve db, pool, schema, withMaxUser and MaxUserTx. Never create src/lib/db.ts,
+db.tsx, db.d.ts or another sibling that shadows @/lib/db. Keep the original imports
+and core declarations in src/lib/db/schema.ts unchanged: maxUsers, maxWebhookEvents,
+maxCatalogItems, maxBusinessActions, maxConsents, maxAnalyticsEvents, maxBotOutbox,
+maxAuditLog. Append new product imports/tables after that block; do not replace it
+with a product-only schema. Managed routes still compile against the core exports.
+This does not create those tables or authorize bypassing the product SQL migration rules.
+Next.js 15 dynamic route handlers use asynchronous params, for example
+DELETE(request: Request, context: { params: Promise<{ id: string }> }); obtain id
+with const { id } = await context.params. Do not use synchronous params signatures.
 The fast check uses the live product catalog to report simple missing FK prerequisites
 without applying SQL. The final PostgreSQL transaction remains authoritative.
 Persistent data still needs backward-compatible migrations. Follow the appended

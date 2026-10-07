@@ -1,4 +1,4 @@
-"""Recovery mechanics preserve fresh reads and ordered write/delete/build effects."""
+"""Recovery compiles only complete trees and preserves fresh reads and empty files."""
 
 from types import SimpleNamespace
 from uuid import uuid4
@@ -9,8 +9,55 @@ from yleum_api.services.generation import agent_recovery
 
 
 @pytest.mark.parametrize("kind", ["snapshot", "max_core"])
-@pytest.mark.parametrize("fault", [None, "write", "delete", "build"])
-async def test_recovery_restores_before_deleting_and_building(kind, fault, monkeypatch):
+async def test_recovery_never_builds_a_half_restored_dependency_tree(kind, monkeypatch):
+    schema = "src/lib/db/schema.ts"
+    product = "src/app/page.tsx"
+    baseline = {schema: "export const maxUsers = {};", "empty.ts": ""}
+    tree = {
+        **baseline,
+        schema: baseline[schema] + "export const workouts = {};",
+        product: "import { workouts } from '@/lib/db/schema';",
+    }
+    observed = []
+
+    async def stage(writes, deletes):
+        tree.update(writes)
+        for path in deletes:
+            tree.pop(path, None)
+
+    async def sync():
+        observed.append(dict(tree))
+        if product in tree and "workouts" not in tree[schema]:
+            return SimpleNamespace(failure="missing workouts export")
+        return SimpleNamespace(failure=None)
+
+    async def build():
+        assert tree == baseline
+        return {"ok": True}
+
+    async def render():
+        return dict(baseline)
+
+    monkeypatch.setattr(agent_recovery.repo_svc, "read_files", lambda *_: dict(baseline))
+    handle = SimpleNamespace(stage_patch=stage, sync_preview=sync)
+    kwargs = dict(
+        project_id=uuid4(),
+        project_slug="recovery",
+        handle=handle,
+        touched_files={schema: tree[schema], product: tree[product]},
+        probe_build=build,
+    )
+    if kind == "snapshot":
+        result = await agent_recovery._restore_touched_tree(**kwargs, baseline_sha="snapshot-sha")
+    else:
+        result = await agent_recovery._restore_max_core(**kwargs, render_core=render)
+    assert result == {"ok": True}
+    assert observed == [baseline]
+
+
+@pytest.mark.parametrize("kind", ["snapshot", "max_core"])
+@pytest.mark.parametrize("fault", [None, "patch", "build"])
+async def test_recovery_restores_before_building(kind, fault, monkeypatch):
     trace = []
     project_id, handle = uuid4(), SimpleNamespace()
     version = {"kept.ts": "first", "empty.ts": ""} if kind == "snapshot" else {}
@@ -27,10 +74,10 @@ async def test_recovery_restores_before_deleting_and_building(kind, fault, monke
 
     async def apply(**kwargs):
         assert kwargs["project_cell_handle"] is handle
-        stage = "write" if len([x for x in trace if isinstance(x, tuple)]) == 0 else "delete"
-        trace.append((stage, dict(kwargs["files"])))
-        if stage == fault:
-            raise RuntimeError(stage)
+        trace.append(("patch", dict(kwargs["files"])))
+        assert kwargs["empty_files"] == (("empty.ts",) if kind == "snapshot" else ())
+        if fault == "patch":
+            raise RuntimeError("patch")
 
     async def build():
         trace.append("build")
@@ -56,15 +103,13 @@ async def test_recovery_restores_before_deleting_and_building(kind, fault, monke
     expected = (
         [
             "read",
-            ("write", {"kept.ts": "first", "empty.ts": ""}),
-            ("delete", {"new.ts": ""}),
+            ("patch", {"kept.ts": "first", "empty.ts": "", "new.ts": ""}),
             "build",
         ]
         if kind == "snapshot"
         else [
             "render",
-            ("write", {}),
-            ("delete", {"empty.ts": "", "kept.ts": "", "new.ts": "", "src/app/page.tsx": ""}),
+            ("patch", {"empty.ts": "", "kept.ts": "", "new.ts": "", "src/app/page.tsx": ""}),
             "build",
         ]
     )

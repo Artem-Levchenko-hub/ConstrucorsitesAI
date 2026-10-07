@@ -244,6 +244,12 @@ async def _execute_max_agent_action(
                 }
         if action.name == "bash" and not max_shell_enabled:
             return {"ok": False, "error": "Project Cell shell is disabled by the operator."}
+        if action.name in {"write_file", "edit_file", "bash", "build", "runtime_check", "probe"}:
+            from yleum_api.services.max_substrate_compatibility import has_trusted_max_db
+
+            before = await project_cell_handle.snapshot_files()
+            if has_trusted_max_db(before):
+                return await _execute_trusted_max_db_action(action, project_cell_handle, before)
         return await project_cell_handle.execute(action)
     if action.name in {"runtime_check", "read_logs", "probe", "verify_isolation"}:
         return await project_cell_handle.execute(action)
@@ -297,6 +303,74 @@ async def _execute_max_agent_action(
                 ),
             }
     return await base_agent_executor(action)
+
+
+async def _execute_trusted_max_db_action(
+    action: AgentBuilderAction,
+    handle: ProjectCellExecutorHandle,
+    before: dict[str, str],
+) -> dict[str, Any]:
+    from yleum_api.services.exact_edit import validate_exact_edit
+    from yleum_api.services.max_substrate_compatibility import (
+        max_db_compatibility_error,
+        max_db_compatibility_violations,
+    )
+    from yleum_api.services.project_cell_errors import (
+        PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+        ProjectCellInfrastructureError,
+    )
+
+    candidate = dict(before)
+    if action.name in {"write_file", "edit_file"}:
+        try:
+            path = project_cell_executor._normalize_path(action.path)
+        except ValueError:
+            return {"ok": False, "error": "Invalid workspace path"}
+        if action.name == "write_file":
+            content = action.args.get("content")
+            if not isinstance(content, str):
+                return {"ok": False, "error": "write_file needs path + content"}
+        else:
+            current = before.get(path)
+            search, replace = action.args.get("search"), action.args.get("replace")
+            if current is None or not isinstance(search, str) or replace is None:
+                return {"ok": False, "error": "edit_file needs an existing path, search, replace"}
+            error = validate_exact_edit(current, search)
+            if error:
+                return {"ok": False, "error": error}
+            content = current.replace(search, str(replace), 1)
+        candidate[path] = content
+    if action.name != "bash":
+        violations = max_db_compatibility_violations(candidate)
+        if violations:
+            return {"ok": False, "error": max_db_compatibility_error(violations)}
+        return await handle.execute(action)
+
+    # Shell output can omit files, include only part of the diff, or report a
+    # failed command after it has already changed source. Read the actual tree.
+    try:
+        result = await handle.execute(action)
+    finally:
+        try:
+            refresh = handle.refresh_snapshot_files or handle.snapshot_files
+            after = await refresh()
+            violations = max_db_compatibility_violations(after)
+            changed = tuple(path for path in violations if before.get(path) != after.get(path))
+            if changed:
+                await handle.stage_patch(
+                    {path: before[path] for path in changed if path in before},
+                    tuple(path for path in changed if path not in before),
+                )
+                restored = await refresh()
+                if any(restored.get(path) != before.get(path) for path in changed):
+                    raise RuntimeError("protected source rollback was not applied")
+        except Exception:
+            # Never invite the model to continue building a workspace whose
+            # protected source could not be restored. Do not expose cause text.
+            raise ProjectCellInfrastructureError(PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED) from None
+    if violations:
+        return {"ok": False, "error": max_db_compatibility_error(violations)}
+    return result
 
 
 async def _abort_unsafe_max_backend(

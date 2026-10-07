@@ -571,7 +571,10 @@ async def test_portable_action_uses_provider_boundary_not_next_source_lock_or_au
     async def execute(action):
         return {"ok": True, "detail": action.name}
 
-    handle = SimpleNamespace(is_portable=lambda: True, execute=execute)
+    handle = SimpleNamespace(
+        is_portable=lambda: True, execute=execute,
+        snapshot_files=AsyncMock(return_value={"server.py": "custom stack"}),
+    )
     for action in (
         Action(
             name="write_file", args={"path": "src/app/layout.tsx", "content": "new product shell"}
