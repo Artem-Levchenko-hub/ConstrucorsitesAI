@@ -307,6 +307,15 @@ class PromptAcceptance:
             or getattr(self, "free_chat_limited", False)
             or ((self.current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT)
         )
+        if not self.is_free and self.current_user.role == "admin":
+            from yleum_api.services.entitlements import (
+                has_qa_unlimited_generations,
+                load_plan_context,
+            )
+
+            self.is_free = has_qa_unlimited_generations(
+                self.current_user, await load_plan_context(self.session, self.current_user.id),
+            )
         if not self.is_free and not self.credential_redirect and not self.explain_failed_build:
             account = await resolve_billing_account(self.session, self.current_user.id)
             wallet = (

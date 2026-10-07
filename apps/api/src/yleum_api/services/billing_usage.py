@@ -242,7 +242,10 @@ async def build_usage_report(
         )
 
     used_free = int(user.free_generations_used or 0)
-    unlimited = bool(get_settings().unlimited_generations)
+    unlimited = bool(
+        get_settings().unlimited_generations
+        or entitlements.has_qa_unlimited_generations(user, context, now=current)
+    )
     free_generations = UsageFreeGenerationsPublic(
         limit=FREE_GENERATION_LIMIT,
         used=used_free,

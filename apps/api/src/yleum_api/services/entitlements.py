@@ -24,6 +24,7 @@ terms, they are not an access-control layer.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID
 
@@ -69,6 +70,31 @@ class PlanContext:
     @property
     def plan_name(self) -> str:
         return self.plan.name if self.plan is not None else "—"
+
+
+def has_qa_unlimited_generations(
+    user: User, context: PlanContext, *, now: datetime | None = None,
+) -> bool:
+    """Trusted persisted admin + private account plan; never infer from price or role alone."""
+    account, subscription, plan = context.account, context.subscription, context.plan
+    if (
+        user.role != "admin"
+        or account is None or subscription is None or plan is None
+        or account.personal_user_id != user.id
+        or subscription.user_id != user.id
+        or subscription.billing_account_id != account.id
+        or subscription.plan_id != plan.id
+        or subscription.status != "active"
+        or plan.code != "qa_internal"
+        or plan.is_active is not False
+        or not isinstance(plan.entitlements, dict)
+        or plan.entitlements.get("qa_unlimited_generations") is not True
+    ):
+        return False
+    end = subscription.current_period_end
+    return end is None or (
+        end.tzinfo is not None and end > (now or datetime.now(UTC))
+    )
 
 
 @dataclass(frozen=True)
