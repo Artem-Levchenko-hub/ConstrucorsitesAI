@@ -625,12 +625,14 @@ async def exec_workspace_agent_command(
                 environment_mutated=before_identity != after_identity,
                 compiled_asset_receipt=(
                     manager.machine_runtime.compilation_receipt(state, request.operation_id)
-                    if request.task_role == "full_build" and result.exit_code == 0
+                    if request.task_role in {"full_build", "restore_runtime"}
+                    and result.exit_code == 0
                     else None
                 ),
                 project_migration_receipt=(
                     manager.machine_runtime.migration_receipt(state, request.operation_id)
-                    if request.task_role == "full_build" and result.exit_code == 0
+                    if request.task_role in {"full_build", "restore_runtime"}
+                    and result.exit_code == 0
                     else None
                 ),
             )

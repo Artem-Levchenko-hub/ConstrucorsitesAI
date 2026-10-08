@@ -5,7 +5,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
@@ -25,7 +25,10 @@ from yleum_api.services.generation.runtime import (
     _require_project_cell,
 )
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
-from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
+from yleum_api.services.project_cell_executor import (
+    ProjectCellCommandRole,
+    ProjectCellExecutorHandle,
+)
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -418,7 +421,7 @@ async def _restore_touched_tree(
             empty_files=tuple(path for path, content in _restore_files.items() if content == ""),
             sync_preview=not source_only,
         )
-    _rollback_build = await probe_build()
+    _rollback_build = await _verify_restored_runtime(handle, probe_build, source_only=source_only)
     return _rollback_build
 
 
@@ -447,5 +450,22 @@ async def _restore_max_core(
         ),
         sync_preview=not source_only,
     )
-    _rollback_build = await probe_build()
+    _rollback_build = await _verify_restored_runtime(handle, probe_build, source_only=source_only)
     return _rollback_build
+
+
+async def _verify_restored_runtime(
+    handle: ProjectCellExecutorHandle,
+    probe_build: Callable[[], Awaitable[dict[str, Any]]],
+    *,
+    source_only: bool,
+) -> dict[str, Any]:
+    if not source_only:
+        return await probe_build()
+    restore = getattr(handle, "run_role", None)
+    if not callable(restore):
+        raise RuntimeError("restored runtime verification unavailable")
+    # This is a fenced controller operation, not candidate finalization:
+    # no new migrations, no promotion and no evaluation of the failed brief.
+    result = await restore(ProjectCellCommandRole.RESTORE_RUNTIME, uuid4())
+    return {"ok": result.ok, "detail": result.redacted_detail}

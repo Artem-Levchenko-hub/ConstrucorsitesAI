@@ -298,6 +298,7 @@ class ProjectCellCommandRole(StrEnum):
     BOOTSTRAP = "bootstrap"
     FAST_CHECK = "fast_check"
     FULL_BUILD = "full_build"
+    RESTORE_RUNTIME = "restore_runtime"
 
 
 @dataclass(frozen=True, slots=True)
@@ -947,7 +948,7 @@ async def maybe_create_project_cell_executor(
         before = _proof_identity(result.before_identity)
         after = _proof_identity(result.after_identity)
         migration_ok = (
-            role is not ProjectCellCommandRole.FULL_BUILD
+            role not in {ProjectCellCommandRole.FULL_BUILD, ProjectCellCommandRole.RESTORE_RUNTIME}
             or not result.ok
             or valid_project_migration_receipt(
                 getattr(result, "project_migration_receipt", None),
@@ -956,14 +957,36 @@ async def maybe_create_project_cell_executor(
                 adaptation=restoration_adaptation,
             )
         )
+        compilation_ok = (
+            role is not ProjectCellCommandRole.RESTORE_RUNTIME
+            or not result.ok
+            or (
+                before == after
+                and isinstance(result.compiled_asset_receipt, dict)
+                and result.compiled_asset_receipt.get("collector_version")
+                == "next-restored-runtime-v1"
+                and result.compiled_asset_receipt.get("workspace_id") == str(agent_workspace_id)
+                and result.compiled_asset_receipt.get("project_id") == str(project_id)
+                and result.compiled_asset_receipt.get("generation_run_id") == str(leased_run_id)
+                and result.compiled_asset_receipt.get("fencing_epoch") == fencing_epoch
+                and result.compiled_asset_receipt.get("operation_id") == str(result.operation_id)
+                and result.compiled_asset_receipt.get("source_revision")
+                == before.workspace_revision
+                and result.compiled_asset_receipt.get("manifest_digest")
+                == before.cell_manifest_digest
+            )
+        )
         return ProjectCellCommandObservation(
             operation_id=result.operation_id,
             role=role,
-            ok=result.ok and migration_ok,
+            ok=result.ok and migration_ok and compilation_ok,
             timed_out=result.timed_out,
             redacted_detail=(
-                result.detail if migration_ok else
-                "Project database migration receipt is missing or stale; build rejected"
+                "Restored compilation receipt is missing or stale; rollback rejected"
+                if not compilation_ok
+                else result.detail
+                if migration_ok
+                else "Project database migration receipt is missing or stale; build rejected"
             ),
             before=before,
             after=after,
@@ -990,6 +1013,7 @@ async def maybe_create_project_cell_executor(
             ProjectCellCommandRole.BOOTSTRAP: 900,
             ProjectCellCommandRole.FAST_CHECK: 480,
             ProjectCellCommandRole.FULL_BUILD: 900,
+            ProjectCellCommandRole.RESTORE_RUNTIME: 900,
         }[role]
         result = await project_cell_agent_exec(
             agent_workspace_id,
@@ -1014,7 +1038,10 @@ async def maybe_create_project_cell_executor(
         if observation.invalidated_dimensions:
             preview_synced = False
         await _refresh_workspace_from_cell()
-        if role is ProjectCellCommandRole.FULL_BUILD and observation.ok:
+        if (
+            role in {ProjectCellCommandRole.FULL_BUILD, ProjectCellCommandRole.RESTORE_RUNTIME}
+            and observation.ok
+        ):
             synced_files = dict(workspace_files)
             dirty = False
             preview_synced = True

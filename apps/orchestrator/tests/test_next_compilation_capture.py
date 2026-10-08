@@ -75,3 +75,14 @@ def test_unknown_or_failed_capture_never_supplies_receipt(mutation):
         if mutation in {"unknown-command", "unpin"}
         else helper.removed == [{"force": True}]
     )
+
+
+@pytest.mark.parametrize("version", ["next-restored-runtime-v1", "next-fixed-data-v1"])
+def test_restore_capture_has_distinct_receipt_and_allows_core_only_build(version):
+    backend, request, manifest, helper, containers = setup({"collector_version": version})
+    request.task_role = "restore_runtime"
+    receipt = capture_next_compilation(backend, request, manifest)
+    script = containers.calls[0][0][1][-1]
+    assert "collect_next_compilation(require_product_page=False)" in script
+    assert (receipt is not None) is (version == "next-restored-runtime-v1")
+    assert helper.removed == [{"force": True}]
