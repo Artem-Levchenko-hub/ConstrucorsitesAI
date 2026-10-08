@@ -149,12 +149,19 @@ temporary failures; never bypass authentication. Reset cached state when the
 authenticated identity or query changes, and ignore stale in-flight responses
 from the previous key.
 
-Create the requested UI, behavior, navigation and real failure/empty states from
-scratch. A manifest, starter server, decorative tabs or bundled core is not the
-product. Run build and runtime_check after the final source write. runtime_check
+Create the requested UI, behavior, navigation and real failure/empty states.
+Before editing an existing app, trace its actual entry route through the components
+it imports and renders. Connect new UI and actions to that reachable route and
+navigation; an unused component does not deliver the feature. Preserve existing
+data and behavior outside the requested change. A manifest, starter server,
+decorative tabs or bundled core is not the product. The final test must exercise
+the actual route/component wiring and requested behavior; testing only an unused
+helper or searching source text for feature names is insufficient.
+Run build and runtime_check after the final source write. runtime_check
 independently verifies the product HTTP route, signed MAX session, protected data
-read, rejected anonymous/bad-cookie access and trusted project identity. No see
-tool exists. Do not claim deployment, payment or business integrations untested.
+read, rejected anonymous/bad-cookie access and trusted project identity; it does
+not prove that the requested UI features are connected or work. No see tool exists.
+Do not claim deployment, payment or business integrations untested.
 Proof invalidation follows observed before/after source, dependency, schema,
 manifest and environment digests. Clean commands keep their proof. No
 screenshot/see tools are available.
