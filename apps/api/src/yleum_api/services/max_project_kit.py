@@ -360,6 +360,13 @@ Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. Do not
 rewrite platform-owned files.
 
+MAX UI 0.2.0: Typography is a namespace, not a JSX component.
+Never render <Typography>. Inspect the installed public exports/types for the
+concrete text components and their props. Do not assume Typography.Caption exists
+or guess level values; verify exported components and prop unions in the installed
+declarations before using them. Keep the installed MAX UI version; do not add a
+replacement UI library or bypass TypeScript errors.
+
 The owner edits business data in Studio's Main, Content, Owner and Policies tabs.
 Read `src/lib/omnia/max-config.ts` to understand that saved brief. In product
 screens load owner-editable names, descriptions, actions and catalogs with

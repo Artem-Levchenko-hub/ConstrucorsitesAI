@@ -35,6 +35,29 @@ def test_prompt_prevents_the_observed_max_ui_namespace_error():
     assert "Never render <Typography>" in prompt
 
 
+@pytest.mark.parametrize("mode", ["legacy_build", "legacy_edit", "native"])
+def test_shared_max_contract_supplies_installed_uikit_guidance_in_every_agent_mode(mode):
+    from yleum_api.services import agent_builder
+    from yleum_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
+
+    compose = {
+        "legacy_build": agent_builder.build_system_prompt,
+        "legacy_edit": agent_builder.build_edit_system_prompt,
+        "native": agent_native.native_system_prompt,
+    }[mode]
+    prompt = " ".join(compose(MAX_MODEL_DIRECTIVE).split())
+
+    for instruction in (
+        "Typography is a namespace, not a JSX component",
+        "Never render <Typography>",
+        "Inspect the installed public exports/types",
+        "concrete text components and their props",
+        "Do not assume Typography.Caption exists or guess level values",
+        "Keep the installed MAX UI version",
+    ):
+        assert instruction in prompt, (mode, instruction)
+
+
 @pytest.mark.asyncio
 async def test_provider_call_cannot_consume_finalization_reserve(monkeypatch):
     monkeypatch.setenv("USE_MAX_FINALIZATION_COORDINATOR", "true")
