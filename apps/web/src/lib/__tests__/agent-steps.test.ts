@@ -28,6 +28,46 @@ describe("agent step history", () => {
     expect(restorePersistedAgentSteps(live, persisted)).toBe(live);
   });
 
+  it("restores a fuller legacy history on refetch just as on a fresh mount", () => {
+    const history: AgentStep[] = Array.from({ length: 20 }, (_, index) => ({
+      step: index + 1,
+      kind: "step",
+      action: "Читаю файл",
+      path: `src/step-${index + 1}.tsx`,
+      tool: "read_file",
+      ok: true,
+    }));
+    const restored = restorePersistedAgentSteps(history.slice(0, 9), history);
+
+    expect(restored).toEqual(restorePersistedAgentSteps([], history));
+    expect(restored).toHaveLength(20);
+    expect(restorePersistedAgentSteps(restored, history)).toBe(restored);
+    expect(restorePersistedAgentSteps(restored, history.slice(0, 9))).toBe(restored);
+  });
+
+  it("restores repeated legacy events omitted by live consecutive deduplication", () => {
+    const read = persisted[0];
+    const build: AgentStep = { ...read, step: 2, action: "Проверяю сборку" };
+    const history = [read, { ...read }, build];
+
+    expect(restorePersistedAgentSteps([read, build], history)).toEqual(history);
+  });
+
+  it("keeps live-only events when a longer legacy response does not contain them", () => {
+    const live = [{ ...persisted[0], action: "Пишу страницу" }];
+    const olderHistory = [persisted[0], { ...persisted[0], step: 2 }];
+
+    expect(restorePersistedAgentSteps(live, olderHistory)).toBe(live);
+  });
+
+  it("does not treat reordered legacy events as a fresher history", () => {
+    const first = persisted[0];
+    const second = { ...first, step: 2, action: "Пишу страницу" };
+    const current = [first, second];
+
+    expect(restorePersistedAgentSteps(current, [second, first, { ...second, step: 3 }])).toBe(current);
+  });
+
   it("keeps the cache unchanged when no persisted history exists", () => {
     expect(restorePersistedAgentSteps([], null)).toEqual([]);
     expect(restorePersistedAgentSteps(undefined, undefined)).toBeUndefined();
