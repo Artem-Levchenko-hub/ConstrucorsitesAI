@@ -396,16 +396,37 @@ def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
 
 
 def normalize_max_globals_css(css: str) -> str:
-    """Move every CSS import ahead of generated rules and Tailwind last.
+    """Normalize generated styles for the MAX template's Tailwind v4 compiler.
 
     Tailwind expands ``@import "tailwindcss"`` into hundreds of rules.  A font
     import placed immediately after it therefore becomes an illegal late import
     only in the real Next/Turbopack compiler; ``tsc --noEmit`` cannot see it.
     Keeping external imports first is deterministic and does not alter the
-    model-owned product styles.
+    model-owned product styles. Legacy v3 directives silently produce no utility
+    rules with the v4 PostCSS plugin, so replace them with its package import.
     """
 
     lines = css.splitlines()
+    legacy_directives: set[int] = set()
+    in_comment = False
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if in_comment:
+            if "*/" in stripped:
+                in_comment = False
+            continue
+        if stripped.startswith("/*"):
+            in_comment = "*/" not in stripped
+            continue
+        if re.fullmatch(r"@tailwind\s+(?:base|components|utilities)\s*;", stripped):
+            legacy_directives.add(index)
+    if legacy_directives:
+        lines = [line for index, line in enumerate(lines) if index not in legacy_directives]
+        if not any(
+            re.match(r"@import\s+(['\"])tailwindcss\1(?:\s|;)", line.strip())
+            for line in lines
+        ):
+            lines.append('@import "tailwindcss";')
     imports = [line for line in lines if line.strip().lower().startswith("@import ")]
     if not imports:
         return css
@@ -435,7 +456,7 @@ def normalize_max_globals_css(css: str) -> str:
             continue
         seen_rule = True
 
-    if import_order_is_safe and import_location_is_safe:
+    if import_order_is_safe and import_location_is_safe and not legacy_directives:
         return css
 
     charsets = [line for line in lines if line.strip().lower().startswith("@charset ")]
