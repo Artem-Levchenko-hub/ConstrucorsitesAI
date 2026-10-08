@@ -20,11 +20,13 @@ from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
     CellResourceError,
+    CellResourceNames,
     LifecycleMutation,
     identity_labels,
 )
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.stack_registry import get_stack
+from yleum_orchestrator.services import nginx_writer
 from yleum_orchestrator.services.cell_state import CellCredentialStore, CoreRuntimeCredentialStore
 from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
@@ -1217,7 +1219,12 @@ class MachineAdapter:
             **({
                 "public_mode": True,
                 "public_origin": (runtime_env or {}).get("OMNIA_PUBLIC_APP_ORIGIN", ""),
-            } if public_mode else {"owner_origins": studio_origins()}),
+            } if public_mode else {
+                "owner_origins": studio_origins(),
+                "preview_origin": nginx_writer.dev_url(
+                    CellResourceNames.for_workspace(state.workspace_id).draft_preview_slug()
+                ),
+            }),
         }
         runtime_stamp = self.root / (
             "public-boundary-runtime" if public_mode else "owner-boundary-runtime"

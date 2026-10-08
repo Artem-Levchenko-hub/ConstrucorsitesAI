@@ -146,6 +146,9 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     ))
     monkeypatch.setattr(machine_business_config, "apply_public_core_overlay", lambda _: None)
     monkeypatch.setattr(machine_business_config, "boundary_source", lambda: "first trusted server")
+    from yleum_orchestrator.services import nginx_writer
+
+    monkeypatch.setattr(nginx_writer, "dev_url", lambda slug: f"https://{slug}-dev.dev.example")
 
     runtime_env = {"OMNIA_PUBLIC_APP_ORIGIN": "https://app.example.test"}
     if configured:
@@ -159,6 +162,11 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     assert delivered[-1]["server"] == "first trusted server"
     if public_mode:
         assert delivered[-1]["config"]["public_origin"] == runtime_env["OMNIA_PUBLIC_APP_ORIGIN"]
+    else:
+        from yleum_orchestrator.core.cell_resources import CellResourceNames
+        assert delivered[-1]["config"]["preview_origin"] == nginx_writer.dev_url(
+            CellResourceNames.for_workspace(state.workspace_id).draft_preview_slug()
+        )
     adapter._start_boundary(state, manifest, backend, 7, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
     # Reuse also proves the receipt was taken AFTER the quota went down: a receipt

@@ -231,7 +231,8 @@ def route_port(path: str, routes: list[dict[str, Any]]) -> int | None:
 
 
 def product_headers(
-    headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any]
+    headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any],
+    origin: object = None,
 ) -> dict[str, str]:
     clean = {
         key: value
@@ -247,6 +248,14 @@ def product_headers(
             "X-Omnia-Session-Epoch": str(epoch),
         }
     )
+    if isinstance(origin, str) and _ORIGIN_RE.fullmatch(origin):
+        # Next validates Server Actions against the forwarded authority. Removing
+        # caller forwarding headers must not replace it with the container IP.
+        # Only controller configuration selects this host; preserve request Origin
+        # so a cross-origin action still fails Next's independent CSRF check.
+        authority = urlsplit(origin).netloc
+        clean.update({"Host": authority, "X-Forwarded-Host": authority,
+                      "X-Forwarded-Proto": "https"})
     return clean
 
 
@@ -427,6 +436,7 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                 project_id=str(config["project_id"]),
                 epoch=int(config["epoch"]),
                 user=user,
+                origin=config.get("public_origin" if public else "preview_origin"),
             )
         connection = http.client.HTTPConnection(target, port, timeout=120)
         try:
