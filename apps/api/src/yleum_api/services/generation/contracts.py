@@ -53,6 +53,15 @@ class GenerationRuntime:
     # writes. Never refresh from a mutable draft after a failed check.
     migration_baseline: dict[str, str] | None = None
 
+    def legacy_coordinator_handoff(self) -> bool:
+        """Only this invocation's portable coordinator owns deferred runtime proof."""
+        return (
+            self.coordinator is not None
+            and self.handle is not None
+            and self.handle.capabilities.get("portable_machine") is True
+            and self.handle.is_portable()
+        )
+
 
 @dataclass(frozen=True)
 class AgentPromptPlan:

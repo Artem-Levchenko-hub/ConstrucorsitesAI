@@ -376,6 +376,7 @@ async def repair_legacy_edit(
     prompt_text: str,
     plan: AgentPromptPlan,
     operations: AgentOperations,
+    coordinator_handoff: bool = False,
 ) -> CandidateProbeResult:
     if (
         _is_edit
@@ -430,6 +431,7 @@ async def repair_legacy_edit(
                     user_id=str(ids.user_id),
                     project_id=str(ids.project_id),
                     require_green_before_done=get_settings().agent_require_green_before_done,
+                    coordinator_handoff=coordinator_handoff,
                     ship_green_on_abort=get_settings().agent_ship_green_on_abort,
                     edit_mode=True,
                 )
@@ -441,7 +443,10 @@ async def repair_legacy_edit(
                 files.update(_rep.files)
             # Re-probe green after this repair attempt.
             try:
-                _rt2 = await operations.probe_runtime("/")
+                _rt2 = (
+                    {"ok": True, "detail": "runtime deferred to finalization"}
+                    if coordinator_handoff else await operations.probe_runtime("/")
+                )
                 _runtime_ok = bool(_rt2.get("ok"))
                 _rt_error = (
                     ""

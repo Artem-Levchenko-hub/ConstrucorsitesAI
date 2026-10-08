@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from yleum_api.services import agent_builder as ab
 
 # ── parse_action ────────────────────────────────────────────────────────────
@@ -597,6 +599,71 @@ def test_green_gate_cap_prevents_hang():
 
 
 # ── K1 knowledge layer: skills injection ─────────────────────────────────────
+
+def test_coordinator_handoff_does_not_require_the_runtime_it_owns():
+    async def execute(action):
+        if action.name == "runtime_check":
+            return {"ok": False, "deferred_to": "max_finalization"}
+        return {"ok": True, "content": "v1"}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=execute,
+        complete=_scripted([
+            '<omnia:action name="write_file">{"path":"page.tsx","content":"v1"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+            '<omnia:action name="done">{"summary":"candidate"}</omnia:action>',
+        ]), max_steps=4, require_green_before_done=True, coordinator_handoff=True,
+    ))
+    assert result.done and result.needs_finalization and result.steps == 4
+
+
+@pytest.mark.parametrize("mutation", ["write_file", "edit_file", "bash", "probe"])
+def test_coordinator_handoff_never_rescues_a_stale_fast_check(mutation):
+    async def execute(action):
+        if action.name == "probe":
+            return {"ok": True, "environment_mutated": True}
+        return {"ok": True, "content": "v1"}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=execute,
+        complete=_scripted([
+            '<omnia:action name="build">{}</omnia:action>',
+            f'<omnia:action name="{mutation}">'
+            '{"path":"page.tsx","cmd":"change","content":"v2"}</omnia:action>',
+            '<omnia:action name="done">{"summary":"stale"}</omnia:action>',
+        ]), max_steps=3, require_green_before_done=True, coordinator_handoff=True,
+    ))
+    assert not result.done and not result.needs_finalization
+
+
+def test_coordinator_handoff_nudges_done_after_read_only_exploration():
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=_ok_executor([]),
+        complete=_scripted([
+            '<omnia:action name="build">{}</omnia:action>',
+            *[f'<omnia:action name="read_file">{{"path":"file{i}.tsx"}}</omnia:action>'
+              for i in range(5)],
+            '<omnia:action name="done">{"summary":"candidate"}</omnia:action>',
+        ]), max_steps=7, require_green_before_done=True, coordinator_handoff=True,
+    ))
+    assert result.done and result.needs_finalization
+    assert any("HAND OFF" in item["content"] for item in result.transcript)
+
+
+def test_untrusted_deferred_runtime_does_not_relax_the_ordinary_gate():
+    async def execute(action):
+        return {"ok": action.name != "runtime_check", "deferred_to": "max_finalization"}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="x", model="m", execute=execute,
+        complete=_scripted([
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="runtime_check">{"path":"/"}</omnia:action>',
+            '<omnia:action name="done">{"summary":"unverified"}</omnia:action>',
+        ]), max_steps=3, require_green_before_done=True, ship_green_on_abort=False,
+    ))
+    assert not result.done
 
 
 def test_build_system_prompt_without_skills_is_unchanged():

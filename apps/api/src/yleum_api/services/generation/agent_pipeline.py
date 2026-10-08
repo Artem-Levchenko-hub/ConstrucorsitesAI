@@ -328,6 +328,7 @@ async def run_agent_generation(
         _rt_error,
         _tc_error,
     ) = await repair_legacy_edit(
+        coordinator_handoff=runtime.legacy_coordinator_handoff(),
         _is_edit=_is_edit,
         _rt_error=_rt_error,
         _runtime_ok=_runtime_ok,

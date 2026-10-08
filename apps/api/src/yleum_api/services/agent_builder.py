@@ -225,6 +225,7 @@ async def run_agent_build(
     # The model stops when done, so short replies are unaffected — this only lifts
     # the ceiling so a big file isn't cut off. No call site overrides it.
     require_green_before_done: bool = False,
+    coordinator_handoff: bool = False,
     ship_green_on_abort: bool = True,
     edit_mode: bool = False,
     bare_mode: bool = False,
@@ -249,6 +250,7 @@ async def run_agent_build(
     infra_dead_streak = 0  # consecutive tool ops that died on infra (container gone)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
     last_build_ok: bool | None = None  # result of the most recent `build` action
+    fast_check_fresh = False  # candidate check, never a runtime/release proof
     red_build_streak = 0  # consecutive failed builds → escalate to the strong model
     # Build-pressure / rotation guard: counts writes since the last `build` so the
     # loop can force a typecheck instead of churning files forever (see guard below).
@@ -298,7 +300,9 @@ async def run_agent_build(
         gate itself only requires a clean build (see `require_green_before_done`),
         so a green abort meets the same bar. Falls through to the original abort
         when there is no green build to rescue."""
-        if ship_green_on_abort and last_build_ok is True:
+        if ship_green_on_abort and (
+            fast_check_fresh if coordinator_handoff else last_build_ok is True
+        ):
             print(
                 f"[AGENT] step={step_no} SHIP-GREEN-ON-{reason} "
                 f"(build clean → ship instead of {fallback.stop_reason})",
@@ -309,6 +313,7 @@ async def run_agent_build(
                 summary="Приложение собрано — билд проходит чисто.",
                 files=written, steps=step_no + 1, transcript=convo,
                 stop_reason="done_on_green",
+                needs_finalization=coordinator_handoff,
             )
         return fallback
 
@@ -326,7 +331,17 @@ async def run_agent_build(
         # Inject the live state (files already written + last build result) into
         # the system slot so the windowed model never forgets what it has done →
         # stops re-writing existing files (the root cycle/exploring cause).
-        _note = _progress_note(written, last_build_ok)
+        _note = _progress_note(
+            written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
+        )
+        if coordinator_handoff:
+            _note += (
+                "\nMAX FINALIZATION HANDOFF: build runs FAST_CHECK only. After a fresh "
+                "clean build and completed source changes, call done to HAND OFF the "
+                "candidate. The server coordinator MUST still run full build, runtime "
+                "and release checks before accepting it. Do not repeat deferred runtime "
+                "checks or rewrite clean source just to obtain runtime proof here."
+            )
         if _note and call_msgs:
             call_msgs = [
                 {"role": call_msgs[0]["role"],
@@ -415,13 +430,19 @@ async def run_agent_build(
             # runtime_check AFTER the last write. Bounded by _DONE_REJECT_CAP so
             # a genuinely-unverifiable build (e.g. no reachable route) still
             # finishes instead of looping (R-10 fail-soft). Default OFF.
-            if require_green_before_done and done_rejections < _DONE_REJECT_CAP:
+            if coordinator_handoff or (
+                require_green_before_done and done_rejections < _DONE_REJECT_CAP
+            ):
                 gap = None
-                if last_build_ok is not True:
+                if coordinator_handoff and not fast_check_fresh:
+                    gap = "run `build` after the latest changes until FAST_CHECK is CLEAN"
+                elif last_build_ok is not True:
                     gap = (
                         "run `build` and fix errors until it is CLEAN before done"
                     )
-                elif wrote_since_check or last_runtime_ok is not True:
+                elif not coordinator_handoff and (
+                    wrote_since_check or last_runtime_ok is not True
+                ):
                     gap = (
                         "you wrote files but did not confirm they RUN — "
                         'runtime_check the main route(s) (e.g. {"path":"/"}), '
@@ -439,6 +460,7 @@ async def run_agent_build(
                 done=True, summary=str(action.args.get("summary", "")),
                 files=written, steps=step + 1, transcript=convo,
                 stop_reason="done",
+                needs_finalization=coordinator_handoff,
             )
 
         # Circuit breaker: the model sometimes gets stuck re-issuing the SAME
@@ -607,9 +629,11 @@ async def run_agent_build(
                 # thrashing on bash/build AFTER success. Nudge
                 # it to FINISH (call done), not to write. Otherwise nudge to write.
                 _green = (
-                    last_build_ok is True
-                    and last_runtime_ok is True
-                    and not wrote_since_check
+                    fast_check_fresh if coordinator_handoff else (
+                        last_build_ok is True
+                        and last_runtime_ok is True
+                        and not wrote_since_check
+                    )
                 )
                 await _escalate(step, "explore")
                 print(
@@ -620,7 +644,9 @@ async def run_agent_build(
                 if emit:
                     await emit("agent.stalled", {"step": step})
                 convo.append({"role": "user", "content": (
-                    _DONE_WHEN_GREEN_NUDGE
+                    "FAST_CHECK is current and clean. Call done to HAND OFF to the "
+                    "server coordinator; do not rewrite source for deferred runtime proof."
+                    if _green and coordinator_handoff else _DONE_WHEN_GREEN_NUDGE
                     if _green
                     else (
                         _EDIT_EXPLORE_STALL_NUDGE if edit_mode else _EXPLORE_STALL_NUDGE
@@ -651,6 +677,7 @@ async def run_agent_build(
             infra_dead_streak = 0
         if action.name == "build":
             last_build_ok = bool(obs.get("ok"))
+            fast_check_fresh = last_build_ok
             # Building clears the build-pressure / rotation window: the agent got
             # real typecheck feedback, so writes that follow are progress (a
             # targeted fix), not blind churn.
@@ -698,6 +725,13 @@ async def run_agent_build(
                 wrote_since_check = True
                 writes_since_build += len(changed_paths)
                 paths_since_build.update(changed_paths)
+        if action.name != "build" and (
+            action.name in {"write_file", "edit_file", "delete_file"}
+            or obs.get("files")
+            or obs.get("environment_mutated") is True
+            or (action.name == "bash" and obs.get("environment_mutated") is not False)
+        ):
+            fast_check_fresh = False
         convo.append({"role": "user", "content": _format_observation(action, obs)})
 
     return _ship_green_or(

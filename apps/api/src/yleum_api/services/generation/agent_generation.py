@@ -503,6 +503,7 @@ async def execute_agent_turn(
             require_green_before_done=(
                 False if plan.bare_stack else get_settings().agent_require_green_before_done
             ),
+            coordinator_handoff=runtime.legacy_coordinator_handoff(),
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,
@@ -625,6 +626,7 @@ async def complete_empty_legacy_build(
             user_id=str(ids.user_id),
             project_id=str(ids.project_id),
             require_green_before_done=get_settings().agent_require_green_before_done,
+            coordinator_handoff=runtime.legacy_coordinator_handoff(),
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
         )
         _total_steps += _floor_res.steps

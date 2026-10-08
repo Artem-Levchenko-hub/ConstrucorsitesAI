@@ -8,6 +8,62 @@ from yleum_api.services import agent_native
 from yleum_api.services.generation_deadline import source_edit_deadline
 
 
+@pytest.mark.parametrize(("coordinator", "portable", "capability", "expected"), [
+    (True, True, True, True), (False, True, True, False),
+    (True, False, True, False), (True, True, "true", False),
+])
+def test_legacy_handoff_requires_the_invocation_owned_portable_coordinator(
+    coordinator, portable, capability, expected,
+):
+    from types import SimpleNamespace
+
+    from yleum_api.services.generation.contracts import GenerationRuntime
+
+    runtime = GenerationRuntime(
+        handle=SimpleNamespace(capabilities={"portable_machine": capability},
+                               is_portable=lambda: portable),
+        coordinator=object() if coordinator else None,
+    )
+    assert runtime.legacy_coordinator_handoff() is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handoff", [False, True])
+async def test_legacy_edit_repair_keeps_runtime_with_its_actual_owner(monkeypatch, handoff):
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation import agent_verification as verification
+
+    monkeypatch.setattr(verification, "get_settings", lambda: SimpleNamespace(
+        use_edit_auto_repair=True, use_native_agent=False, edit_auto_repair_attempts=1,
+        agent_require_green_before_done=True, agent_ship_green_on_abort=True,
+    ))
+    builder = AsyncMock(return_value=AgentResult(
+        done=True, summary="candidate", files={"page.tsx": "fixed"}, steps=3,
+        needs_finalization=handoff,
+    ))
+    monkeypatch.setattr(verification.agent_builder, "run_agent_build", builder)
+    operations = SimpleNamespace(
+        execute=AsyncMock(), emit=AsyncMock(),
+        probe_build=AsyncMock(return_value={"ok": True}),
+        probe_runtime=AsyncMock(return_value={"ok": True}),
+    )
+    result = await verification.repair_legacy_edit(
+        _is_edit=True, _rt_error="", _runtime_ok=True,
+        _tc_error="TS error", _typecheck_ok=False, accumulated="pending",
+        files={"page.tsx": "broken"}, ids=SimpleNamespace(user_id=uuid4(), project_id=uuid4()),
+        project_info=SimpleNamespace(), prompt_text="fix form",
+        plan=SimpleNamespace(seed_context="", stack_guide="", model="m",
+                             escalate_model=None, steps=3),
+        operations=operations, coordinator_handoff=handoff,
+    )
+    assert builder.await_args.kwargs["coordinator_handoff"] is handoff
+    assert operations.probe_runtime.await_count == (0 if handoff else 1)
+    assert result.runtime_ok and result.typecheck_ok
+
+
 @pytest.mark.parametrize(("path", "expected"), [
     ("/workspace/src/app/page.tsx", "src/app/page.tsx"),
     ("/workspace/../secret", "/workspace/../secret"),

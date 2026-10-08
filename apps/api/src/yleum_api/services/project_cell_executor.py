@@ -1339,6 +1339,7 @@ async def maybe_create_project_cell_executor(
                     observation = await _run_role(ProjectCellCommandRole.FAST_CHECK, uuid4())
                     return {
                         "ok": observation.ok,
+                        "deferred_to": "max_finalization",
                         "detail": observation.redacted_detail
                         or ("ok" if observation.ok else "non-zero exit"),
                         "environment_mutated": bool(observation.invalidated_dimensions),
@@ -1430,6 +1431,7 @@ async def maybe_create_project_cell_executor(
                     return {
                         "ok": False,
                         "error": "runtime proof is reserved until the green full build",
+                        "deferred_to": "max_finalization",
                     }
                 sync_result = await _sync_preview()
                 if sync_result.failure is not None:
