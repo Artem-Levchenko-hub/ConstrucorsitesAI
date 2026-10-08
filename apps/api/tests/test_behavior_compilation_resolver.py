@@ -205,9 +205,13 @@ async def test_archive_source_and_traversal_can_never_be_compiled_asset(path):
         await resolve_retained_compilation(handle, req)
 
 
-async def test_different_collector_source_is_unsupported_even_with_same_version():
+@pytest.mark.parametrize(
+    "source_sha256",
+    ["0" * 64, "4fa8d8d7a4f6d5266c2e85585eba02e66429d262c3f5d6c360d2c2f7fc34008e"],
+)
+async def test_different_collector_source_is_unsupported_even_with_same_version(source_sha256):
     req, handle, response, _, _ = setup()
-    response.compiled_asset_receipt["collector_source_sha256"] = "0" * 64
+    response.compiled_asset_receipt["collector_source_sha256"] = source_sha256
     with pytest.raises(b.BehaviorProofError):
         await resolve_retained_compilation(handle, req)
 

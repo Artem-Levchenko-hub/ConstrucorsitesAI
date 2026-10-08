@@ -88,6 +88,52 @@ def assets(bound):
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/_next/static/chunks/app/(app)/dashboard/page-d383517d2c7a60b6.js",
+        "/_next/static/chunks/app/api/workouts/[id]/route-1c082550ded9edf9.js",
+        "/_next/static/chunks/app/api/omnia/integrations/[...path]/route-1c082550ded9edf9.js",
+        "/_next/static/chunks/app/docs/[[...path]]/page-a.js",
+    ],
+)
+def test_compiled_witness_accepts_legitimate_next_route_assets(path):
+    bound = binding()
+    witness = replace(assets(bound), assets=(b.ObservedAsset(path, "d" * 64, 100),))
+    assert b._compiled(witness, bound) is witness
+
+
+@pytest.mark.parametrize(
+    "segment",
+    [
+        ".",
+        "..",
+        "",
+        "foo\\bar",
+        "%2f",
+        "%2F",
+        "%5c",
+        "%2e%2e",
+        "%252f",
+        "foo.bar",
+        "(..)",
+        "()",
+        "[]",
+        "[..path]",
+        "[....path]",
+        "[[path]]",
+        "[...]",
+        "[[...]]",
+    ],
+)
+def test_compiled_witness_rejects_unsafe_or_malformed_route_segments(segment):
+    bound = binding()
+    path = f"/_next/static/chunks/app/{segment}/page-a.js"
+    witness = replace(assets(bound), assets=(b.ObservedAsset(path, "d" * 64, 100),))
+    with pytest.raises(b.BehaviorProofError, match="BEHAVIOR_COMPILED_ASSETS_INVALID"):
+        b._compiled(witness, bound)
+
+
 def measurement():
     def paint():
         return [

@@ -608,10 +608,24 @@ async def exec_workspace_agent_command(
             )
             if status.transport_response is not None:
                 return WorkspaceAgentExecResponse.model_validate(status.transport_response)
+            if request.task_role == "restore_runtime" and (
+                result.exit_code != 0 or result.timed_out
+            ):
+                # Failed restoration deliberately stops its product. Never exec
+                # it to inventory packages or replace the durable failure with
+                # a transport500. Mark the environment as unavailable/changed,
+                # rather than certifying the earlier inventory as still current.
+                environment_digest = hashlib.sha256(
+                    (
+                        "failed-restoration-environment-unavailable:" + str(request.operation_id)
+                    ).encode()
+                ).hexdigest()
+            else:
+                environment_digest = await machine_effect(backend.environment_digest)
             after_identity = _workspace_identity_digest(
                 updated_files,
                 manifest=manifest,
-                environment_digest=await machine_effect(backend.environment_digest),
+                environment_digest=environment_digest,
             )
             response = WorkspaceAgentExecResponse(
                 ok=result.exit_code == 0 and not result.timed_out,
@@ -627,12 +641,14 @@ async def exec_workspace_agent_command(
                     manager.machine_runtime.compilation_receipt(state, request.operation_id)
                     if request.task_role in {"full_build", "restore_runtime"}
                     and result.exit_code == 0
+                    and not result.timed_out
                     else None
                 ),
                 project_migration_receipt=(
                     manager.machine_runtime.migration_receipt(state, request.operation_id)
                     if request.task_role in {"full_build", "restore_runtime"}
                     and result.exit_code == 0
+                    and not result.timed_out
                     else None
                 ),
             )

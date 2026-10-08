@@ -278,6 +278,86 @@ async def test_manifest_build_dispatches_to_machine_after_lease_and_revision_che
 
 
 @pytest.mark.usefixtures("_internal_settings")
+@pytest.mark.parametrize("exit_code,timed_out", [(1, False), (124, True), (0, True)])
+async def test_failed_restore_returns_durable_failure_without_inventorying_stopped_product(
+    tmp_path, monkeypatch, exit_code, timed_out,
+):
+    workspace_id = uuid4()
+    provider, manager, docker, run_id = await _ready_provider(tmp_path, workspace_id)
+
+    class FailedRestoreRuntime(PortableRuntime):
+        def __init__(self):
+            super().__init__()
+            self.inventory_calls = 0
+            self.stopped = False
+            self.saved_response = None
+            self.backend.environment_digest = self.environment_digest
+
+        def environment_digest(self):
+            self.inventory_calls += 1
+            if self.stopped:
+                raise RuntimeError("Docker409: restored product is not running")
+            return "e" * 64
+
+        async def execute(self, state, manifest, request):
+            self.stopped = True  # The failed restore intentionally stops its candidate.
+            return DockerCommandResult(
+                exit_code=exit_code,
+                output="restored compilation receipt unavailable",
+                timed_out=timed_out,
+            )
+
+        async def _request_status(self, **kwargs):
+            return SimpleNamespace(transport_response=self.saved_response)
+
+        async def _store_transport_response(self, **kwargs):
+            self.saved_response = kwargs["response"]
+
+        def compilation_receipt(self, *args):
+            raise AssertionError("Failed or timed-out restoration must not certify compilation")
+
+        def migration_receipt(self, *args):
+            raise AssertionError("Failed or timed-out restoration must not certify migrations")
+
+    runtime = FailedRestoreRuntime()
+    manager.machine_runtime = runtime
+    files = {".omnia/cell.json": json.dumps(payload()), "server.py": "print('python')"}
+    state = manager.state_store.load(workspace_id)
+    await docker.write_volume_files(
+        state.resource_names.workspace_volume,
+        {path: content.encode() for path, content in files.items()},
+    )
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    request = {
+        "generation_run_id": str(run_id), "fencing_epoch": 4,
+        "expected_revision": workspace._workspace_revision(files),
+        "cmd": "omnia:restore-runtime", "task_role": "restore_runtime",
+        "operation_id": str(uuid4()),
+    }
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/agent/exec", json=request,
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["ok"] is False
+    assert body["exit_code"] == exit_code
+    assert body["timed_out"] is timed_out
+    assert body["detail"] == "restored compilation receipt unavailable"
+    assert body["compiled_asset_receipt"] is None
+    assert body["project_migration_receipt"] is None
+    assert body["environment_mutated"] is True
+    assert (
+        body["after_identity"]["environment_digest"]
+        != body["before_identity"]["environment_digest"]
+    )
+    assert runtime.inventory_calls == 1
+    assert runtime.stopped is True
+    assert runtime.saved_response == body
+
+
+@pytest.mark.usefixtures("_internal_settings")
 async def test_operation_journal_is_readable_while_command_holds_workspace_lock(
     tmp_path, monkeypatch
 ):

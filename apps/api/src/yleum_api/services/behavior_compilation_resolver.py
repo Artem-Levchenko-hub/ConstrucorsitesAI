@@ -26,7 +26,7 @@ from yleum_api.services.orchestrator_client import ProjectCellAgentExecResponse
 from yleum_api.services.project_cell_proofs import ProofIdentity
 from yleum_api.services.promotion_permit import MAX_FULL_BUILD_CONTRACT_VERSION
 
-COLLECTOR_SOURCE_SHA256 = "4fa8d8d7a4f6d5266c2e85585eba02e66429d262c3f5d6c360d2c2f7fc34008e"
+COLLECTOR_SOURCE_SHA256 = "41f29604614e6c7bb291bdd6f9696b01a47722441e76a71b66fe0ee6c5d84bfb"
 
 _HEX = re.compile(r"[0-9a-f]{64}")
 
