@@ -616,7 +616,9 @@ async def exec_workspace_agent_command(
                 # a transport500. Mark the environment as unavailable/changed,
                 # rather than certifying the earlier inventory as still current.
                 environment_digest = hashlib.sha256(
-                    ("failed-restoration-environment-unavailable:" + str(request.operation_id)).encode()
+                    (
+                        "failed-restoration-environment-unavailable:" + str(request.operation_id)
+                    ).encode()
                 ).hexdigest()
             else:
                 environment_digest = await machine_effect(backend.environment_digest)
