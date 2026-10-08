@@ -64,6 +64,19 @@ async def test_legacy_edit_repair_keeps_runtime_with_its_actual_owner(monkeypatc
     assert result.runtime_ok and result.typecheck_ok
 
 
+@pytest.mark.parametrize("capabilities", [None, "portable", False])
+def test_legacy_handoff_fails_closed_without_capability_metadata(capabilities):
+    from types import SimpleNamespace
+
+    from yleum_api.services.generation.contracts import GenerationRuntime
+
+    handle = SimpleNamespace(is_portable=lambda: True)
+    if capabilities is not None:
+        handle.capabilities = capabilities
+    runtime = GenerationRuntime(handle=handle, coordinator=object())
+    assert runtime.legacy_coordinator_handoff() is False
+
+
 @pytest.mark.parametrize(("path", "expected"), [
     ("/workspace/src/app/page.tsx", "src/app/page.tsx"),
     ("/workspace/../secret", "/workspace/../secret"),

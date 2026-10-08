@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 from uuid import UUID
@@ -55,10 +55,12 @@ class GenerationRuntime:
 
     def legacy_coordinator_handoff(self) -> bool:
         """Only this invocation's portable coordinator owns deferred runtime proof."""
+        capabilities = getattr(self.handle, "capabilities", None)
         return (
             self.coordinator is not None
             and self.handle is not None
-            and self.handle.capabilities.get("portable_machine") is True
+            and isinstance(capabilities, Mapping)
+            and capabilities.get("portable_machine") is True
             and self.handle.is_portable()
         )
 
