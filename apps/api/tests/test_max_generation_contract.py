@@ -20,6 +20,165 @@ COMPLEX_BRIEF = """
 Нужны профиль пользователя, история действий, уведомления, loading/empty/error/retry.
 """
 
+WIZARD_INFRASTRUCTURE = (
+    "Используй готовую обвязку MAX Bridge, серверную проверку initData, "
+    "MAX-профиль пользователя и webhook бота из шаблона. "
+    "Не добавляй отдельную регистрацию или вход по email."
+)
+
+
+def test_wizard_infrastructure_does_not_request_a_product_profile() -> None:
+    brief = "Нужные возможности: История действий.\n" + WIZARD_INFRASTRUCTURE
+    assert [key for key, _, _ in requested_max_capabilities(brief)] == ["history"]
+
+
+def test_explicit_profile_survives_wizard_infrastructure() -> None:
+    brief = "Нужные возможности: Профиль пользователя.\n" + WIZARD_INFRASTRUCTURE
+    assert [key for key, _, _ in requested_max_capabilities(brief)] == ["profile"]
+
+
+def _crm_product_files() -> dict[str, str]:
+    return {
+        "src/app/page.tsx": (
+            'import { MyLeads } from "@/components/MyLeads";\n'
+            'import { CreateLead } from "@/components/CreateLead";\n'
+            "export default function Page(){ return <main><h1>Заявка в amoCRM</h1>"
+            "<CreateLead/><MyLeads/></main>; }"
+        ),
+        "src/components/MyLeads.tsx": (
+            'import { getYleumLeads } from "@/lib/omnia/integration-client";\n'
+            "async function load(){ const result = await getYleumLeads(); "
+            "return result.items; }\n"
+            "export function MyLeads({items}){ return <section><h2>Мои заявки</h2>"
+            "{items.map(item => <p key={item.id}>{item.status_name}</p>)}"
+            "<button onClick={load}>Обновить</button></section>; }"
+        ),
+        "src/components/CreateLead.tsx": (
+            'import { createYleumLead } from "@/lib/omnia/integration-client";\n'
+            "async function submit(){ return await createYleumLead({"
+            'name: "QA", phone: "0000000000", idempotency_key: "qa"}); }\n'
+            "export function CreateLead(){ return <form><button onClick={submit}>"
+            "Отправить заявку</button></form>; }"
+        ),
+    }
+
+
+def _portable_crm_files() -> dict[str, str]:
+    return {
+        **_crm_product_files(),
+        ".omnia/cell.json": json.dumps({
+            "version": 1,
+            "tasks": [{"name": "final-test", "role": "full_build", "argv": ["pnpm", "test"]}],
+            "services": [{"name": "web", "argv": ["pnpm", "start"]}],
+            "routes": [{"path": "/", "service": "web", "port": 3000}],
+        }),
+    }
+
+
+def test_portable_crm_history_passes_the_actual_finalization_path() -> None:
+    brief = "Нужные возможности: История действий.\n" + WIZARD_INFRASTRUCTURE
+    assert max_source_completion_gap(brief, _portable_crm_files(), portable=True) is None
+    assert "профиль пользователя" in str(max_source_completion_gap(
+        "История заявок и профиль пользователя.\n" + WIZARD_INFRASTRUCTURE,
+        _portable_crm_files(), portable=True,
+    ))
+
+
+def test_portable_crm_history_keeps_manifest_and_runtime_checks() -> None:
+    files = _portable_crm_files()
+    files.pop(".omnia/cell.json")
+    assert "manifest" in str(max_source_completion_gap("История заявок", files, portable=True))
+    assert "runtime_check" in str(max_completion_gap(
+        "История заявок", _portable_crm_files(), {}, portable=True,
+    ))
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_crm_sdk_arrow_handler_before_jsx_is_a_real_call(portable: bool) -> None:
+    files = _portable_crm_files() if portable else _crm_product_files()
+    files["src/components/MyLeads.tsx"] = (
+        'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+        'export function MyLeads(){ const load = async () => { '
+        'const result = await getYleumLeads(); console.log(result.items); }; '
+        'return <section><button onClick={load}>Обновить</button></section>; }'
+    )
+    assert max_source_completion_gap("История заявок", files, portable=portable) is None
+
+
+def test_crm_sdk_history_and_write_are_managed_persistence() -> None:
+    brief = "Отправь заявку в amoCRM и покажи историю заявок.\n" + WIZARD_INFRASTRUCTURE
+    assert max_source_completion_gap(brief, _crm_product_files()) is None
+
+
+def test_crm_sdk_aliases_and_comments_between_call_tokens_are_supported() -> None:
+    files = _crm_product_files()
+    files["src/components/MyLeads.tsx"] = files["src/components/MyLeads.tsx"].replace(
+        "import { getYleumLeads }", "import { getYleumLeads as loadLeads }"
+    ).replace("await getYleumLeads()", "await loadLeads /* fetch current requests */ ()")
+    assert max_source_completion_gap(
+        "Отправь заявку в amoCRM и покажи историю заявок.", files
+    ) is None
+
+
+def test_crm_history_does_not_replace_an_explicitly_requested_profile() -> None:
+    brief = "Нужны история заявок и профиль пользователя.\n" + WIZARD_INFRASTRUCTURE
+    assert "профиль пользователя" in str(max_source_completion_gap(brief, _crm_product_files()))
+
+
+@pytest.mark.parametrize("read_source", [
+    'import { getYleumLeads } from "@/lib/omnia/integration-client";',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; // getYleumLeads()',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'const text = "getYleumLeads()";',
+    'function getYleumLeads(){ return {items: []}; } getYleumLeads();',
+    'import { getYleumLeads } from "./fake-crm"; getYleumLeads();',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'function MyLeads(getYleumLeads){ return getYleumLeads(); }',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'function MyLeads({getYleumLeads}){ return getYleumLeads(); }',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'const MyLeads = getYleumLeads => getYleumLeads();',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'const {getYleumLeads} = fake; getYleumLeads();',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'function MyLeads(){ function getYleumLeads(){return {items:[]}}; getYleumLeads(); }',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'const pattern = /getYleumLeads()/;',
+    'import { getYleumLeads } from "@/lib/omnia/integration-client"; '
+    'export function MyLeads(){ return <code>getYleumLeads()</code>; }',
+])
+def test_crm_sdk_history_needs_a_real_managed_call(read_source: str) -> None:
+    files = _crm_product_files()
+    files["src/components/MyLeads.tsx"] = read_source
+    assert "история действий" in str(max_source_completion_gap("Покажи историю заявок.", files))
+    portable_files = _portable_crm_files()
+    portable_files["src/components/MyLeads.tsx"] = read_source
+    assert "история действий" in str(max_source_completion_gap(
+        "Покажи историю заявок.", portable_files, portable=True,
+    ))
+
+
+def test_crm_import_without_write_does_not_satisfy_persistence() -> None:
+    files = _crm_product_files()
+    files["src/components/CreateLead.tsx"] = (
+        'import { createYleumLead } from "@/lib/omnia/integration-client";'
+        'export function CreateLead(){ return <button>Отправить заявку</button>; }'
+    )
+    assert "authenticated write" in str(
+        max_source_completion_gap("Отправь заявку в amoCRM и покажи историю заявок.", files)
+    )
+
+
+def test_crm_history_label_without_sdk_read_does_not_satisfy_persistence() -> None:
+    files = _crm_product_files()
+    files["src/components/MyLeads.tsx"] = (
+        'import { getYleumLeads } from "@/lib/omnia/integration-client";'
+        "export function MyLeads(){ return <section>История заявок</section>; }"
+    )
+    assert "authenticated read" in str(
+        max_source_completion_gap("Отправь заявку в amoCRM и покажи историю заявок.", files)
+    )
+
 
 @pytest.mark.parametrize("brief, expected", [
     ("Склад: демонстрационные данные и интеграционные тесты.", []),

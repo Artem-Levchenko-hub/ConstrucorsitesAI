@@ -18,6 +18,64 @@ from __future__ import annotations
 import re
 from collections.abc import Mapping
 
+_WIZARD_INFRASTRUCTURE = (
+    "Используй готовую обвязку MAX Bridge, серверную проверку initData, "
+    "MAX-профиль пользователя и webhook бота из шаблона. "
+    "Не добавляй отдельную регистрацию или вход по email."
+)
+_JS_NON_CODE_RE = re.compile(
+    r'//[^\r\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|'
+    r"'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`|"
+    r"/(?![/*])(?:\\.|[^/\\\r\n])+/[dgimsuvy]*"
+)
+
+
+def _managed_lead_calls(content: str) -> set[str]:
+    """Recognize executed named SDK imports, not comments or illustrative strings.
+
+    This supplements the existing source coverage heuristic; compilation and
+    signed runtime proof still establish whether the product actually works.
+    """
+
+    def mask(match: re.Match[str]) -> str:
+        token = match.group()
+        if token in {
+            '"@/lib/omnia/integration-client"',
+            "'@/lib/omnia/integration-client'",
+        }:
+            return " __YLEUM_MANAGED_CLIENT__ "
+        return " "
+
+    code = _JS_NON_CODE_RE.sub(mask, content)
+    code = re.sub(r"(</?[A-Za-z][\w.:-]*(?:\s[^<>]*)?>)[^<>{]*(?=<)", r"\1 ", code)
+    called: set[str] = set()
+    for imported in re.finditer(
+        r"\bimport\s*\{([^}]+)\}\s*from\s+__YLEUM_MANAGED_CLIENT__", code
+    ):
+        for specifier in imported.group(1).split(","):
+            binding = re.fullmatch(
+                r"\s*(getYleumLeads|createYleumLead)"
+                r"(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*", specifier
+            )
+            if not binding:
+                continue
+            name = binding.group(2) or binding.group(1)
+            body = re.sub(r"\bimport\s*\{[^}]+\}\s*from\s+__YLEUM_MANAGED_CLIENT__", "", code)
+            if re.search(r"\b(?:function|const|let|var)\s+" + re.escape(name) + r"\b", body):
+                continue
+            # This is deliberately conservative without a JS scope parser:
+            # only direct calls may reference the binding outside imports.
+            # Parameters/destructuring can shadow it even in a buildable file.
+            references = list(re.finditer(r"(?<![\w$])" + re.escape(name) + r"(?![\w$])", body))
+            if references and all(
+                (match.start() == 0 or body[match.start() - 1] != ".")
+                and re.match(r"\s*\(", body[match.end():])
+                for match in references
+            ):
+                called.add(binding.group(1))
+    return called
+
+
 _CAPABILITIES: tuple[tuple[str, str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "workouts",
@@ -341,7 +399,9 @@ def _explicit_capability_mentions(prompt: str, pattern: str) -> bool:
 def requested_max_capabilities(prompt: str) -> list[tuple[str, str, tuple[str, ...]]]:
     """Return only explicitly named product capabilities, in stable order."""
 
-    prompt = _without_excluded_lists(prompt)
+    # The wizard asks every app to preserve MAX identity infrastructure. That
+    # platform instruction must not invent a visible product profile screen.
+    prompt = _without_excluded_lists(prompt.replace(_WIZARD_INFRASTRUCTURE, ""))
     found: list[tuple[str, str, tuple[str, ...]]] = []
     for key, label, prompt_patterns, source_needles in _CAPABILITIES:
         if any(_explicit_capability_mentions(prompt, pattern) for pattern in prompt_patterns):
@@ -375,6 +435,9 @@ def build_max_product_contract(prompt: str, *, portable: bool = False) -> str:
         "- Use createMaxAction for persisted MAX user activity and getMaxActions to read it "
         "(page long histories with getMaxActions({ limit, cursor }) when needed). Never "
         "store a provider key in source code or expose it to the browser.",
+        "- For CRM requests use createYleumLead/getYleumLeads from the same managed "
+        "integration client. CRM requests and their scoped list are already persisted; "
+        "do not create a duplicate activity just to satisfy the persistence contract.",
         "- The reserved /api/max and /api/omnia routes remain platform-owned. Custom "
         "product APIs may authenticate with requireMaxUser(), but must not import the raw "
         "project DB/Drizzle/pg client. Persist user state only through the managed "
@@ -483,6 +546,7 @@ def max_source_completion_gap(
     not a source gap and therefore never authorises another paid segment.
     """
 
+    prompt = prompt.replace(_WIZARD_INFRASTRUCTURE, "")
     # Checked before anything else: a product that lost the migrations creating
     # its platform tables looks finished and answers 500 on its first real
     # request. Nothing further in this contract can compensate for that.
@@ -495,7 +559,16 @@ def max_source_completion_gap(
     if portable:
         from yleum_api.services.portable_cell_contract import portable_source_gap
 
-        return portable_source_gap(files, requested_max_capabilities(prompt))
+        managed_history = any(
+            "getYleumLeads" in _managed_lead_calls(content)
+            for path, content in files.items()
+            if _is_product_source(path)
+        )
+        return portable_source_gap(
+            files,
+            requested_max_capabilities(prompt),
+            implemented_capabilities=frozenset({"history"}) if managed_history else frozenset(),
+        )
     page = files.get("src/app/page.tsx", "")
     if not page:
         return (
@@ -511,6 +584,9 @@ def max_source_completion_gap(
     capabilities = requested_max_capabilities(prompt)
     product_sources = {path: content for path, content in files.items() if _is_product_source(path)}
     corpus = "\n".join(content.lower() for content in product_sources.values())
+    lead_calls: set[str] = set().union(
+        *(_managed_lead_calls(content) for content in product_sources.values())
+    )
     unsafe_product_db_paths = _unsafe_direct_db_paths(files)
     if unsafe_product_db_paths:
         return (
@@ -532,8 +608,9 @@ def max_source_completion_gap(
         )
     missing = [
         label
-        for _key, label, needles in capabilities
+        for key, label, needles in capabilities
         if not any(needle in corpus for needle in needles)
+        and not (key == "history" and "getYleumLeads" in lead_calls)
     ]
     if missing:
         return "Explicit brief capabilities are still missing: " + ", ".join(missing) + "."
@@ -571,8 +648,12 @@ def max_source_completion_gap(
             return "A timer is still simulating AI work. Replace it with requestYleumAI."
 
     if _PERSISTENCE_PROMPT_RE.search(prompt):
-        managed_read = bool(re.search(r"\bgetmaxactions\s*\(", corpus))
-        managed_write = bool(re.search(r"\bcreatemaxaction\s*\(", corpus))
+        managed_read = bool(re.search(r"\bgetmaxactions\s*\(", corpus)) or (
+            "getYleumLeads" in lead_calls
+        )
+        managed_write = bool(re.search(r"\bcreatemaxaction\s*\(", corpus)) or (
+            "createYleumLead" in lead_calls
+        )
         missing_persistence: list[str] = []
         if not managed_read:
             missing_persistence.append("authenticated read")
@@ -583,7 +664,8 @@ def max_source_completion_gap(
                 "The brief requires user data/history, but the product does not complete "
                 "an authenticated persistence loop. Missing: "
                 + ", ".join(missing_persistence)
-                + ". Use createMaxAction/getMaxActions. Render "
+                + ". Use createMaxAction/getMaxActions, or "
+                "createYleumLead/getYleumLeads for CRM requests. Render "
                 "loading/empty/error/success states; scaffold definitions do not count."
             )
 

@@ -189,7 +189,8 @@ async def machine_stack_guide_from_executor(
 
 
 def portable_source_gap(
-    files: Mapping[str, str], capabilities: list[RequestedCapability]
+    files: Mapping[str, str], capabilities: list[RequestedCapability],
+    *, implemented_capabilities: frozenset[str] = frozenset(),
 ) -> str | None:
     try:
         manifest = json.loads(files.get(".omnia/cell.json", ""))
@@ -237,8 +238,8 @@ def portable_source_gap(
     corpus = "\n".join(source.values()).lower()
     missing = [
         label
-        for _key, label, needles in capabilities
-        if not any(word in corpus for word in needles)
+        for key, label, needles in capabilities
+        if key not in implemented_capabilities and not any(word in corpus for word in needles)
     ]
     return (
         "Explicit brief capabilities are still missing: " + ", ".join(missing) if missing else None
