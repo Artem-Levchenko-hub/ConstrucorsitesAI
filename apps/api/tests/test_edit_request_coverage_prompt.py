@@ -35,7 +35,7 @@ async def test_prompt_preserves_all_requested_clauses_without_expanding_scope(
         factory=factory,
         ids=GenerationIds(*(uuid4() for _ in range(5))),
         project_info=ProjectGenerationFacts(
-            "max-miniapp-nextjs", "qa", "QA", None, None, False, "en", False, "", "",
+            "max_miniapp", "qa", "QA", None, None, False, "en", False, "", "",
         ),
         prompt_text=owner_prompt,
         runtime=GenerationRuntime(handle=handle),
@@ -52,6 +52,6 @@ async def test_prompt_preserves_all_requested_clauses_without_expanding_scope(
     assert "Do not add requirements" in plan.user
     assert "read-only" in plan.user
     assert "Do not weaken existing tests" in plan.user
-    assert plan.steps == (18 if mode == "edit" else 40)
+    assert plan.steps == ((30 if portable else 18) if mode == "edit" else 40)
     assert build_plan is None
     factory.assert_not_called()

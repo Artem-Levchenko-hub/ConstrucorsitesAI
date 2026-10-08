@@ -110,6 +110,15 @@ async def prepare_agent_prompt(
         # escalate-to-stronger-model actually fires before max_steps when a
         # cheap model explores without writing (the "Починить" did nothing bug).
         _agent_steps = 18
+        if (
+            project_info.template == "max_miniapp"
+            and runtime.handle is not None
+            and runtime.handle.capabilities.get("portable_machine") is True
+            and runtime.handle.is_portable()
+        ):
+            # A portable edit must finish its UI, persistence and verification
+            # in the same pass. Keep a floor without opening extra segments.
+            _agent_steps = min(40, max(30, int(get_settings().agent_builder_max_steps)))
     else:
         from yleum_api.services.max_generation_contract import build_max_product_contract
 
