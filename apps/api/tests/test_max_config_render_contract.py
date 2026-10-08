@@ -303,7 +303,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         async def __aexit__(self, *args):
             pass
 
-        async def get(self, model, ident):
+        async def get(self, model, ident, **_kwargs):
             if model is Project:
                 return project
             if model is MaxProjectConfig:
