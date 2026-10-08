@@ -239,6 +239,47 @@ def test_safe_css_import_order_is_byte_stable() -> None:
     assert normalize_max_globals_css(css) == css
 
 
+def test_legacy_tailwind_directives_activate_the_v4_compiler() -> None:
+    css = """@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --app-bg: white; }
+.card { display: grid; }
+"""
+
+    fixed = normalize_max_globals_css(css)
+
+    assert fixed.startswith('@import "tailwindcss";')
+    assert "@tailwind " not in fixed
+    assert ":root { --app-bg: white; }" in fixed
+    assert ".card { display: grid; }" in fixed
+    assert normalize_max_globals_css(fixed) == fixed
+
+
+def test_mixed_tailwind_syntax_does_not_duplicate_the_v4_import() -> None:
+    css = """@import "tailwindcss";
+@tailwind utilities;
+.card { display: grid; }
+"""
+
+    fixed = normalize_max_globals_css(css)
+
+    assert fixed.count('@import "tailwindcss";') == 1
+    assert "@tailwind utilities;" not in fixed
+    assert ".card { display: grid; }" in fixed
+
+
+def test_tailwind_examples_in_css_comments_are_preserved() -> None:
+    css = """/* Previous syntax example:
+@tailwind utilities;
+*/
+.card::before { content: "@tailwind base;"; }
+"""
+
+    assert normalize_max_globals_css(css) == css
+
+
 def test_completion_rejects_fake_ai_even_when_feature_words_exist() -> None:
     files = _complete_files()
     files["src/app/page.tsx"] = files["src/app/page.tsx"].replace(
