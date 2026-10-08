@@ -27,7 +27,8 @@ from yleum_api.services import max_behavior_browser as browser
 from yleum_api.services import max_behavior_proof as b
 from yleum_api.services.behavior_compilation_resolver import compilation_operation_id
 from yleum_api.services.behavior_driver_configuration import configured_behavior_driver
-from yleum_api.services.max_behavior_ui_contract import COFFEE_UI_PRESET
+from yleum_api.services.behavior_platform_assets import FIXED_PLATFORM_ASSET_PATHS
+from yleum_api.services.max_behavior_ui_contract import COFFEE_THEME_UI_PRESET
 from yleum_api.services.orchestrator_client import (
     ProjectCellAgentExecResponse,
     ProjectCellWorkspaceIdentity,
@@ -38,7 +39,10 @@ from .behavior_browser_fixture import installed_chromium
 from .test_max_behavior_proof import binding
 
 CACHE = os.environ.get("NEXT_BEHAVIOR_TEST_MODULES", "")
-REQUEST = "Добавь кнопку «Проверить заявку» для резюме без отправки данных."
+REQUEST = (
+    "Добавь кнопку «Проверить заявку» для резюме без отправки данных. "
+    "Add a visible header Light/Dark theme control and local persistence."
+)
 
 
 def owned_stop(process):
@@ -74,12 +78,30 @@ def test_actual_next_compilation_transport_resolver_private_driver_and_served_ra
     sources = {
         "package.json": json.dumps(package),
         "next.config.js": "module.exports={experimental:{cpus:1},poweredByHeader:false};",
-        "app/layout.js": "export default function Layout({children}){return <html><body>{children}</body></html>}",  # noqa: E501
+        "app/layout.js": (
+            "export default function Layout({children}){return <html><body>{children}"
+            + "".join(f'<script src="{path}" defer></script>'
+                      for path in sorted(FIXED_PLATFORM_ASSET_PATHS))
+            + "</body></html>}"
+        ),
         "app/page.js": """"use client";
-import {useState} from 'react';
+import {useEffect,useState} from 'react';
 export default function Page(){
 const [name,setName]=useState('');const [summary,setSummary]=useState('');
-return <main><form id="form" data-omnia-behavior="coffee-request-form"
+const [theme,setTheme]=useState('light');
+useEffect(()=>{setTheme(localStorage.getItem('omnia:theme:v1')==='dark'?'dark':'light');},[]);
+useEffect(()=>{document.body.style.backgroundColor=theme==='dark'?'#111111':'#ffffff';},[theme]);
+function chooseTheme(value){setTheme(value);localStorage.setItem('omnia:theme:v1',value);}
+const surface={backgroundColor:theme==='dark'?'#111111':'#ffffff',
+color:theme==='dark'?'#eeeeee':'#111111'};
+return <main data-omnia-behavior="theme-card" style={surface}>
+<header data-omnia-behavior="theme-header">
+<button type="button" data-omnia-behavior="theme-light" style={{minWidth:64,minHeight:48}}
+onClick={()=>chooseTheme('light')}>Light</button>
+<button type="button" data-omnia-behavior="theme-dark" style={{minWidth:64,minHeight:48}}
+onClick={()=>chooseTheme('dark')}>Dark</button></header>
+<p data-omnia-behavior="theme-text" style={{color:surface.color}}>Current request</p>
+<form id="form" data-omnia-behavior="coffee-request-form"
 onSubmit={e=>e.preventDefault()}><label>Name
 <input id="name" name="name" data-omnia-behavior="coffee-request-text" value={name}
 onChange={e=>setName(e.target.value)}/></label>
@@ -90,6 +112,15 @@ onClick={()=>setSummary('Summary '+name)}>Проверить заявку</butto
 """,
         "app/fixture/bootstrap/route.js": """export function GET(request){return new Response(null,{status:303,headers:{Location:'/', 'Set-Cookie':'fixture=private; Path=/; HttpOnly'}})}""",  # noqa: E501
     }
+    platform_assets = []
+    for index, path in enumerate(sorted(FIXED_PLATFORM_ASSET_PATHS)):
+        # Known operator-owned fixture bytes; never take pins from generated code.
+        content = f"window.ownedPlatformFixture{index}=true;"
+        sources["public" + path] = content
+        platform_assets.append({
+            "url": path, "sha256": hashlib.sha256(content.encode()).hexdigest(),
+            "bytes": len(content.encode()),
+        })
     for name, content in sources.items():
         target = project / name
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -170,11 +201,11 @@ onClick={()=>setSummary('Summary '+name)}>Проверить заявку</butto
         max_behavior_adapter_registry=json.dumps(
             {
                 "max-miniapp-nextjs": {
-                    "preset": COFFEE_UI_PRESET,
+                    "preset": COFFEE_THEME_UI_PRESET,
                 }
             }
         ),
-        max_behavior_vendor_asset_registry="",
+        max_behavior_vendor_asset_registry=json.dumps(platform_assets),
     )
     driver = configured_behavior_driver(handle, config)
     with socket.socket() as listener:
@@ -205,9 +236,18 @@ onClick={()=>setSummary('Summary '+name)}>Проверить заявку</butto
                 b.observe_candidate(bound, contract, driver, b.PrivatePreviewCapability(None))
             )
             assert proof["status"] == "PASS_OBSERVED"
+            assert set(proof["capabilities"]) == {"coffee_local_summary_v1", "header_theme_v1"}
             assert proof["binding"] == bound.to_json()
             assert proof["observed_assets"] == receipt["assets"]
             b.validate_saved_receipt(proof, bound, contract)
+            platform_script = project / "public/omnia-inspector.js"
+            original_platform_bytes = platform_script.read_bytes()
+            platform_script.write_bytes(b"window.UNPINNED_PLATFORM_BYTES=true;")
+            with pytest.raises(b.BehaviorProofError, match="BEHAVIOR_COMPILED_ASSETS_CHANGED"):
+                asyncio.run(
+                    b.observe_candidate(bound, contract, driver, b.PrivatePreviewCapability(None))
+                )
+            platform_script.write_bytes(original_platform_bytes)
             # A real served byte mutation must invalidate the retained compiler receipt.
             asset = next(x for x in receipt["assets"] if "/app/page-" in x["path"])
             (project / ".next" / asset["path"].removeprefix("/_next/")).write_bytes(

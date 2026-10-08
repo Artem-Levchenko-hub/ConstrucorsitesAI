@@ -628,7 +628,10 @@ def _execute_browser(
                 return witness
             measurements: dict[str, list[dict[str, Any]]] = {}
             approved = {asset.path: asset for asset in witness.assets}
-            vendors = {asset.path: asset for asset in witness.platform_assets}
+            vendors = {
+                (origin + asset.path if asset.path.startswith("/") else asset.path): asset
+                for asset in witness.platform_assets
+            }
             viewports: tuple[ViewportSize, ViewportSize] = (
                 {"width": 1280, "height": 900},
                 {"width": 390, "height": 844},

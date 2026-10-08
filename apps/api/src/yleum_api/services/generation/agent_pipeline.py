@@ -40,7 +40,10 @@ from yleum_api.services.generation.agent_recovery import (
     recover_rejected_candidate,
     recover_stopped_candidate,
 )
-from yleum_api.services.generation.agent_runtime import prepare_agent_runtime
+from yleum_api.services.generation.agent_runtime import (
+    prepare_agent_runtime,
+    require_named_behavior_readiness,
+)
 from yleum_api.services.generation.agent_seed import render_current_max_starter, stage_max_starter
 from yleum_api.services.generation.agent_verification import (
     apply_legacy_design_and_result_text,
@@ -156,6 +159,9 @@ async def run_agent_generation(
         _design_contract=_design_contract,
         _agent_res=_agent_res,
         capacity_dispatch_token=capacity_dispatch_token,
+    )
+    await require_named_behavior_readiness(
+        runtime, prompt_text, template=project_info.template, factory=factory, ids=ids,
     )
     _stack = await prepare_stack_prompt(
         _design_contract=_design_contract,

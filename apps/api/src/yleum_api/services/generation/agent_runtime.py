@@ -32,6 +32,62 @@ from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 _log = logging.getLogger("yleum_api.routers.messages")
 
 
+async def require_named_behavior_readiness(
+    runtime: GenerationRuntime, prompt: str, *, template: str,
+    factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
+) -> None:
+    """Reject unprovable named requests before paid work; this is not a receipt."""
+    from yleum_api.services.max_behavior_proof import (
+        STATE_KEY,
+        BehaviorProofError,
+        contract_from_json,
+        freeze_for_turn,
+        need,
+        required_contract,
+    )
+
+    coordinator = runtime.coordinator
+    contract = (
+        await freeze_for_turn(coordinator, prompt, template=template)
+        if coordinator is not None else required_contract(prompt, template=template)
+    )
+    if coordinator is None:
+        # A configuration change must not erase a frozen obligation on retry,
+        # even when the model-facing retry prompt no longer contains its text.
+        from yleum_api.models.generation_run import GenerationRun
+
+        async with factory() as session:
+            run = await session.get(GenerationRun, ids.run_id, with_for_update=True)
+            saved = run.agent_state.get(STATE_KEY) if run is not None else None
+            if saved is not None:
+                assert run is not None
+                need(
+                    run.project_id == ids.project_id and run.user_id == ids.user_id
+                    and run.user_message_id == ids.user_message_id,
+                    "BEHAVIOR_REQUEST_BINDING_INVALID",
+                )
+                contract = contract_from_json(saved)
+                need(contract.request_sha256 == run.prompt_hash, "BEHAVIOR_REQUEST_BINDING_INVALID")
+    if contract is None:
+        return
+    driver = getattr(coordinator, "behavior_driver", None)
+    try:
+        need(driver is not None, "BEHAVIOR_DRIVER_UNAVAILABLE")
+        need(
+            type(driver) is ControllerBehaviorDriver
+            and callable(driver.collect_compiled) and callable(driver.observe_browser)
+            and type(driver.supported_capabilities) is frozenset
+            and set(contract.capabilities) <= driver.supported_capabilities,
+            "BEHAVIOR_ADAPTER_UNSUPPORTED",
+        )
+    except BehaviorProofError as error:
+        if error.code not in {"BEHAVIOR_DRIVER_UNAVAILABLE", "BEHAVIOR_ADAPTER_UNSUPPORTED"}:
+            raise
+        # A resumed run may already have paid usage. Report this attempt's
+        # readiness failure without asserting that the whole run was free.
+        raise RuntimeError("BEHAVIOR_READINESS_UNAVAILABLE: " + error.code) from None
+
+
 async def migration_feedback(runtime: GenerationRuntime, ids: GenerationIds) -> str | None:
     baseline = getattr(runtime, "migration_baseline", None)
     if baseline is None or runtime.handle is None:

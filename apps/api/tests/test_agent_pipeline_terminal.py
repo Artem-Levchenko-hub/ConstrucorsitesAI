@@ -89,7 +89,10 @@ def pipeline_turn(monkeypatch):
                 assert statement.column_descriptions[0]["entity"] is GenerationRun
                 return run_row
 
-            async def get(self, model, key):
+            async def get(self, model, key, **_kwargs):
+                if model is GenerationRun:
+                    assert key == ids.run_id
+                    return run_row
                 assert model is Message and key == ids.assistant_message_id
                 return message
 

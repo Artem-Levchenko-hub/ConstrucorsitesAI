@@ -11,6 +11,7 @@ from dataclasses import fields, replace
 from typing import Any
 
 from yleum_api.services.behavior_compilation_resolver import resolve_retained_compilation
+from yleum_api.services.behavior_platform_assets import PLATFORM_ASSET_LOCATIONS
 from yleum_api.services.max_behavior_browser import (
     CoffeeSummaryAdapter,
     DensityAdapter,
@@ -87,11 +88,26 @@ def _pin(path: str, expected: str) -> None:
 
 def _adapter(raw: Any) -> PlatformBrowserAdapter:
     if type(raw) is dict and "preset" in raw:
-        from yleum_api.services.max_behavior_ui_contract import COFFEE_SELECTORS, COFFEE_UI_PRESET
+        from yleum_api.services.max_behavior_ui_contract import (
+            COFFEE_SELECTORS,
+            COFFEE_THEME_UI_PRESET,
+            COFFEE_UI_PRESET,
+            THEME_SELECTORS,
+            THEME_STORAGE_KEY,
+            THEME_UI_PRESET,
+        )
 
-        if set(raw) - {"preset", "read_paths"} or raw["preset"] != COFFEE_UI_PRESET:
+        theme = {"theme": {**THEME_SELECTORS, "storage_key": THEME_STORAGE_KEY}}
+        coffee = {"coffee_summary": dict(COFFEE_SELECTORS)}
+        presets = {
+            COFFEE_UI_PRESET: coffee,
+            THEME_UI_PRESET: theme,
+            COFFEE_THEME_UI_PRESET: {**coffee, **theme},
+        }
+        if (set(raw) - {"preset", "read_paths"} or type(raw["preset"]) is not str
+                or raw["preset"] not in presets):
             raise ValueError
-        raw = {"coffee_summary": dict(COFFEE_SELECTORS), "read_paths": raw.get("read_paths", [])}
+        raw = {**presets[raw["preset"]], "read_paths": raw.get("read_paths", [])}
     if type(raw) is not dict or set(raw) - {"density", "theme", "coffee_summary", "read_paths"}:
         raise ValueError
     parsed = dict(raw)
@@ -156,14 +172,16 @@ def configured_behavior_driver(handle: Any, settings: Any) -> ControllerBehavior
             if settings.max_behavior_vendor_asset_registry
             else []
         )
-        if type(vendors) is not list or len(vendors) > 1:
+        if type(vendors) is not list or len(vendors) > len(PLATFORM_ASSET_LOCATIONS):
             raise ValueError
         platform_assets = []
+        seen_urls: set[str] = set()
         for item in vendors:
             if (
                 type(item) is not dict
                 or set(item) != {"url", "sha256", "bytes"}
-                or item["url"] != "https://st.max.ru/js/max-web-app.js"
+                or item["url"] not in PLATFORM_ASSET_LOCATIONS
+                or item["url"] in seen_urls
             ):
                 raise ValueError
             if (
@@ -173,6 +191,7 @@ def configured_behavior_driver(handle: Any, settings: Any) -> ControllerBehavior
             ):
                 raise ValueError
             platform_assets.append(ObservedAsset(item["url"], item["sha256"], item["bytes"]))
+            seen_urls.add(item["url"])
 
         async def resolver(request: BehaviorDriverInput) -> CompiledAssetWitness:
             witness = await resolve_retained_compilation(handle, request)

@@ -19,7 +19,14 @@ def public_generation_failure(run: GenerationRun | None) -> GenerationFailure | 
 def failure_for_error(raw_error: object, *, restoration: bool = False) -> GenerationFailure:
     error = str(raw_error).casefold()
     retryable = True
-    if "max_core_preparation_failed:" in error:
+    if "behavior_readiness_unavailable:" in error:
+        code = "runtime_unavailable"
+        retryable = False
+        message = (
+            "Генерация остановлена до следующего вызова модели: недоступна обязательная "
+            "проверка интерфейса. Требуется восстановить проверку на стороне сервиса."
+        )
+    elif "max_core_preparation_failed:" in error:
         code = "runtime_unavailable"
         message = (
             "Генерация не запускалась: не удалось подготовить среду MAX. "

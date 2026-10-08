@@ -16,9 +16,11 @@ from dataclasses import asdict, dataclass
 from typing import Any, SupportsIndex, cast
 from uuid import UUID
 
+from yleum_api.services.behavior_platform_assets import PLATFORM_ASSET_LOCATIONS
+
 CONTRACT_VERSION = "max-named-behavior-v2"
 PROBE_VERSION = "ac-coffee-process-browser-v3"
-PROBE_SHA256 = "b7d4156dafa2900ea7612bb59ad6a1b12cf5d31e694499a3869e1daf77c6df08"
+PROBE_SHA256 = "919427c0c28f42a418dfae768c540a3a99bdc3800b665f692ff035c703616d28"
 STATE_KEY = "max_named_behavior_contract"
 RECEIPT_KEY = "max_named_behavior_receipt"
 _HEX = re.compile("[0-9a-f]{64}")
@@ -551,11 +553,15 @@ def _compiled(witness: object, binding: CandidateBehaviorBinding) -> CompiledAss
             and 0 < x.bytes <= 8388608,
             "BEHAVIOR_COMPILED_ASSETS_INVALID",
         )
-    need(len(witness.platform_assets) <= 1, "BEHAVIOR_PLATFORM_ASSETS_INVALID")
+    need(
+        len(witness.platform_assets) <= len(PLATFORM_ASSET_LOCATIONS)
+        and len({x.path for x in witness.platform_assets}) == len(witness.platform_assets),
+        "BEHAVIOR_PLATFORM_ASSETS_INVALID",
+    )
     for x in witness.platform_assets:
         need(
             type(x) is ObservedAsset
-            and x.path == "https://st.max.ru/js/max-web-app.js"
+            and x.path in PLATFORM_ASSET_LOCATIONS
             and _HEX.fullmatch(x.sha256)
             and type(x.bytes) is int
             and 0 < x.bytes <= 8388608,
