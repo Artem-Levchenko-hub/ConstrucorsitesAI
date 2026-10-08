@@ -97,7 +97,19 @@ export function restorePersistedAgentSteps(
   const sequenced = [...current, ...persisted].some(
     (step) => step.eventId && typeof step.seq === "number",
   );
-  return sequenced ? mergeAgentStepsBySequence(current, persisted) : current;
+  if (sequenced) return mergeAgentStepsBySequence(current, persisted);
+  if (persisted.length <= current.length) return current;
+
+  // Legacy streams can omit consecutive duplicates. Accept a fuller snapshot
+  // only when every cached event occurs in it in order; never discard a newer
+  // live tail or combine histories whose relationship cannot be established.
+  let matched = 0;
+  for (const step of persisted) {
+    if (matched < current.length && semanticIdentity(step) === semanticIdentity(current[matched])) {
+      matched += 1;
+    }
+  }
+  return matched === current.length ? persisted : current;
 }
 
 /** Подряд идущие одинаковые шаги, слитые в одну строку со счётчиком повторов. */
