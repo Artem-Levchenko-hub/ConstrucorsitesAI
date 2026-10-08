@@ -524,6 +524,29 @@ def validate_measurements(contract: NamedBehaviorContract, measurements: object)
         raise BehaviorProofError("BEHAVIOR_MEASUREMENTS_INVALID") from None
 
 
+_NEXT_CHUNK_SEGMENT = (
+    r"(?:[A-Za-z0-9_-]+|\([A-Za-z0-9_-]+\)|"
+    r"\[(?:\.\.\.)?[A-Za-z0-9_-]+\]|\[\[\.\.\.[A-Za-z0-9_-]+\]\])"
+)
+
+
+def _compiled_asset_path(path: object) -> bool:
+    if type(path) is not str or not path.startswith("/_next/"):
+        return False
+    path = path.removeprefix("/_next/")
+    if any(part in {"", ".", ".."} for part in path.split("/")):
+        return False
+    return bool(
+        re.fullmatch(
+            rf"static/(?:chunks/(?:{_NEXT_CHUNK_SEGMENT}/)*[A-Za-z0-9_-]+\.js|"
+            r"css/[A-Za-z0-9_/-]+\.css|"
+            r"media/(?![^/]*\.\.)[A-Za-z0-9_.-]+\.(?:woff2?|ttf|otf|png|jpg|jpeg|webp|avif|gif|ico)|"
+            r"[A-Za-z0-9_-]+/_(?:buildManifest|ssgManifest)\.js)",
+            path,
+        )
+    )
+
+
 def _compiled(witness: object, binding: CandidateBehaviorBinding) -> CompiledAssetWitness:
     need(
         type(witness) is CompiledAssetWitness
@@ -541,13 +564,7 @@ def _compiled(witness: object, binding: CandidateBehaviorBinding) -> CompiledAss
     for x in witness.assets:
         need(
             type(x) is ObservedAsset
-            and re.fullmatch(
-                r"/_next/static/(chunks/[A-Za-z0-9_/-]+\.js|css/[A-Za-z0-9_/-]+\.css|"
-                r"media/[A-Za-z0-9_.-]+\.(woff2?|ttf|otf|png|jpg|jpeg|webp|avif|gif|ico)|"
-                r"[A-Za-z0-9_-]+/_(buildManifest|ssgManifest)\.js)",
-                x.path,
-            )
-            and ".." not in x.path
+            and _compiled_asset_path(x.path)
             and _HEX.fullmatch(x.sha256)
             and type(x.bytes) is int
             and 0 < x.bytes <= 8388608,

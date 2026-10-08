@@ -18,6 +18,10 @@ RESTORED_COLLECTOR_VERSION = "next-restored-runtime-v1"
 MAX_ASSET_BYTES = 8 * 1024**2
 MAX_TOTAL_BYTES = 64 * 1024**2
 MAX_ASSETS = 128
+_NEXT_CHUNK_SEGMENT = (
+    r"(?:[A-Za-z0-9_-]+|\([A-Za-z0-9_-]+\)|"
+    r"\[(?:\.\.\.)?[A-Za-z0-9_-]+\]|\[\[\.\.\.[A-Za-z0-9_-]+\]\])"
+)
 
 
 class CompilationUnavailable(ValueError):
@@ -39,12 +43,13 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 
 def asset_path(path: object, build_id: str) -> bool:
-    if type(path) is not str or ".." in path:
+    if type(path) is not str or any(part in {"", ".", ".."} for part in path.split("/")):
         return False
     return bool(
         re.fullmatch(
-            r"static/(?:chunks/[A-Za-z0-9_/-]+\.js|css/[A-Za-z0-9_/-]+\.css|"
-            r"media/[A-Za-z0-9_.-]+\.(?:woff2?|ttf|otf|png|jpg|jpeg|webp|avif|gif|ico)|"
+            rf"static/(?:chunks/(?:{_NEXT_CHUNK_SEGMENT}/)*[A-Za-z0-9_-]+\.js|"
+            r"css/[A-Za-z0-9_/-]+\.css|"
+            r"media/(?![^/]*\.\.)[A-Za-z0-9_.-]+\.(?:woff2?|ttf|otf|png|jpg|jpeg|webp|avif|gif|ico)|"
             + re.escape(build_id)
             + r"/_(?:buildManifest|ssgManifest)\.js)",
             path,
