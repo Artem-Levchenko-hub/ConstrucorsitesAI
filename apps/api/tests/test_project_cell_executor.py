@@ -1329,6 +1329,72 @@ async def test_full_build_executor_rejects_green_stdout_without_database_receipt
         assert "migration receipt is missing or stale" in result.redacted_detail
 
 
+@pytest.mark.parametrize("fault", [None, "migration", "compilation", "run", "source", "identity"])
+async def test_restore_runtime_requires_bound_compilation_and_existing_database_receipts(
+    monkeypatch,
+    db_session,
+    test_engine,
+    fault,
+):
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/app/page.tsx": "accepted"},
+        capabilities={"portable_machine": True},
+        cell_exec_result={"ok": True, "exit_code": 0, "timed_out": False, "detail": "restored"},
+    )
+    original_exec = project_cell_executor.project_cell_agent_exec
+
+    async def response(workspace_id, *args, **kwargs):
+        assert kwargs["task_role"] == "restore_runtime"
+        result = await original_exec(workspace_id, *args, **kwargs)
+        migration = {
+            "contract": "project-migrations-v1",
+            "mode": "apply",
+            "workspace_id": str(workspace_id),
+            "generation_run_id": str(kwargs["generation_run_id"]),
+            "fencing_epoch": kwargs["fencing_epoch"],
+            "source_revision": kwargs["expected_revision"],
+            "source_digest": "2" * 64,
+            "database_identity": "3" * 64,
+            "catalog_digest": "4" * 64,
+            "migration_count": 1,
+        }
+        compilation = {
+            "collector_version": "next-restored-runtime-v1",
+            "workspace_id": str(workspace_id),
+            "project_id": str(harness.project_id),
+            "generation_run_id": str(kwargs["generation_run_id"]),
+            "fencing_epoch": kwargs["fencing_epoch"],
+            "operation_id": str(result.operation_id),
+            "source_revision": kwargs["expected_revision"],
+            "manifest_digest": result.before_identity.cell_manifest_digest,
+        }
+        if fault == "run":
+            compilation["generation_run_id"] = str(uuid4())
+        if fault == "source":
+            compilation["source_revision"] = "f" * 64
+        after = result.after_identity
+        if fault == "identity":
+            after = replace(after, workspace_revision="f" * 64)
+        return replace(
+            result,
+            project_migration_receipt=None if fault == "migration" else migration,
+            compiled_asset_receipt=None if fault == "compilation" else compilation,
+            after_identity=after,
+            workspace_revision=after.workspace_revision,
+            environment_mutated=result.before_identity != after,
+        )
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", response)
+    result = await harness.handle.run_role(
+        project_cell_executor.ProjectCellCommandRole.RESTORE_RUNTIME,
+        uuid4(),
+    )
+    assert result.ok is (fault is None)
+
+
 @pytest.mark.parametrize("ok,timed_out", [(True, False), (False, False), (False, True)])
 async def test_clean_portable_shell_retains_preview_and_proof_identity(
     monkeypatch,

@@ -14,6 +14,7 @@ import stat
 from typing import Any, cast
 
 COLLECTOR_VERSION = "next-fixed-data-v1"
+RESTORED_COLLECTOR_VERSION = "next-restored-runtime-v1"
 MAX_ASSET_BYTES = 8 * 1024**2
 MAX_TOTAL_BYTES = 64 * 1024**2
 MAX_ASSETS = 128
@@ -121,7 +122,11 @@ class _Reader:
             os.close(fd)
 
 
-def collect_next_compilation(root: str = "/proof") -> dict[str, Any]:
+def collect_next_compilation(
+    root: str = "/proof",
+    *,
+    require_product_page: bool = True,
+) -> dict[str, Any]:
     reader: _Reader | None = None
     try:
         reader = _Reader(root)
@@ -133,7 +138,9 @@ def collect_next_compilation(root: str = "/proof") -> dict[str, Any]:
         _need(re.fullmatch(r"[A-Za-z0-9_-]{1,128}", build_id))
         build = reader.json(".next/build-manifest.json")
         app = reader.json(".next/app-build-manifest.json")
-        _need(type(app.get("pages")) is dict and "/page" in app["pages"])
+        _need(type(app.get("pages")) is dict)
+        if require_product_page:
+            _need("/page" in app["pages"])
         lists = [build.get(name) for name in ("rootMainFiles", "polyfillFiles", "lowPriorityFiles")]
         _need(type(build.get("pages")) is dict)
         lists.extend(build["pages"].values())
@@ -146,12 +153,13 @@ def collect_next_compilation(root: str = "/proof") -> dict[str, Any]:
                 paths.add(path)
         _need(1 <= len(paths) <= MAX_ASSETS)
         # There must be actual root app JS in the compiler's root page entry.
-        _need(
-            any(
-                p.startswith("static/chunks/app/") and p.endswith(".js")
-                for p in app["pages"]["/page"]
+        if require_product_page:
+            _need(
+                any(
+                    p.startswith("static/chunks/app/") and p.endswith(".js")
+                    for p in app["pages"]["/page"]
+                )
             )
-        )
         assets: list[dict[str, Any]] = []
         total = 0
         for path in sorted(paths):
@@ -177,7 +185,9 @@ def collect_next_compilation(root: str = "/proof") -> dict[str, Any]:
         }
         reader.verify()
         return {
-            "collector_version": COLLECTOR_VERSION,
+            "collector_version": COLLECTOR_VERSION
+            if require_product_page
+            else RESTORED_COLLECTOR_VERSION,
             "declared_next_version": "15.5.24",
             "build_id_sha256": hashlib.sha256(build_bytes).hexdigest(),
             "metadata_sha256": metadata,

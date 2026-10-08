@@ -193,13 +193,17 @@ class WorkspaceAgentExecRequest(BaseModel):
     cmd: str = Field(min_length=1)
     timeout_seconds: int = Field(default=180, ge=1, le=900)
     operation_id: UUID = Field(default_factory=uuid4)
-    task_role: Literal[
-        "bootstrap",
-        "fast_check",
-        "full_build",
-        "build",
-        "test",
-    ] | None = None
+    task_role: (
+        Literal[
+            "bootstrap",
+            "fast_check",
+            "full_build",
+            "restore_runtime",
+            "build",
+            "test",
+        ]
+        | None
+    ) = None
 
 
 class WorkspaceIdentityDigest(BaseModel):

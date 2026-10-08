@@ -41,6 +41,13 @@ def stopped_recovery(monkeypatch):
     async def emit(*args):
         trace.append("rollback_event")
 
+    async def restore_runtime(role, operation_id):
+        assert role.value == "restore_runtime"
+        result = await build()
+        if result["ok"]:
+            trace.append("compile_and_restart")
+        return SimpleNamespace(ok=result["ok"], redacted_detail=result.get("detail", ""))
+
     async def render():
         return dict(baseline)
 
@@ -58,7 +65,7 @@ def stopped_recovery(monkeypatch):
         ids=SimpleNamespace(project_id=uuid4()),
         project_info=SimpleNamespace(slug="recovery"),
         runtime=GenerationRuntime(
-            handle=SimpleNamespace(stage_patch=stage, sync_preview=sync),
+            handle=SimpleNamespace(stage_patch=stage, sync_preview=sync, run_role=restore_runtime),
             coordinator=object(),
         ),
         operations=SimpleNamespace(probe_build=build, emit=emit),
@@ -72,7 +79,7 @@ async def test_stopped_candidate_restores_without_preview_and_preserves_cause(st
         await agent_recovery.recover_stopped_candidate(**kwargs)
     assert "rolled_back" in str(error.value)
     assert tree == baseline
-    assert trace == ["restore", "source_check", "rollback_event"]
+    assert trace == ["restore", "source_check", "compile_and_restart", "rollback_event"]
     assert "no source changes" not in str(error.value)
 
 
@@ -105,7 +112,7 @@ async def test_first_generation_restores_only_core_without_preview(stopped_recov
     with pytest.raises(RuntimeError, match=r"max_steps.*rolled_back"):
         await agent_recovery.recover_stopped_candidate(**kwargs)
     assert tree == {"empty.ts": ""}
-    assert trace == ["restore", "source_check", "rollback_event"]
+    assert trace == ["restore", "source_check", "compile_and_restart", "rollback_event"]
 
 
 async def test_provider_failure_keeps_precedence_after_source_restoration(stopped_recovery):
@@ -114,7 +121,7 @@ async def test_provider_failure_keeps_precedence_after_source_restoration(stoppe
     with pytest.raises(RuntimeError, match="output_limit"):
         await agent_recovery.recover_stopped_candidate(**kwargs)
     assert tree == baseline
-    assert trace == ["restore", "source_check", "rollback_event"]
+    assert trace == ["restore", "source_check", "compile_and_restart", "rollback_event"]
 
 
 @pytest.mark.parametrize("done,needs_finalization", [(True, False), (False, True)])
@@ -128,3 +135,29 @@ async def test_verified_candidate_keeps_normal_finalization_path(
     result, _, _, _ = await agent_recovery.recover_stopped_candidate(**kwargs)
     assert result is candidate and result.files == tree
     assert trace == []
+
+
+async def test_stopped_rollback_replaces_running_candidate_after_restoring_source(stopped_recovery):
+    kwargs, tree, baseline, trace, _ = stopped_recovery
+    served = {"version": "failed candidate"}
+
+    async def restore_runtime(role, operation_id):
+        assert role.value == "restore_runtime"
+        assert tree == baseline
+        served["version"] = "accepted"
+        trace.append("compile_and_restart")
+        return SimpleNamespace(ok=True, redacted_detail="restored runtime ready")
+
+    kwargs["runtime"].handle.run_role = restore_runtime
+    with pytest.raises(RuntimeError, match=r"max_steps.*rolled_back"):
+        await agent_recovery.recover_stopped_candidate(**kwargs)
+    assert served["version"] == "accepted"
+    assert trace == ["restore", "compile_and_restart", "rollback_event"]
+
+
+async def test_green_typecheck_without_runtime_restore_cannot_verify_rollback(stopped_recovery):
+    kwargs, _, _, trace, _ = stopped_recovery
+    kwargs["runtime"].handle.run_role = None
+    with pytest.raises(RuntimeError, match=r"max_steps.*rollback_unverified"):
+        await agent_recovery.recover_stopped_candidate(**kwargs)
+    assert "rollback_event" not in trace

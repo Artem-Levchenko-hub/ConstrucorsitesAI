@@ -63,6 +63,18 @@ def test_valid_next_data_and_exact_asset_hashes(tmp_path):
     assert receipt["build_id_sha256"] == hashlib.sha256(b"build-a").hexdigest()
 
 
+def test_core_only_restoration_has_separate_receipt_without_product_page(tmp_path):
+    fixture(tmp_path)
+    (tmp_path / ".next/app-build-manifest.json").write_text(
+        '{"pages":{"/_not-found/page":["static/chunks/main-app.js"]}}'
+    )
+    receipt = collect_next_compilation(str(tmp_path), require_product_page=False)
+    assert receipt["collector_version"] == "next-restored-runtime-v1"
+    assert receipt["assets"]
+    with pytest.raises(CompilationUnavailable):
+        collect_next_compilation(str(tmp_path))
+
+
 @pytest.mark.parametrize(
     "path,value",
     [

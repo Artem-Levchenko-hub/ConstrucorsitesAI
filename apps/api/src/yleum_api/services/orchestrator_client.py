@@ -1790,7 +1790,15 @@ async def project_cell_agent_exec(
         raise ValueError("timeout_seconds must be between 1 and 900")
     _validate_fencing_epoch(fencing_epoch)
     _validate_workspace_revision(expected_revision)
-    if task_role not in (None, "bootstrap", "fast_check", "full_build", "build", "test"):
+    if task_role not in (
+        None,
+        "bootstrap",
+        "fast_check",
+        "full_build",
+        "restore_runtime",
+        "build",
+        "test",
+    ):
         raise ValueError("invalid portable task role")
     payload = await _request(
         "POST",

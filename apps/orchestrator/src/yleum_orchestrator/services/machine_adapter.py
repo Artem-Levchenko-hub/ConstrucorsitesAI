@@ -178,7 +178,7 @@ class MachineAdapter:
             "database_admin": "runtime-crud",
             "database_migrations": "controller-limited-login",
             "commands": ["bash", "build", "runtime_check"],
-            "task_roles": ["bootstrap", "fast_check", "full_build"],
+            "task_roles": ["bootstrap", "fast_check", "full_build", "restore_runtime"],
             "framework": "nextjs",
             "default_stack": "max-nextjs-typescript",
             "node_major": 22,
@@ -346,25 +346,34 @@ class MachineAdapter:
     async def execute(
         self, state: Any, manifest: MachineManifest, request: Any
     ) -> DockerCommandResult:
-        command_grace = int(
-            getattr(self.settings, "cell_machine_command_grace_seconds", 20)
-        )
+        command_grace = int(getattr(self.settings, "cell_machine_command_grace_seconds", 20))
         cleanup_reserve = command_grace + 5
+        succeeded = False
+        restore_effects = {"started": False}
         try:
             with machine_budget(request.timeout_seconds + cleanup_reserve):
                 async with asyncio.timeout(
                     machine_remaining_seconds(request.timeout_seconds + cleanup_reserve)
                 ):
-                    return await self._execute(state, manifest, request)
+                    if request.task_role == "restore_runtime":
+                        result = await self._execute(
+                            state,
+                            manifest,
+                            request,
+                            restore_effects=restore_effects,
+                        )
+                    else:
+                        result = await self._execute(state, manifest, request)
+                    succeeded = result.exit_code == 0 and not result.timed_out
+                    return result
         except TimeoutError:
             machine, _backend = self.parts(state)
             digest = self._request_digest(manifest, request)
             mutation = LifecycleMutation(request.operation_id, request.fencing_epoch, digest)
             with machine_budget(None):
-                status = await machine.inspect_request_status(
-                    operation_id=request.operation_id
-                )
+                status = await machine.inspect_request_status(operation_id=request.operation_id)
                 if status.result is not None:
+                    succeeded = status.result.exit_code == 0 and not status.result.timed_out
                     return DockerCommandResult(
                         exit_code=status.result.exit_code or 0,
                         output=status.result.output,
@@ -372,8 +381,11 @@ class MachineAdapter:
                     )
                 if status.state in {"starting", "running"}:
                     active_names = {task.name for task in manifest.tasks}
-                    if (request.task_role in {"fast_check", "full_build"}
-                            and node_manifest_commands(manifest)):
+                    if request.task_role in {
+                        "fast_check",
+                        "full_build",
+                        "restore_runtime",
+                    } and node_manifest_commands(manifest):
                         active_names.add(REACT_EFFECT_CHECK_PHASE)
                     if status.phase in active_names:
                         operation_id = uuid5(request.operation_id, status.phase)
@@ -405,9 +417,21 @@ class MachineAdapter:
                 output=stored.output,
                 timed_out=stored.timed_out,
             )
+        finally:
+            if restore_effects["started"] and not succeeded:
+                machine, backend = self.parts(state)
+                saved = machine.state()
+                # A rejected/stale lease must never stop a successor's product.
+                if saved.get("epoch") == request.fencing_epoch and str(
+                    request.operation_id
+                ) in saved.get("operations", {}):
+                    with machine_budget(None):
+                        await machine_effect(backend.stop_machine)
 
     async def protect_migration_sources(
-        self, state: Any, files: dict[str, str],
+        self,
+        state: Any,
+        files: dict[str, str],
     ) -> dict[str, str]:
         from yleum_orchestrator.services.applied_migration_sources import (
             protected_sources,
@@ -513,8 +537,11 @@ class MachineAdapter:
                     "revision": request.expected_revision,
                     "manifest": manifest.digest(),
                     "timeout_seconds": request.timeout_seconds,
-                    **({"migration_contract": "project-migrations-v1"}
-                       if request.task_role == "full_build" else {}),
+                    **(
+                        {"migration_contract": "project-migrations-v1"}
+                        if request.task_role in {"full_build", "restore_runtime"}
+                        else {}
+                    ),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -522,14 +549,25 @@ class MachineAdapter:
         ).hexdigest()
 
     async def _execute(
-        self, state: Any, manifest: MachineManifest, request: Any
+        self,
+        state: Any,
+        manifest: MachineManifest,
+        request: Any,
+        *,
+        restore_effects: dict[str, bool] | None = None,
     ) -> DockerCommandResult:
         request_deadline = time.monotonic() + machine_remaining_seconds(request.timeout_seconds)
         role = request.task_role
         if role == "build" and not any(task.role == "test" for task in manifest.tasks):
             raise ValueError("portable build requires a declared test task")
         if role:
-            roles = ("bootstrap", "build", "test") if role == "build" else (role,)
+            roles = (
+                ("bootstrap", "build", "test")
+                if role == "build"
+                else ("full_build",)
+                if role == "restore_runtime"
+                else (role,)
+            )
             commands = [
                 (task.name, task.argv, task.cwd, task.timeout_seconds)
                 for current_role in roles
@@ -584,15 +622,26 @@ class MachineAdapter:
                 return await finish(exit_code=1, output=str(exc))
             if gap:
                 return await finish(exit_code=1, output=gap)
-        if role == "full_build":
+        if role in {"full_build", "restore_runtime"}:
             try:
-                await self._project_migrations(state, request, verify_applied=False)
+                if role == "restore_runtime":
+                    # Stop the candidate before rebuilding shared .next assets.
+                    # Keep Postgres and every volume; only the product is replaced.
+                    if restore_effects is not None:
+                        restore_effects["started"] = True
+                    await machine_effect(_backend.remove_machine)
+                    await self._project_migrations(state, request, verify_applied=True)
+                    await machine.ensure(manifest, mutation)
+                else:
+                    await self._project_migrations(state, request, verify_applied=False)
             except CellResourceError as exc:
                 return await finish(exit_code=1, output=str(exc))
         heartbeat_seconds = int(
             getattr(self.settings, "cell_machine_command_heartbeat_seconds", 15)
         )
-        if role in {"fast_check", "full_build"} and node_manifest_commands(manifest):
+        if role in {"fast_check", "full_build", "restore_runtime"} and node_manifest_commands(
+            manifest
+        ):
             # Fresh portable volumes have source but no installed dependencies.
             # Run only the declared bootstrap under this request's existing
             # deadline/replay journal before loading the workspace AST parser.
@@ -659,7 +708,7 @@ class MachineAdapter:
                         )
                     break
                 await asyncio.sleep(0.2)
-        if role == "full_build":
+        if role in {"full_build", "restore_runtime"}:
             try:
                 receipt = await self._project_migrations(state, request, verify_applied=True)
                 from yleum_orchestrator.services.next_compilation_capture import (
@@ -667,10 +716,19 @@ class MachineAdapter:
                 )
 
                 _machine, compiler_backend = self.parts(state)
+                if role == "restore_runtime":
+                    await self._require_restored_source_revision(compiler_backend, request)
                 compilation = await machine_effect(
-                    capture_next_compilation, compiler_backend, request, manifest,
+                    capture_next_compilation,
+                    compiler_backend,
+                    request,
+                    manifest,
                 )
+                if role == "restore_runtime" and compilation is None:
+                    raise CellResourceError("restored compilation receipt unavailable")
                 await self._activate_runtime(state, manifest, request)
+                if role == "restore_runtime":
+                    await self._require_restored_source_revision(compiler_backend, request)
             except (MachineServiceFailed, CellResourceError) as exc:
                 # A failed product start is command evidence, not a transport
                 # rejection. Finish the durable request and retain task logs.
@@ -688,8 +746,19 @@ class MachineAdapter:
                 write_controller_json(_machine.path, saved)
         return await finish(exit_code=0, output="\n".join(output))
 
+    async def _require_restored_source_revision(self, backend: Any, request: Any) -> None:
+        from yleum_orchestrator.routers.runtime import _workspace_revision
+        from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
+
+        files = await _read_agent_workspace_files(self.manager, backend.workspace_volume)
+        if _workspace_revision(files) != request.expected_revision:
+            raise CellResourceError("restored source changed during build or runtime activation")
+
     def _store_migration_receipt(
-        self, state: Any, operation_id: UUID, receipt: dict[str, Any],
+        self,
+        state: Any,
+        operation_id: UUID,
+        receipt: dict[str, Any],
     ) -> None:
         machine, _backend = self.parts(state)
         saved = machine.state()

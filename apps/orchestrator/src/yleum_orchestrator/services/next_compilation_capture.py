@@ -9,7 +9,10 @@ from typing import Any
 
 import docker  # type: ignore[import-untyped]
 
-from yleum_orchestrator.services.next_compilation_receipt import COLLECTOR_VERSION
+from yleum_orchestrator.services.next_compilation_receipt import (
+    COLLECTOR_VERSION,
+    RESTORED_COLLECTOR_VERSION,
+)
 from yleum_orchestrator.services.project_machine import machine_remaining_seconds
 
 
@@ -26,9 +29,15 @@ def capture_next_compilation(backend: Any, request: Any, manifest: Any) -> dict[
     if type(image) is not str or not _PIN.fullmatch(image):
         return None
     source = Path(__file__).with_name("next_compilation_receipt.py").read_text()
+    restoring = getattr(request, "task_role", None) == "restore_runtime"
+    collect = (
+        "collect_next_compilation(require_product_page=False)"
+        if restoring
+        else "collect_next_compilation()"
+    )
     script = source + (
         "\ntry:\n"
-        ' print(json.dumps(collect_next_compilation(),sort_keys=True,separators=(",",":")))\n'
+        f' print(json.dumps({collect},sort_keys=True,separators=(",",":")))\n'
         'except CompilationUnavailable:\n print("null")\n'
     )
     helper = None
@@ -61,7 +70,8 @@ def capture_next_compilation(backend: Any, request: Any, manifest: Any) -> dict[
         if len(raw) > 65536:
             return None
         data = json.loads(raw)
-        if type(data) is not dict or data.get("collector_version") != COLLECTOR_VERSION:
+        version = RESTORED_COLLECTOR_VERSION if restoring else COLLECTOR_VERSION
+        if type(data) is not dict or data.get("collector_version") != version:
             return None
         data.update(
             workspace_id=str(backend.workspace_id),
