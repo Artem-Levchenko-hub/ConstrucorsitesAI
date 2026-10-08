@@ -15,6 +15,9 @@ def test_core_upgrade_is_staged_and_preserves_project_data(
     tmp_path, monkeypatch, public_mode, failure
 ):
     from yleum_orchestrator.services import machine_business_config as config
+    from yleum_orchestrator.services import nginx_writer
+
+    monkeypatch.setattr(nginx_writer, "dev_url", lambda slug: f"https://{slug}-dev.dev.example")
 
     image = "sha256:" + "a" * 64
     events, items, creates = [], {}, []
