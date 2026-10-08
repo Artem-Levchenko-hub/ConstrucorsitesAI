@@ -450,8 +450,9 @@ def test_shared_evolution_guidance_has_no_protected_controller_command():
 @pytest.mark.parametrize("provider", ["legacy", "cell-legacy", "portable", "missing-manifest"])
 async def test_agent_policy_survives_provider_replacement_and_all_prompt_protocols(mode, provider):
     from yleum_api.services.max_data_evolution import build_max_agent_guide
+    from yleum_api.services.max_project_kit import MAX_MODEL_DIRECTIVE
 
-    legacy = "MAX PLATFORM CORE CONTRACT\nLEGACY-ONLY-INSTRUCTIONS"
+    legacy = f"{MAX_MODEL_DIRECTIVE}\nLEGACY-ONLY-INSTRUCTIONS"
     snapshot = AsyncMock(
         return_value=({} if provider == "missing-manifest" else {".omnia/cell.json": "{}"})
     )
@@ -463,7 +464,9 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
             snapshot_files=snapshot,
         )
     )
-    guide = await build_max_agent_guide(legacy, executor)
+    guide = await build_max_agent_guide(
+        legacy, executor, integration_guide="INTEGRATION-SENTINEL",
+    )
     builders = {
         "build": agent_builder.build_system_prompt,
         "edit": agent_builder.build_edit_system_prompt,
@@ -471,6 +474,10 @@ async def test_agent_policy_survives_provider_replacement_and_all_prompt_protoco
     }
     prompt = builders[mode](guide)
     assert prompt.count(POLICY_HEADER) == 1
+    assert guide.count("MAX UI 0.2.0: Typography is a namespace") == 1
+    assert "Typography.Title has no level prop" in prompt
+    assert '<Typography.Title variant="small" asChild><h2>' in prompt
+    assert "INTEGRATION-SENTINEL" in prompt
     assert ("LEGACY-ONLY-INSTRUCTIONS" in prompt) == (provider != "portable")
     assert ("EXTENSIBLE MAIN STACK" in prompt) == (provider == "portable")
     assert snapshot.await_count == (provider != "legacy")

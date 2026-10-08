@@ -353,20 +353,31 @@ MAX_MODEL_LOCKED_FILES = frozenset(
     }
 )
 
-MAX_MODEL_DIRECTIVE = """
+MAX_UI_GUIDANCE = """
+MAX UI 0.2.0: Typography is a namespace, not a JSX component.
+Never render <Typography>. Inspect the installed public exports/types for the
+concrete text components and their props. Do not assume Typography.Caption exists
+or guess level values; verify exported components and prop unions in the installed
+declarations before using them. Typography.Title has no level prop: removing an
+unsupported level is required, not choosing another number. Its optional variant
+is 'large-strong' | 'medium-strong' | 'small' | 'small-strong' | 'custom'.
+For a semantic heading use <Typography.Title variant="small" asChild><h2>Title</h2></Typography.Title>.
+Keep the installed MAX UI version; do not add a replacement UI library or bypass
+TypeScript errors.
+""".strip()
+
+MAX_MODEL_DIRECTIVE = (
+    """
 MAX PLATFORM CORE CONTRACT
 The existing MAX files are a secure runtime substrate, not a product UI template.
 Preserve the MAX bridge, authenticated session, legal/support routes, managed AI
 and integration clients, webhook security and generated business config. Do not
 rewrite platform-owned files.
-
-MAX UI 0.2.0: Typography is a namespace, not a JSX component.
-Never render <Typography>. Inspect the installed public exports/types for the
-concrete text components and their props. Do not assume Typography.Caption exists
-or guess level values; verify exported components and prop unions in the installed
-declarations before using them. Keep the installed MAX UI version; do not add a
-replacement UI library or bypass TypeScript errors.
-
+""".strip()
+    + "\n\n"
+    + MAX_UI_GUIDANCE
+    + "\n\n"
+    + """
 The owner edits business data in Studio's Main, Content, Owner and Policies tabs.
 Read `src/lib/omnia/max-config.ts` to understand that saved brief. In product
 screens load owner-editable names, descriptions, actions and catalogs with
@@ -414,6 +425,7 @@ disabled. Managed MAX files stay locked even when shell is available. If shell
 is unavailable, fall back to read_file/edit_file/write_file. On a later surgical
 edit, preserve working behaviour and change only the relevant product files.
 """.strip()
+)
 
 
 def include_portable_manifest(
