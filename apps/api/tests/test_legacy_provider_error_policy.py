@@ -26,6 +26,79 @@ def rejection(details=None, code="model_unavailable"):
     }}})
 
 
+@pytest.mark.parametrize("response_after_seconds", [97.5, 240.0])
+async def test_default_builder_waits_for_gateway_response_without_replaying(
+    monkeypatch, response_after_seconds,
+):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        timeout = request.extensions["timeout"]
+        assert timeout["connect"] == 5.0
+        assert timeout["read"] == 300.0
+        # Simulate transport elapsed time without a real paid call or long sleep.
+        if timeout["read"] < response_after_seconds:
+            raise httpx.ReadTimeout("response still in progress", request=request)
+        return httpx.Response(200, json={"choices": [{"message": {
+            "content": '<omnia:action name="done">{"summary":"ok"}</omnia:action>',
+        }}]})
+
+    install_transport(monkeypatch, handler)
+
+    async def execute(action):
+        return {"ok": True}
+
+    result = await agent_builder.run_agent_build(
+        system_prompt="s", user_prompt="edit", model="m", execute=execute, max_steps=2,
+    )
+    assert result.done, result.summary
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("override,expected", [(None, 90.0), (45.0, 45.0)])
+async def test_other_completion_callers_keep_their_timeout(monkeypatch, override, expected):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.extensions["timeout"]["read"] == expected
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    install_transport(monkeypatch, handler)
+    assert await llm_client.complete_chat([], "m", timeout_seconds=override) == "ok"
+    assert len(calls) == 1
+
+
+async def test_default_builder_read_timeout_remains_ambiguous_and_is_not_replayed(monkeypatch):
+    calls, events = [], []
+
+    def handler(request):
+        calls.append(request)
+        raise httpx.ReadTimeout("synthetic-private-key", request=request)
+
+    install_transport(monkeypatch, handler)
+
+    async def emit(kind, payload):
+        events.append((kind, payload))
+
+    async def execute(action):
+        return {"ok": True}
+
+    result = await agent_builder.run_agent_build(
+        system_prompt="s", user_prompt="edit", model="m", execute=execute,
+        emit=emit, max_steps=2,
+    )
+    assert not result.done and result.stop_reason == "provider_error"
+    assert len(calls) == 1
+    assert "synthetic-private-key" not in result.summary
+    diagnostic = [payload for kind, payload in events if kind == "agent.provider_error"]
+    assert len(diagnostic) == 1
+    assert diagnostic[0]["provider_charge_ambiguous"] is True
+    assert diagnostic[0]["will_retry"] is False
+    assert not any(kind == "agent.retry" for kind, _ in events)
+
+
 async def run_agent(monkeypatch, **kwargs):
     sleeps, events = [], []
 

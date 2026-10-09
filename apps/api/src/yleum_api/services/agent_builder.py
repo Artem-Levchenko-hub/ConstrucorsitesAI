@@ -48,6 +48,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -248,7 +249,11 @@ async def run_agent_build(
     injectable for tests. Returns every file the agent successfully wrote so the
     caller can commit them to git via the existing pipeline.
     """
-    complete = complete or llm_client.complete_chat
+    # The gateway can spend 240s on an accepted upstream request. The shared
+    # nonstream client's 90s default discarded healthy paid responses before
+    # they arrived. Give only this builder bounded response/accounting headroom;
+    # injected completers and other callers retain their existing budgets.
+    complete = complete or partial(llm_client.complete_chat, timeout_seconds=300.0)
     convo: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
