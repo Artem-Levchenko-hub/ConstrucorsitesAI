@@ -242,7 +242,7 @@ if [ "$API" = 1 ]; then
 fi
 
 say "core: ff-merge + идентичность релиза в compose .env"
-ssh max-core "set -e; cd /opt/omnia && git fetch -q origin && git merge --ff-only $SHA >/dev/null && [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ] && git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
+ssh max-core "set -e; cd /opt/omnia; git fetch -q origin; git merge --ff-only $SHA >/dev/null; [ \"\$(git rev-parse HEAD)\" = \"$SHA\" ]; git rev-parse --short=12 HEAD; cd apps/llm-gateway/deploy/full; [ $API = 1 ] && sed -i -E 's#^(API_IMAGE=omnia-api:).*#\1$SHA#; s#^(OMNIA_RELEASE_SHA=).*#\1$SHA#' .env; [ $WEB = 1 ] && { sed -i -E 's#^(WEB_IMAGE=omnia-web:).*#\1$SHA#' .env; grep -q '^WEB_RELEASE_SHA=' .env && sed -i -E 's#^WEB_RELEASE_SHA=.*#WEB_RELEASE_SHA=$SHA#' .env || echo "WEB_RELEASE_SHA=$SHA" >> .env; }; grep -E '^(API_IMAGE|WEB_IMAGE|WEB_RELEASE_SHA|OMNIA_RELEASE_SHA|RESTORATION_ADAPTATION_REPAIR_SECONDS|MAX_GENERATION_DEADLINE_SECONDS|LEGAL_DOCUMENT_VERSION)=' .env | cut -c1-80"
 
 say "core: окно починки адаптации в .env платформы"
 ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && printf '%s' '$REPAIR' | /opt/omnia/infra/release/update-env-value.sh .env RESTORATION_ADAPTATION_REPAIR_SECONDS - >/dev/null && grep -n '^RESTORATION_ADAPTATION_REPAIR_SECONDS=' .env"
@@ -277,15 +277,19 @@ print(\"compose ok: yandex creds at api:\", bool(api.get(\"YANDEX_ID_CLIENT_SECR
 
 TARGETS=""; [ $API = 1 ] && TARGETS="api"; [ $WEB = 1 ] && TARGETS="$TARGETS web"; TARGETS="${TARGETS# }"
 say "core: сборка $TARGETS под nohup, опрос до готовности"
-ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && rm -f $LOG && (nohup docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build $TARGETS >$LOG 2>&1 </dev/null &) && echo сборка запущена"
+# A fresh directory binds completion to this launch, including retries of the same SHA.
+BUILD_RUN=$(ssh max-core "mktemp -d /tmp/omnia-build-${SHA:0:12}.XXXXXX")
+LOG="$BUILD_RUN/build.log"
+BUILD_STATUS="$BUILD_RUN/exit-code"
+ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && (nohup bash -c 'set +e; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml build $TARGETS; build_exit=\$?; printf \"%s\\n\" \"\$build_exit\" >$BUILD_STATUS.tmp && mv $BUILD_STATUS.tmp $BUILD_STATUS; exit \"\$build_exit\"' >$LOG 2>&1 </dev/null &) && echo сборка запущена"
 IMAGES=""; [ $API = 1 ] && IMAGES="omnia-api:$SHA"; [ $WEB = 1 ] && IMAGES="$IMAGES omnia-web:$SHA"; IMAGES="${IMAGES# }"
 state=""
 for i in $(seq 1 60); do
   sleep 30
-  state=$(ssh max-core "if docker image inspect $IMAGES >/dev/null 2>&1; then echo built; elif pgrep -f 'compose build $TARGETS' >/dev/null; then echo building; else echo stopped; fi")
+  state=$(ssh max-core "if [ -f $BUILD_STATUS ]; then build_exit=\$(cat $BUILD_STATUS); if [ \"\$build_exit\" != 0 ]; then echo failed; elif docker image inspect $IMAGES >/dev/null 2>&1; then echo built; else echo missing; fi; else echo building; fi")
   case "$state" in
     built) echo "образы собраны за ~$((i*30)) с"; break ;;
-    stopped) echo "сборка остановилась без образов:"; ssh max-core "tail -40 $LOG"; exit 1 ;;
+    failed|missing) echo "сборка завершилась ошибкой или без ожидаемых образов:"; ssh max-core "tail -40 $LOG"; exit 1 ;;
   esac
   [ $((i % 6)) -eq 0 ] && echo "  идёт сборка ($((i*30)) с): $(ssh max-core "tail -1 $LOG | cut -c1-100")"
 done
