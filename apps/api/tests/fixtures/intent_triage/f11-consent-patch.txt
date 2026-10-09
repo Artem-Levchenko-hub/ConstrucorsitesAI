@@ -1,0 +1,24 @@
+Исправь только src/app/page.tsx текущей сохранённой версии. Только минимальный патч согласия ниже. Не переписывай форму, status-union, компоненты и другие файлы. Сохрани все бизнес-данные, корректный typed422 reset, ключи, валидацию, историю и согласие перед createYleumLead.
+1. Уже существуют рядом requireConsent, consentGiven и configLoading примерно строки99–101. Измени начальное requireConsent на true и добавь configError рядом ДО всех зависимых hooks:
+const [requireConsent, setRequireConsent] = useState(true);
+const [consentGiven, setConsentGiven] = useState(false);
+const [configLoading, setConfigLoading] = useState(true);
+const [configError, setConfigError] = useState(false);
+2. Замени только существующий effect загрузки config примерно103–114:
+useEffect(() => {
+  let mounted = true;
+  getYleumAppConfig().then(config => {
+    if (!mounted) return;
+    setRequireConsent(config.legal.personal_data_consent);
+    setConfigLoading(false);
+  }).catch(() => {
+    if (!mounted) return;
+    setConfigError(true);
+    setConfigLoading(false);
+  });
+  return () => { mounted = false; };
+}, []);
+3. В первом guard handleSubmit добавь configLoading || configError к существующим проверкам status.type === "loading" || status.type === "success". Не переноси объявления state ниже callback.
+4. После существующего early return if(configLoading) и ДО if(status.type === "success") добавь отдельный early return if(configError): Shell с понятным сообщением «Не удалось загрузить настройки приложения. Отправка заявки недоступна» и кнопкой Button variant="primary" onClick={() => window.location.reload()} «Повторить». Используй уже существующие Shell/Button без новых компонентов.
+5. В существующем submit Button disabled около367 добавь configLoading || configError к status.type === "loading". Не добавляй новые сравнения status в JSX — предыдущая попытка создала ошибки narrowing.
+Удали ошибочный (config as any).personal_data_consent и fail-open catch. Не трогай SDK/API/session/DB. Нужен маленький diff, успешная проверка типов/сборки и передача финализации координатору. Новых функций и перестройки JSX не требуется.

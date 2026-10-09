@@ -72,3 +72,20 @@ no reset. Once the executor demonstrates valid receipt support, the extra
 before-read is omitted. The unchanged-action, exploration, write-pressure and step
 limits remain in force. This is not proof of a successful generated feature;
 full build, runtime and promotion checks remain mandatory.
+
+## Narrow follow-up routing correction
+
+The rebuild substring `перестрой` previously also matched the noun `перестройки`
+in a technical follow-up that explicitly requested only a small consent patch.
+It now matches only the whole imperative tokens `перестрой` / `перестройте`.
+Other routing signals, first-prompt/selection precedence and existing infinitive
+behavior are unchanged; this is not a general negation parser.
+
+The supplied sanitized f11 task is retained as test data, not as instructions to
+modify a generated application. Its UTF-8 SHA-256 is
+`283b455aee4c86a3f356cbf34ad34f06698baf482c16a9ae9d75bab3d59995b3`
+(2,125 characters / 2,875 bytes). The regression uses the complete task through
+real classification, prompt preparation and legacy model-call construction,
+with a synthetic source baseline and a mocked model. It checks the edit wrapper,
+original task, baseline and available write/edit protocol. No live run, application
+change or provider transaction is implied by that offline check.

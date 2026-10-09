@@ -8,6 +8,11 @@ addition earns the expensive BUILD orchestration. Build-noun follow-ups
 
 from __future__ import annotations
 
+import hashlib
+from pathlib import Path
+
+import pytest
+
 from yleum_api.services.discovery import detect_appification
 from yleum_api.services.intent_triage import (
     CHEAP,
@@ -108,6 +113,54 @@ def test_explicit_rebuild_orchestrates() -> None:
     assert decide_intent("нужен полный редизайн", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("пересоздай страницу", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("поменяй дизайн полностью", is_first_prompt=False) == ORCHESTRATE
+
+
+@pytest.mark.parametrize("prompt", [
+    "Исправь src/app/page.tsx и .omnia/cell.json минимальным патчем; "
+    "перестройки JSX не требуется.",
+    "Сохрани JSX без перестройки, поправь только настройку.",
+    "Измени текст: перестройка экрана завершена.",
+    "Поменяй подпись суперперестрой.",
+])
+def test_rebuild_noun_or_embedded_verb_does_not_trigger_build(prompt: str) -> None:
+    # Synthetic minimal patch context; the first case preserves the causal phrase
+    # from the live request, not the unavailable full persisted prompt.
+    assert decide_intent(prompt, is_first_prompt=False) == CHEAP
+
+
+@pytest.mark.parametrize("prompt", [
+    "Перестрой приложение целиком",
+    "Перестройте приложение целиком",
+    "Перестрой: приложение целиком",
+])
+def test_explicit_rebuild_verb_orchestrates_without_another_trigger(prompt: str) -> None:
+    assert decide_intent(prompt, is_first_prompt=False) == ORCHESTRATE
+
+
+@pytest.mark.parametrize("prompt", [
+    "Исправь настройку; перестроить JSX не требуется.",
+    "Нужно перестроить только кнопку, сохрани остальную страницу.",
+    "Нужно перестроить приложение целиком",
+])
+def test_infinitive_rebuild_preserves_existing_edit_routing(prompt: str) -> None:
+    assert decide_intent(prompt, is_first_prompt=False) == CHEAP
+
+
+def test_exact_f11_consent_patch_prompt_is_a_followup_edit() -> None:
+    raw = (Path(__file__).parent / "fixtures/intent_triage/f11-consent-patch.txt").read_bytes()
+    assert hashlib.sha256(raw).hexdigest() == (
+        "283b455aee4c86a3f356cbf34ad34f06698baf482c16a9ae9d75bab3d59995b3"
+    )
+    assert decide_intent(raw.decode("utf-8"), is_first_prompt=False) == CHEAP
+
+
+def test_rebuild_verb_change_preserves_first_prompt_and_selection_priority() -> None:
+    prompt = "Исправь страницу; перестройки JSX не требуется."
+    assert decide_intent(prompt, is_first_prompt=True) == ORCHESTRATE
+    for first in (False, True):
+        assert decide_intent(
+            "Перестрой приложение целиком", is_first_prompt=first, selected_count=1,
+        ) == CHEAP
 
 
 def test_bare_peredelai_on_one_thing_is_cheap() -> None:

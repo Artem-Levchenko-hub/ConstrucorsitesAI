@@ -29,6 +29,8 @@ slotted in later without touching any caller.
 
 from __future__ import annotations
 
+import re
+
 ORCHESTRATE = "orchestrate"  # BUILD — regenerate the whole page
 CHEAP = "cheap"  # EDIT — surgical patch, preserve everything else
 RETRY_FAILED_BUILD = "retry_failed_build"
@@ -88,7 +90,8 @@ _FAILED_BUILD_EXPLAIN_KEYWORDS: frozenset[str] = frozenset(
 # project that already has a page. Kept deliberately TIGHT: a bare "переделай"
 # is NOT here, because "переделай кнопку" / "переделай заголовок" is an edit, not
 # a rebuild. We only match phrases that unambiguously mean the WHOLE page.
-# Russian stems matched as substrings, so падежи are covered.
+# Russian noun stems matched as substrings, so падежи are covered. The rebuild
+# verb is token-bound below so the noun "перестройки" cannot earn a full build.
 _REBUILD_KEYWORDS: frozenset[str] = frozenset(
     {
         "с нуля",
@@ -110,12 +113,13 @@ _REBUILD_KEYWORDS: frozenset[str] = frozenset(
         "смени дизайн",
         "сменить дизайн",
         "поменяй дизайн",
-        "перестрой",
         "полностью переделай",
         "полностью обнови",
         "совершенно друг",
     }
 )
+
+_REBUILD_VERB = re.compile(r"\bперестрой(?:те)?\b")
 
 # Genuinely structural / full-stack work — a follow-up that needs the whole
 # orchestrated build because it changes the project's ARCHITECTURE, not one
@@ -198,7 +202,7 @@ def decide_intent(
         return ORCHESTRATE
 
     text = (prompt or "").strip().lower()
-    if _has_any(text, _REBUILD_KEYWORDS):
+    if _has_any(text, _REBUILD_KEYWORDS) or _REBUILD_VERB.search(text):
         return ORCHESTRATE
     if _has_any(text, _STRUCTURAL_KEYWORDS):
         return ORCHESTRATE
