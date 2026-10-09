@@ -11,6 +11,7 @@ from tests.test_max_finalization import (
     _install_exact_release_probe,
     _new_harness,
 )
+from tests.test_visible_filter_source_contract import PAGE, PROMPT, SORT_PAGE, SORT_PROMPT
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellCandidate,
@@ -45,6 +46,52 @@ async def test_finalization_returns_missing_capability_to_same_workspace_editor(
     assert outcome.status is MaxFinalizationStatus.COMPLETE
     assert len(feedback) == 1 and "каталог" in feedback[0]
     assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 1
+
+
+@pytest.mark.parametrize("page,prompt,missing", [
+    (PAGE, PROMPT, "setFilter"),
+    (SORT_PAGE, SORT_PROMPT, "setSortOrder"),
+    (SORT_PAGE.replace(
+        "return <main>",
+        'return <main><button onClick={()=>setSortOrder("asc")}>Дешевле</button>',
+    ), SORT_PROMPT, "sortedCatalog"),
+])
+async def test_unreferenced_requested_controls_block_candidate_before_green_build(
+    db_session, test_engine, page, prompt, missing,
+):
+    harness = await _new_harness(db_session, test_engine)
+    harness.files["src/app/page.tsx"] = page
+    harness.files["patch.js"] = "console.log('Все / До 30 минут / Больше 30 минут; success');"
+
+    outcome = await harness.coordinator.finalize(files=harness.files, prompt=prompt)
+
+    assert outcome.status is MaxFinalizationStatus.NEEDS_EDIT
+    assert missing in outcome.redacted_detail
+    assert harness.roles == []
+    candidates = await db_session.scalar(select(func.count()).select_from(ProjectCellCandidate))
+    assert candidates == 0
+
+
+async def test_filter_repair_reuses_guarded_finalization_without_relaxing_proofs(
+    db_session, test_engine,
+):
+    harness = await _new_harness(db_session, test_engine)
+    harness.files["src/app/page.tsx"] = PAGE
+    feedback = []
+
+    async def repair(detail):
+        feedback.append(detail)
+        harness.files["src/app/page.tsx"] = PAGE.replace(
+            "return <main>",
+            'return <main><button onClick={() => setFilter("short")}>До 30 минут</button>',
+        )
+
+    outcome = await harness.coordinator.finalize_with_repair(prompt=PROMPT, repair=repair)
+
+    assert outcome.status is MaxFinalizationStatus.COMPLETE
+    assert len(feedback) == 1 and "setFilter" in feedback[0]
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 1
+    assert len(harness.runtime_probes) == 1
 
 
 @pytest.mark.parametrize("changes, expected_calls", [(False, 1), (True, 2)])

@@ -556,6 +556,24 @@ def max_source_completion_gap(
     if starter_gap:
         return starter_gap
 
+    capabilities = requested_max_capabilities(prompt)
+    collection_operations = frozenset(
+        operation for operation, requested in (
+            ("filter", any(key == "filters" for key, _, _ in capabilities)),
+            ("sort", _explicit_capability_mentions(
+                _without_excluded_lists(prompt), r"сортиров|sort",
+            )),
+        ) if requested
+    )
+    if collection_operations:
+        from yleum_api.services.max_visible_filter_contract import unused_visible_filter_gap
+
+        visible_filter_gap = unused_visible_filter_gap(
+            prompt, files, operations=collection_operations,
+        )
+        if visible_filter_gap:
+            return visible_filter_gap
+
     if portable:
         from yleum_api.services.portable_cell_contract import portable_source_gap
 
@@ -566,7 +584,7 @@ def max_source_completion_gap(
         )
         return portable_source_gap(
             files,
-            requested_max_capabilities(prompt),
+            capabilities,
             implemented_capabilities=frozenset({"history"}) if managed_history else frozenset(),
         )
     page = files.get("src/app/page.tsx", "")
@@ -581,7 +599,6 @@ def max_source_completion_gap(
             "src/app/page.tsx with the actual requested product before done."
         )
 
-    capabilities = requested_max_capabilities(prompt)
     product_sources = {path: content for path, content in files.items() if _is_product_source(path)}
     corpus = "\n".join(content.lower() for content in product_sources.values())
     lead_calls: set[str] = set().union(
