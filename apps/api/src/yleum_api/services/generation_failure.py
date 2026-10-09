@@ -32,6 +32,27 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
             "Генерация не запускалась: не удалось подготовить среду MAX. "
             "Деньги за вызов модели не списаны. Повторите после восстановления среды."
         )
+    elif re.search(r"\bprovider_http_(?:401|402|403):", error):
+        code = "provider_access"
+        retryable = False
+        message = (
+            "Провайдер модели отклонил запрос. Требуется проверить доступ и средства "
+            "на стороне провайдера; автоматический повтор остановлен."
+        )
+    elif "provider_http_429:" in error:
+        code = "provider_unavailable"
+        retryable = False
+        message = (
+            "Провайдер модели ограничил частоту запросов. Автоматический повтор остановлен. "
+            "Требуется дождаться восстановления доступности модели."
+        )
+    elif "provider_request_failed:" in error or re.search(r"\bprovider_http_[45]\d\d:", error):
+        code = "provider_unavailable"
+        retryable = False
+        message = (
+            "Не получен подтверждённый результат запроса к модели. "
+            "Автоматический повтор остановлен; требуется проверить состояние запроса."
+        )
     elif any(
         value in error
         for value in (

@@ -95,6 +95,53 @@ async def test_provider_response_keeps_bounded_structured_failure_reason(monkeyp
     assert "recovery_attempt" not in recorded[1]
 
 
+async def test_provider_error_keeps_safe_metadata_and_is_not_a_successful_work_step(monkeypatch):
+    recorder = progress.GenerationProgress(None, uuid4(), uuid4(), uuid4())
+    recorded = []
+
+    async def capture(event_type, payload, **kwargs):
+        recorded.append(dict(payload))
+
+    monkeypatch.setattr(recorder, "_record", capture)
+    await recorder.emit_agent_event("agent.provider_error", {
+        "step": 2, "attempt": 0, "will_retry": False,
+        "http_status": 502, "upstream_http_status": 401,
+        "error_code": "model_unavailable", "provider_charge_ambiguous": True,
+        "ok": True, "human": "synthetic-private-key", "detail": "synthetic-private-key",
+    })
+    safe = recorded[0]
+    assert safe["ok"] is False and safe["kind"] == "provider_error"
+    assert safe["upstream_http_status"] == 401
+    assert safe["http_status"] == 502 and safe["error_code"] == "model_unavailable"
+    assert safe["provider_charge_ambiguous"] is True and safe["will_retry"] is False
+    assert safe["attempt"] == 0
+    assert "synthetic-private-key" not in str(safe)
+    await recorder.emit_agent_event("agent.provider_error", {
+        "http_status": "502", "upstream_http_status": True,
+        "error_code": "synthetic-private-key", "provider_charge_ambiguous": "false",
+        "will_retry": 1, "attempt": -1,
+    })
+    invalid = recorded[1]
+    assert all(key not in invalid for key in (
+        "http_status", "upstream_http_status", "error_code", "provider_charge_ambiguous",
+        "will_retry", "attempt",
+    ))
+
+
+async def test_provider_error_metadata_survives_real_committed_event_and_message(test_engine):
+    recorder = await _new_progress(async_sessionmaker(test_engine, expire_on_commit=False))
+    await recorder.emit_agent_event("agent.provider_error", {
+        "step": 1, "attempt": 0, "http_status": 502, "upstream_http_status": 429,
+        "error_code": "model_unavailable", "provider_charge_ambiguous": True,
+        "will_retry": False,
+    })
+    events, transcript = await _read_progress(recorder)
+    assert len(events) == len(transcript) == 1
+    assert events[0].payload["upstream_http_status"] == transcript[0]["upstream_http_status"] == 429
+    assert transcript[0]["provider_charge_ambiguous"] is True
+    assert events[0].payload["ok"] is False and transcript[0]["ok"] is False
+
+
 async def test_mixed_progress_keeps_wire_payload_order_and_independent_durable_sequence(
     test_engine,
     monkeypatch,

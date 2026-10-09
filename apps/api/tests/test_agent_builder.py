@@ -181,9 +181,17 @@ def test_loop_stalls_on_no_action():
     assert res.stop_reason == "stalled"
 
 
-def test_loop_gateway_error_is_soft():
+def test_loop_unknown_gateway_error_stops_without_replay_or_private_details(monkeypatch):
+    calls = []
+
     async def _boom(convo, model, **kw):
-        raise RuntimeError("gateway 502")
+        calls.append(1)
+        raise RuntimeError("gateway 502 synthetic-private-key")
+
+    async def _no_sleep(delay):
+        pytest.fail("Unknown provider outcomes must not be retried")
+
+    monkeypatch.setattr(ab.asyncio, "sleep", _no_sleep)
 
     res = asyncio.run(
         ab.run_agent_build(
@@ -196,8 +204,11 @@ def test_loop_gateway_error_is_soft():
         )
     )
     assert res.done is False
-    assert res.stop_reason == "error"
-    assert "gateway" in res.summary
+    assert res.needs_finalization is False
+    assert res.stop_reason == "provider_error"
+    assert calls == [1]
+    assert "LLM" in res.summary
+    assert "synthetic-private-key" not in res.summary
 
 
 def test_infra_failure_has_non_retryable_stop_reason():

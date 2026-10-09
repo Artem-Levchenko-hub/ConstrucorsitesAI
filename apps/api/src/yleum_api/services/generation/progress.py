@@ -95,6 +95,9 @@ class GenerationProgress:
             action = "думаю, как лучше — меняю подход"
         elif kind == "retry":
             action = f"повторяю запрос (#{data.get('attempt', 0)})"
+        elif kind == "provider_error":
+            action = "Запрос к модели не завершён"
+            raw_tool = "provider_request"
         elif human:
             action = human
             raw_tool = str(data.get("tool", "") or raw_tool)
@@ -111,6 +114,26 @@ class GenerationProgress:
             "detail": str(data.get("detail", "") or ""),
             "ok": bool(data.get("ok", True)),
         }
+        if kind == "provider_error":
+            step_row["ok"] = False
+            step_row["detail"] = "Не получен подтверждённый результат запроса к модели."
+            for key in ("http_status", "upstream_http_status"):
+                value = data.get(key)
+                if type(value) is int and 400 <= value <= 599:
+                    step_row[key] = value
+            code = data.get("error_code")
+            if code in (
+                "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
+                "billing_reconciliation_required",
+            ):
+                step_row["error_code"] = code
+            for key in ("provider_charge_ambiguous", "will_retry"):
+                value = data.get(key)
+                if type(value) is bool:
+                    step_row[key] = value
+            attempt = data.get("attempt")
+            if type(attempt) is int and 0 <= attempt <= 4:
+                step_row["attempt"] = attempt
         if raw_tool == "provider_response":
             reason = data.get("reason")
             if reason in {

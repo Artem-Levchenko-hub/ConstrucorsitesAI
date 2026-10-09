@@ -124,6 +124,23 @@ async def test_provider_failure_keeps_precedence_after_source_restoration(stoppe
     assert trace == ["restore", "source_check", "compile_and_restart", "rollback_event"]
 
 
+async def test_provider_http_rejection_restores_source_and_keeps_public_failure(stopped_recovery):
+    from yleum_api.services.generation.agent_generation import _primary_provider_failure
+    from yleum_api.services.generation_failure import failure_for_error
+
+    kwargs, tree, baseline, trace, _ = stopped_recovery
+    result = kwargs["_agent_res"]
+    result.stop_reason = "provider_error"
+    result.summary = "provider_http_401: Автоматический повтор остановлен."
+    kwargs["_provider_failure"] = _primary_provider_failure(result)
+    with pytest.raises(RuntimeError, match="provider_http_401") as failed:
+        await agent_recovery.recover_stopped_candidate(**kwargs)
+    assert tree == baseline
+    assert trace == ["restore", "source_check", "compile_and_restart", "rollback_event"]
+    public = failure_for_error(failed.value)
+    assert public.code == "provider_access" and not public.retryable
+
+
 @pytest.mark.parametrize("done,needs_finalization", [(True, False), (False, True)])
 async def test_verified_candidate_keeps_normal_finalization_path(
     stopped_recovery, done, needs_finalization,

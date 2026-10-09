@@ -434,14 +434,22 @@ async def acompletion(
     try:
         data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
+        details = _failure_details({}, _receipt_headers(exc.response.headers))
+        status = exc.response.status_code
+        if type(status) is int and 400 <= status <= 599:
+            details["upstream_http_status"] = status
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
-            details=_failure_details({}, _receipt_headers(exc.response.headers)),
+            details=details,
         ) from exc
     except httpx.HTTPError as exc:
         raise UpstreamProviderError(
             f"llmgw transport error: {type(exc).__name__}",
-            details={"provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY)},
+            details={
+                "provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY),
+                "provider_failure_kind": "preconnect" if isinstance(exc, _SAFE_TO_RETRY)
+                else "transport",
+            },
         ) from exc
 
     safe_receipt = receipt_evidence(data)

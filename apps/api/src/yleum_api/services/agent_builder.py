@@ -331,11 +331,9 @@ async def run_agent_build(
         return fallback
 
     for step in range(max_steps):
-        # Retry the model call on transient gateway errors (ReadTimeout / 5xx /
-        # rate-limit). A single hiccup over a 30-step loop must NOT throw away all
-        # the work done so far — without this, one opus timeout aborts the build.
+        # Retry only positively identified preconnection failures. A missing
+        # response to an accepted POST may already represent a paid model call.
         reply = None
-        last_exc: Exception | None = None
         # COST: vsegpt bills by characters, so resending the full growing
         # transcript every step makes a long loop cost balloon. Send only a
         # sliding window (system + the seed/task + the last N turns) → per-step
@@ -361,9 +359,8 @@ async def run_agent_build(
                  "content": call_msgs[0]["content"] + _note},
                 *call_msgs[1:],
             ]
-        # 429-resilience: vsegpt enforces ~1 req/sec globally; under concurrent
-        # prod traffic a step can 429 for several seconds. 5 attempts w/ growing
-        # backoff (4/8/12/16/20s) ride it out instead of aborting the build.
+        # Preserve the existing five-attempt bound for proven safe failures.
+        # Auth/rate rejection and unknown billing outcomes are not replay-safe.
         for attempt in range(5):
             try:
                 reply = await complete(
@@ -376,15 +373,46 @@ async def run_agent_build(
                 )
                 break
             except Exception as exc:
-                last_exc = exc
+                failure = exc if isinstance(exc, llm_client.LLMError) else None
+                retry_safe = failure is not None and failure.retry_safe is True
+                will_retry = retry_safe and attempt < 4
+                diagnostic = {
+                    "step": step, "attempt": attempt, "will_retry": will_retry,
+                    "error_code": failure.code if failure is not None else None,
+                    "http_status": failure.http_status if failure is not None else None,
+                    "upstream_http_status": (
+                        failure.upstream_http_status if failure is not None else None
+                    ),
+                    "provider_charge_ambiguous": (
+                        failure.provider_charge_ambiguous if failure is not None else None
+                    ),
+                }
                 if emit:
-                    await emit("agent.retry", {"step": step, "attempt": attempt})
+                    await emit("agent.provider_error", diagnostic)
+                if not will_retry:
+                    cause = str(failure) if failure is not None else (
+                        "Не получен подтверждённый результат LLM-запроса."
+                    )
+                    prefix = "Исчерпан лимит безопасных попыток. " if retry_safe else (
+                        "Автоматический повтор остановлен. "
+                    )
+                    classification = (
+                        f"provider_http_{failure.upstream_http_status}"
+                        if failure is not None and failure.upstream_http_status is not None
+                        else "provider_request_failed"
+                    )
+                    return AgentResult(
+                        done=False, summary=f"{classification}: {prefix}{cause}", files=written,
+                        steps=step, transcript=convo, stop_reason="provider_error",
+                    )
+                if emit:
+                    await emit("agent.retry", diagnostic)
                 await asyncio.sleep(4.0 * (attempt + 1))
         if reply is None:
             return AgentResult(
                 done=False,
-                summary=f"gateway error after retries: {last_exc}",
-                files=written, steps=step, transcript=convo, stop_reason="error",
+                summary="provider_request_failed: Не получен подтверждённый результат LLM-запроса.",
+                files=written, steps=step, transcript=convo, stop_reason="provider_error",
             )
 
         convo.append({"role": "assistant", "content": reply})

@@ -128,6 +128,31 @@ def test_reported_zero_tokens_are_not_replaced_by_local_counts(client, monkeypat
     assert chat.billing.charge.await_args.kwargs["tokens_out"] == 0
 
 
+@pytest.mark.parametrize("kind", [httpx.ConnectError, httpx.ReadTimeout])
+def test_transport_retry_classification_requires_actual_preconnect_proof(client, monkeypatch, kind):
+    from yleum_gateway.providers import llmgw
+
+    calls, sleeps = [], []
+
+    def reply(request):
+        calls.append(request)
+        raise kind("synthetic-private-key", request=request)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    monkeypatch.setattr(llmgw.time, "sleep", lambda delay: sleeps.append(delay))
+    result = post(client, False)
+    assert result.status_code == 502
+    details = result.json()["detail"]["error"]["details"]
+    safe = kind is httpx.ConnectError
+    assert details["provider_charge_ambiguous"] is (not safe)
+    assert details["provider_failure_kind"] == ("preconnect" if safe else "transport")
+    assert "upstream_http_status" not in details
+    assert len(calls) == (2 if safe else 1)
+    assert sleeps == ([0.5] if safe else [])
+    assert "synthetic-private-key" not in result.text
+    assert chat.billing.charge.await_count == 0
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_ambiguous_accepted_post_is_not_retried(client, monkeypatch, streaming):
     calls = []
@@ -141,6 +166,31 @@ def test_ambiguous_accepted_post_is_not_retried(client, monkeypatch, streaming):
     assert len(calls) == 1
     error = json.loads(events(result)[-1])["error"] if streaming else result.json()["detail"]["error"]
     assert error["details"]["provider_charge_ambiguous"] is True
+    assert chat.billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("status", [401, 403, 429, 500, 502])
+def test_upstream_http_rejection_keeps_safe_status_and_unknown_cost(
+    client, monkeypatch, status,
+):
+    calls = []
+
+    def reject(request):
+        calls.append(request)
+        return httpx.Response(status, json={
+            "error": {"message": "synthetic-private-key https://private.test/path"},
+        })
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reject))
+    response = post(client, False)
+    assert response.status_code == 502
+    error = response.json()["detail"]["error"]
+    assert error["details"]["upstream_http_status"] == status
+    assert error["details"]["provider_charge_ambiguous"] is True
+    assert "synthetic-private-key" not in response.text and "private.test" not in response.text
+    assert len(calls) == 1
+    assert chat.provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    assert chat.provider_calls.finish_call.await_args.kwargs["error_type"] == "HTTPStatusError"
     assert chat.billing.charge.await_count == 0
 
 

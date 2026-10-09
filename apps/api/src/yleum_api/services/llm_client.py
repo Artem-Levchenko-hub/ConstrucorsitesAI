@@ -58,7 +58,76 @@ def aggregate_pass_usage(*usages: dict[str, Any] | None) -> dict[str, Any]:
 
 
 class LLMError(Exception):
-    pass
+    """Safe nonstream failure metadata; unknown POST outcomes are never replay-safe."""
+
+    def __init__(
+        self, message: str, *, code: str | None = None, http_status: int | None = None,
+        upstream_http_status: int | None = None,
+        provider_charge_ambiguous: bool | None = None, retry_safe: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.http_status = http_status
+        self.upstream_http_status = upstream_http_status
+        self.provider_charge_ambiguous = provider_charge_ambiguous
+        self.retry_safe = retry_safe
+
+
+_GATEWAY_ERROR_CODES = {
+    "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
+    "billing_reconciliation_required",
+}
+
+
+def _gateway_failure(response: httpx.Response) -> LLMError:
+    # Never forward provider messages, raw bodies, headers or URLs to the agent.
+    error: dict[str, Any] = {}
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, dict) and isinstance(body.get("detail"), dict):
+        candidate = body["detail"].get("error")
+        if isinstance(candidate, dict):
+            error = candidate
+    raw_code = error.get("code")
+    code = raw_code if isinstance(raw_code, str) and raw_code in _GATEWAY_ERROR_CODES else None
+    details = error.get("details")
+    details = details if isinstance(details, dict) else {}
+    raw_status = details.get("upstream_http_status")
+    upstream = raw_status if type(raw_status) is int and 400 <= raw_status <= 599 else None
+    raw_ambiguity = details.get("provider_charge_ambiguous")
+    ambiguous = raw_ambiguity if type(raw_ambiguity) is bool else None
+    retry_safe = (
+        response.status_code == 502 and code == "model_unavailable"
+        and ambiguous is False and details.get("provider_failure_kind") == "preconnect"
+        and "upstream_http_status" not in details
+    )
+    if upstream == 401:
+        message = "Требуется проверка доступа и средств у LLM-провайдера (HTTP 401)."
+    elif upstream == 403:
+        message = "LLM-провайдер запретил доступ к запросу (HTTP 403)."
+    elif upstream == 402:
+        message = "LLM-провайдер отклонил запрос по оплате (HTTP 402)."
+    elif upstream == 429:
+        message = "LLM-провайдер ограничил частоту запросов (HTTP 429)."
+    elif upstream is not None:
+        message = f"LLM-провайдер завершил запрос ошибкой (HTTP {upstream})."
+    elif code == "wallet_empty":
+        message = "Недостаточно средств на балансе Yleum для этого запроса."
+    elif code == "billing_reconciliation_required":
+        message = "Результат запроса к LLM-провайдеру требует сверки."
+    elif retry_safe:
+        message = "Не удалось установить соединение с LLM-провайдером."
+    else:
+        message = (
+            "Не получен подтверждённый результат LLM-запроса "
+            f"(gateway HTTP {response.status_code})."
+        )
+    return LLMError(
+        message, code=code, http_status=response.status_code, upstream_http_status=upstream,
+        provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
+    )
 
 
 async def stream_chat_completion(
@@ -243,11 +312,22 @@ async def complete_chat(
         async with httpx.AsyncClient(timeout=timeout) as client:
             resp = await client.post(url, json=payload)
             if resp.status_code >= 400:
-                body = await resp.aread()
-                raise LLMError(f"gateway {resp.status_code}: {body[:300]!r}")
-            data = resp.json()
+                raise _gateway_failure(resp)
+            try:
+                data = resp.json()
+            except ValueError:
+                raise LLMError(
+                    "Не удалось прочитать подтверждённый результат LLM-запроса.",
+                    http_status=resp.status_code, provider_charge_ambiguous=True,
+                ) from None
     except httpx.HTTPError as exc:
-        raise LLMError(f"http: {exc}") from exc
+        preconnect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+        raise LLMError(
+            "Не удалось установить соединение с LLM-сервисом." if preconnect else
+            "Не получен подтверждённый ответ LLM-сервиса; исход запроса требует сверки.",
+            code="preconnect" if preconnect else "transport",
+            provider_charge_ambiguous=not preconnect, retry_safe=preconnect,
+        ) from None
     return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
 
 

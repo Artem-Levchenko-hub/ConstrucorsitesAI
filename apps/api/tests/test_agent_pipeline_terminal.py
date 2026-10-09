@@ -67,6 +67,21 @@ async def test_first_max_output_limit_reaches_safe_core_restoration():
     assert cause is not None and "output_limit" in cause
 
 
+async def test_first_provider_rejection_exits_before_extra_repair_or_finalization():
+    stopped = AgentResult(
+        done=False, summary="provider_http_401: Автоматический повтор остановлен.",
+        files={}, steps=1, stop_reason="provider_error",
+    )
+    with pytest.raises(RuntimeError, match="provider_http_401"):
+        await agent_generation.execute_agent_turn(
+            _agent_res=stopped, _is_edit=False, _max_has_generated_snapshot=False,
+            _max_seed_files={}, _max_shell_enabled=False,
+            baseline=SimpleNamespace(sha=None), ids=None, is_free=False,
+            project_info=None, prompt_text="", runtime=GenerationRuntime(),
+            plan=None, operations=None,
+        )
+
+
 @pytest.fixture
 def pipeline_turn(monkeypatch):
     async def run(*, candidate, done=True, native=True, verification_failed=False):
