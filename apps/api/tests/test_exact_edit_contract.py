@@ -4,6 +4,7 @@
 у проекта больше нет. Алгоритм точечной правки здесь не повторяется.
 """
 
+import hashlib
 from dataclasses import dataclass
 
 from yleum_api.services import agent_builder as ab
@@ -69,10 +70,16 @@ async def test_disposable_db_cell_exact_edit_original_consumer(
             assert observation == {"ok": False, "error": case.error}, case.name
             assert harness.write_calls == [], case.name
         else:
+            assert case.current is not None and case.expected is not None, case.name
             assert observation == {
                 "ok": True,
                 "content": case.expected,
                 "detail": "patched src/a.txt",
+                "content_change": {
+                    "path": "src/a.txt",
+                    "before_sha256": hashlib.sha256(case.current.encode()).hexdigest(),
+                    "after_sha256": hashlib.sha256(case.expected.encode()).hexdigest(),
+                },
             }, case.name
             assert harness.write_calls == [
                 {
@@ -107,6 +114,11 @@ async def test_disposable_db_cell_preserves_its_path_and_content_contract(
         "ok": True,
         "content": html,
         "detail": "patched src/app/nested/layout.tsx",
+        "content_change": {
+            "path": "src/app/nested/layout.tsx",
+            "before_sha256": hashlib.sha256(b"old").hexdigest(),
+            "after_sha256": hashlib.sha256(html.encode()).hexdigest(),
+        },
     }
     assert harness.write_calls[0]["files"] == {"src/app/nested/layout.tsx": html}
     assert harness.hot_reload_calls == []  # Ячейка кладёт ровно то, что написал агент.
