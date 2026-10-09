@@ -3,6 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MaxConnectionWizard } from "@/components/max/MaxConnectionWizard";
+import { ApiError } from "@/lib/api/client";
 import type { DeployStatus, MaxIntegration, MaxProjectConfig } from "@/lib/api/types";
 
 const api = vi.hoisted(() => ({
@@ -121,6 +122,36 @@ describe("MAX connection wizard", () => {
     await click("Перейти к публикации");
     expect(api.navigate).toHaveBeenCalledWith("publish");
     expect(api.saveAttached).not.toHaveBeenCalled();
+  });
+
+  it("explains a bot already connected elsewhere without advancing or disconnecting it", async () => {
+    await render();
+    await click("Бот готов — далее");
+    await fillToken("test-secret-12345");
+    api.connect.mockRejectedValueOnce(new ApiError(409, {
+      code: "max_bot_already_bound",
+      message: "Этот бот уже подключён к другому приложению. Сначала отключите его там.",
+    }));
+    await click("Подключить бота");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("уже подключён к другому приложению");
+    expect(button("Перейти к публикации")).toBeUndefined();
+    expect(api.disconnect).not.toHaveBeenCalled();
+    expect(api.activate).not.toHaveBeenCalled();
+    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("test-secret-12345");
+  });
+
+  it("explains an in-progress bot connection without suggesting an invalid token", async () => {
+    await render();
+    await click("Бот готов — далее");
+    await fillToken("test-secret-12345");
+    api.connect.mockRejectedValueOnce(new ApiError(409, {
+      code: "max_bot_binding_busy",
+      message: "Подключение этого бота уже выполняется. Повторите попытку позже.",
+    }));
+    await click("Подключить бота");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("уже выполняется");
+    expect(api.disconnect).not.toHaveBeenCalled();
+    expect(button("Перейти к публикации")).toBeUndefined();
   });
 
   it("keeps back and connect in the same step action group and returns without submitting", async () => {

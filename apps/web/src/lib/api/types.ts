@@ -497,6 +497,8 @@ export type ApiErrorCode =
   | "project_empty"
   | "max_integration_not_found"
   | "max_token_invalid"
+  | "max_bot_already_bound"
+  | "max_bot_binding_busy"
   | "max_api_unavailable"
   | "max_project_required"
   | "max_deploy_required"

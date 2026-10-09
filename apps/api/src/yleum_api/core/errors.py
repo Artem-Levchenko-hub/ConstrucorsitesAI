@@ -44,6 +44,8 @@ ErrorCode = Literal[
     "max_integration_not_found",
     "max_integration_required",
     "max_token_invalid",
+    "max_bot_already_bound",
+    "max_bot_binding_busy",
     "max_api_unavailable",
     "max_api_tls_untrusted",
     "max_project_required",

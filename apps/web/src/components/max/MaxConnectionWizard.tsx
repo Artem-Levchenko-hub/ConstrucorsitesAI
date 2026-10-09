@@ -15,6 +15,7 @@ import { getLastDeploy } from "@/lib/api/runtime";
 import type { DeployStatus, MaxIntegration } from "@/lib/api/types";
 import { canActivateMaxWebhook } from "@/lib/max-integration-flow";
 import { copyMaxLaunchUrl } from "@/lib/max-launch-steps";
+import { ApiError } from "@/lib/api/client";
 
 const steps = ["Бот", "Подключение", "Публикация", "Адрес в MAX"];
 
@@ -119,7 +120,13 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
       <Input id="max-connect-bot-token" type="password" autoComplete="off" value={token} disabled={busy}
         onChange={event => { if (busy) return; setToken(event.target.value); connect.reset(); }} placeholder="Вставьте токен из кабинета MAX" />
       <p className="max-connect-hint">Токен — секретный ключ бота. Он хранится зашифрованно и не показывается повторно.</p>
-      {connect.isError && <p role="alert" className="max-connect-error">Не удалось подключить бота. Проверьте токен и повторите попытку.</p>}
+      {connect.isError && <p role="alert" className="max-connect-error">{
+        connect.error instanceof ApiError && connect.error.code === "max_bot_already_bound"
+          ? "Этот бот уже подключён к другому приложению. Сначала отключите его там."
+          : connect.error instanceof ApiError && connect.error.code === "max_bot_binding_busy"
+          ? "Подключение этого бота уже выполняется. Повторите попытку позже."
+          : "Не удалось подключить бота. Проверьте токен и повторите попытку."
+      }</p>}
     </div>
   );
   const cabinetLink = <a className="max-connect-cabinet" href="https://business.max.ru/" target="_blank" rel="noreferrer">Открыть кабинет MAX <ExternalLink aria-hidden="true" /></a>;

@@ -8,7 +8,8 @@ from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Response, status
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from yleum_api.core.crypto import decrypt_strong, encrypt_strong
 from yleum_api.core.deps import CurrentUserDep, SessionDep
@@ -21,8 +22,21 @@ from yleum_api.services import max_client, orchestrator_client, project_cell_run
 router = APIRouter(prefix="/api/projects", tags=["max-integrations"])
 
 
-async def _owned_project(session: SessionDep, project_id: UUID, owner_id: UUID) -> Project:
-    project = await session.get(Project, project_id)
+async def _owned_project(
+    session: SessionDep, project_id: UUID, owner_id: UUID, *, lock: bool = False,
+) -> Project:
+    try:
+        project = (
+            await session.get(
+                Project, project_id, with_for_update={"nowait": True}, populate_existing=True,
+            )
+            if lock else await session.get(Project, project_id)
+        )
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) != "55P03":
+            raise
+        await session.rollback()
+        raise _bot_binding_busy() from None
     if project is None or project.owner_id != owner_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
@@ -32,6 +46,64 @@ async def _integration(session: SessionDep, project_id: UUID) -> MaxIntegration 
     return (
         await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
     ).scalar_one_or_none()
+
+
+def _bot_binding_conflict() -> ApiError:
+    return ApiError(
+        "max_bot_already_bound",
+        "Этот бот уже подключён к другому приложению. Сначала отключите его там.",
+        status.HTTP_409_CONFLICT,
+    )
+
+
+def _bot_binding_busy() -> ApiError:
+    return ApiError(
+        "max_bot_binding_busy",
+        "Подключение этого бота уже выполняется. Повторите попытку позже.",
+        status.HTTP_409_CONFLICT,
+    )
+
+
+async def _reserve_bot_id(
+    session: SessionDep, integration: MaxIntegration, bot: max_client.MaxBot,
+) -> None:
+    bot_id = (bot.id or "").strip()
+    if not bot_id:
+        raise ApiError(
+            "max_api_unavailable", "MAX API не вернул идентификатор бота. Повторите проверку.",
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+        )
+    acquired = await session.scalar(
+        text("SELECT pg_try_advisory_xact_lock("
+             "hashtext('yleum:max:bot-binding'),hashtext(:bot_id))"),
+        {"bot_id": bot_id},
+    )
+    if not acquired:
+        # Avoid waiting on another claim's UNIQUE index entry while it performs
+        # a MAX request (15s), longer than the DB command timeout (10s).
+        raise _bot_binding_busy()
+    # Friendly refusal before altering credentials or external subscriptions.
+    conflict = await session.scalar(select(MaxIntegration.id).where(
+        MaxIntegration.bot_id == bot_id, MaxIntegration.project_id != integration.project_id,
+    ))
+    if conflict is not None:
+        raise _bot_binding_conflict()
+    integration.bot_id = bot_id
+    session.add(integration)
+    try:
+        # The UNIQUE constraint arbitrates two simultaneous claims. Reserve
+        # before unsubscribe/configure, so the losing request has no side effects.
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        original = exc.orig
+        constraint = (
+            getattr(getattr(original, "__cause__", None), "constraint_name", None)
+            or getattr(getattr(original, "diag", None), "constraint_name", None)
+        )
+        if constraint == "uq_max_integrations_bot_id":
+            raise _bot_binding_conflict() from None
+        raise
 
 
 def _require_max_project(project: Project) -> None:
@@ -128,7 +200,10 @@ async def connect_max(
     except max_client.MaxClientError as exc:
         raise _map_client_error(exc) from exc
 
+    # Preserve the existing public lifecycle's advisory-before-row lock order.
+    project = await _owned_project(session, project_id, current_user.id, lock=True)
     integration = await _integration(session, project_id)
+    existing = integration is not None
     now = datetime.now(UTC)
     if integration is None:
         integration = MaxIntegration(
@@ -137,8 +212,8 @@ async def connect_max(
             bot_token_enc=encrypt_strong(token),
             webhook_secret_enc=encrypt_strong(secrets.token_urlsafe(32)),
         )
-        session.add(integration)
-    else:
+    await _reserve_bot_id(session, integration, bot)
+    if existing:
         old_token = decrypt_strong(integration.bot_token_enc)
         token_changed = not secrets.compare_digest(old_token, token)
         if token_changed:
@@ -146,6 +221,7 @@ async def connect_max(
                 try:
                     await max_client.unsubscribe(old_token, integration.webhook_url)
                 except max_client.MaxClientError as exc:
+                    await session.rollback()
                     raise _map_client_error(exc) from exc
             integration.bot_token_enc = encrypt_strong(token)
             integration.webhook_secret_enc = encrypt_strong(secrets.token_urlsafe(32))
@@ -153,7 +229,6 @@ async def connect_max(
             integration.webhook_url = None
             integration.published_at = None
 
-    integration.bot_id = bot.id
     integration.bot_name = bot.name
     integration.bot_username = bot.username
     integration.status = "verified"
@@ -172,6 +247,7 @@ async def verify_max(
     project = await _owned_project(session, project_id, current_user.id)
     _require_max_project(project)
     await _lock_public_cell_auth(session, project)
+    project = await _owned_project(session, project_id, current_user.id, lock=True)
     integration = await _integration(session, project_id)
     if integration is None:
         raise ApiError(
@@ -186,7 +262,7 @@ async def verify_max(
         integration.last_error = str(exc)[:500]
         await session.commit()
         raise _map_client_error(exc) from exc
-    integration.bot_id = bot.id
+    await _reserve_bot_id(session, integration, bot)
     integration.bot_name = bot.name
     integration.bot_username = bot.username
     integration.status = "active" if integration.webhook_url else "verified"

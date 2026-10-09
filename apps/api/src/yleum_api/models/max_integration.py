@@ -3,7 +3,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text, func
+from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Index, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -46,6 +46,7 @@ class MaxIntegration(Base):
     )
 
     __table_args__ = (
+        UniqueConstraint("bot_id", name="uq_max_integrations_bot_id"),
         CheckConstraint(
             "status IN ('verified', 'active', 'error')",
             name="ck_max_integrations_status_allowed",
