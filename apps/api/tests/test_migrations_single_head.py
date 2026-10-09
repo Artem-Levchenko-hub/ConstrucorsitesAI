@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_provider_ledger_is_the_only_head() -> None:
+def test_max_bot_binding_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0080_provider_ledger"]
+    assert heads == ["0081_max_bot_binding"]
+    assert chain["0081_max_bot_binding"] == "0080_provider_ledger"
     assert chain["0080_provider_ledger"] == "0079_provider_calls"
     assert chain["0079_provider_calls"] == "0078_usage_cost_provenance"
     assert chain["0078_usage_cost_provenance"] == "0077_free_owner_allowance"
@@ -240,7 +241,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version") == "0080_provider_ledger"
+        database.fetchval("SELECT version_num FROM alembic_version") == "0081_max_bot_binding"
     )
     assert [
         tuple(row)
@@ -398,7 +399,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version") == "0080_provider_ledger"
+        database.fetchval("SELECT version_num FROM alembic_version") == "0081_max_bot_binding"
     )
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
