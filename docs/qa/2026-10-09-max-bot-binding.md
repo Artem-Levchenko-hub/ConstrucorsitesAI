@@ -52,3 +52,23 @@ and full CI receipts belong to the release handoff. They do not prove a live
 ownership transfer or a successful CRM/MAX provider transaction. Production
 activation and live acceptance remain serial-owner responsibilities after the
 active generation window closes.
+
+## Adjacent generation repair guard
+
+The same release also corrects a false repeated-read stop. Previously the global
+action count survived successful edits of the same file, so the fourth read could
+be refused even after three real source changes and different compiler errors.
+
+Only the read signatures of the exact safe canonical file are reset, after a
+successful write/edit proves a different before/after content hash. The Cell
+executor produces the full-content receipt after persistence succeeds, including
+for files longer than its 16,000-character read output. Empty content and an absent
+file are distinct. Failed writes, no-op writes, another file, traversal and invalid
+receipts do not earn a reset. Safe path aliases share the unchanged-read limit.
+
+For other injected executors without receipts, the loop uses a bounded fresh
+before-read and full returned after-content; truncated/unavailable evidence earns
+no reset. Once the executor demonstrates valid receipt support, the extra
+before-read is omitted. The unchanged-action, exploration, write-pressure and step
+limits remain in force. This is not proof of a successful generated feature;
+full build, runtime and promotion checks remain mandatory.

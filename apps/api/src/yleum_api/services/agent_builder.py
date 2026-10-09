@@ -43,11 +43,12 @@ app, and authenticated probes verify real interactions and data isolation.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from yleum_api.services import llm_client
@@ -203,9 +204,19 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
     return f"{head}\n{_truncate(body, _MAX_OBS_CHARS)}"
 
 
-# Executor contract: an async callable Action -> {ok: bool, detail/content/error}
+# Executor contract: an async callable Action -> {ok: bool, detail/content/error}.
+# Successful file mutations may include content_change with canonical path and
+# full before_sha256/after_sha256 (None before means the file did not exist).
 Executor = Callable[[Action], Awaitable[dict[str, Any]]]
 Emit = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+def _safe_file_path(path: str) -> str | None:
+    """Canonical read identity; traversal is never a progress witness."""
+    candidate = PurePosixPath(path.replace("\\", "/"))
+    if candidate.is_absolute() or ".." in candidate.parts or candidate.as_posix() == ".":
+        return None
+    return candidate.as_posix()
 
 
 async def run_agent_build(
@@ -249,6 +260,8 @@ async def run_agent_build(
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
     infra_dead_streak = 0  # consecutive tool ops that died on infra (container gone)
     sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
+    read_sigs: dict[str, set[str]] = {}  # canonical file -> its read signatures
+    content_receipts_seen = False  # skip generic before-read after producer proves support
     last_build_ok: bool | None = None  # result of the most recent `build` action
     fast_check_fresh = False  # candidate check, never a runtime/release proof
     red_build_streak = 0  # consecutive failed builds → escalate to the strong model
@@ -466,17 +479,21 @@ async def run_agent_build(
         # Circuit breaker: the model sometimes gets stuck re-issuing the SAME
         # action (observed live: 34x identical grep → max_steps, no progress).
         # Detect consecutive identical actions → nudge to move on → then abort.
+        read_path = _safe_file_path(action.path) if action.name == "read_file" else None
+        sig_args = {**action.args, "path": read_path} if read_path else action.args
         sig = (
-            f"{action.name}|{action.path}|"
-            f"{json.dumps(action.args, sort_keys=True, ensure_ascii=False)}"
+            f"{action.name}|{read_path or action.path}|"
+            f"{json.dumps(sig_args, sort_keys=True, ensure_ascii=False)}"
         )
+        if read_path:
+            read_sigs.setdefault(read_path, set()).add(sig)
         # GLOBAL repeat guard (non-consecutive cycle). A multi-step loop that
         # re-issues the SAME action — INCLUDING re-WRITING a file with identical
         # content (observed live: the same 5 entities, then the same 2 dashboard
         # pages + build, on a loop) — is missed by both the consecutive check below
         # (steps differ within the cycle) and the no-write streak (a write resets
-        # it). Count every exact signature across the whole run: an exact repeat is
-        # never progress, so nudge to MOVE ON, then abort as looping.
+        # it). Count exact signatures, resetting only reads of a file whose content
+        # a successful write/edit has demonstrably changed (see witness below).
         # Only NON-consecutive occurrences count here — back-to-back repeats are the
         # job of the `repeat_count` check below; this guard is for a multi-step CYCLE
         # that returns to the same action (a,b,c,a,b,c… / re-writing the same file).
@@ -654,7 +671,57 @@ async def run_agent_build(
                 )})
                 continue  # don't execute another read — force write/done next
 
+        # Successful writes/edits can be no-ops. Cell supplies full-content hashes;
+        # generic executors get one bounded fresh BEFORE read for a tracked file.
+        # Once a valid receipt proves support, skip that fallback read. No model
+        # call/step is added; unavailable/truncated evidence earns no reset.
+        write_path = (
+            _safe_file_path(action.path)
+            if action.name in {"write_file", "edit_file"} else None
+        )
+        before_content = None
+        if write_path in read_sigs and not content_receipts_seen:
+            before = await execute(Action(name="read_file", args={"path": write_path}))
+            content = before.get("content")
+            if before.get("ok") is True and isinstance(content, str) and len(content) <= _MAX_READ_CHARS:
+                before_content = content
         obs = await execute(action)
+        after_content = obs.get("content")
+        receipt = obs.get("content_change")
+        receipt_valid = (
+            write_path is not None
+            and obs.get("ok") is True
+            and isinstance(after_content, str)
+            and isinstance(receipt, dict)
+            and receipt.get("path") == write_path
+            and "before_sha256" in receipt
+            and (
+                receipt["before_sha256"] is None
+                or (
+                    isinstance(receipt["before_sha256"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", receipt["before_sha256"]) is not None
+                )
+            )
+            and receipt.get("after_sha256") == hashlib.sha256(after_content.encode()).hexdigest()
+        )
+        if receipt_valid and isinstance(receipt, dict):
+            content_receipts_seen = True
+            content_changed = receipt["before_sha256"] != receipt["after_sha256"]
+        else:
+            content_changed = (
+                "content_change" not in obs
+                and before_content is not None
+                and obs.get("ok") is True
+                and isinstance(after_content, str)
+                and after_content != before_content
+            )
+        if (
+            write_path is not None
+            and write_path in read_sigs
+            and content_changed
+        ):
+            for read_sig in read_sigs[write_path]:
+                sig_seen.pop(read_sig, None)
         # Circuit breaker: the executor tags orchestrator/container-unreachable
         # failures as infra_dead (2026-07-08: hibernate stopped a container
         # mid-build and the loop kept feeding 500s to the model for 6 minutes).
@@ -759,8 +826,8 @@ _NO_WRITE_NUDGE_AT = 5
 _NO_WRITE_ABORT_AT = 14
 
 # Global (non-consecutive) repeat guard: the SAME exact action issued this many
-# times in one run is a cycle, not progress (re-writing identical content counts).
-# An exact repeat never advances the build, so nudge to move on, then abort.
+# times without confirmed same-file progress is a cycle (identical writes count).
+# Changed-file read counts reset; all other exact repeats nudge, then abort.
 _REPEAT_NUDGE_AT = 2
 _REPEAT_ABORT_AT = 4
 

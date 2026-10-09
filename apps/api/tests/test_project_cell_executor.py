@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, replace
@@ -27,7 +28,7 @@ from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorks
 from yleum_api.models.user import User
 from yleum_api.routers import messages
 from yleum_api.services import project_cell_capacity, project_cell_executor
-from yleum_api.services.agent_builder import Action
+from yleum_api.services.agent_builder import Action, run_agent_build
 from yleum_api.services.generation import supervisor
 from yleum_api.services.generation_runs import (
     finalize_generation_run,
@@ -62,6 +63,102 @@ CREATE OR REPLACE FUNCTION set_updated_at() RETURNS TRIGGER AS $$
 BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
 $$ LANGUAGE plpgsql;
 """
+
+
+@pytest.mark.parametrize("tool,changed", [
+    ("write_file", True), ("write_file", False), ("edit_file", True), ("edit_file", False),
+])
+async def test_file_mutation_receipt_witnesses_full_content_after_persist(
+    monkeypatch, db_session, test_engine, tool, changed,
+):
+    path = "src/app/page.tsx"
+    before = "v0" + "x" * 16_001
+    after = "v1" + before[2:] if changed else before
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, snapshot_files={path: before},
+    )
+    args = {"path": "./src\\app/page.tsx"}
+    if tool == "write_file":
+        args["content"] = after
+    else:
+        args.update(search="v0", replace="v1" if changed else "v0")
+    result = await harness.handle.execute(Action(name=tool, args=args))
+    assert result["ok"] is True
+    assert result["content_change"] == {
+        "path": path,
+        "before_sha256": hashlib.sha256(before.encode()).hexdigest(),
+        "after_sha256": hashlib.sha256(after.encode()).hexdigest(),
+    }
+    assert harness.write_calls[-1]["files"] == {path: after}
+
+
+async def test_failed_persist_returns_no_content_change_receipt(
+    monkeypatch, db_session, test_engine,
+):
+    path = "src/app/page.tsx"
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, snapshot_files={path: "v0"},
+    )
+
+    async def fail_persist(*args, **kwargs):
+        raise OrchestratorUnavailable("persist failed")
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_write_files", fail_persist)
+    result = await harness.handle.execute(Action(
+        name="edit_file", args={"path": path, "search": "v0", "replace": "v1"},
+    ))
+    assert result["ok"] is False
+    assert "content_change" not in result
+    assert (await harness.handle.snapshot_files())[path] == "v0"
+
+
+async def test_new_file_receipt_distinguishes_absence_from_empty_content(
+    monkeypatch, db_session, test_engine,
+):
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    result = await harness.handle.execute(Action(
+        name="write_file", args={"path": "new.txt", "content": ""},
+    ))
+    assert result["content_change"] == {
+        "path": "new.txt", "before_sha256": None,
+        "after_sha256": hashlib.sha256(b"").hexdigest(),
+    }
+
+
+async def test_real_executor_large_file_repair_does_not_hit_the_read_cycle_guard(
+    monkeypatch, db_session, test_engine,
+):
+    path = "src/app/page.tsx"
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, snapshot_files={path: "v0" + "x" * 16_001},
+    )
+    replies = []
+    for i in range(4):
+        replies.append(f'<omnia:action name="read_file">{{"path":"{path}"}}</omnia:action>')
+        if i < 3:
+            payload = json.dumps({"path": path, "search": f"v{i}", "replace": f"v{i + 1}"})
+            replies.append(f'<omnia:action name="edit_file">{payload}</omnia:action>')
+            replies.append('<omnia:action name="build"></omnia:action>')
+    replies.append('<omnia:action name="done"></omnia:action>')
+    replies = iter(replies)
+
+    async def complete(*args, **kwargs):
+        return next(replies)
+
+    async def execute(action):
+        if action.name == "build":
+            return {"ok": False, "detail": f"compiler failure {len(harness.write_calls)}"}
+        return await harness.handle.execute(action)
+
+    result = await run_agent_build(
+        system_prompt="sys", user_prompt="repair", model="m", complete=complete,
+        execute=execute, max_steps=11, edit_mode=True, ship_green_on_abort=False,
+    )
+    assert result.stop_reason == "done"
+    assert result.files[path].startswith("v3")
+    reads = [turn for turn in result.transcript
+             if turn["content"].startswith("[observation: read_file")]
+    assert len(reads) == 4
 
 
 def _resolve_test_database_url() -> str:
@@ -1681,6 +1778,10 @@ async def test_write_file_preserves_zero_byte_file_in_cell(
         "ok": True,
         "content": "",
         "detail": "wrote empty.txt (0 bytes)",
+        "content_change": {
+            "path": "empty.txt", "before_sha256": None,
+            "after_sha256": hashlib.sha256(b"").hexdigest(),
+        },
     }
     assert read == {"ok": True, "content": ""}
     assert harness.write_calls == [

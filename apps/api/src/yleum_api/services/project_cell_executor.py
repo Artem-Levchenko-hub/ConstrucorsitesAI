@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import posixpath
 import re
@@ -1285,6 +1286,7 @@ async def maybe_create_project_cell_executor(
                 if not isinstance(content, str) or not action.path:
                     return {"ok": False, "error": "write_file needs path + content"}
                 path = _normalize_path(action.path)
+                previous = workspace_files.get(path)
                 await _persist_files(writes={path: content})
                 _apply_to_local_state(workspace_files, writes={path: content})
                 dirty = True
@@ -1292,6 +1294,7 @@ async def maybe_create_project_cell_executor(
                     "ok": True,
                     "content": content,
                     "detail": f"wrote {path} ({len(content)} bytes)",
+                    "content_change": _content_change_receipt(path, previous, content),
                 }
             if action.name == "edit_file":
                 search = action.args.get("search")
@@ -1313,6 +1316,7 @@ async def maybe_create_project_cell_executor(
                     "ok": True,
                     "content": new_content,
                     "detail": f"patched {path}",
+                    "content_change": _content_change_receipt(path, current, new_content),
                 }
             if action.name == "build":
                 # Сборка применяет миграции к ЖИВОЙ базе ячейки, поэтому договор
@@ -1623,6 +1627,17 @@ def _split_external_files(files: dict[str, str]) -> tuple[dict[str, str], tuple[
             continue
         writes[path] = content
     return writes, tuple(sorted(set(deletes)))
+
+
+def _content_change_receipt(path: str, before: str | None, after: str) -> dict[str, str | None]:
+    """Full-content witness emitted only after persistence succeeds; no-op hashes match."""
+    return {
+        "path": path,
+        "before_sha256": (
+            hashlib.sha256(before.encode()).hexdigest() if before is not None else None
+        ),
+        "after_sha256": hashlib.sha256(after.encode()).hexdigest(),
+    }
 
 
 def _normalize_path(path: str) -> str:
