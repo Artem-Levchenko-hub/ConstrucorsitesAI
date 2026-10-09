@@ -160,3 +160,39 @@ def test_amocrm_note_preserves_comment_source_and_context():
     assert "Coffee catering" in text
     assert str(project_id) in text
     assert "42" in text
+
+
+@pytest.mark.parametrize("include_closed", [False, True])
+def test_amocrm_archived_pipeline_labels_are_available_only_for_history(include_closed):
+    from yleum_api.services.amocrm import pipeline_options
+
+    stages = [
+        {"id": 34, "name": "New", "type": 0},
+        {"id": 142, "name": "Won", "type": 0},
+        {"id": 143, "name": "Lost", "type": 0},
+    ]
+    body = {
+        "_embedded": {
+            "pipelines": [
+                {
+                    "id": 12,
+                    "name": "Current",
+                    "is_archive": False,
+                    "_embedded": {"statuses": stages},
+                },
+                {
+                    "id": 24,
+                    "name": "Archive",
+                    "is_archive": True,
+                    "_embedded": {"statuses": stages},
+                },
+            ]
+        }
+    }
+    options = pipeline_options(body, include_closed=include_closed)
+    assert [p["id"] for p in options] == ([12, 24] if include_closed else [12])
+    assert all(
+        p["statuses"]
+        == [{"id": s["id"], "name": s["name"]} for s in (stages if include_closed else stages[:1])]
+        for p in options
+    )

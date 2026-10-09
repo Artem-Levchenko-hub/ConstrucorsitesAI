@@ -1,6 +1,7 @@
 """Disposable PostgreSQL acceptance: no real provider writes or credentials."""
 
 import json
+from copy import deepcopy
 
 import httpx
 import pytest
@@ -217,3 +218,77 @@ async def test_invalid_fields_fail_before_any_provider_dispatch(client, db_sessi
     )
     assert legacy.status_code == 422 and calls == []
     assert (await db_session.scalars(select(IntegrationOperation))).all() == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("archived", "stage", "stage_name"),
+    [
+        (False, 34, "New"),
+        (False, 142, "Won"),
+        (True, 35, "Confirmed"),
+        (True, 142, "Won"),
+        (True, 143, "Lost"),
+    ],
+)
+async def test_history_and_status_preserve_archived_pipeline_labels(
+    client, db_session, monkeypatch, archived, stage, stage_name
+):
+    project, _ = await connected(client, db_session, monkeypatch)
+    pipelines = deepcopy(PIPELINES)
+    pipeline = pipelines["_embedded"]["pipelines"][0]
+    pipeline["is_archive"] = archived
+    pipeline["_embedded"]["statuses"].append({"id": 143, "name": "Lost", "type": 0})
+
+    def provider(request):
+        if request.url.path.endswith("/complex"):
+            return httpx.Response(200, json=[{"id": 123}])
+        if request.url.path.endswith("/notes"):
+            return httpx.Response(200, json={"_embedded": {"notes": [{"id": 567}]}})
+        if request.url.path.endswith("/pipelines"):
+            return httpx.Response(200, json=pipelines)
+        assert request.method == "GET" and request.url.path == "/api/v4/leads/123"
+        return httpx.Response(
+            200,
+            json={
+                "id": 123,
+                "name": "Alice",
+                "pipeline_id": 12,
+                "status_id": stage,
+                "updated_at": 1780000000,
+            },
+        )
+
+    upstream(monkeypatch, provider)
+    url = f"/api/runtime/projects/{project}/leads"
+    assert (await client.post(url, headers=headers(), json=DATA)).status_code == 200
+    history = await client.get(url, headers=headers())
+    assert history.status_code == 200
+    assert len(history.json()["items"]) == 1
+    item = history.json()["items"][0]
+    assert (item["pipeline_id"], item["pipeline_name"]) == (12, "Coffee")
+    assert (item["status_id"], item["status_name"]) == (stage, stage_name)
+    status = await client.post(url + "/status", headers=headers(), json={"lead_id": "123"})
+    assert status.status_code == 200
+    assert status.json()["status_name"] == stage_name
+    assert status.json()["pipeline_name"] == "Coffee"
+
+
+@pytest.mark.asyncio
+async def test_archived_pipeline_remains_unavailable_for_new_lead_settings(
+    client, db_session, monkeypatch
+):
+    project, _ = await connected(client, db_session, monkeypatch)
+    pipelines = deepcopy(PIPELINES)
+    archived = deepcopy(pipelines["_embedded"]["pipelines"][0])
+    archived.update(id=24, name="Archive", is_archive=True)
+    pipelines["_embedded"]["pipelines"].append(archived)
+    upstream(monkeypatch, lambda request: httpx.Response(200, json=pipelines))
+    url = f"/api/projects/{project}/app-integrations/amocrm"
+    options = await client.get(url + "/options")
+    assert options.status_code == 200
+    assert [p["id"] for p in options.json()["pipelines"]] == [12]
+    rejected = await client.put(url + "/settings", json={"pipeline_id": 24, "status_id": 34})
+    assert rejected.status_code == 422
+    binding = await db_session.scalar(select(ProjectIntegrationBinding))
+    assert binding.config == {"pipeline_id": 12, "status_id": 34}

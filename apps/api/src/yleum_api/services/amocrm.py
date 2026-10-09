@@ -50,7 +50,9 @@ def pipeline_options(body: dict[str, Any], *, include_closed: bool = False) -> l
             raise ValueError
         result = []
         for pipeline in pipelines:
-            if pipeline.get("is_archive"):
+            # Historical leads retain their archived pipeline and closed-stage IDs.
+            # Setup still excludes these destinations for new leads.
+            if not include_closed and pipeline.get("is_archive"):
                 continue
             statuses = []
             for stage in pipeline["_embedded"]["statuses"]:
