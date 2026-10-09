@@ -67,7 +67,9 @@ async def test_disposable_db_cell_exact_edit_original_consumer(
             )
         )
         if case.error:
-            assert observation == {"ok": False, "error": case.error}, case.name
+            assert observation == {
+                "ok": False, "error": case.error, "environment_mutated": False,
+            }, case.name
             assert harness.write_calls == [], case.name
         else:
             assert case.current is not None and case.expected is not None, case.name

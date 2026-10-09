@@ -651,6 +651,71 @@ def test_coordinator_handoff_nudges_done_after_read_only_exploration():
     assert any("HAND OFF" in item["content"] for item in result.transcript)
 
 
+@pytest.mark.parametrize("call_done", [True, False])
+@pytest.mark.parametrize("rejection,expected_done", [
+    ({"ok": False, "error": "exact edit rejected", "environment_mutated": False}, True),
+    ({"ok": False, "error": "unknown persistence result"}, False),
+    ({"ok": False, "environment_mutated": "false"}, False),
+    ({"ok": False, "environment_mutated": 0}, False),
+    ({"ok": False, "environment_mutated": False, "files": {"page.tsx": "changed"}}, False),
+    ({"ok": False, "environment_mutated": False, "mutation": {"source_changed": True}}, False),
+    ({"ok": False, "environment_mutated": False, "invalidated_dimensions": ["fast_check"]}, False),
+    ({"ok": False, "environment_mutated": False, "content_change": {"after_sha256": "x"}}, False),
+    ({"ok": False, "environment_mutated": False, "infra_dead": True}, False),
+    ({"ok": True, "environment_mutated": False, "content": "changed"}, False),
+])
+def test_failed_edit_preserves_fast_check_only_with_unambiguous_no_mutation(
+    rejection, expected_done, call_done
+):
+    async def execute(action):
+        if action.name == "edit_file":
+            return rejection
+        return {"ok": True, "content": "candidate"}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="minimal patch", model="m", execute=execute,
+        complete=_scripted([
+            '<omnia:action name="write_file">'
+            '{"path":"page.tsx","content":"candidate"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="edit_file">'
+            '{"path":"page.tsx","search":"missing","replace":"x"}</omnia:action>',
+            '<omnia:action name="done">{"summary":"candidate"}</omnia:action>',
+        ]), max_steps=4 if call_done else 3,
+        require_green_before_done=True, coordinator_handoff=True,
+        edit_mode=True,
+    ))
+    assert result.done is expected_done
+    assert result.needs_finalization is expected_done
+
+
+@pytest.mark.parametrize("bash_result", [
+    {"ok": True}, {"ok": True, "environment_mutated": True},
+])
+def test_nonmutating_failed_edit_cannot_restore_fast_check_lost_to_bash(bash_result):
+    async def execute(action):
+        if action.name == "bash":
+            return bash_result
+        if action.name == "edit_file":
+            return {"ok": False, "error": "exact edit rejected", "environment_mutated": False}
+        return {"ok": True, "content": "candidate"}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt="s", user_prompt="minimal patch", model="m", execute=execute,
+        complete=_scripted([
+            '<omnia:action name="write_file">'
+            '{"path":"page.tsx","content":"candidate"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="bash">{"cmd":"unknown"}</omnia:action>',
+            '<omnia:action name="edit_file">'
+            '{"path":"page.tsx","search":"missing","replace":"x"}</omnia:action>',
+            '<omnia:action name="done">{"summary":"stale"}</omnia:action>',
+        ]), max_steps=5, require_green_before_done=True, coordinator_handoff=True,
+        edit_mode=True,
+    ))
+    assert not result.done and not result.needs_finalization
+
+
 def test_untrusted_deferred_runtime_does_not_relax_the_ordinary_gate():
     async def execute(action):
         return {"ok": action.name != "runtime_check", "deferred_to": "max_finalization"}

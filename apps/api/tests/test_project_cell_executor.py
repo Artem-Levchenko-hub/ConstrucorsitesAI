@@ -109,7 +109,65 @@ async def test_failed_persist_returns_no_content_change_receipt(
     ))
     assert result["ok"] is False
     assert "content_change" not in result
+    assert result.get("environment_mutated") is not False
     assert (await harness.handle.snapshot_files())[path] == "v0"
+
+
+@pytest.mark.parametrize("args", [
+    {"path": "src/app/page.tsx", "search": "same"},
+    {"path": "src/app/missing.tsx", "search": "same", "replace": "new"},
+    {"path": "src/app/page.tsx", "search": "absent", "replace": "new"},
+    {"path": "src/app/page.tsx", "search": "same", "replace": "new"},
+])
+async def test_local_edit_rejection_proves_no_mutation_before_persistence(
+    monkeypatch, db_session, test_engine, args,
+):
+    baseline = {"src/app/page.tsx": "same same"}
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, snapshot_files=baseline,
+    )
+    before_writes = len(harness.write_calls)
+    result = await harness.handle.execute(Action(name="edit_file", args=args))
+    assert result["ok"] is False
+    assert result["environment_mutated"] is False
+    assert "content_change" not in result and "files" not in result
+    assert len(harness.write_calls) == before_writes
+    assert await harness.handle.snapshot_files() == baseline
+
+
+async def test_real_local_edit_rejection_preserves_checked_candidate_at_budget(
+    monkeypatch, db_session, test_engine,
+):
+    path = "src/app/page.tsx"
+    harness = await _prepare_executor(
+        monkeypatch, db_session, test_engine, snapshot_files={path: "v0"},
+    )
+    replies = iter([
+        '<omnia:action name="edit_file">'
+        '{"path":"src/app/page.tsx","search":"v0","replace":"v1"}</omnia:action>',
+        '<omnia:action name="build"></omnia:action>',
+        '<omnia:action name="edit_file">'
+        '{"path":"src/app/page.tsx","search":"absent","replace":"v2"}</omnia:action>',
+    ])
+
+    async def complete(*args, **kwargs):
+        return next(replies)
+
+    async def execute(action):
+        if action.name == "build":
+            return {"ok": True}
+        return await harness.handle.execute(action)
+
+    result = await run_agent_build(
+        system_prompt="sys", user_prompt="repair", model="m", complete=complete,
+        execute=execute, max_steps=3, edit_mode=True, coordinator_handoff=True,
+        require_green_before_done=True,
+    )
+    assert result.done and result.needs_finalization
+    assert result.stop_reason == "done_on_green"
+    assert result.files == {path: "v1"}
+    assert await harness.handle.snapshot_files() == {path: "v1"}
+    assert len(harness.write_calls) == 1
 
 
 async def test_new_file_receipt_distinguishes_absence_from_empty_content(

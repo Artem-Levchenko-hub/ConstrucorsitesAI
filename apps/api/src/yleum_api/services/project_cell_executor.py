@@ -1300,14 +1300,20 @@ async def maybe_create_project_cell_executor(
                 search = action.args.get("search")
                 replace = action.args.get("replace")
                 if not action.path or not isinstance(search, str) or replace is None:
-                    return {"ok": False, "error": "edit_file needs path, search, replace"}
+                    return {
+                        "ok": False, "error": "edit_file needs path, search, replace",
+                        "environment_mutated": False,
+                    }
                 path = _normalize_path(action.path)
                 current = workspace_files.get(path)
                 if current is None:
-                    return {"ok": False, "error": f"not found: {path}"}
+                    return {
+                        "ok": False, "error": f"not found: {path}",
+                        "environment_mutated": False,
+                    }
                 edit_error = validate_exact_edit(current, search)
                 if edit_error is not None:
-                    return {"ok": False, "error": edit_error}
+                    return {"ok": False, "error": edit_error, "environment_mutated": False}
                 new_content = current.replace(search, str(replace), 1)
                 await _persist_files(writes={path: new_content})
                 _apply_to_local_state(workspace_files, writes={path: new_content})

@@ -792,8 +792,20 @@ async def run_agent_build(
                 wrote_since_check = True
                 writes_since_build += len(changed_paths)
                 paths_since_build.update(changed_paths)
+        # Only local edit rejection before persistence can prove no mutation.
+        # Transport errors and shell operations may have changed the candidate;
+        # a later rejected edit cannot restore a check they invalidated.
+        rejected_edit_without_mutation = (
+            action.name == "edit_file"
+            and obs.get("ok") is False
+            and obs.get("environment_mutated") is False
+            and not any(obs.get(key) for key in (
+                "files", "mutation", "invalidated_dimensions", "content_change", "infra_dead",
+            ))
+        )
         if action.name != "build" and (
-            action.name in {"write_file", "edit_file", "delete_file"}
+            (action.name in {"write_file", "edit_file", "delete_file"}
+             and not rejected_edit_without_mutation)
             or obs.get("files")
             or obs.get("environment_mutated") is True
             or (action.name == "bash" and obs.get("environment_mutated") is not False)
