@@ -1,0 +1,446 @@
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -3 +3 @@
+-import { useState, useEffect, useRef } from "react";
++import { useState, useEffect, useRef, useCallback } from "react";
+@@ -7,6 +7,2 @@
+-  getYleumAppConfig,
+-  getYleumIntegrations,
+-  createYleumLead,
+-  getYleumLeads,
+-  YleumIntegrationError,
+-  YleumLeadStatus
++  getYleumAppConfig, getYleumIntegrations, createYleumLead, getYleumLeads,
++  getYleumLeadStatus, getYleumLeadReceipt, YleumIntegrationError, type YleumLeadStatus,
+@@ -16,7 +12,24 @@
+-
+-function getOrCreateIdempotencyKey() {
+-  if (typeof window === "undefined") return "";
+-  let key = sessionStorage.getItem("lead_idempotency_key");
+-  if (!key) {
+-    key = crypto.randomUUID();
+-    sessionStorage.setItem("lead_idempotency_key", key);
++import { useMaxApp } from "@/components/MaxAppProvider";
++
++const UUID_KEY = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
++const DIGEST = /^[0-9a-f]{64}$/;
++const LEAD_ID = /^[1-9][0-9]{0,19}$/;
++type LeadReceipt = { version: 1; key: string } & (
++  { state: "pending"; attempted: boolean; fingerprint: string } |
++  { state: "succeeded"; id: string; fingerprint?: string; requestDigest?: string }
++);
++type LegacyAdoption = { version: 1; key: string; id: string; requestDigest: string };
++
++function readReceipt(storageKey: string): LeadReceipt | null {
++  const raw = sessionStorage.getItem(storageKey);
++  if (raw === null) return null;
++  const value: unknown = JSON.parse(raw);
++  if (!value || typeof value !== "object") throw new Error("Подтверждение заявки повреждено");
++  const record = value as Partial<LeadReceipt>;
++  if (record.version !== 1 || typeof record.key !== "string" || !UUID_KEY.test(record.key) ||
++      !((record.state === "pending" && typeof record.attempted === "boolean" &&
++          typeof record.fingerprint === "string" && DIGEST.test(record.fingerprint)) ||
++        (record.state === "succeeded" && typeof record.id === "string" && LEAD_ID.test(record.id) &&
++          ((typeof record.fingerprint === "string" && DIGEST.test(record.fingerprint)) ||
++           (typeof record.requestDigest === "string" && DIGEST.test(record.requestDigest)))))) {
++    throw new Error("Подтверждение заявки повреждено");
+@@ -24 +37 @@
+-  return key;
++  return record as LeadReceipt;
+@@ -27,3 +40,20 @@
+-function resetIdempotencyKey() {
+-  if (typeof window !== "undefined") {
+-    sessionStorage.removeItem("lead_idempotency_key");
++function samePending(a: LeadReceipt | null, b: LeadReceipt | null): boolean {
++  return a?.state === "pending" && b?.state === "pending" && a.key === b.key &&
++    a.fingerprint === b.fingerprint && a.attempted === b.attempted;
++}
++
++function sameSuccess(a: LeadReceipt | null, b: LeadReceipt | null): boolean {
++  return a?.state === "succeeded" && b?.state === "succeeded" &&
++    a.key === b.key && a.id === b.id && a.fingerprint === b.fingerprint && a.requestDigest === b.requestDigest;
++}
++
++function readLegacyAdoption(storageKey: string): LegacyAdoption | null {
++  const raw = sessionStorage.getItem(`${storageKey}:legacy-adoption`);
++  if (raw === null) return null;
++  const value: unknown = JSON.parse(raw);
++  if (!value || typeof value !== "object") throw new Error("Подтверждение старой заявки повреждено");
++  const record = value as Partial<LegacyAdoption>;
++  if (record.version !== 1 || typeof record.key !== "string" || !UUID_KEY.test(record.key) ||
++      typeof record.id !== "string" || !LEAD_ID.test(record.id) ||
++      typeof record.requestDigest !== "string" || !DIGEST.test(record.requestDigest)) {
++    throw new Error("Подтверждение старой заявки повреждено");
+@@ -30,0 +61 @@
++  return record as LegacyAdoption;
+@@ -33,0 +65,14 @@
++  const { mode, user, error } = useMaxApp();
++  if (mode === "loading") return <div className="flex justify-center p-8"><Spinner size={48} /></div>;
++  const preview = mode === "preview" && user?.id === "preview";
++  if (!preview && (mode !== "max" || !user || !/^[1-9][0-9]{0,19}$/.test(user.id))) {
++    return <div role="alert" className="p-4">{error || "Откройте приложение внутри MAX"}</div>;
++  }
++  // Each product has its own origin. A new actor/mode unmounts private state
++  // synchronously; old asynchronous replies cannot populate the new instance.
++  const scope = `${typeof window === "undefined" ? "" : window.location.origin}:${user!.id}:${mode}`;
++  return <CRMApp key={scope} scope={scope} preview={preview} />;
++}
++
++function CRMApp({ scope, preview }: { scope: string; preview: boolean }) {
++  const storageKey = `yleum:amocrm:lead:v1:${scope}`;
+@@ -39,2 +84 @@
+-
+-  // Form state
++  const [initAttempt, setInitAttempt] = useState(0);
+@@ -49,2 +93,3 @@
+-
+-  // Leads state
++  const [receiptId, setReceiptId] = useState<string | null>(null);
++  const [receiptWarning, setReceiptWarning] = useState<string | null>(null);
++  const [recoveryBlocked, setRecoveryBlocked] = useState(true);
+@@ -51,0 +97 @@
++  const [hasMore, setHasMore] = useState(false);
+@@ -54,2 +100,18 @@
+-
+-  const initFetched = useRef(false);
++  const active = useRef(false);
++  const inFlight = useRef(false);
++  const listSequence = useRef(0);
++  const checkedLegacy = useRef<string | null | undefined>(undefined);
++  const checkedAdoption = useRef<LegacyAdoption | null>(null);
++  const checkedSuccess = useRef<LeadReceipt | null>(null);
++  const assertLegacyUnchanged = () => {
++    if (checkedLegacy.current === undefined ||
++        sessionStorage.getItem("lead_idempotency_key") !== checkedLegacy.current) {
++      throw new Error("Старый ключ заявки изменился. Отправка заблокирована до повторной проверки.");
++    }
++    const marker = readLegacyAdoption(storageKey);
++    const verified = checkedAdoption.current;
++    if ((verified && (!marker || marker.key !== verified.key || marker.id !== verified.id ||
++          marker.requestDigest !== verified.requestDigest)) || (!verified && marker)) {
++      throw new Error("Подтверждение старой заявки изменилось. Отправка заблокирована.");
++    }
++  };
+@@ -58,3 +120,8 @@
+-    if (initFetched.current) return;
+-    initFetched.current = true;
+-
++    active.current = true;
++    return () => { active.current = false; listSequence.current++; };
++  }, []);
++
++  useEffect(() => {
++    let alive = true;
++    setLoadingInit(true); setInitError(null); setRecoveryBlocked(true);
++    checkedLegacy.current = undefined; checkedAdoption.current = null; checkedSuccess.current = null;
+@@ -63,4 +130,2 @@
+-        const [appConfig, integrations] = await Promise.all([
+-          getYleumAppConfig(),
+-          getYleumIntegrations()
+-        ]);
++        const appConfig = await getYleumAppConfig();
++        if (!alive) return;
+@@ -67,0 +133,3 @@
++        if (preview) return; // No CRM status, history, consent or writes in preview.
++        const integrations = await getYleumIntegrations();
++        if (!alive) return;
+@@ -68,0 +137,59 @@
++        try {
++          let saved = readReceipt(storageKey);
++          const oldKey = sessionStorage.getItem("lead_idempotency_key");
++          const marker = readLegacyAdoption(storageKey);
++          if (oldKey !== null) {
++            if (!UUID_KEY.test(oldKey) || (marker && marker.key !== oldKey)) throw new Error("Старый ключ требует проверки");
++            const receipt = await getYleumLeadReceipt(oldKey, marker
++              ? { requestDigest: marker.requestDigest, leadId: marker.id } : undefined);
++            if (!alive) return;
++            if (receipt.provider !== "amocrm" || receipt.status !== "succeeded" ||
++                receipt.idempotency_key !== oldKey || typeof receipt.id !== "string" || !LEAD_ID.test(receipt.id) ||
++                typeof receipt.request_digest !== "string" || !DIGEST.test(receipt.request_digest) ||
++                (marker && (marker.id !== receipt.id || marker.requestDigest !== receipt.request_digest))) {
++              throw new Error("Не удалось сопоставить старую заявку");
++            }
++            if (sessionStorage.getItem("lead_idempotency_key") !== oldKey) throw new Error("Старый ключ изменился");
++            const currentMarker = readLegacyAdoption(storageKey);
++            if ((marker && (!currentMarker || currentMarker.key !== marker.key || currentMarker.id !== marker.id ||
++                currentMarker.requestDigest !== marker.requestDigest)) || (!marker && currentMarker)) {
++              throw new Error("Подтверждение старой заявки изменилось");
++            }
++            saved = readReceipt(storageKey);
++            if (saved?.key === oldKey && saved.state === "succeeded" &&
++                (saved.id !== receipt.id || (saved.requestDigest !== undefined && saved.requestDigest !== receipt.request_digest))) {
++              throw new Error("Сохранённая операция не совпадает с квитанцией");
++            }
++            if (!marker) {
++              if (saved && (saved.state !== "succeeded" || saved.key !== oldKey || saved.id !== receipt.id ||
++                  (saved.requestDigest !== undefined && saved.requestDigest !== receipt.request_digest))) {
++                throw new Error("Сохранённая операция требует отдельной проверки");
++              }
++              // Server digest confirms historical receipt, not a new form payload.
++              saved = { version: 1, key: oldKey, state: "succeeded", id: receipt.id,
++                requestDigest: receipt.request_digest };
++              sessionStorage.setItem(storageKey, JSON.stringify(saved));
++              sessionStorage.setItem(`${storageKey}:legacy-adoption`, JSON.stringify({
++                version: 1, key: oldKey, id: receipt.id, requestDigest: receipt.request_digest,
++              }));
++            }
++            checkedAdoption.current = { version: 1, key: oldKey, id: receipt.id, requestDigest: receipt.request_digest };
++          } else if (marker) throw new Error("Старый ключ отсутствует");
++          checkedLegacy.current = oldKey;
++          if (saved?.state === "succeeded") {
++            const confirmed = await getYleumLeadStatus(saved.id);
++            if (!alive) return;
++            assertLegacyUnchanged();
++            if (!sameSuccess(readReceipt(storageKey), saved)) throw new Error("Сохранённая операция изменилась");
++            if (confirmed.id !== saved.id || confirmed.provider !== "amocrm") throw new Error("Не удалось подтвердить заявку");
++            checkedSuccess.current = saved;
++            setReceiptId(saved.id); setSubmitSuccess(true);
++            setReceiptWarning(confirmed.details_status === "unknown"
++              ? confirmed.warning || "Передача комментария и источника не подтверждена." : null);
++          } else if (saved?.state === "pending" && saved.attempted) {
++            setSubmitError("Исход предыдущей отправки неизвестен. Повторите только те же данные: сохранён прежний ключ заявки.");
++          }
++          setRecoveryBlocked(false);
++        } catch {
++          if (alive) setSubmitError("Не удалось проверить сохранённое подтверждение. Отправка заблокирована до повторной проверки.");
++        }
+@@ -70 +197 @@
+-        setInitError(e instanceof Error ? e.message : "Ошибка инициализации");
++        if (alive) setInitError(e instanceof Error ? e.message : "Ошибка инициализации");
+@@ -72 +199 @@
+-        setLoadingInit(false);
++        if (alive) setLoadingInit(false);
+@@ -75,6 +202,8 @@
+-    init();
+-  }, []);
+-
+-  const loadLeads = async () => {
+-    setLoadingLeads(true);
+-    setLeadsError(null);
++    void init();
++    return () => { alive = false; };
++  }, [preview, storageKey, initAttempt]);
++
++  const loadLeads = useCallback(async () => {
++    if (preview || !amoConnected || !active.current) return;
++    const sequence = ++listSequence.current;
++    setLoadingLeads(true); setLeadsError(null);
+@@ -83 +212,2 @@
+-      setLeads(res.items);
++      if (!active.current || sequence !== listSequence.current) return;
++      setLeads(res.items); setHasMore(res.has_more);
+@@ -85 +215,3 @@
+-      setLeadsError(e instanceof Error ? e.message : "Ошибка загрузки заявок");
++      if (active.current && sequence === listSequence.current) {
++        setLeadsError(e instanceof Error ? e.message : "Ошибка загрузки заявок");
++      }
+@@ -87 +219,95 @@
+-      setLoadingLeads(false);
++      if (active.current && sequence === listSequence.current) setLoadingLeads(false);
++    }
++  }, [preview, amoConnected]);
++
++  useEffect(() => {
++    if (activeTab !== "list" || preview || !amoConnected) return;
++    void loadLeads();
++    const refresh = () => { if (document.visibilityState !== "hidden") void loadLeads(); };
++    window.addEventListener("focus", refresh);
++    const visible = () => { if (document.visibilityState === "visible") void loadLeads(); };
++    document.addEventListener("visibilitychange", visible);
++    return () => {
++      listSequence.current++;
++      window.removeEventListener("focus", refresh);
++      document.removeEventListener("visibilitychange", visible);
++    };
++  }, [activeTab, preview, amoConnected, loadLeads]);
++
++  const handleSubmit = async () => {
++    if (preview || !active.current || !amoConnected || !config || recoveryBlocked ||
++        loadingInit || initError || submitSuccess || inFlight.current) return;
++    if (!name.trim() || !phone.trim()) { setSubmitError("Имя и телефон обязательны"); return; }
++    if (config.legal.personal_data_consent && !consent) {
++      setSubmitError("Необходимо согласие с политикой обработки персональных данных"); return;
++    }
++    inFlight.current = true; // Set before any await; a second click cannot dispatch.
++    setSubmitting(true); setSubmitError(null);
++    let priorAttempted = false;
++    let dispatched = false;
++    let confirmedId: string | null = null;
++    let dispatchedReceipt: LeadReceipt | null = null;
++    try {
++      const payload = { name: name.trim(), phone: phone.trim(), email: email.trim() || undefined,
++        comment: comment.trim() || undefined, source: "MAX Mini App" };
++      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
++      if (!active.current) return;
++      const fingerprint = Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2, "0")).join("");
++      assertLegacyUnchanged();
++      const saved = readReceipt(storageKey);
++      if (saved?.state === "succeeded") throw new Error("Сначала проверьте подтверждение предыдущей заявки");
++      priorAttempted = saved?.state === "pending" && saved.attempted;
++      if (priorAttempted && saved!.fingerprint !== fingerprint) {
++        throw new Error("Исход предыдущей отправки неизвестен. Изменять данные и создавать новый ключ нельзя.");
++      }
++      const key = saved?.fingerprint === fingerprint ? saved.key : crypto.randomUUID();
++      const pending: LeadReceipt = { version: 1, state: "pending", key, fingerprint, attempted: priorAttempted };
++      sessionStorage.setItem(storageKey, JSON.stringify(pending));
++      if (config.legal.personal_data_consent) await saveMaxConsent("personal_data", true, "1");
++      if (!active.current) return;
++      assertLegacyUnchanged();
++      if (!samePending(readReceipt(storageKey), pending)) throw new Error("Сохранённая операция изменилась; отправка заблокирована.");
++      dispatchedReceipt = { ...pending, attempted: true };
++      sessionStorage.setItem(storageKey, JSON.stringify(dispatchedReceipt));
++      dispatched = true;
++      const result = await createYleumLead({ idempotency_key: key, ...payload });
++      if (!active.current) return;
++      if (result.provider !== "amocrm" || typeof result.id !== "string" || !/^[1-9][0-9]{0,19}$/.test(result.id)) {
++        throw new Error("Не удалось подтвердить ID заявки; сохранён прежний ключ");
++      }
++      confirmedId = result.id;
++      const current = readReceipt(storageKey);
++      if (current?.state !== "pending" || current.key !== key || current.fingerprint !== fingerprint) {
++        throw new Error("Сохранённая операция изменилась. Новый ключ не создан; проверьте предыдущую заявку.");
++      }
++      // Store only receipt identifiers/digest, never name/phone/email/comment.
++      assertLegacyUnchanged();
++      const successful: LeadReceipt = { version: 1, state: "succeeded", key, fingerprint, id: result.id };
++      sessionStorage.setItem(storageKey, JSON.stringify(successful));
++      checkedSuccess.current = successful;
++      if (!active.current) return;
++      setReceiptId(result.id); setSubmitSuccess(true);
++      setReceiptWarning(result.details_status === "unknown"
++        ? result.warning || "Передача комментария и источника не подтверждена." : null);
++    } catch (error) {
++      if (!active.current) return;
++      if (error instanceof YleumIntegrationError && error.status === 422 &&
++          error.code === "integration_request_rejected" && dispatched && !priorAttempted) {
++        try {
++          assertLegacyUnchanged();
++          if (!samePending(readReceipt(storageKey), dispatchedReceipt)) {
++            setRecoveryBlocked(true);
++            setSubmitError("Сохранённая операция изменилась. Новый ключ не создан; повторите проверку.");
++            return;
++          }
++          sessionStorage.removeItem(storageKey);
++        } catch { setRecoveryBlocked(true); }
++        setSubmitError("Заявка отклонена. Проверьте данные перед новой отправкой.");
++      } else {
++        setSubmitError(confirmedId
++          ? `Заявка ${confirmedId} создана, но подтверждение не сохранено. Повторите только те же данные с прежним ключом.`
++          : error instanceof Error ? error.message : "Ошибка при отправке заявки");
++      }
++    } finally {
++      inFlight.current = false;
++      if (active.current) setSubmitting(false);
+@@ -91,19 +317,2 @@
+-  useEffect(() => {
+-    if (activeTab === "list" && amoConnected) {
+-      loadLeads();
+-    }
+-  }, [activeTab, amoConnected]);
+-
+-  const handleSubmit = async () => {
+-    if (!name.trim() || !phone.trim()) {
+-      setSubmitError("Имя и телефон обязательны");
+-      return;
+-    }
+-    if (config?.legal.personal_data_consent && !consent) {
+-      setSubmitError("Необходимо согласие с политикой обработки персональных данных");
+-      return;
+-    }
+-
+-    setSubmitting(true);
+-    setSubmitError(null);
+-
++  const newSubmission = () => {
++    if (!submitSuccess || !receiptId || inFlight.current || preview) return;
+@@ -111,29 +320,7 @@
+-      if (config?.legal.personal_data_consent) {
+-        await saveMaxConsent("personal_data", true, "1");
+-      }
+-
+-      const key = getOrCreateIdempotencyKey();
+-      await createYleumLead({
+-        idempotency_key: key,
+-        name: name.trim(),
+-        phone: phone.trim(),
+-        email: email.trim() || undefined,
+-        comment: comment.trim() || undefined,
+-        source: "MAX Mini App"
+-      });
+-
+-      setSubmitSuccess(true);
+-    } catch (error) {
+-      if (error instanceof YleumIntegrationError) {
+-        if (error.status === 422 && error.code === "integration_request_rejected") {
+-          resetIdempotencyKey();
+-          setSubmitError("Заявка отклонена. Пожалуйста, проверьте данные и попробуйте снова.");
+-        } else {
+-          setSubmitError(error.message || "Ошибка при отправке заявки");
+-        }
+-      } else {
+-        setSubmitError("Неизвестная ошибка при отправке");
+-      }
+-    } finally {
+-      setSubmitting(false);
+-    }
++      assertLegacyUnchanged();
++      if (!sameSuccess(readReceipt(storageKey), checkedSuccess.current)) throw new Error("Сохранённая операция изменилась");
++      sessionStorage.removeItem(storageKey);
++      checkedSuccess.current = null;
++      setReceiptId(null); setReceiptWarning(null); setSubmitSuccess(false); setSubmitError(null);
++      setName(""); setPhone(""); setEmail(""); setComment(""); setConsent(false);
++    } catch { setSubmitError("Не удалось завершить прежнюю заявку. Новый ключ не создан."); }
+@@ -155,0 +343 @@
++        <Button className="mt-4" variant="secondary" onClick={() => setInitAttempt(n => n + 1)}>Повторить</Button>
+@@ -160 +348 @@
+-  if (amoConnected === false) {
++  if (!preview && amoConnected === false) {
+@@ -180,0 +369,3 @@
++        {preview && <div role="status" className="mb-4 p-3 border rounded-md">
++          Режим просмотра: форма доступна только для ознакомления. Заявки и CRM-история доступны внутри MAX.
++        </div>}
+@@ -188 +379 @@
+-                  Ваша заявка успешно передана в amoCRM.
++                  Заявка создана в amoCRM. ID: {receiptId}
+@@ -189,0 +381 @@
++                {receiptWarning && <div role="status" className="mt-3">{receiptWarning}</div>}
+@@ -196,0 +389,2 @@
++                <Button className="mt-3" variant="secondary" onClick={newSubmission}>Новая заявка</Button>
++                {submitError && <div role="alert" className="mt-3 text-red-600">{submitError}</div>}
+@@ -206 +400 @@
+-                    disabled={submitting}
++                    disabled={submitting || preview || recoveryBlocked}
+@@ -216 +410 @@
+-                    disabled={submitting}
++                    disabled={submitting || preview || recoveryBlocked}
+@@ -226 +420 @@
+-                    disabled={submitting}
++                    disabled={submitting || preview || recoveryBlocked}
+@@ -235 +429 @@
+-                    disabled={submitting}
++                    disabled={submitting || preview || recoveryBlocked}
+@@ -246 +440 @@
+-                      disabled={submitting}
++                      disabled={submitting || preview || recoveryBlocked}
+@@ -256 +450 @@
+-                  <div className="p-3 bg-red-50 text-red-600 rounded-md text-sm">
++                  <div role="alert" className="p-3 bg-red-50 text-red-600 rounded-md text-sm">
+@@ -260,0 +455,3 @@
++                {recoveryBlocked && !preview && <Button variant="secondary" onClick={() => setInitAttempt(n => n + 1)}>
++                  Повторить проверку
++                </Button>}
+@@ -267 +464 @@
+-                  disabled={submitting}
++                  disabled={submitting || preview || recoveryBlocked}
+@@ -285 +482 @@
+-                disabled={loadingLeads}
++                disabled={loadingLeads || preview}
+@@ -292 +489,2 @@
+-            {loadingLeads && leads.length === 0 ? (
++            {hasMore && !preview && <p className="mb-3 text-sm">Показаны последние 20 заявок.</p>}
++            {preview ? <div role="status">История доступна только внутри MAX. CRM-данные в превью не загружаются.</div> : loadingLeads && leads.length === 0 ? (
+@@ -297 +495 @@
+-              <div className="p-4 bg-red-50 text-red-600 rounded-md text-center">
++              <div role="alert" className="p-4 bg-red-50 text-red-600 rounded-md text-center">
+@@ -319,0 +518 @@
++                        {lead.details_status === "unknown" && <div role="status">{lead.warning || "Комментарий и источник не подтверждены."}</div>}
