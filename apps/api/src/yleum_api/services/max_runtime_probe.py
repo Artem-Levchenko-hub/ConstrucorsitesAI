@@ -277,11 +277,13 @@ async def _probe_signed_runtime(
             request_attempts = attempt
             try:
                 return await client.get(url, headers=headers)
-            except (httpx.ConnectError, httpx.ConnectTimeout):
-                if attempt == _CONNECT_ATTEMPTS:
+            except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError) as exc:
+                if attempt == _CONNECT_ATTEMPTS or (
+                    isinstance(exc, httpx.RemoteProtocolError) and stage != "identity_anonymous"
+                ):
                     raise
-                # Only a transport failure is retryable. HTTP responses, including
-                # failed authentication and identity checks, are assessed once.
+                # Only the read-only anonymous boundary check may retry a protocol
+                # disconnect. HTTP authentication/identity responses are assessed once.
                 await asyncio.sleep(0.2 * attempt)
         raise AssertionError("unreachable")
 
