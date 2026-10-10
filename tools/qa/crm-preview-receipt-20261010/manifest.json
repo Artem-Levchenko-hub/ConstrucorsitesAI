@@ -1,0 +1,48 @@
+{
+  "format_version": 1,
+  "project_id": "2c7bb4d4-e661-45aa-8ad3-eb515838bd83",
+  "source_provenance": "Chat-supplied sanitized draft; HTML entities decoded; LF and trailing whitespace canonicalized. Not an independently retrieved immutable accepted file.",
+  "reported_accepted_commit": "ef0a03cb3d749c60464cbd801de66c7984169417",
+  "reported_snapshot_id": "02cb9fcc-9d7f-46fa-a34f-4d7d7c5d36c9",
+  "reported_draft_revision": "9f152fd6624ffd1bba99f2de337f26c8df55c52070413bb4e342f1f5be07f8db",
+  "reported_resolved_version_status": "ready",
+  "product_paths": [
+    "src/app/page.tsx"
+  ],
+  "status": {
+    "applied": false,
+    "accepted": false,
+    "published": false,
+    "live_max_crm_verified": false
+  },
+  "files": {
+    "before/src/app/page.tsx": {
+      "sha256": "c6a4cf828c4c6f4149d23ae02486a104609b6a525a23aec76c59893252d6abce",
+      "bytes": 13372
+    },
+    "after/src/app/page.tsx": {
+      "sha256": "9e9ace34df40d7f3f32e923d2ff5da2285c8073ca47c0209587229747cdd7670",
+      "bytes": 23095
+    },
+    "product.patch": {
+      "sha256": "fb8aeb6b7b4a70f5cd7d249afc20d2d722f787f090e5e077bf519dd7a2a2c984",
+      "bytes": 17840
+    }
+  },
+  "verification": {
+    "candidate_mock_behavior_tests": 16,
+    "full_web_test_files": 116,
+    "full_web_tests": 1039,
+    "web_lint": "passed",
+    "web_types": "passed",
+    "product_sdk_types": "passed",
+    "product_next_build": "passed",
+    "product_versions": {
+      "next": "15.5.24",
+      "react": "18.3.1",
+      "max_ui": "0.2.0"
+    },
+    "independent_review": "No findings after two reproduced findings fixed"
+  },
+  "application_owner": "Windows live QA root; no application or deployment performed by this preparation"
+}
