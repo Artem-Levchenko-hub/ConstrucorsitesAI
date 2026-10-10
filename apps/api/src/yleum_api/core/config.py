@@ -219,6 +219,17 @@ class Settings(BaseSettings):
     integration_bitrix24_client_secret: SecretStr | None = Field(default=None)
     integration_amocrm_client_id: str | None = Field(default=None)
     integration_amocrm_client_secret: SecretStr | None = Field(default=None)
+    # A profile key identifies an immutable OAuth app/redirect pair. Keep the
+    # legacy credentials available while any legacy grants or states exist.
+    integration_amocrm_legacy_redirect_uri: str = Field(
+        default="https://yleum.ru/api/integrations/oauth/amocrm/callback"
+    )
+    integration_amocrm_public_client_id: str | None = Field(default=None)
+    integration_amocrm_public_client_secret: SecretStr | None = Field(default=None)
+    integration_amocrm_public_redirect_uri: str = Field(
+        default="https://yleum.ru/api/integrations/oauth/amocrm/callback"
+    )
+    integration_amocrm_public_oauth_enabled: bool = Field(default=False)
     # Issued by the MoySklad developer cabinet for this specific solution.
     integration_moysklad_app_id: str | None = Field(default=None)
     integration_moysklad_app_uid: str | None = Field(default=None)

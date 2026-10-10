@@ -31,12 +31,14 @@ def callback_boundary(monkeypatch):
         provider="amocrm",
         used_at=None,
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
+        oauth_client_key="amocrm-public-v1",
+        connection_snapshot={"version": 1, "connection_id": None, "grant_revision": None},
     )
 
     class Session:
         commits = 0
 
-        async def execute(self, statement):
+        async def execute(self, statement, *args):
             expected = hashlib.sha256(raw_state.encode()).hexdigest()
             found = record if statement.compile().params.get("state_hash_1") == expected else None
             return SimpleNamespace(scalar_one_or_none=lambda: found)
@@ -48,13 +50,20 @@ def callback_boundary(monkeypatch):
         async def commit(self):
             self.commits += 1
 
+        def add(self, obj):
+            obj.grant_revision = 0
+            obj.id = uuid4()
+
+        async def flush(self):
+            pass
+
     session = Session()
 
     async def database():
         yield session
 
-    connection = SimpleNamespace(user_id=owner.id, provider="amocrm")
-    find_connection = AsyncMock(return_value=connection)
+    connection = SimpleNamespace(user_id=owner.id, provider="amocrm", grant_revision=0)
+    find_connection = AsyncMock(return_value=None)
     bind = AsyncMock()
     exchange = AsyncMock(return_value=OAuthResult(
         public_config={"base_url": "https://synthetic.amocrm.ru"},
@@ -64,6 +73,7 @@ def callback_boundary(monkeypatch):
     ))
     monkeypatch.setattr(app_integrations, "_account_connection", find_connection)
     monkeypatch.setattr(app_integrations, "_bind", bind)
+    monkeypatch.setattr(app_integrations, "_owned_max_project", AsyncMock())
     monkeypatch.setattr(app_integrations.integration_oauth, "exchange_code", exchange)
     monkeypatch.setattr(app_integrations, "encrypt_strong", lambda _: "synthetic-ciphertext")
     app = FastAPI()
@@ -116,18 +126,19 @@ async def test_owner_cookie_callback_binds_original_project_and_rejects_replay(
 ):
     boundary = callback_boundary
     boundary.record.provider = provider
+    if provider != "amocrm":
+        boundary.find_connection.return_value = boundary.connection
     response = await callback(boundary, user=boundary.owner, provider=provider)
     assert response.status_code == 303
     assert response.headers["location"].endswith(
         f"/max/{boundary.record.project_id}/integrations?oauth=connected"
     )
-    boundary.find_connection.assert_awaited_once_with(
-        boundary.session, boundary.owner.id, provider,
-    )
-    boundary.bind.assert_awaited_once_with(
-        boundary.session, boundary.record.project_id, boundary.connection,
-    )
-    assert boundary.connection.status == "active"
+    connection = boundary.bind.await_args.args[2]
+    assert boundary.bind.await_args.args[:2] == (boundary.session, boundary.record.project_id)
+    assert connection.status == "active"
+    if provider == "amocrm":
+        assert connection.oauth_client_key == "amocrm-public-v1"
+        assert boundary.exchange.await_args.kwargs["client_key"] == "amocrm-public-v1"
     assert boundary.record.used_at is not None
     replay = await callback(boundary, user=boundary.owner, provider=provider)
     assert replay.status_code == 400
@@ -171,8 +182,23 @@ async def test_provider_failure_consumes_state_without_replacing_connection(call
     assert response.status_code == 303
     assert response.headers["location"].endswith("oauth=error")
     assert boundary.record.used_at is not None
-    boundary.find_connection.assert_not_awaited()
+    assert boundary.find_connection.await_count == 1
     boundary.bind.assert_not_awaited()
+
+
+@pytest.mark.parametrize("snapshot", [None, {}, {"version": 1, "connection_id": None,
+                                            "grant_revision": None}])
+async def test_amo_stale_or_legacy_state_cannot_replace_working_grant(callback_boundary, snapshot):
+    boundary = callback_boundary
+    boundary.record.connection_snapshot = snapshot
+    boundary.find_connection.return_value = boundary.connection
+    boundary.connection.credentials_enc = "working-ciphertext"
+    response = await callback(boundary, user=boundary.owner)
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("oauth=conflict")
+    assert boundary.connection.credentials_enc == "working-ciphertext"
+    boundary.exchange.assert_not_awaited()
+    assert boundary.record.used_at is not None
 
 
 def test_login_cookie_allows_top_level_get_oauth_return():

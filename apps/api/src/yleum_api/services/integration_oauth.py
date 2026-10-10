@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode, urlparse
@@ -27,7 +27,15 @@ _AMOCRM_REFERER_ERROR = "amoCRM не передал адрес авторизо�
 @dataclass(frozen=True)
 class OAuthCredentials:
     client_id: str
-    client_secret: str
+    client_secret: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class OAuthClientProfile:
+    key: str | None
+    client_id: str
+    client_secret: str = field(repr=False)
+    redirect_uri: str
 
 
 @dataclass(frozen=True)
@@ -73,6 +81,47 @@ def callback_url(provider: str) -> str:
     return f"{base}/{provider}/callback"
 
 
+def resolve_client_profile(provider: str, client_key: str | None = None) -> OAuthClientProfile:
+    """Resolve the stored profile; NULL always denotes the legacy amoCRM app."""
+    if provider != "amocrm":
+        oauth = credentials(provider)
+        if oauth is None:
+            raise IntegrationProviderError("OAuth приложения сервиса не настроен")
+        return OAuthClientProfile(
+            None, oauth.client_id, oauth.client_secret, callback_url(provider),
+        )
+    settings = get_settings()
+    key = "amocrm-legacy-v1" if client_key is None else client_key
+    if key == "amocrm-legacy-v1":
+        oauth = credentials(provider)
+        redirect = settings.integration_amocrm_legacy_redirect_uri
+    elif key == "amocrm-public-v1":
+        client_id = (settings.integration_amocrm_public_client_id or "").strip()
+        secret = settings.integration_amocrm_public_client_secret
+        client_secret = secret.get_secret_value().strip() if secret is not None else ""
+        oauth = OAuthCredentials(client_id, client_secret) if client_id and client_secret else None
+        redirect = settings.integration_amocrm_public_redirect_uri
+    else:
+        raise IntegrationProviderError("Неизвестный профиль OAuth приложения")
+    if oauth is None or not redirect.strip():
+        raise IntegrationProviderError("Профиль OAuth приложения не настроен")
+    parsed = urlparse(redirect)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise IntegrationProviderError("Адрес возврата OAuth приложения не настроен")
+    return OAuthClientProfile(key, oauth.client_id, oauth.client_secret, redirect)
+
+
+def new_authorization_client_key(provider: str) -> str | None:
+    key = None
+    if provider == "amocrm":
+        key = (
+            "amocrm-public-v1"
+            if get_settings().integration_amocrm_public_oauth_enabled
+            else "amocrm-legacy-v1"
+        )
+    return resolve_client_profile(provider, key).key
+
+
 def _amocrm_base_url(referer: str | None) -> str:
     """Return a provider-owned HTTPS origin from amoCRM's callback referer."""
     value = (referer or "").strip()
@@ -101,13 +150,9 @@ def _amocrm_base_url(referer: str | None) -> str:
     return f"https://{host}"
 
 
-def authorization_url(provider: str, state: str) -> str:
-    oauth = credentials(provider)
-    if oauth is None:
-        raise IntegrationProviderError(
-            "OAuth приложения сервиса ещё не настроен владельцем платформы"
-        )
-    redirect_uri = callback_url(provider)
+def authorization_url(provider: str, state: str, *, client_key: str | None = None) -> str:
+    oauth = resolve_client_profile(provider, client_key)
+    redirect_uri = oauth.redirect_uri
     if provider == "yookassa":
         base = "https://yookassa.ru/oauth/v2/authorize"
         params = {
@@ -173,11 +218,10 @@ async def exchange_code(
     code: str,
     *,
     referer: str | None = None,
+    client_key: str | None = None,
 ) -> OAuthResult:
-    oauth = credentials(provider)
-    if oauth is None:
-        raise IntegrationProviderError("OAuth приложения сервиса не настроен")
-    redirect_uri = callback_url(provider)
+    oauth = resolve_client_profile(provider, client_key)
+    redirect_uri = oauth.redirect_uri
     headers = {
         "Accept": "application/json",
         "User-Agent": "Omnia-Integration-Hub/2.0",
@@ -357,9 +401,11 @@ async def refresh_access_token(
     provider: str,
     public_config: dict[str, Any],
     secret_values: dict[str, str],
+    *,
+    client_key: str | None = None,
 ) -> tuple[dict[str, str], datetime | None]:
     """Refresh an expiring OAuth token without exposing it to a generated app."""
-    oauth = credentials(provider)
+    oauth = resolve_client_profile(provider, client_key)
     refresh = secret_values.get("refresh_token")
     if oauth is None or not refresh:
         raise IntegrationCredentialsInvalid(
@@ -406,7 +452,7 @@ async def refresh_access_token(
                         "client_secret": oauth.client_secret,
                         "grant_type": "refresh_token",
                         "refresh_token": refresh,
-                        "redirect_uri": callback_url(provider),
+                        "redirect_uri": oauth.redirect_uri,
                     },
                 )
             else:

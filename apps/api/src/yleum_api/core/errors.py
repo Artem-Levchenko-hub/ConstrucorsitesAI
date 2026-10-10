@@ -58,6 +58,7 @@ ErrorCode = Literal[
     "integration_connection_failed",
     "integration_oauth_unavailable",
     "integration_oauth_state_invalid",
+    "account_connection_replacement_requires_confirmation",
     "integration_request_rejected",
     "integration_request_failed",
     "integration_configuration_invalid",

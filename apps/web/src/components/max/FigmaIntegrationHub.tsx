@@ -25,7 +25,7 @@ import {
   UsersRound,
 } from "lucide-react";
 import { toast } from "sonner";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
 import { Button } from "@/components/ui/button";
@@ -116,6 +116,14 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
 }) {
   const qc = useQueryClient();
   const router = useRouter();
+  const oauthOutcomes = useSearchParams()?.getAll("oauth") ?? [];
+  const oauthMessages = new Map<string, string>([
+    ["conflict", "Подключение не изменено: ссылка устарела или доступ уже подключён. Проверьте текущий аккаунт. Для замены общего подключения обратитесь в поддержку."],
+    ["cancelled", "Авторизация отменена. Текущее подключение сохранено."],
+    ["error", "Не удалось завершить авторизацию. Текущее подключение сохранено; попробуйте начать вход заново."],
+    ["connected", "Авторизация завершена. Проверьте подключённый аккаунт и настройте сервис для этого приложения."],
+  ]);
+  const oauthReturnMessage = oauthOutcomes.length === 1 ? oauthMessages.get(oauthOutcomes[0]) : undefined;
   const quota = useOwnerChatQuota();
   const [implementationProvider, setImplementationProvider] = useState<string | null>(null);
   const [implementationPrompt, setImplementationPrompt] = useState("");
@@ -620,6 +628,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   );
   const catalogContent = (
     <>
+      {oauthReturnMessage && <p role="alert" className="mt-4 rounded-[6px] border border-border-default bg-surface-base px-4 py-3 text-sm text-fg-secondary">{oauthReturnMessage}</p>}
       {/* Абзац предупреждения был первым, что видит человек на экране выбора
           сервисов. Текст остался, но уступил место самим сервисам. */}
       <details className="mt-4 max-w-[850px] rounded-[6px] border border-border-subtle bg-surface-base px-4 py-3">
