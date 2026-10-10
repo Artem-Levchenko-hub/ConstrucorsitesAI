@@ -97,12 +97,64 @@ def _normalize_reviewed_client(files):
     assert set(legacy) == {"revision", "path", "sha256", "source"}
     assert legacy["revision"] == "d9e4957c81424dbcd3b2ecbf19bce0ba9a692174"
     assert legacy["path"] == path
-    assert legacy["sha256"] == (
-        "b693c0330619fea290dce6dfb82e7e6b0bc36f8ed63460903ecb483f07d1697a"
-    )
+    assert legacy["sha256"] == ("b693c0330619fea290dce6dfb82e7e6b0bc36f8ed63460903ecb483f07d1697a")
     assert hashlib.sha256(legacy["source"].encode()).hexdigest() == legacy["sha256"], path
     normalized = dict(files)
     normalized[path] = legacy["source"]
+    return normalized
+
+
+def _normalize_managed_order_receipts(files):
+    """Pin both reviewed files before projecting them onto the frozen render."""
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    reviewed = json.loads(
+        (fixtures / "shared_public_readme_overrides.json").read_text(encoding="utf-8")
+    )
+    action = json.loads(
+        (fixtures / "max_template_action_write_overrides.json").read_text(encoding="utf-8")
+    )
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_legacy_orders.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    frozen = {
+        "src/lib/omnia/integration-client.ts": (
+            "b4eda845fe2b8d62e403a9e1f3f041940a5b2987a12c4a303b72eb3f206ba885"
+        ),
+        "src/app/api/omnia/integrations/[...path]/route.ts": (
+            "78b2b20d6fe76e89ae3001ef7524ff9d9b36bbc24b35223ad7c9ca9aae2744cb"
+        ),
+    }
+    assert legacy["revision"] == "a67b7cd7856326178ffea99e39aae90c6ee389a6"
+    assert set(legacy["files"]) == set(frozen)
+    normalized = dict(files)
+    for path, baseline_hash in frozen.items():
+        actual = files[path]
+        entry = reviewed[f"max-miniapp-nextjs/{path}"]
+        baseline = legacy["files"][path]
+        assert baseline["sha256"] == baseline_hash
+        assert hashlib.sha256(baseline["source"].encode()).hexdigest() == baseline_hash
+        declaration = None
+        if path.endswith("route.ts"):
+            match = re.search(r'^const PROJECT_ID = ("[^"\n]*");$', actual, re.M)
+            assert match is not None
+            identity = json.loads(match.group(1))
+            assert identity == "" or str(UUID(identity)) == identity
+            declaration = match.group(0)
+            actual = actual.replace(
+                declaration, 'const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";', 1
+            )
+        else:
+            assert entry["sha256"] == action[path]["sha256"]
+        assert hashlib.sha256(actual.encode()).hexdigest() == entry["sha256"], path
+        normalized[path] = (
+            baseline["source"].replace(
+                'const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";', declaration, 1
+            )
+            if declaration
+            else baseline["source"]
+        )
     return normalized
 
 
@@ -200,7 +252,7 @@ def _assert_render_golden(files, expected, *, portable=False):
     # Project only these two verified dependency blobs back to the old baseline;
     # all other rendered bytes must still match the unchanged original golden.
     original_dependencies = _normalize_preview_renewal(
-        _normalize_analytics(_normalize_reviewed_client(files))
+        _normalize_analytics(_normalize_reviewed_client(_normalize_managed_order_receipts(files)))
     )
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
         reviewed_hash = (
@@ -525,6 +577,8 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/app/api/omnia/actions/route.ts",
         "src/app/api/omnia/events/route.ts",
         "src/lib/omnia/analytics.ts",
+        "src/lib/omnia/integration-client.ts",
+        "src/app/api/omnia/integrations/[...path]/route.ts",
     ],
 )
 @pytest.mark.parametrize("portable", [False, True])

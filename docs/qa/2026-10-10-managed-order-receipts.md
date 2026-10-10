@@ -83,6 +83,16 @@ the historical golden and allowlists. Both local gates pass afterward (14
 materialization/dependency tests plus the API export verifier); final exact CI
 must still pass. Orchestrator Ruff/mypy are clean across 113 source files.
 
+The broader local API run was stopped for diagnosis at 44 failures / 2278
+passes; this is not a complete suite PASS. Every observed failure was in the
+historical config-render aggregate after the two reviewed template changes.
+Test-only normalization now pins the new exact SDK/proxy hashes, validates the
+rendered project binding, and projects only those two files onto immutable base
+`a67b7cd` sources before comparison with the unchanged aggregate golden. All 58
+render tests pass; independent review confirms unexpected SDK/proxy and binding
+drift remains rejected in both modes. Remaining local API cases and final full
+CI are still required; no runtime acceptance guard is loosened.
+
 Delivery must also rebuild the materialized MAX kit and its precompiled trusted
 public/preview core through `docs/operations/project-cell-main-stack.md`, using
 verified immutable ancestors and retaining previous pins for rollback. Updating
