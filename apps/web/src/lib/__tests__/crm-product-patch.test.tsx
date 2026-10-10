@@ -12,7 +12,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 // and UIKit rendering are substituted; no platform app consumes this fixture.
 const sdk = {
   getYleumAppConfig: vi.fn(), getYleumIntegrations: vi.fn(),
-  createYleumLead: vi.fn(), getYleumLeads: vi.fn(), getYleumLeadStatus: vi.fn(),
+  createYleumLead: vi.fn(), getYleumLeads: vi.fn(), getYleumLeadStatus: vi.fn(), getYleumLeadReceipt: vi.fn(),
 };
 const saveMaxConsent = vi.fn();
 let session = { mode: "max", user: { id: "101" }, error: null };
@@ -296,4 +296,156 @@ it("a cached receipt is not a success until the scoped server read validates it"
   await mount();
   expect(host.textContent).not.toContain("Заявка отправлена");
   expect(host.querySelector('[role="alert"]')).not.toBeNull();
+});
+
+const legacyKey = "c68421c9-934a-48f8-b293-147d5197a8b9";
+const scopedKey = () => `yleum:amocrm:lead:v1:${location.origin}:101:max`;
+const legacyReceipt = () => ({ provider: "amocrm", status: "succeeded", id: "2964609",
+  idempotency_key: legacyKey, request_digest: "a".repeat(64), details_status: "recorded" });
+
+it("authenticated legacy adoption restores success and preserves old key across F5", async () => {
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sdk.getYleumLeadReceipt.mockResolvedValue(legacyReceipt());
+  sdk.getYleumLeadStatus.mockResolvedValue({ id: "2964609", provider: "amocrm" });
+  await mount();
+  await until(() => expect(host.textContent).toContain("2964609"));
+  expect(sdk.getYleumLeadReceipt).toHaveBeenCalledWith(legacyKey, undefined);
+  expect(sessionStorage.getItem("lead_idempotency_key")).toBe(legacyKey);
+  expect(sdk.createYleumLead).not.toHaveBeenCalled(); expect(saveMaxConsent).not.toHaveBeenCalled();
+  await act(async () => root.unmount()); host.remove(); await mount();
+  await until(() => expect(host.textContent).toContain("2964609"));
+  expect(sdk.getYleumLeadReceipt).toHaveBeenLastCalledWith(legacyKey,
+    { requestDigest: "a".repeat(64), leadId: "2964609" });
+});
+
+it("explicit new intent after adoption survives F5 without replacing unknown outcome", async () => {
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sdk.getYleumLeadReceipt.mockResolvedValue(legacyReceipt());
+  sdk.getYleumLeadStatus.mockResolvedValue({ id: "2964609", provider: "amocrm" });
+  await mount(); await until(() => expect(host.textContent).toContain("2964609"));
+  await click("Новая заявка");
+  sdk.createYleumLead.mockRejectedValueOnce(new Error("New lost response"));
+  await fill(); await click("Отправить заявку");
+  await until(() => expect(sdk.createYleumLead).toHaveBeenCalledTimes(1));
+  const newKey = sdk.createYleumLead.mock.calls[0][0].idempotency_key;
+  expect(newKey).not.toBe(legacyKey);
+  await act(async () => root.unmount()); host.remove(); await mount();
+  await until(() => expect(host.textContent).toContain("Исход предыдущей отправки неизвестен"));
+  expect(JSON.parse(sessionStorage.getItem(scopedKey())!)).toMatchObject({ key: newKey, state: "pending" });
+  expect(sessionStorage.getItem("lead_idempotency_key")).toBe(legacyKey);
+  expect(host.textContent).not.toContain("Заявка отправлена");
+});
+
+it.each(["unknown", "rejected", "multiple", "foreign"])("legacy %s lookup fails closed", async () => {
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sdk.getYleumLeadReceipt.mockRejectedValue(new IntegrationError("Unconfirmed", "integration_receipt_unconfirmed", 409));
+  await mount(); await until(() => expect(host.textContent).toContain("Отправка заблокирована"));
+  expect(sdk.createYleumLead).not.toHaveBeenCalled(); expect(sessionStorage.getItem(scopedKey())).toBeNull();
+  expect(sessionStorage.getItem("lead_idempotency_key")).toBe(legacyKey);
+});
+
+it("legacy marker mismatch and malformed marker never adopt or dispatch", async () => {
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sessionStorage.setItem(`${scopedKey()}:legacy-adoption`, JSON.stringify({ version: 1,
+    key: legacyKey, id: "2964609", requestDigest: "b".repeat(64) }));
+  sdk.getYleumLeadReceipt.mockResolvedValue(legacyReceipt());
+  await mount(); await until(() => expect(host.textContent).toContain("Отправка заблокирована"));
+  expect(sessionStorage.getItem(scopedKey())).toBeNull(); expect(sdk.createYleumLead).not.toHaveBeenCalled();
+  await act(async () => root.unmount()); host.remove();
+  sessionStorage.setItem(`${scopedKey()}:legacy-adoption`, "false");
+  await mount(); await until(() => expect(host.textContent).toContain("Отправка заблокирована"));
+});
+
+it("partial adoption storage failure blocks then recovers without deleting legacy key", async () => {
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sdk.getYleumLeadReceipt.mockResolvedValue(legacyReceipt());
+  sdk.getYleumLeadStatus.mockResolvedValue({ id: "2964609", provider: "amocrm" });
+  const original = Storage.prototype.setItem;
+  const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
+    if (key.endsWith(":legacy-adoption")) throw Error("Storage full");
+    original.call(this, key, value);
+  });
+  await mount(); await until(() => expect(host.textContent).toContain("Отправка заблокирована"));
+  expect(sdk.createYleumLead).not.toHaveBeenCalled(); spy.mockRestore();
+  await act(async () => root.unmount()); host.remove(); await mount();
+  await until(() => expect(host.textContent).toContain("2964609"));
+});
+
+it("late actor A adoption cannot overwrite the later A unknown intent", async () => {
+  let first!: (value: unknown) => void;
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sdk.getYleumLeadReceipt.mockReturnValueOnce(new Promise(resolve => { first = resolve; }))
+    .mockRejectedValueOnce(Error("Foreign" )).mockResolvedValue(legacyReceipt());
+  sdk.getYleumLeadStatus.mockResolvedValue({ id: "2964609", provider: "amocrm" });
+  await mount(); await until(() => expect(sdk.getYleumLeadReceipt).toHaveBeenCalledTimes(1));
+  session = { ...session, user: { id: "202" } }; await act(async () => root.render(createElement(App)));
+  await until(() => expect(sdk.getYleumLeadReceipt).toHaveBeenCalledTimes(2));
+  session = { ...session, user: { id: "101" } }; await act(async () => root.render(createElement(App)));
+  await until(() => expect(host.textContent).toContain("2964609")); await click("Новая заявка");
+  sdk.createYleumLead.mockRejectedValueOnce(Error("Lost")); await fill(); await click("Отправить заявку");
+  await until(() => expect(sdk.createYleumLead).toHaveBeenCalledTimes(1));
+  const unknown = sessionStorage.getItem(scopedKey());
+  await act(async () => first(legacyReceipt()));
+  expect(sessionStorage.getItem(scopedKey())).toBe(unknown);
+});
+
+it("late same-key marker ID or digest changes block a deliberate new dispatch", async () => {
+  sessionStorage.setItem("lead_idempotency_key", legacyKey);
+  sdk.getYleumLeadReceipt.mockResolvedValue(legacyReceipt());
+  sdk.getYleumLeadStatus.mockResolvedValue({ id: "2964609", provider: "amocrm" });
+  await mount(); await until(() => expect(host.textContent).toContain("2964609"));
+  const marker = JSON.parse(sessionStorage.getItem(`${scopedKey()}:legacy-adoption`)!);
+  sessionStorage.setItem(`${scopedKey()}:legacy-adoption`, JSON.stringify({ ...marker, requestDigest: "b".repeat(64) }));
+  await click("Новая заявка");
+  expect(host.textContent).toContain("Заявка отправлена");
+  expect(sdk.createYleumLead).not.toHaveBeenCalled();
+});
+
+it("F5 recovery cannot show old success or delete a newer unknown scoped receipt", async () => {
+  let finish!: (value: unknown) => void;
+  const saved = { version: 1, key: legacyKey, state: "succeeded", id: "2964609", fingerprint: "a".repeat(64) };
+  sessionStorage.setItem(scopedKey(), JSON.stringify(saved));
+  sdk.getYleumLeadStatus.mockReturnValueOnce(new Promise(resolve => { finish = resolve; }));
+  await mount(); await until(() => expect(sdk.getYleumLeadStatus).toHaveBeenCalledTimes(1));
+  const newer = { version: 1, key: "c68421c9-934a-48f8-b293-147d5197a8ba", state: "pending", attempted: true, fingerprint: "b".repeat(64) };
+  sessionStorage.setItem(scopedKey(), JSON.stringify(newer));
+  await act(async () => finish({ id: "2964609", provider: "amocrm" }));
+  expect(host.textContent).not.toContain("Заявка отправлена");
+  expect(host.textContent).toContain("Отправка заблокирована");
+  expect(JSON.parse(sessionStorage.getItem(scopedKey())!)).toEqual(newer);
+});
+
+it("new submission cannot erase a different pending identity stored after success", async () => {
+  sessionStorage.setItem(scopedKey(), JSON.stringify({ version: 1, key: legacyKey, state: "succeeded", id: "2964609", fingerprint: "a".repeat(64) }));
+  sdk.getYleumLeadStatus.mockResolvedValue({ id: "2964609", provider: "amocrm" });
+  await mount(); await until(() => expect(host.textContent).toContain("2964609"));
+  const newer = { version: 1, key: "c68421c9-934a-48f8-b293-147d5197a8ba", state: "pending", attempted: true, fingerprint: "b".repeat(64) };
+  sessionStorage.setItem(scopedKey(), JSON.stringify(newer));
+  await click("Новая заявка");
+  expect(JSON.parse(sessionStorage.getItem(scopedKey())!)).toEqual(newer);
+});
+
+it("late consent completion cannot overwrite or dispatch a newer unknown operation", async () => {
+  let finish!: () => void;
+  sdk.getYleumAppConfig.mockResolvedValue({ legal: { personal_data_consent: true } });
+  saveMaxConsent.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; }));
+  await mount(); await fill();
+  await act(async () => host.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
+  await click("Отправить заявку"); await until(() => expect(saveMaxConsent).toHaveBeenCalledTimes(1));
+  const newer = { version: 1, key: legacyKey, state: "pending", attempted: true, fingerprint: "b".repeat(64) };
+  sessionStorage.setItem(scopedKey(), JSON.stringify(newer));
+  await act(async () => finish());
+  expect(JSON.parse(sessionStorage.getItem(scopedKey())!)).toEqual(newer);
+  expect(sdk.createYleumLead).not.toHaveBeenCalled();
+});
+
+it("late fresh422 cannot delete a newer unknown operation", async () => {
+  let reject!: (value: unknown) => void;
+  sdk.createYleumLead.mockReturnValueOnce(new Promise((_, failed) => { reject = failed; }));
+  await mount(); await fill(); await click("Отправить заявку");
+  await until(() => expect(sdk.createYleumLead).toHaveBeenCalledTimes(1));
+  const newer = { version: 1, key: legacyKey, state: "pending", attempted: true, fingerprint: "b".repeat(64) };
+  sessionStorage.setItem(scopedKey(), JSON.stringify(newer));
+  await act(async () => reject(new IntegrationError("Rejected", "integration_request_rejected", 422)));
+  expect(JSON.parse(sessionStorage.getItem(scopedKey())!)).toEqual(newer);
 });

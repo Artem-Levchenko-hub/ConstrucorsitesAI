@@ -21,7 +21,7 @@ export class YleumIntegrationError extends Error {
 }
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "lead-receipt" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -150,6 +150,32 @@ export function getYleumLeads(): Promise<{ items: YleumLeadStatus[]; has_more: b
 /** Authorization is checked against a durable project/user/account receipt. */
 export function getYleumLeadStatus(leadId: string): Promise<YleumLeadStatus> {
   return invoke("lead-status", { lead_id: leadId });
+}
+
+export type YleumLeadReceipt = {
+  provider: "amocrm";
+  id: string;
+  status: "succeeded";
+  idempotency_key: string;
+  request_digest: string;
+  details_status: "recorded" | "unknown";
+  warning: string | null;
+};
+
+/** Read a confirmed own receipt by its exact client key; never creates a lead.
+ * Unknown, rejected or conflicting outcomes stay errors and retain their key.
+ * No personal form data is returned or sent by this lookup.
+ */
+export function getYleumLeadReceipt(idempotencyKey: string, expectations: {
+  requestDigest?: string;
+  leadId?: string;
+} = {}): Promise<YleumLeadReceipt> {
+  return invoke("lead-receipt", {
+    idempotency_key: idempotencyKey,
+    ...(expectations.requestDigest !== undefined
+      ? { expected_request_digest: expectations.requestDigest } : {}),
+    ...(expectations.leadId !== undefined ? { expected_lead_id: expectations.leadId } : {}),
+  });
 }
 
 export function getYleumCatalog(): Promise<{

@@ -1,10 +1,11 @@
 """Project CRM setup and receipt-authorized current lead status."""
 
+import re
 from datetime import UTC, datetime
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Header, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -16,6 +17,8 @@ from yleum_api.routers.app_integrations import _account_connection, _binding, _o
 from yleum_api.routers.integration_runtime import _connections, _runtime_context, _secrets
 from yleum_api.schemas.integration_runtime import (
     RuntimeLeadListPublic,
+    RuntimeLeadReceiptPublic,
+    RuntimeLeadReceiptRequest,
     RuntimeLeadStatusPublic,
     RuntimeLeadStatusRequest,
 )
@@ -171,6 +174,73 @@ async def _runtime_connection(session: SessionDep, project_id: UUID) -> AccountI
     if connection is None:
         raise ApiError("crm_integration_required", "Подключите amoCRM к приложению", 409)
     return connection
+
+
+@router.post(_RUNTIME + "/receipt", response_model=RuntimeLeadReceiptPublic)
+async def my_lead_receipt(
+    project_id: UUID,
+    payload: RuntimeLeadReceiptRequest,
+    session: SessionDep,
+    request: Request,
+    response: Response,
+    x_max_init_data: Annotated[str, Header(alias="X-MAX-Init-Data")] = "",
+) -> RuntimeLeadReceiptPublic:
+    """Read an exact durable receipt; never refresh credentials or contact CRM."""
+    context = await _runtime_context(session, project_id, x_max_init_data, request)
+    connection = await _runtime_connection(session, project_id)
+    rows = list(
+        (
+            await session.scalars(
+                select(IntegrationOperation)
+                .where(
+                    IntegrationOperation.project_id == project_id,
+                    IntegrationOperation.max_user_id == str(context.max_user_id),
+                    IntegrationOperation.integration_id == connection.id,
+                    IntegrationOperation.provider == "amocrm",
+                    IntegrationOperation.kind == "lead",
+                    IntegrationOperation.client_key == payload.idempotency_key,
+                    IntegrationOperation.result["_account_base_url"].astext
+                    == amocrm.base_url(connection),
+                )
+                .limit(2)
+            )
+        ).all()
+    )
+    if not rows:
+        raise ApiError("not_found", "Подтверждение заявки не найдено", 404)
+    conflict = ApiError(
+        "integration_operation_conflict",
+        "Подтверждение заявки требует проверки",
+        409,
+    )
+    if len(rows) != 1:
+        raise conflict
+    receipt = rows[0]
+    identifier = receipt.result.get("id")
+    if (
+        receipt.status != "succeeded"
+        or receipt.result.get("provider") != "amocrm"
+        or not isinstance(identifier, str)
+        or re.fullmatch(r"[1-9][0-9]{0,19}", identifier) is None
+        or re.fullmatch(r"[0-9a-f]{64}", receipt.request_digest) is None
+        or (payload.expected_lead_id is not None and payload.expected_lead_id != identifier)
+        or (
+            payload.expected_request_digest is not None
+            and payload.expected_request_digest != receipt.request_digest
+        )
+    ):
+        raise conflict
+    details = "recorded" if receipt.result.get("details_status") == "recorded" else "unknown"
+    response.headers["Cache-Control"] = "private, no-store"
+    return RuntimeLeadReceiptPublic(
+        id=identifier,
+        idempotency_key=receipt.client_key,
+        request_digest=receipt.request_digest,
+        details_status=details,
+        warning=None
+        if details == "recorded"
+        else "Передача комментария и источника не подтверждена.",
+    )
 
 
 @router.get(_RUNTIME, response_model=RuntimeLeadListPublic)

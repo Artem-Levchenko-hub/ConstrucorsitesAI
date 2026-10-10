@@ -88,6 +88,22 @@ class RuntimeLeadStatusRequest(BaseModel):
     lead_id: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
 
 
+class RuntimeLeadReceiptRequest(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=128)
+    expected_request_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    expected_lead_id: str | None = Field(default=None, pattern=r"^[1-9][0-9]{0,19}$")
+
+
+class RuntimeLeadReceiptPublic(BaseModel):
+    provider: Literal["amocrm"] = "amocrm"
+    id: str = Field(pattern=r"^[1-9][0-9]{0,19}$")
+    status: Literal["succeeded"] = "succeeded"
+    idempotency_key: str
+    request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    details_status: Literal["recorded", "unknown"]
+    warning: str | None = None
+
+
 class RuntimeLeadStatusPublic(RuntimeLeadPublic):
     name: str
     pipeline_id: int

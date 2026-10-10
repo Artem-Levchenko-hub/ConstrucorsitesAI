@@ -95,7 +95,7 @@ def test_catalog_item_refuses_a_photo_address_that_is_not_https() -> None:
 
 def test_kit_v24_retires_encrypted_crud_and_stores_only_the_max_user_id() -> None:
     project_id = uuid4()
-    assert MAX_MANAGED_KIT_VERSION == 28
+    assert MAX_MANAGED_KIT_VERSION == 29
     managed = render_max_managed_files(_config(), project_id)
     starter = render_max_starter_files(_config(), project_id, portable=True)
     # v22: no managed server file reads or persists the MAX visitor profile.
@@ -939,3 +939,11 @@ def test_portable_starter_does_not_reintroduce_legacy_database_scripts():
     for key in ("dependencies", "devDependencies"):
         assert portable_package[key] == legacy_package[key]
     assert portable["pnpm-lock.yaml"] == legacy["pnpm-lock.yaml"]
+
+
+def test_managed_kit_refresh_exposes_authenticated_lead_receipt_read() -> None:
+    assert MAX_MANAGED_KIT_VERSION == 29
+    managed = render_max_managed_files(_config(), uuid4())
+    assert "getYleumLeadReceipt" in managed["src/lib/omnia/integration-client.ts"]
+    route = managed["src/app/api/omnia/integrations/[...path]/route.ts"]
+    assert 'operation === "lead-receipt"' in route and "/leads/receipt`" in route
