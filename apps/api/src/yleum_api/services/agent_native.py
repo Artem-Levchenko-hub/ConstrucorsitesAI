@@ -18,6 +18,7 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import asyncio
+import posixpath
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -134,7 +135,8 @@ _SOURCE_REPAIR_DISCOVERY_TURNS = 2
 _SOURCE_REPAIR_NO_PROGRESS_TURNS = 4
 _SOURCE_REPAIR_NUDGE = (
     "SOURCE REPAIR REQUIRED: the coordinator rejected this source. A green fast check "
-    "does not resolve that failure. Apply a minimal write_file/edit_file change addressing "
+    "does not resolve that failure. Only an advertised one-time read_file may inspect an "
+    "unread existing source; then apply a minimal write_file/edit_file change addressing "
     "the reported source error; do not repeat shell exploration or unchanged checks. "
     "Preserve working features, business data and accepted/applied migrations. "
     "Then build and hand the changed candidate to the coordinator for full verification."
@@ -216,6 +218,24 @@ def _normalize_agent_path(path: str) -> str:
     normalized = (path or "").replace("\\", "/")
     while normalized.startswith("./"):
         normalized = normalized[2:]
+    return normalized
+
+
+def _source_repair_read_path(path: str) -> str | None:
+    """Canonical source-only target; never advertise config, secrets or traversal."""
+    normalized = _normalize_agent_path(path)
+    if (
+        not normalized
+        or "\x00" in normalized
+        or ":" in normalized
+        or any(part in {"", ".", ".."} for part in normalized.split("/"))
+        or not normalized.startswith(("src/", "tests/", "test/", "drizzle/", "migrations/"))
+        or not normalized.endswith((
+            ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".sql", ".css", ".scss",
+        ))
+        or not _is_source_repair_path(normalized)
+    ):
+        return None
     return normalized
 
 
@@ -457,6 +477,19 @@ _MAX_ENTRY_WRITE_CHOICE: dict[str, str] = {"type": "tool", "name": "write_file"}
 _SOURCE_REPAIR_TOOLS_CACHED = _cache_toolset(
     [tool for tool in _TOOLS if tool["name"] in {"write_file", "edit_file"}]
 )
+
+
+def _source_repair_tools(read_paths: list[str]) -> list[dict[str, Any]]:
+    if not read_paths:
+        return _SOURCE_REPAIR_TOOLS_CACHED
+    return _cache_toolset([
+        *[tool for tool in _TOOLS if tool["name"] in {"write_file", "edit_file"}],
+        _tool(
+            "read_file", "Inspect ONE unread existing source, then apply the targeted repair. "
+            "Reading is not implementation progress and does not extend the repair budget.",
+            {"path": {"type": "string", "enum": read_paths}}, ["path"],
+        ),
+    ])
 
 
 def _system_blocks(system: str) -> list[dict[str, Any]]:
@@ -1082,6 +1115,12 @@ async def _run_native_segment(
 
     convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
     baseline_files = dict(initial_files or {})
+    repair_read_paths = {
+        canonical for path in baseline_files
+        if (canonical := _source_repair_read_path(path)) is not None
+    } if source_repair else set()
+    repair_read_attempts: set[str] = set()
+    repair_targeted_read_used = False
     written: dict[str, str] = {}
     last_build_ok: bool | None = None
     wrote_since_build = False
@@ -1121,6 +1160,11 @@ async def _run_native_segment(
             _is_source_repair_path(path) and content != baseline_files.get(path, "")
             for path, content in written.items()
         )
+
+    def _remaining_repair_reads() -> list[str]:
+        if repair_targeted_read_used:
+            return []
+        return sorted(repair_read_paths - repair_read_attempts)
 
     def _record_turn_progress(product_progress: bool) -> None:
         nonlocal no_write_turns
@@ -1410,7 +1454,9 @@ async def _run_native_segment(
                         auth_factory=messages_auth_factory,
                         tools=(
                             _SOURCE_REPAIR_TOOLS_CACHED
-                            if repair_write_required or edit_write_required
+                            if edit_write_required
+                            else _source_repair_tools(_remaining_repair_reads())
+                            if repair_write_required
                             else _MAX_ENTRY_WRITE_TOOLS
                             if force_max_entry_write
                             else _MAX_COORDINATOR_BASH_TOOLS_CACHED
@@ -1701,7 +1747,11 @@ async def _run_native_segment(
                 ):
                     obs = {"ok": False, "error": _EDIT_SOURCE_NUDGE}
                 elif repair_write_required and not _repair_source_changed() and not (
-                    name in {"write_file", "edit_file"} and _is_source_repair_path(action.path)
+                    (name in {"write_file", "edit_file"} and _is_source_repair_path(action.path))
+                    or (
+                        name == "read_file"
+                        and _source_repair_read_path(action.path) in _remaining_repair_reads()
+                    )
                 ):
                     obs = {"ok": False, "error": _SOURCE_REPAIR_NUDGE}
                 elif coordinated_max and name == "runtime_check":
@@ -1719,6 +1769,19 @@ async def _run_native_segment(
                         ),
                     }
                 else:
+                    if source_repair and name == "read_file":
+                        # Discovery still uses the executor's broader relative-path
+                        # grammar. Count equivalent spellings of a read once, without
+                        # admitting those spellings through the strict locked schema.
+                        read_path = _source_repair_read_path(
+                            posixpath.normpath(action.path.replace("\\", "/")),
+                        )
+                        if read_path is not None:
+                            repair_read_attempts.add(read_path)
+                        if repair_write_required and not _repair_source_changed():
+                            # Consume before execution, including failures and additional
+                            # tools in this batch; never reset no-write/proof budgets.
+                            repair_targeted_read_used = True
                     if name in {"build", "runtime_check", "probe", "verify_isolation"}:
                         _invalidate_proofs(name)
                     try:
