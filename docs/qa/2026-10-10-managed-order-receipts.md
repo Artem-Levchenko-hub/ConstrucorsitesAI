@@ -74,3 +74,18 @@ Production installation and real MAX → MoySklad checkout/reopen are pending.
 The Windows QA/deployment owner serializes release after the current Coffee
 generation reaches terminal state and fresh global idle/config preservation
 checks. Do not treat local tests or a generated build as live acceptance.
+
+Initial CI `38051425503` reported red image/export and orchestrator gates. The
+strict materialization and API export verifiers were reproduced locally: they
+expected the previous SDK/proxy bytes. A follow-up updates only those reviewed
+file hashes/size/blob metadata in existing approved override fixtures, retaining
+the historical golden and allowlists. Both local gates pass afterward (14
+materialization/dependency tests plus the API export verifier); final exact CI
+must still pass. Orchestrator Ruff/mypy are clean across 113 source files.
+
+Delivery must also rebuild the materialized MAX kit and its precompiled trusted
+public/preview core through `docs/operations/project-cell-main-stack.md`, using
+verified immutable ancestors and retaining previous pins for rollback. Updating
+the API alone does not add the reserved proxy routes to an older compiled core.
+Verify installed `order-list`, `order-status`, `order-details` without creating
+a provider order, then normal guarded app promotion and genuine MAX acceptance.
