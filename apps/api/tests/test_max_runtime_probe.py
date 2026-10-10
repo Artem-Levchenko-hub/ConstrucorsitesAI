@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import httpx
@@ -242,6 +243,117 @@ async def test_portable_probe_bounds_connection_retries_and_redacts_transport(
     assert "ConnectError (stage=identity_anonymous; attempts=3)" in result.detail
     assert "private-transport-detail" not in result.detail
     assert origin not in result.detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cookie", [None, "__Host-max_session=invalid.invalid"])
+@pytest.mark.parametrize(
+    ("disconnects", "status", "identity_change"),
+    [(1, 401, {}), (3, 401, {}), (1, 200, {}), (1, 502, {}),
+     (1, 401, {"project_id": str(UUID(int=2))}), (1, 401, {"epoch": 6})],
+)
+async def test_anonymous_identity_disconnect_is_bounded_without_weakening_proof(
+    monkeypatch: pytest.MonkeyPatch,
+    cookie: str | None,
+    disconnects: int,
+    status: int,
+    identity_change: dict[str, object],
+) -> None:
+    calls = 0
+    visited: list[str] = []
+    sleep = AsyncMock()
+    monkeypatch.setattr(max_runtime_probe.asyncio, "sleep", sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        visited.append(request.url.path)
+        if request.url.path == "/__omnia/identity":
+            if request.headers.get("cookie") == cookie:
+                calls += 1
+                if calls <= disconnects:
+                    raise httpx.RemoteProtocolError("private-disconnect-detail", request=request)
+                return httpx.Response(status)
+            if request.headers.get("cookie") != "__Host-max_session=valid":
+                return httpx.Response(401)
+            return httpx.Response(200, json={
+                "project_id": str(PROJECT_ID), "user_id": "preview", "epoch": 7,
+                **identity_change,
+            })
+        if request.url.path == "/api/omnia/preview-session":
+            return httpx.Response(307, headers={
+                "Location": "/", "Set-Cookie": "__Host-max_session=valid; Path=/; Secure",
+            })
+        if request.url.path == "/api/omnia/actions":
+            return httpx.Response(200, json={"actions": []})
+        return httpx.Response(200)
+
+    _install_transport(monkeypatch, handler)
+    result = await max_runtime_probe._probe_signed_runtime(
+        BOOTSTRAP, portable_project_id=PROJECT_ID, expected_epoch=7,
+    )
+
+    assert calls == min(disconnects + 1, 3)
+    assert [call.args[0] for call in sleep.await_args_list] == (
+        [0.2, 0.4] if disconnects == 3 else [0.2]
+    )
+    assert result.ok is (disconnects == 1 and status == 401 and not identity_change)
+    assert "private-disconnect-detail" not in result.detail
+    assert ORIGIN not in result.detail
+    if disconnects == 3:
+        assert "RemoteProtocolError (stage=identity_anonymous; attempts=3)" in result.detail
+        assert "/api/omnia/preview-session" not in visited
+    elif status != 401:
+        assert "/api/omnia/preview-session" not in visited
+        assert ("accepts unauthenticated" if status == 200 else "HTTP 502") in result.detail
+    else:
+        assert visited.count("/__omnia/identity") == 4
+        assert visited.count("/api/omnia/preview-session") == 1
+        assert visited.count("/api/omnia/actions") == 1
+        if identity_change:
+            assert result.detail == "portable boundary identity proof failed"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stage", ["bootstrap", "product", "actions", "identity_signed"])
+async def test_non_anonymous_protocol_disconnect_remains_terminal(
+    monkeypatch: pytest.MonkeyPatch, stage: str,
+) -> None:
+    calls = 0
+    sleep = AsyncMock()
+    monkeypatch.setattr(max_runtime_probe.asyncio, "sleep", sleep)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        path = request.url.path
+        if path == "/__omnia/identity":
+            if request.headers.get("cookie") != "__Host-max_session=valid":
+                return httpx.Response(401)
+            current_stage = "identity_signed"
+        else:
+            current_stage = {
+                "/api/omnia/preview-session": "bootstrap",
+                "/api/omnia/actions": "actions", "/": "product",
+            }[path]
+        if current_stage == stage:
+            calls += 1
+            raise httpx.RemoteProtocolError("private-disconnect-detail", request=request)
+        if current_stage == "bootstrap":
+            return httpx.Response(307, headers={
+                "Location": "/", "Set-Cookie": "__Host-max_session=valid; Path=/; Secure",
+            })
+        return httpx.Response(200, json={"actions": []})
+
+    _install_transport(monkeypatch, handler)
+    result = await max_runtime_probe._probe_signed_runtime(
+        BOOTSTRAP, portable_project_id=PROJECT_ID, expected_epoch=7,
+    )
+
+    assert result.ok is False
+    assert calls == 1
+    sleep.assert_not_awaited()
+    assert f"RemoteProtocolError (stage={stage}; attempts=1)" in result.detail
+    assert "private-disconnect-detail" not in result.detail
+    assert ORIGIN not in result.detail
 
 
 @pytest.mark.asyncio
