@@ -18,7 +18,7 @@ describe("MAX workspace responsive contract", () => {
   });
 
   it("uses two work areas on a laptop and a preview drawer on narrow screens", () => {
-    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) minmax(440px, 40%)");
+    expect(styles).toContain("grid-template-columns: minmax(0, 1fr) clamp(440px, 30%, 520px)");
     expect(styles).toContain("@media (max-width: 1023px)");
     expect(styles).toContain(".max-editor-desktop-preview { display: none; }");
     expect(workspace).toContain('modal === "preview" ? "max-mobile-preview"');

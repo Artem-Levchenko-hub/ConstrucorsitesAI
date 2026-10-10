@@ -53,7 +53,7 @@
 .max-editor-header-actions { flex-shrink: 0; gap: 8px; }
 .max-editor-header-actions > button, .max-editor-header-actions > a { min-height: 44px; border-radius: 6px; font-size: 13px; }
 .max-editor-header-actions .max-editor-publish { background: #0062ee; color: #fff; padding-inline: 18px; }
-.max-editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(440px, 40%); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
+.max-editor-workspace { display: grid; grid-template-columns: minmax(0, 1fr) clamp(440px, 30%, 520px); grid-template-rows: minmax(0, 1fr); flex: 1; min-height: 0; overflow: hidden; }
 .max-editor-conversation { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .max-editor-section-heading { padding: 24px 28px 16px; }
 .max-editor-section-heading h1 { font-size: 20px; font-weight: 600; letter-spacing: -.035em; }
