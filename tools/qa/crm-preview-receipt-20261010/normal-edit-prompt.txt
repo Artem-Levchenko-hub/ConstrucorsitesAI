@@ -1,0 +1,277 @@
+Исправь только src/app/page.tsx текущей принятой версии. Ни SDK, ни server routes, config, SQL, dependencies, legal, auth не меняй. Ниже точный unified diff к accepted page SHA256 76d2d01f2ef523db137e4a65a6b35bd4e07e2331403b308b131fe3b7a69a7467. Примени только этот diff стандартными write_file/edit_file, сохрани все остальные файлы. Выполни проверку типов/сборки и обычную финализацию координатора. Не создавай patch.js/новые helper-файлы. Это кодовый patch, не credentials. Новый page SHA256: 2881629c3c67ffa64421420fd602796344394b62a5b414e2c9b597aaebc1c59a.
+
+--- a/src/app/page.tsx
++++ b/src/app/page.tsx
+@@ -8 +8 @@
+-  getYleumLeadStatus, getYleumLeadReceipt, YleumIntegrationError, type YleumLeadStatus,
++  getYleumLeadStatus, getYleumLeadReceipt, YleumIntegrationError, type YleumLeadStatus, type YleumLeadReceipt,
+@@ -24,2 +24,2 @@
+-  const raw = sessionStorage.getItem(storageKey);
+-  if (raw === null) return null;
++  const raw = localStorage.getItem(storageKey) ?? sessionStorage.getItem(storageKey);
++  if (raw === null || raw === "null") return null;
+@@ -32,0 +33,2 @@
++          (record.fingerprint === undefined || (typeof record.fingerprint === "string" && DIGEST.test(record.fingerprint))) &&
++          (record.requestDigest === undefined || (typeof record.requestDigest === "string" && DIGEST.test(record.requestDigest))) &&
+@@ -37 +39,6 @@
+-  return record as LeadReceipt;
++  const valid = record as LeadReceipt;
++  return valid.state === "pending"
++    ? { version: 1, key: valid.key, state: "pending", attempted: valid.attempted, fingerprint: valid.fingerprint }
++    : { version: 1, key: valid.key, state: "succeeded", id: valid.id,
++        ...(valid.fingerprint ? { fingerprint: valid.fingerprint } : {}),
++        ...(valid.requestDigest ? { requestDigest: valid.requestDigest } : {}) };
+@@ -51 +58 @@
+-  const raw = sessionStorage.getItem(`${storageKey}:legacy-adoption`);
++  const raw = localStorage.getItem(`${storageKey}:legacy-adoption`) ?? sessionStorage.getItem(`${storageKey}:legacy-adoption`);
+@@ -61 +68,26 @@
+-  return record as LegacyAdoption;
++  return { version: 1, key: record.key, id: record.id, requestDigest: record.requestDigest } as LegacyAdoption;
++}
++
++function checkReceipt(receipt: YleumLeadReceipt, key: string, id?: string, digest?: string) {
++  if (receipt.provider !== "amocrm" || receipt.status !== "succeeded" || receipt.idempotency_key !== key ||
++      typeof receipt.id !== "string" || !LEAD_ID.test(receipt.id) ||
++      typeof receipt.request_digest !== "string" || !DIGEST.test(receipt.request_digest) ||
++      (id !== undefined && receipt.id !== id) || (digest !== undefined && receipt.request_digest !== digest)) {
++    throw new Error("Не удалось сопоставить сохранённую заявку");
++  }
++}
++
++async function withReceiptLock(key: string, signal: AbortSignal, action: () => Promise<void>) {
++  if (!navigator.locks?.request) throw new Error("Безопасное хранение заявки недоступно. Отправка заблокирована.");
++  await navigator.locks.request(key, { mode: "exclusive", signal }, async () => {
++    if (signal.aborted) return;
++    let stopped!: () => void;
++    const cancelled = new Promise<void>(resolve => { stopped = resolve; });
++    signal.addEventListener("abort", stopped, { once: true });
++    try { await Promise.race([action(), cancelled]); }
++    finally { signal.removeEventListener("abort", stopped); }
++  });
++}
++
++function legacyIdentity(storageKey: string): string | null {
++  return sessionStorage.getItem("lead_idempotency_key") ?? readLegacyAdoption(storageKey)?.key ?? null;
+@@ -100,0 +133 @@
++  const storageLifetime = useRef(new AbortController());
+@@ -108 +141 @@
+-        sessionStorage.getItem("lead_idempotency_key") !== checkedLegacy.current) {
++        legacyIdentity(storageKey) !== checkedLegacy.current) {
+@@ -121 +154,2 @@
+-    return () => { active.current = false; listSequence.current++; };
++    storageLifetime.current = new AbortController();
++    return () => { active.current = false; storageLifetime.current.abort(); listSequence.current++; };
+@@ -139 +173,2 @@
+-          const oldKey = sessionStorage.getItem("lead_idempotency_key");
++          let currentKeyVerified = false;
++          const oldKey = legacyIdentity(storageKey);
+@@ -140,0 +176,6 @@
++          if (localStorage.getItem(storageKey) === null && saved) {
++            localStorage.setItem(storageKey, JSON.stringify(saved));
++          }
++          if (localStorage.getItem(`${storageKey}:legacy-adoption`) === null && marker) {
++            localStorage.setItem(`${storageKey}:legacy-adoption`, JSON.stringify(marker));
++          }
+@@ -152 +193 @@
+-            if (sessionStorage.getItem("lead_idempotency_key") !== oldKey) throw new Error("Старый ключ изменился");
++            if (legacyIdentity(storageKey) !== oldKey) throw new Error("Старый ключ изменился");
+@@ -171,2 +212,2 @@
+-              sessionStorage.setItem(storageKey, JSON.stringify(saved));
+-              sessionStorage.setItem(`${storageKey}:legacy-adoption`, JSON.stringify({
++              localStorage.setItem(storageKey, JSON.stringify(saved));
++              localStorage.setItem(`${storageKey}:legacy-adoption`, JSON.stringify({
+@@ -178,0 +220,14 @@
++          if (saved?.state === "pending" && saved.attempted) {
++            let recovered: YleumLeadReceipt | null = null;
++            try { recovered = await getYleumLeadReceipt(saved.key); } catch { /* Unknown stays pending. */ }
++            if (!alive) return;
++            assertLegacyUnchanged();
++            if (!samePending(readReceipt(storageKey), saved)) throw new Error("Сохранённая операция изменилась");
++            if (recovered) {
++              checkReceipt(recovered, saved.key);
++              currentKeyVerified = true;
++              saved = { version: 1, key: saved.key, state: "succeeded", id: recovered.id,
++                fingerprint: saved.fingerprint, requestDigest: recovered.request_digest };
++              localStorage.setItem(storageKey, JSON.stringify(saved));
++            }
++          }
+@@ -179,0 +235,11 @@
++            if (saved.key !== oldKey && !currentKeyVerified) {
++              const exact = await getYleumLeadReceipt(saved.key, {
++                leadId: saved.id, ...(saved.requestDigest ? { requestDigest: saved.requestDigest } : {}),
++              });
++              if (!alive) return;
++              assertLegacyUnchanged();
++              if (!sameSuccess(readReceipt(storageKey), saved)) throw new Error("Сохранённая операция изменилась");
++              checkReceipt(exact, saved.key, saved.id, saved.requestDigest);
++              saved = { ...saved, requestDigest: exact.request_digest };
++              localStorage.setItem(storageKey, JSON.stringify(saved));
++            }
+@@ -202 +268,6 @@
+-    void init();
++    void (preview ? init() : withReceiptLock(storageKey, storageLifetime.current.signal, init)).catch(() => {
++      if (alive) {
++        setSubmitError("Безопасное хранение заявки недоступно. Отправка заблокирована.");
++        setLoadingInit(false);
++      }
++    });
+@@ -246,4 +316,0 @@
+-    let priorAttempted = false;
+-    let dispatched = false;
+-    let confirmedId: string | null = null;
+-    let dispatchedReceipt: LeadReceipt | null = null;
+@@ -251,45 +318,6 @@
+-      const payload = { name: name.trim(), phone: phone.trim(), email: email.trim() || undefined,
+-        comment: comment.trim() || undefined, source: "MAX Mini App" };
+-      const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
+-      if (!active.current) return;
+-      const fingerprint = Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2, "0")).join("");
+-      assertLegacyUnchanged();
+-      const saved = readReceipt(storageKey);
+-      if (saved?.state === "succeeded") throw new Error("Сначала проверьте подтверждение предыдущей заявки");
+-      priorAttempted = saved?.state === "pending" && saved.attempted;
+-      if (priorAttempted && saved!.fingerprint !== fingerprint) {
+-        throw new Error("Исход предыдущей отправки неизвестен. Изменять данные и создавать новый ключ нельзя.");
+-      }
+-      const key = saved?.fingerprint === fingerprint ? saved.key : crypto.randomUUID();
+-      const pending: LeadReceipt = { version: 1, state: "pending", key, fingerprint, attempted: priorAttempted };
+-      sessionStorage.setItem(storageKey, JSON.stringify(pending));
+-      if (config.legal.personal_data_consent) await saveMaxConsent("personal_data", true, "1");
+-      if (!active.current) return;
+-      assertLegacyUnchanged();
+-      if (!samePending(readReceipt(storageKey), pending)) throw new Error("Сохранённая операция изменилась; отправка заблокирована.");
+-      dispatchedReceipt = { ...pending, attempted: true };
+-      sessionStorage.setItem(storageKey, JSON.stringify(dispatchedReceipt));
+-      dispatched = true;
+-      const result = await createYleumLead({ idempotency_key: key, ...payload });
+-      if (!active.current) return;
+-      if (result.provider !== "amocrm" || typeof result.id !== "string" || !/^[1-9][0-9]{0,19}$/.test(result.id)) {
+-        throw new Error("Не удалось подтвердить ID заявки; сохранён прежний ключ");
+-      }
+-      confirmedId = result.id;
+-      const current = readReceipt(storageKey);
+-      if (current?.state !== "pending" || current.key !== key || current.fingerprint !== fingerprint) {
+-        throw new Error("Сохранённая операция изменилась. Новый ключ не создан; проверьте предыдущую заявку.");
+-      }
+-      // Store only receipt identifiers/digest, never name/phone/email/comment.
+-      assertLegacyUnchanged();
+-      const successful: LeadReceipt = { version: 1, state: "succeeded", key, fingerprint, id: result.id };
+-      sessionStorage.setItem(storageKey, JSON.stringify(successful));
+-      checkedSuccess.current = successful;
+-      if (!active.current) return;
+-      setReceiptId(result.id); setSubmitSuccess(true);
+-      setReceiptWarning(result.details_status === "unknown"
+-        ? result.warning || "Передача комментария и источника не подтверждена." : null);
+-    } catch (error) {
+-      if (!active.current) return;
+-      if (error instanceof YleumIntegrationError && error.status === 422 &&
+-          error.code === "integration_request_rejected" && dispatched && !priorAttempted) {
++      await withReceiptLock(storageKey, storageLifetime.current.signal, async () => {
++        if (!active.current) return;
++        let priorAttempted = false;
++        let dispatched = false;
++        let confirmedId: string | null = null;
++        let dispatchedReceipt: LeadReceipt | null = null;
+@@ -296,0 +325,5 @@
++          const payload = { name: name.trim(), phone: phone.trim(), email: email.trim() || undefined,
++            comment: comment.trim() || undefined, source: "MAX Mini App" };
++          const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(JSON.stringify(payload)));
++          if (!active.current) return;
++          const fingerprint = Array.from(new Uint8Array(bytes), n => n.toString(16).padStart(2, "0")).join("");
+@@ -298,12 +331,60 @@
+-          if (!samePending(readReceipt(storageKey), dispatchedReceipt)) {
+-            setRecoveryBlocked(true);
+-            setSubmitError("Сохранённая операция изменилась. Новый ключ не создан; повторите проверку.");
+-            return;
+-          }
+-          sessionStorage.removeItem(storageKey);
+-        } catch { setRecoveryBlocked(true); }
+-        setSubmitError("Заявка отклонена. Проверьте данные перед новой отправкой.");
+-      } else {
+-        setSubmitError(confirmedId
+-          ? `Заявка ${confirmedId} создана, но подтверждение не сохранено. Повторите только те же данные с прежним ключом.`
+-          : error instanceof Error ? error.message : "Ошибка при отправке заявки");
++          const saved = readReceipt(storageKey);
++          if (saved?.state === "succeeded") throw new Error("Сначала проверьте подтверждение предыдущей заявки");
++          priorAttempted = saved?.state === "pending" && saved.attempted;
++          if (priorAttempted && saved!.fingerprint !== fingerprint) {
++            throw new Error("Исход предыдущей отправки неизвестен. Изменять данные и создавать новый ключ нельзя.");
++          }
++          const key = saved?.fingerprint === fingerprint ? saved.key : crypto.randomUUID();
++          const pending: LeadReceipt = { version: 1, state: "pending", key, fingerprint, attempted: priorAttempted };
++          localStorage.setItem(storageKey, JSON.stringify(pending));
++          if (config.legal.personal_data_consent) await saveMaxConsent("personal_data", true, "1");
++          if (!active.current) return;
++          assertLegacyUnchanged();
++          if (!samePending(readReceipt(storageKey), pending)) throw new Error("Сохранённая операция изменилась; отправка заблокирована.");
++          dispatchedReceipt = { ...pending, attempted: true };
++          localStorage.setItem(storageKey, JSON.stringify(dispatchedReceipt));
++          dispatched = true;
++          const result = await createYleumLead({ idempotency_key: key, ...payload });
++          if (!active.current) return;
++          if (result.provider !== "amocrm" || typeof result.id !== "string" || !/^[1-9][0-9]{0,19}$/.test(result.id)) {
++            throw new Error("Не удалось подтвердить ID заявки; сохранён прежний ключ");
++          }
++          confirmedId = result.id;
++          const current = readReceipt(storageKey);
++          if (current?.state !== "pending" || current.key !== key || current.fingerprint !== fingerprint) {
++            throw new Error("Сохранённая операция изменилась. Новый ключ не создан; проверьте предыдущую заявку.");
++          }
++          // Store only receipt identifiers/digest, never name/phone/email/comment.
++          assertLegacyUnchanged();
++          const successful: LeadReceipt = { version: 1, state: "succeeded", key, fingerprint, id: result.id };
++          localStorage.setItem(storageKey, JSON.stringify(successful));
++          checkedSuccess.current = successful;
++          if (!active.current) return;
++          setReceiptId(result.id); setSubmitSuccess(true);
++          setReceiptWarning(result.details_status === "unknown"
++            ? result.warning || "Передача комментария и источника не подтверждена." : null);
++        } catch (error) {
++          if (!active.current) return;
++          if (error instanceof YleumIntegrationError && error.status === 422 &&
++              error.code === "integration_request_rejected" && dispatched && !priorAttempted) {
++            try {
++              assertLegacyUnchanged();
++              if (!samePending(readReceipt(storageKey), dispatchedReceipt)) {
++                setRecoveryBlocked(true);
++                setSubmitError("Сохранённая операция изменилась. Новый ключ не создан; повторите проверку.");
++                return;
++              }
++              localStorage.setItem(storageKey, "null");
++            } catch { setRecoveryBlocked(true); }
++            setSubmitError("Заявка отклонена. Проверьте данные перед новой отправкой.");
++          } else {
++            setSubmitError(confirmedId
++              ? `Заявка ${confirmedId} создана, но подтверждение не сохранено. Повторите только те же данные с прежним ключом.`
++              : error instanceof Error ? error.message : "Ошибка при отправке заявки");
++          }
++        }
++      });
++    } catch {
++      if (active.current) {
++        setRecoveryBlocked(true);
++        setSubmitError("Безопасное хранение заявки недоступно. Отправка заблокирована.");
+@@ -317 +398 @@
+-  const newSubmission = () => {
++  const newSubmission = async () => {
+@@ -318,0 +400 @@
++    inFlight.current = true;
+@@ -320,7 +402,11 @@
+-      assertLegacyUnchanged();
+-      if (!sameSuccess(readReceipt(storageKey), checkedSuccess.current)) throw new Error("Сохранённая операция изменилась");
+-      sessionStorage.removeItem(storageKey);
+-      checkedSuccess.current = null;
+-      setReceiptId(null); setReceiptWarning(null); setSubmitSuccess(false); setSubmitError(null);
+-      setName(""); setPhone(""); setEmail(""); setComment(""); setConsent(false);
+-    } catch { setSubmitError("Не удалось завершить прежнюю заявку. Новый ключ не создан."); }
++      await withReceiptLock(storageKey, storageLifetime.current.signal, async () => {
++        if (!active.current) return;
++        assertLegacyUnchanged();
++        if (!sameSuccess(readReceipt(storageKey), checkedSuccess.current)) throw new Error("Сохранённая операция изменилась");
++        localStorage.setItem(storageKey, "null");
++        checkedSuccess.current = null;
++        setReceiptId(null); setReceiptWarning(null); setSubmitSuccess(false); setSubmitError(null);
++        setName(""); setPhone(""); setEmail(""); setComment(""); setConsent(false);
++      });
++    } catch { if (active.current) setSubmitError("Не удалось завершить прежнюю заявку. Новый ключ не создан."); }
++    finally { inFlight.current = false; }

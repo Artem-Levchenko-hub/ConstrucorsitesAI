@@ -1,10 +1,10 @@
 {
-  "format_version": 1,
+  "format_version": 3,
   "project_id": "2c7bb4d4-e661-45aa-8ad3-eb515838bd83",
-  "source_provenance": "Chat-supplied sanitized draft; HTML entities decoded; LF and trailing whitespace canonicalized. Not an independently retrieved immutable accepted file.",
-  "reported_accepted_commit": "ef0a03cb3d749c60464cbd801de66c7984169417",
-  "reported_snapshot_id": "02cb9fcc-9d7f-46fa-a34f-4d7d7c5d36c9",
-  "reported_draft_revision": "9f152fd6624ffd1bba99f2de337f26c8df55c52070413bb4e342f1f5be07f8db",
+  "source_provenance": "before is exact tracked v2 candidate byte-matched by Windows root to live accepted fb31; after is reviewed v3 preparation, not applied",
+  "reported_accepted_commit": "fb31ea770d89f9d189d472cac7c15be42d19519f",
+  "reported_snapshot_id": "d1c8842d (root supplied prefix; full UUID to be reconfirmed before EDIT)",
+  "reported_draft_revision": "fresh full tree/CAS required from root",
   "reported_resolved_version_status": "ready",
   "product_paths": [
     "src/app/page.tsx"
@@ -17,22 +17,26 @@
   },
   "files": {
     "before/src/app/page.tsx": {
-      "sha256": "c6a4cf828c4c6f4149d23ae02486a104609b6a525a23aec76c59893252d6abce",
-      "bytes": 13372
-    },
-    "after/src/app/page.tsx": {
       "sha256": "76d2d01f2ef523db137e4a65a6b35bd4e07e2331403b308b131fe3b7a69a7467",
       "bytes": 29945
     },
+    "after/src/app/page.tsx": {
+      "sha256": "2881629c3c67ffa64421420fd602796344394b62a5b414e2c9b597aaebc1c59a",
+      "bytes": 35427
+    },
     "product.patch": {
-      "sha256": "6be0f79c06e658cd9a19a2ff6b681d97fb28961427c3a51733cd2e8557269e14",
-      "bytes": 24744
+      "sha256": "417256457698c21ed00eda524bd36c7ba9c7e02e0c36561c1c6cc28e681057bf",
+      "bytes": 17935
+    },
+    "normal-edit-prompt.txt": {
+      "sha256": "0a24e2b928917963f103e16a82b580b184fa29d3f102b0f335d5887bab43bfd0",
+      "bytes": 18701
     }
   },
   "verification": {
-    "candidate_mock_behavior_tests": 30,
+    "candidate_mock_behavior_tests": 46,
     "full_web_test_files": 116,
-    "full_web_tests": 1053,
+    "full_web_tests": 1069,
     "web_lint": "passed",
     "web_types": "passed",
     "product_sdk_types": "passed",
@@ -42,10 +46,12 @@
       "react": "18.3.1",
       "max_ui": "0.2.0"
     },
-    "independent_review": "No findings after reproduced marker/scoped-record mutation findings fixed",
+    "independent_review": "No findings on final exact-key recovery and late-callback handling; actual component46 PASS; see review-receipt.md",
     "api_receipt_tests": 18,
     "sdk_proxy_tests": 17,
-    "managed_kit_tests": 41
+    "managed_kit_tests": 41,
+    "real_chromium_helper_probes": 6,
+    "react_effect_lifetime_check": "passed"
   },
   "application_owner": "Windows live QA root; no application or deployment performed by this preparation",
   "platform_requirement": {
@@ -53,13 +59,13 @@
     "lookup": "POST /api/runtime/projects/{project_id}/leads/receipt",
     "sdk": "getYleumLeadReceipt",
     "proxy": "POST lead-receipt",
-    "deployment": "Canonical API/workers/controllers/billing plus trusted template kit/compiled core and matching pins on both hosts; normal generation preparation required",
+    "deployment": "Existing live platform591bb842 kit29/SDK+immutable compiled core already supplies lookup; v3 changes only fixture/test/docs, no runtime platform source or new migration",
     "managed_kit_version": 29,
     "expected_database_head": "0082; no new migration",
     "expected_managed_paths": [
-      "src/lib/omnia/integration-client.ts",
-      "src/app/api/omnia/integrations/[...path]/route.ts"
-    ]
+      "src/lib/omnia/integration-client.ts"
+    ],
+    "effective_proxy": "Reserved /api/omnia routed to immutable compiled core, inert legacy product route need not match current template"
   },
   "legacy_adoption": {
     "old_key_deleted": false,
@@ -67,5 +73,14 @@
     "server_digest_distinct_from_client_fingerprint": true,
     "non_success_or_mismatch": "quarantine",
     "migration_marker": "actor/product-origin-scoped; verified on each mount"
+  },
+  "normal_edit_prompt_utf16_chars": 16968,
+  "durable_storage": {
+    "scope": "genuine MAX actor + unique product origin + mode; no payload/history/credentials stored",
+    "records": "localStorage whitelisted identifiers/digests; scoped session records validated and migrated once; durable null tombstone prevents resurrection",
+    "legacy": "global session key never written/deleted; authenticated marker used if old key absent after lifecycle; marker is revalidated via exact lookup",
+    "coordination": "exclusive Web Locks; unavailable storage/locks fail closed; inactive lifetime abort releases lock, late callbacks cannot mutate/render",
+    "known_limit": "Origin storage can be partitioned/cleared by browser; new candidate real MAX menu refresh/full tab reopen verification NOTRUN; previously lost exact intent key cannot be guessed from history",
+    "revalidation": "Every saved current key uses exact authenticated getYleumLeadReceipt(key, expectedID/digest); pending attempts readonly exact lookup before retaining unknown. No create fallback."
   }
 }
