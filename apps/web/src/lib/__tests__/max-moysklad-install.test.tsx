@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
 const boundary = vi.hoisted(() => ({ catalog: vi.fn(), install: vi.fn(), start: vi.fn(), claim: vi.fn(), connect: vi.fn(), options: vi.fn(), deleteConnection: vi.fn(), disconnect: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: async () => undefined }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock("@/lib/api/app-integrations", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/api/app-integrations")>(),

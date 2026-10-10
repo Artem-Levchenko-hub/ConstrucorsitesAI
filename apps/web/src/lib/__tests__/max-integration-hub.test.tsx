@@ -6,7 +6,7 @@ import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
 
 const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), verify: vi.fn(), catalog: vi.fn(), platformAi: vi.fn(), amocrmOptions: vi.fn(), saveAmocrm: vi.fn(), success: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: boundary.push }) }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search), useRouter: () => ({ push: boundary.push }) }));
 vi.mock("@/components/max/MaxSectionShell", () => ({ MaxSectionShell: ({ children }: { children: ReactNode }) => children }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: async () => undefined }));
 vi.mock("sonner", () => ({ toast: { success: boundary.success, error: vi.fn(), warning: vi.fn() } }));
@@ -68,6 +68,37 @@ describe("Integration Hub implementation handoff", () => {
     boundary.catalog.mockResolvedValue(data);
     await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(FigmaIntegrationHub, { projectId: "project-1", projectName: "Project" }))));
   }
+  it("explains a conflicting OAuth return without claiming that access was granted", async () => {
+    window.history.replaceState(null, "", "/max/project-1?panel=services&oauth=conflict");
+    try {
+      await render([]);
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain("Подключение не изменено");
+      expect(boundary.success).not.toHaveBeenCalled();
+      expect(boundary.connect).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+  it.each(["__proto__", "constructor", "toString"])("ignores inherited OAuth outcome %s and keeps the catalog usable", async (outcome) => {
+    window.history.replaceState(null, "", `/max/project-1?panel=services&oauth=${outcome}`);
+    try {
+      await render([]);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(button("Подключить")).toBeDefined();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
+  it("ignores duplicate OAuth outcomes", async () => {
+    window.history.replaceState(null, "", "/max/project-1?panel=services&oauth=connected&oauth=conflict");
+    try {
+      await render([]);
+      expect(container.querySelector('[role="alert"]')).toBeNull();
+      expect(button("Подключить")).toBeDefined();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+  });
   it("requires confirmation and transfers the edited proposal without account data", async () => {
     await render([connection]);
     await click("Добавить в приложение");

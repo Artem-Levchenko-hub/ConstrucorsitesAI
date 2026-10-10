@@ -2,18 +2,33 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from uuid import UUID
 
 from cryptography.fernet import InvalidToken
 from fastapi import status
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.crypto import decrypt_strong, encrypt_strong
 from yleum_api.core.errors import ApiError
 from yleum_api.models.app_integration import AccountIntegration
 from yleum_api.services import integration_oauth, integration_providers
+
+
+async def lock_account_provider(session: AsyncSession, user_id: UUID, provider: str) -> None:
+    """Serialize amoCRM grants, including the period before a connection exists.
+
+    Always acquire this transaction lock before any state or connection row lock.
+    A stable namespaced digest works across processes; collisions only serialize.
+    """
+    if provider != "amocrm":
+        return
+    digest = hashlib.sha256(f"integration-grant:v1:{user_id}:{provider}".encode()).digest()
+    key = int.from_bytes(digest[:8], "big", signed=True)
+    await session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
 
 async def load_credentials(
@@ -25,6 +40,7 @@ async def load_credentials(
     rotating refresh token. Refresh the identity map *after* acquiring the row
     lock: another request may already have committed a replacement token.
     """
+    await lock_account_provider(session, connection.user_id, connection.provider)
     current = (
         await session.execute(
             select(AccountIntegration)
@@ -61,7 +77,8 @@ async def load_credentials(
     ):
         try:
             result, expires_at = await integration_oauth.refresh_access_token(
-                current.provider, dict(current.public_config or {}), result
+                current.provider, dict(current.public_config or {}), result,
+                client_key=current.oauth_client_key,
             )
         except integration_providers.IntegrationCredentialsInvalid as exc:
             message = "Срок авторизации истёк. Переподключите сервис в Integration Hub."

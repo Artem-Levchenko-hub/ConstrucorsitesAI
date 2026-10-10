@@ -37,7 +37,7 @@ from yleum_api.schemas.app_integration import (
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import integration_oauth, integration_providers
 from yleum_api.services.entitlements import assert_integrations_allowed
-from yleum_api.services.integration_credentials import load_credentials
+from yleum_api.services.integration_credentials import load_credentials, lock_account_provider
 from yleum_api.services.max_access import require_max_studio_access
 
 router = APIRouter(tags=["app-integrations"])
@@ -59,17 +59,16 @@ async def _owned_max_project(
 
 
 async def _account_connection(
-    session: SessionDep, user_id: UUID, provider: str
+    session: SessionDep, user_id: UUID, provider: str, *, for_update: bool = False,
 ) -> AccountIntegration | None:
     """Connections belong to the account and are shared by all of its projects."""
-    return (
-        await session.execute(
-            select(AccountIntegration).where(
-                AccountIntegration.user_id == user_id,
-                AccountIntegration.provider == provider,
-            )
-        )
-    ).scalar_one_or_none()
+    query = select(AccountIntegration).where(
+        AccountIntegration.user_id == user_id,
+        AccountIntegration.provider == provider,
+    )
+    if for_update:
+        query = query.with_for_update().execution_options(populate_existing=True)
+    return (await session.execute(query)).scalar_one_or_none()
 
 
 async def _binding(
@@ -141,7 +140,11 @@ async def _bind(
 
 
 def _oauth_available(provider_key: str) -> bool:
-    return integration_oauth.credentials(provider_key) is not None
+    try:
+        integration_oauth.new_authorization_client_key(provider_key)
+    except integration_providers.IntegrationProviderError:
+        return False
+    return True
 
 
 def _provider_public(
@@ -379,6 +382,7 @@ async def connect_integration(
     require_max_studio_access(current_user)
     # Plan flag `integrations` (402 `subscription_entitlement_required`).
     await assert_integrations_allowed(session, current_user.id)
+    await lock_account_provider(session, current_user.id, provider_key)
     try:
         provider = integration_providers.get_provider(provider_key)
         if not provider.available or not provider.fields:
@@ -395,7 +399,9 @@ async def connect_integration(
         raise _map_provider_error(exc) from exc
 
     now = datetime.now(UTC)
-    connection = await _account_connection(session, current_user.id, provider_key)
+    connection = await _account_connection(
+        session, current_user.id, provider_key, for_update=True,
+    )
     if connection is None:
         connection = AccountIntegration(
             user_id=current_user.id,
@@ -406,6 +412,8 @@ async def connect_integration(
         session.add(connection)
         await session.flush()
     connection.auth_mode = "credentials"
+    connection.oauth_client_key = None
+    connection.grant_revision += 1
     connection.credentials_enc = encrypt_strong(
         json.dumps(secret_values, ensure_ascii=False, sort_keys=True)
     )
@@ -610,7 +618,10 @@ async def delete_account_integration(
     """Remove the account-level connection itself, not only this project's binding."""
     await _owned_max_project(session, project_id, current_user.id)
     require_max_studio_access(current_user)
-    connection = await _account_connection(session, current_user.id, provider_key)
+    await lock_account_provider(session, current_user.id, provider_key)
+    connection = await _account_connection(
+        session, current_user.id, provider_key, for_update=True,
+    )
     if connection is not None:
         await session.delete(connection)
         await session.commit()
@@ -637,20 +648,37 @@ async def start_integration_oauth(
             "OAuth-подключение этого сервиса пока не настроено",
             status.HTTP_409_CONFLICT,
         )
+    client_key = integration_oauth.new_authorization_client_key(provider_key)
+    snapshot = None
+    if provider_key == "amocrm":
+        await lock_account_provider(session, current_user.id, provider_key)
+        connection = await _account_connection(
+            session, current_user.id, provider_key, for_update=True,
+        )
+        if connection is not None:
+            raise ApiError(
+                "account_connection_replacement_requires_confirmation",
+                "Подключение amoCRM общее для всех ваших проектов. "
+                "Повторная авторизация требует отдельного подтверждения замены.",
+                status.HTTP_409_CONFLICT,
+            )
+        snapshot = {"version": 1, "connection_id": None, "grant_revision": None}
     raw_state = secrets.token_urlsafe(40)
+    try:
+        url = integration_oauth.authorization_url(provider_key, raw_state, client_key=client_key)
+    except integration_providers.IntegrationProviderError as exc:
+        raise _map_provider_error(exc) from exc
     state = IntegrationOAuthState(
         state_hash=hashlib.sha256(raw_state.encode()).hexdigest(),
         user_id=current_user.id,
         project_id=project_id,
         provider=provider_key,
+        oauth_client_key=client_key,
+        connection_snapshot=snapshot,
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
     )
     session.add(state)
     await session.commit()
-    try:
-        url = integration_oauth.authorization_url(provider_key, raw_state)
-    except integration_providers.IntegrationProviderError as exc:
-        raise _map_provider_error(exc) from exc
     return IntegrationOAuthStartPublic(authorization_url=url)
 
 
@@ -672,12 +700,14 @@ async def integration_oauth_callback(
     error: str | None = Query(default=None, max_length=256),
     referer: str | None = Query(default=None, max_length=512),
 ) -> RedirectResponse:
+    await lock_account_provider(session, current_user.id, provider_key)
     state_hash = hashlib.sha256(state.encode()).hexdigest()
     record = (
         await session.execute(
             select(IntegrationOAuthState)
             .where(IntegrationOAuthState.state_hash == state_hash)
             .with_for_update()
+            .execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     now = datetime.now(UTC)
@@ -697,16 +727,34 @@ async def integration_oauth_callback(
     if error or not code:
         await session.commit()
         return _oauth_redirect(record.project_id, "cancelled")
+    connection = None
+    if provider_key == "amocrm":
+        await _owned_max_project(session, record.project_id, current_user.id)
+        connection = await _account_connection(
+            session, record.user_id, provider_key, for_update=True,
+        )
+        snapshot = record.connection_snapshot
+        # This release supports new grants only. Existing grants require a
+        # separate account-wide confirmation flow before reconnect is enabled.
+        if (
+            not isinstance(snapshot, dict)
+            or type(snapshot.get("version")) is not int
+            or snapshot != {"version": 1, "connection_id": None, "grant_revision": None}
+            or connection is not None
+        ):
+            await session.commit()
+            return _oauth_redirect(record.project_id, "conflict")
     try:
         result = await integration_oauth.exchange_code(
-            provider_key, code, referer=referer
+            provider_key, code, referer=referer, client_key=record.oauth_client_key,
         )
     except integration_providers.IntegrationProviderError:
         await session.commit()
         return _oauth_redirect(record.project_id, "error")
 
     provider = integration_providers.get_provider(provider_key)
-    connection = await _account_connection(session, record.user_id, provider_key)
+    if provider_key != "amocrm":
+        connection = await _account_connection(session, record.user_id, provider_key)
     if connection is None:
         connection = AccountIntegration(
             user_id=record.user_id,
@@ -717,6 +765,10 @@ async def integration_oauth_callback(
         session.add(connection)
         await session.flush()
     connection.auth_mode = "oauth"
+    connection.oauth_client_key = (
+        record.oauth_client_key or "amocrm-legacy-v1" if provider_key == "amocrm" else None
+    )
+    connection.grant_revision += 1
     connection.credentials_enc = encrypt_strong(
         json.dumps(result.secret_values, ensure_ascii=False, sort_keys=True)
     )

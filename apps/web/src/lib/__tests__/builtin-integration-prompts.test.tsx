@@ -9,7 +9,7 @@ import { builtinIntegrationRequests, recognizeBuiltinIntegrationRequest } from "
 import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
 
 const boundary = vi.hoisted(() => ({ send: vi.fn(), catalog: vi.fn() }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search), useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: async () => undefined }));
 vi.mock("@/lib/api/messages", () => ({ sendPrompt: boundary.send }));
 vi.mock("@/lib/api/app-integrations", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/api/app-integrations")>(), getIntegrationCatalog: boundary.catalog }));

@@ -8,7 +8,7 @@ import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/
 
 const boundary = vi.hoisted(() => ({ push: vi.fn(), connect: vi.fn(), catalog: vi.fn(), send: vi.fn(), profile: vi.fn() }));
 vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: boundary.profile }));
-vi.mock("next/navigation", () => ({ useRouter: () => ({ push: boundary.push }) }));
+vi.mock("next/navigation", () => ({ useSearchParams: () => new URLSearchParams(window.location.search), useRouter: () => ({ push: boundary.push }) }));
 vi.mock("@/lib/api/messages", () => ({ sendPrompt: boundary.send }));
 vi.mock("@/lib/api/max-studio", () => ({
   syncMaxManagedKit: async () => undefined,

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     CheckConstraint,
     DateTime,
@@ -39,6 +40,10 @@ class AccountIntegration(Base):
     provider: Mapped[str] = mapped_column(Text, nullable=False)
     auth_mode: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="credentials", default="credentials"
+    )
+    oauth_client_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    grant_revision: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
     )
     status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="active", default="active"
@@ -162,6 +167,8 @@ class IntegrationOAuthState(Base):
         nullable=False,
     )
     provider: Mapped[str] = mapped_column(Text, nullable=False)
+    oauth_client_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    connection_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
