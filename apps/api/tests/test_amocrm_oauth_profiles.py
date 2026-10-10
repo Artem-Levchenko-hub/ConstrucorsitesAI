@@ -90,5 +90,3 @@ async def test_invalid_profile_fails_before_http(profiles, monkeypatch, failure)
             "amocrm", {"base_url": "https://synthetic.amocrm.ru"},
             {"refresh_token": "old"}, client_key=key,
         )
-
-
