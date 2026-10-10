@@ -70,4 +70,68 @@ describe("MAX chat credential intake", () => {
     expect(safe).not.toContain(labelled);
     expect(safe).toContain("ключ сохранён в Yleum");
   });
+
+  it.each([
+    "requestToken===detailsSeq.current.",
+    "const opToken=++operationCounter.current;",
+    "requestToken !== detailsSeq.current;",
+    "token === detailsSeq.current;",
+    "token: ++operationCounter.current;",
+    "token = detailsSeq.current;",
+    "api_key = process.env.PROVIDER_API_KEY;",
+    "token: import.meta.env.PROVIDER_TOKEN;",
+    "my_token: operationCounter.current;",
+    "мойтокен: operationCounter.current;",
+  ])("admits public code without redaction or provider intake: %s", (code) => {
+    expect(containsChatSecret(code)).toBe(false);
+    expect(resolveChatCredential(code, [aitunnel])).toEqual({ kind: "none" });
+    expect(redactChatSecrets(code)).toBe(code);
+  });
+
+  it.each(["token:", "TOKEN =", "api-key:", "api_key =", "ключ —", "токен это"])(
+    "still protects a standalone labelled opaque credential: %s", (label) => {
+      const secret = "synthetic_opaque_credential_123456";
+      const prompt = `AITUNNEL ${label} \"${secret}\"`;
+      const result = resolveChatCredential(prompt, [aitunnel]);
+      expect(containsChatSecret(prompt)).toBe(true);
+      expect(result.kind).toBe("match");
+      if (result.kind !== "match") return;
+      expect(result.value.secret).toBe(secret);
+      expect(result.value.safePrompt).not.toContain(secret);
+      expect(redactChatSecrets(prompt)).not.toContain(secret);
+    },
+  );
+
+  it("keeps real key detection inside code and identifier assignments", () => {
+    const secret = `sk-${"d".repeat(24)}`;
+    const code = `const opToken=\"${secret}\"; requestToken===detailsSeq.current.`;
+    expect(containsChatSecret(code)).toBe(true);
+    expect(resolveChatCredential(code, [aitunnel])).toEqual({ kind: "needs_provider" });
+    expect(redactChatSecrets(code)).not.toContain(secret);
+    expect(redactChatSecrets(code)).toContain("requestToken===detailsSeq.current.");
+  });
+
+  it.each([
+    "synthetic_jwt_header.synthetic_jwt_payload.synthetic_jwt_signature",
+    "synthetic_base64_1234567890+/=",
+    "detailsSeq.current",
+    "process.env.PROVIDER_API_KEY",
+  ])("does not exempt a quoted credential literal: %s", (secret) => {
+    const prompt = `token: \"${secret}\"`;
+    expect(containsChatSecret(prompt)).toBe(true);
+    expect(resolveChatCredential(prompt, [aitunnel])).toEqual({ kind: "needs_provider" });
+    expect(redactChatSecrets(prompt)).not.toContain(secret);
+  });
+
+  it.each([
+    "++ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+    "!synthetic_opaque_credential_123456",
+    "--synthetic_opaque_credential_123456",
+    "process.env.NOT_A_REFERENCE/opaque_suffix",
+  ])("protects opaque unquoted credentials even with operator-like prefixes: %s", (secret) => {
+    const prompt = `token: ${secret}`;
+    expect(containsChatSecret(prompt)).toBe(true);
+    expect(resolveChatCredential(prompt, [aitunnel])).toEqual({ kind: "needs_provider" });
+    expect(redactChatSecrets(prompt)).not.toContain(secret);
+  });
 });

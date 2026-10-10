@@ -18,7 +18,16 @@ const PROVIDER_ALIASES: Record<string, string[]> = {
 };
 
 const LABELLED_SECRET_PATTERN =
-  /(?:api[\s_-]*key|ключ|token|токен)(?:\s*(?:[:=—–-]|это)\s*|\s+)["'`]?([^\s"'`,;]{16,})/giu;
+  /(?<![\p{L}\p{N}_$])(?:api[\s_-]*key|ключ|token|токен)(?![\p{L}\p{N}_$])(?:\s*(?:[:=—–-]|это)\s*|\s+)(["'`]?)([^\s"'`,;]{16,})/giu;
+
+function isPublicCodeExpression(candidate: string): boolean {
+  // Standalone labels can also appear in code. Do not treat comparison/
+  // increment operators, env references or React ref reads as credentials.
+  // Known key formats are detected separately, including inside source code.
+  const reference = candidate.replace(/^(?:={1,3}|!={1,2}|[<>]=?|\+\+|--)/, "");
+  return /^(?:process\.env|import\.meta\.env)(?:\.[\p{L}_$][\p{L}\p{N}_$]*|\[[\p{L}_$][\p{L}\p{N}_$]*\])\.?$/u.test(reference)
+    || /^[\p{L}_$][\p{L}\p{N}_$]*(?:\.[\p{L}_$][\p{L}\p{N}_$]*)*\.current\.?$/u.test(reference);
+}
 
 export type ChatCredentialMatch = {
   provider: IntegrationProvider;
@@ -71,7 +80,8 @@ function keywordSecrets(text: string): string[] {
   return [
     ...new Set(
       [...text.matchAll(new RegExp(LABELLED_SECRET_PATTERN))]
-        .map((match) => match[1]?.trim() ?? "")
+        .filter((match) => match[1] || !isPublicCodeExpression(match[2] ?? ""))
+        .map((match) => match[2]?.trim() ?? "")
         .filter((candidate) => candidate && !/^https?:\/\//i.test(candidate)),
     ),
   ];
