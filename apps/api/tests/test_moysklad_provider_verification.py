@@ -66,7 +66,10 @@ async def test_moysklad_verification_uses_supported_accept_header(
         seen.append(request)
         if request.headers.get("accept") != "application/json;charset=utf-8":
             return httpx.Response(400, json={"errors": [{"error": "Unsupported Accept"}]})
-        return httpx.Response(200, json={"name": "Тестовый склад"})
+        body = {"name": "Тестовый склад"} if request.url.path.endswith(
+            "/context/companysettings"
+        ) else {"rows": []}
+        return httpx.Response(200, json=body)
 
     original_client = httpx.AsyncClient
     transport = httpx.MockTransport(respond)
@@ -81,5 +84,79 @@ async def test_moysklad_verification_uses_supported_accept_header(
     )
 
     assert label == "Тестовый склад"
-    assert len(seen) == 1
-    assert seen[0].headers["authorization"] == "Bearer synthetic-token"
+    assert len(seen) == 5
+    assert all(request.method == "GET" for request in seen)
+    assert all(request.headers["authorization"] == "Bearer synthetic-token" for request in seen)
+    assert all(request.headers["accept-encoding"] == "gzip" for request in seen)
+    assert all(request.url.params["limit"] == "1" for request in seen[1:])
+
+
+@pytest.mark.parametrize("denied_path", [
+    "/entity/product", "/entity/organization", "/entity/store", "/report/stock/all",
+])
+async def test_moysklad_read_permission_denial_prevents_verified_connection(
+    monkeypatch, denied_path,
+):
+    original_client = httpx.AsyncClient
+
+    def respond(request):
+        if request.url.path.endswith(denied_path):
+            return httpx.Response(403, json={"errors": [{"error": "private provider detail"}]})
+        return httpx.Response(200, json={"name": "Synthetic", "rows": []})
+
+    monkeypatch.setattr(integration_providers.httpx, "AsyncClient", lambda **kwargs:
+                        original_client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(integration_providers.IntegrationCredentialsInvalid) as caught:
+        await integration_providers.verify_provider("moysklad", {}, {"token": "synthetic-token"})
+    assert "private provider detail" not in str(caught.value)
+
+
+@pytest.mark.parametrize("body", [{}, {"rows": None}, {"rows": "not a list"}])
+async def test_moysklad_malformed_read_response_does_not_verify_access(monkeypatch, body):
+    original_client = httpx.AsyncClient
+
+    def respond(request):
+        payload = body if request.url.path.endswith("/entity/product") else {
+            "name": "Synthetic", "rows": [],
+        }
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(integration_providers.httpx, "AsyncClient", lambda **kwargs:
+                        original_client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(integration_providers.IntegrationProviderError):
+        await integration_providers.verify_provider("moysklad", {}, {"token": "synthetic-token"})
+
+
+async def test_moysklad_preflight_has_one_deadline_across_all_reads(monkeypatch):
+    import asyncio
+
+    original_client = httpx.AsyncClient
+    seen = []
+
+    async def respond(request):
+        seen.append(request)
+        await asyncio.sleep(0.012)
+        return httpx.Response(200, json={"name": "Synthetic", "rows": []})
+
+    monkeypatch.setattr(integration_providers, "MOYSKLAD_PREFLIGHT_TIMEOUT_SECONDS", 0.02,
+                        raising=False)
+    monkeypatch.setattr(integration_providers.httpx, "AsyncClient", lambda **kwargs:
+                        original_client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(integration_providers.IntegrationProviderUnavailable):
+        await integration_providers.verify_provider("moysklad", {}, {"token": "synthetic-token"})
+    assert len(seen) < 5
+
+
+async def test_moysklad_rate_limit_does_not_verify_connection(monkeypatch):
+    original_client = httpx.AsyncClient
+
+    def respond(request):
+        if request.url.path.endswith("/report/stock/all"):
+            return httpx.Response(429, json={"errors": [{"error": "private detail"}]})
+        return httpx.Response(200, json={"name": "Synthetic", "rows": []})
+
+    monkeypatch.setattr(integration_providers.httpx, "AsyncClient", lambda **kwargs:
+                        original_client(transport=httpx.MockTransport(respond), **kwargs))
+    with pytest.raises(integration_providers.IntegrationProviderUnavailable) as caught:
+        await integration_providers.verify_provider("moysklad", {}, {"token": "synthetic-token"})
+    assert "private detail" not in str(caught.value)

@@ -144,6 +144,15 @@ export function disconnectAppIntegration(
   });
 }
 
+export function deleteAccountIntegration(
+  projectId: Uuid,
+  provider: string,
+): Promise<void> {
+  return apiFetch<void>(`${path(projectId)}/${provider}/connection`, {
+    method: "DELETE",
+  });
+}
+
 export function setPlatformAiEnabled(
   projectId: Uuid,
   enabled: boolean,

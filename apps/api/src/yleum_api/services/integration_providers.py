@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
+
+MOYSKLAD_PREFLIGHT_TIMEOUT_SECONDS = 15.0
 
 
 class IntegrationProviderError(RuntimeError):
@@ -415,18 +418,14 @@ async def verify_provider(
                 return f"{host} · {display}"
 
             if provider_key == "moysklad":
-                response = await client.get(
-                    "https://api.moysklad.ru/api/remap/1.2/context/companysettings",
-                    headers={
-                        **headers,
-                        "Accept": "application/json;charset=utf-8",
-                        "Authorization": f"Bearer {secret_values['token']}",
-                    },
-                )
-                _provider_http_error(provider.name, response)
-                payload = response.json()
-                company = payload.get("name") if isinstance(payload, dict) else None
-                return str(company or "Аккаунт МойСклад")
+                moysklad_headers = {
+                    **headers,
+                    "Accept": "application/json;charset=utf-8",
+                    "Accept-Encoding": "gzip",
+                    "Authorization": f"Bearer {secret_values['token']}",
+                }
+                async with asyncio.timeout(MOYSKLAD_PREFLIGHT_TIMEOUT_SECONDS):
+                    return await _verify_moysklad_reads(client, moysklad_headers)
 
             if provider_key == "yandex_metrica":
                 counter_id = public_values["counter_id"]
@@ -467,7 +466,7 @@ async def verify_provider(
                 return str(payload.get("name") or parsed.hostname)
     except IntegrationProviderError:
         raise
-    except (httpx.TimeoutException, httpx.NetworkError) as exc:
+    except (TimeoutError, httpx.TimeoutException, httpx.NetworkError) as exc:
         raise IntegrationProviderUnavailable(
             f"Не удалось связаться с {provider.name}. Повторите проверку позже."
         ) from exc
@@ -477,3 +476,29 @@ async def verify_provider(
         ) from exc
 
     raise IntegrationProviderError("Для этой интеграции ещё нет проверки доступа.")
+
+
+async def _verify_moysklad_reads(client: httpx.AsyncClient, headers: dict[str, str]) -> str:
+    response = await client.get(
+        "https://api.moysklad.ru/api/remap/1.2/context/companysettings", headers=headers,
+    )
+    _provider_http_error("МойСклад", response)
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise ValueError("Invalid company settings response")
+    for endpoint, resource in (
+        ("entity/product", "товаров"),
+        ("entity/organization", "организаций"),
+        ("entity/store", "складов"),
+        ("report/stock/all", "остатков"),
+    ):
+        check = await client.get(
+            f"https://api.moysklad.ru/api/remap/1.2/{endpoint}",
+            params={"limit": 1}, headers=headers,
+        )
+        _provider_http_error(f"МойСклад: чтение {resource}", check)
+        body = check.json()
+        rows = body.get("rows") if isinstance(body, dict) else None
+        if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+            raise ValueError("Invalid collection response")
+    return str(payload.get("name") or "Аккаунт МойСклад")
