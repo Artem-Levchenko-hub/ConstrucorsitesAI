@@ -13,6 +13,7 @@ import httpx
 from yleum_api.core.errors import ApiError
 from yleum_api.services.integration_catalog import moysklad_quantities
 from yleum_api.services.integration_operations import SafePreDispatchError
+from yleum_api.services.integration_order_snapshots import minor_value, submitted_snapshot
 
 BASE = "https://api.moysklad.ru/api/remap/1.2"
 
@@ -24,6 +25,7 @@ class PreparedOrder:
     counterparty_id: str | None
     buyer_name: str
     phone: str | None
+    snapshot: dict[str, Any] | None = None
 
 
 def _meta(kind: str, identifier: str) -> dict[str, dict[str, str]]:
@@ -180,6 +182,10 @@ async def prepare_customer_order(
         }
         for identifier, quantity in totals.items()
     ]
+    # Catalog price currency does not establish the currency of the submitted
+    # document: the existing POST has no explicit rate.currency. Only a valid
+    # provider document response may resolve it, otherwise it stays unknown.
+    snapshot = submitted_snapshot(positions, products, None)
     payload: dict[str, Any] = {
         "organization": _meta("organization", organization),
         "positions": positions,
@@ -189,12 +195,12 @@ async def prepare_customer_order(
     }
     if store:
         payload["store"] = _meta("store", store)
-    return PreparedOrder(payload, customer_code, counterparty_id, buyer_name, phone)
+    return PreparedOrder(payload, customer_code, counterparty_id, buyer_name, phone, snapshot)
 
 
 async def submit_customer_order(
     client: httpx.AsyncClient, prepared: PreparedOrder
-) -> dict[str, str]:
+) -> dict[str, Any]:
     buyer_name = prepared.buyer_name.strip()
     phone = prepared.phone.strip() or None if prepared.phone is not None else None
     counterparty_id = prepared.counterparty_id
@@ -245,7 +251,30 @@ async def submit_customer_order(
         _rows(response)
     try:
         result = response.json()
-        return {"provider": "moysklad", "id": str(UUID(result["id"]))}
+        receipt: dict[str, Any] = {"provider": "moysklad", "id": str(UUID(result["id"]))}
+        rate = result.get("rate")
+        currency = rate.get("currency") if isinstance(rate, dict) else None
+        code = currency.get("isoCode") if isinstance(currency, dict) else None
+        currency_code = (
+            code
+            if isinstance(code, str)
+            and len(code) == 3
+            and code.isascii()
+            and code.isalpha()
+            and code.isupper()
+            else None
+        )
+        if prepared.snapshot is not None:
+            receipt["snapshot"] = {**prepared.snapshot, "currency": currency_code}
+        # Missing/invalid totals do not invalidate a confirmed external ID or
+        # trigger another POST. They remain explicitly unavailable. Currency
+        # comes only from this document, never from the catalog/defaults.
+        provider_sum = minor_value(result.get("sum"))
+        if provider_sum is not None:
+            receipt["provider_total_minor"] = provider_sum
+        if currency_code is not None:
+            receipt["provider_total_currency"] = currency_code
+        return receipt
     except (ValueError, KeyError, TypeError) as exc:
         raise ApiError("integration_response_invalid", "МойСклад не подтвердил заказ", 502) from exc
 
@@ -261,7 +290,7 @@ async def create_customer_order(
     lines: list[tuple[UUID, Decimal]],
     organization_id: str | None = None,
     store_id: str | None = None,
-) -> dict[str, str]:
+) -> dict[str, Any]:
     prepared = await prepare_customer_order(
         client,
         project_id=project_id,

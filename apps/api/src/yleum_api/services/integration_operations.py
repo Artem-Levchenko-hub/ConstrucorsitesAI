@@ -39,6 +39,7 @@ async def execute_once(
     payload: dict[str, Any],
     send: Callable[[], Awaitable[dict[str, Any]]],
     prepare: Callable[[], Awaitable[None]] | None = None,
+    dispatch_result: Callable[[], dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     digest = hashlib.sha256(
         json.dumps(payload, sort_keys=True, ensure_ascii=True, separators=(",", ":")).encode()
@@ -84,7 +85,7 @@ async def execute_once(
             **values,
             request_digest=digest,
             status="dispatching",
-            result={},
+            result=dispatch_result() if dispatch_result is not None else {},
         )
         .on_conflict_do_nothing(constraint="uq_integration_operation_key")
         .returning(IntegrationOperation.id)

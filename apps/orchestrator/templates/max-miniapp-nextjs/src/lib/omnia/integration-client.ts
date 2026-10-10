@@ -21,7 +21,7 @@ export class YleumIntegrationError extends Error {
 }
 
 async function invoke<T>(
-  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "catalog" | "orders" | "ai",
+  path: "status" | "payments" | "payment-status" | "leads" | "lead-list" | "lead-status" | "catalog" | "orders" | "order-list" | "order-status" | "order-details" | "ai",
   payload: Record<string, unknown> = {},
 ): Promise<T> {
   const initData = getMaxWebApp()?.initData;
@@ -168,12 +168,53 @@ export function getYleumCatalog(): Promise<{
   return invoke("catalog");
 }
 
+export type YleumOrderSnapshot = {
+  amount_source: "server_submitted";
+  lines: Array<{ product_id: string; name: string | null; quantity: string;
+    unit_price_minor: string; total_minor: string }>;
+  total_minor: string;
+  currency: string | null;
+};
+
+export type YleumOrder = {
+  provider: "moysklad";
+  id: string;
+  snapshot?: YleumOrderSnapshot | null;
+  provider_total_minor?: string | null;
+  provider_total_currency?: string | null;
+};
+
+export type YleumOrderReceipt = {
+  provider: "moysklad";
+  idempotency_key: string;
+  status: "dispatching" | "succeeded" | "rejected" | "unknown";
+  created_at: string;
+  finished_at: string | null;
+  snapshot_status: "recorded" | "unavailable";
+  submitted_snapshot: YleumOrderSnapshot | null;
+  order: YleumOrder | null;
+};
+
+/** Durable own receipts, not current provider fulfillment/payment status. */
+export function getYleumOrders(): Promise<{ items: YleumOrderReceipt[]; has_more: boolean }> {
+  return invoke("order-list");
+}
+
+/** Read-only: an unknown result must keep this key; never creates an order. */
+export function getYleumOrderStatus(idempotencyKey: string): Promise<YleumOrderReceipt> {
+  return invoke("order-status", { idempotency_key: idempotencyKey });
+}
+
+export function getYleumOrder(orderId: string): Promise<YleumOrderReceipt> {
+  return invoke("order-details", { order_id: orderId });
+}
+
 export function createYleumOrder(input: {
   idempotency_key?: string;
   buyer_name: string;
   phone?: string;
   lines: Array<{ product_id: string; quantity: number }>;
-}): Promise<{ provider: "moysklad"; id: string }> {
+}): Promise<YleumOrder> {
   return invokeWrite("orders", input);
 }
 

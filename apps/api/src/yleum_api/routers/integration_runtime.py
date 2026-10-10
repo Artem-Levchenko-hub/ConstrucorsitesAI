@@ -753,7 +753,9 @@ async def _send_runtime_lead(
         ) from exc
 
 
-@router.post("/{project_id}/orders", response_model=RuntimeOrderPublic)
+@router.post(
+    "/{project_id}/orders", response_model=RuntimeOrderPublic, response_model_exclude_unset=True
+)
 async def create_runtime_order(
     project_id: UUID,
     payload: RuntimeOrderRequest,
@@ -808,7 +810,7 @@ async def create_runtime_order(
                     store_id=connection.public_config.get("store_id"),
                 )
 
-            async def send() -> dict[str, str]:
+            async def send() -> dict[str, Any]:
                 assert prepared is not None
                 buyer_lock = int.from_bytes(
                     hashlib.sha256(
@@ -832,6 +834,7 @@ async def create_runtime_order(
                 payload=payload.model_dump(mode="json"),
                 send=send,
                 prepare=preflight,
+                dispatch_result=lambda: {"snapshot": prepared.snapshot} if prepared else {},
             )
     except (httpx.TimeoutException, httpx.NetworkError) as exc:
         raise ApiError(

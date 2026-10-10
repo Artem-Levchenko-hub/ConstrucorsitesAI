@@ -129,7 +129,9 @@ async def test_order_uses_selected_organization_store_and_reserved_free_stock() 
             organization_id=str(organization),
             store_id=str(store),
         )
-    assert result == {"provider": "moysklad", "id": str(order)}
+    assert result["provider"] == "moysklad" and result["id"] == str(order)
+    assert Decimal(result["snapshot"]["total_minor"]) == Decimal("15000")
+    assert result["snapshot"]["currency"] is None
     assert len(posted) == 1
     assert posted[0]["organization"]["meta"]["href"].endswith(str(organization))
     assert posted[0]["store"]["meta"]["href"].endswith(str(store))

@@ -20,7 +20,7 @@ export async function POST(request: NextRequest, context: Context) {
   const { path } = await context.params;
   const operation = path.join("/");
   if (
-    !["status", "payments", "payment-status", "leads", "lead-list", "lead-status", "catalog", "orders", "ai"].includes(
+    !["status", "payments", "payment-status", "leads", "lead-list", "lead-status", "catalog", "orders", "order-list", "order-status", "order-details", "ai"].includes(
       operation,
     )
   ) {
@@ -50,7 +50,7 @@ export async function POST(request: NextRequest, context: Context) {
       { status: 401 },
     );
   }
-  const readOnly = operation === "status" || operation === "catalog" || operation === "lead-list";
+  const readOnly = operation === "status" || operation === "catalog" || operation === "lead-list" || operation === "order-list";
   const upstreamPath =
     operation === "status"
       ? `/api/runtime/projects/${PROJECT_ID}/integrations`
@@ -64,6 +64,12 @@ export async function POST(request: NextRequest, context: Context) {
         ? `/api/runtime/projects/${PROJECT_ID}/leads`
       : operation === "lead-status"
         ? `/api/runtime/projects/${PROJECT_ID}/leads/status`
+      : operation === "order-list"
+        ? `/api/runtime/projects/${PROJECT_ID}/orders`
+      : operation === "order-status"
+        ? `/api/runtime/projects/${PROJECT_ID}/orders/status`
+      : operation === "order-details"
+        ? `/api/runtime/projects/${PROJECT_ID}/orders/details`
       : `/api/runtime/projects/${PROJECT_ID}/${operation}`;
   const method = readOnly ? "GET" : "POST";
   const upstreamBody = readOnly ? "" : JSON.stringify(body.payload || {});

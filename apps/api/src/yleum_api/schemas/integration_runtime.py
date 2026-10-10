@@ -2,8 +2,9 @@
 
 import json
 import re
+from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator
@@ -144,9 +145,53 @@ class RuntimeOrderRequest(BaseModel):
         return value
 
 
+class RuntimeOrderSnapshotLine(BaseModel):
+    product_id: UUID
+    name: str | None
+    quantity: str
+    unit_price_minor: str
+    total_minor: str
+
+
+class RuntimeOrderSnapshot(BaseModel):
+    # Prices fetched by the platform and included in the POST, not a receipt
+    # of payment, fulfillment, or a subsequently changed provider document.
+    amount_source: Literal["server_submitted"] = "server_submitted"
+    lines: list[RuntimeOrderSnapshotLine]
+    total_minor: str
+    currency: str | None
+
+
 class RuntimeOrderPublic(BaseModel):
     provider: str
     id: str
+    snapshot: RuntimeOrderSnapshot | None = None
+    provider_total_minor: str | None = None
+    provider_total_currency: str | None = None
+
+
+class RuntimeOrderStatusRequest(BaseModel):
+    idempotency_key: str = Field(min_length=16, max_length=128)
+
+
+class RuntimeOrderDetailsRequest(BaseModel):
+    order_id: UUID
+
+
+class RuntimeOrderReceiptPublic(BaseModel):
+    provider: Literal["moysklad"] = "moysklad"
+    idempotency_key: str
+    status: Literal["dispatching", "succeeded", "rejected", "unknown"]
+    created_at: datetime
+    finished_at: datetime | None
+    snapshot_status: Literal["recorded", "unavailable"]
+    submitted_snapshot: RuntimeOrderSnapshot | None
+    order: RuntimeOrderPublic | None
+
+
+class RuntimeOrderListPublic(BaseModel):
+    items: list[RuntimeOrderReceiptPublic]
+    has_more: bool
 
 
 class RuntimeAIRequest(BaseModel):
