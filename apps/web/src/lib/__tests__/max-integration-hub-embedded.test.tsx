@@ -198,8 +198,10 @@ describe("Integration Hub inside the editor modal", () => {
     const onExit = vi.fn();
     const dialog = await render([connection], onExit);
     await click("Добавить в приложение");
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("Storage blocked"); });
+    const blockedStorage = vi.spyOn(Object.getPrototypeOf(window.sessionStorage), "setItem")
+      .mockImplementation(() => { throw new Error("Storage blocked"); });
     await click("Запустить доработку");
+    expect(blockedStorage).toHaveBeenCalled();
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(dialog.querySelector("textarea")).not.toBeNull();
     expect(onExit).not.toHaveBeenCalled();

@@ -3,14 +3,16 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { FigmaIntegrationHub } from "@/components/max/FigmaIntegrationHub";
-import type { IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
-const boundary = vi.hoisted(() => ({ catalog: vi.fn(), install: vi.fn(), start: vi.fn(), claim: vi.fn(), connect: vi.fn() }));
+import type { AppIntegration, IntegrationCatalog, IntegrationProvider } from "@/lib/api/types";
+const boundary = vi.hoisted(() => ({ catalog: vi.fn(), install: vi.fn(), start: vi.fn(), claim: vi.fn(), connect: vi.fn(), options: vi.fn(), deleteConnection: vi.fn(), disconnect: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 vi.mock("@/lib/api/max-studio", () => ({ syncMaxManagedKit: async () => undefined }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn(), warning: vi.fn() } }));
 vi.mock("@/lib/api/app-integrations", async importOriginal => ({ ...await importOriginal<typeof import("@/lib/api/app-integrations")>(),
   getIntegrationCatalog: boundary.catalog, getMoyskladInstall: boundary.install, startMoyskladInstall: boundary.start,
   claimMoyskladIntegration: boundary.claim, connectAppIntegration: boundary.connect,
+  getMoyskladOptions: boundary.options, deleteAccountIntegration: boundary.deleteConnection,
+  disconnectAppIntegration: boundary.disconnect,
 }));
 const provider: IntegrationProvider = {
   key: "moysklad", name: "МойСклад", category: "inventory", description: "Товары и остатки", capabilities: [],
@@ -23,14 +25,15 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true }); vi.resetAllMocks();
   window.history.replaceState({}, "", "/");
   boundary.install.mockResolvedValue({ available: false, install_url: null });
+  boundary.options.mockResolvedValue({ organizations: [], stores: [] });
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
 });
 afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); vi.restoreAllMocks(); });
 function button(label: string) { return Array.from(container.querySelectorAll("button")).find(el => el.textContent?.trim() === label); }
 async function click(label: string) { expect(button(label)).toBeDefined(); await act(async () => button(label)!.click()); }
-async function render(mode: IntegrationProvider["connection_mode"] = "partner", projectId = "selected-project", returned = false) {
-  const data: IntegrationCatalog = { providers: [{ ...provider, connection_mode: mode }], connections: [], recommended_pack: {
+async function render(mode: IntegrationProvider["connection_mode"] = "partner", projectId = "selected-project", returned = false, connections: AppIntegration[] = []) {
+  const data: IntegrationCatalog = { providers: [{ ...provider, connection_mode: mode }], connections, recommended_pack: {
     key: "fixture", title: "", description: "", provider_keys: [], bound_count: 0, reusable_count: 0,
   } };
   boundary.catalog.mockResolvedValue(data); client.setQueryData(["app-integrations", projectId], data);
@@ -99,13 +102,67 @@ it("explains native in-solution login and owned app selection while keeping old 
   expect(boundary.start).not.toHaveBeenCalled();
   expect(boundary.connect).not.toHaveBeenCalled();
 });
-it("retains legacy credentials only as an explicit closed manual alternative", async () => {
+it("lets a new customer enter their own token without discovering a legacy fallback", async () => {
   await render("credentials");
-  const details = Array.from(container.querySelectorAll("details")).find(el => el.textContent?.includes("Ранее настроенное ручное подключение"));
-  expect(details).toBeDefined(); expect(details?.open).toBe(false); expect(button("Проверить и подключить")).toBeUndefined();
-  await act(async () => { details!.open = true; details!.dispatchEvent(new Event("toggle")); });
-  expect(container.querySelector('input[type="password"]')).not.toBeNull();
-  expect(button("Проверить и подключить")).toBeDefined();
+  const input = container.querySelector<HTMLInputElement>('input[type="password"]');
+  expect(input).not.toBeNull();
+  expect(button("Проверить и подключить")?.disabled).toBe(true);
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "synthetic-customer-token");
+    input!.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(button("Проверить и подключить")?.disabled).toBe(false);
+  expect(container.textContent).toContain("Право создавать заказы");
+  expect(container.textContent).toContain("всех ваших мини-приложений");
+  boundary.connect.mockResolvedValue({ status: "active" });
+  await click("Проверить и подключить");
+  expect(boundary.connect).toHaveBeenCalledWith("selected-project", "moysklad", { token: "synthetic-customer-token" });
+  expect(container.querySelector('input[type="password"]')).toBeNull();
+});
+const savedConnection: AppIntegration = {
+  id: "synthetic-connection", provider: "moysklad", status: "active", auth_mode: "credentials",
+  account_scoped: true, bound_to_project: true, binding_status: "ready", binding_config: {},
+  account_label: "Synthetic", public_config: { organization_id: "org", store_id: "store" },
+  capabilities: [], configured_fields: ["token"], last_error: null,
+  verified_at: null, last_checked_at: null, created_at: "2026-10-10", updated_at: "2026-10-10",
+};
+it("requires separate acknowledgement before removing a shared owner connection", async () => {
+  await render("credentials", "selected-project", true, [savedConnection]);
+  await click("Настроить");
+  await click("Удалить общее подключение");
+  expect(boundary.deleteConnection).not.toHaveBeenCalled();
+  expect(boundary.disconnect).not.toHaveBeenCalled();
+  expect(container.textContent).toContain("во всех ваших мини-приложениях");
+  expect(button("Подтвердить удаление")?.disabled).toBe(true);
+  const checkbox = container.querySelector<HTMLInputElement>("#moysklad-delete-confirm");
+  expect(checkbox).not.toBeNull();
+  await act(async () => checkbox!.click());
+  boundary.deleteConnection.mockResolvedValue(undefined);
+  await click("Подтвердить удаление");
+  expect(boundary.deleteConnection).toHaveBeenCalledWith("selected-project", "moysklad");
+  expect(boundary.disconnect).not.toHaveBeenCalled();
+});
+
+it("blocks token replacement while shared deletion is pending", async () => {
+  await render("credentials", "selected-project", true, [savedConnection]);
+  await click("Настроить");
+  const token = container.querySelector<HTMLInputElement>('input[type="password"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(token, "synthetic-token");
+    token.dispatchEvent(new Event("input", { bubbles: true }));
+    container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+  });
+  expect(button("Проверить и подключить")?.disabled).toBe(false);
+  await click("Удалить общее подключение");
+  await act(async () => container.querySelector<HTMLInputElement>("#moysklad-delete-confirm")!.click());
+  let finish!: () => void;
+  boundary.deleteConnection.mockImplementation(() => new Promise<void>(resolve => { finish = resolve; }));
+  await click("Подтвердить удаление");
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
+  expect(button("Проверить и подключить")?.disabled).toBe(true);
+  button("Проверить и подключить")!.click();
+  expect(boundary.connect).not.toHaveBeenCalled();
+  await act(async () => finish());
 });
 it("shows unavailable lookup errors distinctly from publication pending", async () => {
   boundary.install.mockRejectedValue(new Error("local network failure"));
