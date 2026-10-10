@@ -178,3 +178,27 @@ with the deployed trusted kit. The intended product change is only
 `src/app/page.tsx`. Check the entire frozen baseline inventory after acceptance;
 any other delta requires explanation and review. Never manufacture a permit,
 completed run or snapshot from a draft save.
+
+## Reported live baseline, not acceptance of this candidate
+
+The Windows live-QA owner supplied these receipts on 10 October 2026:
+
+- The ordinary QA owner published the existing accepted version through the
+  normal UI; the public app returned HTTP 200 at
+  `https://qa-10-10-publichnaia-amocrm-kabinet-b-9163ce.apps.yleum.ru`.
+- The existing Coffee bot moved to this QA project after explicit owner and
+  document approval. The old project/snapshots were retained; no token rotation.
+- Genuine MAX validation rejected missing inputs/consent, then created the
+  synthetic lead `2964609` in `officeyleumru`. A CRM UI stage change appeared
+  in MAX history with a fresh server `checked_at`; reopening preserved history.
+- Identical same-key replay returned `2964609`. Read-only operation checks before
+  and after confirmed exactly one succeeded lead and one succeeded lead note;
+  no duplicate operation was created.
+- A fresh complete inventory had 44 files, accepted and draft identical. Its
+  canonical page SHA-256 matched the baseline pinned in this manifest.
+
+These are baseline receipts supplied by the live owner, not independent Linux
+browser verification or evidence that this new preview/F5/adoption patch is
+installed. The candidate remains unapplied. `yalium`/two-independent-CRM
+negative isolation, candidate live acceptance and moderation resubmission
+were not performed. No new moderation submission is part of this task.
