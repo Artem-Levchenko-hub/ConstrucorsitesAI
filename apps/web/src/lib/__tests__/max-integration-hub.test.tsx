@@ -62,8 +62,8 @@ describe("Integration Hub implementation handoff", () => {
     client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   });
   afterEach(() => { act(() => root.unmount()); client.clear(); container.remove(); });
-  async function render(connections: AppIntegration[], providers = [provider]) {
-    const data = { ...catalog(connections), providers };
+  async function render(connections: AppIntegration[], providers = [provider], recommendedPack = catalog(connections).recommended_pack) {
+    const data = { ...catalog(connections), providers, recommended_pack: recommendedPack };
     client.setQueryData(["app-integrations", "project-1"], data);
     boundary.catalog.mockResolvedValue(data);
     await act(async () => root.render(createElement(QueryClientProvider, { client }, createElement(FigmaIntegrationHub, { projectId: "project-1", projectName: "Project" }))));
@@ -192,20 +192,18 @@ describe("Integration Hub implementation handoff", () => {
     expect(boundary.platformAi).not.toHaveBeenCalled();
   });
   it("hides a recommended pack that would connect unsupported services", async () => {
-    await render([]);
-    await act(async () => client.setQueryData<IntegrationCatalog>(["app-integrations", "project-1"], current => ({
-      ...current!, recommended_pack: { ...current!.recommended_pack!, title: "Bitrix24 bundle", provider_keys: ["yookassa", "bitrix24"] },
-    })));
+    await render([], [provider], {
+      ...catalog([]).recommended_pack!, title: "Bitrix24 bundle", provider_keys: ["yookassa", "bitrix24"],
+    });
     expect(button("Подключить рекомендуемые")).toBeUndefined();
     expect(container.textContent).not.toContain("Bitrix24 bundle");
     expect(boundary.pack).not.toHaveBeenCalled();
   });
   it("keeps an entirely supported recommended pack actionable", async () => {
-    await render([]);
     boundary.pack.mockResolvedValue({ remaining_provider_keys: [] });
-    await act(async () => client.setQueryData<IntegrationCatalog>(["app-integrations", "project-1"], current => ({
-      ...current!, recommended_pack: { ...current!.recommended_pack!, provider_keys: ["yookassa"] },
-    })));
+    await render([], [provider], {
+      ...catalog([]).recommended_pack!, provider_keys: ["yookassa"],
+    });
     await click("Подключить рекомендуемые");
     expect(boundary.pack).toHaveBeenCalledWith("project-1");
   });
