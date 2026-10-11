@@ -1,7 +1,7 @@
 // Disposable real-core HTTP acceptance. No production credentials or external MAX traffic.
 // Run inside the exact candidate image after its trusted bootstrap, using runtime DSN only.
 import assert from 'node:assert/strict';
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer } from 'node:http';
 import { once } from 'node:events';
@@ -14,6 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const cases = [];
 let stage = 'preflight';
 let requests = 0;
+let observedStatus = null;
 
 function safeDsn(raw) {
   const url = new URL(raw);
@@ -58,6 +59,7 @@ async function request(path, { method = 'GET', cookie, body, headers = {} } = {}
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  observedStatus = response.status;
   const reader = response.body?.getReader();
   const chunks = []; let bytes = 0;
   if (reader) {
@@ -96,6 +98,43 @@ async function main() {
   let mockCalls = 0;
   let mockFail = false;
   let mockBadRequest = false;
+  let platformCalls = 0;
+  let platformFail = false;
+  let platformBadRequest = false;
+  const platformMock = createServer(async (req, res) => {
+    try {
+      let bytes = 0; const chunks = [];
+      for await (const chunk of req) { bytes += chunk.length; assert.ok(bytes <= 65536); chunks.push(chunk); }
+      const body = Buffer.concat(chunks).toString('utf8');
+      const isPolicy = req.url === `/api/runtime/projects/${PROJECT}/consent-policy`;
+      assert.ok(isPolicy || req.url === `/api/runtime/projects/${PROJECT}/analytics`);
+      assert.equal(req.method, isPolicy ? 'GET' : 'POST');
+      if (isPolicy) assert.equal(bytes, 0);
+      assert.equal(req.headers['x-max-init-data'], undefined);
+      const [version, encoded, signature] = String(req.headers['x-omnia-integration-assertion']).split('.');
+      assert.equal(version, 'v1');
+      const key = createHmac('sha256', token).update('omnia:integration-assertion:v1').digest();
+      assert.equal(signature, createHmac('sha256', key).update(`${version}.${encoded}`).digest('hex'));
+      const claims = JSON.parse(Buffer.from(encoded, 'base64url'));
+      assert.equal(claims.project_id, PROJECT);
+      assert.ok((isPolicy ? ['10001', '10002'] : ['10001', '10002', '10003']).includes(claims.max_user_id));
+      assert.equal(claims.method, req.method); assert.equal(claims.path, req.url);
+      assert.equal(claims.body_sha256, createHash('sha256').update(body).digest('hex'));
+      assert.ok(claims.exp > Math.floor(Date.now() / 1000));
+      if (!isPolicy) {
+        const event = JSON.parse(body);
+        assert.ok(UUID.test(event.event_id) && ['open', 'action', 'event'].includes(event.kind));
+        assert.deepEqual(Object.keys(event).sort(), ['event_id', 'kind']);
+        res.writeHead(204); res.end(); return;
+      }
+      platformCalls++;
+      res.writeHead(platformFail ? 503 : 200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(platformFail ? { error: 'synthetic' } :
+        { enabled: false, policy_version: null, policy_hash: null }));
+    } catch {
+      platformBadRequest = true; res.writeHead(400); res.end();
+    }
+  });
   const mock = createServer(async (req, res) => {
     try {
       let bytes = 0;
@@ -145,6 +184,7 @@ async function main() {
       HOSTNAME: '127.0.0.1', PORT: '3000', DATABASE_URL: dsn, AUTH_SECRET: auth,
       MAX_BOT_TOKEN: token, MAX_WEBHOOK_SECRET: webhookSecret,
       MAX_API_BASE_URL: 'http://127.0.0.1:3101', OMNIA_PROJECT_ID: PROJECT,
+      OMNIA_PLATFORM_API_URL: 'http://127.0.0.1:3102',
       ...(ownerPreview ? { OMNIA_OWNER_PREVIEW: '1' } : { OMNIA_PUBLIC_APP_ORIGIN: ORIGIN }),
     };
     assert.ok(!('CORE_RUNTIME_PASSWORD' in env));
@@ -223,6 +263,9 @@ async function main() {
     assert.ok(['rolsuper','rolbypassrls','rolcreatedb','rolcreaterole','rolreplication'].every(key => role[key] === false));
     await new Promise((resolve, reject) => {
       mock.once('error', reject); mock.listen(3101, '127.0.0.1', resolve);
+    });
+    await new Promise((resolve, reject) => {
+      platformMock.once('error', reject); platformMock.listen(3102, '127.0.0.1', resolve);
     });
     stage = 'owner_preview_auth';
     await start(true);
@@ -311,17 +354,30 @@ async function main() {
     cases.push('http_alternating_concurrent_actors_and_runtime_pool_local_guc_reset');
     stage = 'consents_events';
     for (let i = 0; i < 2; i++) {
+      stage = `legacy_consent_post_${i}`;
       const consent = await request('/api/omnia/consents', { method: 'POST', cookie: cookies[i],
         body: { consentType: 'qa', granted: true, policyVersion: 'qa-1', maxUserId: actors[1-i] } });
       assert.equal(consent.status, 201); assert.equal(consent.data.consent.maxUserId, actors[i]);
+      stage = `legacy_consent_get_${i}`;
       const consents = await request('/api/omnia/consents', { cookie: cookies[i] });
       assert.equal(consents.status, 200); assert.equal(consents.data.consents.length, 1);
       assert.equal(consents.data.consents[0].maxUserId, actors[i]);
+      stage = `legacy_consent_event_${i}`;
+      const eventCountBefore = (await actorSql(actors[i], 'SELECT count(*)::int n FROM max_analytics_events')).rows[0].n;
       assert.equal((await request('/api/omnia/events', { method: 'POST', cookie: cookies[i],
         body: { eventName: 'qa_event', properties: { synthetic: true }, maxUserId: actors[1-i] } })).status, 204);
-      assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_analytics_events')).rows[0].n, 1);
+      assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_analytics_events')).rows[0].n, eventCountBefore + 1);
+      assert.equal((await actorSql(actors[i], "SELECT count(*)::int n FROM max_analytics_events WHERE event_name='qa_event'")).rows[0].n, 1);
     }
     cases.push('consents_events_owner_isolation');
+    assert.ok(platformCalls >= 4); assert.equal(platformBadRequest, false);
+    platformFail = true;
+    assert.equal((await request('/api/omnia/consents', { method: 'POST', cookie: cookies[0],
+      body: { consentType: 'personal_data', granted: true, policyVersion: '1' } })).status, 503);
+    assert.equal((await request('/api/omnia/consents', { cookie: cookies[0] })).status, 503);
+    assert.equal((await actorSql(actors[0], 'SELECT count(*)::int n FROM max_consents')).rows[0].n, 1);
+    platformFail = false;
+    cases.push('consent_policy_trusted_hmac_and_platform_failure_no_local_write');
     stage = 'restart_persistence';
     const beforeRestart = await Promise.all(cookies.map(cookie => list(cookie)));
     await stop(); await start();
@@ -424,13 +480,16 @@ async function main() {
     assert.equal((await request('/api/health')).status, 200);
     cases.push('catalog_json_config_health');
     assert.ok(childLogBytes <= 4 * 1024 * 1024);
-    result = { passed: true, cases, requests, mock_max_calls: mockCalls,
+    assert.equal(platformBadRequest, false);
+    result = { passed: true, cases, requests, mock_max_calls: mockCalls, mock_platform_calls: platformCalls,
       server_has_admin_env: false, real_MAX_launch: 'NOT_RUN',
       pool_scope: 'runtime_role_test_pool_commit_rollback_plus_real_HTTP_concurrency' };
   } finally {
     await stop();
     mock.closeAllConnections();
     await new Promise(resolve => mock.close(resolve));
+    platformMock.closeAllConnections();
+    await new Promise(resolve => platformMock.close(resolve));
     await pool.end();
     clearTimeout(lifetime);
   }
@@ -452,6 +511,6 @@ try {
   if (process.argv.includes('--self-test')) selfTest(); else await main();
 } catch {
   // Assertion/driver/server errors may include private values. Emit only our closed stage.
-  console.log(JSON.stringify({ passed: false, stage, cases }));
+  console.log(JSON.stringify({ passed: false, stage, observed_status: observedStatus, cases }));
   process.exitCode = 1;
 }

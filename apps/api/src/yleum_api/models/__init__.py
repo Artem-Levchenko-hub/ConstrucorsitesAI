@@ -33,6 +33,11 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.hero_media_asset import HeroMediaAsset
 from yleum_api.models.hero_media_brief import HeroMediaBrief
 from yleum_api.models.hero_media_render import HeroMediaRender
+from yleum_api.models.integration_consent import (
+    IntegrationConsentEvent,
+    IntegrationConsentPolicy,
+    IntegrationConsentState,
+)
 from yleum_api.models.integration_operation import IntegrationOperation
 from yleum_api.models.lead import Lead
 from yleum_api.models.max_analytics import MaxAnalyticsEvent
@@ -94,6 +99,9 @@ __all__ = [
     "HeroMediaAsset",
     "HeroMediaBrief",
     "HeroMediaRender",
+    "IntegrationConsentEvent",
+    "IntegrationConsentPolicy",
+    "IntegrationConsentState",
     "IntegrationOAuthState",
     "IntegrationOperation",
     "Lead",

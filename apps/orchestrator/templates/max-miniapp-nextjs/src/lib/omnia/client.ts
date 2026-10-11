@@ -46,12 +46,42 @@ export async function saveMaxConsent(
   granted: boolean,
   policyVersion = "1",
 ): Promise<void> {
-  const response = await post("/api/omnia/consents", {
-    consentType,
-    granted,
-    policyVersion,
+  // This function is called only for an explicit grant/revoke. Freeze its event
+  // and revision before delivery; a retry must never refresh a revoked baseline.
+  const context = await fetch("/api/omnia/consents?platform=1", { credentials: "include", cache: "no-store" });
+  if (!context.ok) throw new Error("Consent save failed");
+  const snapshot = await context.json() as {
+    actor?: string; policy?: { enabled?: boolean; policy_version?: string | null; policy_hash?: string | null };
+    state?: { revision?: number } | null;
+  };
+  if (!snapshot.actor || typeof snapshot.policy?.enabled !== "boolean") throw new Error("Consent save failed");
+  const authoritative = snapshot.policy.enabled && consentType === "personal_data";
+  if (authoritative && (!Number.isSafeInteger(snapshot.state?.revision) || Number(snapshot.state?.revision) < 0 ||
+      typeof snapshot.policy.policy_version !== "string" || typeof snapshot.policy.policy_hash !== "string")) throw new Error("Consent save failed");
+  const body = JSON.stringify({ consentType, granted, policyVersion,
+    ...(authoritative ? { eventId: crypto.randomUUID(), expectedRevision: snapshot.state!.revision, policyHash: snapshot.policy.policy_hash } : {}),
   });
-  if (!response.ok) throw new Error("Consent save failed");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch("/api/omnia/consents", {
+        method: "POST", credentials: "include", signal: AbortSignal.timeout(10_000),
+        headers: { "Content-Type": "application/json", "X-Omnia-Actor": snapshot.actor }, body,
+      });
+      if (response.ok) {
+        if (!authoritative) return;
+        const receipt = await response.json().catch(() => null) as {
+          state?: { granted?: boolean; policy_version?: string | null; policy_hash?: string | null };
+        } | null;
+        if (receipt?.state?.granted === granted && (!granted ||
+            (receipt.state.policy_version === snapshot.policy.policy_version && receipt.state.policy_hash === snapshot.policy.policy_hash))) return;
+        // A replay may acknowledge an old receipt after a revoke. It must not
+        // report a fresh grant or trigger another event with a newer baseline.
+        break;
+      }
+      if (response.status < 500) break;
+    } catch { /* Unknown delivery: retry only this same frozen consent event. */ }
+  }
+  throw new Error("Consent save failed");
 }
 
 // Keep the supported legacy import on the same durable write contract.

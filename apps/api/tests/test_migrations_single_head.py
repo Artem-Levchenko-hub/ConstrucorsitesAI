@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_billing_catalog_is_the_only_head() -> None:
+def test_integration_consent_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0084_billing_catalog_v3"]
+    assert heads == ["0085_integration_consent"]
+    assert chain["0085_integration_consent"] == "0084_billing_catalog_v3"
     assert chain["0084_billing_catalog_v3"] == "0083_email_verification_codes"
     assert chain["0083_email_verification_codes"] == "0082_amocrm_oauth_profiles"
     assert chain["0082_amocrm_oauth_profiles"] == "0081_max_bot_binding"
@@ -237,12 +238,133 @@ def test_billing_catalog_is_the_only_head() -> None:
     assert chain["0056_project_cell_finalization"] == "0055_project_cell_capacity_queue"
 
 
+def test_consent_upgrade_preserves_existing_data_without_enabling_projects(
+    project_cell_migration_database: ProjectCellMigrationDatabase,
+) -> None:
+    # This fixture creates and removes its own random database; no production downgrade.
+    database = project_cell_migration_database
+    database.upgrade("0084_billing_catalog_v3")
+    owner, project, account, subscription = [str(uuid4()) for _ in range(4)]
+    asyncio.run(
+        _execute(
+            database.dsn,
+            f"""
+        INSERT INTO users(id, email, password_hash)
+        VALUES ('{owner}', 'consent-upgrade@example.invalid', 'synthetic');
+        INSERT INTO projects(id, owner_id, name, slug, template)
+        VALUES ('{project}', '{owner}', 'Existing project', 'consent-upgrade', 'max_miniapp');
+        INSERT INTO billing_accounts(id, scope, personal_user_id)
+        VALUES ('{account}', 'personal', '{owner}');
+        INSERT INTO subscriptions(id, user_id, billing_account_id, plan_id, status)
+        VALUES ('{subscription}', '{owner}', '{account}',
+                '00000000-0000-4000-8000-000000000002', 'active');
+        INSERT INTO payments(id, user_id, billing_account_id, subscription_id, purpose,
+                             idempotency_key, package_code, amount_rub, credit_rub, status)
+        VALUES (uuid_generate_v4(), '{owner}', '{account}', '{subscription}',
+                'subscription_initial', 'synthetic-consent-upgrade',
+                'subscription:pro:v1', 1490, 500, 'succeeded');
+    """,
+        )
+    )
+    preserved_tables = (
+        "users",
+        "projects",
+        "billing_accounts",
+        "billing_plans",
+        "subscriptions",
+        "payments",
+    )
+    before = {
+        table: database.fetchval(f"SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM {table} t")
+        for table in preserved_tables
+    }
+
+    database.upgrade("0085_integration_consent")
+
+    assert (
+        database.fetchval("SELECT version_num FROM alembic_version") == "0085_integration_consent"
+    )
+    for table, snapshot in before.items():
+        assert (
+            database.fetchval(f"SELECT jsonb_agg(to_jsonb(t) ORDER BY id) FROM {table} t")
+            == snapshot
+        )
+    tables = [f"integration_consent_{suffix}" for suffix in ("policies", "states", "events")]
+    constraints = database.fetch("""
+        SELECT conrelid::regclass::text AS table_name, contype::text AS contype, convalidated,
+               pg_get_constraintdef(oid) AS definition
+        FROM pg_constraint
+        WHERE conrelid IN ('integration_consent_policies'::regclass,
+                          'integration_consent_states'::regclass,
+                          'integration_consent_events'::regclass)
+    """)
+    assert all(row["convalidated"] for row in constraints)
+    for table, primary_key in zip(
+        tables,
+        (
+            "PRIMARY KEY (project_id)",
+            "PRIMARY KEY (project_id, max_user_id)",
+            "PRIMARY KEY (project_id, max_user_id, event_id)",
+        ),
+        strict=True,
+    ):
+        actual = {
+            (row["contype"], _normalized_catalog_sql(row["definition"]))
+            for row in constraints
+            if row["table_name"] == table
+        }
+        expected = {
+            ("p", primary_key),
+            ("f", "FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE"),
+        }
+        if table != "integration_consent_policies":
+            expected.add(("c", "CHECK ((revision > 0))"))
+        assert actual == expected
+        assert database.fetchval(f"SELECT count(*) FROM {table}") == 0
+    assert (
+        database.fetchval("""
+        SELECT column_default FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'integration_consent_policies'
+          AND column_name = 'enabled'
+    """)
+        == "false"
+    )
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        asyncio.run(
+            _execute(
+                database.dsn,
+                f"""
+            INSERT INTO integration_consent_policies(project_id, policy_version, policy_hash)
+            VALUES ('{uuid4()}', 'synthetic', repeat('a', 64))
+        """,
+            )
+        )
+    for table in tables[1:]:
+        event_columns = ", event_id, request_digest" if table.endswith("events") else ""
+        event_values = ", uuid_generate_v4(), repeat('b', 64)" if table.endswith("events") else ""
+        with pytest.raises(asyncpg.CheckViolationError):
+            asyncio.run(
+                _execute(
+                    database.dsn,
+                    f"""
+                INSERT INTO {table}(project_id, max_user_id, granted, policy_version,
+                                    policy_hash, revision{event_columns})
+                VALUES ('{project}', '10001', false, 'synthetic', repeat('a', 64),
+                        0{event_values})
+            """,
+                )
+            )
+
+
 def test_email_code_upgrade_preserves_existing_verification_links(
     project_cell_migration_database: ProjectCellMigrationDatabase,
 ) -> None:
     database = project_cell_migration_database
     database.upgrade("0082_amocrm_oauth_profiles")
-    asyncio.run(_execute(database.dsn, """
+    asyncio.run(
+        _execute(
+            database.dsn,
+            """
         INSERT INTO users(id, email, password_hash)
         VALUES ('00000000-0000-4000-8000-000000000001', 'legacy@example.invalid', 'synthetic');
         INSERT INTO auth_tokens(id, user_id, purpose, token_hash, expires_at, used_at)
@@ -253,26 +375,42 @@ def test_email_code_upgrade_preserves_existing_verification_links(
           ('00000000-0000-4000-8000-000000000003',
            '00000000-0000-4000-8000-000000000001', 'verify_email', repeat('b',64),
            '2030-01-02T00:00:00Z', '2026-01-01T00:00:00Z');
-    """))
-    before = [tuple(row) for row in database.fetch(
-        "SELECT id, user_id, purpose, token_hash, expires_at, used_at FROM auth_tokens ORDER BY id"
-    )]
+    """,
+        )
+    )
+    before = [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT id, user_id, purpose, token_hash, expires_at, used_at "
+            "FROM auth_tokens ORDER BY id"
+        )
+    ]
 
     database.upgrade("head")
 
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0084_billing_catalog_v3"
+        "0085_integration_consent"
     )
-    assert [tuple(row) for row in database.fetch(
-        "SELECT id, user_id, purpose, token_hash, expires_at, used_at FROM auth_tokens ORDER BY id"
-    )] == before
-    assert [tuple(row) for row in database.fetch(
-        "SELECT code_hash, code_expires_at, code_attempts FROM auth_tokens ORDER BY id"
-    )] == [(None, None, 0), (None, None, 0)]
-    assert [tuple(row) for row in database.fetch(
-        "SELECT conname, convalidated FROM pg_constraint "
-        "WHERE conrelid = 'auth_tokens'::regclass AND conname = 'ck_auth_tokens_code_attempts'"
-    )] == [("ck_auth_tokens_code_attempts", True)]
+    assert [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT id, user_id, purpose, token_hash, expires_at, used_at "
+            "FROM auth_tokens ORDER BY id"
+        )
+    ] == before
+    assert [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT code_hash, code_expires_at, code_attempts FROM auth_tokens ORDER BY id"
+        )
+    ] == [(None, None, 0), (None, None, 0)]
+    assert [
+        tuple(row)
+        for row in database.fetch(
+            "SELECT conname, convalidated FROM pg_constraint "
+            "WHERE conrelid = 'auth_tokens'::regclass AND conname = 'ck_auth_tokens_code_attempts'"
+        )
+    ] == [("ck_auth_tokens_code_attempts", True)]
     with pytest.raises(asyncpg.CheckViolationError):
         asyncio.run(_execute(database.dsn, "UPDATE auth_tokens SET code_attempts = 6"))
     assert database.fetchval("SELECT max(code_attempts) FROM auth_tokens") == 0
@@ -285,8 +423,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version")
-        == "0084_billing_catalog_v3"
+        database.fetchval("SELECT version_num FROM alembic_version") == "0085_integration_consent"
     )
     assert [
         tuple(row)
@@ -444,8 +581,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version")
-        == "0084_billing_catalog_v3"
+        database.fetchval("SELECT version_num FROM alembic_version") == "0085_integration_consent"
     )
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 

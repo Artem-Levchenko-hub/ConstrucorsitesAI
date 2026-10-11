@@ -8,6 +8,7 @@ import json
 import logging
 import re
 import time
+from contextlib import nullcontext
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated, Any, cast
@@ -17,6 +18,8 @@ from uuid import UUID
 import httpx
 from cryptography.fernet import InvalidToken
 from fastapi import APIRouter, Header, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select, text
 
 from yleum_api.core.config import get_settings
@@ -46,6 +49,13 @@ from yleum_api.schemas.integration_runtime import (
 )
 from yleum_api.services import integration_providers
 from yleum_api.services.integration_auth import verify_integration_assertion
+from yleum_api.services.integration_consent import (
+    actor_dispatch_guard,
+    consent_state,
+    policy_context,
+    record_consent,
+    require_consent,
+)
 from yleum_api.services.integration_responses import (
     invalid_response,
     lead_id,
@@ -75,6 +85,71 @@ return 0
 class RuntimeContext:
     project_id: UUID
     max_user_id: int
+
+
+class RuntimeConsentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    event_id: UUID
+    expected_revision: int = Field(ge=0, strict=True)
+    policy_version: str = Field(min_length=1, max_length=32)
+    policy_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    granted: bool = Field(strict=True)
+
+
+async def _consent_context(
+    session: SessionDep, project_id: UUID, request: Request
+) -> RuntimeContext:
+    # Only the immutable Core can attest to an explicit consent instruction.
+    # Raw MAX identity can send leads, but never manufacture a consent record.
+    if not request.headers.get("X-Omnia-Integration-Assertion"):
+        raise ApiError("forbidden", "Согласие должно быть записано приложением", 403)
+    return await _runtime_context(session, project_id, "", request)
+
+
+@router.get("/{project_id}/consent-policy")
+async def runtime_consent_policy(
+    project_id: UUID, session: SessionDep, request: Request
+) -> JSONResponse:
+    await _consent_context(session, project_id, request)
+    policy = await policy_context(session, project_id)
+    return JSONResponse(
+        {
+            "enabled": policy.enabled,
+            "policy_version": policy.policy_version,
+            "policy_hash": policy.policy_hash,
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/{project_id}/consents")
+async def runtime_consent_state(
+    project_id: UUID, session: SessionDep, request: Request
+) -> JSONResponse:
+    context = await _consent_context(session, project_id, request)
+    return JSONResponse(
+        await consent_state(session, project_id, context.max_user_id),
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.post("/{project_id}/consents")
+async def runtime_record_consent(
+    project_id: UUID, payload: RuntimeConsentRequest, session: SessionDep, request: Request
+) -> JSONResponse:
+    context = await _consent_context(session, project_id, request)
+    result = await record_consent(
+        session,
+        project_id,
+        context.max_user_id,
+        event_id=payload.event_id,
+        expected_revision=payload.expected_revision,
+        granted=payload.granted,
+        policy_version=payload.policy_version,
+        policy_hash=payload.policy_hash,
+    )
+    return JSONResponse(result, headers={"Cache-Control": "private, no-store"})
 
 
 def _validate_init_data(init_data: str, bot_token: str) -> int:
@@ -572,107 +647,169 @@ async def create_runtime_lead(
             "Обновите приложение: для заявки amoCRM требуется ключ безопасной отправки.",
             status.HTTP_422_UNPROCESSABLE_CONTENT,
         )
-    credentials = await _secrets(session, connection)
-    from yleum_api.services.integration_operations import execute_once
-
-    binding = (await session.scalars(select(ProjectIntegrationBinding).where(
-        ProjectIntegrationBinding.project_id == project_id,
-        ProjectIntegrationBinding.integration_id == connection.id,
-    ))).one_or_none()
-    config = dict(binding.config) if binding else {}
-
-    async def send() -> dict[str, Any]:
-        result = (await _send_runtime_lead(
-            connection, credentials, context, payload, config,
-        )).model_dump()
-        if connection.provider == "amocrm":
-            from yleum_api.services.amocrm import base_url
-
-            result["_account_base_url"] = base_url(connection)
-        return result
-
-    if payload.idempotency_key is None:
-        # Legacy Bitrix clients retain their response contract. amoCRM was
-        # rejected above: its lead/note flow always needs a durable intent key.
-        return await _send_runtime_lead(connection, credentials, context, payload, config)
-    operation_key = payload.idempotency_key
-    result = await execute_once(
-        session,
-        project_id=project_id,
-        integration_id=connection.id,
-        provider=connection.provider,
-        max_user_id=context.max_user_id,
-        kind="lead",
-        client_key=operation_key,
-        payload=payload.model_dump(exclude={"idempotency_key"}),
-        send=send,
+    guard = (
+        actor_dispatch_guard(session, project_id, context.max_user_id)
+        if connection.provider == "amocrm"
+        else nullcontext()
     )
-    if connection.provider == "amocrm":
-        from yleum_api.services import amocrm
+    async with guard:
+        credentials: dict[str, str] | None = None
+        from yleum_api.services.integration_operations import execute_once
 
-        if result.get("_account_base_url") != amocrm.base_url(connection):
-            raise ApiError("integration_operation_conflict",
-                           "Аккаунт CRM изменился. Проверьте предыдущую заявку.", 409)
-
-        # Persist the lead ID BEFORE the second external write. A note failure
-        # must never turn a confirmed lead into a rejected/replayable creation.
-        async def send_note() -> dict[str, Any]:
-            async with amocrm.client(credentials) as client:
-                try:
-                    response = await client.post(
-                        f"{amocrm.base_url(connection)}/api/v4/leads/{result['id']}/notes",
-                        json=[{"note_type": "common", "params": {"text": amocrm.note_text(
-                            payload, project_id, context.max_user_id,
-                        )}}],
-                    )
-                except (httpx.TimeoutException, httpx.NetworkError,
-                        httpx.RemoteProtocolError) as exc:
-                    raise ApiError("integration_provider_unavailable",
-                                   "Не удалось подтвердить примечание amoCRM", 503) from exc
-            if response.status_code >= 300:
-                raise _provider_failure("amoCRM", response)
-            embedded = response_object(response).get("_embedded")
-            notes = embedded.get("notes") if isinstance(embedded, dict) else None
-            if not isinstance(notes, list) or not notes or not isinstance(notes[0], dict):
-                raise invalid_response()
-            lead_id(notes[0].get("id"))
-            return {"id": result["id"], "details_status": "recorded"}
-
-        try:
-            await execute_once(
-                session, project_id=project_id, integration_id=connection.id, provider="amocrm",
-                max_user_id=context.max_user_id, kind="lead_note",
-                client_key=operation_key,
-                payload={"lead_id": result["id"], "comment": payload.comment,
-                         "source": payload.source}, send=send_note,
+        binding = (
+            await session.scalars(
+                select(ProjectIntegrationBinding).where(
+                    ProjectIntegrationBinding.project_id == project_id,
+                    ProjectIntegrationBinding.integration_id == connection.id,
+                )
             )
-            result = {**result, "details_status": "recorded", "warning": None}
-        except ApiError:
-            result = {**result, "details_status": "unknown", "warning": (
-                "Заявка создана. Передача комментария и источника не подтверждена. "
-                "Не отправляйте заявку повторно; свяжитесь с менеджером."
-            )}
-        receipt = (await session.scalars(select(IntegrationOperation).where(
-            IntegrationOperation.project_id == project_id,
-            IntegrationOperation.provider == "amocrm",
-            IntegrationOperation.max_user_id == str(context.max_user_id),
-            IntegrationOperation.kind == "lead",
-            IntegrationOperation.client_key == operation_key,
-        ))).one()
-        receipt.result = result
-        await session.commit()
-    public = RuntimeLeadPublic.model_validate(result)
-    from yleum_api.services.max_integration_analytics import record_confirmed_action
+        ).one_or_none()
+        config = dict(binding.config) if binding else {}
 
-    await record_confirmed_action(
-        session,
-        project_id=project_id,
-        user_id=context.max_user_id,
-        provider=connection.provider,
-        kind="lead",
-        client_key=operation_key,
-    )
-    return public
+        async def prepare() -> None:
+            nonlocal credentials
+            if connection.provider == "amocrm":
+                await require_consent(session, project_id, context.max_user_id)
+            if credentials is None:
+                credentials = await _secrets(session, connection)
+
+        async def send() -> dict[str, Any]:
+            assert credentials is not None
+            result = (
+                await _send_runtime_lead(
+                    connection,
+                    credentials,
+                    context,
+                    payload,
+                    config,
+                )
+            ).model_dump()
+            if connection.provider == "amocrm":
+                from yleum_api.services.amocrm import base_url
+
+                result["_account_base_url"] = base_url(connection)
+            return result
+
+        if payload.idempotency_key is None:
+            # Legacy Bitrix clients retain their response contract. amoCRM was
+            # rejected above: its lead/note flow always needs a durable intent key.
+            credentials = await _secrets(session, connection)
+            return await _send_runtime_lead(connection, credentials, context, payload, config)
+        operation_key = payload.idempotency_key
+        result = await execute_once(
+            session,
+            project_id=project_id,
+            integration_id=connection.id,
+            provider=connection.provider,
+            max_user_id=context.max_user_id,
+            kind="lead",
+            client_key=operation_key,
+            payload=payload.model_dump(exclude={"idempotency_key"}),
+            send=send,
+            prepare=prepare,
+        )
+        if connection.provider == "amocrm":
+            from yleum_api.services import amocrm
+
+            if result.get("_account_base_url") != amocrm.base_url(connection):
+                raise ApiError(
+                    "integration_operation_conflict",
+                    "Аккаунт CRM изменился. Проверьте предыдущую заявку.",
+                    409,
+                )
+
+            # Persist the lead ID BEFORE the second external write. A note failure
+            # must never turn a confirmed lead into a rejected/replayable creation.
+            async def send_note() -> dict[str, Any]:
+                assert credentials is not None
+                async with amocrm.client(credentials) as client:
+                    try:
+                        response = await client.post(
+                            f"{amocrm.base_url(connection)}/api/v4/leads/{result['id']}/notes",
+                            json=[
+                                {
+                                    "note_type": "common",
+                                    "params": {
+                                        "text": amocrm.note_text(
+                                            payload,
+                                            project_id,
+                                            context.max_user_id,
+                                        )
+                                    },
+                                }
+                            ],
+                        )
+                    except (
+                        httpx.TimeoutException,
+                        httpx.NetworkError,
+                        httpx.RemoteProtocolError,
+                    ) as exc:
+                        raise ApiError(
+                            "integration_provider_unavailable",
+                            "Не удалось подтвердить примечание amoCRM",
+                            503,
+                        ) from exc
+                if response.status_code >= 300:
+                    raise _provider_failure("amoCRM", response)
+                embedded = response_object(response).get("_embedded")
+                notes = embedded.get("notes") if isinstance(embedded, dict) else None
+                if not isinstance(notes, list) or not notes or not isinstance(notes[0], dict):
+                    raise invalid_response()
+                lead_id(notes[0].get("id"))
+                return {"id": result["id"], "details_status": "recorded"}
+
+            try:
+                await execute_once(
+                    session,
+                    project_id=project_id,
+                    integration_id=connection.id,
+                    provider="amocrm",
+                    max_user_id=context.max_user_id,
+                    kind="lead_note",
+                    client_key=operation_key,
+                    payload={
+                        "lead_id": result["id"],
+                        "comment": payload.comment,
+                        "source": payload.source,
+                    },
+                    send=send_note,
+                    prepare=prepare,
+                )
+                result = {**result, "details_status": "recorded", "warning": None}
+            except ApiError:
+                result = {
+                    **result,
+                    "details_status": "unknown",
+                    "warning": (
+                        "Заявка создана. Передача комментария и источника не подтверждена. "
+                        "Не отправляйте заявку повторно; свяжитесь с менеджером."
+                    ),
+                }
+            receipt = (
+                await session.scalars(
+                    select(IntegrationOperation).where(
+                        IntegrationOperation.project_id == project_id,
+                        IntegrationOperation.provider == "amocrm",
+                        IntegrationOperation.max_user_id == str(context.max_user_id),
+                        IntegrationOperation.kind == "lead",
+                        IntegrationOperation.client_key == operation_key,
+                    )
+                )
+            ).one()
+            receipt.result = result
+            await session.commit()
+        public = RuntimeLeadPublic.model_validate(result)
+        from yleum_api.services.max_integration_analytics import record_confirmed_action
+
+        await record_confirmed_action(
+            session,
+            project_id=project_id,
+            user_id=context.max_user_id,
+            provider=connection.provider,
+            kind="lead",
+            client_key=operation_key,
+        )
+        return public
 
 
 async def _send_runtime_lead(
@@ -734,7 +871,9 @@ async def _send_runtime_lead(
             if not isinstance(lead, dict):
                 raise invalid_response()
             return RuntimeLeadPublic(
-                provider="amocrm", id=lead_id(lead.get("id")), details_status="unknown",
+                provider="amocrm",
+                id=lead_id(lead.get("id")),
+                details_status="unknown",
                 warning="Заявка создана; передача комментария и источника ещё не подтверждена.",
             )
     except ApiError:

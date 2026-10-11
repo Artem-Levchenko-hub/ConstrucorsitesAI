@@ -40,7 +40,7 @@ function load(file) {
   throw new Error('Unexpected import '+name);
  }};
  // Execute trusted source using Node's builtin erasure, adapting only module syntax.
- let source=stripTypeScriptTypes(fs.readFileSync(file,'utf8'));
+ let source=stripTypeScriptTypes(fs.readFileSync(file,'utf8'),{mode:'transform'});
  const exported=[];
  source=source.replace(/import\s+\{([^}]+)\}\s+from\s+["']([^"']+)["'];?/g,
    (_,bindings,name)=>`const {${bindings.replace(/\bas\b/g,':')}}=require('${name}');`);

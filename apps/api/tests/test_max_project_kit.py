@@ -169,6 +169,7 @@ def test_managed_kit_contains_config_and_required_legal_routes() -> None:
         "src/lib/omnia/max-config.ts",
         "src/lib/omnia/client.ts",
         "src/lib/omnia/analytics.ts",
+        "src/lib/omnia/consent.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
