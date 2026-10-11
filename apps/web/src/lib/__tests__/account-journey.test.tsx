@@ -187,6 +187,19 @@ it("explains preserved historical paid subscription terms without hiding its pri
   } finally { await app.close(); }
 });
 
+it.each([
+  ["qa_internal", "РўРµСЃС‚РѕРІС‹Р№ Р±РµР·Р»РёРјРёС‚", "Тестовый безлимит"],
+  ["pro", "Pro - персональные условия", "Pro - персональные условия"],
+])("shows the current %s plan name without changing billing values", async (code, name, expected) => {
+  currentPlan = { ...freePlan, id: "current-plan", code, name, price_rub: "1490.00" };
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(document.querySelector(".account-plan-current h2")?.textContent).toBe(expected));
+    expect(document.querySelector(".account-plan-current strong")?.textContent).toMatch(/1\s490/);
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
+
 it("shows the period's spend and the plan's use next to each limit", async () => {
   const app = await mount("billing");
   try {

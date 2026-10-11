@@ -20,7 +20,7 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
     {current && <section className="account-plan-current">
       <div>
         <p>Текущий тариф</p>
-        <h2>{current.plan.name}</h2>
+        <h2>{String(current.plan.code) === "qa_internal" ? "Тестовый безлимит" : current.plan.name}</h2>
         <strong>{money(current.plan.price_rub)} / месяц</strong>
         <p>{current.current_period_end ? `Оплачен до ${date(current.current_period_end)}` : "Нет оплаченного периода"}</p>
         {historical && <p>У вас сохранены условия прежней версии тарифа. Стоимость действующей подписки указана выше; новые тарифы — ниже.</p>}
