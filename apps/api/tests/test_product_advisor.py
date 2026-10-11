@@ -309,7 +309,7 @@ async def test_complete_chat_free_override_reaches_gateway_metadata(monkeypatch)
         status_code = 200
 
         def json(self):
-            return {"choices": [{"message": {"content": "ok"}}]}
+            return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}]}
 
     class FakeClient:
         async def __aenter__(self):

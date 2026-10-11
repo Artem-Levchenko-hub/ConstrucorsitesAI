@@ -20,6 +20,7 @@ async def _fake_astream(
     model: str, messages: list[dict], **kwargs: object
 ) -> AsyncIterator[tuple[str, str]]:
     """Mimic providers.llmgw.astream — yields (delta, omnia_id) tuples."""
+    kwargs["receipt"]["finish_reason"] = "stop"
     for piece in ["Hel", "lo", " world"]:
         yield piece, model
 

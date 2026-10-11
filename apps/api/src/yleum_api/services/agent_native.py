@@ -893,6 +893,18 @@ def native_system_prompt(stack_guide: str, skills: str | None = None) -> str:
     return "\n\n".join(p for p in parts if p)
 
 
+def _validate_response_stop_reason(response: dict[str, Any]) -> None:
+    reason = response.get("stop_reason")
+    if reason == "content_filter" or response.get("provider_finish_reason") == "content_filter":
+        raise RuntimeError("PROVIDER_OUTPUT_FILTERED: ответ модели отклонён; повтор остановлен.")
+    if not isinstance(reason, str) or reason not in {
+        "end_turn", "tool_use", "stop_sequence", "max_tokens",
+    }:
+        raise RuntimeError(
+            "PROVIDER_OUTPUT_INVALID: завершение ответа не подтверждено; повтор остановлен."
+        )
+
+
 async def _call_messages(
     client: httpx.AsyncClient,
     url: str,
@@ -977,6 +989,23 @@ async def _call_messages(
                     timeout=min(_HTTP_TIMEOUT_S, remaining),
                     headers=request_headers,
                 )
+            if r.status_code >= 400:
+                try:
+                    output_body = r.json()
+                except ValueError:
+                    output_body = None
+                output_error = output_body.get("error") if isinstance(output_body, dict) else None
+                if isinstance(output_error, dict):
+                    for field in ("code", "type"):
+                        if output_error.get(field) in (
+                            "provider_output_invalid", "provider_output_filtered",
+                        ):
+                            # This response has already been accounted for. Never
+                            # enter generic 502/rate-limit retries or echo its body.
+                            raise RuntimeError(
+                                f"{output_error[field].upper()}: "
+                                "ответ модели не принят; автоматический повтор остановлен."
+                            )
             if r.status_code == 503:
                 try:
                     error_body = r.json()
@@ -1052,6 +1081,7 @@ async def _call_messages(
                 body = r.json()
                 if not isinstance(body, dict):
                     raise RuntimeError("messages API returned a non-object payload")
+                _validate_response_stop_reason(body)
                 if run_id:
                     # Набор живёт в долгом процессе воркера — держим его маленьким.
                     if len(_RUNS_WITH_A_LIVE_KEY) > 512:
@@ -1481,6 +1511,7 @@ async def _run_native_segment(
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
+                    _validate_response_stop_reason(resp)
             except Exception as exc:
                 if isinstance(exc, TimeoutError) and call_budget.expired():
                     return await _finish_without_provider(
@@ -1493,6 +1524,7 @@ async def _run_native_segment(
                 safe_reason = (
                     str(exc) if str(exc).startswith((
                         "PROVIDER_AUTH_FAILED", "PAYMENT_REQUIRED", "BILLING_UNAVAILABLE",
+                        "PROVIDER_OUTPUT_INVALID", "PROVIDER_OUTPUT_FILTERED",
                     ))
                     else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
                 )

@@ -133,7 +133,7 @@ def test_runtime_ai_bills_normalized_upstream_cache_usage(
 
     response = {
         "model": "google/gemini-3.1-pro-preview-customtools",
-        "choices": [{"message": {"role": "assistant", "content": "answer"}}],
+        "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "answer"}}],
         "usage": {"prompt_tokens": 1000, "completion_tokens": 100, **reported},
     }
     # Exercise the real model router and provider normalization; mock only the
@@ -234,7 +234,7 @@ def test_chat_cache_does_not_reuse_answer_for_different_history(client: TestClie
     entries: dict[str, dict] = {}
     provider = AsyncMock(side_effect=lambda **kwargs: {
         "model": kwargs["model"],
-        "choices": [{"message": {"role": "assistant", "content": kwargs["messages"][0]["content"]}}],
+        "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": kwargs["messages"][0]["content"]}}],
         "usage": {"prompt_tokens": 1, "completion_tokens": 1},
     })
 
@@ -282,7 +282,7 @@ def test_chat_cache_separates_owner_project_and_generation_parameters(
         calls += 1
         return {
             "model": kwargs["model"],
-            "choices": [{"message": {"role": "assistant", "content": f"answer {calls}"}}],
+            "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": f"answer {calls}"}}],
             "usage": {"prompt_tokens": 1, "completion_tokens": 1},
         }
 

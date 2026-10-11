@@ -76,6 +76,7 @@ class LLMError(Exception):
 _GATEWAY_ERROR_CODES = {
     "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
     "billing_reconciliation_required",
+    "provider_output_invalid", "provider_output_filtered",
 }
 
 
@@ -328,7 +329,27 @@ async def complete_chat(
             code="preconnect" if preconnect else "transport",
             provider_charge_ambiguous=not preconnect, retry_safe=preconnect,
         ) from None
-    return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+    choices = data.get("choices") if isinstance(data, dict) else None
+    choice = choices[0] if isinstance(choices, list) and choices else None
+    reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+    if not isinstance(reason, str) or reason not in {"stop", "tool_calls"}:
+        raise LLMError(
+            "LLM-провайдер не подтвердил завершение ответа; автоматический повтор остановлен.",
+            code=(
+                "provider_output_filtered"
+                if reason == "content_filter" else "provider_output_invalid"
+            ),
+            retry_safe=False,
+        )
+    assert isinstance(choice, dict)
+    message = choice.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(message, dict) or (content is not None and not isinstance(content, str)):
+        raise LLMError(
+            "LLM-провайдер вернул неподтверждённый формат ответа.",
+            code="provider_output_invalid", retry_safe=False,
+        )
+    return content or ""
 
 
 async def _mock_stream(messages: list[dict[str, str]]) -> AsyncIterator[dict[str, Any]]:

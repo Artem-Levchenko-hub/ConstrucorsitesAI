@@ -31,7 +31,7 @@ def payload() -> dict:
 def completion() -> dict:
     return {
         "model": "gemini-3.1-pro-preview-customtools",
-        "choices": [{"message": {"role": "assistant", "content": "paid answer"}}],
+        "choices": [{"finish_reason": "stop", "message": {"role": "assistant", "content": "paid answer"}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 5},
     }
 

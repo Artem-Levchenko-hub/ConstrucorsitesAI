@@ -37,7 +37,7 @@ def response():
             "usage": {"prompt_tokens": 100, "completion_tokens": 10,
                       "prompt_cache_hit_tokens": 20, "cache_creation_input_tokens": 5,
                       "cost_rub": "0.5", "cost_usd": "0.01"},
-            "choices": [{"message": {"content": "answer"}}]}
+            "choices": [{"finish_reason": "stop", "message": {"content": "answer"}}]}
 
 
 def post(client, **extra):
@@ -124,6 +124,7 @@ async def test_stream_receipt_finishes_once_before_charge(journal, monkeypatch, 
         yield "answer", model
         if mode != "complete":
             raise UpstreamProviderError("transport", details={"provider_charge_ambiguous": True})
+        receipt["finish_reason"] = "stop"
 
     async def charge(**kwargs):
         journal[1].assert_awaited_once()

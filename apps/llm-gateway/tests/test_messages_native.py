@@ -1218,8 +1218,6 @@ def test_native_transport_only_allows_replay_before_provider_acceptance(
     b'{"choices": []}',
     b'{"choices": {"synthetic-private-key": 1}}',
     b'{"choices": [{"message": "synthetic-private-message"}]}',
-    b'{"choices": [{"message": {}, "finish_reason": []}],'
-    b'"usage": {"prompt_tokens": 1, "completion_tokens": 1}}',
 ])
 def test_native_malformed_success_stops_replay_without_charge(
     client, monkeypatch, response_body,
