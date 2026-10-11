@@ -1,14 +1,18 @@
-import { and, desc, eq, lt, or } from "drizzle-orm";
+import { and, desc, eq, lt, ne, or } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 
 import { schema, withMaxUser } from "@/lib/db";
 import { getMaxUser } from "@/lib/max/session";
+import { ConsentBridgeError, getConsentContext, recordConsent } from "@/lib/omnia/consent";
 
 const Consent = z.object({
   consentType: z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/),
   granted: z.boolean(),
   policyVersion: z.string().min(1).max(32),
+  eventId: z.string().uuid().optional(),
+  expectedRevision: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional(),
+  policyHash: z.string().regex(/^[a-f0-9]{64}$/i).optional(),
 });
 
 const DEFAULT_CONSENT_LIMIT = 250;
@@ -39,6 +43,12 @@ function decodeCursor(raw: string | null): { createdAt: Date; id: string } | nul
 export async function GET(request: Request) {
   const user = await getMaxUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  let platform;
+  try { platform = await getConsentContext(user.id); }
+  catch (error) { return consentError(error); }
+  if (new URL(request.url).searchParams.get("platform") === "1") {
+    return NextResponse.json({ ...platform, actor: user.id });
+  }
   const query = ConsentQuery.safeParse(
     Object.fromEntries(new URL(request.url).searchParams.entries()),
   );
@@ -50,6 +60,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Invalid consent cursor" }, { status: 400 });
   }
   const filters = [eq(schema.maxConsents.maxUserId, user.id)];
+  if (platform.policy.enabled) filters.push(ne(schema.maxConsents.consentType, "personal_data"));
   if (cursor) {
     filters.push(
       or(
@@ -70,7 +81,7 @@ export async function GET(request: Request) {
   const consents = hasMore ? rows.slice(0, query.data.limit) : rows;
   const nextCursor =
     hasMore && consents.length > 0 ? encodeCursor(consents[consents.length - 1]) : null;
-  return NextResponse.json({ consents, nextCursor });
+  return NextResponse.json({ consents, nextCursor, ...platform, actor: user.id });
 }
 
 export async function POST(request: Request) {
@@ -82,11 +93,28 @@ export async function POST(request: Request) {
   } catch {
     return NextResponse.json({ error: "Invalid consent" }, { status: 400 });
   }
-  const [consent] = await withMaxUser(user.id, (tx) =>
-    tx
-      .insert(schema.maxConsents)
-      .values({ maxUserId: user.id, ...input })
-      .returning(),
-  );
-  return NextResponse.json({ consent }, { status: 201 });
+  const expectedActor = request.headers.get("X-Omnia-Actor");
+  if (expectedActor && expectedActor !== user.id) {
+    return NextResponse.json({ error: "Consent actor changed" }, { status: 409 });
+  }
+  try {
+    const platform = await getConsentContext(user.id);
+    const result = platform.policy.enabled && input.consentType === "personal_data"
+      ? await recordConsent(user.id, input, platform) : null;
+    const [consent] = result ? [] : await withMaxUser(user.id, (tx) =>
+      tx.insert(schema.maxConsents).values({
+        maxUserId: user.id, consentType: input.consentType, granted: input.granted,
+        policyVersion: input.policyVersion,
+      }).onConflictDoNothing().returning(),
+    );
+    // The platform journal is the sole ordered audit for enabled personal-data
+    // consent. A local mirror cannot preserve ordering across concurrent revokes.
+    return NextResponse.json({ consent: consent ?? null, policy: platform.policy, state: result?.state ?? platform.state }, { status: 201 });
+  } catch (error) { return consentError(error); }
+}
+
+function consentError(error: unknown) {
+  return NextResponse.json({ error: { code: error instanceof ConsentBridgeError ? error.code : "consent_service_unavailable",
+    message: error instanceof ConsentBridgeError ? error.message : "Не удалось сохранить согласие. Повторите запрос позже." } },
+  { status: error instanceof ConsentBridgeError ? error.status : 503 });
 }

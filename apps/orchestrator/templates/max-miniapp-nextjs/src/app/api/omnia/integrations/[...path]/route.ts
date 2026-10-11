@@ -2,6 +2,7 @@ import { createHash, createHmac } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 
 import { getMaxUser } from "@/lib/max/session";
+import { ConsentBridgeError, getConsentContext, getConsentPolicy } from "@/lib/omnia/consent";
 
 const PROJECT_ID = process.env.OMNIA_PROJECT_ID || "";
 const PLATFORM_API = (
@@ -20,7 +21,7 @@ export async function POST(request: NextRequest, context: Context) {
   const { path } = await context.params;
   const operation = path.join("/");
   if (
-    !["status", "payments", "payment-status", "leads", "lead-list", "lead-status", "lead-receipt", "catalog", "orders", "order-list", "order-status", "order-details", "ai"].includes(
+    !["status", "payments", "payment-status", "leads", "lead-list", "lead-status", "lead-receipt", "catalog", "orders", "order-list", "order-status", "order-details", "ai", "consent-policy", "consent-state"].includes(
       operation,
     )
   ) {
@@ -43,6 +44,18 @@ export async function POST(request: NextRequest, context: Context) {
   // Only the immutable core imports the signed-cookie session implementation.
   // The portable product session adapter must never mint these assertions.
   const user = await getMaxUser();
+  if (operation === "consent-policy" || operation === "consent-state") {
+    // Unlike legacy integration operations, consent never accepts raw initData
+    // from product code and never converts a business request into a grant.
+    if (!user) return NextResponse.json({ error: { message: "Откройте приложение внутри MAX" } }, { status: 401 });
+    try {
+      return NextResponse.json(operation === "consent-policy"
+        ? await getConsentPolicy(user.id) : await getConsentContext(user.id));
+    } catch (error) {
+      return NextResponse.json({ error: { message: "Не удалось проверить согласие" } },
+        { status: error instanceof ConsentBridgeError ? error.status : 503 });
+    }
+  }
   const rawInitData = typeof body.initData === "string" ? body.initData : "";
   if ((user && !/^[1-9][0-9]{0,19}$/.test(user.id)) || (!user && !rawInitData)) {
     return NextResponse.json(

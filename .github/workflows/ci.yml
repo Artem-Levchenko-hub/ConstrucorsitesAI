@@ -97,6 +97,12 @@ jobs:
       - name: Verify generation snapshot publication on disposable PostgreSQL
         working-directory: apps/api
         run: uv run --frozen pytest -o addopts='' -q tests/test_generation_artifacts.py
+      - name: Verify amoCRM consent gates and concurrent revocation on PostgreSQL
+        working-directory: apps/api
+        run: >-
+          uv run --frozen pytest -o addopts='' -q
+          tests/test_amocrm_runtime_consent.py
+          tests/test_integration_consent.py
       - name: Verify cancellation transaction and consumers on disposable PostgreSQL
         working-directory: apps/api
         run: >-
