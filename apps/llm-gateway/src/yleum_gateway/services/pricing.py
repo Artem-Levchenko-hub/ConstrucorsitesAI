@@ -23,6 +23,7 @@ from yleum_gateway.core.errors import ModelNotFoundError
 class ModelPrice:
     rub_per_1k_in: Decimal
     rub_per_1k_out: Decimal
+    cache_read_factor: Decimal = Decimal("0.1")
 
 
 PRICE_TABLE: Mapping[str, ModelPrice] = {
@@ -31,19 +32,16 @@ PRICE_TABLE: Mapping[str, ModelPrice] = {
     # transcription (routers/audio.py) bill via their own paths, not this table.
     "gemini-3.1-pro-preview-customtools": ModelPrice(Decimal("1.50"), Decimal("7.50")),
     "claude-sonnet-5": ModelPrice(Decimal("0.323"), Decimal("1.615")),
+    # Verified LLMGW public quote, 2026-10-12. Fallback estimates only;
+    # actual RUB receipts and validated live catalog quotes take precedence.
+    "claude-sonnet-5.5": ModelPrice(Decimal("0.3498078"), Decimal("1.7490389"), Decimal("0.05")),
+    "~anthropic/claude-sonnet-latest": ModelPrice(Decimal("0.3498078"), Decimal("1.7490389"), Decimal("0.05")),
 }
 
 _PER_1K = Decimal("1000")
 _QUANT = Decimal("0.0001")  # 4 decimals — matches NUMERIC(12,4) in Postgres
 
-# Cached-prefix input tokens bill at a fraction of the fresh-input rate. When a
-# provider serves a prompt prefix from its context cache (DeepSeek automatic
-# context caching, Anthropic cache_read, Gemini implicit caching), those tokens
-# cost far less upstream — DeepSeek/Anthropic charge ~10% of the normal input
-# rate for a cache hit. We mirror that so our billing reflects the real cost of
-# the big stable system prompt once it is cached. `cached_tokens` defaults to 0,
-# so every existing caller is byte-for-byte unchanged.
-_CACHE_HIT_RATE = Decimal("0.1")
+# Read discounts belong to each model's fallback tariff; preserve old tariffs.
 _CACHE_WRITE_RATE = Decimal("1.25")
 
 
@@ -116,14 +114,14 @@ def cost_provenance(
     tariff = {
         "rub_per_1k_in": str(price.rub_per_1k_in),
         "rub_per_1k_out": str(price.rub_per_1k_out),
-        "cache_read_factor": str(_CACHE_HIT_RATE),
+        "cache_read_factor": str(price.cache_read_factor),
         "cache_write_factor": str(cache_write_factor),
         "quantum_rub": str(_QUANT),
     }
     revision = {
         "formula": "token-cache-rub-v1",
         "prices": {k: [str(v.rub_per_1k_in), str(v.rub_per_1k_out)] for k, v in PRICE_TABLE.items()},
-        "cache_read_factor": str(_CACHE_HIT_RATE),
+        "cache_read_factor": str(price.cache_read_factor),
         "cache_write_factor": str(cache_write_factor),
         "quantum_rub": str(_QUANT),
     }
@@ -195,6 +193,13 @@ def validate_cost_provenance(
 
 
 _CATALOG_URL = "https://app.llmgw.ru/api/v1/models/models-with-pricing"
+# Exact provider catalog identities, never inferred by stripping a prefix.
+_CATALOG_MODEL_IDS = {
+    "google/gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview-customtools",
+    "anthropic/claude-sonnet-5": "claude-sonnet-5",
+    "anthropic/claude-sonnet-5.5": "claude-sonnet-5.5",
+    "~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest",
+}
 _CATALOG_TTL = 15.0
 _catalog_cache: tuple[float, dict[str, tuple[Decimal, Decimal, Decimal]]] | None = None
 _catalog_lock: asyncio.Lock | None = None
@@ -208,10 +213,8 @@ def _parse_catalog_prices(data: Any) -> dict[str, tuple[Decimal, Decimal, Decima
     for item in data["items"]:
         if not isinstance(item, dict) or not isinstance(item.get("model_name"), str):
             continue
-        model = item["model_name"].split("/", 1)[-1]
-        slugs = {"claude-sonnet-5": "anthropic/claude-sonnet-5",
-                 "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools"}
-        if model not in PRICE_TABLE or item["model_name"] != slugs[model]:
+        model = _CATALOG_MODEL_IDS.get(item["model_name"])
+        if model is None or model not in PRICE_TABLE:
             continue
         price = item.get("pricing")
         if not isinstance(price, dict) or price.get("currency") != "RUB" or price.get("unit") != "1M_tokens":
@@ -290,7 +293,7 @@ async def resolve_request_cost(
     # selects a factor only from the cache controls actually sent upstream;
     # mixed/unknown policies do not acquire a fabricated current quote.
     known_write_factor = (
-        cache_write_factor if model_id == "claude-sonnet-5"
+        cache_write_factor if model_id in {"claude-sonnet-5", "claude-sonnet-5.5", "~anthropic/claude-sonnet-latest"}
         and isinstance(cache_write_factor, Decimal) and cache_write_factor.is_finite()
         and cache_write_factor in {Decimal("1.25"), Decimal("2")} else None
     )
@@ -340,7 +343,7 @@ def calculate_cost_rub(
     """RUB cost for a request, quantized to 4 decimal places.
 
     ``cached_tokens`` (≤ ``tokens_in``) are the prompt tokens the provider served
-    from its context cache; they bill at ``_CACHE_HIT_RATE`` of the input rate.
+    from its context cache; they bill at the model's cache-read factor.
     Default 0 → identical to the pre-cache behaviour.
     """
     if tokens_in < 0 or tokens_out < 0 or cached_tokens < 0 or cache_write_tokens < 0:
@@ -357,7 +360,7 @@ def calculate_cost_rub(
     fresh_in = tokens_in - cached - cache_write
     cost = (
         Decimal(fresh_in) * price.rub_per_1k_in
-        + Decimal(cached) * price.rub_per_1k_in * _CACHE_HIT_RATE
+        + Decimal(cached) * price.rub_per_1k_in * price.cache_read_factor
         + Decimal(cache_write) * price.rub_per_1k_in * cache_write_factor
         + Decimal(tokens_out) * price.rub_per_1k_out
     ) / _PER_1K
@@ -383,6 +386,14 @@ _MODEL_META: Mapping[str, _ModelMeta] = {
         "Claude Sonnet 5",
         "anthropic",
         1_000_000,
+        ("agentic", "coding", "tool-use", "multimodal"),
+    ),
+    "claude-sonnet-5.5": _ModelMeta(
+        "Claude Sonnet 5.5", "anthropic", 1_000_000,
+        ("agentic", "coding", "tool-use", "multimodal"),
+    ),
+    "~anthropic/claude-sonnet-latest": _ModelMeta(
+        "Claude Sonnet Latest", "anthropic", 1_000_000,
         ("agentic", "coding", "tool-use", "multimodal"),
     ),
 }

@@ -85,7 +85,8 @@ def edit_workspace(monkeypatch):
             ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
             project_info=SimpleNamespace(template="max_miniapp"),
             prompt_text=prompt_text, runtime=SimpleNamespace(handle=handle, coordinator=None),
-            plan=SimpleNamespace(stack_guide="", skills=None, user=prompt_text, steps=24),
+            plan=SimpleNamespace(stack_guide="", skills=None, user=prompt_text, steps=24,
+                                 model="~anthropic/claude-sonnet-latest"),
             operations=SimpleNamespace(execute=execute, emit=None),
         )
 
@@ -551,3 +552,23 @@ async def test_fresh_native_build_does_not_receive_stale_seed_entry_context(edit
                   prompt_text="Add a new coffee UI")
     assert calls == ["Add a new coffee UI"]
     assert not executed and workspace == before
+
+
+@pytest.mark.parametrize("is_edit", [False, True])
+async def test_generation_and_edit_forward_selected_model(edit_workspace, is_edit):
+    run, _, workspace, executed = edit_workspace
+    before = dict(workspace)
+    models = []
+
+    async def provider(*args, **kwargs):
+        models.append(kwargs.get("model"))
+        raise RuntimeError("stop before provider dispatch")
+
+    if is_edit:
+        result, failure = await run(provider)
+        assert result.stop_reason == "provider_error" and failure
+    else:
+        with pytest.raises(RuntimeError, match="PROVIDER_UNAVAILABLE"):
+            await run(provider, is_edit=False, generated_snapshot=False)
+    assert models == ["~anthropic/claude-sonnet-latest"]
+    assert workspace == before and not executed

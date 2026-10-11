@@ -16,7 +16,7 @@ _MAX_DEPTH = 8
 
 def anthropic_cache_write_factor(model_id: str, request: Mapping[str, Any]) -> Decimal | None:
     """Return a factor only for explicit supported controls with one TTL."""
-    if model_id != "claude-sonnet-5":
+    if model_id not in {"claude-sonnet-5", "claude-sonnet-5.5", "~anthropic/claude-sonnet-latest"}:
         return None
     pending: list[tuple[Mapping[str, Any], int]] = [(request, 0)]
     visited = 0

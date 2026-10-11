@@ -60,6 +60,8 @@ def test_models_endpoint_lists_all_supported(client: TestClient) -> None:
     assert ids == {
         "gemini-3.1-pro-preview-customtools",
         "claude-sonnet-5",
+        "claude-sonnet-5.5",
+        "~anthropic/claude-sonnet-latest",
     }
     # No keys configured in test → all unavailable.
     assert all(m["available"] is False for m in body["data"])

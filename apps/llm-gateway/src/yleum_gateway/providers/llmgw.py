@@ -3,7 +3,8 @@
 The public API lives under ``https://api.llmgw.ru/v1`` and uses
 ``Authorization: Bearer <LLMGW_API_KEY>``. The provider requires canonical
 vendor-prefixed model ids (``google/gemini-3.1-pro-preview-customtools``), while
-Omnia keeps a stable public id without the vendor prefix.
+Omnia keeps stable public ids; the provider's ``~anthropic/claude-sonnet-latest``
+alias is deliberately preserved exactly, without adding another prefix.
 
 Why a sync ``httpx.Client`` on a worker thread instead of ``AsyncClient``: the
 gateway container may carry an ``HTTPS_PROXY`` (a UK egress used only to
@@ -42,6 +43,8 @@ _SAFE_TO_RETRY = (httpx.ConnectError, httpx.ConnectTimeout)
 _MODEL_SLUG: dict[str, str] = {
     "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools",
     "claude-sonnet-5": "anthropic/claude-sonnet-5",
+    "claude-sonnet-5.5": "anthropic/claude-sonnet-5.5",
+    "~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest",
 }
 
 # The native Messages response may add the provider prefix; accept both forms.
@@ -50,12 +53,16 @@ _SLUG_TO_OMNIA: dict[str, str] = {
     "google/gemini-3.1-pro-preview-customtools": "gemini-3.1-pro-preview-customtools",
     "claude-sonnet-5": "claude-sonnet-5",
     "anthropic/claude-sonnet-5": "claude-sonnet-5",
+    "claude-sonnet-5.5": "claude-sonnet-5.5",
+    "anthropic/claude-sonnet-5.5": "claude-sonnet-5.5",
+    "~anthropic/claude-sonnet-latest": "~anthropic/claude-sonnet-latest",
 }
 
 # Natively multimodal models — keep OpenAI image_url blocks instead of flattening
 # them (the acceptance/vision judge + the agent `see` tool send screenshots).
 _MULTIMODAL: frozenset[str] = frozenset(
-    {"gemini-3.1-pro-preview-customtools", "claude-sonnet-5"}
+    {"gemini-3.1-pro-preview-customtools", "claude-sonnet-5", "claude-sonnet-5.5",
+     "~anthropic/claude-sonnet-latest"}
 )
 
 _DEFAULT_MAX_TOKENS = 32768
