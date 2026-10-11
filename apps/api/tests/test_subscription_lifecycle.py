@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+from uuid import UUID
 
 import httpx
 import pytest
@@ -11,8 +13,10 @@ from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import (
     PRO_PLAN_ID,
+    PRO_PLAN_V1_ID,
     BillingAccount,
     BillingPaymentMethod,
+    BillingPlan,
     Subscription,
 )
 from yleum_api.models.project import Project
@@ -95,13 +99,14 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
     )
     assert created.status_code == 201
     assert create_calls[0]["save_payment_method"] is True
+    assert create_calls[0]["amount"] == "2990.00"
     payment_id = created.json()["id"]
 
     async def fake_get_payment(_provider_id: str) -> dict[str, object]:
         return {
             "id": "provider-saved-method",
             "status": "succeeded",
-            "amount": {"value": "1490.00", "currency": "RUB"},
+            "amount": {"value": "2990.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
             "payment_method": {
                 "id": "saved-method-1",
@@ -143,10 +148,18 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
     assert restored.json()["next_charge_at"] == restored.json()["current_period_end"]
 
 
+@pytest.mark.parametrize(
+    ("plan_id", "version", "amount"),
+    [(PRO_PLAN_ID, 2, "2990.00"), (PRO_PLAN_V1_ID, 1, "1490.00")],
+    ids=["current-pro-v2", "legacy-inactive-pro-v1"],
+)
 async def test_lifecycle_renews_and_credits_exactly_once(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
+    plan_id: UUID,
+    version: int,
+    amount: str,
 ) -> None:
     user, account, free = await _registered_billing_context(
         client,
@@ -154,6 +167,11 @@ async def test_lifecycle_renews_and_credits_exactly_once(
         email="renewal-success@example.com",
     )
     now = datetime.now(UTC).replace(microsecond=0)
+    plan = await db_session.get(BillingPlan, plan_id)
+    assert plan is not None
+    assert plan.version == version
+    assert plan.price_rub == Decimal(amount)
+    assert plan.is_active is (version == 2)
     free.status = "expired"
     free.ended_at = now
     await db_session.flush()
@@ -171,7 +189,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     subscription = Subscription(
         billing_account_id=account.id,
         user_id=user.id,
-        plan_id=PRO_PLAN_ID,
+        plan_id=plan_id,
         payment_method_id=method.id,
         status="active",
         auto_renew=True,
@@ -189,10 +207,11 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     async def fake_recurring(**kwargs: object) -> dict[str, object]:
         nonlocal provider_calls
         provider_calls += 1
+        assert kwargs["amount"] == amount
         return {
             "id": "provider-renewal-success",
             "status": "succeeded",
-            "amount": {"value": "1490.00", "currency": "RUB"},
+            "amount": {"value": amount, "currency": "RUB"},
             "metadata": kwargs["metadata"],
         }
 
@@ -201,6 +220,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     assert await process_subscription_cycle(db_session, now=now) == 0
     await db_session.refresh(subscription)
     assert subscription.status == "active"
+    assert subscription.plan_id == plan_id
     assert subscription.current_period_start == now
     assert subscription.current_period_end is not None
     assert subscription.current_period_end > now
@@ -223,6 +243,18 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     )
     assert renewal_count == 1
     assert credit_count == 1
+    renewal = (
+        await db_session.execute(
+            select(Payment).where(
+                Payment.subscription_id == subscription.id,
+                Payment.purpose == "subscription_renewal",
+            )
+        )
+    ).scalar_one()
+    assert renewal.amount_rub == Decimal(amount)
+    assert renewal.credit_rub == Decimal("500.0000")
+    assert renewal.package_code == f"subscription:pro:v{version}"
+    assert renewal.status == "succeeded"
 
 
 async def test_failed_renewal_grace_then_downgrades_and_revokes_keep_alive(

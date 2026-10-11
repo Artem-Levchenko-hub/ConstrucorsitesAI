@@ -219,7 +219,7 @@ export async function maxRegisterAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-09-25",
+      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-10-11",
   });
   if (error) return { error };
   redirect("/max/onboarding");
@@ -254,7 +254,7 @@ export async function oauthCompleteAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-09-25",
+      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-11",
   });
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);

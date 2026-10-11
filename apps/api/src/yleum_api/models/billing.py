@@ -23,16 +23,15 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from yleum_api.models.base import Base
 
-# Free v1 (migration 0035) limited an account to one project, no publications and
-# no integrations. The owner's model of 2026-09-17 is different: Free gives full
-# access to building and publishing MAX apps, the only quotas are generations and
-# the app's own visitor traffic, and a Free app merely sleeps when idle. Plan
-# terms are immutable rows, so migration 0070 ships that model as Free v2 and
-# moves every live Free subscription onto it; v1 stays for history.
+# Catalog versions are immutable: historical paid subscriptions and payment
+# snapshots retain their original rows. Only the latest versions are public.
 FREE_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000001")
-FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000004")
-PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000002")
-BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000003")
+FREE_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000004")
+PRO_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000002")
+BUSINESS_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000003")
+FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000005")
+PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
+BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000007")
 
 # Entitlement keys the platform enforces. A numeric key set to ``null`` (or
 # missing) means "no limit"; a flag key missing means "allowed".
@@ -65,7 +64,7 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "is_active": False,
     },
     {
-        "id": FREE_PLAN_ID,
+        "id": FREE_PLAN_V2_ID,
         "code": "free",
         "version": 2,
         "name": "Free",
@@ -81,10 +80,10 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "preview_idle_minutes": 15,
         },
         "sort_order": 0,
-        "is_active": True,
+        "is_active": False,
     },
     {
-        "id": PRO_PLAN_ID,
+        "id": PRO_PLAN_V1_ID,
         "code": "pro",
         "version": 1,
         "name": "Pro",
@@ -100,10 +99,10 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "preview_idle_minutes": 60,
         },
         "sort_order": 10,
-        "is_active": True,
+        "is_active": False,
     },
     {
-        "id": BUSINESS_PLAN_ID,
+        "id": BUSINESS_PLAN_V1_ID,
         "code": "business",
         "version": 1,
         "name": "Business",
@@ -111,6 +110,67 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "billing_interval": "month",
         "included_credit_rub": Decimal("1500.0000"),
         "entitlements": {
+            "max_projects": 10,
+            "static_publish_slots": 10,
+            "always_on_slots": 1,
+            "team_seats": 5,
+            "integrations": True,
+            "preview_idle_minutes": 0,
+        },
+        "sort_order": 20,
+        "is_active": False,
+    },
+    {
+        "id": FREE_PLAN_ID,
+        "code": "free",
+        "version": 3,
+        "name": "Free",
+        "price_rub": Decimal("0.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "custom_domains": 0,
+            "generation_messages_lifetime": 1,
+            "max_projects": 1,
+            "static_publish_slots": 1,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 15,
+        },
+        "sort_order": 0,
+        "is_active": True,
+    },
+    {
+        "id": PRO_PLAN_ID,
+        "code": "pro",
+        "version": 2,
+        "name": "Pro",
+        "price_rub": Decimal("2990.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("500.0000"),
+        "entitlements": {
+            "custom_domains": 0,
+            "max_projects": 3,
+            "static_publish_slots": 3,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 60,
+        },
+        "sort_order": 10,
+        "is_active": True,
+    },
+    {
+        "id": BUSINESS_PLAN_ID,
+        "code": "business",
+        "version": 2,
+        "name": "Business",
+        "price_rub": Decimal("6990.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("1500.0000"),
+        "entitlements": {
+            "custom_domains": 0,
             "max_projects": 10,
             "static_publish_slots": 10,
             "always_on_slots": 1,

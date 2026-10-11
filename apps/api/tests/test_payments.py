@@ -124,7 +124,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     assert duplicate.status_code == 201
     assert duplicate.json()["id"] == created.json()["id"]
     assert len(provider_calls) == 1
-    assert provider_calls[0]["amount"] == "1490.00"
+    assert provider_calls[0]["amount"] == "2990.00"
     metadata = provider_calls[0]["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["purpose"] == "subscription_initial"
@@ -138,7 +138,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
         return {
             "id": "provider-subscription-1",
             "status": "succeeded",
-            "amount": {"value": "1490.00", "currency": "RUB"},
+            "amount": {"value": "2990.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
         }
 
@@ -155,6 +155,8 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     active = await client.get("/api/billing/subscription")
     assert active.status_code == 200
     assert active.json()["plan"]["code"] == "pro"
+    assert active.json()["plan"]["version"] == 2
+    assert active.json()["plan"]["price_rub"] == "2990.00"
     assert active.json()["status"] == "active"
     assert active.json()["auto_renew"] is False
     assert active.json()["current_period_start"] is not None
@@ -262,10 +264,11 @@ async def test_subscription_checkout_applies_immediate_provider_success(
     assert registered.status_code == 201
 
     async def fake_create_payment(**kwargs: object) -> dict[str, object]:
+        assert kwargs["amount"] == "6990.00"
         return {
             "id": "provider-immediate-subscription",
             "status": "succeeded",
-            "amount": {"value": "4990.00", "currency": "RUB"},
+            "amount": {"value": "6990.00", "currency": "RUB"},
             "metadata": kwargs["metadata"],
         }
 
@@ -283,6 +286,8 @@ async def test_subscription_checkout_applies_immediate_provider_success(
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "business"
+    assert subscription.json()["plan"]["version"] == 2
+    assert subscription.json()["plan"]["price_rub"] == "6990.00"
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
     assert wallet.json()["balance_rub"] == "1600.0000"

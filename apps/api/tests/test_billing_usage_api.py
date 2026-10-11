@@ -235,7 +235,7 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     assert response.status_code == 200, response.text
     report = response.json()
     assert report["period"]["source"] == "calendar_month"
-    assert report["plan"]["code"] == "free" and report["plan"]["version"] == 2
+    assert report["plan"]["code"] == "free" and report["plan"]["version"] == 3
     assert report["subscription_status"] == "active"
     legacy_generations = report["generations"].pop("cost_breakdown")
     assert legacy_generations["unknown"] == {"calls": 2, "cost_rub": "4.7500"}

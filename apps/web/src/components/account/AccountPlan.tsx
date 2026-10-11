@@ -4,8 +4,7 @@ import { Button } from "@/components/ui/button";
 import { getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
 import type { PaymentJourney } from "./PaymentCheckout";
 import { date, money, QueryError } from "./account-presentation";
-// A plan stores `null` for "no limit" (Free v2: apps and publications are not
-// capped); a missing key is shown as unknown rather than as a limit.
+// Historical plans can store `null` for "no limit"; a missing key is unknown.
 const limit = (value: unknown) => value === null ? "Без ограничений" : value === undefined ? "—" : String(value);
 export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
   const client = useQueryClient();
@@ -13,15 +12,18 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
   const subscription = useQuery({ queryKey: ["billing-subscription"], queryFn: getSubscription });
   const manage = useMutation({ mutationFn: manageSubscription, onSuccess: updated => client.setQueryData(["billing-subscription"], updated) });
   const current = subscription.data;
+  const historical = current && current.plan.code !== "free" && plans.data
+    && !plans.data.some(plan => plan.id === current.plan.id);
   return <>
     <QueryError error={subscription.error} retry={() => void subscription.refetch()} />
     {subscription.isPending && <p role="status">Загружаем тариф…</p>}
     {current && <section className="account-plan-current">
       <div>
         <p>Текущий тариф</p>
-        <h2>{current.plan.name}</h2>
+        <h2>{String(current.plan.code) === "qa_internal" ? "Тестовый безлимит" : current.plan.name}</h2>
         <strong>{money(current.plan.price_rub)} / месяц</strong>
         <p>{current.current_period_end ? `Оплачен до ${date(current.current_period_end)}` : "Нет оплаченного периода"}</p>
+        {historical && <p>У вас сохранены условия прежней версии тарифа. Стоимость действующей подписки указана выше; новые тарифы — ниже.</p>}
       </div>
       <div className="account-renewal">
         <span className="account-status pending">{current.cancel_at_period_end ? "Отменится в конце периода" : current.auto_renew ? "Автопродление включено" : "Без автопродления"}</span>
@@ -57,7 +59,7 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
               <dt>Мест в команде</dt>
               <dd>{limit(plan.entitlements.team_seats)}</dd>
             </div>
-            {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
+            {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"], ["generation_messages_lifetime", "Сообщений для генерации за всё время"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
               <dt>{label}</dt>
               <dd>{limit(plan.entitlements[key])}</dd>
             </div>)}
@@ -66,10 +68,13 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
               <dd>{plan.entitlements.integrations ? "Да" : "Нет"}</dd>
             </div>}
             <div>
-              <dt>Кредит на баланс</dt>
+              <dt>Включённый кредит на баланс</dt>
               <dd>{money(plan.included_credit_rub)}</dd>
             </div>
           </dl>
+          <p className="account-hint">{plan.code === "free"
+            ? "Лимит сообщений для генерации даётся один раз на аккаунт и не обновляется каждый месяц."
+            : "Включённый кредит поступает на баланс после каждой успешной ежемесячной оплаты тарифа."}</p>
           {plan.code !== "free" && <Button variant={active ? "outline" : "primary"} disabled={active || !current || !j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "plan", code: plan.code, title: plan.name, price: plan.price_rub, credit: plan.included_credit_rub })}>{active ? "Текущий тариф" : `Выбрать ${plan.name}`}</Button>}</article>;
       })}</div>
       {j.config.data && !j.config.data.enabled && <p className="account-notice pending">{j.config.data.reason ?? "Платёжный сервис недоступен"}</p>}
