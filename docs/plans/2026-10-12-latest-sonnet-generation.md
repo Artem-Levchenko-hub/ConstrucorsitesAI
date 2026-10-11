@@ -46,6 +46,31 @@ provider route. The current adapter does not forward its internal thinking
 budget; no unverified reasoning parameter or larger retry limit is introduced.
 Truncated or malformed tool responses remain failures, not completed builds.
 
+### Instructions selected for Yleum
+
+The general guidance and the model-specific Sonnet guide are complementary.
+This is a product-specific adaptation, not a claim that Anthropic has certified
+our prompt or that a provider alias identifies a fixed model version.
+
+- State the requested working outcome and scope; finish that outcome without
+  adding unrelated features. Separate request, existing files and tool feedback.
+- Choose a visual direction for the actual audience. Make typography, spacing,
+  color pairs and the primary action consistent across the application's screens.
+- Preserve existing data and working features. Repair the reported failure using
+  current source and previous check feedback instead of repeating an earlier fix.
+- Run checks that exercise the change before claiming completion. If the agent
+  cannot inspect rendered screens, record that limitation for the final verifier.
+- Use a concrete acceptance path: user action, expected screen, saved record,
+  and result after reopening. Include representative populated, empty and error
+  states rather than one shared decorative template.
+- Calibrate quality/latency controls with our own evaluations only after the
+  transport supports them. Native API recommendations for effort, thinking and
+  output limits are not instructions to blindly pass those parameters to Gateway.
+
+For paired live evaluations, additionally check MAX light/dark themes, mobile
+keyboard and safe areas, long input, focus, repeated submission and reopening.
+These are acceptance tasks, not evidence supplied by the prompt itself.
+
 ## Delivery and acceptance
 
 Local API/Gateway tests, lint, types and independent defect review precede push.

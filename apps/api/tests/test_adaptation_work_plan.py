@@ -280,6 +280,7 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
 
     async def run_native_build(**kwargs: Any) -> Any:
         tasks.append(str(kwargs["task"]))
+        assert kwargs["model"] == "selected-agent-model"
         assert kwargs["source_repair"] is True
         # A repair which attempts done without build gets the same accepted
         # baseline contract, not a new baseline from its mutable candidate.
@@ -324,7 +325,10 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
             is_free=False,
             prompt_text="Верни версию",
             runtime=runtime,  # type: ignore[arg-type]
-            plan=SimpleNamespace(user="TASK", stack_guide="G", skills=None, steps=40),  # type: ignore[arg-type]
+            plan=SimpleNamespace(  # type: ignore[arg-type]
+                user="TASK", stack_guide="G", skills=None, steps=40,
+                model="selected-agent-model",
+            ),
             operations=SimpleNamespace(  # type: ignore[arg-type]
                 execute=None, emit=_emit(), probe_runtime=None, probe_build=None, preview_url=None
             ),
@@ -348,6 +352,7 @@ async def test_finalization_repair_rejects_unverified_output_limit(
     from yleum_api.services.generation import agent_finalization
 
     async def run_native_build(**kwargs: Any) -> Any:
+        assert kwargs["model"] == "selected-agent-model"
         return SimpleNamespace(
             stop_reason="output_limit", needs_finalization=needs_finalization,
             summary="provider response too long", files={}, steps=1,
@@ -395,7 +400,10 @@ async def test_finalization_repair_rejects_unverified_output_limit(
             is_free=False,
             prompt_text="Change page",
             runtime=runtime,  # type: ignore[arg-type]
-            plan=SimpleNamespace(user="TASK", stack_guide="G", skills=None, steps=40),  # type: ignore[arg-type]
+            plan=SimpleNamespace(  # type: ignore[arg-type]
+                user="TASK", stack_guide="G", skills=None, steps=40,
+                model="selected-agent-model",
+            ),
             operations=SimpleNamespace(  # type: ignore[arg-type]
                 execute=None, emit=_emit(), probe_runtime=None, probe_build=None, preview_url=None
             ),
