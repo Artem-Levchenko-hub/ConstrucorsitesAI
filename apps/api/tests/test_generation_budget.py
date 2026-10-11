@@ -47,6 +47,7 @@ async def test_legacy_edit_repair_keeps_runtime_with_its_actual_owner(monkeypatc
     monkeypatch.setattr(verification.agent_builder, "run_agent_build", builder)
     operations = SimpleNamespace(
         execute=AsyncMock(), emit=AsyncMock(),
+        snapshot_files=AsyncMock(return_value={"page.tsx": "broken"}),
         probe_build=AsyncMock(return_value={"ok": True}),
         probe_runtime=AsyncMock(return_value={"ok": True}),
     )
@@ -60,6 +61,7 @@ async def test_legacy_edit_repair_keeps_runtime_with_its_actual_owner(monkeypatc
         operations=operations, coordinator_handoff=handoff,
     )
     assert builder.await_args.kwargs["coordinator_handoff"] is handoff
+    assert builder.await_args.kwargs["snapshot_files"] is operations.snapshot_files
     assert operations.probe_runtime.await_count == (0 if handoff else 1)
     assert result.runtime_ok and result.typecheck_ok
 
