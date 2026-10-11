@@ -30,7 +30,10 @@ def _error(call_id: UUID, *, started: bool = True) -> BillingReconciliationRequi
 
 
 def _model(value: str | None) -> bool:
-    return isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}", value) is not None
+    return isinstance(value, str) and (
+        value == "~anthropic/claude-sonnet-latest"
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_./:-]{0,199}", value) is not None
+    )
 
 
 async def start_call(

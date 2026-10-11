@@ -120,6 +120,65 @@ async def finish(call_id, **kwargs):
     await provider_calls.finish_call(call_id, **values)
 
 
+@pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions", "/v1/project-cell/messages"])
+@pytest.mark.parametrize("status", ["completed", "failed", "ambiguous"])
+async def test_exact_latest_alias_is_preserved_across_writer_boundaries(connection, route, status):
+    model = "~anthropic/claude-sonnet-latest"
+    call_id = await provider_calls.start_call(route=route, model=model)
+    assert connection.rows[call_id]["requested_model"] == model
+    assert connection.rows[call_id]["status"] == "started"
+    await finish(call_id, actual_model=model, status=status)
+    receipt = deepcopy(connection.rows[call_id])
+    assert receipt["actual_model"] == model
+    assert receipt["status"] == status
+    await finish(call_id, actual_model=model, status=status)
+    assert connection.rows[call_id] == receipt
+    with pytest.raises(BillingReconciliationRequiredError):
+        await finish(call_id, actual_model="claude-sonnet-5.5", status=status)
+    assert connection.rows[call_id] == receipt
+
+
+@pytest.mark.parametrize("model", [
+    "~anthropic/claude-sonnet-other", "~anthropic/claude-sonnet-latest/extra",
+    "~~anthropic/claude-sonnet-latest", "anthropic/~anthropic/claude-sonnet-latest",
+    "~Anthropic/claude-sonnet-latest", "~anthropic/claude-sonnet-latest\n",
+])
+async def test_latest_exception_does_not_expand_unsafe_model_names(connection, model):
+    with pytest.raises(BillingReconciliationRequiredError) as admission:
+        await provider_calls.start_call(route="/v1/messages", model=model)
+    assert admission.value.details["provider_charge_ambiguous"] is False
+    assert connection.rows == {} and connection.writes == []
+    call_id = await start()
+    before = deepcopy(connection.rows)
+    with pytest.raises(BillingReconciliationRequiredError) as receipt:
+        await finish(call_id, actual_model=model)
+    assert receipt.value.details["provider_charge_ambiguous"] is True
+    assert connection.rows == before
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "ambiguous"])
+async def test_latest_response_can_close_previously_admitted_call(connection, status):
+    call_id = await start()
+    await finish(call_id, actual_model="~anthropic/claude-sonnet-latest", status=status)
+    assert connection.rows[call_id]["actual_model"] == "~anthropic/claude-sonnet-latest"
+    assert connection.rows[call_id]["status"] == status
+
+
+async def test_latest_admission_database_failure_remains_closed(monkeypatch):
+    attempts = []
+
+    def unavailable():
+        attempts.append(True)
+        raise RuntimeError("private database detail")
+
+    monkeypatch.setattr(provider_calls, "get_pool", unavailable)
+    with pytest.raises(BillingReconciliationRequiredError) as raised:
+        await provider_calls.start_call(route="/v1/messages", model="~anthropic/claude-sonnet-latest")
+    assert raised.value.details["provider_charge_ambiguous"] is False
+    assert "private" not in str(raised.value)
+    assert len(attempts) == 1
+
+
 async def test_admission_records_configured_provider_organization(connection, monkeypatch):
     from types import SimpleNamespace
 
