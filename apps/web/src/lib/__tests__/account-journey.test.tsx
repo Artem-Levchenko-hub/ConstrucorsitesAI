@@ -10,8 +10,8 @@ vi.mock("@/lib/api/wallet", () => ({ getWallet: async () => ({ balance_rub: 1234
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 const payment = { id: "pay-1", purpose: "wallet_topup", subscription_id: null, package_code: "start", amount_rub: "777", credit_rub: "888", status: "pending", confirmation_url: null, created_at: "2026-09-07T00:00:00Z" };
 const plan = { id: "pro-1", code: "pro", version: 1, name: "Pro", price_rub: "999", billing_interval: "month", included_credit_rub: "456", entitlements: { max_projects: 7, team_seats: 3, static_publish_slots: 5, always_on_slots: 2, integrations: false } };
-// Free v2 stores `null` for "no limit" on apps and publications.
-const freePlan = { id: "free-2", code: "free", version: 2, name: "Free", price_rub: "0.00", billing_interval: "month", included_credit_rub: "0", entitlements: { max_projects: null, team_seats: 1, static_publish_slots: null, always_on_slots: 0, integrations: true } };
+const freePlan = { id: "free-3", code: "free", version: 3, name: "Free", price_rub: "0.00", billing_interval: "month", included_credit_rub: "0", entitlements: { max_projects: 1, team_seats: 1, static_publish_slots: 1, always_on_slots: 0, integrations: true, generation_messages_lifetime: 1 } };
+let currentPlan = freePlan;
 const usage = {
   period: { start: "2026-09-01T00:00:00Z", end: "2026-09-23T12:00:00Z", source: "calendar_month" },
   plan: freePlan, subscription_status: "active",
@@ -36,7 +36,7 @@ beforeEach(() => {
   localStorage.clear(); mocks.search = ""; mocks.replace.mockReset(); sessionError = false; requests = [];
   config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888" }] };
   payments = []; post = async () => Response.json(payment);
-  usageResponse = usage;
+  usageResponse = usage; currentPlan = freePlan;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
@@ -46,7 +46,7 @@ beforeEach(() => {
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
     if (path === "/api/billing/plans") return Response.json([freePlan, plan]);
     if (path === "/api/billing/usage") return Response.json(usageResponse);
-    if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: { ...plan, code: "free", id: "free", name: "Free" }, status: "active", auto_renew: false, cancel_at_period_end: false });
+    if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: currentPlan, status: "active", auto_renew: false, cancel_at_period_end: false });
     if (path === "/api/auth/sessions") return sessionError ? Promise.reject(new Error("Sessions offline")) : Response.json([{ id: "current", current: true, user_agent: "Macintosh", ip_address: "127.0.0.1", created_at: "2026-09-06", last_seen_at: "2026-09-07" }]);
     return new Response(null, { status: 204 });
   }));
@@ -142,7 +142,7 @@ it("includes current legal consent only after explicit renewal opt-in", async ()
     await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro");
     await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
     await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1));
-    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-09-25" });
+    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-10-11" });
   } finally { await app.close(); }
 });
 it("filters real ledger statuses without treating pending payments as credited", async () => {
@@ -170,9 +170,20 @@ it("compares publication capacity and integrations from actual entitlements", as
     await wait(() => expect(button("Выбрать Pro")).toBeDefined());
     const entries = [...document.querySelectorAll("article dl > div")].map(row => row.textContent);
     expect(entries).toContain("Публикаций5"); expect(entries).toContain("Постоянно работающих приложений2"); expect(entries).toContain("ИнтеграцииНет");
-    // Free v2: `null` is "no limit", never "null" or a dash.
-    expect(entries).toContain("ПроектовБез ограничений"); expect(entries).toContain("ПубликацийБез ограничений"); expect(entries).toContain("ИнтеграцииДа");
+    expect(entries).toContain("Проектов1"); expect(entries).toContain("Публикаций1"); expect(entries).toContain("ИнтеграцииДа");
+    expect(entries).toContain("Сообщений для генерации за всё время1");
+    expect(document.body.textContent).toContain("после каждой успешной ежемесячной оплаты");
     expect(document.body.textContent).not.toContain("null");
+  } finally { await app.close(); }
+});
+
+it("explains preserved historical paid subscription terms without hiding its price", async () => {
+  currentPlan = { ...freePlan, id: "historical-pro", code: "pro", name: "Pro", version: 1, price_rub: "1490.00" };
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    expect(document.querySelector(".account-plan-current")?.textContent).toMatch(/1\s490/);
+    expect(document.body.textContent).toContain("У вас сохранены условия прежней версии тарифа");
   } finally { await app.close(); }
 });
 

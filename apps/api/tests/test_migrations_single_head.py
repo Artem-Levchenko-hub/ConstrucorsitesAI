@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_email_verification_codes_is_the_only_head() -> None:
+def test_billing_catalog_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0083_email_verification_codes"]
+    assert heads == ["0084_billing_catalog_v3"]
+    assert chain["0084_billing_catalog_v3"] == "0083_email_verification_codes"
     assert chain["0083_email_verification_codes"] == "0082_amocrm_oauth_profiles"
     assert chain["0082_amocrm_oauth_profiles"] == "0081_max_bot_binding"
     assert chain["0081_max_bot_binding"] == "0080_provider_ledger"
@@ -260,7 +261,7 @@ def test_email_code_upgrade_preserves_existing_verification_links(
     database.upgrade("head")
 
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0083_email_verification_codes"
+        "0084_billing_catalog_v3"
     )
     assert [tuple(row) for row in database.fetch(
         "SELECT id, user_id, purpose, token_hash, expires_at, used_at FROM auth_tokens ORDER BY id"
@@ -285,7 +286,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("head")
     assert (
         database.fetchval("SELECT version_num FROM alembic_version")
-        == "0083_email_verification_codes"
+        == "0084_billing_catalog_v3"
     )
     assert [
         tuple(row)
@@ -346,14 +347,14 @@ def test_restoration_adaptation_migrations_roundtrip(
         "FOREIGN KEY (usage_id) REFERENCES usage(id) ON DELETE RESTRICT",
         "FOREIGN KEY (wallet_charge_id) REFERENCES wallet_charges(id) ON DELETE RESTRICT",
     }
-    # 0070: the usage journal exists and Free v2 is the only active Free
+    # 0070/0084: the usage journal exists and Free v3 is the only active Free
     assert database.fetchval("SELECT to_regclass('billing_usage_events')") is not None
     assert [
         tuple(row)
         for row in database.fetch(
             "SELECT version, is_active FROM billing_plans WHERE code = 'free' ORDER BY version"
         )
-    ] == [(1, False), (2, True)]
+    ] == [(1, False), (2, False), (3, True)]
     assert (
         database.fetchval(
             "SELECT entitlements->'max_projects' FROM billing_plans "
@@ -444,7 +445,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("head")
     assert (
         database.fetchval("SELECT version_num FROM alembic_version")
-        == "0083_email_verification_codes"
+        == "0084_billing_catalog_v3"
     )
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 

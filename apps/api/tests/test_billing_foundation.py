@@ -22,15 +22,29 @@ async def test_public_plan_catalog_is_versioned_and_ordered(
     assert response.status_code == 200
     plans = response.json()
     assert [plan["code"] for plan in plans] == ["free", "pro", "business"]
-    # Free v2 (migration 0070) carries the owner's model: no cap on apps or
-    # publications, integrations included; only v2 is active for `free`.
-    assert [plan["version"] for plan in plans] == [2, 1, 1]
-    assert [plan["price_rub"] for plan in plans] == ["0.00", "1490.00", "4990.00"]
-    assert plans[0]["entitlements"]["max_projects"] is None
-    assert plans[0]["entitlements"]["static_publish_slots"] is None
+    assert [plan["version"] for plan in plans] == [3, 2, 2]
+    assert [plan["price_rub"] for plan in plans] == ["0.00", "2990.00", "6990.00"]
+    assert plans[0]["entitlements"]["max_projects"] == 1
+    assert plans[0]["entitlements"]["static_publish_slots"] == 1
+    assert plans[0]["entitlements"]["generation_messages_lifetime"] == 1
     assert plans[0]["entitlements"]["integrations"] is True
     assert plans[1]["included_credit_rub"] == "500.0000"
+    assert plans[2]["included_credit_rub"] == "1500.0000"
     assert plans[2]["entitlements"]["always_on_slots"] == 1
+
+
+async def test_historical_paid_plans_keep_original_contract_terms(
+    db_session: AsyncSession,
+) -> None:
+    plans = (
+        await db_session.execute(select(BillingPlan).where(BillingPlan.version == 1))
+    ).scalars().all()
+    paid = {plan.code: plan for plan in plans if plan.code != "free"}
+    assert paid["pro"].price_rub == Decimal("1490.00")
+    assert paid["pro"].included_credit_rub == Decimal("500.0000")
+    assert paid["business"].price_rub == Decimal("4990.00")
+    assert paid["business"].included_credit_rub == Decimal("1500.0000")
+    assert all(not plan.is_active for plan in paid.values())
 
 
 async def test_registration_creates_one_free_subscription(
@@ -151,4 +165,4 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "free"
-    assert subscription.json()["plan"]["version"] == 2
+    assert subscription.json()["plan"]["version"] == 3

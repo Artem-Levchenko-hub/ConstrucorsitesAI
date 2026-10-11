@@ -165,7 +165,7 @@ class Settings(BaseSettings):
     legal_operator_inn: str | None = Field(default=None)
     legal_operator_address: str | None = Field(default=None)
     legal_support_email: str = Field(default="support@yleum.ru")
-    legal_document_version: str = Field(default="2026-09-25")
+    legal_document_version: str = Field(default="2026-10-11")
     admin_emails: str = Field(default="")
 
     yookassa_shop_id: str | None = Field(default=None)

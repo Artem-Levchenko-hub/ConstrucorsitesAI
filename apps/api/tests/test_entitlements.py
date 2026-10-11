@@ -22,6 +22,7 @@ from yleum_api.models.billing import (
     ENTITLEMENT_LIMIT_KEYS,
     FREE_PLAN_ID,
     FREE_PLAN_V1_ID,
+    FREE_PLAN_V2_ID,
     BillingPlan,
 )
 from yleum_api.services import billing_usage, entitlements
@@ -64,22 +65,29 @@ def test_usage_exceeded_only_when_use_passes_the_limit() -> None:
     assert EntitlementUsage(key="max_projects", kind="limit", used=0, limit=1).label == "Приложений"
 
 
-def test_free_v2_is_the_active_free_plan_with_the_owner_model() -> None:
+def test_free_v3_is_the_active_free_plan_with_one_lifetime_generation() -> None:
     free = {plan["code"]: plan for plan in DEFAULT_BILLING_PLANS if plan["is_active"]}["free"]
     assert free["id"] == FREE_PLAN_ID
-    assert free["version"] == 2
+    assert free["version"] == 3
     terms = cast(dict[str, object], free["entitlements"])
-    # Owner (2026-09-17): Free = full access to building and publishing, only
-    # generations and app traffic are quotas, a Free app sleeps instead of
-    # being always on.
-    assert terms["max_projects"] is None
-    assert terms["static_publish_slots"] is None
+    assert terms["max_projects"] == 1
+    assert terms["static_publish_slots"] == 1
+    assert terms["generation_messages_lifetime"] == 1
     assert terms["integrations"] is True
     assert terms["always_on_slots"] == 0
     inactive_free = [
         plan for plan in DEFAULT_BILLING_PLANS if plan["code"] == "free" and not plan["is_active"]
     ]
-    assert [plan["id"] for plan in inactive_free] == [FREE_PLAN_V1_ID]
+    assert [plan["id"] for plan in inactive_free] == [FREE_PLAN_V1_ID, FREE_PLAN_V2_ID]
+    original, previous = [cast(dict[str, object], plan["entitlements"]) for plan in inactive_free]
+    assert original["max_projects"] == 1
+    assert original["static_publish_slots"] == 0
+    assert original["integrations"] is False
+    assert previous["max_projects"] is None
+    assert previous["static_publish_slots"] is None
+    assert previous["integrations"] is True
+    assert "generation_messages_lifetime" not in original
+    assert "generation_messages_lifetime" not in previous
     assert set(ENTITLEMENT_LIMIT_KEYS) | set(ENTITLEMENT_FLAG_KEYS) <= set(terms)
 
 
