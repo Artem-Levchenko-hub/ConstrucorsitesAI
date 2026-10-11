@@ -94,6 +94,7 @@ async def test_both_runners_receive_the_planned_budget_once(monkeypatch, native,
     class RunnerReached(Exception):
         pass
 
+    snapshot = AsyncMock(return_value={"src/app/page.tsx": "old screen"})
     legacy_runner = AsyncMock(side_effect=RunnerReached)
     native_runner = AsyncMock(side_effect=RunnerReached)
     monkeypatch.setattr(agent_builder, "run_agent_build", legacy_runner)
@@ -106,7 +107,8 @@ async def test_both_runners_receive_the_planned_budget_once(monkeypatch, native,
             ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
             project_info=SimpleNamespace(template="max_miniapp"),
             prompt_text="Add a date input to this screen.", runtime=runtime, plan=plan,
-            operations=SimpleNamespace(execute=AsyncMock(), emit=AsyncMock()),
+            operations=SimpleNamespace(execute=AsyncMock(), emit=AsyncMock(),
+                                       snapshot_files=snapshot),
         )
     selected, unused = (native_runner, legacy_runner) if native else (legacy_runner, native_runner)
     selected.assert_awaited_once()
@@ -116,5 +118,6 @@ async def test_both_runners_receive_the_planned_budget_once(monkeypatch, native,
         assert selected.call_args.kwargs["max_segments"] == 1
         assert selected.call_args.kwargs["edit_deadline"] is deadline
     else:
+        assert selected.call_args.kwargs["snapshot_files"] is snapshot
         assert selected.call_args.kwargs["require_green_before_done"] is True
         assert selected.call_args.kwargs["ship_green_on_abort"] is False

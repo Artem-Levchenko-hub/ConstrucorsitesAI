@@ -52,17 +52,21 @@ observations, per-action rather than cumulative progress, failed partial mutatio
 invalidation, and the unchanged total model budget. Existing repeated-read,
 rewrite-pressure, green handoff and progress security tests remain in scope.
 
-Local focused API tests: **168 passed**; additional generation caller/progress
+Local focused API tests: **196 passed**; additional generation caller/progress
 contracts on disposable local PostgreSQL: **190 passed**. Full web tests: **116 files / 1070 tests
 passed**. API Ruff and mypy (**282 files**) passed; web lint, type checking and
 production build passed. Independent bounded source review: **No findings**.
 The first full API pass exposed outdated `AgentOperations` test mocks in the
-budget and legacy context capture fixtures without `snapshot_files`; supplying
-the callback and asserting exact forwarding changed those cases from red to
+budget, portable budget and legacy context capture fixtures without
+`snapshot_files`; supplying the callback and asserting exact forwarding changed those cases from red to
 green, with no production code delta.
-The complete local API suite and exact branch CI are pending at the time of this
-checkpoint; their final receipts must be read before merge/delivery. No live
-canary or production deployment was performed by this source owner.
+The initial complete local API run collected before those test-fixture fixes
+finished with **4755 passed / 19 failed / 1 skipped**: 18 failures were the
+callback mocks above; one starter check used the wrong local pnpm version. The
+correct pinned pnpm **9.15.0** starter run passed **41 tests**; the corrected
+focused API run passed the **196 tests** reported above. This is not an all-green
+local full-suite claim. Exact final branch CI is required before merge/delivery.
+No live canary or production deployment was performed by this source owner.
 
 Deliver through the existing canonical full production process after exact CI
 and a fresh idle/admission check, under the Windows root's sole ownership. The
