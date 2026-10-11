@@ -40,7 +40,9 @@ def source_check(monkeypatch):
     workspace = {"src/app/page.tsx": "candidate", "tests/product.test.mjs": "keep assertions"}
     before = dict(workspace)
     calls = []
+    models = []
     mode = {
+        "models": models,
         "write": True,
         "green": True,
         "extra": False,
@@ -53,6 +55,7 @@ def source_check(monkeypatch):
 
     async def provider(*args, **kwargs):
         calls.append(args[2])
+        models.append(kwargs.get("model"))
         if len(calls) > 1 and mode["provider_error"]:
             raise RuntimeError("synthetic provider error")
         if len(calls) == 1 and mode["write"]:
@@ -131,6 +134,7 @@ def source_check(monkeypatch):
         runtime=runtime,
         operations=SimpleNamespace(execute=execute, probe_build=probe, emit=AsyncMock()),
         plan=SimpleNamespace(
+            model="~anthropic/claude-sonnet-latest",
             stack_guide="MAX PLATFORM CORE CONTRACT",
             skills=None,
             steps=4,
@@ -144,8 +148,9 @@ def source_check(monkeypatch):
 
 
 async def test_last_turn_assertion_reaches_real_native_repair_before_rollback(source_check):
-    kwargs, _workspace, calls, rollback, _ = source_check
+    kwargs, _workspace, calls, rollback, mode = source_check
     result = await agent_recovery.recover_rejected_candidate(**kwargs)
+    assert mode["models"] and set(mode["models"]) == {"~anthropic/claude-sonnet-latest"}
     assert not result.candidate_failed
     assert result.files["src/app/page.tsx"] == "repaired filter"
     assert result.files["tests/product.test.mjs"] == "keep assertions"

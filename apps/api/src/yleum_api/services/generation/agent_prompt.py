@@ -156,6 +156,25 @@ async def prepare_agent_prompt(
         _agent_steps = 30
         _agent_system = stack.system
         _agent_steps = min(30, max(1, int(get_settings().agent_builder_max_steps)))
+    if project_info.template == "max_miniapp":
+        _agent_user += (
+            "\n\n<product_delivery>\n"
+            "Complete the requested product or edit before handing it off; do not stop "
+            "after planning or a partial implementation. For requested interface work, "
+            "choose one visual direction appropriate to the audience, with deliberate "
+            "typography, hierarchy, spacing and accent colors. On edits preserve the "
+            "existing style, working features and existing business records unless the "
+            "owner requests changes. Set explicit foreground/background pairs for "
+            "product surfaces using consistent --app-* tokens. Check primary/secondary "
+            "text, inputs, buttons and loading/empty/error states in the MAX theme; "
+            "normal text needs at least 4.5:1 contrast. Inspect inherited CSS instead "
+            "of applying a blanket color override to all controls. Use real available "
+            "build/type checks; fix concrete errors before completion. Inspect the "
+            "rendered result when the available tools support it. A source check or "
+            "HTTP 200 is not a visual inspection: report visual behavior as unverified "
+            "until actually observed. Honor API-only and read-only requests.\n"
+            "</product_delivery>"
+        )
     _agent_user += (
         "\n\nREQUEST COVERAGE: identify each explicit requirement in the owner's "
         "request, including constraints, before editing. Before done, check every "
@@ -176,8 +195,8 @@ async def prepare_agent_prompt(
             project_info.template,
             configured_steps=_agent_steps,
         )
-    # The historical cinematic pipeline uses one strong Opus model for
-    # planning, implementation, visual review, and recovery. Operators
+    # The orchestration registry selects planning, implementation and recovery.
+    # Operators
     # can still retune a role through ROLE_MODELS without a code deploy.
     _agent_model = model_for_role("agent", override=force_model)
     # Stall recovery resolves through the same role registry.

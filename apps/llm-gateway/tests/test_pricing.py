@@ -97,6 +97,8 @@ def test_list_models_covers_price_table() -> None:
     assert set(PRICE_TABLE) == {
         "gemini-3.1-pro-preview-customtools",
         "claude-sonnet-5",
+        "claude-sonnet-5.5",
+        "~anthropic/claude-sonnet-latest",
     }
     assert {m["id"] for m in catalog} == set(PRICE_TABLE.keys())
     for m in catalog:

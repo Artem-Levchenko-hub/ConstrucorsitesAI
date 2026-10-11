@@ -899,6 +899,7 @@ async def _call_messages(
     convo: list[dict[str, Any]],
     system: str,
     *,
+    model: str = _MODEL,
     user_id: str | None = None,
     project_id: str | None = None,
     run_id: str | None = None,
@@ -915,7 +916,7 @@ async def _call_messages(
     import asyncio
 
     payload: dict[str, Any] = {
-        "model": _MODEL,
+        "model": model,
         "max_tokens": _MAX_TOKENS,
         "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
         # Prompt caching: cache the stable system prompt + tool schemas, and a
@@ -1080,6 +1081,7 @@ async def _call_messages(
 
 async def _run_native_segment(
     *,
+    model: str = _MODEL,
     system: str,
     task: str,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
@@ -1444,6 +1446,7 @@ async def _run_native_segment(
                         url,
                         convo,
                         system,
+                        model=model,
                         user_id=str(user_id) if user_id else None,
                         project_id=str(project_id) if project_id else None,
                         run_id=str(run_id) if run_id else None,
@@ -2190,6 +2193,7 @@ async def _run_native_segments(
 
 async def run_native_build(
     *,
+    model: str = _MODEL,
     system: str,
     task: str,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
@@ -2220,6 +2224,7 @@ async def run_native_build(
         initial_files: Mapping[str, str],
     ) -> AgentResult:
         return await _run_native_segment(
+            model=model,
             system=system,
             task=segment_task,
             execute=execute,

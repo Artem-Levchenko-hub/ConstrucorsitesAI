@@ -1075,10 +1075,10 @@ def generation_mode(model_id: str | None, project_id: str | None = None) -> Gene
 # (env ROLE_MODELS) without a code change.
 # ──────────────────────────────────────────────────────────────────────────
 
-PRIMARY_LLM_MODEL = "gemini-3.1-pro-preview-customtools"
+PRIMARY_LLM_MODEL = "~anthropic/claude-sonnet-latest"
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-07-31): Gemini 3.1 Pro Preview Custom Tools drives
+    # Owner directive (2026-10-12): the provider's latest Sonnet drives
     # classify → art direction → implementation → visual audit → repair. Flux
     # image generation and Seedance video generation remain separate media tools.
     "classify": PRIMARY_LLM_MODEL,  # pick 1 of N presets

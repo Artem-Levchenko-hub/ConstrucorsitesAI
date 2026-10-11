@@ -1484,7 +1484,8 @@ async def test_edit_turn_rejects_unchanged_done_and_applies_requested_change(mon
             handle=SimpleNamespace(is_portable=lambda: True, export_files=export),
             coordinator=None,
         ),
-        plan=SimpleNamespace(stack_guide="", skills=None, user="Fix stock limit", steps=8),
+        plan=SimpleNamespace(stack_guide="", skills=None, user="Fix stock limit", steps=8,
+                             model="claude-sonnet-5"),
         operations=SimpleNamespace(execute=execute, emit=None),
     )
     assert failure is None
@@ -1635,7 +1636,8 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
                 ),
                 coordinator=coordinator,
             ),
-            plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=24),
+            plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=24,
+                                 model="claude-sonnet-5"),
             operations=SimpleNamespace(execute=execute, emit=None),
         )
 
@@ -1730,7 +1732,8 @@ async def test_existing_turn_preserves_inspection_continuation_and_empty_deletio
             handle=SimpleNamespace(is_portable=lambda: True, export_files=export),
             coordinator=None,
         ),
-        plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=5),
+        plan=SimpleNamespace(stack_guide="", skills=None, user=prompt, steps=5,
+                             model="claude-sonnet-5"),
         operations=SimpleNamespace(execute=execute, emit=None),
     )
     assert failure is None

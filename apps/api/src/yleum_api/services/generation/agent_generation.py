@@ -458,6 +458,7 @@ async def execute_agent_turn(
             1 if _is_edit or edit_source_changed is not None else get_settings().agent_max_segments
         )
         _agent_res = await agent_native.run_native_build(
+            model=plan.model,
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
             task=plan.user + (
                 _native_edit_entry_context(baseline.files)

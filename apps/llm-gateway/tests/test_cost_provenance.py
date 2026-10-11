@@ -58,9 +58,11 @@ def test_tariff_fingerprint_changes_when_table_or_cache_factor_changes(monkeypat
     monkeypatch.setattr(pricing, "PRICE_TABLE", table)
     second = pricing.cost_provenance(MODEL, Decimal("1"), tokens_in=1, tokens_out=1)
     assert first["tariff_revision"] != second["tariff_revision"]
-    monkeypatch.setattr(pricing, "_CACHE_HIT_RATE", Decimal("0.2"))
+    table[MODEL] = pricing.ModelPrice(Decimal("1.51"), Decimal("7.50"), Decimal("0.2"))
     third = pricing.cost_provenance(MODEL, Decimal("1"), tokens_in=1, tokens_out=1)
     assert second["tariff_revision"] != third["tariff_revision"]
+    assert second["tariff"]["cache_read_factor"] == "0.1"
+    assert third["tariff"]["cache_read_factor"] == "0.2"
 
 
 def test_stream_estimate_is_labeled_as_estimate_without_provider_charge():

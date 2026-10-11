@@ -162,6 +162,7 @@ async def run_native_source_repair(
         ),
     )
     result = await agent_native.run_native_build(
+        model=plan.model,
         system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
         task=task, execute=repair_execute,
         user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),

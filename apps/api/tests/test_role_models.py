@@ -17,8 +17,8 @@ from yleum_api.core.config import (
 )
 
 
-def test_role_map_full_gemini_custom_tools_orchestration() -> None:
-    assert PRIMARY_LLM_MODEL == "gemini-3.1-pro-preview-customtools"
+def test_role_map_latest_sonnet_orchestration() -> None:
+    assert PRIMARY_LLM_MODEL == "~anthropic/claude-sonnet-latest"
     assert model_for_role("director") == PRIMARY_LLM_MODEL
     assert model_for_role("polish") == PRIMARY_LLM_MODEL
     assert model_for_role("classify") == PRIMARY_LLM_MODEL

@@ -38,7 +38,8 @@ def _is_anthropic(model: str) -> bool:
     LiteLLM's. Provider-prefixed forms (`anthropic/claude-...`) are routed
     through the same code path so we cover them too."""
     m = model.lower()
-    return m.startswith("claude-") or m.startswith("anthropic/")
+    return (m.startswith("claude-") or m.startswith("anthropic/")
+            or model == "~anthropic/claude-sonnet-latest")
 
 
 def apply_anthropic_cache(
