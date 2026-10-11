@@ -94,6 +94,9 @@ const providerIcons: Record<string, LucideIcon> = {
   cdek: Truck,
 };
 
+// The public selector is intentionally narrower than the stored connection catalog.
+const offeredProviderKeys = new Set(["moysklad", "amocrm", "yandex_metrica", "yookassa"]);
+
 const readyForImplementation = (
   provider: IntegrationProvider | undefined,
   connection: AppIntegration | undefined,
@@ -155,6 +158,13 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     queryFn: () => getIntegrationCatalog(projectId),
     retry: false,
   });
+  const offeredProviders = useMemo(
+    () => (catalog.data?.providers ?? []).filter(provider => offeredProviderKeys.has(provider.key)),
+    [catalog.data?.providers],
+  );
+  const recommendedPack = catalog.data?.recommended_pack;
+  const canOfferPack = Boolean(recommendedPack?.provider_keys.length
+    && recommendedPack.provider_keys.every(key => offeredProviderKeys.has(key)));
   const selected = selectedChoice ?? (moyskladReturnProject === projectId
     ? catalog.data?.providers.find((provider) => provider.key === "moysklad") ?? null : null);
   const closeProvider = () => { setSelected(null); setMoyskladReturnProject(null); setValues({}); };
@@ -195,14 +205,14 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   );
   const visible = useMemo(() => {
     const needle = search.trim().toLocaleLowerCase("ru-RU");
-    return (catalog.data?.providers ?? []).filter(
+    return offeredProviders.filter(
       (provider) =>
         (category === "all" || provider.category === category) &&
         (!needle ||
           provider.name.toLocaleLowerCase("ru-RU").includes(needle) ||
           provider.description.toLocaleLowerCase("ru-RU").includes(needle)),
     );
-  }, [catalog.data?.providers, category, search]);
+  }, [offeredProviders, category, search]);
 
   const sync = async () => {
     try {
@@ -283,7 +293,10 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     onError: (error) => toast.error("Не удалось включить", { description: message(error) }),
   });
   const pack = useMutation({
-    mutationFn: () => applyIntegrationPack(projectId),
+    mutationFn: () => {
+      if (!canOfferPack) throw new Error("Набор содержит неподдерживаемые сервисы");
+      return applyIntegrationPack(projectId);
+    },
     onSuccess: ({ remaining_provider_keys }) => {
       void qc.invalidateQueries({ queryKey });
       void sync();
@@ -421,7 +434,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
   };
 
   const canUseProvider = (providerKey: string) => readyForImplementation(
-    catalog.data?.providers.find((provider) => provider.key === providerKey),
+    offeredProviders.find((provider) => provider.key === providerKey),
     connections.get(providerKey),
   );
   const openImplementation = (providerKey: string) => {
@@ -457,7 +470,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
     onExit?.();
     router.push(`/max/${projectId}?starter=1`);
   };
-  const connectedCount = (catalog.data?.providers ?? []).filter((provider) => canUseProvider(provider.key)).length;
+  const connectedCount = offeredProviders.filter((provider) => canUseProvider(provider.key)).length;
   const canSubmit = selected?.fields.every((field) => !field.required || Boolean(values[field.key]?.trim())) ?? false;
   const showCredentials = selected?.key !== "moysklad" || selected.connection_mode === "credentials";
   const replacementAllowed = selected?.key !== "moysklad" || !moyskladConnection || moyskladReplaceConfirmed;
@@ -633,10 +646,10 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
           сервисов. Текст остался, но уступил место самим сервисам. */}
       <details className="mt-4 max-w-[850px] rounded-[6px] border border-border-subtle bg-surface-base px-4 py-3">
         <summary className="cursor-pointer text-sm font-medium text-accent-secondary">Что даёт подключение</summary>
-        <p className="mt-2 text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. Для встроенного ИИ или после авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Пользователи увидят изменения после повторной публикации.</p>
+        <p className="mt-2 text-sm leading-6 text-fg-secondary">Подключение сервиса не добавляет экраны автоматически. После авторизации сервиса выберите «Добавить в приложение», проверьте задание для ИИ и запустите доработку. Пользователи увидят изменения после повторной публикации.</p>
       </details>
       <section className="max-integration-summary mt-6 grid gap-4 lg:grid-cols-[1fr_220px]">
-        <div className="rounded-[12px] border border-border-default bg-surface p-6">
+        {canOfferPack && <div className="rounded-[12px] border border-border-default bg-surface p-6">
           <div className="flex items-start gap-4">
             <span className="grid size-11 shrink-0 place-items-center rounded-[8px] bg-accent text-fg-on-accent"><Sparkles className="size-5" /></span>
             <div>
@@ -649,10 +662,10 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
             {pack.isPending ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
             Подключить рекомендуемые
           </Button>
-        </div>
+        </div>}
         <div className="rounded-[12px] border border-border-default bg-surface p-6">
           <p className="omnia-kicker text-fg-tertiary">Состояние</p>
-          <p className="mt-3 text-3xl font-semibold">{catalog.isSuccess ? connectedCount : "—"}<span className="text-lg text-fg-tertiary"> / {catalog.isSuccess ? catalog.data.providers.length : "—"}</span></p>
+          <p className="mt-3 text-3xl font-semibold">{catalog.isSuccess ? connectedCount : "—"}<span className="text-lg text-fg-tertiary"> / {catalog.isSuccess ? offeredProviders.length : "—"}</span></p>
           <p className="mt-2 text-xs text-fg-secondary">сервисов активно в этом проекте</p>
           <div className="mt-5 flex items-center gap-2 text-xs text-success-fg"><ShieldCheck className="size-4" /> Секреты зашифрованы</div>
         </div>
@@ -661,7 +674,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       <section className="mt-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-wrap gap-2">
-            {(Object.keys(categories) as Array<IntegrationCategory | "all">).map((key) => {
+            {(Object.keys(categories) as Array<IntegrationCategory | "all">).filter(key => key === "all" || offeredProviders.some(provider => provider.category === key)).map((key) => {
               const item = categories[key];
               return (
                 <button key={key} aria-pressed={category === key} onClick={() => setCategory(key)} className={cn("inline-flex h-11 shrink-0 items-center gap-2 rounded-[8px] border px-3 text-xs sm:h-9", category === key ? "border-accent bg-accent-subtle text-accent-secondary" : "border-border-default bg-surface text-fg-secondary")}>

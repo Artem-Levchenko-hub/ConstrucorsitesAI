@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
@@ -17,6 +17,7 @@ import { Button } from "@/components/ui/button";
 import {
   getMaxAccess,
   resendVerification,
+  verifyEmailCode,
 } from "@/lib/api/max-account";
 import { ApiError } from "@/lib/api/client";
 import { cn } from "@/lib/utils";
@@ -29,6 +30,9 @@ function errorMessage(error: unknown): string {
 
 export function MaxOnboarding({ email }: { email: string }) {
   const router = useRouter();
+  const [code, setCode] = useState("");
+  const [codeError, setCodeError] = useState("");
+  const [letterSent, setLetterSent] = useState(false);
   const access = useQuery({
     queryKey: ["max-access"],
     queryFn: getMaxAccess,
@@ -42,15 +46,29 @@ export function MaxOnboarding({ email }: { email: string }) {
   }, [access.data?.email_verified, router]);
 
   const resend = useMutation({
-    mutationFn: () => resendVerification(email),
-    onSuccess: () =>
+    mutationFn: resendVerification,
+    onSuccess: () => {
+      setLetterSent(true);
+      setCode("");
+      setCodeError("");
       toast.success("Письмо отправлено", {
         description: "Проверьте входящие и папку «Спам».",
-      }),
+      });
+    },
     onError: (error) =>
       toast.error("Не удалось отправить письмо", {
         description: errorMessage(error),
       }),
+  });
+
+  const verifyCode = useMutation({
+    mutationFn: verifyEmailCode,
+    onSuccess: async () => {
+      setCodeError("");
+      await access.refetch();
+      router.replace("/max");
+    },
+    onError: (error) => setCodeError(errorMessage(error)),
   });
 
   if (access.isLoading) {
@@ -124,22 +142,60 @@ export function MaxOnboarding({ email }: { email: string }) {
                   нельзя: письма не уходит, и человек будет ждать его напрасно. */}
               {data?.email_delivery_configured ? (
                 <>
-                  Мы отправили ссылку на <span className="text-fg-primary">{email}</span>.
-                  После перехода вернитесь сюда — статус обновится автоматически.
+                  {letterSent ? "Письмо отправлено на" : "Если письмо уже пришло на"}{" "}
+                  <span className="text-fg-primary">{email}</span>, в нём есть код на 10 минут
+                  и ссылка на 24 часа.
                 </>
               ) : (
                 <>
                   Адрес <span className="text-fg-primary">{email}</span> сохранён.
-                  Письмо со ссылкой придёт, как только подключится отправка почты.
+                  Отправка писем пока недоступна. Повторите отправку после подключения почты.
                 </>
               )}
             </p>
             {!data?.email_delivery_configured && (
               <div className="mt-5 flex gap-3 rounded-[10px] border border-warning/40 bg-warning/10 p-4 text-sm text-warning">
                 <CircleAlert className="mt-0.5 size-4 shrink-0" />
-                Почтовый канал ещё подключается. Аккаунт сохранён; поддержка
-                подтвердит адрес после настройки отправки.
+                Почтовый канал ещё подключается. Аккаунт сохранён.
               </div>
+            )}
+            {data?.email_delivery_configured && (
+              <form
+                className="mt-6 max-w-sm"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  if (verifyCode.isPending || resend.isPending) return;
+                  setCodeError("");
+                  if (/^\d{6}$/.test(code)) verifyCode.mutate(code);
+                  else setCodeError("Введите 6 цифр из письма");
+                }}
+              >
+                <label htmlFor="email-verification-code" className="block text-sm font-medium">
+                  Код из письма
+                </label>
+                <input
+                  id="email-verification-code"
+                  name="one-time-code"
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="[0-9]{6}"
+                  maxLength={6}
+                  value={code}
+                  onChange={(event) => {
+                    setCode(event.target.value.replace(/\D/g, "").slice(0, 6));
+                    setCodeError("");
+                  }}
+                  aria-invalid={Boolean(codeError)}
+                  aria-describedby={codeError ? "email-code-error" : undefined}
+                  className="mt-2 h-12 w-full rounded-lg border border-border-strong bg-surface px-4 text-lg tracking-[0.2em] text-fg-primary focus-visible:outline-2 focus-visible:outline-accent"
+                />
+                {codeError && <p id="email-code-error" role="alert" className="mt-2 text-sm text-warning">{codeError}</p>}
+                <Button type="submit" disabled={verifyCode.isPending || resend.isPending} className="mt-3 h-11 bg-accent text-fg-on-accent">
+                  {verifyCode.isPending && <Loader2 className="mr-2 size-4 animate-spin" />}
+                  Подтвердить код
+                </Button>
+              </form>
             )}
             <Button
               type="button"

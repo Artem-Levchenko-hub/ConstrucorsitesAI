@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_amocrm_oauth_profiles_is_the_only_head() -> None:
+def test_email_verification_codes_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0082_amocrm_oauth_profiles"]
+    assert heads == ["0083_email_verification_codes"]
+    assert chain["0083_email_verification_codes"] == "0082_amocrm_oauth_profiles"
     assert chain["0082_amocrm_oauth_profiles"] == "0081_max_bot_binding"
     assert chain["0081_max_bot_binding"] == "0080_provider_ledger"
     assert chain["0080_provider_ledger"] == "0079_provider_calls"
@@ -235,6 +236,47 @@ def test_amocrm_oauth_profiles_is_the_only_head() -> None:
     assert chain["0056_project_cell_finalization"] == "0055_project_cell_capacity_queue"
 
 
+def test_email_code_upgrade_preserves_existing_verification_links(
+    project_cell_migration_database: ProjectCellMigrationDatabase,
+) -> None:
+    database = project_cell_migration_database
+    database.upgrade("0082_amocrm_oauth_profiles")
+    asyncio.run(_execute(database.dsn, """
+        INSERT INTO users(id, email, password_hash)
+        VALUES ('00000000-0000-4000-8000-000000000001', 'legacy@example.invalid', 'synthetic');
+        INSERT INTO auth_tokens(id, user_id, purpose, token_hash, expires_at, used_at)
+        VALUES
+          ('00000000-0000-4000-8000-000000000002',
+           '00000000-0000-4000-8000-000000000001', 'verify_email', repeat('a',64),
+           '2030-01-01T00:00:00Z', NULL),
+          ('00000000-0000-4000-8000-000000000003',
+           '00000000-0000-4000-8000-000000000001', 'verify_email', repeat('b',64),
+           '2030-01-02T00:00:00Z', '2026-01-01T00:00:00Z');
+    """))
+    before = [tuple(row) for row in database.fetch(
+        "SELECT id, user_id, purpose, token_hash, expires_at, used_at FROM auth_tokens ORDER BY id"
+    )]
+
+    database.upgrade("head")
+
+    assert database.fetchval("SELECT version_num FROM alembic_version") == (
+        "0083_email_verification_codes"
+    )
+    assert [tuple(row) for row in database.fetch(
+        "SELECT id, user_id, purpose, token_hash, expires_at, used_at FROM auth_tokens ORDER BY id"
+    )] == before
+    assert [tuple(row) for row in database.fetch(
+        "SELECT code_hash, code_expires_at, code_attempts FROM auth_tokens ORDER BY id"
+    )] == [(None, None, 0), (None, None, 0)]
+    assert [tuple(row) for row in database.fetch(
+        "SELECT conname, convalidated FROM pg_constraint "
+        "WHERE conrelid = 'auth_tokens'::regclass AND conname = 'ck_auth_tokens_code_attempts'"
+    )] == [("ck_auth_tokens_code_attempts", True)]
+    with pytest.raises(asyncpg.CheckViolationError):
+        asyncio.run(_execute(database.dsn, "UPDATE auth_tokens SET code_attempts = 6"))
+    assert database.fetchval("SELECT max(code_attempts) FROM auth_tokens") == 0
+
+
 def test_restoration_adaptation_migrations_roundtrip(
     project_cell_migration_database: ProjectCellMigrationDatabase,
 ) -> None:
@@ -242,7 +284,8 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version") == "0082_amocrm_oauth_profiles"
+        database.fetchval("SELECT version_num FROM alembic_version")
+        == "0083_email_verification_codes"
     )
     assert [
         tuple(row)
@@ -400,7 +443,8 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
     assert (
-        database.fetchval("SELECT version_num FROM alembic_version") == "0082_amocrm_oauth_profiles"
+        database.fetchval("SELECT version_num FROM alembic_version")
+        == "0083_email_verification_codes"
     )
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
