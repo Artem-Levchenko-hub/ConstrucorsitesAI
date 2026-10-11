@@ -81,13 +81,36 @@ _LEGACY_ANALYTICS_HASHES = {
 }
 
 
+def _consent_overrides():
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    overrides = json.loads(
+        (fixtures / "max_template_consent_overrides.json").read_text(encoding="utf-8")
+    )
+    assert set(overrides) == {
+        "src/app/api/omnia/consents/route.ts",
+        "src/app/api/omnia/integrations/[...path]/route.ts",
+        "src/lib/omnia/client.ts",
+        "src/lib/omnia/consent.ts",
+    }
+    return overrides
+
+
+@pytest.mark.parametrize("portable", [False, True])
+def test_render_includes_locked_reviewed_consent_dependency(portable):
+    config = MaxProjectConfigPayload(app_name="Contract", app_type="custom", summary="Contract")
+    files = max_project_kit.render_max_starter_files(config, UUID(int=1), portable=portable)
+    helper = "src/lib/omnia/consent.ts"
+    assert helper in files, "rendered routes must include their consent dependency"
+    assert helper in max_project_kit.MAX_SECURITY_LOCKED_FILES
+    assert (
+        hashlib.sha256(files[helper].encode()).hexdigest() == _consent_overrides()[helper]["sha256"]
+    )
+
+
 def _normalize_reviewed_client(files):
     """Pin the new managed client, then keep every historical render golden exact."""
     path = "src/lib/omnia/client.ts"
-    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
-    overrides = json.loads(
-        (fixtures / "max_template_action_write_overrides.json").read_text(encoding="utf-8")
-    )
+    overrides = _consent_overrides()
     assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
     legacy = json.loads(
         (Path(__file__).parent / "fixtures/max_config_render_legacy_client.json").read_text(
@@ -131,7 +154,11 @@ def _normalize_managed_order_receipts(files):
     normalized = dict(files)
     for path, baseline_hash in frozen.items():
         actual = files[path]
-        entry = reviewed[f"max-miniapp-nextjs/{path}"]
+        entry = (
+            _consent_overrides()[path]
+            if path.endswith("route.ts")
+            else reviewed[f"max-miniapp-nextjs/{path}"]
+        )
         baseline = legacy["files"][path]
         assert baseline["sha256"] == baseline_hash
         assert hashlib.sha256(baseline["source"].encode()).hexdigest() == baseline_hash
@@ -155,6 +182,30 @@ def _normalize_managed_order_receipts(files):
             if declaration
             else baseline["source"]
         )
+    return normalized
+
+
+def _normalize_consent(files):
+    """Pin the current route/helper, then project only these onto historical bytes."""
+    overrides = _consent_overrides()
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_legacy_consent.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    route = "src/app/api/omnia/consents/route.ts"
+    helper = "src/lib/omnia/consent.ts"
+    baseline_hash = "8231cbfbe1b1e23d5170d4304e3b7c9df985bbbe92835dbd496ea903c4f21a55"
+    assert set(legacy) == {"revision", "path", "sha256", "source"}
+    assert legacy["revision"] == "684e4a2e889624c71b7efd794bbd45f1a4760950"
+    assert legacy["path"] == route and legacy["sha256"] == baseline_hash
+    assert hashlib.sha256(legacy["source"].encode()).hexdigest() == baseline_hash
+    for path in (route, helper):
+        assert path in files, path
+        assert hashlib.sha256(files[path].encode()).hexdigest() == overrides[path]["sha256"], path
+    normalized = dict(files)
+    normalized[route] = legacy["source"]
+    normalized.pop(helper)
     return normalized
 
 
@@ -252,7 +303,9 @@ def _assert_render_golden(files, expected, *, portable=False):
     # Project only these two verified dependency blobs back to the old baseline;
     # all other rendered bytes must still match the unchanged original golden.
     original_dependencies = _normalize_preview_renewal(
-        _normalize_analytics(_normalize_reviewed_client(_normalize_managed_order_receipts(files)))
+        _normalize_analytics(
+            _normalize_reviewed_client(_normalize_managed_order_receipts(_normalize_consent(files)))
+        )
     )
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
         reviewed_hash = (
@@ -577,6 +630,8 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "src/app/api/omnia/actions/route.ts",
         "src/app/api/omnia/events/route.ts",
         "src/lib/omnia/analytics.ts",
+        "src/lib/omnia/consent.ts",
+        "src/app/api/omnia/consents/route.ts",
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
     ],

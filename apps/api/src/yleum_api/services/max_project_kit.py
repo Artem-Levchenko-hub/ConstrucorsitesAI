@@ -170,6 +170,7 @@ def render_max_managed_files(
             "src/app/api/omnia/consents/route.ts"
         ),
         "src/app/api/omnia/events/route.ts": _template_file("src/app/api/omnia/events/route.ts"),
+        "src/lib/omnia/consent.ts": _template_file("src/lib/omnia/consent.ts"),
         "src/lib/omnia/analytics.ts": _template_file("src/lib/omnia/analytics.ts").replace(
             'process.env.OMNIA_PROJECT_ID || ""', project_literal, 1
         ),
@@ -332,6 +333,7 @@ MAX_SECURITY_LOCKED_FILES = frozenset(
         "src/lib/omnia/max-config.ts",
         "src/lib/omnia/client.ts",
         "src/lib/omnia/analytics.ts",
+        "src/lib/omnia/consent.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
         "src/app/api/omnia/integrations/[...path]/route.ts",
