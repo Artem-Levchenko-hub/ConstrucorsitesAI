@@ -51,6 +51,7 @@ async def _capture(monkeypatch, files, *, native=False, edit=True, portable=True
         pass
 
     runner = AsyncMock(side_effect=Captured)
+    snapshot = AsyncMock(return_value=dict(files))
     monkeypatch.setattr(agent_native if native else agent_builder,
                         "run_native_build" if native else "run_agent_build", runner)
     with pytest.raises(Captured):
@@ -67,9 +68,12 @@ async def _capture(monkeypatch, files, *, native=False, edit=True, portable=True
             plan=SimpleNamespace(system="system", user="requested edit", model="model",
                                  escalate_model=None, steps=30, bare_stack=False,
                                  stack_guide="guide", skills=None),
-            operations=SimpleNamespace(execute=AsyncMock(), emit=AsyncMock()),
+            operations=SimpleNamespace(execute=AsyncMock(), emit=AsyncMock(),
+                                       snapshot_files=snapshot),
         )
     runner.assert_awaited_once()
+    if not native:
+        assert runner.call_args.kwargs["snapshot_files"] is snapshot
     return runner.call_args.kwargs["task" if native else "user_prompt"]
 
 
@@ -149,7 +153,8 @@ async def test_exact_f11_prompt_preserves_edit_plan_and_baseline_at_model(monkey
             _max_seed_files={}, _max_shell_enabled=True, baseline=baseline,
             ids=ids, is_free=False, project_info=project_info, prompt_text=prompt,
             runtime=runtime, plan=plan,
-            operations=SimpleNamespace(execute=execute, emit=AsyncMock()),
+            operations=SimpleNamespace(execute=execute, emit=AsyncMock(),
+                                       snapshot_files=AsyncMock(return_value=dict(FILES))),
         )
     messages, captured_model = model.call_args.args
     system, user = messages[0]["content"], messages[1]["content"]
