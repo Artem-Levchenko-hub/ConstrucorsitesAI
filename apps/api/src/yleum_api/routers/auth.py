@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import secrets
 from collections.abc import Awaitable
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from yleum_api.core.security import consume_dummy_verify, hash_password, verify_
 from yleum_api.models.account import AuthSession, AuthToken
 from yleum_api.models.user import User
 from yleum_api.schemas.user import (
+    EmailCodeConsume,
     EmailTokenConsume,
     EmailTokenRequest,
     PasswordResetConsume,
@@ -47,6 +49,18 @@ def _token_hash(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
+def _verification_code(user_id: UUID, raw: str) -> str:
+    key = get_settings().jwt_secret.get_secret_value().encode()
+    digest = hmac.digest(key, f"email-code:{user_id}:{raw}".encode(), "sha256")
+    return f"{int.from_bytes(digest[:8], 'big') % 1_000_000:06d}"
+
+
+def _verification_code_hash(user_id: UUID, token_hash: str, code: str) -> str:
+    key = get_settings().jwt_secret.get_secret_value().encode()
+    message = f"email-code-hash:{user_id}:{token_hash}:{code}".encode()
+    return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+
 async def _issue_email_token(
     session: SessionDep,
     user: User,
@@ -54,6 +68,9 @@ async def _issue_email_token(
     *,
     ttl: timedelta,
 ) -> str:
+    # Serialize issuance and consumption for this account in the same order.
+    await session.execute(select(User.id).where(User.id == user.id).with_for_update())
+    now = datetime.now(UTC)
     await session.execute(
         update(AuthToken)
         .where(
@@ -61,15 +78,19 @@ async def _issue_email_token(
             AuthToken.purpose == purpose,
             AuthToken.used_at.is_(None),
         )
-        .values(used_at=datetime.now(UTC))
+        .values(used_at=now)
     )
     raw = secrets.token_urlsafe(48)
+    token_hash = _token_hash(raw)
+    code = _verification_code(user.id, raw) if purpose == "verify_email" else None
     session.add(
         AuthToken(
             user_id=user.id,
             purpose=purpose,
-            token_hash=_token_hash(raw),
-            expires_at=datetime.now(UTC) + ttl,
+            token_hash=token_hash,
+            code_hash=_verification_code_hash(user.id, token_hash, code) if code else None,
+            code_expires_at=now + timedelta(minutes=10) if code else None,
+            expires_at=now + ttl,
         )
     )
     await session.commit()
@@ -81,6 +102,22 @@ async def _consume_email_token(
 ) -> User:
     """Spend the one-time token and return its user; the caller commits. The row
     lock makes two concurrent requests with one link see it spent exactly once."""
+    candidate = (
+        await session.execute(
+            select(AuthToken.user_id)
+            .where(
+                AuthToken.token_hash == _token_hash(raw),
+                AuthToken.purpose == purpose,
+            )
+        )
+    ).scalar_one_or_none()
+    if candidate is None:
+        raise ApiError(
+            "token_invalid", "Ссылка недействительна или истекла", status.HTTP_400_BAD_REQUEST
+        )
+    user = (
+        await session.execute(select(User).where(User.id == candidate).with_for_update())
+    ).scalar_one_or_none()
     token = (
         await session.execute(
             select(AuthToken)
@@ -99,7 +136,6 @@ async def _consume_email_token(
             "Ссылка недействительна или истекла",
             status.HTTP_400_BAD_REQUEST,
         )
-    user = await session.get(User, token.user_id)
     if user is None:
         raise ApiError("token_invalid", "Ссылка недействительна", status.HTTP_400_BAD_REQUEST)
     token.used_at = now
@@ -121,12 +157,15 @@ async def _deliver(letter: Awaitable[None]) -> None:
 async def _send_verification(user: User, raw_token: str) -> None:
     settings = get_settings()
     link = f"{settings.web_base_url.rstrip('/')}/max/verify-email?token={raw_token}"
+    code = _verification_code(user.id, raw_token)
     await send_transactional_email(
         recipient=str(user.email),
         subject="Подтвердите email для Yleum",
         text=(
             "Подтвердите email, чтобы продолжить создание MAX Mini App:\n\n"
-            f"{link}\n\nСсылка действует 24 часа. Если это были не вы, ничего не делайте."
+            f"Код: {code}\nКод действует 10 минут.\n\n"
+            f"Или откройте ссылку: {link}\n\n"
+            "Ссылка действует 24 часа. Если это были не вы, ничего не делайте."
         ),
     )
 
@@ -273,16 +312,15 @@ async def me(current_user: CurrentUserDep, session: SessionDep) -> UserPublic:
     dependencies=[Depends(rate_limit_email)],
 )
 async def request_email_verification(
-    payload: EmailTokenRequest,
+    current_user: CurrentUserDep,
     session: SessionDep,
 ) -> dict[str, bool]:
-    user = (
-        await session.execute(select(User).where(User.email == payload.email))
-    ).scalar_one_or_none()
-    if user is None or user.email_verified_at is not None:
+    if current_user.is_anon or current_user.email is None:
+        raise ApiError("forbidden", "Нужен аккаунт с email", status.HTTP_403_FORBIDDEN)
+    if current_user.email_verified_at is not None:
         return {"accepted": True}
-    raw = await _issue_email_token(session, user, "verify_email", ttl=timedelta(hours=24))
-    await _deliver(_send_verification(user, raw))
+    raw = await _issue_email_token(session, current_user, "verify_email", ttl=timedelta(hours=24))
+    await _deliver(_send_verification(current_user, raw))
     return {"accepted": True}
 
 
@@ -290,6 +328,52 @@ async def request_email_verification(
 async def verify_email(payload: EmailTokenConsume, session: SessionDep) -> dict[str, bool]:
     now = datetime.now(UTC)
     user = await _consume_email_token(session, payload.token, "verify_email", now)
+    user.email_verified_at = now
+    await session.commit()
+    return {"verified": True}
+
+
+@router.post("/email/verify/code", dependencies=[Depends(rate_limit_auth)])
+async def verify_email_code(
+    payload: EmailCodeConsume, current_user: CurrentUserDep, session: SessionDep
+) -> dict[str, bool]:
+    now = datetime.now(UTC)
+    user = (
+        await session.execute(select(User).where(User.id == current_user.id).with_for_update())
+    ).scalar_one()
+    token = (
+        await session.execute(
+            select(AuthToken)
+            .where(
+                AuthToken.user_id == user.id,
+                AuthToken.purpose == "verify_email",
+                AuthToken.used_at.is_(None),
+            )
+            .order_by(AuthToken.created_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+    ).scalar_one_or_none()
+    if user.email_verified_at is not None or token is None or token.code_hash is None:
+        raise ApiError(
+            "code_invalid", "Код недействителен. Запросите новый", status.HTTP_400_BAD_REQUEST
+        )
+    if token.code_expires_at is None or token.code_expires_at <= now or token.expires_at <= now:
+        raise ApiError(
+            "code_expired", "Срок кода истёк. Запросите новый", status.HTTP_400_BAD_REQUEST
+        )
+    if token.code_attempts >= 5:
+        raise ApiError(
+            "code_attempts_exceeded",
+            "Попытки исчерпаны. Запросите новый код",
+            status.HTTP_400_BAD_REQUEST,
+        )
+    expected = _verification_code_hash(user.id, token.token_hash, payload.code)
+    if not hmac.compare_digest(token.code_hash, expected):
+        token.code_attempts += 1
+        await session.commit()
+        raise ApiError("code_invalid", "Неверный код", status.HTTP_400_BAD_REQUEST)
+    token.used_at = now
     user.email_verified_at = now
     await session.commit()
     return {"verified": True}

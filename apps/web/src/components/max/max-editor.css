@@ -141,14 +141,15 @@
   .max-editor-brand { padding-right: 12px; }
 }
 @media (max-width: 600px) {
-  .max-editor-header { height: 64px; padding-inline: 12px; }
+  .max-editor-header { height: auto; min-height: 64px; flex-wrap: wrap; padding: 8px 12px; }
   .max-editor-brand { display: none; }
   .max-editor-project-trigger { gap: 6px; padding-inline: 0; }
   .max-editor-project-trigger strong { max-width: 100px; font-size: 13px; }
-  .max-editor-header-actions { gap: 5px; }
+  .max-editor-header-actions { gap: 5px; flex-wrap: wrap; max-width: 100%; }
   .max-editor-data-button span { display: none; }
   .max-editor-header-actions .max-editor-data-button { width: 36px; padding: 8px; }
   .max-editor-header-actions > button { width: 36px; }
+  .max-editor-header-actions .max-editor-integrations { width: auto; padding-inline: 10px; font-size: 12px; }
   .max-editor-header-actions .max-editor-publish { width: auto; padding-inline: 10px; font-size: 12px; }
   .max-editor-publish svg { display: none; }
   .max-editor-section-heading { padding: 20px 16px 12px; }

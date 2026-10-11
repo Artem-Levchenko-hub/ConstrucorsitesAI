@@ -317,7 +317,7 @@ export function BuilderVisual() {
 
 export function IntegrationVisual() {
   return (
-    <ScreenshotFrame label="Снимок 03" title="Дополнительно → интеграции после запуска">
+    <ScreenshotFrame label="Снимок 03" title="Редактор → Интеграции">
       <div className="flex h-full text-white">
         <Sidebar active="Интеграции" />
         <div className="min-w-0 flex-1 p-[4%]">
@@ -326,15 +326,15 @@ export function IntegrationVisual() {
           <p className="mt-1 text-[8px] text-[#828491]">Секреты хранятся зашифрованно и не попадают в код проекта.</p>
           <div className="mt-[5%] grid grid-cols-2 gap-[3%]">
             {[
-              ["ИИ", "LLMGW: расходы с баланса владельца", Plug, "Включить ИИ", true],
+              ["МойСклад", "Товары, остатки и заказы", Plug, "Подключить", true],
               ["ЮKassa", "Создание платежей и статусы", ShieldCheck, "Подключить", false],
-              ["Битрикс24", "Создание лидов", Plug, "Подключить", false],
+              ["amoCRM", "Заявки и этапы сделок", Plug, "Подключить", false],
               ["Яндекс Метрика", "События и конверсии", Activity, "Подключить", false],
             ].map(([title, copy, Icon, action, hot]) => {
               const ItemIcon = Icon as typeof Bot;
               return (
                 <div key={String(title)} className={`rounded-lg border bg-[#191b20] p-[5%] ${hot ? "border-accent/60 shadow-[0_8px_24px_rgba(79,129,247,.12)]" : "border-[#2b2d32]"}`}>
-                  <div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-accent" /></span><span className="rounded-full bg-[#121519] px-2 py-1 text-[6px] text-[#828491]">{title === "ИИ" ? "Не включено" : "Не подключено"}</span></div>
+                  <div className="flex items-center justify-between"><span className="grid size-7 place-items-center rounded-md bg-[#2b2d32]"><ItemIcon className="size-3.5 text-accent" /></span><span className="rounded-full bg-[#121519] px-2 py-1 text-[6px] text-[#828491]">Не подключено</span></div>
                   <p className="mt-[7%] text-[10px] font-semibold">{String(title)}</p><p className="mt-1 text-[7px] text-[#828491]">{String(copy)}</p>
                   <button data-guide-target={hot ? "integration-connect" : undefined} className={`mt-[7%] rounded-md px-3 py-1.5 text-[7px] font-semibold ${hot ? "bg-accent text-[#121519]" : "border border-[#2b2d32]"}`}>{String(action)}</button>
                 </div>

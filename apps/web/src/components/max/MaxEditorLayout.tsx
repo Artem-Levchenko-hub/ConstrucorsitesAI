@@ -79,6 +79,7 @@ export function MaxEditorLayout({ project, children, navigation, tools, preview,
         </div>
         <div className="max-editor-header-actions">
           <MaxEditorDataDialog projectId={project.id} controlled={{ section: dataSection, onOpenChange: value => select(value ? "data:details" : null) }} />
+          <Button variant="outline" className="max-editor-integrations" data-testid="max-integrations-open" disabled={modalBusy} onClick={event => open("services", event.currentTarget)}>Интеграции</Button>
           <Button variant="outline" size="icon" aria-label="Инструменты редактора" onClick={event => open("tools", event.currentTarget)}><Ellipsis className="size-5" /></Button>
           <Button variant="outline" size="icon" onClick={event => open("preview", event.currentTarget)} className="max-editor-mobile-preview-trigger" aria-label="Открыть живое превью" data-testid="max-mobile-preview-open"><PanelRightOpen className="size-4" /></Button>
           <Button data-testid="max-launch-open" title={launchStatus} className="max-editor-publish" onClick={event => open("publish", event.currentTarget)}>Опубликовать <ArrowUpRight className="size-4" /></Button>

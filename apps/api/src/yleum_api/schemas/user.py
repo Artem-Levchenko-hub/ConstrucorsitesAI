@@ -69,6 +69,10 @@ class EmailTokenConsume(BaseModel):
     token: str = Field(min_length=32, max_length=512)
 
 
+class EmailCodeConsume(BaseModel):
+    code: str = Field(pattern=r"^[0-9]{6}$")
+
+
 class PasswordResetConsume(BaseModel):
     token: str = Field(min_length=32, max_length=512)
     password: str = Field(min_length=8, max_length=128)

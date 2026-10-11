@@ -27,11 +27,18 @@ export function getMaxAccess(): Promise<MaxAccess> {
   return apiFetch<MaxAccess>("/api/max/account/access");
 }
 
-export function resendVerification(email: string): Promise<{ accepted: boolean }> {
-  if (USE_MOCKS) return Promise.resolve({ accepted: Boolean(email) });
+export function resendVerification(): Promise<{ accepted: boolean }> {
+  if (USE_MOCKS) return Promise.resolve({ accepted: true });
   return apiFetch<{ accepted: boolean }>("/api/auth/email/verify/request", {
     method: "POST",
-    json: { email },
+  });
+}
+
+export function verifyEmailCode(code: string): Promise<{ verified: boolean }> {
+  if (USE_MOCKS) return Promise.resolve({ verified: /^\d{6}$/.test(code) });
+  return apiFetch<{ verified: boolean }>("/api/auth/email/verify/code", {
+    method: "POST",
+    json: { code },
   });
 }
 

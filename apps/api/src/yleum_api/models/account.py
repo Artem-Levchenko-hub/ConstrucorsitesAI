@@ -48,6 +48,9 @@ class AuthToken(Base):
     )
     purpose: Mapped[str] = mapped_column(Text, nullable=False)
     token_hash: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    code_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    code_attempts: Mapped[int] = mapped_column(nullable=False, server_default="0", default=0)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
@@ -59,6 +62,7 @@ class AuthToken(Base):
             "purpose IN ('verify_email', 'reset_password')",
             name="ck_auth_tokens_purpose",
         ),
+        CheckConstraint("code_attempts BETWEEN 0 AND 5", name="code_attempts"),
         Index("ix_auth_tokens_user_purpose", "user_id", "purpose"),
     )
 
