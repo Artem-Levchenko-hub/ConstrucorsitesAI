@@ -39,6 +39,13 @@ ANALYTICS_OVERRIDES = json.loads(
     ).read_text(encoding="utf-8")
 )
 
+CONSENT_OVERRIDES = json.loads(
+    (
+        Path(__file__).resolve().parents[2]
+        / "orchestrator/tests/fixtures/max_template_consent_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+
 SOURCE_MAPPING = json.loads(
     (
         Path(__file__).resolve().parents[2]
@@ -96,6 +103,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             expected.update(DEPENDENCY_OVERRIDES)
             expected.update(PREVIEW_RENEWAL_OVERRIDES)
             expected.update(ANALYTICS_OVERRIDES)
+            expected.update(CONSENT_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -132,6 +140,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_support_overrides.json"),
             str(fixtures / "max_template_preview_renewal_overrides.json"),
             str(fixtures / "max_template_analytics_overrides.json"),
+            str(fixtures / "max_template_consent_overrides.json"),
         ],
         cwd=tmp_path,
         env=env,
@@ -158,6 +167,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_support_overrides.json"),
         str(fixtures / "max_template_preview_renewal_overrides.json"),
         str(fixtures / "max_template_analytics_overrides.json"),
+        str(fixtures / "max_template_consent_overrides.json"),
     ]
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
@@ -232,6 +242,52 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             else "max-miniapp-nextjs/src/lib/omnia/analytics.ts"
         )
         assert expected_error in rejected.stderr
+
+    # Consent overrides cannot admit arbitrary files, omit the new helper, or
+    # bypass the reviewed bytes (including client.ts's newer consent revision).
+    for mutation in ("extra", "missing", "hash"):
+        bad_consent = dict(CONSENT_OVERRIDES)
+        if mutation == "extra":
+            bad_consent["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64, "mode": "100644"}
+        elif mutation == "missing":
+            bad_consent.pop("src/lib/omnia/consent.ts")
+        else:
+            bad_consent["src/lib/omnia/client.ts"] = {"sha256": "0" * 64, "mode": "100644"}
+        invalid_consent = tmp_path / "untrusted-consent-overrides.json"
+        invalid_consent.write_text(json.dumps(bad_consent), encoding="utf-8")
+        invalid_args = args.copy()
+        invalid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+        invalid_args[9] = str(invalid_consent)
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+        )
+        assert rejected.returncode != 0
+        expected_error = (
+            "max-miniapp-nextjs/src/lib/omnia/client.ts"
+            if mutation == "hash"
+            else "unexpected MAX consent override paths"
+        )
+        assert expected_error in rejected.stderr
+
+    valid_args = args.copy()
+    valid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+    consent_helper = mounted / "max-miniapp-nextjs/src/lib/omnia/consent.ts"
+    consent_bytes = consent_helper.read_bytes()
+    for mutation in ("missing", "drift"):
+        if mutation == "missing":
+            consent_helper.unlink()
+        else:
+            consent_helper.write_bytes(consent_bytes + b"\n// unreviewed consent drift\n")
+        rejected = subprocess.run(
+            valid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+        )
+        assert rejected.returncode != 0
+        assert (
+            "incomplete standalone export"
+            if mutation == "missing"
+            else "max-miniapp-nextjs/src/lib/omnia/consent.ts"
+        ) in rejected.stderr
+        consent_helper.write_bytes(consent_bytes)
 
     # A missing newly managed helper must fail the same baked-export gate.
     helper = mounted / "max-miniapp-nextjs/src/lib/omnia/analytics.ts"

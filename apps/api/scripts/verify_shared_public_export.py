@@ -58,6 +58,14 @@ _ANALYTICS_OVERRIDE_PATHS = {
 }
 
 
+_CONSENT_OVERRIDE_PATHS = {
+    "src/app/api/omnia/consents/route.ts",
+    "src/app/api/omnia/integrations/[...path]/route.ts",
+    "src/lib/omnia/client.ts",
+    "src/lib/omnia/consent.ts",
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
@@ -67,6 +75,7 @@ def main() -> None:
     parser.add_argument("support_overrides", type=Path)
     parser.add_argument("preview_renewal_overrides", type=Path)
     parser.add_argument("analytics_overrides", type=Path)
+    parser.add_argument("consent_overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -92,6 +101,10 @@ def main() -> None:
     assert set(analytics_overrides) == _ANALYTICS_OVERRIDE_PATHS, (
         "unexpected MAX analytics override paths"
     )
+    consent_overrides = json.loads(args.consent_overrides.read_text(encoding="utf-8"))
+    assert set(consent_overrides) == _CONSENT_OVERRIDE_PATHS, (
+        "unexpected MAX consent override paths"
+    )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
             complete_tree = (
@@ -99,6 +112,7 @@ def main() -> None:
                 | dependency_overrides
                 | preview_renewal_overrides
                 | analytics_overrides
+                | consent_overrides
             )
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
@@ -112,6 +126,7 @@ def main() -> None:
                 entry = action_write_overrides.get(relative, entry)
                 entry = support_overrides.get(relative, entry)
                 entry = analytics_overrides.get(relative, entry)
+                entry = consent_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

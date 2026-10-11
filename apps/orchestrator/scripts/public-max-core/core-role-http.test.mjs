@@ -14,6 +14,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const cases = [];
 let stage = 'preflight';
 let requests = 0;
+let observedStatus = null;
 
 function safeDsn(raw) {
   const url = new URL(raw);
@@ -58,6 +59,7 @@ async function request(path, { method = 'GET', cookie, body, headers = {} } = {}
       ...(body === undefined ? {} : { 'Content-Type': 'application/json' }), ...headers },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  observedStatus = response.status;
   const reader = response.body?.getReader();
   const chunks = []; let bytes = 0;
   if (reader) {
@@ -352,15 +354,20 @@ async function main() {
     cases.push('http_alternating_concurrent_actors_and_runtime_pool_local_guc_reset');
     stage = 'consents_events';
     for (let i = 0; i < 2; i++) {
+      stage = `legacy_consent_post_${i}`;
       const consent = await request('/api/omnia/consents', { method: 'POST', cookie: cookies[i],
         body: { consentType: 'qa', granted: true, policyVersion: 'qa-1', maxUserId: actors[1-i] } });
       assert.equal(consent.status, 201); assert.equal(consent.data.consent.maxUserId, actors[i]);
+      stage = `legacy_consent_get_${i}`;
       const consents = await request('/api/omnia/consents', { cookie: cookies[i] });
       assert.equal(consents.status, 200); assert.equal(consents.data.consents.length, 1);
       assert.equal(consents.data.consents[0].maxUserId, actors[i]);
+      stage = `legacy_consent_event_${i}`;
+      const eventCountBefore = (await actorSql(actors[i], 'SELECT count(*)::int n FROM max_analytics_events')).rows[0].n;
       assert.equal((await request('/api/omnia/events', { method: 'POST', cookie: cookies[i],
         body: { eventName: 'qa_event', properties: { synthetic: true }, maxUserId: actors[1-i] } })).status, 204);
-      assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_analytics_events')).rows[0].n, 1);
+      assert.equal((await actorSql(actors[i], 'SELECT count(*)::int n FROM max_analytics_events')).rows[0].n, eventCountBefore + 1);
+      assert.equal((await actorSql(actors[i], "SELECT count(*)::int n FROM max_analytics_events WHERE event_name='qa_event'")).rows[0].n, 1);
     }
     cases.push('consents_events_owner_isolation');
     assert.ok(platformCalls >= 4); assert.equal(platformBadRequest, false);
@@ -504,6 +511,6 @@ try {
   if (process.argv.includes('--self-test')) selfTest(); else await main();
 } catch {
   // Assertion/driver/server errors may include private values. Emit only our closed stage.
-  console.log(JSON.stringify({ passed: false, stage, cases }));
+  console.log(JSON.stringify({ passed: false, stage, observed_status: observedStatus, cases }));
   process.exitCode = 1;
 }

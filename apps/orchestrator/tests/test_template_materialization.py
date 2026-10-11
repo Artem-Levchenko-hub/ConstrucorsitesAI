@@ -71,6 +71,17 @@ assert set(ANALYTICS_OVERRIDES) == {
     "src/app/api/omnia/events/route.ts",
     "src/lib/omnia/analytics.ts",
 }
+CONSENT_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_consent_overrides.json").read_text(
+        encoding="utf-8"
+    )
+)
+assert set(CONSENT_OVERRIDES) == {
+    "src/app/api/omnia/consents/route.ts",
+    "src/app/api/omnia/integrations/[...path]/route.ts",
+    "src/lib/omnia/client.ts",
+    "src/lib/omnia/consent.ts",
+}
 # The frozen Git tree remains the baseline; deliberate MAX integration changes
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
@@ -95,6 +106,7 @@ def assert_golden(name: str, root: Path) -> None:
         expected.update(DEPENDENCY_OVERRIDES)
         expected.update(PREVIEW_RENEWAL_OVERRIDES)
         expected.update(ANALYTICS_OVERRIDES)
+        expected.update(CONSENT_OVERRIDES)
     actual = {
         p.relative_to(root).as_posix(): p
         for p in root.rglob("*")
@@ -107,6 +119,7 @@ def assert_golden(name: str, root: Path) -> None:
             entry = ACTION_WRITE_OVERRIDES.get(relative, entry)
             entry = SUPPORT_OVERRIDES.get(relative, entry)
             entry = ANALYTICS_OVERRIDES.get(relative, entry)
+            entry = CONSENT_OVERRIDES.get(relative, entry)
         data = actual[relative].read_bytes()
         if os.name == "nt":
             data = data.replace(b"\r\n", b"\n")  # Git autocrlf; Linux gate checks raw bytes.
