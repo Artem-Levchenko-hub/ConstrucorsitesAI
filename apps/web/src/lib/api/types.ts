@@ -892,8 +892,9 @@ export type AgentStep = {
   repeatedCount?: number;
   /** What the step did inside — content/output preview, shown on drill-in. */
   detail?: string;
-  /** false = the step failed (drill-in shows the error). */
-  ok?: boolean;
+  /** true/false = actual completion; null/absent = no confirmed execution. */
+  ok?: boolean | null;
+  skipped?: boolean;
 };
 
 export type PassProgress = {
@@ -1073,7 +1074,8 @@ export type WsEvent =
         path: string;
         tool?: string;
         detail?: string;
-        ok?: boolean;
+        ok?: boolean | null;
+        skipped?: boolean;
       };
     };
 

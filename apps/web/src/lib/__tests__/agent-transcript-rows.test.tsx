@@ -83,6 +83,14 @@ describe("лента работы агента", () => {
 });
 
 describe("словарь действий", () => {
+  it("не показывает пропущенный done как завершённую работу", () => {
+    const skipped = stepCopy({
+      step: 3, kind: "step", action: "done", path: "", ok: null, skipped: true,
+    });
+    expect(skipped.tone).toBe("wait");
+    expect(skipped.title).toContain("пропущен");
+  });
+
   it("переводит пути в человеческие имена мест", () => {
     expect(humanPath("src/app/page.tsx")).toBe("главный экран");
     expect(humanPath("src/app/orders/page.tsx")).toBe("экран «orders»");

@@ -214,7 +214,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             path: typeof data.path === "string" ? data.path : "",
             tool: typeof data.tool === "string" ? data.tool : undefined,
             detail: typeof data.detail === "string" ? data.detail : undefined,
-            ok: typeof data.ok === "boolean" ? data.ok : undefined,
+            ok: typeof data.ok === "boolean" ? data.ok : null,
+            skipped: data.skipped === true,
           };
         } else if (envelope.type.startsWith("tool.") && mid) {
           const operationId =
@@ -426,7 +427,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
               path: event.data.path ?? "",
               tool: event.data.tool ?? undefined,
               detail: event.data.detail ?? undefined,
-              ok: event.data.ok ?? undefined,
+              ok: event.data.ok ?? null,
+              skipped: event.data.skipped === true,
             };
             const last = list[list.length - 1];
             if (

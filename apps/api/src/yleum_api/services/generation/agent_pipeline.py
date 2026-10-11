@@ -218,6 +218,7 @@ async def run_agent_generation(
 
     runtime.migration_baseline = {**baseline.files, **_max_seed_files}
     _operations = AgentOperations(
+        snapshot_files=getattr(runtime.handle, "snapshot_files", None),
         execute=bindings.execute,
         emit=_agent_emit,
         probe_runtime=bindings.probe_runtime,
