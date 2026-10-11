@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 from yleum_api.core.config import get_settings
@@ -41,7 +42,7 @@ async def send_transactional_email(*, recipient: str, subject: str, text: str) -
     def _send() -> None:
         with smtplib.SMTP(smtp_host, settings.smtp_port, timeout=15) as smtp:
             if settings.smtp_starttls:
-                smtp.starttls()
+                smtp.starttls(context=ssl.create_default_context())
             if settings.smtp_user and settings.smtp_password:
                 smtp.login(
                     settings.smtp_user,
