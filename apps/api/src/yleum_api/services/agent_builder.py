@@ -53,6 +53,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from yleum_api.services import llm_client
+from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -200,7 +201,7 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
     """Render an executor result as the next user turn the model reads."""
     ok = obs.get("ok", True)
     head = f"[observation: {action.name}{(' ' + action.path) if action.path else ''} "
-    head += "OK]" if ok else "FAILED]"
+    head += "SKIPPED]" if obs.get("skipped") is True else "OK]" if ok else "FAILED]"
     body = obs.get("detail") or obs.get("content") or obs.get("error") or ""
     return f"{head}\n{_truncate(body, _MAX_OBS_CHARS)}"
 
@@ -241,6 +242,7 @@ async def run_agent_build(
     ship_green_on_abort: bool = True,
     edit_mode: bool = False,
     bare_mode: bool = False,
+    snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -264,11 +266,13 @@ async def run_agent_build(
     repeat_count = 0
     no_write_streak = 0  # consecutive actions that wrote nothing (cycle breaker)
     infra_dead_streak = 0  # consecutive tool ops that died on infra (container gone)
-    sig_seen: dict[str, int] = {}  # global repeat count per action (cycle breaker)
+    sig_seen: dict[str, int] = {}  # executed non-consecutive action signatures
+    blocked_cycles: dict[str, int] = {}  # denied repeat attempts keep the existing bound
     read_sigs: dict[str, set[str]] = {}  # canonical file -> its read signatures
     content_receipts_seen = False  # skip generic before-read after producer proves support
     last_build_ok: bool | None = None  # result of the most recent `build` action
     fast_check_fresh = False  # candidate check, never a runtime/release proof
+    pending_source_build = False  # one build owed after successful actual source progress
     red_build_streak = 0  # consecutive failed builds → escalate to the strong model
     # Build-pressure / rotation guard: counts writes since the last `build` so the
     # loop can force a typecheck instead of churning files forever (see guard below).
@@ -276,6 +280,7 @@ async def run_agent_build(
     paths_since_build: set[str] = set()  # distinct paths written since the last build
     rewrites_since_build = 0  # writes to a path already written since the last build
     build_pressure_nudged = False  # the gentle "run build" nudge fires once per window
+    blocked_rewrites = 0  # refused rewrites count toward the existing churn bound
     # `require_green_before_done` bookkeeping: a `done` is only honoured once the
     # last build was clean AND the running app was re-checked after the last write
     # (a clean typecheck is exactly what a model hallucinates completion around —
@@ -285,6 +290,70 @@ async def run_agent_build(
     done_rejections = 0
     active_model = model
     escalated = False
+
+    async def _step_result(
+        action: Action,
+        step: int,
+        obs: dict[str, Any] | None = None,
+        *,
+        skipped: str | None = None,
+    ) -> None:
+        if emit:
+            result = obs or {}
+            await emit(
+                "agent.step",
+                {
+                    "step": step,
+                    "action": action.name,
+                    "path": action.path,
+                    "ok": result.get("ok") if type(result.get("ok")) is bool else None,
+                    "detail": skipped
+                    or bounded_redacted_diagnostic(
+                        str(result.get("detail") or result.get("error") or ""),
+                        max_bytes=_MAX_OBS_CHARS,
+                    ),
+                    **({"skipped": True} if skipped is not None else {}),
+                },
+            )
+
+    async def _skip_action(action: Action, step: int, reason: str) -> None:
+        nonlocal no_write_streak
+        no_write_streak += 1
+        await _step_result(action, step, skipped=reason)
+        convo.append(
+            {
+                "role": "user",
+                "content": _format_observation(
+                    action,
+                    {"ok": None, "skipped": True, "detail": reason},
+                ),
+            }
+        )
+
+    async def _nudge_exploration(step: int) -> None:
+        green = (
+            fast_check_fresh
+            if coordinator_handoff
+            else (last_build_ok is True and last_runtime_ok is True and not wrote_since_check)
+        )
+        await _escalate(step, "explore")
+        if emit:
+            await emit("agent.stalled", {"step": step})
+        convo.append(
+            {
+                "role": "user",
+                "content": (
+                    "FAST_CHECK is current and clean. Call done to HAND OFF to the "
+                    "server coordinator; do not rewrite source for deferred runtime proof."
+                    if green and coordinator_handoff
+                    else _DONE_WHEN_GREEN_NUDGE
+                    if green
+                    else _EDIT_EXPLORE_STALL_NUDGE
+                    if edit_mode
+                    else _EXPLORE_STALL_NUDGE
+                ),
+            }
+        )
 
     async def _escalate(step: int, reason: str) -> None:
         """First stall-nudge of any kind → upgrade to the stronger model, once.
@@ -354,7 +423,8 @@ async def run_agent_build(
             _note += (
                 "\nMAX FINALIZATION HANDOFF: build runs FAST_CHECK only. After a fresh "
                 "clean build and completed source changes, call done to HAND OFF the "
-                "candidate. The server coordinator MUST still run full build, runtime "
+                "candidate; done hands off a candidate, not an accepted product. "
+                "The server coordinator MUST still run full build, runtime "
                 "and release checks before accepting it. Do not repeat deferred runtime "
                 "checks or rewrite clean source just to obtain runtime proof here."
             )
@@ -464,11 +534,6 @@ async def run_agent_build(
             continue
         stalls = 0
 
-        if emit:
-            await emit("agent.step", {
-                "step": step, "action": action.name, "path": action.path,
-            })
-
         if action.name == "done":
             # Green-gate: refuse a premature `done`. The model loves to declare
             # victory on a clean typecheck without ever opening the route, so a
@@ -496,17 +561,40 @@ async def run_agent_build(
                     )
                 if gap is not None:
                     done_rejections += 1
+                    await _step_result(action, step, skipped=gap)
                     if emit:
                         await emit("agent.stalled", {"step": step})
                     convo.append({"role": "user", "content": (
                         "NOT DONE YET — " + gap + "."
                     )})
                     continue
+            await _step_result(action, step, {"ok": True, "detail": action.args.get("summary", "")})
             return AgentResult(
                 done=True, summary=str(action.args.get("summary", "")),
                 files=written, steps=step + 1, transcript=convo,
                 stop_reason="done",
                 needs_finalization=coordinator_handoff,
+            )
+
+        # Failed/noop writes cannot evade the bounded no-progress limit.
+        # The previous observation has already reached this model turn.
+        if no_write_streak >= _NO_WRITE_ABORT_AT and not (
+            action.name == "build" and pending_source_build
+        ):
+            await _step_result(
+                action, step, skipped="No source progress; exploration budget exhausted"
+            )
+            return _ship_green_or(
+                AgentResult(
+                    done=False,
+                    summary="stuck exploring without successful source changes",
+                    files=written,
+                    steps=step + 1,
+                    transcript=convo,
+                    stop_reason="exploring",
+                ),
+                step,
+                "explore",
             )
 
         # Circuit breaker: the model sometimes gets stuck re-issuing the SAME
@@ -518,8 +606,6 @@ async def run_agent_build(
             f"{action.name}|{read_path or action.path}|"
             f"{json.dumps(sig_args, sort_keys=True, ensure_ascii=False)}"
         )
-        if read_path:
-            read_sigs.setdefault(read_path, set()).add(sig)
         # GLOBAL repeat guard (non-consecutive cycle). A multi-step loop that
         # re-issues the SAME action — INCLUDING re-WRITING a file with identical
         # content (observed live: the same 5 entities, then the same 2 dashboard
@@ -534,8 +620,9 @@ async def run_agent_build(
         # re-observing the app after a fix is progress, not a cycle — caging them
         # here is what falsely aborted long build→fix→build loops as "looping".
         if sig != last_sig and action.name not in _VERIFY_ACTIONS:
-            sig_seen[sig] = sig_seen.get(sig, 0) + 1
-            if sig_seen[sig] >= _REPEAT_ABORT_AT:
+            cycle_count = sig_seen.get(sig, 0) + blocked_cycles.get(sig, 0) + 1
+            if cycle_count >= _REPEAT_ABORT_AT:
+                await _step_result(action, step, skipped="Repeated unchanged action; cycle limit")
                 return _ship_green_or(
                     AgentResult(
                         done=False,
@@ -545,10 +632,12 @@ async def run_agent_build(
                     ),
                     step, "cycle",
                 )
-            if sig_seen[sig] >= _REPEAT_NUDGE_AT:
+            if cycle_count >= _REPEAT_NUDGE_AT:
+                blocked_cycles[sig] = blocked_cycles.get(sig, 0) + 1
+                await _skip_action(action, step, "Repeated unchanged action; cycle guard")
                 await _escalate(step, "cycle")
                 print(
-                    f"[AGENT] step={step} CYCLE x{sig_seen[sig]} {action.name} {action.path}",
+                    f"[AGENT] step={step} CYCLE x{cycle_count} {action.name} {action.path}",
                     flush=True,
                 )
                 if emit:
@@ -557,16 +646,9 @@ async def run_agent_build(
                     _EDIT_REPEAT_CYCLE_NUDGE if edit_mode else _REPEAT_CYCLE_NUDGE
                 )})
                 continue
-        if sig == last_sig:
-            repeat_count += 1
-        elif bare_mode and action.name == "bash":
-            # A bare-project shell can scaffold/write the whole source tree.
-            # Treat it as productive before execution so the exploration guard
-            # cannot skip the command that would create the first files.
-            no_write_streak = 0
-        else:
-            repeat_count, last_sig = 0, sig
-        if repeat_count >= 5:
+        next_repeat_count = repeat_count + 1 if sig == last_sig else 0
+        if next_repeat_count >= 5:
+            await _step_result(action, step, skipped="Repeated identical action; repeat limit")
             return _ship_green_or(
                 AgentResult(
                     done=False,
@@ -576,7 +658,9 @@ async def run_agent_build(
                 ),
                 step, "repeat",
             )
-        if repeat_count >= 2:
+        if next_repeat_count >= 2:
+            repeat_count = next_repeat_count
+            await _skip_action(action, step, "Repeated identical action; repeat guard")
             await _escalate(step, "repeat")
             print(
                 f"[AGENT] step={step} REPEAT x{repeat_count} {action.name} {action.path}",
@@ -607,7 +691,6 @@ async def run_agent_build(
         # not building. Nudge HARD to write; if it still won't, abort early (with a
         # distinct stop_reason) rather than burning the whole budget reading.
         if action.name in ("write_file", "edit_file"):
-            no_write_streak = 0
             # Build-pressure / rotation guard. The model sometimes WRITES forever
             # without ever running `build` — rewriting the same files in rotation
             # with slight content variations (observed live: a messenger churned the
@@ -620,12 +703,8 @@ async def run_agent_build(
             #   * a REWRITE of a path already written SINCE THE LAST BUILD — never
             #     legitimate without a build in between → force a build, then abort;
             #   * a high count of writes with NO build at all → one gentle reminder.
-            writes_since_build += 1
-            if action.path in paths_since_build:
-                rewrites_since_build += 1
-            else:
-                paths_since_build.add(action.path)
-            if rewrites_since_build >= _REWRITE_LOOP_ABORT_AT:
+            if rewrites_since_build + blocked_rewrites >= _REWRITE_LOOP_ABORT_AT:
+                await _step_result(action, step, skipped="Rewrite churn without build; limit")
                 return _ship_green_or(
                     AgentResult(
                         done=False,
@@ -636,6 +715,8 @@ async def run_agent_build(
                     step, "rewrite-loop",
                 )
             if rewrites_since_build >= _REWRITE_BEFORE_BUILD_NUDGE:
+                blocked_rewrites += 1
+                await _skip_action(action, step, "Rewrite paused until build")
                 await _escalate(step, "rewrite_loop")
                 print(
                     f"[AGENT] step={step} REWRITE-LOOP x{rewrites_since_build} "
@@ -651,6 +732,7 @@ async def run_agent_build(
                 and writes_since_build >= _WRITES_BEFORE_BUILD_NUDGE
             ):
                 build_pressure_nudged = True  # one gentle reminder per no-build window
+                await _skip_action(action, step, "Writes paused until build")
                 await _escalate(step, "no_build")
                 print(
                     f"[AGENT] step={step} BUILD-PRESSURE x{writes_since_build} "
@@ -659,50 +741,14 @@ async def run_agent_build(
                 )
                 convo.append({"role": "user", "content": _BUILD_PRESSURE_NUDGE})
                 continue  # build once before piling on more files
-        else:
-            no_write_streak += 1
-            if no_write_streak >= _NO_WRITE_ABORT_AT:
-                return _ship_green_or(
-                    AgentResult(
-                        done=False,
-                        summary="stuck exploring (reading) without writing any file",
-                        files=written, steps=step + 1, transcript=convo,
-                        stop_reason="exploring",
-                    ),
-                    step, "explore",
-                )
-            if no_write_streak >= (
-                _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
-            ):
-                # If the app is already GREEN (build clean + route verified + no
-                # unverified writes) there is nothing left to write — the model is
-                # thrashing on bash/build AFTER success. Nudge
-                # it to FINISH (call done), not to write. Otherwise nudge to write.
-                _green = (
-                    fast_check_fresh if coordinator_handoff else (
-                        last_build_ok is True
-                        and last_runtime_ok is True
-                        and not wrote_since_check
-                    )
-                )
-                await _escalate(step, "explore")
-                print(
-                    f"[AGENT] step={step} EXPLORE-STALL x{no_write_streak} "
-                    f"({action.name}) → nudge {'DONE' if _green else 'WRITE'}",
-                    flush=True,
-                )
-                if emit:
-                    await emit("agent.stalled", {"step": step})
-                convo.append({"role": "user", "content": (
-                    "FAST_CHECK is current and clean. Call done to HAND OFF to the "
-                    "server coordinator; do not rewrite source for deferred runtime proof."
-                    if _green and coordinator_handoff else _DONE_WHEN_GREEN_NUDGE
-                    if _green
-                    else (
-                        _EDIT_EXPLORE_STALL_NUDGE if edit_mode else _EXPLORE_STALL_NUDGE
-                    )
-                )})
-                continue  # don't execute another read — force write/done next
+        elif action.name not in _VERIFY_ACTIONS and no_write_streak >= (
+            _EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT
+        ):
+            # The threshold-producing action ran on the previous turn. Its real
+            # observation is already visible; only further discovery is paused.
+            await _skip_action(action, step, "No source progress; discovery paused")
+            await _nudge_exploration(step)
+            continue
 
         # Successful writes/edits can be no-ops. Cell supplies full-content hashes;
         # generic executors get one bounded fresh BEFORE read for a tracked file.
@@ -713,12 +759,22 @@ async def run_agent_build(
             if action.name in {"write_file", "edit_file"} else None
         )
         before_content = None
-        if write_path in read_sigs and not content_receipts_seen:
+        if snapshot_files is None and write_path in read_sigs and not content_receipts_seen:
             before = await execute(Action(name="read_file", args={"path": write_path}))
             content = before.get("content")
             if before.get("ok") is True and isinstance(content, str) and len(content) <= _MAX_READ_CHARS:
                 before_content = content
+        # Discovery/rewrite skips above did not execute: they must not poison
+        # a later first read or change the identity of the last executed action.
+        if read_path:
+            read_sigs.setdefault(read_path, set()).add(sig)
+        if sig != last_sig and action.name not in _VERIFY_ACTIONS:
+            sig_seen[sig] = sig_seen.get(sig, 0) + 1
+        repeat_count, last_sig = next_repeat_count, sig
+        source_before = dict(await snapshot_files()) if snapshot_files is not None else None
         obs = await execute(action)
+        source_after = dict(await snapshot_files()) if snapshot_files is not None else None
+        await _step_result(action, step, obs)
         after_content = obs.get("content")
         receipt = obs.get("content_change")
         receipt_valid = (
@@ -748,13 +804,42 @@ async def run_agent_build(
                 and isinstance(after_content, str)
                 and after_content != before_content
             )
-        if (
-            write_path is not None
-            and write_path in read_sigs
-            and content_changed
+        if source_before is not None and source_after is not None:
+            changed_source_paths = {
+                path
+                for path in source_before.keys() | source_after.keys()
+                if _safe_file_path(path) == path
+                and source_before.get(path) != source_after.get(path)
+            }
+        else:
+            changed_source_paths = (
+                {write_path} if write_path is not None and content_changed else set()
+            )
+        if changed_source_paths:
+            pending_source_build = obs.get("ok") is True
+        if action.name == "build":
+            # Consume the allowance even on red builds; no extra model/retry budget.
+            pending_source_build = False
+        if changed_source_paths and obs.get("ok") is True:
+            no_write_streak = 0
+            if action.name != "build":
+                for path in changed_source_paths:
+                    writes_since_build += 1
+                    if path in paths_since_build:
+                        rewrites_since_build += 1
+                    paths_since_build.add(path)
+        else:
+            no_write_streak += 1
+        for path in changed_source_paths:
+            for read_sig in read_sigs.get(path, ()):
+                sig_seen.pop(read_sig, None)
+                blocked_cycles.pop(read_sig, None)
+        if source_before is None and (
+            write_path is not None and write_path in read_sigs and content_changed
         ):
             for read_sig in read_sigs[write_path]:
                 sig_seen.pop(read_sig, None)
+                blocked_cycles.pop(read_sig, None)
         # Circuit breaker: the executor tags orchestrator/container-unreachable
         # failures as infra_dead (2026-07-08: hibernate stopped a container
         # mid-build and the loop kept feeding 500s to the model for 6 minutes).
@@ -783,6 +868,7 @@ async def run_agent_build(
             # targeted fix), not blind churn.
             writes_since_build = 0
             rewrites_since_build = 0
+            blocked_rewrites = 0
             paths_since_build.clear()
             build_pressure_nudged = False
             # A persistent red typecheck the cheap model can't clear is exactly
@@ -821,10 +907,7 @@ async def run_agent_build(
                 written[path] = raw_content
                 changed_paths.append(path)
             if changed_paths:
-                no_write_streak = 0
                 wrote_since_check = True
-                writes_since_build += len(changed_paths)
-                paths_since_build.update(changed_paths)
         # Only local edit rejection before persistence can prove no mutation.
         # Transport errors and shell operations may have changed the candidate;
         # a later rejected edit cannot restore a check they invalidated.
@@ -836,15 +919,22 @@ async def run_agent_build(
                 "files", "mutation", "invalidated_dimensions", "content_change", "infra_dead",
             ))
         )
+        if changed_source_paths:
+            wrote_since_check = True
         if action.name != "build" and (
-            (action.name in {"write_file", "edit_file", "delete_file"}
-             and not rejected_edit_without_mutation)
+            bool(changed_source_paths)
+            or (
+                action.name in {"write_file", "edit_file", "delete_file"}
+                and not rejected_edit_without_mutation
+            )
             or obs.get("files")
             or obs.get("environment_mutated") is True
             or (action.name == "bash" and obs.get("environment_mutated") is not False)
         ):
             fast_check_fresh = False
         convo.append({"role": "user", "content": _format_observation(action, obs)})
+        if no_write_streak == (_EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT):
+            await _nudge_exploration(step)
 
     return _ship_green_or(
         AgentResult(
@@ -1040,10 +1130,13 @@ the EXACT file + error — make a TARGETED fix to THAT file/line (common causes:
 column/prop passed to <CrudResource> — pass ONLY `entity` + optional title; a wrong \
 import path; or an entity field type the engine rejects). NEVER re-issue write_file with \
 the SAME content — an identical re-write fixes NOTHING; read the error and change exactly \
-what it points at. Repeat build→fix until clean. THEN verify it actually RUNS: \
+what it points at. Repeat build→fix until clean. Outside MAX FINALIZATION HANDOFF, \
+verify it actually RUNS: \
 `runtime_check {"path":"/dashboard"}` — a typecheck-clean app can still 5xx on render. If it \
 fails, `read_logs` to inspect the real runtime error, fix the named file, re-check. Call \
-`done` ONLY after the build is clean and the route renders.
+`done` only after the build is clean and the route renders. In MAX FINALIZATION \
+HANDOFF, call done after fresh clean FAST_CHECK; the coordinator must still verify \
+full build, runtime and release before acceptance.
 - Never repeat an identical read OR an identical write. Never ask the user questions — \
 decide and act. One action per reply."""
 
@@ -1066,7 +1159,7 @@ ACTIONS:
 - bash       {"cmd": "..."}                         — run a shell command if needed
 - read_logs  {}                                     — live dev-server logs (runtime errors)
 - runtime_check {"path": "/"}                        — open the changed route, confirm it still renders
-- done       {"summary": "what changed"}            — after a clean build and runtime_check of the touched route
+- done       {"summary": "what changed"}            — in MAX FINALIZATION HANDOFF after fresh clean FAST_CHECK; otherwise after build and runtime_check
 
 RULES:
 - This is a SURGICAL EDIT. Change the minimum. Do NOT regenerate entities/pages \
@@ -1128,17 +1221,18 @@ ACTIONS:
 - bash       {"cmd": "pnpm test"}              — run a shell command (lint / test / install)
 - read_logs  {}                                — live dev-server stdout/stderr (RUNTIME errors build can't see)
 - runtime_check {"path": "/"}                  — open a real route, get the REAL HTTP status + crash file
-- probe      {"method":"POST","path":"/api/...","body":{...}}  — make a REAL request AS A LOGGED-IN test user; returns the EXACT status+body. The only way to prove an interactive feature works end-to-end (catches a 4xx on a user POST that build/runtime_check miss)
-- verify_isolation {"create":{"method":"POST","path":"/api/<resource>","body":{...}},"read":{"path":"/api/<resource>/{id}"}}  — PROVE no data leak: logs in TWO users, user A creates the resource, then asserts user B is DENIED reading it AND it is absent from B's list. Run this for EVERY owned resource — a green build never proves isolation
-- done       {"summary": "what you built"}     — ONLY after a clean build, the app renders, and required functional probes pass
+- probe      {"method":"POST","path":"/api/...","body":{...}}  — outside MAX FINALIZATION HANDOFF, make a REAL request AS A LOGGED-IN test user; returns the EXACT status+body. The only way to prove an interactive feature works end-to-end (catches a 4xx on a user POST that build/runtime_check miss)
+- verify_isolation {"create":{"method":"POST","path":"/api/<resource>","body":{...}},"read":{"path":"/api/<resource>/{id}"}}  — outside MAX FINALIZATION HANDOFF, PROVE no data leak: logs in TWO users, user A creates the resource, then asserts user B is DENIED reading it AND it is absent from B's list. Run this for EVERY owned resource — a green build never proves isolation
+- done       {"summary": "what you built"}     — in MAX FINALIZATION HANDOFF after fresh clean FAST_CHECK; otherwise after build, runtime and functional probes
 
 WORK STYLE: explore MINIMALLY, spend most steps WRITING, never repeat an identical \
 read or write, never ask the user questions — decide and act. When an EXTERNAL library's \
 API bites you (a build error about a wrong signature, a renamed export, a removed option), \
 call `docs` for that library BEFORE guessing — current docs beat a stale memory. When you author tests, \
-run them with bash. After the build is clean, `runtime_check` the main route(s) — a \
+run them with bash. Outside MAX FINALIZATION HANDOFF, after the build is clean, \
+`runtime_check` the main route(s) — a \
 typecheck-clean app can still crash on render; if it 5xx, `read_logs`, fix, re-check. \
-For an INTERACTIVE feature (send a message, save, submit a form, log in), a clean build \
+Outside MAX FINALIZATION HANDOFF, for an INTERACTIVE feature (send a message, save, submit a form, log in), a clean build \
 and a 200 page do NOT prove it works — the real failure is a 4xx on the user's POST that \
 a screenshot can never show. After editing one, `read_logs` and look for a 4xx/5xx with \
 its reason — the server logs the EXACT cause (e.g. a rejected/mismatched field); fix until \
@@ -1147,9 +1241,14 @@ perform the real action as a logged-in user (e.g. probe POST to create a resourc
 probe POST to act on it) and require a 2xx with the expected body before `done`. \
 For any OWNED data (records a user creates and others must not see), scope EVERY query \
 by the authenticated user (the session user id) — never return rows the current user \
-does not own, and protect every data route with auth. Then PROVE it with `verify_isolation` \
+does not own, and protect every data route with auth. Outside MAX FINALIZATION HANDOFF, prove it with `verify_isolation` \
 on that resource: a green build and a working create do NOT prove that another user can't \
 read it. Fix until isolation passes before `done`. \
+In MAX FINALIZATION HANDOFF, done hands off a candidate, not an accepted product: \
+the server coordinator owns mandatory full build, signed runtime and release checks. \
+Keep authenticated owner scoping and applicable isolated local tests; A/B owner isolation remains unverified \
+unless an actual two-user check provides evidence. Report that limit honestly. \
+Do not call deferred runtime/probe tools from this source-editing loop. \
 One action per reply."""
 
 

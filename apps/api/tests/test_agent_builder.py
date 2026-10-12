@@ -10,6 +10,7 @@ Run:  cd apps/api && uv run pytest tests/test_agent_builder.py -q
 from __future__ import annotations
 
 import asyncio
+import hashlib
 
 import pytest
 
@@ -110,12 +111,31 @@ def _scripted(replies):
 
 
 def _ok_executor(record):
+    state = {}
+
     async def _execute(action: ab.Action):
         record.append((action.name, action.path))
-        if action.name == "build":
-            return {"ok": True, "detail": "typecheck clean"}
         if action.name in ("write_file", "edit_file"):
-            return {"ok": True, "content": action.args.get("content", "patched")}
+            before = state.get(action.path, action.args.get("search"))
+            content = (
+                action.args.get("content", "x")
+                if action.name == "write_file"
+                else (before or "").replace(
+                    action.args.get("search", ""), action.args.get("replace", ""), 1
+                )
+            )
+            state[action.path] = content
+            return {
+                "ok": True,
+                "content": content,
+                "content_change": {
+                    "path": action.path,
+                    "before_sha256": hashlib.sha256(before.encode()).hexdigest()
+                    if before is not None
+                    else None,
+                    "after_sha256": hashlib.sha256(content.encode()).hexdigest(),
+                },
+            }
         return {"ok": True, "detail": "ok"}
 
     return _execute

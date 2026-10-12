@@ -112,8 +112,11 @@ class GenerationProgress:
             # `detail` = what the step did inside (content/output) so the
             # UI can drill into a step; `ok` colours success/failure.
             "detail": str(data.get("detail", "") or ""),
-            "ok": bool(data.get("ok", True)),
+            "ok": data.get("ok") if type(data.get("ok")) is bool else None,
         }
+        if data.get("skipped") is True:
+            step_row["ok"] = None
+            step_row["skipped"] = True
         if kind == "provider_error":
             step_row["ok"] = False
             step_row["detail"] = "Не получен подтверждённый результат запроса к модели."

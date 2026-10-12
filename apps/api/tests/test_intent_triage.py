@@ -147,7 +147,9 @@ def test_infinitive_rebuild_preserves_existing_edit_routing(prompt: str) -> None
 
 
 def test_exact_f11_consent_patch_prompt_is_a_followup_edit() -> None:
+    # Git may check this text fixture out with CRLF on Windows; hash canonical LF.
     raw = (Path(__file__).parent / "fixtures/intent_triage/f11-consent-patch.txt").read_bytes()
+    raw = raw.replace(b"\r\n", b"\n")
     assert hashlib.sha256(raw).hexdigest() == (
         "283b455aee4c86a3f356cbf34ad34f06698baf482c16a9ae9d75bab3d59995b3"
     )
@@ -176,6 +178,77 @@ def test_structural_fullstack_addition_orchestrates() -> None:
     assert decide_intent("добавь бэкенд на FastAPI", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("сделай многостраничным", is_first_prompt=False) == ORCHESTRATE
     assert decide_intent("прикрути базу данных", is_first_prompt=False) == ORCHESTRATE
+
+
+_COFFEE_REPAIR_PROMPT = (
+    'Исправь реальный пользовательский сценарий существующей кофейни, не создавай приложение '
+    'заново. Сначала прочитай фактические custom route handlers и нормализаторы, затем '
+    'согласуй UI/API через общие типизированные DTO или явно валидируемый mapper. '
+    'Обнаруженные несоответствия именно этой схемы: UI корзины отправляет quantity, сервер '
+    'ожидает qty; оформление собственной заявки не передаёт требуемый маршрутом '
+    'idempotencyKey; история читает total вместо totalRub и должна следовать реальному '
+    'контракту items. Используй точные request/response маршрутов; корзина после записи '
+    'должна отображать авторитетный серверный ответ и сохраняться после чтения и reload. Один'
+    ' стабильный ключ на пользовательское намерение, тот же ключ при явном повторе с '
+    'неизвестным исходом, новый ключ для нового намерения; повтор не создаёт дубликат. '
+    'Никаких автоматических повторов или фиктивного успеха: ошибка записи видима, '
+    'оптимистическое состояние откатывается или сверяется с сервером. Исправь нижнюю '
+    'фиксированную навигацию: она не должна перекрываться обязательным платформенным footer. '
+    'Сохрани footer и его ссылки; выдели место, правильный порядок слоёв и safe-area отступы '
+    'для доступных касаний. Сохрани эспрессо 150, капучино 240 и латте 280 рублей, кремово-'
+    'коричневый стиль, существующие записи, ID и авторизацию. Не меняй управляемые '
+    'платформенные файлы, не подключай оплату и внешние интеграции. Выполни full build и '
+    'тесты реального UI payload через маршрут, response mapping, write/read/reload и '
+    'совпадения истории. Не очищай БД и не заменяй существующие данные; для тестов допустимы '
+    'только изолированные одноразовые записи в собственной локальной тестовой среде. Честно '
+    'укажи непроверенное в UI.'
+)
+
+
+def test_coffee_repair_prompt_edits_existing_product() -> None:
+    assert decide_intent(_COFFEE_REPAIR_PROMPT, is_first_prompt=False) == CHEAP
+    assert decide_intent(_COFFEE_REPAIR_PROMPT, is_first_prompt=True) == ORCHESTRATE
+    assert decide_intent(
+        _COFFEE_REPAIR_PROMPT, is_first_prompt=True, selected_count=1,
+    ) == CHEAP
+
+
+@pytest.mark.parametrize("prompt", [
+    "Исправь корзину, не создавай приложение заново.",
+    "Не создавай сайт с нуля, исправь кнопку.",
+    "Не пересоздай приложение заново, исправь кнопку.",
+    "Не перестрой приложение целиком, исправь кнопку.",
+    "Do not rebuild the app from scratch; fix the cart.",
+    "Don't redesign the site; fix the cart.",
+    "Do not create the app from scratch; fix the cart.",
+    "Отображай авторитетный серверный ответ после сохранения.",
+    'Поменяй подпись «серверный ответ» на «Сохранено».',
+    'Show the authoritative server response, including "server response" errors.',
+])
+def test_negated_rebuild_and_server_response_are_edits(prompt: str) -> None:
+    assert decide_intent(prompt, is_first_prompt=False) == CHEAP
+
+
+@pytest.mark.parametrize("prompt", [
+    "Не создавай приложение заново, но добавь backend.",
+    "Не создавай приложение заново и добавь серверную часть.",
+    "Не создавай приложение заново. Добавь базу данных.",
+    "Do not rebuild the app, but add a backend.",
+    "Don't redesign the page and add a backend.",
+    "Не создавай сайт заново, но пересоздай приложение с нуля.",
+    "Do not rebuild the page; rebuild the app from scratch.",
+    "Добавь серверную часть.",
+    "Добавь серверную логику.",
+    "Измени серверную архитектуру.",
+    "Добавь серверную обработку заказов.",
+    "Добавь серверную инфраструктуру.",
+    "Отображай серверный ответ, затем добавь серверную обработку заказов.",
+    "Rebuild the app from scratch.",
+    "Создай приложение заново.",
+])
+def test_affirmative_rebuild_or_architecture_still_builds(prompt: str) -> None:
+    assert decide_intent(prompt, is_first_prompt=False) == ORCHESTRATE
+    assert decide_intent(prompt, is_first_prompt=False, selected_count=1) == CHEAP
 
 
 # ── BLIND SPOT H1 (dogfood-eval run #1, 2026-06-16) ──────────────────────────

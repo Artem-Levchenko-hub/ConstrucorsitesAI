@@ -121,6 +121,21 @@ _REBUILD_KEYWORDS: frozenset[str] = frozenset(
 
 _REBUILD_VERB = re.compile(r"\bперестрой(?:те)?\b")
 
+# Strip only a bounded negative rebuild command, never its surrounding clause.
+# In particular, "не создавай приложение заново и добавь backend" still builds.
+# This is deliberately not a general natural-language negation detector.
+_NEGATED_REBUILD = re.compile(
+    r"\bне\s+(?:создавай(?:те)?|создать|делай(?:те)?|делать|"
+    r"пересоздай(?:те)?|пересоздавай(?:те)?|пересобери(?:те)?|"
+    r"перестрой(?:те)?|переделай(?:те)?)\b"
+    r"(?:\s+(?:приложение|сайт|страницу|лендинг|его|это))?"
+    r"(?:\s+(?:заново|с\s+нуля|целиком|полностью))?"
+    r"|\b(?:do\s+not|don['’]t|never)\s+(?:rebuild|redesign|recreate|create)\b"
+    r"(?:\s+(?:(?:the|this|existing|whole|entire)\s+){0,2}"
+    r"(?:app|application|site|website|page|it))?"
+    r"(?:\s+from\s+scratch)?"
+)
+
 # Genuinely structural / full-stack work — a follow-up that needs the whole
 # orchestrated build because it changes the project's ARCHITECTURE, not one
 # block. Kept DELIBERATELY MINIMAL: the owner's complaint is over-orchestration,
@@ -146,6 +161,13 @@ _STRUCTURAL_KEYWORDS: frozenset[str] = frozenset(
         "многостраничн",
         "много страниц",
     }
+)
+
+# A server *response* refers to an API result, not new server architecture.
+# Exclude only this target; keep all other structural signals, including those
+# in the same sentence, under the existing conservative BUILD rule.
+_SERVER_RESPONSE = re.compile(
+    r"\bсерверн(?:ый|ого|ому|ым|ом|ые|ых|ыми)\s+ответ(?:а|у|ом|е|ы|ов|ам|ами|ах)?\b"
 )
 
 
@@ -202,9 +224,10 @@ def decide_intent(
         return ORCHESTRATE
 
     text = (prompt or "").strip().lower()
-    if _has_any(text, _REBUILD_KEYWORDS) or _REBUILD_VERB.search(text):
+    rebuild_text = _NEGATED_REBUILD.sub(" ", text)
+    if _has_any(rebuild_text, _REBUILD_KEYWORDS) or _REBUILD_VERB.search(rebuild_text):
         return ORCHESTRATE
-    if _has_any(text, _STRUCTURAL_KEYWORDS):
+    if _has_any(_SERVER_RESPONSE.sub(" ", text), _STRUCTURAL_KEYWORDS):
         return ORCHESTRATE
 
     # App-ification follow-up (P-H1): "переделай это в полноценное приложение: вход,

@@ -166,3 +166,53 @@ Acceptance remains real UI add -> reload -> unchanged cart -> submit -> retry
 the same operation -> one history entry -> reload, followed by regeneration
 with existing data and the independent MAX flow. Do not weaken security or
 replace these checks with compiler success. The accepted-product streak is zero.
+
+## Third pair: execution guard failure, not a provider/compiler failure
+
+On deployed `f6b6745f`, workshop completed with 30 completed provider receipts
+and accepted build evidence. Coffee failed with 37 completed provider receipts:
+`generation stopped (exploring): stuck exploring (reading) without writing any file; rolled_back`.
+The six-attempt cohort has three completed builds and three failures. No full
+product streak is established; the new workshop priority UI still needs acceptance.
+
+The Coffee loop requested `build` on steps 27 and 34. Both requests were skipped
+by the no-write guard before executor invocation. Their preliminary `ok: true`
+events were not compiler results. Existing accepted snapshot/publication identity
+survived the failure; this does not independently prove all business rows unchanged.
+
+Reuse PR82's executed-source-progress and truthful skipped-step implementation
+on top of current main. Preserve actual source-change witnesses, repeat limits,
+the total turn budget and coordinator proof. Additional regressions cover one
+necessary build after new source at the hard no-progress threshold, skipped
+read signatures, and consistent coordinated finalization instructions. No
+unbounded verification exception or arbitrary shell exemption is authorized.
+
+Fix routing separately: negative recreation commands and a server response are
+not requests to rebuild architecture. Retain first-build, selected-element and
+positive backend/rebuild behavior. The exact Coffee repair is a focused edit.
+
+## Official Anthropic instructions and delivery
+
+The current [Sonnet 5.5 guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5),
+[Sonnet 5 design guidance](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5)
+and [Anthropic frontend design skill](https://github.com/anthropics/claude-code/blob/main/plugins/frontend-design/skills/frontend-design/SKILL.md)
+support a product-specific brief before new UI/redesign: main action, named
+palette values, typography roles and layout hierarchy. Focused edits preserve
+the existing design and records. Use independent rendered/user-flow acceptance;
+the generator's summary and a green compiler are insufficient.
+
+Effort and native tool settings are not changed in this patch. Our classic
+OpenAI-compatible Gateway route is distinct from direct Anthropic Messages;
+source repair can still use native tools with the main native flag disabled.
+The [5.5 migration rules](https://platform.claude.com/docs/en/models/sonnet-5-5/migration-guide)
+need a separate transport capability check. Latest alias receipts prove the
+requested routing label, not the underlying physical 5.5 version.
+
+This combined patch changes API execution and web progress rendering. Deliver
+both from exact pushed main, retaining schema, compiled Core, model overrides,
+legal/SMTP/OAuth settings, existing CRM/MAX bindings and data. Prepare a fresh
+release record from API/controllers `f6b6745f` and web `684e4a2e`, with independent
+review, exact CI, backup/drain, exact service/HTTP identity and production smoke.
+No fourth paid pair is launched until that delivery is verified. Keep historical
+failures in the denominator; resume the same two QA projects, not replacement
+projects or a reduced product acceptance definition.
