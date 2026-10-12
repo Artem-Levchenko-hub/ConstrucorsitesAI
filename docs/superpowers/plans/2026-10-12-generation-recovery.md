@@ -32,10 +32,10 @@ checkpoint before rollback, with owner/project/run/baseline binding.
 **Files:** services/agent_builder.py, tests/test_agent_builder.py (under apps/api).
 **Interfaces:** Preserve Action and AgentResult; run_agent_build keeps existing defaults.
 
-- [ ] Add tests for known alternate action tags and reject non-object arguments.
-- [ ] Reproduce stale-green completion and repeated premature done; observe RED.
-- [ ] Fix parsing and fresh-check enforcement; remove invented component nudges.
-- [ ] Run builder tests, Ruff and mypy; expect PASS, then commit intended changes.
+- [x] Add tests for known alternate action tags and reject non-object arguments.
+- [x] Reproduce stale-green completion and repeated premature done; observe RED.
+- [x] Fix parsing and fresh-check enforcement; remove invented component nudges.
+- [x] Run builder tests, Ruff and mypy; expect PASS, then commit intended changes.
 
 ### Task 2: Same-run continuation and private recovery checkpoint
 
@@ -43,10 +43,10 @@ checkpoint before rollback, with owner/project/run/baseline binding.
 generation/agent_preparation.py; new generation/source_checkpoint.py; associated tests.
 **Interfaces:** Add max_segments to the text loop, default 1; persist checkpoint by UUID identity.
 
-- [ ] Reproduce a last-step write followed by successful next-segment verification.
-- [ ] Test no-progress/provider/cancel stops and exact cumulative files; observe RED.
-- [ ] Implement progress-bound segments, per-segment guidance and checkpoint persistence.
-- [ ] Test owner/baseline mismatch and explicit adjacent continuation; observe RED then GREEN.
+- [x] Reproduce a last-step write followed by successful next-segment verification.
+- [x] Test no-progress/provider/cancel stops and exact cumulative files; observe RED.
+- [x] Implement progress-bound segments, per-segment guidance and checkpoint persistence.
+- [x] Test owner/baseline mismatch and explicit adjacent continuation; observe RED then GREEN.
 - [ ] Run affected tests and full API suite on isolated services; expect PASS; commit.
 
 ### Task 3: Diagnostic and final-result contracts
@@ -55,10 +55,10 @@ generation/agent_preparation.py; new generation/source_checkpoint.py; associated
 existing MAX completion/finalization tests and generation progress tests.
 **Interfaces:** Only safe refusal categories cross API boundaries; no raw secrets.
 
-- [ ] Reproduce missing component/invalid page export/schema/UI contract errors through existing repair gates.
-- [ ] Verify refusal categories distinguish access/funds/rate without pretending ambiguous charges are free.
-- [ ] Fix only remaining gaps, with regression tests RED then GREEN; preserve acceptance gates.
-- [ ] Run API/gateway checks and independent branch review; fix material findings; commit.
+- [x] Reproduce missing component/invalid page export/schema/UI contract errors through existing repair gates.
+- [x] Verify refusal categories distinguish access/funds/rate without pretending ambiguous charges are free.
+- [x] Fix only remaining gaps, with regression tests RED then GREEN; preserve acceptance gates.
+- [x] Run API/gateway checks and independent branch review; fix material findings; commit.
 
 ### Task 4: Delivery and live acceptance
 
@@ -67,6 +67,9 @@ existing MAX completion/finalization tests and generation progress tests.
 
 - [ ] Push branch, create/attach PR, require full CI, merge within existing authorization.
 - [ ] Deploy serially by documented production route; verify API/workers/controllers/gateway.
-- [ ] Check provider availability without payment; execute authorized generation pairs only if available.
+- [x] Check provider availability without payment; execute authorized generation pairs only if available.
 - [ ] Check final UI/API/MAX behavior and data persistence, record actual accepted rounds or external blocker.
-- [ ] Publish a concise checkpoint with revision, tests, live evidence and remaining limitations.
+- [x] Publish a concise checkpoint with revision, tests, live evidence and remaining limitations.
+
+Provider check: authenticated balance -16.02 RUB on 2026-10-12; no new paid calls.
+Delivery remains pending full CI and recovery of the prior 89a73036 release fence.

@@ -14,6 +14,7 @@ import pytest
 
 from yleum_api.core import config as core_config
 from yleum_api.core.config import Settings
+from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
@@ -38,6 +39,7 @@ from yleum_api.services.generation import (
     lifecycle,
     onboarding,
     progress,
+    source_checkpoint,
 )
 
 
@@ -364,6 +366,9 @@ def _assert_render_golden(files, expected, *, portable=False):
 )
 async def test_real_process_config_render(caller, stored, portable, fallback, fault, monkeypatch):
     pid, uid, mid, rid = (UUID(int=i) for i in range(1, 5))
+    # Source checkpoint persistence must see the active owner/run identity even
+    # though this render contract replaces database I/O with a local session.
+    run = GenerationRun(id=rid, project_id=pid, user_id=uid, status="running", agent_state={})
     state = {"model_ran": False, "runtime_probed": False, "config_reads": 0}
     rendered = []
     # Snapshot is the full staged tree, including seed; export is only the model diff.
@@ -411,6 +416,8 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         async def get(self, model, ident, **_kwargs):
             if model is Project:
                 return project
+            if model is GenerationRun:
+                return run if ident == rid else None
             if model is MaxProjectConfig:
                 state["config_reads"] += 1
                 target = (caller == "seed" and state["config_reads"] == 2) or state["model_ran"]
@@ -583,6 +590,16 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
             "test-model",
             orchestrate=True,
         )
+    if caller != "seed":
+        checkpoint = run.agent_state["source_checkpoint"]
+        assert checkpoint["baseline_sha"] is None
+        data = source_checkpoint._get_checkpoint(pid, rid, checkpoint["digest"])
+        assert data is not None
+        saved = source_checkpoint.decode_checkpoint(
+            data, project_id=pid, user_id=uid, run_id=rid, baseline_sha=None,
+        )
+        assert saved is not None
+        assert saved["files"]["src/app/page.tsx"] == product["src/app/page.tsx"]
     if fault:
         assert handled == [handler_prefix]
         assert len(rendered) == (0 if caller == "seed" else 1)

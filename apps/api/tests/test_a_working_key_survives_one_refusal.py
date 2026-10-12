@@ -1,8 +1,7 @@
-"""Bound auth retries without inferring a cause from earlier success.
+"""Access refusals stay terminal without guessing from earlier success.
 
-An unexplained refusal after success in the same run permits bounded retries.
-An explicit key block or a first-call auth refusal stops immediately.
-The user receives the provider's sanitized explanation and actionable guidance.
+Every 401/403 stops this provider request. Structured gateway categories give
+fixed factual guidance; free-form provider complaints and keys never escape.
 """
 
 from __future__ import annotations
@@ -17,21 +16,16 @@ _OK = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
 
 
 @pytest.fixture(autouse=True)
-def _forget_previous_runs() -> None:
-    agent_native._RUNS_WITH_A_LIVE_KEY.clear()
-
-
-@pytest.fixture(autouse=True)
 def _no_real_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_sleep(_delay: float) -> None:
-        return None
+        pytest.fail("access refusal must not back off and replay a provider POST")
 
     monkeypatch.setattr(agent_native.asyncio, "sleep", fake_sleep)
 
 
 @pytest.mark.asyncio
-async def test_a_refusal_after_a_success_is_asked_again() -> None:
-    """Главное: живой случай 5fdae5f1 больше не выбрасывает работу прогона."""
+async def test_a_refusal_after_a_success_is_not_replayed() -> None:
+    """Prior success cannot prove that replaying the refusal will repair access."""
     replies = [httpx.Response(200, json=_OK), httpx.Response(401, text="unauthorized")]
     replies += [httpx.Response(200, json=_OK)]
     seen: list[int] = []
@@ -43,11 +37,11 @@ async def test_a_refusal_after_a_success_is_asked_again() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         first = await agent_native._call_messages(client, _URL, [], "s", run_id="run-1")
-        second = await agent_native._call_messages(client, _URL, [], "s", run_id="run-1")
+        with pytest.raises(RuntimeError, match="provider_http_401"):
+            await agent_native._call_messages(client, _URL, [], "s", run_id="run-1")
 
     assert first["content"][0]["text"] == "ok"
-    assert second["content"][0]["text"] == "ok", "отказ после успеха снова убил вызов"
-    assert 401 in seen, "проверка стала бы пустой: отказа не было вовсе"
+    assert seen == [200, 401], "the offered third reply must not cause a blind retry"
 
 
 @pytest.mark.asyncio
@@ -63,8 +57,9 @@ async def test_a_key_that_never_worked_still_fails_fast() -> None:
         with pytest.raises(RuntimeError) as failure:
             await agent_native._call_messages(client, _URL, [], "s", run_id="run-2")
 
-    assert str(failure.value).startswith("PROVIDER_AUTH_FAILED")
-    assert "проверьте блокировку" in str(failure.value)
+    assert str(failure.value).startswith("provider_http_401:")
+    assert "проверить доступ и средства" in str(failure.value)
+    assert "недостат" not in str(failure.value).casefold()
     assert len(attempts) == 1, f"ключ не работал ни разу — повторять нечего: {len(attempts)}"
 
 
@@ -85,12 +80,11 @@ async def test_repeated_refusal_stops_with_factual_guidance() -> None:
             await agent_native._call_messages(client, _URL, [], "s", run_id="run-3")
 
     message = str(failure.value)
-    assert message.startswith("PROVIDER_AUTH_FAILED")
-    assert "ключ раньше работал" in message
-    assert "Проверьте статус и разрешения ключа" in message
+    assert message.startswith("provider_http_401:")
+    assert "проверить доступ и средства" in message
+    assert "ключ раньше работал" not in message
     assert "дело скорее" not in message
-    # Первый вызов + сам отказ + оговоренные переспросы: молотилки быть не должно.
-    assert len(attempts) <= 2 + agent_native._AUTH_RETRIES_AFTER_SUCCESS, len(attempts)
+    assert len(attempts) == 2
 
 
 @pytest.mark.asyncio
@@ -107,36 +101,35 @@ async def test_a_success_in_one_run_does_not_vouch_for_another() -> None:
         with pytest.raises(RuntimeError) as failure:
             await agent_native._call_messages(client, _URL, [], "s", run_id="run-other")
 
-    assert "проверьте блокировку" in str(failure.value)
+    assert str(failure.value).startswith("provider_http_401:")
     assert len(attempts) == 2, f"чужой успех не должен разрешать повторы: {len(attempts)}"
 
 
 @pytest.mark.asyncio
-async def test_the_refusal_carries_what_the_provider_actually_said() -> None:
-    """Прогон c3ca1587 умер за минуту, и понять причину было нельзя.
-
-    «Провайдер отклонил ключ доступа» — это НАША формулировка; сам провайдер
-    отвечает по-разному: неверный ключ, исчерпанный баланс, заблокированный
-    аккаунт, слишком много запросов. Шлюз этот ответ сохраняет и отдаёт дальше,
-    а платформа его выбрасывала — владельца отправляли проверять ключ, не
-    сказав, что именно с ним не так.
-    """
+async def test_structured_refusal_category_gives_safe_factual_guidance() -> None:
+    """Only explicit gateway evidence may distinguish funds from access."""
 
     def reply(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
-            401, json={"error": {"message": "Insufficient balance for this request"}}
+            401, json={"error": {
+                "message": "Insufficient balance for this request private-provider-detail",
+                "details": {"upstream_http_status": 401, "provider_refusal_category": "funds"},
+            }}
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         with pytest.raises(RuntimeError) as failure:
             await agent_native._call_messages(client, _URL, [], "s", run_id="run-say")
 
-    assert "Insufficient balance" in str(failure.value)
+    message = str(failure.value)
+    assert message.startswith("provider_refusal_funds:")
+    assert "Провайдер модели сообщил о недостатке средств" in message
+    assert "Insufficient balance" not in message and "private-provider-detail" not in message
 
 
 @pytest.mark.asyncio
-async def test_a_plain_text_answer_is_carried_too() -> None:
-    """Не всякий отказ приходит разобранным JSON — например, ответ от прокси."""
+async def test_a_plain_text_refusal_stays_generic_without_echoing_its_body() -> None:
+    """Unstructured proxy errors cannot establish access or funds evidence."""
 
     def reply(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(401, text="<html>401 Unauthorized</html>")
@@ -145,7 +138,9 @@ async def test_a_plain_text_answer_is_carried_too() -> None:
         with pytest.raises(RuntimeError) as failure:
             await agent_native._call_messages(client, _URL, [], "s", run_id="run-html")
 
-    assert "401 Unauthorized" in str(failure.value)
+    assert str(failure.value).startswith("provider_http_401:")
+    assert "проверить доступ и средства" in str(failure.value)
+    assert "401 Unauthorized" not in str(failure.value)
 
 
 @pytest.mark.asyncio
@@ -155,7 +150,10 @@ async def test_anything_key_shaped_never_leaves_the_platform() -> None:
     def reply(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             401,
-            json={"error": {"message": "Invalid key sk-abcdef0123456789abcdef0123456789"}},
+            json={"error": {
+                "message": "Invalid key sk-abcdef0123456789abcdef0123456789",
+                "details": {"upstream_http_status": 401, "provider_refusal_category": "access"},
+            }},
         )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
@@ -164,13 +162,15 @@ async def test_anything_key_shaped_never_leaves_the_platform() -> None:
 
     message = str(failure.value)
     assert "abcdef0123456789" not in message, message
-    assert "Invalid key" in message, "вместе с ключом вырезали и объяснение"
+    assert "Invalid key" not in message
+    assert message.startswith("provider_refusal_access:")
+    assert "Провайдер модели отклонил доступ к запросу" in message
 
 
 @pytest.mark.parametrize("status", [401, 403])
 @pytest.mark.parametrize("previous_success", [False, True])
 @pytest.mark.asyncio
-async def test_explicit_key_block_stops_without_retry_even_after_success(
+async def test_structured_access_refusal_stops_without_retry_even_after_success(
     status: int, previous_success: bool,
 ) -> None:
     attempts: list[int] = []
@@ -180,9 +180,10 @@ async def test_explicit_key_block_stops_without_retry_even_after_success(
         attempts.append(1)
         if previous_success and len(attempts) == 1:
             return httpx.Response(200, json=_OK)
-        if status == 401:
-            return httpx.Response(status, json={"error": {"message": complaint}})
-        return httpx.Response(status, text=complaint)
+        return httpx.Response(status, json={"error": {
+            "message": complaint,
+            "details": {"upstream_http_status": status, "provider_refusal_category": "access"},
+        }})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         if previous_success:
@@ -192,7 +193,8 @@ async def test_explicit_key_block_stops_without_retry_even_after_success(
 
     message = str(failure.value)
     assert len(attempts) == 1 + int(previous_success)
-    assert message.startswith("PROVIDER_AUTH_FAILED")
-    assert "Разблокируйте" in message
+    assert message.startswith("provider_refusal_access:")
+    assert "Провайдер модели отклонил доступ к запросу" in message
+    assert "Автоматический повтор остановлен" in message
     assert "повторите запрос" not in message
-    assert "Key is blocked" in message
+    assert "Key is blocked" not in message and "/key/unblock" not in message

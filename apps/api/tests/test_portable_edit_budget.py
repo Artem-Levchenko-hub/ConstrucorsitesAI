@@ -1,4 +1,4 @@
-"""The selected portable MAX edit gets one bounded completion budget."""
+"""The selected portable MAX edit keeps its planned step and segment budgets."""
 
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -75,14 +75,17 @@ async def test_other_max_completion_modes_keep_their_existing_budget(
 
 @pytest.mark.parametrize("native", [False, True])
 @pytest.mark.parametrize("configured", [14, 80])
-async def test_both_runners_receive_the_planned_budget_once(monkeypatch, native, configured):
+@pytest.mark.parametrize("segments", [2, 4])
+async def test_both_runners_receive_the_planned_budget_once(
+    monkeypatch, native, configured, segments,
+):
     from yleum_api.services import agent_builder, agent_native, max_behavior_proof
     from yleum_api.services.generation import agent_generation
 
     plan = await _plan(monkeypatch, configured=configured, native=native)
     monkeypatch.setattr(agent_generation, "get_settings", lambda: SimpleNamespace(
         use_native_agent=native, agent_require_green_before_done=True,
-        agent_ship_green_on_abort=False,
+        agent_ship_green_on_abort=False, agent_max_segments=segments,
     ))
     monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", AsyncMock())
     deadline = object()
@@ -113,11 +116,11 @@ async def test_both_runners_receive_the_planned_budget_once(monkeypatch, native,
     selected, unused = (native_runner, legacy_runner) if native else (legacy_runner, native_runner)
     selected.assert_awaited_once()
     unused.assert_not_awaited()
+    assert plan.steps == (30 if configured == 14 else 40)
     assert selected.call_args.kwargs["max_steps"] == plan.steps
-    if native:
-        assert selected.call_args.kwargs["max_segments"] == 1
-        assert selected.call_args.kwargs["edit_deadline"] is deadline
-    else:
+    assert selected.call_args.kwargs["max_segments"] == (1 if native else segments)
+    assert selected.call_args.kwargs["edit_deadline"] is deadline
+    if not native:
         assert selected.call_args.kwargs["snapshot_files"] is snapshot
         assert selected.call_args.kwargs["require_green_before_done"] is True
         assert selected.call_args.kwargs["ship_green_on_abort"] is False
