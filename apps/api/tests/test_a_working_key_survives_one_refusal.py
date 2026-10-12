@@ -13,7 +13,7 @@ import pytest
 from yleum_api.services import agent_native
 
 _URL = "https://gateway.test/v1/messages"
-_OK = {"content": [{"type": "text", "text": "ok"}]}
+_OK = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
 
 
 @pytest.fixture(autouse=True)

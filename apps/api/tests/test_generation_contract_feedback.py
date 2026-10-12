@@ -111,8 +111,12 @@ async def test_native_build_and_done_get_contract_feedback_and_repair_in_same_ru
     assert "changed without a new canonical" in completion({}, {})
     turns = iter(
         [
-            {"content": [{"type": "tool_use", "id": "premature", "name": "build", "input": {}}]},
             {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "premature", "name": "build", "input": {}}],
+            },
+            {
+                "stop_reason": "tool_use",
                 "content": [
                     {
                         "type": "tool_use",
@@ -125,7 +129,10 @@ async def test_native_build_and_done_get_contract_feedback_and_repair_in_same_ru
                     }
                 ]
             },
-            {"content": [{"type": "tool_use", "id": "done", "name": "done", "input": {}}]},
+            {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "done", "name": "done", "input": {}}],
+            },
         ]
     )
     transcripts = []
