@@ -125,5 +125,44 @@ provider stop reasons must never become successful completion or executable
 actions. Actual provider receipts and settlement remain required even when
 the output cannot be used; terminal output errors must not trigger blind retries.
 
-Pending: verify and deliver that repair iteration, repeat a paired evaluation,
-then inspect rendered UI, persistent business data and the MAX user flow.
+That repair was delivered as `e65848f11064a9c3586914821c38b570682c5cee`.
+Exact-main CI and production smoke passed; API, workers and both controllers
+match that revision. Web and compiled MAX Core stayed unchanged, and protected
+CRM/MAX data and settings passed the release preservation checks.
+
+## Second paired evaluation: build success, product failure
+
+Both repeated generations completed with accepted build/runtime evidence.
+Workshop took 647.5 seconds total (12 model calls); coffee took 650.4 seconds
+(20 calls). Receipts confirmed the latest alias. These are two completed builds
+out of four attempts, not two accepted products or a stable success rate.
+
+Independent source inspection and real coffee UI interaction found:
+
+- Cart UI writes `quantity`, while its generated API normalizes `qty`. The
+  API silently persists an empty list; optimistic UI shows one item until reload.
+- The request form omits its own route's required idempotency key. Its history
+  reader also expects `total` and expanded items, while the API returns
+  `totalRub` and product identifiers/quantities. These are product-owned DTOs,
+  not fields to impose on all managed MAX APIs.
+- The product's fixed bottom navigation has no stacking layer. A live DOM
+  hit-test found the required platform footer's privacy link above the cart
+  button, explaining its unexpected navigation.
+
+The next vertical slice corrects the common generation instructions: inspect
+actual routes/normalizers, share or explicitly map validated client/server DTOs,
+preserve stable operation identity across uncertain retries, and verify actual
+client payloads and response rendering. SQL storage tests alone cannot prove
+that the UI sends the same contract. Preserve the platform footer and make both
+its links and product navigation accessible with safe-area/layout checks.
+
+The workshop's normal Yandex-owner browser flow created one disposable QA order,
+changed its status from diagnostics to repair, and retained its title, description
+and new status after reload. This is positive UI/persistence evidence, but not
+cross-user isolation, regeneration or real MAX acceptance. Retain that QA record
+for the next regeneration test; do not clear the database to make checks pass.
+
+Acceptance remains real UI add -> reload -> unchanged cart -> submit -> retry
+the same operation -> one history entry -> reload, followed by regeneration
+with existing data and the independent MAX flow. Do not weaken security or
+replace these checks with compiler success. The accepted-product streak is zero.

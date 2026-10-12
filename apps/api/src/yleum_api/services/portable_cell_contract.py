@@ -45,8 +45,15 @@ Each role runs only its declared tasks; full_build requires a real final test.
 Final tests must preserve production build output. Never run next dev against
 .next after next build: it erases the production build. Use a separate distDir
 for a test dev server, or test next start on a separate port and terminate it.
-For small database features, direct SQL integration tests avoid rebuilding a
-second web server. Do not weaken or skip actual persistence/isolation checks.
+For small database features, SQL integration tests remain useful storage/isolation
+checks, but cannot substitute for the client-route contract. For requested UI/API
+writes, exercise the actual UI payload through the custom route and response mapping,
+then write -> read/reload and matching history values. Use the route's real schema,
+not a separately invented test payload. Read-only means no writes; API-only means no
+extra UI changes. For requested writes, contract tests may use isolated disposable test
+records in the project's own local test environment: no external business actions;
+never change existing or unrelated data and never truncate the database.
+Do not weaken or skip actual persistence/isolation checks.
 bash executes in this same machine. Never use a fake
 test exit or claim build success without exercising product behavior. Services
 are controller-supervised after runtime_check applies the checked manifest;

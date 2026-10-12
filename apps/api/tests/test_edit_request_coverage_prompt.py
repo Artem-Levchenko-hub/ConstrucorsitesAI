@@ -52,6 +52,36 @@ async def test_prompt_preserves_all_requested_clauses_without_expanding_scope(
     assert "Do not add requirements" in plan.user
     assert "read-only" in plan.user
     assert "Do not weaken existing tests" in plan.user
+    delivery = plan.user.split("<product_delivery>", 1)[1].split("</product_delivery>", 1)[0]
+    for requirement in (
+        "read the actual custom route handlers and normalizers",
+        "shared typed DTOs or an explicit validated mapper",
+        "exact request and response shapes",
+        "stable operation key per user intent",
+        "unknown-outcome retry",
+        "fresh key for a new intent",
+        "failed writes visibly",
+        "not persisted success",
+        "actual UI payload through the route",
+        "write -> read/reload",
+        "matching history values",
+        "SQL-only persistence checks cannot replace",
+        "managed platform footer and its links",
+        "layout space, stacking order and safe-area insets",
+        "touch targets remain unobstructed",
+        "Do not hide the footer",
+        "Honor API-only and read-only requests",
+        "Read-only means no writes",
+        "API-only means no extra UI changes",
+        "isolated disposable test records in the project",
+        "own local test environment",
+        "no external business actions",
+        "never change existing or unrelated data",
+        "never truncate the database",
+    ):
+        assert requirement in delivery
+    # Custom fields from one failed generated app are not a managed API schema.
+    assert all(field not in delivery for field in ("qty", "idempotencyKey", "totalRub"))
     assert plan.steps == ((30 if portable else 18) if mode == "edit" else 40)
     assert build_plan is None
     factory.assert_not_called()

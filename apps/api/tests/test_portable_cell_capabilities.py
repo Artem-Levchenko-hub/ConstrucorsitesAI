@@ -65,6 +65,23 @@ def test_main_stack_guide_keeps_next_max_tools_and_preserves_legacy_selection():
     assert "dedicated project PostgreSQL" in guide
     assert "isolated from the managed MAX core" in guide
     assert "Do NOT call or retry probe/verify_isolation" in prompt
+    delivered = " ".join(prompt.split())
+    for requirement in (
+        "SQL integration tests remain useful storage/isolation checks",
+        "cannot substitute for the client-route contract",
+        "actual UI payload",
+        "response mapping",
+        "write -> read/reload",
+        "matching history values",
+        "Read-only means no writes",
+        "API-only means no extra UI changes",
+        "isolated disposable test records",
+        "own local test environment",
+        "no external business actions",
+        "never change existing or unrelated data",
+        "never truncate the database",
+    ):
+        assert requirement in delivered
 
 
 @pytest.mark.parametrize("capabilities,files,portable", [
