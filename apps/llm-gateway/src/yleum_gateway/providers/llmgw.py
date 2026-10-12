@@ -317,6 +317,11 @@ async def astream(
                             key: obj[key] for key in ("usage", "model", "id", "metadata")
                             if obj.get(key) is not None
                         }))
+                        choices = obj.get("choices")
+                        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                            reason = choices[0].get("finish_reason")
+                            if reason is not None:
+                                loop.call_soon_threadsafe(queue.put_nowait, ("finish", reason))
                         try:
                             delta = obj["choices"][0].get("delta", {}).get("content", "")
                         except (KeyError, IndexError, TypeError):
@@ -367,6 +372,11 @@ async def astream(
                     receipt.get("model", ""), model,
                     receipt.get("provider_request_id") or receipt.get("id"),
                 )
+                continue
+            if kind == "finish":
+                if "finish_reason" in receipt and receipt["finish_reason"] != val:
+                    receipt["finish_reason_conflict"] = True
+                receipt["finish_reason"] = val
                 continue
             yield val, slug_to_omnia(receipt.get("model", "")) or model
     finally:
@@ -497,7 +507,7 @@ async def acompletion(
             "choices": [{
                 "index": 0,
                 "message": {"role": "assistant", "content": content},
-                "finish_reason": (choice.get("finish_reason") or "stop"),
+                "finish_reason": choice.get("finish_reason"),
             }],
             "usage": usage,
         }

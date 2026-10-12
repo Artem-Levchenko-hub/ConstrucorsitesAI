@@ -91,5 +91,39 @@ the app inside MAX. A green compiler or HTTP response does not count as visual
 or functional acceptance. Aim for eight consecutive accepted generations;
 record failed attempts rather than removing them from the denominator.
 
-Pending: production delivery, latest-model application generations, visual
-acceptance and MAX acceptance. Existing CRM demo/bot/data remain preserved.
+## First delivered evaluation
+
+Revision `75ddf81525b3b8057f1bfe964e7d0ec84dcb1004` completed exact-main CI,
+production delivery and production smoke. All six generation roles resolve to
+the requested latest alias; the existing disabled native-generation flag,
+compiled Core, web revision and CRM demo/bot/data were preserved.
+
+Two real generations on separate authorized profiles ran concurrently. Both
+recorded 29 completed calls to the latest alias and failed final acceptance:
+
+- Coffee: 505.9 seconds of execution. The capability matcher interpreted
+  "Не выдумывай историю заказов" as a positive request for history. Source checks
+  passed, but this invented requirement rejected the product. Source repair
+  made no source changes and correctly stopped rather than accepting it.
+- Workshop: 447.6 seconds of execution. The full Next.js build rejected an
+  exported `STATUS_LABELS` constant in `src/app/page.tsx`; the existing finalizer
+  classified that source/type error as terminal instead of offering bounded
+  source repair.
+
+These observations are 0 accepted products out of 2 attempts, not evidence of
+stable generation. Neither app has passed rendered UI, business-data or MAX
+acceptance. The underlying model version behind the provider alias is still
+unconfirmed. Provider RUB receipt amounts were absent; platform cost estimates
+must not be reported as verified provider charges.
+
+The next iteration addresses the two reproduced failures separately. Negative
+mentions must not invent requested capabilities, while explicit positive
+requirements remain enforced. Confirmed compiler/type failures may enter the
+existing bounded source-repair path; infrastructure failures, timeouts and
+unknown outcomes must remain terminal. Separately, missing/unknown/filtered
+provider stop reasons must never become successful completion or executable
+actions. Actual provider receipts and settlement remain required even when
+the output cannot be used; terminal output errors must not trigger blind retries.
+
+Pending: verify and deliver that repair iteration, repeat a paired evaluation,
+then inspect rendered UI, persistent business data and the MAX user flow.

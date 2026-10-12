@@ -31,6 +31,7 @@ from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger, provider_calls
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
+from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 from yleum_gateway.services.token_counter import count_message_tokens, count_text_tokens
@@ -216,7 +217,10 @@ async def stream_completion(
             await asyncio.shield(settlement_task)
         except GatewayError as exc:
             settlement_error = exc
-        error = settlement_error or upstream_error
+        output_error = output_stop_error(
+            None if receipt.get("finish_reason_conflict") else receipt.get("finish_reason"),
+        )
+        error = settlement_error or upstream_error or output_error
         if error is not None:
             yield _sse({"error": {
                 "code": error.code, "message": error.message, "details": error.details,
@@ -225,7 +229,7 @@ async def stream_completion(
         yield _sse({
             "id": response_id, "object": "chat.completion.chunk", "created": created,
             "model": actual_model,
-            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            "choices": [{"index": 0, "delta": {}, "finish_reason": receipt["finish_reason"]}],
             "usage": usage,
             "metadata": {
                 "actual_model_used": actual_model, "fallback_used": actual_model != model,

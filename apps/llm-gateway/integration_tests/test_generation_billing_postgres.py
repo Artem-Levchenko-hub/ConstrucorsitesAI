@@ -612,7 +612,7 @@ async def test_chat_and_stream_missing_run_id_bind_real_owner_message_without_ea
             # platform-owned preliminary after the customer's chat call.
             "id": "qa-chat-" + str(uuid4()),
             "model": model,
-            "choices": [],
+            "choices": [{"message": {"content": "synthetic"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "2"},
         }
 
@@ -621,6 +621,7 @@ async def test_chat_and_stream_missing_run_id_bind_real_owner_message_without_ea
             {
                 "id": "qa-stream-" + str(r),
                 "model": model,
+                "finish_reason": "stop",
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "3"},
                 "complete": True,
             }
@@ -807,7 +808,7 @@ async def test_api_llm_client_paid_run_and_platform_preliminary_attribution(
         return {
             "id": "client-" + str(len(seen)) + "-" + str(r),
             "model": model,
-            "choices": [{"message": {"content": "synthetic"}}],
+            "choices": [{"message": {"content": "synthetic"}, "finish_reason": "stop"}],
             "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "2"},
         }
 
@@ -816,6 +817,7 @@ async def test_api_llm_client_paid_run_and_platform_preliminary_attribution(
             {
                 "id": "client-stream-" + str(r),
                 "model": model,
+                "finish_reason": "stop",
                 "usage": {"prompt_tokens": 2, "completion_tokens": 1, "cost_rub": "3"},
                 "complete": True,
             }

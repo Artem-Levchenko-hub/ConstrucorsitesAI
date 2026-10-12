@@ -222,6 +222,7 @@ async def test_first_source_write_gets_early_typecheck_feedback(monkeypatch):
     turns = iter(
         [
             {
+                "stop_reason": "tool_use",
                 "content": [
                     {
                         "type": "tool_use",
@@ -232,6 +233,7 @@ async def test_first_source_write_gets_early_typecheck_feedback(monkeypatch):
                 ]
             },
             {
+                "stop_reason": "tool_use",
                 "content": [
                     {
                         "type": "tool_use",
@@ -241,8 +243,14 @@ async def test_first_source_write_gets_early_typecheck_feedback(monkeypatch):
                     }
                 ]
             },
-            {"content": [{"type": "tool_use", "id": "build", "name": "build", "input": {}}]},
-            {"content": [{"type": "tool_use", "id": "done", "name": "done", "input": {}}]},
+            {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "build", "name": "build", "input": {}}],
+            },
+            {
+                "stop_reason": "tool_use",
+                "content": [{"type": "tool_use", "id": "done", "name": "done", "input": {}}],
+            },
         ]
     )
     observations = []

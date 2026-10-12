@@ -30,6 +30,7 @@ from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, cache, file_logger, provider_calls, safety, streaming
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
+from yleum_gateway.services.output_stop import completion_finish_reason, output_stop_error
 from yleum_gateway.services.pricing import (
     calculate_cost_rub,
     read_reported_cost,
@@ -199,7 +200,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         cached = None
         log.exception("cache.get_failed", key=cache_key)
 
-    if cached is not None:
+    if cached is not None and output_stop_error(completion_finish_reason(cached)) is None:
         cached.setdefault("metadata", {})
         cached["metadata"]["cache_hit"] = True
         cached["metadata"]["cost_rub"] = "0"
@@ -355,6 +356,12 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                 if meta.require_billing or meta.run_id is not None:
                     # Never expose or cache an answer whose wallet debit failed.
                     raise _billing_unavailable() from exc
+
+        # Paid output may be unusable. Settlement errors remain authoritative;
+        # rejected output must never reach consumers or the response cache.
+        output_error = output_stop_error(completion_finish_reason(response))
+        if output_error is not None:
+            raise _gateway_error_to_http(output_error)
 
         response.setdefault("metadata", {})
         response["metadata"]["actual_model_used"] = actual_model

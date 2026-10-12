@@ -41,6 +41,7 @@ from yleum_gateway.providers import llmgw
 from yleum_gateway.services import billing, file_logger, provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
+from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.pricing import (
     ReportedCost,
     calculate_cost_rub,
@@ -276,7 +277,9 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
             )
 
     finish_reason = choice.get("finish_reason")
-    if finish_reason == "length":
+    if output_stop_error(finish_reason) is not None:
+        stop_reason = None
+    elif finish_reason == "length":
         stop_reason = "max_tokens"
     elif tool_calls or finish_reason == "tool_calls":
         stop_reason = "tool_use"
@@ -291,9 +294,7 @@ def _anthropic_response(data: dict[str, Any], omnia_model: str) -> dict[str, Any
         "model": omnia_model,
         "content": content,
         "stop_reason": stop_reason,
-        "provider_finish_reason": finish_reason if finish_reason in {
-            "length", "tool_calls", "stop", "content_filter", "function_call",
-        } else None,
+        "provider_finish_reason": finish_reason if isinstance(finish_reason, str) else None,
         "stop_sequence": None,
         "usage": {
             "input_tokens": usage["prompt_tokens"],
@@ -721,6 +722,16 @@ async def _native_messages_impl(
                 run_id=str(run_id) if run_id else None,
             )
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
+
+    # Deny output only after the actual receipt and wallet have been settled.
+    output_error = output_stop_error(adapted["provider_finish_reason"])
+    if output_error is not None:
+        return Response(status_code=502, media_type="application/json", content=json.dumps({
+            "type": "error", "error": {
+                "type": output_error.code, "code": output_error.code,
+                "message": output_error.message, "retry_safe": False,
+            },
+        }))
 
     adapted["metadata"] = {
         "requested_model": model,

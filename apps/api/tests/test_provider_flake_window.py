@@ -51,7 +51,9 @@ async def test_a_flake_as_long_as_the_live_one_no_longer_kills_the_build(
         elapsed["s"] += 5.0 + (slept[-1] if slept else 0.0)
         if elapsed["s"] < _OBSERVED_FLAKE_SECONDS:
             return httpx.Response(502, text="<html>502 Bad Gateway</html>")
-        return httpx.Response(200, json={"content": [{"type": "text", "text": "ok"}]})
+        return httpx.Response(
+            200, json={"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
+        )
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         body = await agent_native._call_messages(client, _URL, [], "s")

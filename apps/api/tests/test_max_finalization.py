@@ -253,6 +253,7 @@ async def _new_harness(
     engine: AsyncEngine,
     *,
     build_green: bool = True,
+    build_detail: str = "TS2322",
 ) -> _Harness:
     owner = User(
         email=f"finalization-{uuid.uuid4().hex}@example.com",
@@ -333,7 +334,7 @@ async def _new_harness(
             role=role,
             ok=ok,
             timed_out=False,
-            redacted_detail="green" if ok else "TS2322",
+            redacted_detail="green" if ok else build_detail,
             before=current,
             after=current,
             invalidated_dimensions=frozenset(),
@@ -1564,3 +1565,140 @@ async def test_deadline_watchdog_retry_pause_preserves_cancellation(monkeypatch)
         )
     assert caught.value is original
     assert waits == [1.0]
+
+
+_PAGE_EXPORT_FAILURE = (
+    'Failed to compile.\n'
+    'src/app/page.tsx\n'
+    'Type error: Page "src/app/page.tsx" does not match the required types of a Next.js Page.\n'
+    '  "STATUS_LABELS" is not a valid Page export field.\n'
+    'Next.js build worker exited with code: 1 and signal: null'
+)
+
+
+@pytest.mark.parametrize("changed", [True, False])
+async def test_page_export_repair_rebuilds_only_changed_source(db_session, test_engine, changed):
+    harness = await _new_harness(db_session, test_engine, build_green=False,
+                                 build_detail=_PAGE_EXPORT_FAILURE)
+    harness.files["src/app/page.tsx"] += '\nexport const STATUS_LABELS = { ready: "Ready" };'
+    feedback = []
+
+    async def repair(detail):
+        feedback.append(detail)
+        if changed:
+            harness.files["src/app/page.tsx"] = harness.files["src/app/page.tsx"].replace(
+                "export const STATUS_LABELS", "const STATUS_LABELS",
+            )
+            harness.set_build_green(True)
+
+    outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
+    assert len(feedback) == 1
+    assert '"STATUS_LABELS" is not a valid Page export field.' in feedback[0]
+    assert outcome.status is (MaxFinalizationStatus.COMPLETE if changed
+                              else MaxFinalizationStatus.NEEDS_EDIT)
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == (2 if changed else 1)
+    assert len(harness.runtime_probes) == (1 if changed else 0)
+
+
+@pytest.mark.parametrize("detail,timed_out,changed_identity,edit_source,expected_repairs", [
+    (_PAGE_EXPORT_FAILURE, False, False, True, 1),
+    (_PAGE_EXPORT_FAILURE, False, False, False, 1),
+    (_PAGE_EXPORT_FAILURE, True, False, True, 0),
+    (_PAGE_EXPORT_FAILURE, False, True, True, 0),
+    (_PAGE_EXPORT_FAILURE + "\nNext.js build worker exited with signal: SIGKILL",
+     False, False, True, 0),
+    (_PAGE_EXPORT_FAILURE + "\nFATAL ERROR: Reached heap limit", False, False, True, 0),
+    ("[source-repair:confirmed]\nworker_lost", False, False, True, 0),
+    ("worker_lost", False, False, True, 0),
+    ("command timed out", True, False, True, 0),
+    ("unknown failure", False, False, True, 0),
+    ("src/app/page.tsx(3,2): error TS2322: Type 'number' is not assignable to type 'string'.",
+     False, False, True, 1),
+])
+async def test_full_build_source_repair_boundary_without_database(
+    monkeypatch, detail, timed_out, changed_identity, edit_source, expected_repairs,
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import max_finalization as finalization
+    from yleum_api.services.generation_metrics import GenerationPhase
+
+    now = datetime.now(UTC)
+    run = GenerationRun(status="running", agent_state={}, created_at=now, started_at=now)
+    @asynccontextmanager
+    async def sessions():
+        yield SimpleNamespace(commit=AsyncMock())
+
+    files = _files()
+    identity = ProofIdentity(
+        workspace_id=uuid.uuid4(), generation_run_id=uuid.uuid4(), fencing_epoch=3,
+        workspace_revision="1" * 64, dependency_digest="2" * 64, schema_data_digest="3" * 64,
+        cell_manifest_digest="4" * 64, base_image_digest="5" * 64, toolchain_digest="6" * 64,
+        resource_profile_version="v2", build_config_digest="7" * 64,
+    )
+    proof = MaxFinalizationCoordinator._transient_proof(identity)
+    coordinator = object.__new__(MaxFinalizationCoordinator)
+    coordinator.session_factory = sessions
+    coordinator.executor = SimpleNamespace(
+        snapshot_files=AsyncMock(side_effect=lambda: dict(files)),
+    )
+    coordinator._raise_persisted_infrastructure_failure = AsyncMock()
+    coordinator._locked_run = AsyncMock(return_value=run)
+    coordinator._checkpoint = lambda *args: None
+    coordinator._log_terminal = AsyncMock()
+    coordinator._verified_workspace_files = AsyncMock(side_effect=lambda *args: dict(files))
+    monkeypatch.setattr(finalization, "generation_deadline", lambda run: SimpleNamespace(
+        at=now + timedelta(hours=1),
+    ))
+    builds = []
+    repaired = []
+
+    async def command(**kwargs):
+        builds.append(dict(files))
+        green = len(builds) > 1
+        return ProjectCellCommandObservation(
+            operation_id=uuid.uuid4(), role=ProjectCellCommandRole.FULL_BUILD,
+            ok=green, timed_out=timed_out, redacted_detail="green" if green else detail,
+            before=identity, after=(replace(identity, workspace_revision="9" * 64)
+                                    if changed_identity else identity),
+            invalidated_dimensions=frozenset(),
+        )
+
+    async def record(**kwargs):
+        return SimpleNamespace(outcome=kwargs["outcome"].value,
+                               operation_id=kwargs["operation_id"],
+                               redacted_detail=kwargs["detail"])
+
+    async def outcome(status, checkpoint, proof_bundle, detail):
+        return SimpleNamespace(status=status, redacted_detail=detail)
+
+    async def finalize(**kwargs):
+        result = await coordinator._run_role_result(
+            proof=proof, identity=identity, dimension=ProofDimension.FULL_BUILD,
+            role=ProjectCellCommandRole.FULL_BUILD, phase=GenerationPhase.FINAL_BUILD,
+        )
+        if result.outcome == ProofOutcome.GREEN.value:
+            return SimpleNamespace(status=MaxFinalizationStatus.COMPLETE)
+        return await coordinator._failed(identity, proof, GenerationPhase.FINAL_BUILD,
+                                         result, result.redacted_detail)
+
+    async def repair(feedback):
+        repaired.append(feedback)
+        if edit_source:
+            files["src/app/page.tsx"] += "\n// repaired source"
+
+    coordinator._execute_role = command
+    coordinator._record = record
+    coordinator._outcome = outcome
+    coordinator.finalize = finalize
+    result = await coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
+    assert len(repaired) == expected_repairs
+    assert len(builds) == (2 if expected_repairs and edit_source else 1)
+    if expected_repairs:
+        assert detail in repaired[0]
+        assert result.status is (MaxFinalizationStatus.COMPLETE if edit_source
+                                 else MaxFinalizationStatus.NEEDS_EDIT)
+    else:
+        assert result.status is MaxFinalizationStatus.FAILED

@@ -40,7 +40,7 @@ async def test_default_builder_waits_for_gateway_response_without_replaying(
         # Simulate transport elapsed time without a real paid call or long sleep.
         if timeout["read"] < response_after_seconds:
             raise httpx.ReadTimeout("response still in progress", request=request)
-        return httpx.Response(200, json={"choices": [{"message": {
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {
             "content": '<omnia:action name="done">{"summary":"ok"}</omnia:action>',
         }}]})
 
@@ -63,7 +63,9 @@ async def test_other_completion_callers_keep_their_timeout(monkeypatch, override
     def handler(request):
         calls.append(request)
         assert request.extensions["timeout"]["read"] == expected
-        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+        return httpx.Response(200, json={"choices": [{
+            "finish_reason": "stop", "message": {"content": "ok"},
+        }]})
 
     install_transport(monkeypatch, handler)
     assert await llm_client.complete_chat([], "m", timeout_seconds=override) == "ok"
@@ -245,7 +247,7 @@ async def test_proven_gateway_preconnect_can_retry_and_finish(monkeypatch):
             return rejection({
                 "provider_charge_ambiguous": False, "provider_failure_kind": "preconnect",
             })
-        return httpx.Response(200, json={"choices": [{"message": {
+        return httpx.Response(200, json={"choices": [{"finish_reason": "stop", "message": {
             "content": '<omnia:action name="done">{"summary":"ok"}</omnia:action>',
         }}]})
 

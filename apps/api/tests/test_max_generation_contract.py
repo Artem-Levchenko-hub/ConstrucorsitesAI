@@ -271,6 +271,49 @@ def test_historical_restore_with_explicit_task_history_keeps_requirement() -> No
     assert "history" in {key for key, _, _ in requested_max_capabilities(brief)}
 
 
+COFFEE_NO_FABRICATION_BRIEF = (
+    "Создай полноценный MAX mini app кофейни: каталог эспрессо 150, капучино 240 и "
+    "латте 280 рублей, категории, поиск, корзина и оформление заявки без оплаты и "
+    "внешних интеграций. Сохраняй корзину и заявки отдельно для каждого пользователя. "
+    "Кремовый фон, тёмно-коричневый текст; мобильный интерфейс. "
+    "Не выдумывай историю заказов."
+)
+
+
+@pytest.mark.parametrize("brief", [
+    COFFEE_NO_FABRICATION_BRIEF,
+    "Не выдумывай историю заказов.",
+    "Не придумывай историю заявок.",
+    "Do not fabricate order history.",
+    "Do not invent a user history.",
+])
+def test_no_fabrication_instruction_does_not_require_history(brief: str) -> None:
+    assert "history" not in {key for key, _, _ in requested_max_capabilities(brief)}
+
+
+@pytest.mark.parametrize("brief", [
+    "Покажи историю заявок.",
+    "Покажи историю заявок. Не выдумывай записи.",
+    "Не выдумывай историю заказов, но показывай настоящую историю заказов.",
+])
+def test_real_history_request_survives_no_fabrication_constraint(brief: str) -> None:
+    assert "history" in {key for key, _, _ in requested_max_capabilities(brief)}
+
+
+def test_portable_coffee_without_history_only_fails_when_history_is_requested() -> None:
+    files = {
+        ".omnia/cell.json": _portable_crm_files()[".omnia/cell.json"],
+        "src/app/page.tsx": (
+            "export default function Page(){ return <main><h1>Каталог кофе</h1>"
+            "<input aria-label='Поиск кофе'/><button>Корзина</button></main>; }"
+        ),
+    }
+    assert max_source_completion_gap(COFFEE_NO_FABRICATION_BRIEF, files, portable=True) is None
+    assert "история действий" in str(max_source_completion_gap(
+        COFFEE_NO_FABRICATION_BRIEF + " Покажи историю заявок.", files, portable=True,
+    ))
+
+
 def test_full_restoration_panel_prompt_does_not_invent_product_capabilities() -> None:
     panel = (
         Path(__file__).resolve().parents[2]

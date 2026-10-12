@@ -6,6 +6,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
@@ -229,8 +230,41 @@ def _content_digest(label: str, *parts: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _versioned_build_detail(detail: str) -> str:
-    return _FULL_BUILD_DETAIL_PREFIX + ("\n" + detail if detail else "")
+def _confirmed_build_source_error(
+    observation: ProjectCellCommandObservation, identity: ProofIdentity,
+) -> bool:
+    """Only a finished compiler rejection of the frozen source permits editing."""
+    if (
+        observation.ok or observation.timed_out
+        or observation.role is not ProjectCellCommandRole.FULL_BUILD
+        or observation.before != identity or observation.after != identity
+    ):
+        return False
+    detail = observation.redacted_detail
+    if re.search(
+        r"(?i)\b(?:SIGKILL|SIGTERM|ENOSPC|ENOMEM|ECONNRESET|ETIMEDOUT|worker_lost)\b"
+        r"|out of memory|heap limit|command timed out|connection refused",
+        detail,
+    ):
+        return False
+    source = r"(?:\./|/workspace/)?(?:src/|app/|pages/|components/|lib/|\.next/types/)"
+    file = source + r"[^\r\n]*\.(?:tsx?|jsx?)"
+    return bool(
+        re.search(r"(?m)^" + file + r"\(\d+,\d+\): error TS\d{4}:", detail)
+        or re.search(
+            r"(?m)^" + file + r"(?::\d+(?::\d+)?)?\r?\n(?:Type error|Syntax error): ",
+            detail,
+        )
+    )
+
+
+def _versioned_build_detail(detail: str, *, source_repair: bool = False) -> str:
+    # Always prepend the decision: raw command text cannot forge this first line.
+    decision = "confirmed" if source_repair else "unconfirmed"
+    return (
+        _FULL_BUILD_DETAIL_PREFIX + f"\n[source-repair:{decision}]"
+        + ("\n" + detail if detail else "")
+    )
 
 
 def _current_build_result(result: ProjectCellProofResult, artifact_digest: str) -> bool:
@@ -757,7 +791,9 @@ class MaxFinalizationCoordinator:
         artifact_ref = None
         artifact_digest = None
         if dimension is ProofDimension.FULL_BUILD:
-            detail = _versioned_build_detail(detail)
+            detail = _versioned_build_detail(
+                detail, source_repair=_confirmed_build_source_error(observation, identity),
+            )
             if outcome is ProofOutcome.GREEN:
                 artifact_files = await self._verified_workspace_files(identity)
                 artifact_digest = canonical_files_digest(artifact_files)
@@ -1704,7 +1740,9 @@ class MaxFinalizationCoordinator:
             self._last_files = artifact_files
             artifact_ref = f"build/sha256/{digest}"
         if dimension is ProofDimension.FULL_BUILD:
-            detail = _versioned_build_detail(detail)
+            detail = _versioned_build_detail(
+                detail, source_repair=_confirmed_build_source_error(observation, identity),
+            )
         return await self._record(
             proof=proof,
             dimension=dimension,
@@ -2278,6 +2316,9 @@ class MaxFinalizationCoordinator:
             f"[project-migration-source-error:{code}]" in detail
             for code in ("42P01", "42703", "42601", "42804", "42830", "42704")
         )
+        build_source_error = phase is GenerationPhase.FINAL_BUILD and detail.startswith(
+            _FULL_BUILD_DETAIL_PREFIX + "\n[source-repair:confirmed]\n"
+        )
         if missing_build:
             detail = (
                 "Repair the test/manifest that removed the production build. "
@@ -2287,7 +2328,8 @@ class MaxFinalizationCoordinator:
             )
         outcome = await self._outcome(
             MaxFinalizationStatus.NEEDS_EDIT
-            if missing_build or migration_source_error else MaxFinalizationStatus.FAILED,
+            if missing_build or migration_source_error or build_source_error
+            else MaxFinalizationStatus.FAILED,
             self._checkpoint(identity, phase, result.operation_id),
             bundle or ProofBundle(identity=proof),
             detail,

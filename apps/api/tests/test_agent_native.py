@@ -1989,7 +1989,7 @@ async def test_transient_provider_errors_still_retry(monkeypatch, status, body):
     def reply(request):
         calls.append(request)
         return httpx.Response(status, json=body) if len(calls) == 1 else httpx.Response(
-            200, json={"content": []},
+            200, json={"content": [], "stop_reason": "end_turn"},
         )
 
     async def sleep(delay):
@@ -1999,7 +1999,7 @@ async def test_transient_provider_errors_still_retry(monkeypatch, status, body):
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         assert await agent_native._call_messages(
             client, "https://gateway.test/v1/messages", [], "s",
-        ) == {"content": []}
+        ) == {"content": [], "stop_reason": "end_turn"}
     assert len(calls) == 2 and len(delays) == 1
 
 
@@ -2744,6 +2744,7 @@ async def test_native_accepts_reply_within_gateway_deadline_without_paid_replay(
     )
     calls = []
     reply = {
+        "stop_reason": "tool_use",
         "content": [
             {
                 "type": "tool_use",

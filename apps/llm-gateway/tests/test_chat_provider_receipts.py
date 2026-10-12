@@ -43,12 +43,12 @@ def provider(monkeypatch, *, streaming, cost, usage=None):
         if streaming:
             chunks = [
                 {**common, "choices": [{"delta": {"content": "answer"}}]},
-                {**common, "choices": [], "usage": usage},
+                {**common, "choices": [{"finish_reason": "stop"}], "usage": usage},
             ]
             content = "".join(f"data: {json.dumps(c)}\n\n" for c in chunks)
             return httpx.Response(200, headers=headers, content=content + "data: [DONE]\n\n")
         return httpx.Response(200, headers=headers, json={
-            **common, "choices": [{"message": {"content": "answer"}}], "usage": usage,
+            **common, "choices": [{"finish_reason": "stop", "message": {"content": "answer"}}], "usage": usage,
         })
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
@@ -206,7 +206,7 @@ def test_missing_usage_is_explicitly_estimated(client, monkeypatch, streaming):
 def test_synthetic_response_id_is_not_recorded_as_provider_receipt(client, monkeypatch):
     def reply(request):
         return httpx.Response(200, json={
-            "choices": [{"message": {"content": "answer"}}], "usage": USAGE,
+            "choices": [{"finish_reason": "stop", "message": {"content": "answer"}}], "usage": USAGE,
         })
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
@@ -256,7 +256,7 @@ async def test_stream_settles_before_yielding_final_usage(monkeypatch, neutraliz
 
 def test_stream_bills_reported_reasoning_even_without_visible_text(client, monkeypatch):
     def reply(request):
-        chunk = {"id": "reasoning-only", "model": MODEL, "choices": [], "usage": USAGE}
+        chunk = {"id": "reasoning-only", "model": MODEL, "choices": [{"finish_reason": "stop"}], "usage": USAGE}
         return httpx.Response(200, headers={"x-llmgw-cost-rub": "0.75"},
                               content=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n")
 
@@ -324,7 +324,7 @@ async def test_cancel_during_price_lookup_still_settles_once(monkeypatch, neutra
 def test_local_cache_hit_does_not_reuse_previous_provider_charge(client):
     chat.cache.get.return_value = {
         "id": "cached-response", "model": MODEL,
-        "choices": [{"message": {"content": "cached answer"}}],
+        "choices": [{"finish_reason": "stop", "message": {"content": "cached answer"}}],
         "usage": {**USAGE, "cost_rub": "3", "cost": "0.02"},
         "metadata": {"cost_rub": "3", "cost_usd": "0.02",
                      "provider_request_id": "old-provider-request",
@@ -428,7 +428,7 @@ def test_missing_done_preserves_received_provider_receipt(client, monkeypatch, w
 def test_unknown_actual_model_cannot_be_billed_as_requested_model(client, monkeypatch, streaming):
     def reply(request):
         body = {"model": "vendor/unsupported-model", "id": "unknown-model-receipt", "usage": USAGE,
-                "choices": [{"message": {"content": "answer"}, "delta": {"content": "answer"}}]}
+                "choices": [{"finish_reason": "stop", "message": {"content": "answer"}, "delta": {"content": "answer"}}]}
         if streaming:
             return httpx.Response(200, content=f"data: {json.dumps(body)}\n\ndata: [DONE]\n\n")
         return httpx.Response(200, json=body)
@@ -530,7 +530,7 @@ def test_write_factor_uses_only_transmitted_cache_controls(client, monkeypatch, 
     def reply(request):
         transmitted.append(json.loads(request.content))
         response = {"id": "control-receipt", "model": "anthropic/claude-sonnet-5", "usage": USAGE,
-                    "choices": [{"message": {"content": "answer"}, "delta": {"content": "answer"}}]}
+                    "choices": [{"finish_reason": "stop", "message": {"content": "answer"}, "delta": {"content": "answer"}}]}
         if flow == "stream":
             return httpx.Response(200, content=f"data: {json.dumps(response)}\n\ndata: [DONE]\n\n")
         return httpx.Response(200, json=response)
@@ -584,7 +584,7 @@ def test_invalid_native_usage_never_reports_successful_zero_charge(client, monke
     def reply(request):
         calls.append(True)
         return httpx.Response(200, json={"id": "invalid-usage", "model": MODEL,
-                                       "choices": [{"message": {"content": "answer"}}], "usage": usage})
+                                       "choices": [{"finish_reason": "stop", "message": {"content": "answer"}}], "usage": usage})
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
     result = client.post("/v1/messages", json={

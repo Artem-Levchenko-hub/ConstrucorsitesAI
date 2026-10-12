@@ -348,8 +348,8 @@ def _fake_user_data_paths(files: Mapping[str, str]) -> list[str]:
 
 _EXCLUSION_PREFIX = (
     r"\b(?:без|without|no|никак\w*|не\s+(?!только\b)(?:нуж\w*|добав\w*|дела\w*|"
-    r"показыв\w*|требу\w*|превращ\w*|реализ\w*|созда\w*)|"
-    r"do\s+not\s+(?:add|include))\b"
+    r"показыв\w*|требу\w*|превращ\w*|реализ\w*|созда\w*|выдум\w*|придум\w*)|"
+    r"do\s+not\s+(?:add|include|fabricate|invent))\b"
 )
 
 
