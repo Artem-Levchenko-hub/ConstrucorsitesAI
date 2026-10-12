@@ -2792,3 +2792,103 @@ async def test_native_read_timeout_is_not_replayed_when_accounting_may_settle(mo
         )
     assert calls == [0]
     assert "synthetic-private" not in str(error.value)
+
+@pytest.mark.parametrize("choice", [None, {"type":"any"},
+                                    {"type":"tool","name":"qa_probe"}, {"type":"auto"}])
+@pytest.mark.parametrize("model", ["claude-sonnet-5.5", "claude-sonnet-5"])
+async def test_native_named_model_request_profile_preserves_legacy(model, choice):
+    captured = []
+    reply = _turn(("qa_probe", {}))
+
+    class Gateway:
+        async def post(self, url, **kwargs):
+            captured.append(kwargs["json"])
+            return httpx.Response(200, request=httpx.Request("POST", url), json=reply)
+
+    result = await agent_native._call_messages(
+        Gateway(), "https://gateway.test/v1/messages", [], "s", model=model,
+        tools=[{"name":"qa_probe","input_schema":{"type":"object"}}], tool_choice=choice,
+    )
+    assert result == reply and len(captured) == 1
+    payload = captured[0]
+    assert payload["model"] == model
+    assert payload["max_tokens"] == 20000
+    if model == "claude-sonnet-5.5":
+        assert payload["tool_choice"] == {"type":"auto"}
+        assert "thinking" not in payload
+        assert "output_config" not in payload
+    else:
+        assert payload["tool_choice"] == (choice or {"type":"auto"})
+        assert payload["thinking"] == {"type":"enabled","budget_tokens":8000}
+
+
+@pytest.mark.parametrize("status", [400,404,422])
+async def test_native_deterministic_http_refusal_is_not_replayed(monkeypatch,status):
+    calls = []
+
+    class Gateway:
+        async def post(self,url,**kwargs):
+            calls.append(kwargs["json"]["metadata"]["retry_count"])
+            return httpx.Response(status, request=httpx.Request("POST",url),
+                                  text="PRIVATE_BODY_NOT_FOR_LOGS")
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(agent_native.asyncio,"sleep",sleep)
+    with pytest.raises(RuntimeError, match=f"^provider_http_{status}:") as error:
+        await agent_native._call_messages(Gateway(),"https://private.test/path",[],"s")
+    assert calls == [0]
+    sleep.assert_not_awaited()
+    assert "PRIVATE_BODY" not in str(error.value) and "private.test" not in str(error.value)
+
+
+@pytest.mark.parametrize("status", [400,404,422])
+async def test_native_http_refusal_remains_terminal_with_safe_reason(monkeypatch,status):
+    async def rejected(*args,**kwargs):
+        raise RuntimeError(f"provider_http_{status}: PRIVATE_BODY_NOT_FOR_LOGS")
+
+    monkeypatch.setattr(agent_native,"_call_messages",rejected)
+    execute = AsyncMock()
+    with capture_logs() as logs:
+        result = await agent_native.run_native_build(
+            system="s",task="t",execute=execute,model="claude-sonnet-5.5",
+        )
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "provider_error"
+    assert result.summary.startswith(f"provider_http_{status}:")
+    execute.assert_not_awaited()
+    assert "PRIVATE_BODY" not in result.summary + str(logs)
+    event = next(row for row in logs if row["event"]=="agent_native.provider_failed")
+    assert event["reason_code"] == f"provider_http_{status}"
+
+@pytest.mark.parametrize("reply", [
+    {"stop_reason":"end_turn","content":[{"type":"text","text":"Done"}]},
+    _turn(("done", {"summary":"Done"})),
+])
+async def test_sonnet55_auto_does_not_accept_unchanged_source(monkeypatch,reply):
+    import json
+
+    calls = []
+    original_client = httpx.AsyncClient
+
+    def respond(request):
+        payload = json.loads(request.content)
+        calls.append(payload)
+        assert payload["tool_choice"] == {"type":"auto"}
+        assert "thinking" not in payload
+        return httpx.Response(200,request=request,json=reply)
+
+    monkeypatch.setattr(agent_native.httpx,"AsyncClient",lambda: original_client(
+        transport=httpx.MockTransport(respond),
+    ))
+    execute = AsyncMock(return_value={"ok":True,"detail":"clean"})
+    result = await agent_native._run_native_segment(
+        system="MAX VERIFICATION OVERRIDE",task="Apply requested source fix",
+        model="claude-sonnet-5.5",execute=execute,max_steps=2,
+        messages_url="https://gateway.test/v1/messages",
+        initial_files={"src/app/page.tsx":"existing product"}, source_repair=True,
+        edit_source_changed=lambda: False,
+        completion_check=lambda files,evidence: "Requested edit is still missing",
+    )
+    assert calls and len(calls)<=2
+    assert not result.done and not result.needs_finalization
+    assert result.files == {}

@@ -245,3 +245,103 @@ export default function Catalog({items}) {
   </section>;
 }'''
     assert max_source_completion_gap(PROMPT, files, portable=True) is None
+
+PRIORITY_PROMPT = "Добавь видимый фильтр по приоритету."
+MIXED_PRIORITY_PAGE = '''import {useState} from "react";
+export default function Page({orders}) {
+  const [filter,setFilter]=useState("all");
+  const [priorityFilter,setPriorityFilter]=useState("all");
+  const visible=orders.filter(o=>(filter==="all" || o.status===filter) &&
+    (priorityFilter==="all" || o.priority===priorityFilter));
+  return <ListView orders={visible} filter={filter} onFilter={setFilter}/>;
+}
+function ListView({orders,filter,onFilter}) {
+  return <section><button onClick={()=>onFilter("ready")}>Ready</button>
+    {orders.map(o=><article key={o.id}>{o.status}</article>)}</section>;
+}'''
+
+
+@pytest.mark.parametrize("prompt", [PRIORITY_PROMPT, "Add visible priority filter controls."])
+def test_working_status_filter_cannot_hide_requested_inert_priority(prompt: str) -> None:
+    gap = max_source_completion_gap(prompt, candidate(MIXED_PRIORITY_PAGE), portable=True)
+    assert gap is not None and "setPriorityFilter" in gap
+
+
+@pytest.mark.parametrize("prompt", [
+    "Добавь видимый фильтр по статусу.",
+    "Добавь видимые фильтры.",
+    "Только API: добавь видимый фильтр по приоритету.",
+    "Не добавляй видимый фильтр по приоритету.",
+    "Добавь видимый фильтр по статусу. Не меняй приоритет.",
+])
+def test_unrequested_priority_keeps_existing_mixed_filter_acceptance(prompt: str) -> None:
+    assert max_source_completion_gap(prompt, candidate(MIXED_PRIORITY_PAGE), portable=True) is None
+
+
+def test_connected_priority_control_has_no_negative_witness() -> None:
+    page = MIXED_PRIORITY_PAGE.replace(
+        'return <ListView',
+        'return <><button onClick={()=>setPriorityFilter("high")}>High</button><ListView',
+    ).replace('onFilter={setFilter}/>;', 'onFilter={setFilter}/></>;')
+    assert max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True) is None
+
+
+@pytest.mark.parametrize("page", [
+    MIXED_PRIORITY_PAGE.split('function ListView')[0]
+    + '\n// ListView implementation is imported or otherwise unknown',
+    MIXED_PRIORITY_PAGE.replace('function ListView', 'function OldListView'),
+    MIXED_PRIORITY_PAGE.replace('return <section>',
+                               'const shown = customFilter(orders); return <section>'),
+    MIXED_PRIORITY_PAGE.replace('{orders.map', '{orders.filter(o=>o.priority==="high").map'),
+    MIXED_PRIORITY_PAGE.replace('return <section>',
+                               'const p = useSearchParams(); return <section>'),
+    MIXED_PRIORITY_PAGE.replace('return <section>', 'return <section><OtherList items={orders}/>'),
+    MIXED_PRIORITY_PAGE.replace('{o.status}', '{o[column]}'),
+])
+def test_unknown_or_alternative_priority_view_remains_inconclusive(page: str) -> None:
+    assert max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True) is None
+
+@pytest.mark.parametrize("change", [
+    ('return <ListView', 'const [priority,setPriority]=useState("all"); '
+     'const alternate=orders.filter(o=>priority==="all" || o.priority===priority); '
+     'setPriority("high"); return <ListView'),
+    ('function ListView({orders,filter,onFilter})',
+     'function ListView({orders:rows,filter,onFilter})'),
+])
+def test_alternative_priority_state_or_aliased_child_input_is_unknown(change) -> None:
+    page = MIXED_PRIORITY_PAGE.replace(*change)
+    if 'orders:rows' in page:
+        page = page.replace('{orders.map', '{customFilter(rows).map')
+    assert max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True) is None
+
+
+def test_member_prop_alias_with_unknown_filter_is_inconclusive() -> None:
+    page = MIXED_PRIORITY_PAGE.replace(
+        'function ListView({orders,filter,onFilter}) {',
+        'function ListView(props) { const rows=props.orders;',
+    ).replace('{orders.map', '{customFilter(rows).map')
+    assert max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True) is None
+
+
+def test_normalized_priority_comparison_still_exposes_inert_setter() -> None:
+    page = MIXED_PRIORITY_PAGE.replace('o.priority===priorityFilter',
+                                       'normalizePriority(o.priority)===priorityFilter')
+    gap = max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True)
+    assert gap is not None and 'setPriorityFilter' in gap
+
+@pytest.mark.parametrize("predicate", [
+    'priority === "all" || o["priority"] === priority',
+    'matchesPriority(o, priority)',
+    'priority === "all" || o[field] === priority',
+    'priority === "all" || (priority === "high" && o.priority === "high")',
+])
+def test_active_unknown_priority_filter_after_visible_collection_is_inconclusive(predicate):
+    page = MIXED_PRIORITY_PAGE.replace(
+        'return <ListView',
+        'const [priority,setPriority]=useState("all"); '
+        f'const actual=visible.filter(o=>{predicate}); '
+        'return <><button onClick={()=>setPriority("high")}>High</button><ListView',
+    ).replace('orders={visible}', 'orders={actual}').replace(
+        'onFilter={setFilter}/>;', 'onFilter={setFilter}/></>;',
+    )
+    assert max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True) is None

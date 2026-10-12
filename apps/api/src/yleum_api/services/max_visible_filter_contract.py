@@ -191,6 +191,155 @@ def _pure_copy_sort(value: Node) -> bool:
     )
 
 
+def _known_priority_views(program: Node, body: Node, collections: set[str]) -> bool:
+    """Only inspect local, transparent list views; delegation is otherwise unknown."""
+    local = {
+        _text(node.child_by_field_name("name")): node
+        for node in program.named_children if node.type == "function_declaration"
+    }
+    for element in _walk(body):
+        if element.type not in {"jsx_opening_element", "jsx_self_closing_element"}:
+            continue
+        if any(child.type == "jsx_expression" for child in element.named_children):
+            return False  # Spread props can carry another implementation.
+        component = _text(element.child_by_field_name("name"))
+        if not component or not component[0].isupper():
+            continue
+        props = set()
+        for attribute in element.named_children:
+            if attribute.type != "jsx_attribute":
+                continue
+            if any(node.type == "identifier" and _text(node) in collections
+                   for node in _walk(attribute)):
+                props.add(_text(attribute.named_children[0]))
+        if not props:
+            continue
+        view = local.get(component)
+        view_body = view.child_by_field_name("body") if view is not None else None
+        if view is None or view_body is None or re.search(
+            r"priority|приоритет", _text(view_body), re.I,
+        ):
+            return False
+        if any(node.type in {"pair_pattern", "rest_pattern", "assignment_pattern"}
+               for node in _walk(view)):
+            return False  # Renamed/default/spread bindings need scope analysis.
+        if _delegates_collection(view_body, [], props):
+            return False
+        for node in _walk(view_body):
+            if node.type in {"subscript_expression", "spread_element"}:
+                return False
+            if node.type == "variable_declarator" and any(
+                item.type in {"identifier", "property_identifier"} and _text(item) in props
+                for item in _walk(node.child_by_field_name("value") or node)
+            ):
+                return False  # Aliased/transformed collection needs deeper analysis.
+            if node.type != "call_expression":
+                continue
+            function = _text(node.child_by_field_name("function"))
+            if re.search(r"\buse[A-Z]|\.(?:filter|sort)\b", function):
+                return False
+            arguments = node.child_by_field_name("arguments")
+            if arguments and any(item.type in {"identifier", "property_identifier"}
+                                 and _text(item) in props
+                                 for item in _walk(arguments)):
+                return False
+    return True
+
+
+def _priority_depends(value: Node, getter: str) -> bool:
+    if not _depends(value, getter, "filter"):
+        return False
+    for node in _walk(value):
+        if node.type != "binary_expression" or _text(
+            node.child_by_field_name("operator")
+        ) not in {"==", "===", "!=", "!=="}:
+            continue
+        left, right = node.child_by_field_name("left"), node.child_by_field_name("right")
+        for state, field in ((left, right), (right, left)):
+            if state is not None and field is not None and _text(state) == getter and any(
+                item.type == "member_expression"
+                and _text(item.child_by_field_name("property")) == "priority"
+                for item in _walk(field)
+            ):
+                return True
+    return False
+
+
+def _only_status_filter(value: Node, getter: str) -> bool:
+    """A known status predicate cannot substitute for requested priority controls."""
+    arguments = value.child_by_field_name("arguments")
+    if arguments is None:
+        return False
+    references = [node for node in _walk(arguments)
+                  if node.type == "identifier" and _text(node) == getter]
+    for node in references:
+        parent = node.parent
+        if parent is None or parent.type != "binary_expression" or _text(
+            parent.child_by_field_name("operator")
+        ) not in {"==", "===", "!=", "!=="}:
+            return False
+        left, right = parent.child_by_field_name("left"), parent.child_by_field_name("right")
+        other = right if left == node else left
+        if other is None or not (other.type == "string" or (
+            other.type == "member_expression"
+            and _text(other.child_by_field_name("property")) == "status"
+        )):
+            return False
+    return bool(references)
+
+
+def _priority_filter_gap(
+    prompt: str, program: Node, body: Node, source: str,
+    declarations: list[tuple[Node, Node]], bindings: list[tuple[str, str, bool]],
+) -> str | None:
+    # Field-specific positive intent must be in the same non-negative UI clause.
+    if not any(
+        re.search(r"\b(?:priority|приоритет\w*)\b", clause, re.I)
+        and re.search(r"\b(?:фильтр\w*|filters?)\b", clause, re.I)
+        and re.search(
+            r"\b(?:видим\w*|кнопк\w*|переключател\w*|visible|controls?|buttons?|interactive)\b",
+            clause, re.I,
+        )
+        and not re.search(r"\b(?:не|нет|not|without)\b", clause, re.I)
+        for clause in re.split(r"[.!?;\n]", prompt)
+    ):
+        return None
+    for getter, setter, literal in bindings:
+        if not literal or not re.fullmatch(r"priorityFilter|filterPriority", getter, re.I):
+            continue
+        if _reference(setter, source) != 1:
+            continue
+        values = [(name, value) for name, value in declarations
+                  if name.type == "identifier" and _priority_depends(value, getter)]
+        if not values:
+            continue
+        if any(
+            other != getter and _reference(other_setter, source) > 1
+            and any(_depends(node, other, "filter") and (
+                        node.id not in {value.id for _, value in values}
+                        or not _only_status_filter(node, other)
+                    )
+                    for node in _walk(body) if node.type == "call_expression")
+            for other, other_setter, _ in bindings
+        ):
+            continue  # Another state may implement the same requested field.
+        collections = {_text(name) for name, _ in values}
+        for _, value in values:
+            function = value.child_by_field_name("function")
+            receiver = function.child_by_field_name("object") if function else None
+            if receiver is not None:
+                collections.update(_text(node) for node in _walk(receiver)
+                                   if node.type == "identifier")
+        if _known_priority_views(program, body, collections):
+            return (
+                "The explicitly requested visible priority filter has an unreferenced "
+                "React state setter " + setter + " in src/app/page.tsx. A working status "
+                "filter does not implement the priority controls. Connect and verify "
+                "the requested controls before done."
+            )
+    return None
+
+
 def unused_visible_filter_gap(
     prompt: str, files: Mapping[str, str], *, operations: frozenset[str] = frozenset({"filter"}),
 ) -> str | None:
@@ -268,6 +417,10 @@ def unused_visible_filter_gap(
         literal = bool(arguments and len(arguments.named_children) == 1
                        and arguments.named_children[0].type == "string")
         bindings.append((_text(pair[0]), _text(pair[1]), literal))
+    if "filter" in positive:
+        priority_gap = _priority_filter_gap(prompt, program, body, source, declarations, bindings)
+        if priority_gap:
+            return priority_gap
     for operation in sorted(positive):
         dependent = [
             (getter, setter, literal, _text(name)) for getter, setter, literal in bindings
