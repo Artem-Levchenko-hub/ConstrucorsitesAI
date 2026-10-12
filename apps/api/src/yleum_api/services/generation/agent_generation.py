@@ -522,11 +522,15 @@ async def execute_agent_turn(
         _native_execute, _completion_check = await guard_native_source_contract(
             runtime, ids, _native_execute, _completion_check,
         )
-        _native_max_segments = (
-            1 if _is_edit or edit_source_changed is not None else get_settings().agent_max_segments
-        )
         snapshot_reader = getattr(operations, "snapshot_files", None) or getattr(
             runtime.handle, "snapshot_files", None,
+        )
+        _native_max_segments = (
+            None
+            if runtime.coordinator is not None
+            and getattr(get_settings(), "agent_progressive_continuation", False)
+            else 1 if _is_edit or edit_source_changed is not None
+            else get_settings().agent_max_segments
         )
         if source_checkpoint is not None and callable(snapshot_reader):
             _native_execute = checkpoint_source_actions(
@@ -551,6 +555,7 @@ async def execute_agent_turn(
                 completion_check=_completion_check,
                 max_steps=plan.steps,
                 max_segments=_native_max_segments,
+                snapshot_files=snapshot_reader if callable(snapshot_reader) else None,
                 allow_max_bash=_max_shell_enabled,
                 portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
                 initial_files=(
@@ -597,7 +602,11 @@ async def execute_agent_turn(
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,
             max_segments=(
-                get_settings().agent_max_segments
+                None
+                if project_info.template == "max_miniapp"
+                and runtime.coordinator is not None
+                and getattr(get_settings(), "agent_progressive_continuation", False)
+                else get_settings().agent_max_segments
                 if project_info.template == "max_miniapp" else 1
             ),
             checkpoint=source_checkpoint,

@@ -17,8 +17,8 @@ from yleum_api.core.config import (
 )
 
 
-def test_role_map_latest_sonnet_orchestration() -> None:
-    assert PRIMARY_LLM_MODEL == "~anthropic/claude-sonnet-latest"
+def test_role_map_pinned_sonnet_55_orchestration() -> None:
+    assert PRIMARY_LLM_MODEL == "claude-sonnet-5.5"
     assert model_for_role("director") == PRIMARY_LLM_MODEL
     assert model_for_role("polish") == PRIMARY_LLM_MODEL
     assert model_for_role("classify") == PRIMARY_LLM_MODEL
@@ -45,6 +45,12 @@ def test_role_map_latest_sonnet_orchestration() -> None:
     }
     for m in ROLE_MODEL_MAP.values():
         assert m not in banned
+
+
+def test_sonnet_55_receives_the_full_premium_prompt() -> None:
+    from yleum_api.core.config import tier_for_model
+
+    assert tier_for_model("claude-sonnet-5.5") == "premium"
 
 
 def test_art_director_writer_both_use_gemini_custom_tools() -> None:

@@ -184,7 +184,9 @@ async def test_unchanged_or_still_red_repairs_roll_back_once(source_check, write
     result = await agent_recovery.recover_rejected_candidate(**kwargs)
     assert result.candidate_failed and not result.files
     assert rollback.await_count == 1
-    assert len(calls) <= kwargs["plan"].steps
+    # One window changed the source; the next unchanged window must stop.
+    # A window boundary no longer discards a potentially useful repair.
+    assert len(calls) <= 2 * kwargs["plan"].steps
     assert kwargs["runtime"].coordinator.source_edit_deadline.await_count == 1
 
 

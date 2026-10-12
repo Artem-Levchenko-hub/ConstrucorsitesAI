@@ -100,12 +100,15 @@ async def test_finalization_repairs_stop_without_success_or_unbounded_retries(
 ):
     harness = await _new_harness(db_session, test_engine)
     tree = harness.files
+    initial = tree["src/app/page.tsx"]
     calls = []
 
     async def repair(detail):
         calls.append(detail)
         if changes:
-            tree["src/app/page.tsx"] += "\n// still incomplete"
+            tree["src/app/page.tsx"] = (
+                initial + "\n// still incomplete" if len(calls) == 1 else initial
+            )
 
     outcome = await harness.coordinator.finalize_with_repair(prompt="Каталог", repair=repair)
 
@@ -276,3 +279,32 @@ async def test_unclassified_service_failure_does_not_trigger_model_repair(db_ses
     harness.coordinator.executor = replace(harness.coordinator.executor, run_role=run_role)
     outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
     assert outcome.status is MaxFinalizationStatus.FAILED
+
+
+async def test_three_distinct_repairs_keep_full_finalization_and_promote_only_green(
+    db_session, test_engine,
+):
+    harness = await _new_harness(
+        db_session, test_engine, build_green=False,
+        build_detail=(
+            "src/app/page.tsx(3,2): error TS2322: "
+            "Type 'number' is not assignable to type 'string'."
+        ),
+    )
+    calls = []
+    async def repair(detail):
+        calls.append(detail)
+        # Three distinct actual source states; the full build stays red for the first two.
+        harness.files["src/app/page.tsx"] = (
+            "export default function Page(){return <main>Tracker revision "
+            + str(len(calls)) + "</main>}"
+        )
+        if len(calls) == 3:
+            harness.set_build_green(True)
+    outcome = await harness.coordinator.finalize_with_repair(prompt="Build tracker", repair=repair)
+    assert outcome.status is MaxFinalizationStatus.COMPLETE
+    assert len(calls) == 3
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 4
+    assert len(harness.runtime_probes) == 1
+    candidates = list(await db_session.scalars(select(ProjectCellCandidate)))
+    assert len(candidates) == 1 and candidates[0].status == "accepted"

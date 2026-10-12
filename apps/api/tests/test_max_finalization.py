@@ -1645,6 +1645,7 @@ async def test_full_build_source_repair_boundary_without_database(
         snapshot_files=AsyncMock(side_effect=lambda: dict(files)),
     )
     coordinator._raise_persisted_infrastructure_failure = AsyncMock()
+    coordinator._repair_progress_receipts = AsyncMock(return_value=frozenset())
     coordinator._locked_run = AsyncMock(return_value=run)
     coordinator._checkpoint = lambda *args: None
     coordinator._log_terminal = AsyncMock()
