@@ -284,7 +284,13 @@ async def test_unclassified_service_failure_does_not_trigger_model_repair(db_ses
 async def test_three_distinct_repairs_keep_full_finalization_and_promote_only_green(
     db_session, test_engine,
 ):
-    harness = await _new_harness(db_session, test_engine, build_green=False)
+    harness = await _new_harness(
+        db_session, test_engine, build_green=False,
+        build_detail=(
+            "src/app/page.tsx(3,2): error TS2322: "
+            "Type 'number' is not assignable to type 'string'."
+        ),
+    )
     calls = []
     async def repair(detail):
         calls.append(detail)
