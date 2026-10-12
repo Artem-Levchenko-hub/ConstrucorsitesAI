@@ -20,11 +20,32 @@ import pytest
 from yleum_api.services import agent_builder as ab
 
 
-def _ok_executor(record: list):
+def _ok_executor(record):
+    state = {}
+
     async def _execute(action: ab.Action):
         record.append((action.name, action.path))
         if action.name in ("write_file", "edit_file"):
-            return {"ok": True, "content": action.args.get("content", "x")}
+            before = state.get(action.path, action.args.get("search"))
+            content = (
+                action.args.get("content", "x")
+                if action.name == "write_file"
+                else (before or "").replace(
+                    action.args.get("search", ""), action.args.get("replace", ""), 1
+                )
+            )
+            state[action.path] = content
+            return {
+                "ok": True,
+                "content": content,
+                "content_change": {
+                    "path": action.path,
+                    "before_sha256": hashlib.sha256(before.encode()).hexdigest()
+                    if before is not None
+                    else None,
+                    "after_sha256": hashlib.sha256(content.encode()).hexdigest(),
+                },
+            }
         return {"ok": True, "detail": "ok"}
 
     return _execute
@@ -270,8 +291,11 @@ def test_repeated_read_after_confirmed_same_file_edits_reaches_done(mutation):
     assert res.stop_reason == "done"
     # Every requested read must actually produce an observation, including the
     # fourth read previously aborted before execution.
-    reads = [turn for turn in res.transcript
-             if turn["content"].startswith("[observation: read_file")]
+    reads = [
+        turn for turn in res.transcript
+        if turn["content"].startswith("[observation: read_file")
+        and " SKIPPED]" not in turn["content"]
+    ]
     assert len(reads) == 4
     assert res.files["src/app/page.tsx" if mutation == "edit" else "./src\\app/page.tsx"] == "v3"
 
@@ -284,8 +308,11 @@ def test_unconfirmed_or_other_file_change_preserves_read_repeat_limit(mutation):
     assert res.done is False
     assert res.stop_reason == "looping"
     assert res.steps == 10  # fourth identical read attempt, NUDGE at attempts 2/3
-    reads = [turn for turn in res.transcript
-             if turn["content"].startswith("[observation: read_file")]
+    reads = [
+        turn for turn in res.transcript
+        if turn["content"].startswith("[observation: read_file")
+        and " SKIPPED]" not in turn["content"]
+    ]
     assert len(reads) == 1
 
 

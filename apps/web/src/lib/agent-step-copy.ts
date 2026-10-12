@@ -204,6 +204,14 @@ function capitalize(value: string): string {
  * сохранённых лент, где в `action` лежит сырое имя инструмента.
  */
 export function stepCopy(step: AgentStep): StepCopy {
+  if (step.skipped) {
+    return {
+      title: "Шаг пропущен",
+      hint: "Агент получил замечание проверки и выбирает следующий шаг.",
+      tone: "wait",
+      icon: "wait",
+    };
+  }
   if (step.ok === false) {
     // Одна и та же фраза красным и серым различается плохо: у неудачи должно
     // быть видно словами, что шаг не получился, а не только цветом.
