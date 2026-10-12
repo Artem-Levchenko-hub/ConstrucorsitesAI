@@ -940,6 +940,12 @@ async def _call_messages(
         "tool_choice": dict(tool_choice) if tool_choice is not None else {"type": "auto"},
         "messages": _with_incremental_cache(convo),
     }
+    if model == "claude-sonnet-5.5":
+        # The pinned Gateway model rejects forced tool use. It does not expose
+        # verified adaptive/effort controls; do not send a legacy manual budget.
+        payload.pop("thinking")
+        if payload["tool_choice"].get("type") in {"any", "tool"}:
+            payload["tool_choice"] = {"type": "auto"}
     if user_id:
         payload["user"] = user_id
     last: Exception | None = None
@@ -1050,6 +1056,10 @@ async def _call_messages(
                     f"provider_refusal_{category}" if category is not None
                     else "provider_http_402"
                 )
+            if r.status_code in {400, 404, 422}:
+                # Repeating the same rejected request cannot fix its contract.
+                # Keep only the HTTP class; never infer quota or expose its body.
+                raise _terminal_provider_error(f"provider_http_{r.status_code}")
             if r.status_code == 429 or category == "rate_limit":
                 last = (
                     _terminal_provider_error("provider_refusal_rate_limit")
@@ -1506,7 +1516,7 @@ async def _run_native_segment(
                 )
                 marker = re.match(
                     r"\A(PLATFORM_WALLET_EMPTY|provider_refusal_(?:access|funds|rate_limit)|"
-                    r"provider_http_(?:401|402|403)):",
+                    r"provider_http_(?:400|401|402|403|404|422)):",
                     str(exc),
                 )
                 if marker is not None:
