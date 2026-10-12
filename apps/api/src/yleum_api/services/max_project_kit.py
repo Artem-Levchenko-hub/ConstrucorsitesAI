@@ -402,8 +402,12 @@ Create src/app/page.tsx, the product styling, domain screens, components and API
 behaviour required by the brief from scratch. A thin shell, decorative tabs,
 static demo response or fake timer is not a finished application. Persist user actions with
 `createMaxAction` and read them with `getMaxActions` (optionally paginated with
-`{ limit, cursor }`), both from `@/lib/omnia/integration-client`. Never fabricate the current user's history,
-profile, progress, workouts, meals or metrics with demo/mock/test constants.
+`{ limit, cursor }`), both from `@/lib/omnia/integration-client`.
+Do not impose arbitrary limits on the number of business listings or records a
+user can create. Use pagination for reading large lists; a page size is not a
+creation quota. Add a business quota only when the owner explicitly requests it.
+Never fabricate the current user's history, profile, progress, workouts, meals
+or metrics with demo/mock/test constants.
 Load user-owned state from `getMaxActions`; if no records exist, show an honest
 empty/onboarding state. Static immutable reference catalogs are allowed only when
 they are clearly separate from user activity. In an attested project-owner sandbox

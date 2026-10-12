@@ -30,6 +30,7 @@ import structlog
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
+from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -76,32 +77,31 @@ _HTTP_TIMEOUT_S = 300.0
 # _CALL_RETRY_WINDOW_S), and a wall-clock ceiling so a provider that accepts the
 # connection and then hangs cannot eat the whole generation deadline on one step.
 _CALL_RETRIES = 7
-# Retry an unexplained auth refusal only after success in this run.
-# An explicit key block overrides that history: earlier access can be revoked.
-_AUTH_RETRIES_AFTER_SUCCESS = 2
-_AUTH_RETRY_DELAY_S = 5.0
-_RUNS_WITH_A_LIVE_KEY: set[str] = set()
-
-
-
-def _provider_complaint(response: Any) -> str:
-    """Что провайдер ответил своими словами — коротко и без похожего на ключ.
-
-    26.09.2026: прогон умер с «провайдер отклонил ключ», и понять, блокировка
-    это или исчерпанный баланс, было нельзя — ответ провайдера платформа
-    выбрасывала. Шлюз его как раз сохраняет, так что терялся он именно здесь.
-    """
-
-    import re
-
+def _provider_refusal_category(response: httpx.Response) -> str | None:
+    """Accept only the gateway's structured category for this HTTP refusal."""
+    if not 400 <= response.status_code < 500 or len(response.content) > 16_384:
+        return None
     try:
         body = response.json()
-        raw = body.get("error", {}).get("message") if isinstance(body, dict) else None
-    except Exception:
-        raw = None
-    text = str(raw or getattr(response, "text", "") or "")[:200]
-    # Похожее на ключ или токен наружу не выносим, даже если провайдер его вернул.
-    return re.sub(r"[A-Za-z0-9_\-]{20,}", "…", text).strip()
+    except (ValueError, RecursionError):
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    details = error.get("details") if isinstance(error, dict) else None
+    if not isinstance(details, dict):
+        return None
+    status = details.get("upstream_http_status")
+    category = details.get("provider_refusal_category")
+    if (type(status) is int and status == response.status_code
+            and isinstance(category, str) and category in {"access", "funds", "rate_limit"}):
+        return category
+    return None
+
+
+def _terminal_provider_error(marker: str) -> RuntimeError:
+    """Fixed internal marker and public summary; no upstream text survives."""
+    return RuntimeError(f"{marker}: {failure_for_error(marker + ':').message}")
+
+
 # The gateway allows 240s per upstream I/O. A 210s caller window discarded
 # a healthy paid response before it arrived (live 2026-10-03). Keep bounded
 # response/accounting headroom; this also bounds all retries/backoff in a turn,
@@ -941,7 +941,6 @@ async def _call_messages(
     if user_id:
         payload["user"] = user_id
     last: Exception | None = None
-    auth_attempt = 0
     loop = asyncio.get_running_loop()
     started_at = loop.time()
     for attempt in range(_CALL_RETRIES):
@@ -1006,6 +1005,7 @@ async def _call_messages(
                                 f"{output_error[field].upper()}: "
                                 "ответ модели не принят; автоматический повтор остановлен."
                             )
+            category = _provider_refusal_category(r)
             if r.status_code == 503:
                 try:
                     error_body = r.json()
@@ -1032,49 +1032,28 @@ async def _call_messages(
                         "PROVIDER_MODEL_MISMATCH: upstream model identity is unsupported; "
                         "no automatic replay or wrong-model charge"
                     )
-            # 402 = provider key out of balance. Retrying can't fix it, so fail
-            # FAST with a human cause instead of grinding 8 backoff retries and
-            # surfacing an opaque "соединение потеряно" 3+ minutes later.
+            # Access/funds refusals cannot be repaired by replaying the POST.
+            # Earlier success is not evidence that the next refusal is transient.
             if r.status_code in {401, 403}:
-                proven = bool(run_id) and str(run_id) in _RUNS_WITH_A_LIVE_KEY
-                complaint = _provider_complaint(r)
-                blocked = "key is blocked" in complaint.casefold()
-                if blocked:
-                    guidance = (
-                        "; провайдер сообщил о блокировке ключа. "
-                        "Разблокируйте его у провайдера перед новым запуском."
-                    )
-                elif proven:
-                    guidance = (
-                        "; в этом запуске ключ раньше работал, но сейчас провайдер "
-                        "отказывает в доступе. Проверьте статус и разрешения ключа."
-                    )
-                else:
-                    guidance = "; проверьте блокировку и разрешения ключа."
-                refusal = RuntimeError(
-                    "PROVIDER_AUTH_FAILED: провайдер модели отклонил ключ доступа"
-                    + guidance
-                    + (f" Ответ провайдера: {complaint}" if complaint else "")
+                raise _terminal_provider_error(
+                    f"provider_refusal_{category}" if category is not None
+                    else f"provider_http_{r.status_code}"
                 )
-                if proven and not blocked and auth_attempt < _AUTH_RETRIES_AFTER_SUCCESS:
-                    # Keep the auth cause if the shared retry budget ends first.
-                    auth_attempt += 1
-                    last = refusal
-                    await asyncio.sleep(min(
-                        _AUTH_RETRY_DELAY_S * auth_attempt,
-                        max(0.0, _CALL_RETRY_WINDOW_S - (loop.time() - started_at)),
-                    ))
-                    continue
-                raise refusal
-            if r.status_code == 402:
-                complaint = _provider_complaint(r)
-                raise RuntimeError(
-                    "PAYMENT_REQUIRED: баланс LLM-провайдера (LLMGW) исчерпан — "
-                    "пополни ключ и повтори промпт"
-                    + (f" Ответ провайдера: {complaint}" if complaint else "")
+            if (r.status_code == 402 and isinstance(output_error, dict)
+                    and output_error.get("type") == "wallet_empty"):
+                # Gateway wallet admission happens before any provider POST.
+                raise _terminal_provider_error("PLATFORM_WALLET_EMPTY")
+            if r.status_code == 402 or category in {"access", "funds"}:
+                raise _terminal_provider_error(
+                    f"provider_refusal_{category}" if category is not None
+                    else "provider_http_402"
                 )
-            if r.status_code == 429 or (r.status_code >= 400 and "rate_limit" in r.text[:300]):
-                last = RuntimeError(f"429 concurrency (attempt {attempt + 1})")
+            if r.status_code == 429 or category == "rate_limit":
+                last = (
+                    _terminal_provider_error("provider_refusal_rate_limit")
+                    if category == "rate_limit"
+                    else RuntimeError(f"429 concurrency (attempt {attempt + 1})")
+                )
                 delay = 6.0 * (attempt + 1)
             else:
                 r.raise_for_status()
@@ -1082,11 +1061,6 @@ async def _call_messages(
                 if not isinstance(body, dict):
                     raise RuntimeError("messages API returned a non-object payload")
                 _validate_response_stop_reason(body)
-                if run_id:
-                    # Набор живёт в долгом процессе воркера — держим его маленьким.
-                    if len(_RUNS_WITH_A_LIVE_KEY) > 512:
-                        _RUNS_WITH_A_LIVE_KEY.clear()
-                    _RUNS_WITH_A_LIVE_KEY.add(str(run_id))
                 return body
         except TimeoutError as exc:
             raise RuntimeError("PROVIDER_TIMEOUT: native request budget exhausted") from exc
@@ -1528,6 +1502,13 @@ async def _run_native_segment(
                     ))
                     else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
                 )
+                marker = re.match(
+                    r"\A(PLATFORM_WALLET_EMPTY|provider_refusal_(?:access|funds|rate_limit)|"
+                    r"provider_http_(?:401|402|403)):",
+                    str(exc),
+                )
+                if marker is not None:
+                    safe_reason = f"{marker.group(1)}: {failure_for_error(exc).message}"
                 reason_code = safe_reason.partition(":")[0].lower()
                 if str(exc).startswith("PROVIDER_TIMEOUT:"):
                     reason_code = "provider_timeout"

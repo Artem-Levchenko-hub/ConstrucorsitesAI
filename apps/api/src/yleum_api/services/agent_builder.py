@@ -48,6 +48,7 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -60,7 +61,8 @@ from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 # The model is taught to emit exactly one of these per turn. We parse the LAST
 # block in the reply (the model may "think" in prose first, then act).
 _ACTION_RE = re.compile(
-    r"<omnia:action\s+name=[\"']([a-z_]+)[\"']\s*>\s*(.*?)\s*</omnia:action>",
+    r"<(?:omnia:action|action|invoke)\s+name=[\"']([a-z_]+)[\"']\s*>"
+    r"\s*(.*?)\s*</(?:omnia:action|action|invoke)>",
     re.DOTALL | re.IGNORECASE,
 )
 
@@ -138,7 +140,9 @@ def parse_action(reply: str) -> Action | None:
     else:
         try:
             parsed = json.loads(body)
-            args = parsed if isinstance(parsed, dict) else {}
+            if not isinstance(parsed, dict):
+                return None
+            args = parsed
         except json.JSONDecodeError:
             # `done` and `build` legitimately carry no/loose body — accept them.
             if name in ("done", "build"):
@@ -233,6 +237,116 @@ async def run_agent_build(
     complete: Callable[..., Awaitable[str]] | None = None,
     user_id: str | None = None,
     project_id: str | None = None,
+    max_tokens: int = 16384,
+    require_green_before_done: bool = False,
+    coordinator_handoff: bool = False,
+    ship_green_on_abort: bool = True,
+    edit_mode: bool = False,
+    bare_mode: bool = False,
+    snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    max_segments: int = 1,
+    checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None,
+    edit_deadline: datetime | None = None,
+) -> AgentResult:
+    """Continue a progressing candidate without a new run, cell or blind replay."""
+    segment_limit = max(1, min(8, int(max_segments)))
+    cumulative_files: dict[str, str] = {}
+    transcript: list[dict[str, str]] = []
+    total_steps = 0
+    task = user_prompt
+    for segment in range(1, segment_limit + 1):
+        offset = total_steps
+        source_progress = False
+
+        async def segment_emit(
+            event: str, data: dict[str, Any], *,
+            current_segment: int = segment, step_offset: int = offset,
+        ) -> None:
+            if emit is not None:
+                payload = {**data, "segment": current_segment}
+                if type(payload.get("step")) is int:
+                    payload["step"] += step_offset
+                await emit(event, payload)
+
+        async def segment_progress(
+            candidate: AgentResult, *,
+            current_segment: int = segment, step_offset: int = offset,
+        ) -> None:
+            nonlocal source_progress
+            source_progress = True
+            if checkpoint is not None:
+                candidate.steps += step_offset
+                candidate.segments = current_segment
+                await checkpoint(candidate)
+
+        result = await _run_agent_segment(
+            system_prompt=system_prompt, user_prompt=task, model=model,
+            execute=execute, escalate_model=escalate_model, max_steps=max_steps,
+            emit=segment_emit if emit is not None else None, complete=complete,
+            user_id=user_id, project_id=project_id, max_tokens=max_tokens,
+            require_green_before_done=require_green_before_done,
+            coordinator_handoff=coordinator_handoff,
+            ship_green_on_abort=ship_green_on_abort,
+            edit_mode=edit_mode, bare_mode=bare_mode, snapshot_files=snapshot_files,
+            initial_written=cumulative_files,
+            on_progress=segment_progress,
+            edit_deadline=edit_deadline,
+        )
+        cumulative_files.update(result.files)
+        total_steps += result.steps
+        transcript.extend(result.transcript)
+        result.files = dict(cumulative_files)
+        result.steps = total_steps
+        result.segments = segment
+        result.transcript = list(transcript)
+        if result.done or result.needs_finalization:
+            return result
+        if result.stop_reason not in {"max_steps", "looping", "exploring", "stalled"}:
+            return result
+        if segment_limit == 1:
+            return result
+        if not source_progress:
+            result.stop_reason = "no_progress"
+            result.summary = "Остановлено: сегмент не изменил исходники приложения."
+            return result
+        if segment == segment_limit:
+            result.stop_reason = "max_segments"
+            result.summary = "Приложение ещё не прошло итоговые проверки; продолжение остановлено."
+            return result
+        diagnostics = [
+            turn["content"] for turn in result.transcript[-12:]
+            if turn.get("role") == "user"
+        ][-4:]
+        task = (
+            "Continue the SAME candidate in the SAME workspace. Keep existing source; "
+            "do not scaffold or duplicate the application. Fix the concrete errors, "
+            "finish missing requested behavior, build after the last change, then done. "
+            "A prior green check is invalid after any further write.\n\n"
+            f"Original request:\n{user_prompt}\n\n"
+            f"Previous segment stopped: {result.stop_reason}\n"
+            + "\n".join(diagnostics)[-16000:]
+        )
+        if emit is not None:
+            await emit("agent.continuation", {
+                "step": total_steps, "segment": segment + 1,
+                "human": "Продолжаю сохранённую работу и исправляю оставшиеся ошибки",
+                "ok": None,
+            })
+        await asyncio.sleep(0)
+    raise AssertionError("segment limit must be positive")
+
+async def _run_agent_segment(
+    *,
+    system_prompt: str,
+    user_prompt: str,
+    model: str,
+    execute: Executor,
+    escalate_model: str | None = None,
+    max_steps: int = 12,
+    emit: Emit | None = None,
+    complete: Callable[..., Awaitable[str]] | None = None,
+    user_id: str | None = None,
+    project_id: str | None = None,
     max_tokens: int = 16384,  # Opus emits a full page/route in one write; 8192
     # truncated large files mid-content (→ broken file the next build must fix).
     # The model stops when done, so short replies are unaffected — this only lifts
@@ -243,6 +357,9 @@ async def run_agent_build(
     edit_mode: bool = False,
     bare_mode: bool = False,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    initial_written: dict[str, str] | None = None,
+    on_progress: Callable[[AgentResult], Awaitable[None]] | None = None,
+    edit_deadline: datetime | None = None,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -255,12 +372,13 @@ async def run_agent_build(
     # nonstream client's 90s default discarded healthy paid responses before
     # they arrived. Give only this builder bounded response/accounting headroom;
     # injected completers and other callers retain their existing budgets.
+    uses_gateway = complete is None
     complete = complete or partial(llm_client.complete_chat, timeout_seconds=300.0)
     convo: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
-    written: dict[str, str] = {}
+    written: dict[str, str] = dict(initial_written or {})
     stalls = 0
     last_sig = ""
     repeat_count = 0
@@ -284,10 +402,10 @@ async def run_agent_build(
     # `require_green_before_done` bookkeeping: a `done` is only honoured once the
     # last build was clean AND the running app was re-checked after the last write
     # (a clean typecheck is exactly what a model hallucinates completion around —
-    # see SYSTEM_PROMPT). Bounded by `_DONE_REJECT_CAP` so it nudges, never hangs.
+    # see SYSTEM_PROMPT). The segment budget bounds rejected claims without
+    # ever converting an unverified candidate into a successful result.
     last_runtime_ok: bool | None = None  # result of the most recent `runtime_check`
     wrote_since_check = False  # a write happened with no runtime_check after it
-    done_rejections = 0
     active_model = model
     escalated = False
 
@@ -387,8 +505,9 @@ async def run_agent_build(
         gate itself only requires a clean build (see `require_green_before_done`),
         so a green abort meets the same bar. Falls through to the original abort
         when there is no green build to rescue."""
-        if ship_green_on_abort and (
-            fast_check_fresh if coordinator_handoff else last_build_ok is True
+        if ship_green_on_abort and fast_check_fresh and (
+            coordinator_handoff or not require_green_before_done
+            or (last_runtime_ok is True and not wrote_since_check)
         ):
             print(
                 f"[AGENT] step={step_no} SHIP-GREEN-ON-{reason} "
@@ -405,6 +524,13 @@ async def run_agent_build(
         return fallback
 
     for step in range(max_steps):
+        if edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
+            return _ship_green_or(
+                AgentResult(
+                    done=False, summary="Завершаю работу с исходниками; сохраняю время для проверок.",
+                    files=written, steps=step, transcript=convo, stop_reason="source_deadline",
+                ), step, "deadline",
+            )
         # Retry only positively identified preconnection failures. A missing
         # response to an accepted POST may already represent a paid model call.
         reply = None
@@ -437,8 +563,21 @@ async def run_agent_build(
         # Preserve the existing five-attempt bound for proven safe failures.
         # Auth/rate rejection and unknown billing outcomes are not replay-safe.
         for attempt in range(5):
+            remaining = (
+                (edit_deadline - datetime.now(UTC)).total_seconds()
+                if edit_deadline is not None else None
+            )
+            if remaining is not None and remaining <= 0:
+                return AgentResult(
+                    done=False, summary="Время работы с исходниками завершилось.",
+                    files=written, steps=step, transcript=convo, stop_reason="source_deadline",
+                )
+            bounded_complete = (
+                partial(llm_client.complete_chat, timeout_seconds=min(300.0, remaining))
+                if uses_gateway and remaining is not None else complete
+            )
             try:
-                reply = await complete(
+                reply = await bounded_complete(
                     call_msgs,
                     active_model,
                     user_id=user_id,
@@ -461,6 +600,9 @@ async def run_agent_build(
                     "provider_charge_ambiguous": (
                         failure.provider_charge_ambiguous if failure is not None else None
                     ),
+                    "provider_refusal_category": (
+                        failure.provider_refusal_category if failure is not None else None
+                    ),
                 }
                 if emit:
                     await emit("agent.provider_error", diagnostic)
@@ -476,6 +618,18 @@ async def run_agent_build(
                         if failure is not None and failure.upstream_http_status is not None
                         else "provider_request_failed"
                     )
+                    if (
+                        failure is not None and failure.code == "wallet_empty"
+                        and failure.http_status == 402
+                    ):
+                        classification = "PLATFORM_WALLET_EMPTY"
+                    elif (
+                        failure is not None
+                        and failure.provider_refusal_category in {"access", "funds", "rate_limit"}
+                        and failure.upstream_http_status is not None
+                        and 400 <= failure.upstream_http_status < 500
+                    ):
+                        classification = f"provider_refusal_{failure.provider_refusal_category}"
                     return AgentResult(
                         done=False, summary=f"{classification}: {prefix}{cause}", files=written,
                         steps=step, transcript=convo, stop_reason="provider_error",
@@ -538,14 +692,11 @@ async def run_agent_build(
             # Green-gate: refuse a premature `done`. The model loves to declare
             # victory on a clean typecheck without ever opening the route, so a
             # broken-at-runtime app ships. Require last build clean + a
-            # runtime_check AFTER the last write. Bounded by _DONE_REJECT_CAP so
-            # a genuinely-unverifiable build (e.g. no reachable route) still
-            # finishes instead of looping (R-10 fail-soft). Default OFF.
-            if coordinator_handoff or (
-                require_green_before_done and done_rejections < _DONE_REJECT_CAP
-            ):
+            # runtime_check AFTER the last write. The segment budget bounds
+            # rejected claims; insistence cannot replace real proof.
+            if coordinator_handoff or require_green_before_done:
                 gap = None
-                if coordinator_handoff and not fast_check_fresh:
+                if not fast_check_fresh:
                     gap = "run `build` after the latest changes until FAST_CHECK is CLEAN"
                 elif last_build_ok is not True:
                     gap = (
@@ -560,7 +711,6 @@ async def run_agent_build(
                         "fix any 5xx, THEN done"
                     )
                 if gap is not None:
-                    done_rejections += 1
                     await _step_result(action, step, skipped=gap)
                     if emit:
                         await emit("agent.stalled", {"step": step})
@@ -677,8 +827,8 @@ async def run_agent_build(
                 else (
                     f"STOP — you ran this EXACT action {repeat_count + 1} times with the "
                     "same result. Do NOT repeat it. You have enough context: WRITE the "
-                    "next file now (a dashboard page renders <CrudResource entity=\"...\"/>; "
-                    "also write dashboard/page.tsx), or run build, or call done."
+                    "next required file using components that actually exist in this "
+                    "project, or fix the named compiler error, or run build, or call done."
                 )
             )})
             continue
@@ -933,6 +1083,21 @@ async def run_agent_build(
         ):
             fast_check_fresh = False
         convo.append({"role": "user", "content": _format_observation(action, obs)})
+        if changed_source_paths and on_progress is not None:
+            try:
+                await on_progress(AgentResult(
+                    done=False, summary="Исходники изменены; сохраняю черновик.",
+                    files=dict(written), steps=step + 1, transcript=list(convo),
+                    stop_reason="checkpoint",
+                ))
+            except Exception:
+                # Let the pipeline restore the accepted tree. Storage failure
+                # must not jump past recovery or consume another model call.
+                return AgentResult(
+                    done=False, summary="Не удалось сохранить черновик; требуется проверка хранилища.",
+                    files=dict(written), steps=step + 1, transcript=list(convo),
+                    stop_reason="checkpoint_error",
+                )
         if no_write_streak == (_EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT):
             await _nudge_exploration(step)
 
@@ -976,11 +1141,6 @@ _REWRITE_BEFORE_BUILD_NUDGE = 2
 _REWRITE_LOOP_ABORT_AT = 5
 _WRITES_BEFORE_BUILD_NUDGE = 10
 
-# Green-gate: how many premature `done`s to reject (nudging the model to build +
-# runtime_check) before honouring it anyway. Bounded so an app with no checkable
-# route can still finish — the server-side acceptance gate is the hard backstop.
-_DONE_REJECT_CAP = 2
-
 # Escalate to the strong model after this many consecutive RED builds — a cheap
 # model that can't clear a typecheck in two tries usually needs a different model,
 # not more tries. Bounded by the one-shot `escalated` flag in `_escalate`.
@@ -1022,13 +1182,11 @@ _BUILD_PRESSURE_NUDGE = (
 )
 
 _EXPLORE_STALL_NUDGE = (
-    "STOP READING. You have already read the entity JSON, the CrudResource "
-    "component and use-entity — that is ENOUGH context. Do NOT read_file / grep / "
-    "list_dir again. Your VERY NEXT action MUST be write_file: create the next "
-    "missing page now — an entity page is \"use client\" and renders "
-    "<CrudResource entity=\"Name\" .../>; the dashboard index is "
-    "src/app/(app)/dashboard/page.tsx. When every page exists, run build; when the "
-    "build is clean, call done. Writing a file is the ONLY way to make progress."
+    "Discovery is paused because no source changed. Use the real compiler "
+    "diagnostic and the current task: fix the named file, or create the next "
+    "required page and its dependencies. Do not assume a component, user field "
+    "or schema column exists. Implement any needed component before importing it. "
+    "Then run build after the last change; when the source is complete, call done."
 )
 
 # Edit-mode nudges. The build nudges above name ENTITY primitives (CrudResource,

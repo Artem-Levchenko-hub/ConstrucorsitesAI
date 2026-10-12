@@ -19,7 +19,35 @@ def public_generation_failure(run: GenerationRun | None) -> GenerationFailure | 
 def failure_for_error(raw_error: object, *, restoration: bool = False) -> GenerationFailure:
     error = str(raw_error).casefold()
     retryable = True
-    if "behavior_readiness_unavailable:" in error:
+    # The gateway category reaches terminal/history errors as an internal marker.
+    # Exact prefixes prevent arbitrary provider text from claiming a category.
+    refusal = re.match(r"\Aprovider_refusal_(access|funds|rate_limit):", error)
+    if error.startswith("platform_wallet_empty:"):
+        code = "wallet_empty"
+        retryable = False
+        message = (
+            "Недостаточно средств в кошельке Yleum. "
+            "Пополните кошелёк Yleum и повторите запрос."
+        )
+    elif refusal is not None:
+        category = refusal.group(1)
+        code = "provider_unavailable" if category == "rate_limit" else "provider_access"
+        retryable = False
+        message = {
+            "access": (
+                "Провайдер модели отклонил доступ к запросу. Требуется проверить доступ "
+                "к модели на стороне провайдера. Автоматический повтор остановлен."
+            ),
+            "funds": (
+                "Провайдер модели сообщил о недостатке средств. Требуется пополнить баланс "
+                "на стороне провайдера. Автоматический повтор остановлен."
+            ),
+            "rate_limit": (
+                "Провайдер модели ограничил частоту запросов. Автоматический повтор остановлен. "
+                "Требуется дождаться восстановления доступности модели."
+            ),
+        }[category]
+    elif "behavior_readiness_unavailable:" in error:
         code = "runtime_unavailable"
         retryable = False
         message = (

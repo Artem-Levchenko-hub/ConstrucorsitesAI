@@ -248,7 +248,8 @@ def test_first_max_build_has_no_template_and_cannot_finish_at_core_stage() -> No
     assert "_recover_max_resume_prompt" in source
     assert '_starter_patch = {**_starter_files, "src/app/page.tsx": ""}' in source
     assert '"rm -f -- src/app/page.tsx"' not in source
-    assert "{} if not _max_has_generated_snapshot else dict(baseline.files)" in source
+    assert "dict(current_source)" in source
+    assert "if _max_has_generated_snapshot or workspace_context_files is not None else {}" in source
     assert "normalize_max_globals_css" in source
     assert "seed_design_memory" in source
     assert "await asyncio.sleep(2)" in source
@@ -1946,7 +1947,7 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
 
     monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
-        with pytest.raises(RuntimeError, match="PROVIDER_AUTH_FAILED"):
+        with pytest.raises(RuntimeError, match="provider_http_401"):
             await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
     assert len(calls) == 1
 

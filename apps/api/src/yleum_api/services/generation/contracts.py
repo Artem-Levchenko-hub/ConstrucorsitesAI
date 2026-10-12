@@ -87,6 +87,7 @@ class AgentOperations:
     probe_build: Callable[[], Awaitable[dict[str, Any]]]
     preview_url: Callable[[], Awaitable[str | None]]
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None
+    checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None
 
 
 class FinalizedAgentSource(NamedTuple):

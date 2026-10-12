@@ -64,6 +64,7 @@ class LLMError(Exception):
         self, message: str, *, code: str | None = None, http_status: int | None = None,
         upstream_http_status: int | None = None,
         provider_charge_ambiguous: bool | None = None, retry_safe: bool = False,
+        provider_refusal_category: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -71,6 +72,7 @@ class LLMError(Exception):
         self.upstream_http_status = upstream_http_status
         self.provider_charge_ambiguous = provider_charge_ambiguous
         self.retry_safe = retry_safe
+        self.provider_refusal_category = provider_refusal_category
 
 
 _GATEWAY_ERROR_CODES = {
@@ -99,12 +101,23 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     upstream = raw_status if type(raw_status) is int and 400 <= raw_status <= 599 else None
     raw_ambiguity = details.get("provider_charge_ambiguous")
     ambiguous = raw_ambiguity if type(raw_ambiguity) is bool else None
+    category = details.get("provider_refusal_category")
+    category = (
+        category if isinstance(category, str) and category in {"access", "funds", "rate_limit"}
+        and upstream is not None and 400 <= upstream < 500 else None
+    )
     retry_safe = (
         response.status_code == 502 and code == "model_unavailable"
         and ambiguous is False and details.get("provider_failure_kind") == "preconnect"
         and "upstream_http_status" not in details
     )
-    if upstream == 401:
+    if category == "funds":
+        message = "Недостаточно средств у LLM-провайдера."
+    elif category == "access":
+        message = "LLM-провайдер отклонил доступ к запросу."
+    elif category == "rate_limit":
+        message = "LLM-провайдер ограничил частоту запросов."
+    elif upstream == 401:
         message = "Требуется проверка доступа и средств у LLM-провайдера (HTTP 401)."
     elif upstream == 403:
         message = "LLM-провайдер запретил доступ к запросу (HTTP 403)."
@@ -128,6 +141,7 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
     return LLMError(
         message, code=code, http_status=response.status_code, upstream_http_status=upstream,
         provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
+        provider_refusal_category=category,
     )
 
 

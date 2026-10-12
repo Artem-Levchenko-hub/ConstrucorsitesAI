@@ -308,6 +308,9 @@ async def recover_rejected_candidate(
     # earlier rollback covers a non-done AgentResult; this guard covers a
     # model that said `done` while the independent verification disagreed.
     if get_settings().use_native_agent and (not _runtime_ok or not _typecheck_ok):
+        from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
+
+        await checkpoint_before_rollback(operations)
         _verification_error = _tc_error or _rt_error or "final verification failed"
         _verification_rolled_back = False
         try:

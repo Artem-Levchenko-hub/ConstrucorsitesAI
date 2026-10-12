@@ -194,6 +194,40 @@ def test_upstream_http_rejection_keeps_safe_status_and_unknown_cost(
     assert chat.billing.charge.await_count == 0
 
 
+@pytest.mark.parametrize("status,code,category", [
+    (401, "invalid_api_key", "access"),
+    (401, "insufficient_funds", "funds"),
+    (429, "rate_limit_exceeded", "rate_limit"),
+])
+def test_structured_refusal_diagnostic_preserves_ambiguous_journal_and_skips_wallet_debit(
+    client, monkeypatch, status, code, category,
+):
+    calls = []
+
+    def reject(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": {
+            "code": code, "message": "synthetic-private-key https://private.test/path",
+        }}, headers={"x-llmgw-request-id": "provider-request-id", "x-llmgw-cost-rub": "2.50"})
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reject))
+    response = post(client, False)
+    assert response.status_code == 502
+    error = response.json()["detail"]["error"]
+    assert error["code"] == "model_unavailable"
+    assert error["details"]["provider_refusal_category"] == category
+    assert error["details"]["upstream_http_status"] == status
+    assert error["details"]["provider_charge_ambiguous"] is True
+    assert "private" not in response.text
+    assert len(calls) == 1
+    journal = chat.provider_calls.finish_call.await_args.kwargs
+    assert journal["status"] == "ambiguous"
+    assert journal["error_type"] == "HTTPStatusError"
+    assert journal["provider_request_id"] == "provider-request-id"
+    assert journal["provider_cost_rub"] == Decimal("2.50")
+    assert chat.billing.charge.await_count == 0
+
+
 @pytest.mark.parametrize("streaming", [False, True])
 def test_missing_usage_is_explicitly_estimated(client, monkeypatch, streaming):
     provider(monkeypatch, streaming=streaming, cost=None, usage={})

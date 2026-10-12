@@ -45,6 +45,18 @@ def test_provider_timeout_is_not_reported_as_a_failed_build_check():
     assert "synthetic-private" not in failure.model_dump_json()
 
 
+def test_platform_wallet_exhaustion_is_not_provider_funds_exhaustion():
+    failure = public_generation_failure(SimpleNamespace(
+        status="failed", error="PLATFORM_WALLET_EMPTY: private-key", agent_state={},
+    ))
+    assert failure.code == "wallet_empty"
+    assert failure.message == (
+        "Недостаточно средств в кошельке Yleum. "
+        "Пополните кошелёк Yleum и повторите запрос."
+    )
+    assert failure.retryable is False and "private-key" not in failure.model_dump_json()
+
+
 @pytest.mark.parametrize(
     ("error", "code", "retryable"),
     [
@@ -80,6 +92,64 @@ def test_restoration_retry_must_use_reviewed_version_workflow():
     )
     assert not failure.retryable
     assert "историю версий" in failure.message
+
+
+@pytest.mark.parametrize("category,code,message", [
+    ("access", "provider_access", "Провайдер модели отклонил доступ к запросу."),
+    ("funds", "provider_access", "Провайдер модели сообщил о недостатке средств."),
+    ("rate_limit", "provider_unavailable", "Провайдер модели ограничил частоту запросов."),
+])
+@pytest.mark.parametrize("restoration", [False, True])
+def test_structured_provider_refusal_keeps_specific_safe_terminal_and_history_message(
+    category, code, message, restoration,
+):
+    from yleum_api.services.generation_failure import failure_for_error
+
+    raw = f"provider_refusal_{category}: private-key https://private.test/path"
+    state = {"restoration_adaptation": {"operation_id": "opaque"}} if restoration else {}
+    history = public_generation_failure(
+        SimpleNamespace(status="failed", error=raw, agent_state=state),
+    )
+    terminal = failure_for_error(RuntimeError(raw), restoration=restoration)
+    for failure in (history, terminal):
+        assert failure.code == code
+        assert failure.message.startswith(message)
+        assert "Автоматический повтор остановлен" in failure.message
+        assert not failure.retryable
+        assert "private" not in failure.model_dump_json()
+        assert ("историю версий" in failure.message) is restoration
+
+
+@pytest.mark.parametrize("raw", [
+    "provider_http_401: private-key",
+    "provider_http_401: provider_refusal_funds: arbitrary provider text",
+    "provider_http_401: insufficient balance private-key",
+    "provider_http_401: provider_refusal_unknown: private-key",
+])
+def test_historical_http_401_without_structured_category_does_not_assert_lack_of_funds(raw):
+    failure = public_generation_failure(
+        SimpleNamespace(status="failed", error=raw, agent_state={}),
+    )
+    assert failure.code == "provider_access"
+    assert "проверить доступ и средства" in failure.message.casefold()
+    assert "недостат" not in failure.message.casefold()
+    assert not failure.retryable
+    assert "private" not in failure.model_dump_json()
+
+
+@pytest.mark.parametrize("raw", [
+    "provider_refusal_funds_extra: private-key",
+    "provider_refusal_funds private-key",
+    "upstream said provider_refusal_funds: private-key",
+    "provider_refusal_unknown: private-key",
+])
+def test_provider_refusal_marker_requires_exact_trusted_prefix(raw):
+    from yleum_api.services.generation_failure import failure_for_error
+
+    failure = failure_for_error(raw)
+    assert failure.code == "verification"
+    assert "недостат" not in failure.message.casefold()
+    assert "private" not in failure.model_dump_json()
 
 
 @pytest.mark.parametrize(

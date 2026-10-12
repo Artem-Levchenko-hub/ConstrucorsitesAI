@@ -26,6 +26,31 @@ def rejection(details=None, code="model_unavailable"):
     }}})
 
 
+@pytest.mark.parametrize('category,message', [
+    ('funds', 'Недостаточно средств у LLM-провайдера.'),
+    ('access', 'LLM-провайдер отклонил доступ к запросу.'),
+    ('rate_limit', 'LLM-провайдер ограничил частоту запросов.'),
+])
+def test_structured_provider_refusal_is_specific_without_becoming_retry_safe(category, message):
+    error = llm_client._gateway_failure(rejection({
+        'upstream_http_status': 401, 'provider_charge_ambiguous': True,
+        'provider_refusal_category': category,
+    }))
+    assert getattr(error, 'provider_refusal_category', None) == category
+    assert str(error) == message
+    assert error.provider_charge_ambiguous is True and error.retry_safe is False
+    assert 'synthetic-private-key' not in str(error)
+
+
+@pytest.mark.parametrize('category', ['unknown', {'raw': 'private'}, True])
+def test_unknown_provider_category_remains_unclassified(category):
+    error = llm_client._gateway_failure(rejection({
+        'upstream_http_status': 401, 'provider_refusal_category': category,
+    }))
+    assert getattr(error, 'provider_refusal_category', None) is None
+    assert str(error) == 'Требуется проверка доступа и средств у LLM-провайдера (HTTP 401).'
+
+
 @pytest.mark.parametrize("response_after_seconds", [97.5, 240.0])
 async def test_default_builder_waits_for_gateway_response_without_replaying(
     monkeypatch, response_after_seconds,
@@ -119,6 +144,45 @@ async def run_agent(monkeypatch, **kwargs):
         complete=llm_client.complete_chat, execute=execute, emit=emit, **kwargs,
     )
     return result, sleeps, events
+
+
+@pytest.mark.parametrize("category", ["access", "funds", "rate_limit"])
+async def test_structured_refusal_survives_agent_terminal_summary(monkeypatch, category):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return rejection({
+            "upstream_http_status": 401, "provider_charge_ambiguous": True,
+            "provider_refusal_category": category,
+        })
+
+    install_transport(monkeypatch, handler)
+    result, sleeps, events = await run_agent(monkeypatch)
+    assert result.summary.startswith(f"provider_refusal_{category}:")
+    assert result.stop_reason == "provider_error" and not result.done
+    assert len(calls) == 1 and sleeps == []
+    assert "synthetic-private-key" not in repr((result, events))
+
+
+async def test_legacy_platform_wallet_failure_does_not_claim_provider_funds(monkeypatch):
+    from yleum_api.services.generation_failure import failure_for_error
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(402, json={"detail": {"error": {
+            "code": "wallet_empty", "message": "private-wallet-detail",
+        }}})
+
+    install_transport(monkeypatch, handler)
+    result, sleeps, events = await run_agent(monkeypatch)
+    assert result.summary.startswith("PLATFORM_WALLET_EMPTY:")
+    assert len(calls) == 1 and sleeps == []
+    assert "private-wallet-detail" not in repr((result, events))
+    failure = failure_for_error(result.summary)
+    assert failure.code == "wallet_empty" and "кошельке Yleum" in failure.message
 
 
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 502])

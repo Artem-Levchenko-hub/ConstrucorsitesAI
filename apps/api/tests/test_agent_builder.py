@@ -11,10 +11,54 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from yleum_api.services import agent_builder as ab
+
+
+@pytest.mark.parametrize('opening,closing', [
+    ('invoke', 'invoke'), ('action', 'action'), ('action', 'omnia:action'),
+])
+def test_parse_known_alternate_action_tags(opening, closing):
+    result = ab.parse_action(
+        f'<{opening} name="read_file">{{"path":"src/app/page.tsx"}}</{closing}>'
+    )
+    assert result is not None
+    assert result.name == 'read_file' and result.path == 'src/app/page.tsx'
+
+
+def test_non_object_arguments_cannot_turn_into_empty_write():
+    assert ab.parse_action('<omnia:action name="write_file">[]</omnia:action>') is None
+
+
+def test_changed_candidate_cannot_ship_on_a_stale_green_build():
+    record = []
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m',
+        execute=_ok_executor(record), complete=_scripted([
+            '<omnia:action name="write_file">{"path":"a.ts","content":"one"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="write_file">{"path":"a.ts","content":"two"}</omnia:action>',
+        ]), max_steps=3,
+    ))
+    assert result.done is False
+    assert result.files == {'a.ts': 'two'}
+
+
+def test_repeated_done_cannot_bypass_a_failed_required_build():
+    async def red(action):
+        return {'ok': False, 'detail': 'Cannot find module CrudResource'}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m', execute=red,
+        complete=_scripted([
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="done">{"summary":"all done"}</omnia:action>',
+        ]), max_steps=5, require_green_before_done=True,
+    ))
+    assert result.done is False
 
 # ── parse_action ────────────────────────────────────────────────────────────
 
@@ -610,9 +654,8 @@ def test_green_gate_rejects_premature_done():
     assert ("build", "") in record and ("runtime_check", "/") in record
 
 
-def test_green_gate_cap_prevents_hang():
-    """flag on but the app is never verifiable: after _DONE_REJECT_CAP rejections
-    the `done` is honoured anyway (fail-soft — the server gate is the backstop)."""
+def test_unverified_done_remains_incomplete_with_a_bounded_budget():
+    """Repeated claims cannot replace proof, and still cannot hang forever."""
     replies = ['<omnia:action name="done">{"summary":"insist"}</omnia:action>']
     res = asyncio.run(
         ab.run_agent_build(
@@ -625,8 +668,162 @@ def test_green_gate_cap_prevents_hang():
             require_green_before_done=True,
         )
     )
-    assert res.done is True and res.stop_reason == "done"
-    assert res.steps == ab._DONE_REJECT_CAP + 1  # rejected CAP times, then honoured
+    assert res.done is False and res.stop_reason == "max_steps"
+    assert res.steps == 12
+
+
+def test_progressing_candidate_continues_in_same_executor_after_step_budget():
+    record = []
+    saved = []
+
+    async def checkpoint(result):
+        saved.append(dict(result.files))
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m',
+        execute=_ok_executor(record), complete=_scripted([
+            '<omnia:action name="write_file">{"path":"a.ts","content":"one"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="write_file">{"path":"a.ts","content":"two"}</omnia:action>',
+            '<omnia:action name="build">{}</omnia:action>',
+            '<omnia:action name="done">{"summary":"done"}</omnia:action>',
+        ]), max_steps=3, max_segments=2, coordinator_handoff=True,
+        checkpoint=checkpoint,
+    ))
+    assert result.done is True and result.needs_finalization is True
+    assert result.files == {'a.ts': 'two'}
+    assert result.segments == 2 and result.steps == 5
+    assert saved == [{'a.ts': 'one'}, {'a.ts': 'two'}]
+    assert record == [('write_file', 'a.ts'), ('build', ''), ('write_file', 'a.ts'), ('build', '')]
+
+
+def test_no_progress_segment_does_not_buy_more_model_calls():
+    calls = []
+
+    async def read_only(convo, model, **kwargs):
+        calls.append(1)
+        return '<omnia:action name="read_file">{"path":"a.ts"}</omnia:action>'
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m',
+        execute=_ok_executor([]), complete=read_only,
+        max_steps=2, max_segments=4,
+    ))
+    assert result.done is False and result.stop_reason == 'no_progress'
+    assert len(calls) == 2 and result.segments == 1
+
+
+def test_provider_failure_preserves_checkpoint_without_another_segment():
+    calls = []
+    saved = []
+
+    async def complete(convo, model, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return (
+                '<omnia:action name="write_file">'
+                '{"path":"a.ts","content":"draft"}</omnia:action>'
+            )
+        raise RuntimeError('unknown outcome')
+
+    async def checkpoint(result):
+        saved.append(dict(result.files))
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m',
+        execute=_ok_executor([]), complete=complete,
+        max_steps=3, max_segments=4, checkpoint=checkpoint,
+    ))
+    assert result.stop_reason == 'provider_error' and result.done is False
+    assert saved == [{'a.ts': 'draft'}] and len(calls) == 2
+
+
+def test_failed_write_cannot_authorize_a_continuation():
+    calls = []
+
+    async def complete(convo, model, **kwargs):
+        calls.append(1)
+        return '<omnia:action name="write_file">{"path":"a.ts","content":"draft"}</omnia:action>'
+
+    async def rejected(action):
+        return {'ok': False, 'environment_mutated': False, 'error': 'locked file'}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m', execute=rejected,
+        complete=complete, max_steps=2, max_segments=4,
+    ))
+    assert result.done is False and result.segments == 1 and len(calls) == 2
+
+
+def test_identical_write_receipt_does_not_buy_another_segment_without_snapshots():
+    calls = []
+    digest = hashlib.sha256(b'same').hexdigest()
+
+    async def complete(*args, **kwargs):
+        calls.append(1)
+        return '<omnia:action name="write_file">{"path":"a.ts","content":"same"}</omnia:action>'
+
+    async def unchanged(action):
+        return {'ok': True, 'content': 'same', 'content_change': {
+            'path': 'a.ts', 'before_sha256': digest, 'after_sha256': digest,
+        }}
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m', execute=unchanged,
+        complete=complete, max_steps=1, max_segments=4,
+    ))
+    assert len(calls) == 1 and result.segments == 1 and not result.done
+
+
+def test_draft_is_saved_before_handoff_and_the_next_model_call():
+    saved = []
+    observed_saved = []
+    replies = iter([
+        '<omnia:action name="write_file">{"path":"a.ts","content":"draft"}</omnia:action>',
+        '<omnia:action name="build">{}</omnia:action>',
+        '<omnia:action name="done">{"summary":"done"}</omnia:action>',
+    ])
+
+    async def complete(*args, **kwargs):
+        observed_saved.append(bool(saved))
+        return next(replies)
+
+    async def checkpoint(result):
+        saved.append(dict(result.files))
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m', execute=_ok_executor([]),
+        complete=complete, max_steps=3, checkpoint=checkpoint, coordinator_handoff=True,
+    ))
+    assert result.needs_finalization and result.done
+    assert observed_saved == [False, True, True] and saved == [{'a.ts': 'draft'}]
+
+
+def test_checkpoint_fault_returns_recoverable_candidate_instead_of_throwing():
+    async def broken(result):
+        raise RuntimeError('private storage detail')
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m', execute=_ok_executor([]),
+        complete=_scripted([
+            '<omnia:action name="write_file">{"path":"a.ts","content":"draft"}</omnia:action>',
+        ]), max_steps=1, max_segments=2, checkpoint=broken,
+    ))
+    assert not result.done and result.stop_reason == 'checkpoint_error'
+    assert result.files == {'a.ts': 'draft'}
+    assert 'private storage detail' not in result.summary
+
+
+def test_expired_source_deadline_does_not_start_a_provider_call():
+    async def forbidden(*args, **kwargs):
+        pytest.fail('No model call is allowed after the source deadline')
+
+    result = asyncio.run(ab.run_agent_build(
+        system_prompt='sys', user_prompt='build', model='m', execute=_ok_executor([]),
+        complete=forbidden, max_steps=2, max_segments=4,
+        edit_deadline=datetime.now(UTC) - timedelta(seconds=1),
+    ))
+    assert not result.done and result.stop_reason == 'source_deadline'
 
 
 # ── K1 knowledge layer: skills injection ─────────────────────────────────────

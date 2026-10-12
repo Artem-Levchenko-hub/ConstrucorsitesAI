@@ -56,6 +56,39 @@ def isolated_project_repo_storage(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture(autouse=True)
+def isolated_source_checkpoint_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep private generation drafts away from every real MinIO endpoint."""
+    from minio.error import S3Error
+
+    from yleum_api.services.generation import source_checkpoint
+
+    objects: dict[tuple[str, str], bytes] = {}
+
+    class Response(io.BytesIO):
+        def release_conn(self) -> None:
+            pass
+
+    class Storage:
+        def put_object(
+            self, bucket: str, key: str, data: io.BytesIO, length: int,
+            *, content_type: str,
+        ) -> None:
+            assert key.startswith("generation-checkpoints/")
+            assert content_type == "application/json"
+            payload = data.read()
+            assert len(payload) == length
+            objects[bucket, key] = payload
+
+        def get_object(self, bucket: str, key: str) -> Response:
+            if (bucket, key) not in objects:
+                raise S3Error("NoSuchKey", "Missing QA object", key, "qa", "qa", None)
+            return Response(objects[bucket, key])
+
+    storage = Storage()
+    monkeypatch.setattr(source_checkpoint, "get_minio_client", lambda: storage)
+
+
+@pytest.fixture(autouse=True)
 def isolated_background_jobs(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep API unit tests isolated from real Redis queues and pub/sub."""
     from yleum_api.routers import messages, projects, rollback

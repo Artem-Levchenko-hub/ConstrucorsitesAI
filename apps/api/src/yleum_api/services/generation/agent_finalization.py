@@ -152,6 +152,10 @@ async def run_native_source_repair(
 ) -> agent_builder.AgentResult:
     """Reuse the finalizer's guarded, single-segment editor without accepting proof."""
     from yleum_api.services import agent_native
+    from yleum_api.services.generation.agent_generation import (
+        SourceCheckpointError,
+        checkpoint_source_actions,
+    )
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
     from yleum_api.services.max_generation_contract import max_source_completion_gap
 
@@ -161,16 +165,27 @@ async def run_native_source_repair(
             prompt_text, {**baseline, **written}, portable=True,
         ),
     )
-    result = await agent_native.run_native_build(
-        model=plan.model,
-        system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
-        task=task, execute=repair_execute,
-        user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
-        message_id=str(ids.assistant_message_id), free=is_free, emit=operations.emit,
-        max_steps=plan.steps, max_segments=1, source_repair=True,
-        allow_max_bash=shell_enabled, portable_cell=True, initial_files=baseline,
-        edit_deadline=edit_deadline, completion_check=repair_completion,
+    checkpoint = getattr(operations, "checkpoint", None)
+    snapshot = getattr(operations, "snapshot_files", None) or getattr(
+        runtime.handle, "snapshot_files", None,
     )
+    if checkpoint is not None and callable(snapshot):
+        repair_execute = checkpoint_source_actions(
+            execute=repair_execute, snapshot=snapshot, checkpoint=checkpoint,
+        )
+    try:
+        result = await agent_native.run_native_build(
+            model=plan.model,
+            system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+            task=task, execute=repair_execute,
+            user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
+            message_id=str(ids.assistant_message_id), free=is_free, emit=operations.emit,
+            max_steps=plan.steps, max_segments=1, source_repair=True,
+            allow_max_bash=shell_enabled, portable_cell=True, initial_files=baseline,
+            edit_deadline=edit_deadline, completion_check=repair_completion,
+        )
+    except SourceCheckpointError as exc:
+        raise RuntimeError(exc.candidate.summary) from None
     if result.stop_reason == "output_limit" and not result.needs_finalization:
         raise RuntimeError(
             "Provider response rejected (output_limit); finalization repair was not verified."
@@ -281,6 +296,9 @@ async def finalize_max_candidate(
 
             if isinstance(exc, AdaptationActivationRecoveryRequired):
                 raise AdaptationActivationPending(str(exc)) from exc
+            from yleum_api.services.generation.source_checkpoint import checkpoint_before_rollback
+
+            await checkpoint_before_rollback(operations)
             raise_if_terminal_cell_error(exc)
             if runtime.coordinator is not None:
                 from yleum_api.services.restorations import (

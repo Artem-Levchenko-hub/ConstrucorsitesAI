@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
+from dataclasses import replace
 from functools import partial
 from typing import Any
 from uuid import UUID
@@ -61,6 +62,12 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
 )
 from yleum_api.services.generation.progress import GenerationProgress
+from yleum_api.services.generation.runtime import _apply_project_cell_preview_files
+from yleum_api.services.generation.source_checkpoint import (
+    adjacent_checkpoint,
+    checkpoint_resume_request,
+    persist_checkpoint,
+)
 from yleum_api.services.generation_runs import record_generation_product_failure
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -107,6 +114,11 @@ async def run_agent_generation(
     # this worker fn — use the in-scope `current_snapshot_id` (None on a
     # brand-new project's first build) so this never NameErrors.
     _agent_res: agent_builder.AgentResult | None = None
+    resumed = None
+    if project_info.template == "max_miniapp" and checkpoint_resume_request(prompt_text):
+        resumed = await adjacent_checkpoint(factory=factory, ids=ids, baseline=baseline)
+        if resumed is not None:
+            prompt_text = resumed[1]
     (
         prompt_text,
         _is_continue,
@@ -217,6 +229,18 @@ async def run_agent_generation(
     )
 
     runtime.migration_baseline = {**baseline.files, **_max_seed_files}
+    if resumed is not None and runtime.handle is not None:
+        saved_source = resumed[0]
+        await _apply_project_cell_preview_files(
+            files={**saved_source["files"], **dict.fromkeys(saved_source["deleted_paths"], "")},
+            empty_files=tuple(
+                path for path, content in saved_source["files"].items() if not content
+            ),
+            project_cell_handle=runtime.handle, sync_preview=False,
+        )
+        await _agent_emit("agent.continuation", {
+            "human": "Восстанавливаю сохранённый черновик и продолжаю проверку", "ok": None,
+        })
     _operations = AgentOperations(
         snapshot_files=getattr(runtime.handle, "snapshot_files", None),
         execute=bindings.execute,
@@ -225,6 +249,22 @@ async def run_agent_generation(
         probe_build=bindings.probe_build,
         preview_url=bindings.preview_url,
     )
+
+    async def save_source_checkpoint(result: agent_builder.AgentResult) -> None:
+        if project_info.template != "max_miniapp" or _operations.snapshot_files is None:
+            return
+        candidate_files = await _operations.snapshot_files()
+        if candidate_files == runtime.migration_baseline:
+            return
+        await persist_checkpoint(
+            factory=factory, ids=ids, baseline=baseline, files=candidate_files,
+            original_prompt=prompt_text,
+        )
+        await _agent_emit("agent.checkpoint", {
+            "step": result.steps, "human": "Сохраняю черновик, чтобы работа не потерялась",
+            "ok": True,
+        })
+    _operations = replace(_operations, checkpoint=save_source_checkpoint)
     (
         _agent_res,
         _provider_failure,
@@ -242,6 +282,11 @@ async def run_agent_generation(
         runtime=runtime,
         plan=_prompt_plan,
         operations=_operations,
+        source_checkpoint=save_source_checkpoint,
+        workspace_context_files=(
+            await _operations.snapshot_files()
+            if resumed is not None and _operations.snapshot_files is not None else None
+        ),
     )
     # Rollback is evaluated only after the same-run continuation policy
     # reaches done, cancellation/infra/no-progress, or its runaway backstop.

@@ -174,9 +174,9 @@ async def test_a_dead_key_still_fails_immediately(monkeypatch: pytest.MonkeyPatc
     slept = _record_sleeps(monkeypatch)
 
     for status, marker in (
-        (401, "PROVIDER_AUTH_FAILED"),
-        (403, "PROVIDER_AUTH_FAILED"),
-        (402, "PAYMENT_REQUIRED"),
+        (401, "provider_http_401"),
+        (403, "provider_http_403"),
+        (402, "provider_http_402"),
     ):
         attempts: list[int] = []
 

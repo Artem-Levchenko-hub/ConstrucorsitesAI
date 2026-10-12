@@ -1,4 +1,6 @@
+import asyncio
 import json
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -11,7 +13,66 @@ from yleum_api.services.generation.agent_finalization import (
     unchanged_candidate_before_finalization,
     validate_edit_source_change,
 )
-from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+from yleum_api.services.generation.contracts import (
+    GenerationIds,
+    GenerationRuntime,
+    SourceBaseline,
+)
+
+
+async def test_legacy_max_turn_continues_progress_and_checkpoints_before_rollback(monkeypatch):
+    from yleum_api.services import agent_builder
+    from yleum_api.services.generation.contracts import GenerationRuntime
+
+    settings = get_settings().model_copy(update={
+        'use_native_agent': False, 'agent_max_segments': 2,
+        'agent_require_green_before_done': False,
+    })
+    monkeypatch.setattr(agent_generation, 'get_settings', lambda: settings)
+    path = 'src/app/page.tsx'
+    tree = {path: 'old product'}
+    scripted = iter([
+        {'name': 'write_file', 'args': {'path': path, 'content': 'new product'}},
+        {'name': 'build', 'args': {}},
+        {'name': 'write_file', 'args': {'path': path, 'content': 'final product'}},
+        {'name': 'build', 'args': {}},
+        {'name': 'done', 'args': {'summary': 'done'}},
+    ])
+    saved = []
+
+    async def complete(*args, **kwargs):
+        action = next(scripted)
+        return f'<omnia:action name="{action["name"]}">{json.dumps(action["args"])}</omnia:action>'
+
+    async def execute(action):
+        if action.name == 'write_file':
+            tree[action.path] = action.args['content']
+        return {'ok': True, 'content': tree.get(action.path, ''), 'detail': 'clean'}
+
+    async def snapshot():
+        return dict(tree)
+
+    async def checkpoint(result):
+        saved.append(dict(tree))
+
+    monkeypatch.setattr(agent_builder.llm_client, 'complete_chat', complete)
+    result, provider_error = await agent_generation.execute_agent_turn(
+        _agent_res=None, _is_edit=False, _max_has_generated_snapshot=True,
+        _max_seed_files={}, _max_shell_enabled=True,
+        baseline=SourceBaseline(uuid4(), 'a' * 40, {path: 'old product'}),
+        ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
+        project_info=SimpleNamespace(template='max_miniapp'), prompt_text='Improve product',
+        runtime=GenerationRuntime(handle=SimpleNamespace(
+            is_portable=lambda: True, export_files=snapshot, snapshot_files=snapshot,
+        )),
+        plan=SimpleNamespace(system='sys', user='Improve product', model='m',
+                             escalate_model=None, steps=3, bare_stack=False),
+        operations=SimpleNamespace(execute=execute, emit=None, snapshot_files=snapshot),
+        source_checkpoint=checkpoint,
+    )
+    assert result.done and result.segments == 2 and provider_error is None
+    assert result.files[path] == 'final product'
+    assert saved == [{path: 'new product'}, {path: 'final product'}]
 
 
 @pytest.mark.parametrize("prompt, expected", [
@@ -72,10 +133,24 @@ def edit_workspace(monkeypatch):
 
     async def run(
         provider, *, snapshot=True, prompt_text="Remove History", is_edit=True,
-        generated_snapshot=True,
+        generated_snapshot=True, source_checkpoint=None, workspace_context_files=None,
+        coordinator=None, native=True, stack_guide="",
     ):
+        turn_settings = settings.model_copy(update={
+            "use_native_agent": native,
+            "use_max_finalization_coordinator": coordinator is not None,
+        })
+        monkeypatch.setattr(agent_generation, "get_settings", lambda: turn_settings)
+        monkeypatch.setattr(agent_native, "get_settings", lambda: turn_settings)
         monkeypatch.setattr(agent_native, "_call_messages", provider)
-        handle = SimpleNamespace(is_portable=lambda: True, export_files=export)
+        if not native:
+            from yleum_api.services import agent_builder
+
+            monkeypatch.setattr(agent_builder.llm_client, "complete_chat", provider)
+        handle = SimpleNamespace(
+            is_portable=lambda: True, export_files=export,
+            capabilities={"portable_machine": True},
+        )
         if snapshot:
             handle.snapshot_files = export
         return await agent_generation.execute_agent_turn(
@@ -84,13 +159,361 @@ def edit_workspace(monkeypatch):
             baseline=SourceBaseline(uuid4(), "baseline", initial),
             ids=GenerationIds(*(uuid4() for _ in range(5))), is_free=False,
             project_info=SimpleNamespace(template="max_miniapp"),
-            prompt_text=prompt_text, runtime=SimpleNamespace(handle=handle, coordinator=None),
-            plan=SimpleNamespace(stack_guide="", skills=None, user=prompt_text, steps=24,
-                                 model="~anthropic/claude-sonnet-latest"),
-            operations=SimpleNamespace(execute=execute, emit=None),
+            prompt_text=prompt_text,
+            runtime=GenerationRuntime(handle=handle, coordinator=coordinator),
+            plan=SimpleNamespace(stack_guide=stack_guide, skills=None, user=prompt_text, steps=24,
+                                 model="~anthropic/claude-sonnet-latest", system="sys",
+                                 escalate_model=None, bare_stack=False),
+            operations=SimpleNamespace(execute=execute, emit=None,
+                                       snapshot_files=export if snapshot else None),
+            source_checkpoint=source_checkpoint,
+            workspace_context_files=workspace_context_files,
         )
 
     return run, initial, workspace, executed
+
+
+async def test_native_handoff_checkpoints_candidate_before_return(edit_workspace, monkeypatch):
+    from yleum_api.services import max_behavior_proof
+
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+    saved = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                      "replace": "Orders"})
+        if len(calls) == 2:
+            return turn("build", {})
+        return turn("done", {"summary": "changed"})
+
+    async def checkpoint(result):
+        saved.append({"source": dict(workspace), "done": result.done})
+
+    async def deadline():
+        return datetime.now(UTC) + timedelta(minutes=5)
+
+    async def freeze(*args, **kwargs):
+        pass
+
+    monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", freeze)
+    result, failure = await run(
+        provider, source_checkpoint=checkpoint,
+        coordinator=SimpleNamespace(source_edit_deadline=deadline),
+    )
+    assert result.done and failure is None
+    assert saved[-1] == {"source": {"src/app/page.tsx": "Catalog; Orders",
+                                   "src/lib/auth.ts": "auth"}, "done": True}
+    assert initial["src/app/page.tsx"] == "Catalog; History"
+    assert executed == ["edit_file", "build"]
+
+
+@pytest.mark.parametrize("stop", ["done", "provider_error"])
+async def test_native_checkpoint_failure_returns_safe_stop_and_allows_rollback(
+    edit_workspace, monkeypatch, stop,
+):
+    from yleum_api.services.generation import agent_recovery
+
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+    storage_secret = "storage-key-must-stay-private"
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                      "replace": "Orders"})
+        if stop == "provider_error":
+            raise RuntimeError("provider unavailable")
+        if len(calls) == 2:
+            return turn("build", {})
+        return turn("done", {"summary": "changed"})
+
+    async def checkpoint(result):
+        if result.stop_reason != "checkpoint":
+            raise RuntimeError(storage_secret)
+
+    result, failure = await run(provider, source_checkpoint=checkpoint)
+    assert not result.done and not result.needs_finalization
+    assert result.proof_checkpoint is None
+    assert result.stop_reason == "checkpoint_error" and failure is None
+    assert storage_secret not in result.summary
+    assert result.files["src/app/page.tsx"] == "Catalog; Orders"
+    assert len(calls) == (3 if stop == "done" else 2)
+    assert executed == (["edit_file", "build"] if stop == "done" else ["edit_file"])
+
+    async def stage_patch(writes, deletes):
+        workspace.update(writes)
+        for path in deletes:
+            workspace.pop(path, None)
+
+    async def restored_runtime(*args):
+        return SimpleNamespace(ok=True, redacted_detail="restored source is clean")
+
+    async def emit(*args):
+        pass
+
+    monkeypatch.setattr(agent_recovery.repo_svc, "read_files", lambda *_: dict(initial))
+    with pytest.raises(RuntimeError, match=r"checkpoint_error.*rolled_back") as raised:
+        await agent_recovery.recover_stopped_candidate(
+            _agent_res=result, _max_has_generated_snapshot=True, _max_seed_files={},
+            _provider_failure=failure, _render_current_max_starter_files=None,
+            baseline=SourceBaseline(uuid4(), "a" * 40, initial),
+            ids=GenerationIds(*(uuid4() for _ in range(5))),
+            project_info=SimpleNamespace(slug="checkpoint-test"),
+            runtime=GenerationRuntime(handle=SimpleNamespace(
+                stage_patch=stage_patch, run_role=restored_runtime,
+            ), coordinator=SimpleNamespace()),
+            operations=SimpleNamespace(probe_build=None, emit=emit),
+        )
+    assert workspace == initial
+    assert storage_secret not in str(raised.value)
+
+
+async def test_native_source_is_checkpointed_before_cancellation_in_the_next_request(
+    edit_workspace,
+):
+    run, _, workspace, _ = edit_workspace
+    calls = []
+    saved = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                      "replace": "Orders"})
+        raise asyncio.CancelledError
+
+    async def checkpoint(result):
+        saved.append(dict(workspace))
+
+    with pytest.raises(asyncio.CancelledError):
+        await run(provider, source_checkpoint=checkpoint)
+    assert len(calls) == 2
+    assert saved == [{"src/app/page.tsx": "Catalog; Orders", "src/lib/auth.ts": "auth"}]
+
+
+async def test_native_noop_does_not_checkpoint_before_a_real_mutation(edit_workspace):
+    run, _, workspace, executed = edit_workspace
+    calls = []
+    saved = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                      "replace": "History"})
+        if len(calls) == 2:
+            assert saved == []
+            return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                      "replace": "Orders"})
+        if len(calls) == 3:
+            assert saved == [{"src/app/page.tsx": "Catalog; Orders", "src/lib/auth.ts": "auth"}]
+            return turn("build", {})
+        return turn("done", {"summary": "changed"})
+
+    async def checkpoint(result):
+        if result.stop_reason == "checkpoint":
+            saved.append(dict(workspace))
+
+    result, failure = await run(provider, source_checkpoint=checkpoint)
+    assert result.done and failure is None
+    assert executed == ["edit_file", "edit_file", "build"]
+    assert saved == [{"src/app/page.tsx": "Catalog; Orders", "src/lib/auth.ts": "auth"}]
+
+
+async def test_native_source_checkpoint_failure_cannot_buy_another_provider_call(edit_workspace):
+    run, _, workspace, executed = edit_workspace
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        return turn("edit_file", {"path": "src/app/page.tsx", "search": "History",
+                                  "replace": "Orders"})
+
+    async def checkpoint(result):
+        raise RuntimeError("private storage response")
+
+    result, failure = await run(provider, source_checkpoint=checkpoint)
+    assert not result.done and not result.needs_finalization and failure is None
+    assert result.stop_reason == "checkpoint_error"
+    assert len(calls) == 1 and executed == ["edit_file"]
+    assert result.files == workspace
+    assert "private storage response" not in result.summary
+
+
+async def test_shared_source_checkpoint_preserves_deletions_and_empty_files_with_live_snapshot():
+    from yleum_api.services.agent_builder import Action
+
+    wrapper = getattr(agent_generation, "checkpoint_source_actions", None)
+    assert callable(wrapper)
+    tree = {"old.ts": "remove me"}
+    saved = []
+
+    async def snapshot():
+        return tree
+
+    async def execute(action):
+        tree.pop("old.ts")
+        tree["empty.ts"] = ""
+        return {"ok": True}
+
+    async def checkpoint(result):
+        saved.append(dict(result.files))
+
+    checked_execute = wrapper(execute=execute, snapshot=snapshot, checkpoint=checkpoint)
+    result = await checked_execute(Action("bash", {"command": "update source"}))
+    assert result == {"ok": True}
+    assert saved == [{"empty.ts": ""}]
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_restored_candidate_is_checkpointed_before_provider_failure(edit_workspace, native):
+    run, _, workspace, _ = edit_workspace
+    workspace["src/app/page.tsx"] = "Saved unfinished product"
+    restored = dict(workspace)
+    events = []
+    saved = []
+
+    async def provider(*args, **kwargs):
+        events.append("provider")
+        raise RuntimeError("unknown provider outcome")
+
+    async def checkpoint(result):
+        events.append("checkpoint")
+        saved.append(dict(workspace))
+
+    result, failure = await run(
+        provider, native=native, workspace_context_files=restored, source_checkpoint=checkpoint,
+    )
+    assert not result.done and result.stop_reason == "provider_error"
+    assert failure is not None and failure != "checkpoint_error"
+    assert events[:2] == ["checkpoint", "provider"]
+    assert events.count("provider") == 1
+    assert saved[0] == {"src/app/page.tsx": "Saved unfinished product", "src/lib/auth.ts": "auth"}
+    assert workspace == restored
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_restored_candidate_checkpoint_failure_stops_before_provider(edit_workspace, native):
+    run, _, workspace, executed = edit_workspace
+    workspace["src/app/page.tsx"] = "Saved unfinished product"
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError("provider must not run without a durable resume checkpoint")
+
+    async def checkpoint(result):
+        raise RuntimeError("private storage credential")
+
+    result, failure = await run(
+        provider, native=native, workspace_context_files=dict(workspace),
+        source_checkpoint=checkpoint,
+    )
+    assert not result.done and not result.needs_finalization and failure is None
+    assert result.stop_reason == "checkpoint_error" and result.files == workspace
+    assert calls == [] and executed == []
+    assert "private storage credential" not in result.summary
+
+
+async def test_native_restored_context_edits_saved_source_without_losing_draft_features(
+    edit_workspace,
+):
+    run, initial, workspace, executed = edit_workspace
+    workspace["src/app/page.tsx"] = "Catalog; Draft History; Saved feature"
+    restored = dict(workspace)
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            task = args[2][0]["content"]
+            context = json.loads(task.split("\nENTRY_SOURCE_JSON_BEGIN\n", 1)[1]
+                                 .split("\nENTRY_SOURCE_JSON_END\n", 1)[0])
+            return turn("edit_file", {
+                "path": "src/app/page.tsx", "search": context["segments"][0]["content"],
+                "replace": context["segments"][0]["content"].replace("Draft History", "Orders"),
+            })
+        if len(calls) == 2:
+            return turn("build", {})
+        return turn("done", {"summary": "continued"})
+
+    result, failure = await run(provider, workspace_context_files=restored)
+    assert result.done and failure is None
+    assert workspace["src/app/page.tsx"] == "Catalog; Orders; Saved feature"
+    assert initial["src/app/page.tsx"] == "Catalog; History"
+    assert executed == ["edit_file", "build"]
+
+
+async def test_first_product_resume_can_finish_helper_without_rewriting_saved_entry(
+    edit_workspace, monkeypatch,
+):
+    from yleum_api.services import max_generation_contract
+
+    # Exercise native entry admission; full MAX product/runtime acceptance has
+    # separate tests and is not represented by this small source sentinel.
+    monkeypatch.setattr(max_generation_contract, "max_completion_gap", lambda *args, **kw: None)
+    run, initial, workspace, executed = edit_workspace
+    initial.pop("src/app/page.tsx")
+    workspace["src/app/page.tsx"] = "Saved first product"
+    calls = []
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            task = args[2][0]["content"]
+            assert "RESUME SAVED PRODUCT" in task
+            context = json.loads(task.split("\nENTRY_SOURCE_JSON_BEGIN\n", 1)[1]
+                                 .split("\nENTRY_SOURCE_JSON_END\n", 1)[0])
+            assert context["segments"][0]["content"] == "Saved first product"
+            return turn("write_file", {"path": "src/components/Orders.tsx",
+                                       "content": "Completed orders helper"})
+        if len(calls) == 2:
+            return turn("build", {})
+        return turn("done", {"summary": "continued saved product"})
+
+    result, failure = await run(
+        provider, is_edit=False, generated_snapshot=False, prompt_text="Build product",
+        workspace_context_files=dict(workspace), stack_guide="MAX PLATFORM CORE CONTRACT",
+    )
+    assert result.done and failure is None
+    assert workspace["src/app/page.tsx"] == "Saved first product"
+    assert workspace["src/components/Orders.tsx"] == "Completed orders helper"
+    assert executed == ["write_file", "build"]
+    assert len(calls) == 3
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_expired_coordinator_deadline_cannot_start_a_provider_request(
+    edit_workspace, monkeypatch, native,
+):
+    from yleum_api.services import max_behavior_proof
+
+    run, initial, workspace, executed = edit_workspace
+    calls = []
+
+    async def deadline():
+        return datetime.now(UTC) - timedelta(seconds=1)
+
+    async def freeze(*args, **kwargs):
+        pass
+
+    async def provider(*args, **kwargs):
+        calls.append(1)
+        raise AssertionError("provider must not run after the source deadline")
+
+    monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", freeze)
+    result, failure = await run(
+        provider, is_edit=False, generated_snapshot=False, prompt_text="Build product",
+        native=native, coordinator=SimpleNamespace(source_edit_deadline=deadline),
+    )
+    assert not result.done and not result.needs_finalization and failure is None
+    assert calls == []
+    assert all(action == "build" for action in executed)
+    assert workspace == initial
 
 
 async def test_nominal_existing_task_enables_mutation_gate(edit_workspace):

@@ -55,9 +55,14 @@ router = APIRouter()
 _TIMEOUT_S = 240.0
 
 
-def _err(status: int, err_type: str, message: str) -> Response:
+def _err(
+    status: int, err_type: str, message: str, *, details: dict[str, Any] | None = None,
+) -> Response:
+    error: dict[str, Any] = {"type": err_type, "message": message}
+    if details is not None:
+        error["details"] = details
     return Response(
-        content=json.dumps({"type": "error", "error": {"type": err_type, "message": message}}),
+        content=json.dumps({"type": "error", "error": error}),
         status_code=status,
         media_type="application/json",
     )
@@ -611,12 +616,20 @@ async def _native_messages_impl(
         )
         if ambiguous or not recorded:
             return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
-        try:
-            upstream_error = upstream.json().get("error", {})
-            message = upstream_error.get("message") or upstream.text[:300]
-        except (ValueError, AttributeError):
-            message = upstream.text[:300]
-        return _err(upstream.status_code, "api_error", str(message))
+        category = llmgw._refusal_category(upstream)
+        details: dict[str, Any] = {
+            "upstream_http_status": upstream.status_code,
+            "provider_charge_ambiguous": False,
+        }
+        message = "Provider rejected the request"
+        if category is not None:
+            details["provider_refusal_category"] = category
+            message = {
+                "access": "Provider denied access to the request",
+                "funds": "Provider reported insufficient funds",
+                "rate_limit": "Provider rate limit exceeded",
+            }[category]
+        return _err(upstream.status_code, "api_error", message, details=details)
 
     try:
         upstream_data = upstream.json()

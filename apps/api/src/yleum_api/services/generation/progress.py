@@ -120,6 +120,14 @@ class GenerationProgress:
         if kind == "provider_error":
             step_row["ok"] = False
             step_row["detail"] = "Не получен подтверждённый результат запроса к модели."
+            category = data.get("provider_refusal_category")
+            if category in ("access", "funds", "rate_limit"):
+                step_row["provider_refusal_category"] = category
+                step_row["detail"] = {
+                    "access": "Провайдер отказал в доступе к запросу.",
+                    "funds": "Провайдер сообщил о недостатке средств.",
+                    "rate_limit": "Провайдер ограничил частоту запросов.",
+                }[category]
             for key in ("http_status", "upstream_http_status"):
                 value = data.get(key)
                 if type(value) is int and 400 <= value <= 599:

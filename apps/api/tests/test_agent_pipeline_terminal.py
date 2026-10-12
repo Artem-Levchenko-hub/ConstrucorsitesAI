@@ -54,7 +54,7 @@ async def test_first_max_output_limit_reaches_safe_core_restoration():
         _max_has_generated_snapshot=False,
         _max_seed_files={},
         _max_shell_enabled=False,
-        baseline=SimpleNamespace(sha=None),
+        baseline=SourceBaseline(None, None, {}),
         ids=None,
         is_free=False,
         project_info=None,
@@ -76,7 +76,7 @@ async def test_first_provider_rejection_exits_before_extra_repair_or_finalizatio
         await agent_generation.execute_agent_turn(
             _agent_res=stopped, _is_edit=False, _max_has_generated_snapshot=False,
             _max_seed_files={}, _max_shell_enabled=False,
-            baseline=SimpleNamespace(sha=None), ids=None, is_free=False,
+            baseline=SourceBaseline(None, None, {}), ids=None, is_free=False,
             project_info=None, prompt_text="", runtime=GenerationRuntime(),
             plan=None, operations=None,
         )

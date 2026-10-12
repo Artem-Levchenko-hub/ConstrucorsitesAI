@@ -39,6 +39,21 @@ from yleum_gateway.services.receipt_evidence import receipt_evidence
 # still mean a paid generation; replaying it may create a second provider bill.
 _SAFE_TO_RETRY = (httpx.ConnectError, httpx.ConnectTimeout)
 
+# Only explicit structured refusal codes become public diagnostics. HTTP 401
+# alone and free-form messages cannot distinguish access from provider funds.
+_REFUSAL_CATEGORIES = {
+    "invalid_api_key": "access",
+    "authentication_error": "access",
+    "permission_denied": "access",
+    "access_denied": "access",
+    "provider_auth_failed": "access",
+    "insufficient_funds": "funds",
+    "insufficient_balance": "funds",
+    "payment_required": "funds",
+    "rate_limit_exceeded": "rate_limit",
+    "rate_limit_error": "rate_limit",
+}
+
 # Omnia model ID → the exact llmgw catalog id sent as the OpenAI `model` field.
 _MODEL_SLUG: dict[str, str] = {
     "gemini-3.1-pro-preview-customtools": "google/gemini-3.1-pro-preview-customtools",
@@ -200,6 +215,26 @@ def _failure_details(data: object, headers: object = None) -> dict[str, Any]:
         key: str(value) if key.startswith("provider_cost_") and value is not None else value
         for key, value in evidence.items()
     }}
+
+
+def _refusal_category(response: httpx.Response) -> str | None:
+    """Return a fixed category; no provider strings or body fields escape."""
+    if not 400 <= response.status_code < 500 or len(response.content) > 16_384:
+        return None
+    try:
+        body = response.json()
+    except (ValueError, RecursionError):
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return None
+    categories = {
+        _REFUSAL_CATEGORIES[value]
+        for key in ("code", "type")
+        if isinstance(value := error.get(key), str) and value in _REFUSAL_CATEGORIES
+    }
+    # Contradictory structured evidence must stay unknown.
+    return next(iter(categories)) if len(categories) == 1 else None
 
 
 def normalize_usage(
@@ -455,6 +490,9 @@ async def acompletion(
         status = exc.response.status_code
         if type(status) is int and 400 <= status <= 599:
             details["upstream_http_status"] = status
+        category = _refusal_category(exc.response)
+        if category is not None:
+            details["provider_refusal_category"] = category
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
             details=details,

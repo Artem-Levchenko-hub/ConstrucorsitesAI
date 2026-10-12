@@ -18,6 +18,7 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
 )
 from yleum_api.services.generation.file_transforms import _merge_seeded_agent_files
+from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -26,6 +27,44 @@ _log = logging.getLogger("yleum_api.routers.messages")
 # MAX page fits in full; larger pages receive explicitly incomplete head/tail.
 _NATIVE_EDIT_ENTRY_CONTEXT_CHARS = 80_000
 _NATIVE_EDIT_ENTRY_PATH = "src/app/page.tsx"
+_SOURCE_CHECKPOINT_FAILURE = "Не удалось сохранить черновик; требуется проверка хранилища."
+
+
+class SourceCheckpointError(ProjectCellInfrastructureError):
+    """Stop native tools through their existing terminal-error boundary."""
+
+    def __init__(self, candidate: agent_builder.AgentResult) -> None:
+        super().__init__("checkpoint_error")
+        self.candidate = candidate
+
+
+def checkpoint_source_actions(
+    *, execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
+    snapshot: Callable[[], Awaitable[dict[str, str]]],
+    checkpoint: Callable[[agent_builder.AgentResult], Awaitable[None]],
+) -> Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]:
+    """Preserve actual source changes before another native request or repair."""
+
+    async def checked_execute(action: agent_builder.Action) -> dict[str, Any]:
+        before = dict(await snapshot())
+        observation = await execute(action)
+        after = dict(await snapshot())
+        if before != after:
+            candidate = agent_builder.AgentResult(
+                done=False, summary="Исходники изменены; сохраняю черновик.",
+                files=after, steps=0, stop_reason="checkpoint",
+            )
+            try:
+                await checkpoint(candidate)
+            except Exception:
+                candidate.stop_reason = "checkpoint_error"
+                candidate.summary = _SOURCE_CHECKPOINT_FAILURE
+                # Ordinary tool errors become model feedback. The established
+                # terminal boundary stops before another provider request.
+                raise SourceCheckpointError(candidate) from None
+        return observation
+
+    return checked_execute
 
 
 def _edit_source_excerpt(path: str, source: str, limit: int) -> dict[str, Any]:
@@ -324,12 +363,38 @@ async def execute_agent_turn(
     runtime: GenerationRuntime,
     plan: AgentPromptPlan,
     operations: AgentOperations,
+    source_checkpoint: Callable[[agent_builder.AgentResult], Awaitable[None]] | None = None,
+    workspace_context_files: dict[str, str] | None = None,
 ) -> tuple[agent_builder.AgentResult, str | None]:
     if runtime.coordinator is not None:
         from yleum_api.services.max_behavior_proof import freeze_for_turn
 
         await freeze_for_turn(runtime.coordinator, prompt_text, template=project_info.template)
     edit_source_changed: Callable[[], bool] | None = None
+    current_source = baseline.files if workspace_context_files is None else workspace_context_files
+    resume_instruction = (
+        "RESUME SAVED PRODUCT. Continue the existing restored source below; "
+        "it takes precedence over starter/from-scratch instructions in the original brief. "
+        "Preserve its completed features and business data. Repair remaining gaps; "
+        "do not replace the product with a new template.\n\n"
+        if workspace_context_files is not None else ""
+    )
+    if (
+        _agent_res is None and workspace_context_files is not None
+        and source_checkpoint is not None and project_info.template == "max_miniapp"
+    ):
+        candidate = agent_builder.AgentResult(
+            done=False, summary="Восстанавливаю сохранённый черновик.",
+            files=dict(current_source), steps=0, stop_reason="checkpoint",
+        )
+        try:
+            # The resumed run becomes adjacent immediately. An outage on its
+            # first provider request must not strand the earlier source object.
+            await source_checkpoint(candidate)
+        except Exception:
+            candidate.stop_reason = "checkpoint_error"
+            candidate.summary = _SOURCE_CHECKPOINT_FAILURE
+            _agent_res = candidate
     if _agent_res is None and get_settings().use_native_agent:
         # Native tool-use path (owner «как Claude Code, только на сервере»): one
         # GenerationRun/Project Cell, with bounded fresh provider segments
@@ -356,7 +421,10 @@ async def execute_agent_turn(
             # A service/config snapshot may predate the first real product
             # and can contain the retired UI canvas. It is not product input
             # and must never satisfy the completion contract.
-            _max_baseline_files = {} if not _max_has_generated_snapshot else dict(baseline.files)
+            _max_baseline_files = (
+                dict(current_source)
+                if _max_has_generated_snapshot or workspace_context_files is not None else {}
+            )
 
             def _max_completion_check(
                 written: Mapping[str, str], evidence: Mapping[str, int]
@@ -457,38 +525,57 @@ async def execute_agent_turn(
         _native_max_segments = (
             1 if _is_edit or edit_source_changed is not None else get_settings().agent_max_segments
         )
-        _agent_res = await agent_native.run_native_build(
-            model=plan.model,
-            system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
-            task=plan.user + (
-                _native_edit_entry_context(baseline.files)
-                if edit_source_changed is not None else ""
-            ),
-            execute=_native_execute,
-            user_id=str(ids.user_id),
-            project_id=str(ids.project_id),
-            run_id=str(ids.run_id),
-            message_id=str(ids.assistant_message_id),
-            free=is_free,
-            emit=operations.emit,
-            completion_check=_completion_check,
-            max_steps=plan.steps,
-            max_segments=_native_max_segments,
-            allow_max_bash=_max_shell_enabled,
-            portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
-            initial_files=baseline.files if _is_edit or _max_has_generated_snapshot else None,
-            edit_deadline=(
-                await runtime.coordinator.source_edit_deadline()
-                if runtime.coordinator is not None else None
-            ),
-            edit_source_changed=edit_source_changed,
+        snapshot_reader = getattr(operations, "snapshot_files", None) or getattr(
+            runtime.handle, "snapshot_files", None,
         )
+        if source_checkpoint is not None and callable(snapshot_reader):
+            _native_execute = checkpoint_source_actions(
+                execute=_native_execute, snapshot=snapshot_reader, checkpoint=source_checkpoint,
+            )
+        try:
+            _agent_res = await agent_native.run_native_build(
+                model=plan.model,
+                system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
+                task=resume_instruction + plan.user + (
+                    _native_edit_entry_context(current_source)
+                    if edit_source_changed is not None or workspace_context_files is not None
+                    else ""
+                ),
+                execute=_native_execute,
+                user_id=str(ids.user_id),
+                project_id=str(ids.project_id),
+                run_id=str(ids.run_id),
+                message_id=str(ids.assistant_message_id),
+                free=is_free,
+                emit=operations.emit,
+                completion_check=_completion_check,
+                max_steps=plan.steps,
+                max_segments=_native_max_segments,
+                allow_max_bash=_max_shell_enabled,
+                portable_cell=bool(runtime.handle is not None and runtime.handle.is_portable()),
+                initial_files=(
+                    current_source
+                    if (
+                        _is_edit or _max_has_generated_snapshot
+                        or workspace_context_files is not None
+                    )
+                    else None
+                ),
+                edit_deadline=(
+                    await runtime.coordinator.source_edit_deadline()
+                    if runtime.coordinator is not None else None
+                ),
+                edit_source_changed=edit_source_changed,
+            )
+        except SourceCheckpointError as exc:
+            _agent_res = exc.candidate
     elif _agent_res is None:
         _agent_res = await agent_builder.run_agent_build(
             system_prompt=plan.system,
-            user_prompt=plan.user + (
-                _legacy_portable_edit_context(baseline.files)
-                if _is_edit and project_info.template == "max_miniapp"
+            user_prompt=resume_instruction + plan.user + (
+                _legacy_portable_edit_context(current_source)
+                if (_is_edit or workspace_context_files is not None)
+                and project_info.template == "max_miniapp"
                 and runtime.handle is not None
                 and getattr(runtime.handle, "capabilities", {}).get("portable_machine") is True
                 and runtime.handle.is_portable()
@@ -509,7 +596,32 @@ async def execute_agent_turn(
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
             edit_mode=_is_edit,
             bare_mode=plan.bare_stack,
+            max_segments=(
+                get_settings().agent_max_segments
+                if project_info.template == "max_miniapp" else 1
+            ),
+            checkpoint=source_checkpoint,
+            edit_deadline=(
+                await runtime.coordinator.source_edit_deadline()
+                if runtime.coordinator is not None else None
+            ),
         )
+    if (
+        get_settings().use_native_agent and source_checkpoint is not None
+        and _agent_res.stop_reason != "checkpoint_error"
+    ):
+        try:
+            # A source handoff still awaits full finalization. Preserve that
+            # candidate before a later rejected proof restores accepted source.
+            await source_checkpoint(_agent_res)
+        except Exception:
+            # Persistence must not bypass the pipeline's existing rollback, and
+            # storage credentials or response bodies must never become user text.
+            _agent_res.done = False
+            _agent_res.needs_finalization = False
+            _agent_res.proof_checkpoint = None
+            _agent_res.stop_reason = "checkpoint_error"
+            _agent_res.summary = _SOURCE_CHECKPOINT_FAILURE
     _provider_failure = _primary_provider_failure(_agent_res)
     if (
         _agent_res.stop_reason == "provider_error"
@@ -519,6 +631,8 @@ async def execute_agent_turn(
         raise RuntimeError(_provider_failure)
     if runtime.handle is not None:
         _agent_res.files = await runtime.handle.export_files()
+    if _agent_res.stop_reason == "checkpoint_error":
+        return _agent_res, _provider_failure
     if edit_source_changed is not None and not edit_source_changed() and not _provider_failure:
         # A full unchanged export is not a write. Stop before legacy probes,
         # looped-but-serves reporting, production finalization or publication.

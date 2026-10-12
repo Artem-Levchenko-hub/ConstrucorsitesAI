@@ -190,3 +190,90 @@ async def test_any_received_malformed_response_keeps_header_receipt_without_retr
     assert details["provider_cost_rub"] == "2.50"
     assert details["provider_cost_usd"] == "0.025"
     assert "private" not in repr(details)
+
+
+@pytest.mark.parametrize("status,error,category", [
+    (401, {"code": "invalid_api_key"}, "access"),
+    (401, {"type": "authentication_error"}, "access"),
+    (403, {"code": "permission_denied"}, "access"),
+    (403, {"code": "access_denied"}, "access"),
+    (401, {"code": "provider_auth_failed"}, "access"),
+    (401, {"code": "insufficient_funds"}, "funds"),
+    (401, {"code": "insufficient_balance", "type": "invalid_request_error"}, "funds"),
+    (402, {"type": "payment_required"}, "funds"),
+    (429, {"code": "rate_limit_exceeded"}, "rate_limit"),
+    (429, {"type": "rate_limit_error"}, "rate_limit"),
+])
+async def test_http_refusal_category_requires_explicit_structured_provider_evidence(
+    monkeypatch, status, error, category,
+):
+    from yleum_gateway.core.config import reset_settings_cache
+
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+    calls = []
+
+    def reject(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": {
+            **error, "message": "private-provider-key https://private.test/path",
+            "param": "private-field", "balance": "private-value",
+        }}, headers={"x-llmgw-request-id": "canonical-id", "x-llmgw-cost-rub": "2.50"})
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reject))
+    with pytest.raises(UpstreamProviderError) as raised:
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+
+    assert raised.value.details == {
+        "provider_charge_ambiguous": True,
+        "provider_request_id": "canonical-id",
+        "provider_cost_rub": "2.50",
+        "provider_cost_usd": None,
+        "upstream_http_status": status,
+        "provider_refusal_category": category,
+    }
+    assert len(calls) == 1
+    assert "private" not in str(raised.value)
+
+
+@pytest.mark.parametrize("status,body", [
+    (401, {"error": {"message": "insufficient balance private-key"}}),
+    (401, {"error": {"code": "unknown-private-code", "type": "unknown-private-type"}}),
+    (401, {"error": {"code": "insufficient_quota"}}),
+    (401, {"error": {"code": "invalid_api_key private-key"}}),
+    (401, {"error": {"code": "INVALID_API_KEY"}}),
+    (401, {"error": {"code": ["invalid_api_key"], "type": {"private": "data"}}}),
+    (401, {"error": {"code": "insufficient_balance", "type": "authentication_error"}}),
+    (401, {"error": "insufficient_balance private-key"}),
+    (401, {"code": "insufficient_balance", "message": "private-key"}),
+    (401, [{"error": {"code": "insufficient_balance"}}]),
+    (401, None),
+    (401, "private-invalid-json"),
+    (401, {"error": {"code": "insufficient_funds", "message": "private-key" * 2000}}),
+    (500, {"error": {"code": "insufficient_funds"}}),
+])
+async def test_http_refusal_without_unambiguous_bounded_evidence_stays_unclassified(
+    monkeypatch, status, body,
+):
+    from yleum_gateway.core.config import reset_settings_cache
+
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+    calls = []
+
+    def reject(request):
+        calls.append(request)
+        if isinstance(body, str):
+            return httpx.Response(status, content=body.encode())
+        return httpx.Response(status, json=body)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reject))
+    with pytest.raises(UpstreamProviderError) as raised:
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "hi"}])
+
+    details = raised.value.details
+    assert "provider_refusal_category" not in details
+    assert details["provider_charge_ambiguous"] is True
+    assert details["upstream_http_status"] == status
+    assert "private" not in repr(details) + str(raised.value)
+    assert len(calls) == 1
