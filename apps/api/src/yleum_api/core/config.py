@@ -835,6 +835,11 @@ class Settings(BaseSettings):
     # bound is only a runaway safety backstop; no-progress and cancellation stop
     # earlier. Env deployments may tune within this deliberately generous range.
     agent_max_segments: int = Field(default=4, ge=1, le=8)
+    # Coordinated MAX runs use a bounded context window, not a total step cap.
+    # Continuation requires a finite edit deadline and independently read source
+    # snapshots; repeated states, cancellation and provider failures still stop.
+    # Explicit legacy/non-coordinated callers retain agent_max_segments.
+    agent_progressive_continuation: bool = Field(default=True)
 
     # Native tool-use agent (2026-07-01, owner «как Claude Code, только на сервере»).
     # When ON, a container-app build runs through agent_native.run_native_build: ONE
@@ -975,6 +980,7 @@ MODEL_TIER_MAP: dict[str, str] = {
     # Premium — full single-shot prompt, no decomposition.
     "claude-opus-4-7": "premium",
     "claude-sonnet-5": "premium",
+    "claude-sonnet-5.5": "premium",
     "gemini-3.1-pro-preview-customtools": "premium",
     "gemini-3.5-flash-high": "premium",  # orchestrator (art_director)
     "deepseek-v4-pro-thinking": "premium",  # orchestrator (owner 06-02)
@@ -1075,10 +1081,10 @@ def generation_mode(model_id: str | None, project_id: str | None = None) -> Gene
 # (env ROLE_MODELS) without a code change.
 # ──────────────────────────────────────────────────────────────────────────
 
-PRIMARY_LLM_MODEL = "~anthropic/claude-sonnet-latest"
+PRIMARY_LLM_MODEL = "claude-sonnet-5.5"
 
 ROLE_MODEL_MAP: dict[str, str] = {
-    # Owner directive (2026-10-12): the provider's latest Sonnet drives
+    # Owner directive (2026-10-12): verified Sonnet 5.5 drives
     # classify → art direction → implementation → visual audit → repair. Flux
     # image generation and Seedance video generation remain separate media tools.
     "classify": PRIMARY_LLM_MODEL,  # pick 1 of N presets

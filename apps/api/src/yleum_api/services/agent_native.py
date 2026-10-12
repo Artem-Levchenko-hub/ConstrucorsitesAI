@@ -23,6 +23,7 @@ import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from itertools import count as segment_numbers
 from typing import Any
 
 import httpx
@@ -30,6 +31,7 @@ import structlog
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
+from yleum_api.services.generation.continuation import SourceNoveltyTracker
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
@@ -2098,9 +2100,11 @@ async def _run_native_segments(
     *,
     task: str,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None,
-    max_segments: int,
+    max_segments: int | None,
     run_segment: NativeSegmentRunner,
     initial_files: Mapping[str, str] | None = None,
+    snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    edit_deadline: datetime | None = None,
 ) -> AgentResult:
     """Continue one native build without creating another run or workspace.
 
@@ -2111,7 +2115,19 @@ async def _run_native_segments(
     backstop, not a success condition.
     """
 
-    segment_limit = max(1, int(max_segments))
+    if max_segments is None and (
+        edit_deadline is None or edit_deadline.utcoffset() is None or snapshot_files is None
+    ):
+        raise ValueError("Progressive continuation requires an aware deadline and source snapshot")
+    segment_limit = max(1, int(max_segments)) if max_segments is not None else None
+    novelty = None
+    observed_source = dict(initial_files or {})
+    if segment_limit is None:
+        assert snapshot_files is not None and edit_deadline is not None
+        if datetime.now(UTC) < edit_deadline:
+            async with asyncio.timeout((edit_deadline - datetime.now(UTC)).total_seconds()):
+                observed_source = await snapshot_files()
+            novelty = SourceNoveltyTracker(observed_source)
     cumulative_files: dict[str, str] = {}
     cumulative_evidence: dict[str, int] = {}
     cumulative_transcript: list[dict[str, str]] = []
@@ -2119,7 +2135,7 @@ async def _run_native_segments(
     segment_task = task
     last_result: AgentResult | None = None
 
-    for segment in range(1, segment_limit + 1):
+    for segment in segment_numbers(1):
         files_before = dict(cumulative_files)
         evidence_before = dict(cumulative_evidence)
 
@@ -2133,8 +2149,18 @@ async def _run_native_segments(
             else None
         )
 
+        if (
+            segment_limit is None and segment > 1 and edit_deadline is not None
+            and datetime.now(UTC) >= edit_deadline
+        ):
+            return AgentResult(
+                done=False, summary="Source deadline reached", files=cumulative_files,
+                steps=total_steps, transcript=cumulative_transcript,
+                stop_reason="finalization_reserve", segments=segment - 1,
+            )
         result = await run_segment(
-            segment_task, segment_completion_check, {**(initial_files or {}), **files_before}
+            segment_task, segment_completion_check,
+            observed_source if novelty is not None else {**(initial_files or {}), **files_before}
         )
         last_result = result
         total_steps += result.steps
@@ -2159,7 +2185,17 @@ async def _run_native_segments(
             needs_finalization=result.needs_finalization,
             proof_checkpoint=result.proof_checkpoint,
         )
-        if result.done or result.needs_finalization or segment_limit == 1:
+        budget_boundary = segment_limit is None and result.stop_reason in {
+            "max_steps", "max_steps_green", "max_steps_red",
+        }
+        if budget_boundary:
+            combined.done = combined.needs_finalization = False
+            combined.proof_checkpoint = None
+            combined.stop_reason = "max_steps"
+        if (
+            ((result.done or result.needs_finalization) and not budget_boundary)
+            or segment_limit == 1
+        ):
             return combined
         if result.stop_reason in _CONTINUATION_TERMINAL_REASONS:
             return combined
@@ -2172,6 +2208,16 @@ async def _run_native_segments(
             and evidence_before.get(f"{name}_after_write", 0) <= 0
             for name in ("build", "runtime_check", "probe", "verify_isolation")
         )
+        if novelty is not None:
+            assert snapshot_files is not None and edit_deadline is not None
+            remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
+            if remaining <= 0:
+                combined.stop_reason = "finalization_reserve"
+                return combined
+            async with asyncio.timeout(remaining):
+                observed_source = await snapshot_files()
+            file_progress = novelty.observe(observed_source)
+            evidence_progress = False  # Counters are not validated server proof receipts.
         if not file_progress and not evidence_progress:
             combined.summary = (
                 "Автономная генерация остановлена: целый сегмент не изменил "
@@ -2218,13 +2264,14 @@ async def run_native_build(
     emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     completion_check: Callable[[Mapping[str, str], Mapping[str, int]], str | None] | None = None,
     max_steps: int = 24,
-    max_segments: int = 1,
+    max_segments: int | None = 1,
     allow_max_bash: bool = False,
     portable_cell: bool = False,
     messages_url: str | None = None,
     messages_headers: Mapping[str, str] | None = None,
     messages_auth_factory: NativeMessagesAuthFactory | None = None,
     initial_files: Mapping[str, str] | None = None,
+    snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
     edit_source_changed: Callable[[], bool] | None = None,
@@ -2266,4 +2313,6 @@ async def run_native_build(
         max_segments=max_segments,
         run_segment=run_segment,
         initial_files=initial_files,
+        snapshot_files=snapshot_files,
+        edit_deadline=edit_deadline,
     )

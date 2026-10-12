@@ -1579,7 +1579,9 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
         return dict(workspace)
 
     async def deadline():
-        return None
+        from datetime import UTC, datetime, timedelta
+
+        return datetime.now(UTC) + timedelta(minutes=5)
 
     monkeypatch.setattr(agent_native, "_call_messages", call)
     prompt = (

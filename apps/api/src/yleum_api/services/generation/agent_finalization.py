@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import PurePosixPath
 from typing import NamedTuple
 
+from yleum_api.core.config import get_settings
 from yleum_api.services import agent_builder
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.generation.contracts import (
@@ -150,7 +151,7 @@ async def run_native_source_repair(
     operations: AgentOperations, is_free: bool, shell_enabled: bool,
     edit_deadline: datetime | None,
 ) -> agent_builder.AgentResult:
-    """Reuse the finalizer's guarded, single-segment editor without accepting proof."""
+    """Reuse the guarded editor's progress windows without accepting proof."""
     from yleum_api.services import agent_native
     from yleum_api.services.generation.agent_generation import (
         SourceCheckpointError,
@@ -180,7 +181,15 @@ async def run_native_source_repair(
             task=task, execute=repair_execute,
             user_id=str(ids.user_id), project_id=str(ids.project_id), run_id=str(ids.run_id),
             message_id=str(ids.assistant_message_id), free=is_free, emit=operations.emit,
-            max_steps=plan.steps, max_segments=1, source_repair=True,
+            max_steps=plan.steps,
+            max_segments=(
+                None
+                if runtime.coordinator is not None
+                and getattr(get_settings(), "agent_progressive_continuation", False)
+                else 1
+            ),
+            snapshot_files=snapshot if callable(snapshot) else None,
+            source_repair=True,
             allow_max_bash=shell_enabled, portable_cell=True, initial_files=baseline,
             edit_deadline=edit_deadline, completion_check=repair_completion,
         )

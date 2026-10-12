@@ -50,11 +50,13 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from functools import partial
+from itertools import count as segment_numbers
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from yleum_api.services import llm_client
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
+from yleum_api.services.generation.continuation import SourceNoveltyTracker
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -114,6 +116,8 @@ class AgentResult:
     segments: int = 1
     needs_finalization: bool = False
     proof_checkpoint: object | None = None
+    # Preserve the cause when finite legacy loops promote a green abort to done.
+    continuation_reason: str = ""
 
 
 def parse_action(reply: str) -> Action | None:
@@ -244,17 +248,27 @@ async def run_agent_build(
     edit_mode: bool = False,
     bare_mode: bool = False,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
-    max_segments: int = 1,
+    max_segments: int | None = 1,
     checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None,
     edit_deadline: datetime | None = None,
 ) -> AgentResult:
     """Continue a progressing candidate without a new run, cell or blind replay."""
-    segment_limit = max(1, min(8, int(max_segments)))
+    if max_segments is None and (
+        edit_deadline is None or edit_deadline.utcoffset() is None or snapshot_files is None
+    ):
+        raise ValueError("Progressive continuation requires an aware deadline and source snapshot")
+    segment_limit = max(1, min(8, int(max_segments))) if max_segments is not None else None
+    novelty = None
+    if segment_limit is None:
+        assert snapshot_files is not None and edit_deadline is not None
+        if datetime.now(UTC) < edit_deadline:
+            async with asyncio.timeout((edit_deadline - datetime.now(UTC)).total_seconds()):
+                novelty = SourceNoveltyTracker(await snapshot_files())
     cumulative_files: dict[str, str] = {}
     transcript: list[dict[str, str]] = []
     total_steps = 0
     task = user_prompt
-    for segment in range(1, segment_limit + 1):
+    for segment in segment_numbers(1):
         offset = total_steps
         source_progress = False
 
@@ -279,6 +293,15 @@ async def run_agent_build(
                 candidate.segments = current_segment
                 await checkpoint(candidate)
 
+        if (
+            segment_limit is None and segment > 1 and edit_deadline is not None
+            and datetime.now(UTC) >= edit_deadline
+        ):
+            return AgentResult(
+                done=False, summary="Source deadline reached", files=cumulative_files,
+                steps=total_steps, transcript=transcript, stop_reason="source_deadline",
+                segments=segment - 1,
+            )
         result = await _run_agent_segment(
             system_prompt=system_prompt, user_prompt=task, model=model,
             execute=execute, escalate_model=escalate_model, max_steps=max_steps,
@@ -299,12 +322,28 @@ async def run_agent_build(
         result.steps = total_steps
         result.segments = segment
         result.transcript = list(transcript)
+        if segment_limit is None and (
+            result.stop_reason in {"max_steps", "max_steps_green", "max_steps_red"}
+            or result.continuation_reason == "max_steps"
+        ):
+            # A context-window boundary does not mean the requested work is done.
+            result.done = result.needs_finalization = False
+            result.proof_checkpoint = None
+            result.stop_reason = "max_steps"
         if result.done or result.needs_finalization:
             return result
         if result.stop_reason not in {"max_steps", "looping", "exploring", "stalled"}:
             return result
         if segment_limit == 1:
             return result
+        if novelty is not None:
+            assert snapshot_files is not None and edit_deadline is not None
+            remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
+            if remaining <= 0:
+                result.stop_reason = "source_deadline"
+                return result
+            async with asyncio.timeout(remaining):
+                source_progress = novelty.observe(await snapshot_files())
         if not source_progress:
             result.stop_reason = "no_progress"
             result.summary = "Остановлено: сегмент не изменил исходники приложения."
@@ -520,6 +559,7 @@ async def _run_agent_segment(
                 files=written, steps=step_no + 1, transcript=convo,
                 stop_reason="done_on_green",
                 needs_finalization=coordinator_handoff,
+                continuation_reason=fallback.stop_reason,
             )
         return fallback
 

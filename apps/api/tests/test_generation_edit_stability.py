@@ -134,11 +134,12 @@ def edit_workspace(monkeypatch):
     async def run(
         provider, *, snapshot=True, prompt_text="Remove History", is_edit=True,
         generated_snapshot=True, source_checkpoint=None, workspace_context_files=None,
-        coordinator=None, native=True, stack_guide="",
+        coordinator=None, native=True, stack_guide="", progressive=False,
     ):
         turn_settings = settings.model_copy(update={
             "use_native_agent": native,
             "use_max_finalization_coordinator": coordinator is not None,
+            "agent_progressive_continuation": progressive,
         })
         monkeypatch.setattr(agent_generation, "get_settings", lambda: turn_settings)
         monkeypatch.setattr(agent_native, "get_settings", lambda: turn_settings)
@@ -995,3 +996,62 @@ async def test_generation_and_edit_forward_selected_model(edit_workspace, is_edi
             await run(provider, is_edit=False, generated_snapshot=False)
     assert models == ["~anthropic/claude-sonnet-latest"]
     assert workspace == before and not executed
+
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("is_edit", [False, True])
+async def test_coordinated_productive_turn_exceeds_400_actions(
+    edit_workspace, monkeypatch, native, is_edit,
+):
+    from yleum_api.services import max_behavior_proof
+    run, initial, workspace, executed = edit_workspace
+    calls = 0
+    manifest = json.dumps({
+        "version": 1,
+        "tasks": [{"name": "final-test", "role": "full_build", "argv": ["pnpm", "test"]}],
+        "services": [{"name": "web", "argv": ["pnpm", "start"]}],
+        "routes": [{"path": "/", "service": "web", "port": 3000}],
+    })
+    initial[".omnia/cell.json"] = manifest
+    workspace[".omnia/cell.json"] = manifest
+    if is_edit:
+        existing_features = {
+            f"src/features/delivery/feature-{index}.tsx":
+            f"export const Feature{index} = () => <div>Previous feature {index}</div>;"
+            for index in range(2, 442)
+        }
+        initial.update(existing_features)
+        workspace.update(existing_features)
+    async def deadline():
+        return datetime.now(UTC) + timedelta(minutes=5)
+    async def freeze(*args, **kwargs):
+        pass
+    async def provider(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls <= 441:
+            name, args = "write_file", {
+                "path": "src/app/page.tsx" if calls == 1
+                else f"src/features/delivery/feature-{calls}.tsx",
+                "content": "Catalog; Orders" if calls == 1
+                else f"export const Feature{calls} = () => <div>Feature {calls}</div>;",
+            }
+        elif calls == 442:
+            name, args = "build", {}
+        else:
+            name, args = "done", {"summary": "requested changes complete"}
+        if native:
+            return turn(name, args)
+        return f'<omnia:action name="{name}">{json.dumps(args)}</omnia:action>'
+    monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", freeze)
+    result, failure = await run(
+        provider, native=native, is_edit=is_edit, progressive=True,
+        prompt_text="Update the existing product", generated_snapshot=True,
+        coordinator=SimpleNamespace(source_edit_deadline=deadline),
+    )
+    assert result.done and failure is None, (result.stop_reason, result.summary, failure)
+    assert calls == 443, (result.stop_reason, result.summary, result.needs_finalization)
+    assert result.steps >= 400
+    assert executed.count("write_file") > 10
+    assert workspace["src/app/page.tsx"] == "Catalog; Orders"
+    assert "Feature 441" in workspace["src/features/delivery/feature-441.tsx"]
+    assert workspace["src/lib/auth.ts"] == initial["src/lib/auth.ts"]
