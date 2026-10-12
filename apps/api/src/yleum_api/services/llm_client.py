@@ -65,6 +65,7 @@ class LLMError(Exception):
         upstream_http_status: int | None = None,
         provider_charge_ambiguous: bool | None = None, retry_safe: bool = False,
         provider_refusal_category: str | None = None,
+        retry_after_seconds: int | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -73,6 +74,7 @@ class LLMError(Exception):
         self.provider_charge_ambiguous = provider_charge_ambiguous
         self.retry_safe = retry_safe
         self.provider_refusal_category = provider_refusal_category
+        self.retry_after_seconds = retry_after_seconds
 
 
 _GATEWAY_ERROR_CODES = {
@@ -82,12 +84,27 @@ _GATEWAY_ERROR_CODES = {
 }
 
 
+def rate_limit_retry_delay(details: object) -> int | None:
+    """Accept only the Gateway's post-journal, closed refusal policy contract."""
+    if not isinstance(details, dict) or not (
+        type(details.get("upstream_http_status")) is int
+        and details["upstream_http_status"] == 429
+        and details.get("provider_refusal_category") == "rate_limit"
+        and details.get("provider_charge_ambiguous") is False
+        and details.get("retry_safe") is True
+        and details.get("retry_policy") == "llmgw_key_rate_limit_v1"
+    ):
+        return None
+    delay = details.get("retry_after_seconds", 0)
+    return delay if type(delay) is int and 0 <= delay <= 86_400 else None
+
+
 def _gateway_failure(response: httpx.Response) -> LLMError:
     # Never forward provider messages, raw bodies, headers or URLs to the agent.
     error: dict[str, Any] = {}
     try:
         body = response.json()
-    except ValueError:
+    except (ValueError, RecursionError):
         body = None
     if isinstance(body, dict) and isinstance(body.get("detail"), dict):
         candidate = body["detail"].get("error")
@@ -111,6 +128,13 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         and ambiguous is False and details.get("provider_failure_kind") == "preconnect"
         and "upstream_http_status" not in details
     )
+    rate_delay = (
+        rate_limit_retry_delay(details)
+        if response.status_code == 502 and code == "model_unavailable"
+        and len(response.content) <= 16_384
+        and error.get("type", "model_unavailable") == "model_unavailable" else None
+    )
+    retry_safe = retry_safe or rate_delay is not None
     if category == "funds":
         message = "Недостаточно средств у LLM-провайдера."
     elif category == "access":
@@ -142,6 +166,7 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         message, code=code, http_status=response.status_code, upstream_http_status=upstream,
         provider_charge_ambiguous=ambiguous, retry_safe=retry_safe,
         provider_refusal_category=category,
+        retry_after_seconds=rate_delay,
     )
 
 

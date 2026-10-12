@@ -288,6 +288,19 @@ def _only_status_filter(value: Node, getter: str) -> bool:
     return bool(references)
 
 
+def _visible_control_intent(clause: str) -> bool:
+    # CSS selectors name style rules, not interactive controls. Remove only
+    # that qualified phrase: a separate UI selector in the same clause counts.
+    text = re.sub(
+        r"\b(?:css[\s-]+(?:селектор\w*|selectors?)|"
+        r"(?:селектор\w*|selectors?)[\s-]+css)\b", " ", clause, flags=re.I,
+    )
+    return re.search(
+        r"\b(?:видим\w*|кнопк\w*|переключател\w*|селектор\w*|"
+        r"visible|controls?|buttons?|interactive|selectors?)\b", text, re.I,
+    ) is not None
+
+
 def _priority_filter_gap(
     prompt: str, program: Node, body: Node, source: str,
     declarations: list[tuple[Node, Node]], bindings: list[tuple[str, str, bool]],
@@ -296,10 +309,7 @@ def _priority_filter_gap(
     if not any(
         re.search(r"\b(?:priority|приоритет\w*)\b", clause, re.I)
         and re.search(r"\b(?:фильтр\w*|filters?)\b", clause, re.I)
-        and re.search(
-            r"\b(?:видим\w*|кнопк\w*|переключател\w*|visible|controls?|buttons?|interactive)\b",
-            clause, re.I,
-        )
+        and _visible_control_intent(clause)
         and not re.search(r"\b(?:не|нет|not|without)\b", clause, re.I)
         for clause in re.split(r"[.!?;\n]", prompt)
     ):
@@ -355,10 +365,7 @@ def unused_visible_filter_gap(
             r"\b(?:фильтр\w*|filters?)\b" if operation == "filter"
             else r"\b(?:сортиров\w*|sort\w*)\b", clause, re.IGNORECASE,
         )
-        and re.search(
-            r"\b(?:кнопк\w*|переключател\w*|видим\w*|buttons?|controls?|visible|interactive)\b",
-            clause, re.IGNORECASE,
-        )
+        and _visible_control_intent(clause)
         and not re.search(
             r"\b(?:не\s+(?:добав\w*|меня\w*|трог\w*|нуж\w*|треб\w*)|do\s+not|without)\b",
             clause, re.IGNORECASE,

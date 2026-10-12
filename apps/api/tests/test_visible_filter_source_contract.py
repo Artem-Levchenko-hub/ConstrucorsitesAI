@@ -247,6 +247,12 @@ export default function Catalog({items}) {
     assert max_source_completion_gap(PROMPT, files, portable=True) is None
 
 PRIORITY_PROMPT = "Добавь видимый фильтр по приоритету."
+SELECTOR_PRIORITY_PROMPT = (
+    "Доработай видимый интерфейс: приоритет не виден. "
+    "Используй уже добавленные поля приоритета low/normal/high. "
+    "Покажи селектор в форме создания и редактирования, понятную метку "
+    "приоритета в списке и работающий фильтр."
+)
 MIXED_PRIORITY_PAGE = '''import {useState} from "react";
 export default function Page({orders}) {
   const [filter,setFilter]=useState("all");
@@ -329,13 +335,46 @@ def test_normalized_priority_comparison_still_exposes_inert_setter() -> None:
     gap = max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True)
     assert gap is not None and 'setPriorityFilter' in gap
 
+
+@pytest.mark.parametrize("prompt", [
+    SELECTOR_PRIORITY_PROMPT,
+    "Show a selector and a priority label in the list with a working filter.",
+    "Исправь селектор CSS и добавь селектор фильтра по приоритету.",
+    "Fix the CSS selector and add a selector for the priority filter.",
+])
+def test_requested_selector_exposes_existing_inert_priority_filter(prompt: str) -> None:
+    page = MIXED_PRIORITY_PAGE.replace(
+        'o.priority===priorityFilter', 'normalizePriority(o.priority)===priorityFilter',
+    )
+    gap = max_source_completion_gap(prompt, candidate(page), portable=True)
+    assert gap is not None and "setPriorityFilter" in gap
+
+
+@pytest.mark.parametrize("prompt", [
+    "Только API: добавь селектор фильтра по приоритету.",
+    "Не добавляй селектор фильтра по приоритету.",
+    "Покажи селектор фильтра по статусу. Не меняй приоритет.",
+    "Покажи селектор приоритета в форме и метку в списке.",
+    "API-only: add a priority filter selector.",
+    "Do not add a priority filter selector.",
+    "Исправь только CSS-селектор фильтра по приоритету.",
+    "Fix the CSS selector for the priority filter.",
+    "Исправь только селектор CSS для фильтра по приоритету.",
+    "Fix only the CSS  selector for the priority filter.",
+    "Fix only the selector   CSS for the priority filter.",
+    "Исправь только CSS - селектор фильтра по приоритету.",
+])
+def test_selector_does_not_invent_positive_priority_filter_intent(prompt: str) -> None:
+    assert max_source_completion_gap(prompt, candidate(MIXED_PRIORITY_PAGE), portable=True) is None
+
 @pytest.mark.parametrize("predicate", [
     'priority === "all" || o["priority"] === priority',
     'matchesPriority(o, priority)',
     'priority === "all" || o[field] === priority',
     'priority === "all" || (priority === "high" && o.priority === "high")',
 ])
-def test_active_unknown_priority_filter_after_visible_collection_is_inconclusive(predicate):
+@pytest.mark.parametrize("prompt", [PRIORITY_PROMPT, SELECTOR_PRIORITY_PROMPT])
+def test_active_unknown_priority_filter_after_visible_collection_is_inconclusive(predicate, prompt):
     page = MIXED_PRIORITY_PAGE.replace(
         'return <ListView',
         'const [priority,setPriority]=useState("all"); '
@@ -344,4 +383,4 @@ def test_active_unknown_priority_filter_after_visible_collection_is_inconclusive
     ).replace('orders={visible}', 'orders={actual}').replace(
         'onFilter={setFilter}/>;', 'onFilter={setFilter}/></>;',
     )
-    assert max_source_completion_gap(PRIORITY_PROMPT, candidate(page), portable=True) is None
+    assert max_source_completion_gap(prompt, candidate(page), portable=True) is None

@@ -601,8 +601,16 @@ async def _run_agent_segment(
                 *call_msgs[1:],
             ]
         # Preserve the existing five-attempt bound for proven safe failures.
-        # Auth/rate rejection and unknown billing outcomes are not replay-safe.
+        # Only confirmed refusal/preconnect evidence permits another paid POST.
+        retry_started = asyncio.get_running_loop().time()
+        rate_retry_deadline: float | None = None
         for attempt in range(5):
+            if (rate_retry_deadline is not None
+                    and asyncio.get_running_loop().time() >= rate_retry_deadline):
+                return AgentResult(
+                    done=False, summary="provider_refusal_rate_limit: safe retry window exhausted",
+                    files=written, steps=step, transcript=convo, stop_reason="provider_error",
+                )
             remaining = (
                 (edit_deadline - datetime.now(UTC)).total_seconds()
                 if edit_deadline is not None else None
@@ -617,19 +625,38 @@ async def _run_agent_segment(
                 if uses_gateway and remaining is not None else complete
             )
             try:
-                reply = await bounded_complete(
-                    call_msgs,
-                    active_model,
-                    user_id=user_id,
-                    project_id=project_id,
-                    max_tokens=max_tokens,
-                    temperature=0.0,
+                rate_remaining = (
+                    rate_retry_deadline - asyncio.get_running_loop().time()
+                    if rate_retry_deadline is not None else None
                 )
+                # A retry admitted near the boundary cannot outlive its window.
+                # A timed-out POST has an unknown outcome and is never replayed.
+                async with asyncio.timeout(rate_remaining):
+                    reply = await bounded_complete(
+                        call_msgs,
+                        active_model,
+                        user_id=user_id,
+                        project_id=project_id,
+                        max_tokens=max_tokens,
+                        temperature=0.0,
+                    )
                 break
             except Exception as exc:
                 failure = exc if isinstance(exc, llm_client.LLMError) else None
                 retry_safe = failure is not None and failure.retry_safe is True
                 will_retry = retry_safe and attempt < 4
+                delay = 4.0 * (attempt + 1)
+                wait_budget = (
+                    (edit_deadline - datetime.now(UTC)).total_seconds()
+                    if edit_deadline is not None else None
+                )
+                if failure is not None and failure.retry_after_seconds is not None:
+                    rate_retry_deadline = retry_started + 270.0
+                    delay = max(delay, failure.retry_after_seconds)
+                    rate_budget = rate_retry_deadline - asyncio.get_running_loop().time()
+                    wait_budget = min(wait_budget, rate_budget) if wait_budget is not None else rate_budget
+                if wait_budget is not None and delay >= wait_budget:
+                    will_retry = False
                 diagnostic = {
                     "step": step, "attempt": attempt, "will_retry": will_retry,
                     "error_code": failure.code if failure is not None else None,
@@ -676,7 +703,7 @@ async def _run_agent_segment(
                     )
                 if emit:
                     await emit("agent.retry", diagnostic)
-                await asyncio.sleep(4.0 * (attempt + 1))
+                await asyncio.sleep(delay)
         if reply is None:
             return AgentResult(
                 done=False,
