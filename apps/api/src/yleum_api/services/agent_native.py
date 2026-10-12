@@ -34,6 +34,7 @@ from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
 from yleum_api.services.generation.continuation import SourceNoveltyTracker
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
+from yleum_api.services.llm_client import rate_limit_retry_delay
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 log = structlog.get_logger(__name__)
@@ -924,8 +925,9 @@ async def _call_messages(
     tool_choice: Mapping[str, Any] | None = None,
     headers: Mapping[str, str] | None = None,
     auth_factory: NativeMessagesAuthFactory | None = None,
+    edit_deadline: datetime | None = None,
 ) -> dict[str, Any]:
-    """One native /v1/messages call with 429 (concurrency) retry. Returns the parsed
+    """One native /v1/messages call with proven safe refusal retries. Returns the parsed
     Anthropic response dict, or raises the last error."""
     import asyncio
 
@@ -984,6 +986,8 @@ async def _call_messages(
         delay = min(45.0, 4.0 * (2**attempt))
         try:
             remaining = _CALL_RETRY_WINDOW_S - (loop.time() - started_at)
+            if edit_deadline is not None:
+                remaining = min(remaining, (edit_deadline - datetime.now(UTC)).total_seconds())
             if remaining <= 0:
                 break
             # httpx's timeout is per I/O operation. The outer scope also bounds
@@ -1061,12 +1065,17 @@ async def _call_messages(
                 # Keep only the HTTP class; never infer quota or expose its body.
                 raise _terminal_provider_error(f"provider_http_{r.status_code}")
             if r.status_code == 429 or category == "rate_limit":
-                last = (
-                    _terminal_provider_error("provider_refusal_rate_limit")
-                    if category == "rate_limit"
-                    else RuntimeError(f"429 concurrency (attempt {attempt + 1})")
+                rate_delay = (
+                    rate_limit_retry_delay(output_error.get("details"))
+                    if r.status_code == 429 and isinstance(output_error, dict)
+                    and len(r.content) <= 16_384
+                    and output_error.get("type") == "api_error"
+                    and output_error.get("code", "api_error") == "api_error" else None
                 )
-                delay = 6.0 * (attempt + 1)
+                last = _terminal_provider_error("provider_refusal_rate_limit")
+                if rate_delay is None:
+                    raise last
+                delay = max(6.0 * (attempt + 1), rate_delay)
             else:
                 r.raise_for_status()
                 body = r.json()
@@ -1089,9 +1098,12 @@ async def _call_messages(
         # A pause is only worth taking if another attempt follows it.
         if attempt + 1 >= _CALL_RETRIES or loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
             break
-        await asyncio.sleep(min(
-            delay, max(0.0, _CALL_RETRY_WINDOW_S - (loop.time() - started_at)),
-        ))
+        wait_budget = _CALL_RETRY_WINDOW_S - (loop.time() - started_at)
+        if edit_deadline is not None:
+            wait_budget = min(wait_budget, (edit_deadline - datetime.now(UTC)).total_seconds())
+        if delay >= wait_budget:
+            break
+        await asyncio.sleep(delay)
     raise last or RuntimeError("messages call failed")
 
 
@@ -1471,6 +1483,7 @@ async def _run_native_segment(
                         stage=call_stage,
                         headers=messages_headers,
                         auth_factory=messages_auth_factory,
+                        edit_deadline=edit_deadline,
                         tools=(
                             _SOURCE_REPAIR_TOOLS_CACHED
                             if edit_write_required

@@ -33,11 +33,13 @@ import httpx
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
 # still mean a paid generation; replaying it may create a second provider bill.
 _SAFE_TO_RETRY = (httpx.ConnectError, httpx.ConnectTimeout)
+
 
 # Only explicit structured refusal codes become public diagnostics. HTTP 401
 # alone and free-form messages cannot distinguish access from provider funds.
@@ -486,13 +488,17 @@ async def acompletion(
     try:
         data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
-        details = _failure_details({}, _receipt_headers(exc.response.headers))
+        details = _failure_details(bounded_error_body(exc.response) or {}, _receipt_headers(exc.response.headers))
         status = exc.response.status_code
         if type(status) is int and 400 <= status <= 599:
             details["upstream_http_status"] = status
         category = _refusal_category(exc.response)
         if category is not None:
             details["provider_refusal_category"] = category
+        candidate = refusal_retry_candidate(exc.response)
+        if candidate is not None:
+            details["provider_charge_ambiguous"] = False
+            details["_rate_limit_retry_candidate"] = candidate
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
             details=details,

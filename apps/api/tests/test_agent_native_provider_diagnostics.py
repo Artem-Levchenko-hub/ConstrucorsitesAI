@@ -129,8 +129,13 @@ async def test_known_native_rate_refusal_keeps_existing_retry_cadence(monkeypatc
         if recovers and len(calls) == 2:
             return httpx.Response(200, json=SUCCESS)
         return httpx.Response(429, json={"error": {
+            "type": "api_error",
             "message": "synthetic-private-key",
-            "details": {"upstream_http_status": 429, "provider_refusal_category": "rate_limit"},
+            "details": {
+                "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
+                "provider_charge_ambiguous": False, "retry_safe": True,
+                "retry_policy": "llmgw_key_rate_limit_v1",
+            },
         }})
 
     async def pause(delay):

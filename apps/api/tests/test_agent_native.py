@@ -1983,7 +1983,11 @@ async def test_billing_unavailable_is_terminal_without_exposing_response(monkeyp
     (503, {"error": {"message": "billing_unavailable in an untrusted message"}}),
     (503, {"error": "temporary failure"}),
     (503, []),
-    (429, {"error": {"type": "rate_limit"}}),
+    (429, {"error": {"type": "api_error", "details": {
+        "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
+        "provider_charge_ambiguous": False, "retry_safe": True,
+        "retry_policy": "llmgw_key_rate_limit_v1",
+    }}}),
 ])
 async def test_transient_provider_errors_still_retry(monkeypatch, status, body):
     calls = []
@@ -2266,7 +2270,13 @@ async def test_call_messages_retry_gets_fresh_token_from_auth_factory(
             )
             self.count += 1
             if self.count == 1:
-                return httpx.Response(429, request=httpx.Request("POST", url), text="rate_limit")
+                return httpx.Response(429, request=httpx.Request("POST", url), json={
+                    "error": {"type": "api_error", "details": {
+                        "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
+                        "provider_charge_ambiguous": False, "retry_safe": True,
+                        "retry_policy": "llmgw_key_rate_limit_v1",
+                    }},
+                })
             return httpx.Response(
                 200,
                 request=httpx.Request("POST", url),

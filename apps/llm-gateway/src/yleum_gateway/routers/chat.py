@@ -258,6 +258,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         )
     except BaseException as exc:
         details = exc.details if isinstance(exc, GatewayError) else {}
+        retry_candidate = details.pop("_rate_limit_retry_candidate", None)
         status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
         with CancelScope(shield=True):
             try:
@@ -268,6 +269,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             except GatewayError as journal_error:
                 raise _gateway_error_to_http(journal_error) from journal_error
         if isinstance(exc, GatewayError):
+            if status == "failed" and isinstance(retry_candidate, dict):
+                exc.details.update(retry_candidate)
             exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
             raise _gateway_error_to_http(exc) from exc
         if isinstance(exc, asyncio.CancelledError):

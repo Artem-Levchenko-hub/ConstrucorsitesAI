@@ -29,7 +29,7 @@ def client(neutralize_lifespan, neutralize_side_effects):
     (401, "private-key not-json", None),
     (402, {"error": {"message": "private-key"}}, None),
 ])
-def test_native_refusal_returns_only_safe_category_and_keeps_failed_receipt(
+def test_native_refusal_returns_only_safe_category_and_keeps_receipt(
     client, monkeypatch, status, body, category,
 ):
     monkeypatch.setattr(messages_native, "native_messages_route",
@@ -54,12 +54,12 @@ def test_native_refusal_returns_only_safe_category_and_keeps_failed_receipt(
     assert error["type"] == "api_error"
     details = error["details"]
     assert details["upstream_http_status"] == status
-    assert details["provider_charge_ambiguous"] is False
+    assert details["provider_charge_ambiguous"] is (status == 429)
     assert details.get("provider_refusal_category") == category
     assert "private" not in response.text
     assert len(calls) == 1
     receipt = provider_calls.finish_call.await_args.kwargs
-    assert receipt["status"] == "failed"
+    assert receipt["status"] == ("ambiguous" if status == 429 else "failed")
     assert receipt["error_type"] == "HTTPStatusError"
     assert receipt["provider_request_id"] == "provider-request-id"
     assert receipt["provider_cost_rub"] == Decimal("2.50")

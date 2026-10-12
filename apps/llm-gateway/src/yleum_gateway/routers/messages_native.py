@@ -38,6 +38,7 @@ from yleum_gateway.core.runner_auth import (
     verify_runner_bearer_header,
 )
 from yleum_gateway.providers import llmgw
+from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services import billing, file_logger, provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
@@ -441,7 +442,7 @@ async def _finish_provider_call(call_id: UUID, **receipt: Any) -> bool:
 
 def _known_response_evidence(upstream: httpx.Response) -> dict[str, Any]:
     try:
-        data = upstream.json()
+        data = bounded_error_body(upstream) if upstream.status_code >= 400 else upstream.json()
     except (ValueError, UnicodeError):
         data = {}
     if not isinstance(data, dict):
@@ -609,18 +610,21 @@ async def _native_messages_impl(
 
     known_evidence = _known_response_evidence(upstream)
     if upstream.status_code >= 400:
-        ambiguous = upstream.status_code >= 500
+        retry_candidate = refusal_retry_candidate(upstream)
+        ambiguous = upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
         recorded = await _finish_provider_call(
             provider_call_id, status="ambiguous" if ambiguous else "failed",
             error_type="HTTPStatusError", **known_evidence,
         )
-        if ambiguous or not recorded:
+        if upstream.status_code >= 500 or not recorded:
             return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
         category = llmgw._refusal_category(upstream)
         details: dict[str, Any] = {
             "upstream_http_status": upstream.status_code,
-            "provider_charge_ambiguous": False,
+            "provider_charge_ambiguous": ambiguous,
         }
+        if retry_candidate is not None:
+            details.update(retry_candidate)
         message = "Provider rejected the request"
         if category is not None:
             details["provider_refusal_category"] = category
