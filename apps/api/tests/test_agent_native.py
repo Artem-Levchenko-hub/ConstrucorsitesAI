@@ -664,6 +664,63 @@ async def test_native_segments_stop_after_proven_no_progress() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("content", ["existing product", ""])
+async def test_native_segments_stop_when_reported_files_match_initial_tree(content: str) -> None:
+    calls = 0
+    initial_files = {"src/app/page.tsx": content}
+
+    async def run_segment(
+        _task: str, _check: Any, effective_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        assert effective_files == initial_files
+        return AgentResult(
+            done=False, summary="rewrote the same file", files=dict(initial_files), steps=12,
+            stop_reason="exploring",
+        )
+
+    result = await agent_native._run_native_segments(
+        task="Change the page", completion_check=lambda _files, _proof: "missing change",
+        max_segments=4, run_segment=run_segment, initial_files=initial_files,
+    )
+
+    assert calls == 1
+    assert result.stop_reason == "no_progress"
+    assert result.steps == 12
+    assert result.files == initial_files
+
+
+@pytest.mark.asyncio
+async def test_native_segments_new_empty_file_is_source_progress() -> None:
+    calls = 0
+    initial_files = {"src/app/page.tsx": "existing product"}
+
+    async def run_segment(
+        _task: str, _check: Any, effective_files: Mapping[str, str],
+    ) -> AgentResult:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            assert effective_files == initial_files
+            return AgentResult(
+                done=False, summary="created helper", files={"src/lib/helper.ts": ""}, steps=1,
+                stop_reason="max_steps",
+            )
+        assert effective_files == {**initial_files, "src/lib/helper.ts": ""}
+        return AgentResult(done=True, summary="complete", files={}, steps=1, stop_reason="done")
+
+    result = await agent_native._run_native_segments(
+        task="Create a helper", completion_check=lambda _files, _proof: None,
+        max_segments=4, run_segment=run_segment, initial_files=initial_files,
+    )
+
+    assert calls == 2
+    assert result.done
+    assert result.files == {"src/lib/helper.ts": ""}
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("tool", ["read_file", "grep", "list_dir", "bash", "docs"])
 async def test_native_segments_observations_do_not_authorize_paid_continuation(tool: str) -> None:
     calls = 0
@@ -832,6 +889,101 @@ def _turn(*tools: tuple[str, dict[str, Any]]) -> dict[str, Any]:
             for i, (name, args) in enumerate(tools)
         ],
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["write_file", "edit_file", "bash"])
+async def test_native_done_before_later_source_mutation_requires_fresh_build(
+    monkeypatch: pytest.MonkeyPatch, mutation: str,
+) -> None:
+    calls = 0
+    actions = []
+    events = []
+    observed_done_results = []
+    content = "unverified new source"
+    mutation_args = (
+        {"cmd": "update source"} if mutation == "bash" else
+        {"path": "src/app.tsx", "content": content} if mutation == "write_file" else
+        {"path": "src/app.tsx", "search": "old", "replace": content}
+    )
+
+    async def fake_call(_client, _url, convo, _system, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _turn(("build", {}))
+        if calls == 2:
+            return _turn(("done", {"summary": "ready"}), (mutation, mutation_args))
+        done_result = next(
+            result for result in convo[-1]["content"] if result.get("tool_use_id") == "tu_0"
+        )
+        observed_done_results.append(dict(done_result))
+        raise RuntimeError("PROVIDER_AUTH_FAILED: synthetic refusal")
+
+    async def execute(action):
+        actions.append(action.name)
+        if action.name == "edit_file":
+            return {"ok": True, "content": content}
+        if action.name == "bash":
+            return {"ok": True, "files": {"src/app.tsx": content}}
+        return {"ok": True}
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native._run_native_segment(
+        system="s", task="Change source", execute=execute, emit=emit, max_steps=3,
+        initial_files={"src/app.tsx": "old"},
+    )
+
+    assert calls == 3
+    assert actions == ["build", mutation]
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "provider_error"
+    assert result.files == {"src/app.tsx": content}
+    assert result.evidence["build_after_write"] == 0
+    assert len(observed_done_results) == 1
+    assert observed_done_results[0]["is_error"]
+    assert "build" in observed_done_results[0]["content"]
+    assert not any(event == "agent.done" for event, _payload in events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("done_first", [False, True])
+async def test_native_done_uses_fresh_build_from_final_batch_state(
+    monkeypatch: pytest.MonkeyPatch, done_first: bool,
+) -> None:
+    actions = []
+    events = []
+    done = ("done", {"summary": "verified final source"})
+    source_and_build = [
+        ("write_file", {"path": "src/app.tsx", "content": "verified new source"}),
+        ("build", {}),
+    ]
+    batch = [done, *source_and_build] if done_first else [*source_and_build, done]
+
+    async def fake_call(*_args, **_kwargs):
+        return _turn(*batch)
+
+    async def execute(action):
+        actions.append(action.name)
+        return {"ok": True}
+
+    async def emit(event, payload):
+        events.append((event, payload))
+
+    monkeypatch.setattr(agent_native, "_call_messages", fake_call)
+    result = await agent_native._run_native_segment(
+        system="s", task="Change source", execute=execute, emit=emit, max_steps=1,
+        initial_files={"src/app.tsx": "old"},
+    )
+
+    assert actions == ["write_file", "build"]
+    assert result.done and result.stop_reason == "done"
+    assert result.files == {"src/app.tsx": "verified new source"}
+    assert result.evidence["build_after_write"] == 1
+    assert sum(event == "agent.done" for event, _payload in events) == 1
 
 
 @pytest.mark.asyncio
@@ -1952,6 +2104,67 @@ async def test_auth_failure_is_not_retried_or_finalized(monkeypatch):
         with pytest.raises(RuntimeError, match="provider_http_401"):
             await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 413, 422])
+async def test_invalid_native_request_is_not_replayed(monkeypatch, status):
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": {
+            "type": "invalid_request_error", "message": "private-request-detail",
+        }})
+
+    async def no_sleep(_delay):
+        pytest.fail("an unchanged invalid request must not back off and replay")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(RuntimeError, match=f"provider_http_{status}") as caught:
+            await agent_native._call_messages(client, "https://gateway.test/v1/messages", [], "s")
+
+    assert len(calls) == 1
+    assert "private-request-detail" not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [400, 413, 422])
+async def test_invalid_native_request_stops_without_green_tree_acceptance(monkeypatch, status):
+    calls = []
+    original_client = httpx.AsyncClient
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(status, json={"error": {
+            "type": "api_error", "message": "private-provider-detail",
+            "details": {"upstream_http_status": status, "ambiguity": False},
+        }})
+
+    monkeypatch.setattr(
+        agent_native.httpx, "AsyncClient",
+        lambda: original_client(transport=httpx.MockTransport(reply)),
+    )
+
+    async def no_sleep(_delay):
+        pytest.fail("an unchanged invalid request must not back off and replay")
+
+    async def execute(_action):
+        pytest.fail("a rejected request must not build or accept the existing tree")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    result = await agent_native.run_native_build(
+        system="s", task="Change the page", execute=execute,
+        initial_files={"src/app/page.tsx": "existing green product"},
+        completion_check=lambda _files, _proof: None, max_segments=4,
+    )
+
+    assert len(calls) == 1
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "provider_error"
+    assert result.summary.startswith(f"provider_http_{status}:")
+    assert "private-provider-detail" not in result.summary
 
 
 @pytest.mark.asyncio

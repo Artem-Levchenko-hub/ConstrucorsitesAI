@@ -6,6 +6,7 @@ committed state at the event boundary, without requiring a PostgreSQL server.
 """
 
 from copy import deepcopy
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -16,7 +17,12 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.services import restorations
 from yleum_api.services.agent_builder import AgentResult
-from yleum_api.services.generation import agent_generation, agent_pipeline, agent_publication
+from yleum_api.services.generation import (
+    agent_generation,
+    agent_pipeline,
+    agent_publication,
+    agent_recovery,
+)
 from yleum_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
@@ -84,7 +90,9 @@ async def test_first_provider_rejection_exits_before_extra_repair_or_finalizatio
 
 @pytest.fixture
 def pipeline_turn(monkeypatch):
-    async def run(*, candidate, done=True, native=True, verification_failed=False):
+    async def run(*, candidate, done=True, native=True, verification_failed=False,
+                  checkpoint_failure_phase=None, source_deadline=None,
+                  multi_path_checkpoint_failure=False, checkpoint_snapshot_failure=False):
         ids = GenerationIds(*(uuid4() for _ in range(5)))
         run_row = GenerationRun(id=ids.run_id, status="running", agent_state={})
         message = Message(id=ids.assistant_message_id, content="", tokens_out=None)
@@ -168,6 +176,7 @@ def pipeline_turn(monkeypatch):
         # Treat expensive provider/runtime stages as already completed. Preserve
         # the real final source guard, product verdict and database publication.
         phase_results = {
+            "require_named_behavior_readiness": None,
             "classify_agent_turn": ("Change title", False, True, True),
             "prepare_agent_runtime": (bindings, None),
             "prepare_stack_prompt": SimpleNamespace(orchestrator_template=None),
@@ -190,9 +199,99 @@ def pipeline_turn(monkeypatch):
         for name, value in phase_results.items():
             monkeypatch.setattr(agent_pipeline, name, AsyncMock(return_value=value))
 
-        await agent_pipeline.run_agent_generation(
+        runtime = GenerationRuntime()
+        if source_deadline is not None:
+            runtime.coordinator = SimpleNamespace(
+                source_edit_deadline=AsyncMock(return_value=source_deadline),
+            )
+        baseline_files = {"src/page.tsx": "original"}
+        tree = {"src/page.tsx": "unsaved source"}
+        if checkpoint_failure_phase is not None:
+            snapshot_unavailable = False
+
+            async def snapshot():
+                if snapshot_unavailable:
+                    raise RuntimeError("private snapshot unavailable")
+                return dict(tree)
+
+            runtime.handle = SimpleNamespace(
+                snapshot_files=AsyncMock(side_effect=snapshot),
+            )
+            bindings.probe_build = AsyncMock(return_value={"ok": True})
+            stopped = AgentResult(
+                done=False, summary="checkpoint storage failed", files=dict(tree), steps=1,
+                stop_reason="checkpoint_error",
+            )
+            getattr(agent_pipeline, checkpoint_failure_phase).side_effect = (
+                agent_generation.SourceCheckpointError(stopped)
+            )
+
+            def read_baseline(project_id, sha):
+                assert project_id == ids.project_id and sha == "baseline-sha"
+                return dict(baseline_files)
+
+            async def apply_restored_files(*, files, empty_files=(), **_kwargs):
+                for path, content in files.items():
+                    if content or path in empty_files:
+                        tree[path] = content
+                    else:
+                        tree.pop(path, None)
+                trace.append("restored_accepted_source")
+
+            monkeypatch.setattr(agent_recovery.repo_svc, "read_files", read_baseline)
+            monkeypatch.setattr(
+                agent_recovery, "_apply_project_cell_preview_files", apply_restored_files,
+            )
+
+            if multi_path_checkpoint_failure:
+                baseline_files = {
+                    "src/main.tsx": "accepted main",
+                    "src/heal.tsx": "accepted heal",
+                    "src/deleted.tsx": "accepted deleted",
+                }
+                tree.clear()
+                tree.update({**baseline_files, **candidate})
+                monkeypatch.setattr(agent_pipeline, "persist_checkpoint", AsyncMock(
+                    side_effect=[None, RuntimeError("private storage unavailable")],
+                ))
+
+                async def fail_heal(*, operations, **_kwargs):
+                    nonlocal snapshot_unavailable
+                    tree["src/prior-new.tsx"] = "earlier heal source"
+                    await operations.checkpoint(AgentResult(
+                        done=False, summary="earlier heal", steps=1,
+                        files={"src/prior-new.tsx": "earlier heal source"},
+                    ))
+                    tree.update({
+                        "src/heal.tsx": "failed heal source",
+                        "src/heal-new.tsx": "failed heal new source",
+                    })
+                    tree.pop("src/deleted.tsx")
+                    stopped.files = {
+                        "src/heal.tsx": "failed heal source",
+                        "src/heal-new.tsx": "failed heal new source",
+                        "src/deleted.tsx": "",
+                    }
+                    snapshot_unavailable = checkpoint_snapshot_failure
+                    try:
+                        await operations.checkpoint(stopped)
+                    except RuntimeError:
+                        snapshot_unavailable = True
+                        agent_generation.raise_if_source_checkpoint_failed(stopped)
+                    pytest.fail("failed private checkpoint must stop the heal")
+
+                getattr(agent_pipeline, checkpoint_failure_phase).side_effect = fail_heal
+
+            async def recover(**kwargs):
+                if kwargs["_agent_res"].stop_reason == "checkpoint_error":
+                    return await agent_recovery.recover_stopped_candidate(**kwargs)
+                return phase_results["recover_stopped_candidate"]
+
+            agent_pipeline.recover_stopped_candidate.side_effect = recover
+
+        invocation = agent_pipeline.run_agent_generation(
             _consume_free_generation=forbidden,
-            baseline=SourceBaseline(uuid4(), "baseline-sha", {"src/page.tsx": "original"}),
+            baseline=SourceBaseline(uuid4(), "baseline-sha", baseline_files),
             capacity_dispatch_token=None,
             factory=Session,
             force_model=None,
@@ -200,19 +299,92 @@ def pipeline_turn(monkeypatch):
             is_free=False,
             model_id="fixture-model",
             orchestrate=False,
-            progress=SimpleNamespace(emit_agent_event=forbidden, steps=[]),
+            progress=SimpleNamespace(
+                emit_agent_event=AsyncMock() if checkpoint_failure_phase is not None else forbidden,
+                steps=[],
+            ),
             project_info=ProjectGenerationFacts(
                 "max_miniapp", "fixture", "Fixture", None, None, False, "ru", False, "", ""
             ),
             prompt_text="Change title",
-            runtime=GenerationRuntime(),
+            runtime=runtime,
             selected_elements=None,
         )
+        failure = None
+        try:
+            await invocation
+        except Exception as exc:
+            if checkpoint_failure_phase is None:
+                raise
+            failure = exc
         return SimpleNamespace(
-            ids=ids, committed=committed, trace=trace, events=events, cards=cards
+            ids=ids, committed=committed, trace=trace, events=events, cards=cards,
+            tree=tree, failure=failure,
+            phases={name: getattr(agent_pipeline, name) for name in phase_results},
         )
 
     return run
+
+
+async def test_pipeline_carries_one_source_deadline_to_main_and_legacy_fallbacks(pipeline_turn):
+    deadline = datetime.now(UTC) + timedelta(seconds=20)
+    turn = await pipeline_turn(candidate={}, done=False, native=False, source_deadline=deadline)
+    operations = turn.phases["execute_agent_turn"].await_args.kwargs["operations"]
+    assert operations.edit_deadline is deadline
+    assert operations.checkpoint is not None
+    for name in (
+        "complete_empty_legacy_build", "check_backend_and_normalize_css", "repair_legacy_edit",
+        "check_runtime_security_gates", "check_coverage_gate",
+    ):
+        assert turn.phases[name].await_args.kwargs["operations"] is operations
+
+
+@pytest.mark.parametrize("phase", [
+    "complete_empty_legacy_build", "check_backend_and_normalize_css", "repair_legacy_edit",
+    "check_runtime_security_gates", "check_coverage_gate",
+])
+async def test_pipeline_checkpoint_failure_restores_accepted_source_before_stopping(
+    pipeline_turn, phase,
+):
+    turn = await pipeline_turn(
+        candidate={"src/page.tsx": "changed"}, native=False, checkpoint_failure_phase=phase,
+    )
+    assert turn.failure is not None
+    assert turn.tree == {"src/page.tsx": "original"}
+    assert turn.trace == ["restored_accepted_source"]
+    assert turn.phases["recover_stopped_candidate"].await_count == 2
+    turn.phases["finalize_max_candidate"].assert_not_awaited()
+    assert turn.events == [] and turn.cards == [] and turn.committed == {}
+
+
+@pytest.mark.parametrize("phase", [
+    "check_backend_and_normalize_css", "repair_legacy_edit",
+    "check_runtime_security_gates", "check_coverage_gate",
+])
+@pytest.mark.parametrize("checkpoint_snapshot_failure", [False, True])
+async def test_heal_checkpoint_failure_restores_every_run_change_to_exact_accepted_tree(
+    pipeline_turn, phase, checkpoint_snapshot_failure,
+):
+    turn = await pipeline_turn(
+        candidate={"src/main.tsx": "main candidate", "src/main-new.tsx": "main new source"},
+        native=False, checkpoint_failure_phase=phase, multi_path_checkpoint_failure=True,
+        checkpoint_snapshot_failure=checkpoint_snapshot_failure,
+    )
+    assert turn.failure is not None and "private" not in str(turn.failure)
+    assert turn.tree == {
+        "src/main.tsx": "accepted main",
+        "src/heal.tsx": "accepted heal",
+        "src/deleted.tsx": "accepted deleted",
+    }
+    assert turn.trace == ["restored_accepted_source"]
+    heal_phases = (
+        "check_backend_and_normalize_css", "repair_legacy_edit",
+        "check_runtime_security_gates", "check_coverage_gate",
+    )
+    for later_phase in heal_phases[heal_phases.index(phase) + 1:]:
+        turn.phases[later_phase].assert_not_awaited()
+    turn.phases["finalize_max_candidate"].assert_not_awaited()
+    assert turn.events == [] and turn.cards == [] and turn.committed == {}
 
 
 @pytest.mark.parametrize("native,done", [(True, True), (True, False), (False, False)])

@@ -54,6 +54,28 @@ log = structlog.get_logger(__name__)
 router = APIRouter()
 
 _TIMEOUT_S = 240.0
+_REQUEST_ERROR_MESSAGES = {
+    "invalid_request_error": "Provider rejected an invalid request",
+    "request_too_large": "Provider rejected an oversized request",
+}
+
+
+def _request_error_type(response: httpx.Response) -> str | None:
+    """Preserve bounded, explicit request-error types without provider text."""
+    if response.status_code not in {400, 413, 422} or len(response.content) > 16_384:
+        return None
+    try:
+        body = response.json()
+    except (ValueError, RecursionError):
+        return None
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return None
+    kinds = {
+        value for field in ("type", "code")
+        if isinstance(value := error.get(field), str) and value in _REQUEST_ERROR_MESSAGES
+    }
+    return next(iter(kinds)) if len(kinds) == 1 else None
 
 
 def _err(
@@ -168,10 +190,15 @@ def _openai_messages(body: dict[str, Any]) -> list[dict[str, Any]]:
         for block in content:
             if not isinstance(block, dict) or block.get("type") != "tool_result":
                 continue
+            result_content = _text(block.get("content")) or str(block.get("content") or "")
+            if block.get("is_error") is True:
+                # OpenAI tool messages have no is_error field. Keep its meaning
+                # explicit in content, rather than silently treating failure as success.
+                result_content = f"TOOL_ERROR: {result_content}"
             tool_result: dict[str, Any] = {
                 "role": "tool",
                 "tool_call_id": str(block.get("tool_use_id") or ""),
-                "content": _text(block.get("content")) or str(block.get("content") or ""),
+                "content": result_content,
             }
             # The native loop puts its moving prefix breakpoint on the last
             # tool_result. LiteLLM understands cache_control at message level,
@@ -623,6 +650,7 @@ async def _native_messages_impl(
             "upstream_http_status": upstream.status_code,
             "provider_charge_ambiguous": ambiguous,
         }
+        err_type = "api_error"
         if retry_candidate is not None:
             details.update(retry_candidate)
         message = "Provider rejected the request"
@@ -633,7 +661,12 @@ async def _native_messages_impl(
                 "funds": "Provider reported insufficient funds",
                 "rate_limit": "Provider rate limit exceeded",
             }[category]
-        return _err(upstream.status_code, "api_error", message, details=details)
+        else:
+            request_error = _request_error_type(upstream)
+            if request_error is not None:
+                err_type = request_error
+                message = _REQUEST_ERROR_MESSAGES[request_error]
+        return _err(upstream.status_code, err_type, message, details=details)
 
     try:
         upstream_data = upstream.json()

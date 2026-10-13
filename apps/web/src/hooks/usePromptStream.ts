@@ -17,6 +17,7 @@ import type {
   WsEvent,
 } from "@/lib/api/types";
 import { mergeAgentStepsBySequence } from "@/lib/agent-steps";
+import { generationEventStep } from "@/lib/generation-event-step";
 import {
   cancelGeneration,
   getLatestGeneration,
@@ -195,64 +196,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         const mid = typeof data.message_id === "string" ? data.message_id : null;
         if (mid) watchdogHeartbeatRef.current[mid]?.();
 
-        let next: AgentStep | null = null;
-        if (envelope.type === "agent.step" && mid) {
-          const rawKind = data.kind;
-          const kind =
-            rawKind === "escalate" ||
-            rawKind === "stalled" ||
-            rawKind === "retry"
-              ? rawKind
-              : "step";
-          next = {
-            eventId: envelope.event_id,
-            runId: envelope.run_id,
-            seq: envelope.seq,
-            step: typeof data.step === "number" ? data.step : null,
-            kind,
-            action: typeof data.action === "string" ? data.action : "",
-            path: typeof data.path === "string" ? data.path : "",
-            tool: typeof data.tool === "string" ? data.tool : undefined,
-            detail: typeof data.detail === "string" ? data.detail : undefined,
-            ok: typeof data.ok === "boolean" ? data.ok : null,
-            skipped: data.skipped === true,
-          };
-        } else if (envelope.type.startsWith("tool.") && mid) {
-          const operationId =
-            typeof data.operation_id === "string"
-              ? data.operation_id
-              : envelope.event_id;
-          const phase =
-            typeof data.phase === "string" ? data.phase : "операция";
-          const finished = envelope.type === "tool.finished";
-          const state = typeof data.state === "string" ? data.state : "active";
-          next = {
-            eventId: `operation:${operationId}`,
-            runId: envelope.run_id,
-            seq: envelope.seq,
-            step: null,
-            kind: "heartbeat",
-            action: finished ? `${phase}: завершено` : `${phase}: выполняется`,
-            path: "",
-            operationId,
-            detail:
-              typeof data.log_bytes === "number"
-                ? `Обработано ${data.log_bytes} байт журнала`
-                : undefined,
-            ok: finished ? state === "completed" : undefined,
-          };
-        } else if (envelope.type === "generation.phase" && mid) {
-          const phase = typeof data.phase === "string" ? data.phase : "generation";
-          next = {
-            eventId: envelope.event_id,
-            runId: envelope.run_id,
-            seq: envelope.seq,
-            step: null,
-            kind: "heartbeat",
-            action: `Этап: ${phase}`,
-            path: "",
-          };
-        }
+        const next = mid ? generationEventStep(envelope) : null;
         if (mid && next) {
           qc.setQueryData<AgentStep[]>(
             ["agent-steps", projectId, mid],

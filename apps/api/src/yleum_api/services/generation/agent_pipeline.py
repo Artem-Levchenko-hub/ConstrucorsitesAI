@@ -24,6 +24,7 @@ from yleum_api.services.generation.agent_finalization import (
     validate_edit_source_change,
 )
 from yleum_api.services.generation.agent_generation import (
+    SourceCheckpointError,
     complete_empty_legacy_build,
     execute_agent_turn,
 )
@@ -243,6 +244,10 @@ async def run_agent_generation(
         })
     _operations = AgentOperations(
         snapshot_files=getattr(runtime.handle, "snapshot_files", None),
+        edit_deadline=(
+            await runtime.coordinator.source_edit_deadline()
+            if runtime.coordinator is not None else None
+        ),
         execute=bindings.execute,
         emit=_agent_emit,
         probe_runtime=bindings.probe_runtime,
@@ -250,10 +255,15 @@ async def run_agent_generation(
         preview_url=bindings.preview_url,
     )
 
+    _checkpoint_source_files: dict[str, str] = {}
+
     async def save_source_checkpoint(result: agent_builder.AgentResult) -> None:
+        # Keep all known paths even if the next snapshot or private save fails.
+        _checkpoint_source_files.update(result.files)
         if project_info.template != "max_miniapp" or _operations.snapshot_files is None:
             return
         candidate_files = await _operations.snapshot_files()
+        _checkpoint_source_files.update(candidate_files)
         if candidate_files == runtime.migration_baseline:
             return
         await persist_checkpoint(
@@ -308,11 +318,37 @@ async def run_agent_generation(
         runtime=runtime,
         operations=_operations,
     )
+
+    async def _legacy_source_operation(operation: Awaitable[Any]) -> Any:
+        try:
+            return await operation
+        except SourceCheckpointError as exc:
+            # Use the same accepted-source restoration as a stopped main turn.
+            # A failed private save cannot continue to another heal or publication.
+            # A heal result contains only its own changes; include earlier writes,
+            # new paths and baseline paths deleted during this run without rereading.
+            exc.candidate.files = {
+                **baseline.files,
+                **(_agent_res.files if _agent_res is not None else {}),
+                **_checkpoint_source_files,
+                **exc.candidate.files,
+            }
+            await recover_stopped_candidate(
+                _agent_res=exc.candidate,
+                _max_has_generated_snapshot=_max_has_generated_snapshot,
+                _max_seed_files=_max_seed_files,
+                _provider_failure=None,
+                _render_current_max_starter_files=_render_current_max_starter_files,
+                baseline=baseline, ids=ids, project_info=project_info, runtime=runtime,
+                operations=_operations,
+            )
+            raise RuntimeError(exc.candidate.summary) from None
+
     (
         _agent_res,
         files,
         _total_steps,
-    ) = await complete_empty_legacy_build(
+    ) = await _legacy_source_operation(complete_empty_legacy_build(
         _agent_res=_agent_res,
         _is_edit=_is_edit,
         _max_seed_files=_max_seed_files,
@@ -320,12 +356,12 @@ async def run_agent_generation(
         runtime=runtime,
         plan=_prompt_plan,
         operations=_operations,
-    )
+    ))
 
     # Layer C — backend-guardrail self-heal. Custom server logic is allowed,
     # but raw DB access remains behind the managed boundary until isolation is
     # enforced by Postgres rather than a forgeable source-code string check.
-    await check_backend_and_normalize_css(
+    await _legacy_source_operation(check_backend_and_normalize_css(
         _active_max_locked_files=bindings.locked_files,
         _agent_res=_agent_res,
         _is_edit=_is_edit,
@@ -337,7 +373,7 @@ async def run_agent_generation(
         runtime=runtime,
         plan=_prompt_plan,
         operations=_operations,
-    )
+    ))
 
     # Honest chat: never surface the raw internal summary on a non-done exit
     # (the "hit step budget without calling done" leak). See helper.
@@ -373,7 +409,7 @@ async def run_agent_generation(
         _typecheck_ok,
         _rt_error,
         _tc_error,
-    ) = await repair_legacy_edit(
+    ) = await _legacy_source_operation(repair_legacy_edit(
         coordinator_handoff=runtime.legacy_coordinator_handoff(),
         _is_edit=_is_edit,
         _rt_error=_rt_error,
@@ -387,7 +423,7 @@ async def run_agent_generation(
         prompt_text=prompt_text,
         plan=_prompt_plan,
         operations=_operations,
-    )
+    ))
     # ──────────────────────────────────────────────────────────────────
 
     # Keep the failed candidate's outcome even if restoring the old tree
@@ -457,7 +493,7 @@ async def run_agent_generation(
         _att_capture,
         _attestation_stack,
         accumulated,
-    ) = await check_runtime_security_gates(
+    ) = await _legacy_source_operation(check_runtime_security_gates(
         _is_edit=_is_edit,
         _orch_name=_stack.orchestrator_template,
         accumulated=accumulated,
@@ -466,7 +502,7 @@ async def run_agent_generation(
         project_info=project_info,
         plan=_prompt_plan,
         operations=_operations,
-    )
+    ))
 
     # Coverage gate (тезис 2 — «не на зелёном минимуме»). STACK-AGNOSTIC:
     # when a Build Plan exists, completion means its must-have capabilities
@@ -480,7 +516,7 @@ async def run_agent_generation(
     (
         _att_capture,
         accumulated,
-    ) = await check_coverage_gate(
+    ) = await _legacy_source_operation(check_coverage_gate(
         _att_capture=_att_capture,
         _build_plan=_build_plan,
         _is_edit=_is_edit,
@@ -493,7 +529,7 @@ async def run_agent_generation(
         runtime=runtime,
         plan=_prompt_plan,
         operations=_operations,
-    )
+    ))
 
     (
         _max_finalization_proof,

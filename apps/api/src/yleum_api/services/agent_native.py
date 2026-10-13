@@ -1060,7 +1060,7 @@ async def _call_messages(
                     f"provider_refusal_{category}" if category is not None
                     else "provider_http_402"
                 )
-            if r.status_code in {400, 404, 422}:
+            if r.status_code in {400, 404, 413, 422}:
                 # Repeating the same rejected request cannot fix its contract.
                 # Keep only the HTTP class; never infer quota or expose its body.
                 raise _terminal_provider_error(f"provider_http_{r.status_code}")
@@ -1529,7 +1529,7 @@ async def _run_native_segment(
                 )
                 marker = re.match(
                     r"\A(PLATFORM_WALLET_EMPTY|provider_refusal_(?:access|funds|rate_limit)|"
-                    r"provider_http_(?:400|401|402|403|404|422)):",
+                    r"provider_http_(?:400|401|402|403|404|413|422)):",
                     str(exc),
                 )
                 if marker is not None:
@@ -1721,6 +1721,7 @@ async def _run_native_segment(
 
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
+            pending_done: list[tuple[str, dict[str, Any]]] = []
             product_progress_this_turn = False
             ops_this_turn = 0  # executed (non-done) tool ops this turn
             infra_this_turn = 0  # of those, how many died on infra
@@ -1728,39 +1729,15 @@ async def _run_native_segment(
                 name = tu.get("name", "")
                 tu_id = tu.get("id", "")
                 if name == "done":
-                    if edit_source_changed is not None and not edit_source_changed():
-                        results.append({
-                            "type": "tool_result", "tool_use_id": tu_id,
-                            "is_error": True, "content": "Not done yet: " + _EDIT_SOURCE_NUDGE,
-                        })
-                        continue
-                    # Fact-gate: refuse a premature done if the model wrote files but
-                    # never confirmed a CLEAN build afterwards. Bounded (R-10).
-                    premature = wrote_since_build or last_build_ok is not True
-                    if premature:
-                        results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tu_id,
-                                "is_error": True,
-                                "content": "Not done yet: run the `build` tool and make it "
-                                "CLEAN (fix any errors) before calling done.",
-                            }
-                        )
-                        continue
-                    gap = _completion_gap()
-                    if gap:
-                        results.append(
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": tu_id,
-                                "is_error": True,
-                                "content": "Not done yet: " + gap,
-                            }
-                        )
-                        continue
-                    done_summary = str((tu.get("input") or {}).get("summary", ""))
-                    results.append({"type": "tool_result", "tool_use_id": tu_id, "content": "done"})
+                    # Later tools in this response can mutate source or invalidate
+                    # proof. Evaluate every done request only after the whole batch.
+                    done_result = {
+                        "type": "tool_result", "tool_use_id": tu_id, "content": "done",
+                    }
+                    results.append(done_result)
+                    pending_done.append((
+                        str((tu.get("input") or {}).get("summary", "")), done_result,
+                    ))
                     continue
 
                 action = _tool_use_to_action(tu, portable_cell=portable_cell)
@@ -1931,6 +1908,22 @@ async def _run_native_segment(
                     if _hint:
                         _tr["content"] = str(_tr["content"]) + _hint
                 results.append(_tr)
+
+            if pending_done:
+                if edit_source_changed is not None and not edit_source_changed():
+                    done_gap = _EDIT_SOURCE_NUDGE
+                elif wrote_since_build or last_build_ok is not True:
+                    done_gap = (
+                        "run the `build` tool and make it CLEAN (fix any errors) "
+                        "before calling done."
+                    )
+                else:
+                    done_gap = _completion_gap() or ""
+                for summary, done_result in pending_done:
+                    if done_gap:
+                        done_result.update(is_error=True, content="Not done yet: " + done_gap)
+                    else:
+                        done_summary = summary
 
             if (
                 max_runtime
@@ -2160,12 +2153,13 @@ async def _run_native_segments(
 
     for segment in segment_numbers(1):
         files_before = dict(cumulative_files)
+        effective_files_before = {**(initial_files or {}), **files_before}
         evidence_before = dict(cumulative_evidence)
 
         segment_completion_check = (
             _cumulative_completion_check(
                 completion_check,
-                {**(initial_files or {}), **files_before},
+                effective_files_before,
                 evidence_before,
             )
             if completion_check is not None
@@ -2183,7 +2177,7 @@ async def _run_native_segments(
             )
         result = await run_segment(
             segment_task, segment_completion_check,
-            observed_source if novelty is not None else {**(initial_files or {}), **files_before}
+            observed_source if novelty is not None else effective_files_before
         )
         last_result = result
         total_steps += result.steps
@@ -2223,7 +2217,7 @@ async def _run_native_segments(
         if result.stop_reason in _CONTINUATION_TERMINAL_REASONS:
             return combined
 
-        file_progress = cumulative_files != files_before
+        file_progress = {**(initial_files or {}), **cumulative_files} != effective_files_before
         # Read/shell counters are observations, not new readiness proof. Repeated
         # successful exploration must not authorize another paid segment.
         evidence_progress = any(

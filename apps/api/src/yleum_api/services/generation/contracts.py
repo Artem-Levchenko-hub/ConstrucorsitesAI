@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, NamedTuple
 from uuid import UUID
 
@@ -88,6 +89,7 @@ class AgentOperations:
     preview_url: Callable[[], Awaitable[str | None]]
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None
     checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None
+    edit_deadline: datetime | None = None
 
 
 class FinalizedAgentSource(NamedTuple):

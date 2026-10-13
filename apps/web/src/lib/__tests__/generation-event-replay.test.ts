@@ -37,7 +37,7 @@ describe("generation event replay", () => {
     });
 
     expect(mergeAgentStepsBySequence([started], [heartbeat])).toEqual([
-      heartbeat,
+      { ...heartbeat, detail: undefined, orderSeq: 10 },
     ]);
   });
 

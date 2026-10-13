@@ -90,3 +90,87 @@ def test_native_server_error_still_quarantines_receipt_without_diagnostic_replay
     assert len(calls) == 1
     assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
     assert billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("content", ["command output", [{"type": "text", "text": "command output"}]])
+def test_failed_tool_result_keeps_error_semantics_in_openai_compatible_content(content):
+    result = messages_native._openai_messages({"messages": [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "build-id", "name": "build", "input": {}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "build-id", "content": content,
+             "is_error": True, "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "Fix this and continue."},
+        ]},
+    ]})
+    assert result[1] == {
+        "role": "tool", "tool_call_id": "build-id", "content": "TOOL_ERROR: command output",
+        "cache_control": {"type": "ephemeral"},
+    }
+    assert result[2] == {"role": "user", "content": "Fix this and continue."}
+
+
+@pytest.mark.parametrize("flag", [False, None, "true", 1])
+def test_successful_or_unproven_tool_error_keeps_existing_openai_content(flag):
+    result = messages_native._openai_messages({"messages": [
+        {"role": "assistant", "content": [
+            {"type": "tool_use", "id": "build-id", "name": "build", "input": {}},
+        ]},
+        {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "build-id", "content": "command output",
+             "is_error": flag},
+        ]},
+    ]})
+    assert result[1] == {"role": "tool", "tool_call_id": "build-id", "content": "command output"}
+
+
+@pytest.mark.parametrize("status,error,kind,category", [
+    (400, {"type": "invalid_request_error"}, "invalid_request_error", None),
+    (400, {"code": "invalid_request_error"}, "invalid_request_error", None),
+    (413, {"type": "request_too_large"}, "request_too_large", None),
+    (422, {"type": "invalid_request_error"}, "invalid_request_error", None),
+    (400, {"message": "invalid_request_error"}, "api_error", None),
+    (400, {"type": "invalid_request_error-private"}, "api_error", None),
+    (400, {"type": "invalid_request_error", "padding": "private" * 3000}, "api_error", None),
+    (400, {"type": ["invalid_request_error"]}, "api_error", None),
+    (400, {"type": "invalid_request_error", "code": "request_too_large"}, "api_error", None),
+    (400, {"type": "invalid_request_error", "code": "insufficient_balance"}, "api_error", "funds"),
+    (400, {"type": "authentication_error", "code": "invalid_request_error"}, "api_error", "access"),
+    (429, {"type": "rate_limit_error", "code": "invalid_request_error"}, "api_error", "rate_limit"),
+])
+def test_native_invalid_request_preserves_only_allowlisted_safe_error_type(
+    client, monkeypatch, status, error, kind, category,
+):
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://provider.test/v1"))
+    calls = []
+
+    def reply(*args):
+        calls.append(args)
+        return httpx.Response(status, json={"type": "error", "error": {
+            **error, "message": "synthetic-private-key https://private.test/path",
+            "param": "private-field",
+        }}, headers={"x-llmgw-request-id": "provider-request-id", "x-cost-rub": "2.50"})
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", reply)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert response.status_code == status
+    output = response.json()["error"]
+    assert output["type"] == kind
+    assert output["details"]["upstream_http_status"] == status
+    # This fixture carries cost evidence and a conflicting 429 request code;
+    # the latest closed retry policy must keep that outcome ambiguous.
+    assert output["details"]["provider_charge_ambiguous"] is (status == 429)
+    assert "retry_safe" not in output["details"] and "retry_policy" not in output["details"]
+    assert output["details"].get("provider_refusal_category") == category
+    assert "private" not in response.text
+    assert len(calls) == 1
+    receipt = provider_calls.finish_call.await_args.kwargs
+    assert receipt["status"] == ("ambiguous" if status == 429 else "failed")
+    assert receipt["error_type"] == "HTTPStatusError"
+    assert receipt["provider_request_id"] == "provider-request-id"
+    assert receipt["provider_cost_rub"] == Decimal("2.50")
+    assert billing.charge.await_count == 0

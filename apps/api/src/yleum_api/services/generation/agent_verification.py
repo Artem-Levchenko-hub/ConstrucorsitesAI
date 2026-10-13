@@ -11,6 +11,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.services import (
     agent_builder,
 )
+from yleum_api.services.generation.agent_generation import raise_if_source_checkpoint_failed
 from yleum_api.services.generation.agent_messages import (
     _agent_result_message,
     _capture_hard_coverage_attestation,
@@ -173,7 +174,10 @@ async def check_backend_and_normalize_css(
                 emit=operations.emit,
                 user_id=str(ids.user_id),
                 project_id=str(ids.project_id),
+                edit_deadline=getattr(operations, "edit_deadline", None),
+                checkpoint=getattr(operations, "checkpoint", None),
             )
+            raise_if_source_checkpoint_failed(_heal)
             files.update(_heal.files)
         from yleum_api.services.max_data_evolution import max_migration_contract_errors
 
@@ -436,7 +440,10 @@ async def repair_legacy_edit(
                     coordinator_handoff=coordinator_handoff,
                     ship_green_on_abort=get_settings().agent_ship_green_on_abort,
                     edit_mode=True,
+                    edit_deadline=getattr(operations, "edit_deadline", None),
+                    checkpoint=getattr(operations, "checkpoint", None),
                 )
+                raise_if_source_checkpoint_failed(_rep)
             except Exception as _rep_exc:
                 raise_if_terminal_cell_error(_rep_exc)
                 print(f"[PP] edit_auto_repair run failed: {_rep_exc!r}", flush=True)
@@ -684,7 +691,10 @@ async def check_runtime_security_gates(
                     emit=operations.emit,
                     user_id=str(ids.user_id),
                     project_id=str(ids.project_id),
+                    edit_deadline=getattr(operations, "edit_deadline", None),
+                    checkpoint=getattr(operations, "checkpoint", None),
                 )
+                raise_if_source_checkpoint_failed(_fheal)
                 # Never regress a clean build: accept the heal's files ONLY
                 # if it left the typecheck GREEN. A failed/unverifiable heal
                 # must NOT overwrite the clean done-build snapshot — the worst
@@ -843,7 +853,10 @@ async def check_coverage_gate(
                     emit=operations.emit,
                     user_id=str(ids.user_id),
                     project_id=str(ids.project_id),
+                    edit_deadline=getattr(operations, "edit_deadline", None),
+                    checkpoint=getattr(operations, "checkpoint", None),
                 )
+                raise_if_source_checkpoint_failed(_cheal)
                 # Never regress a clean build: accept the heal's files ONLY
                 # if the typecheck stayed GREEN (same rule as the runtime
                 # gate). A non-green / unverifiable heal is discarded.

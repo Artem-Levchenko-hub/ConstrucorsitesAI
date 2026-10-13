@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from pathlib import PurePosixPath
-from typing import Any, TypedDict
+from typing import Any, TypedDict, cast
 from uuid import UUID
 
 from minio.error import S3Error
@@ -204,49 +204,141 @@ async def adjacent_checkpoint(
     *, factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
     baseline: SourceBaseline,
 ) -> tuple[SourceCheckpoint, str] | None:
-    """Never skip a newer successful/unrelated task to resurrect old source."""
+    """Persist explicit resume provenance before fallible draft setup begins.
+
+    Each validated resume carries the original immutable object identity forward;
+    no private-object copy or unbounded history walk is needed after an outage.
+    Only the adjacent failed task may authorize that reference.
+    """
     async with factory() as session:
-        current = await session.get(GenerationRun, ids.run_id)
+        current = await session.get(GenerationRun, ids.run_id, with_for_update=True)
         if (
             current is None or current.user_id != ids.user_id
             or current.project_id != ids.project_id
+            or current.status != "running" or current.user_message_id != ids.user_message_id
         ):
             return None
-        previous = await session.scalar(
-            select(GenerationRun).where(
-                GenerationRun.project_id == ids.project_id,
-                GenerationRun.id != ids.run_id,
-                GenerationRun.created_at <= current.created_at,
-            ).order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc()).limit(1)
-        )
+        request = await session.get(Message, current.user_message_id)
         if (
-            previous is None or previous.status != "failed" or previous.user_id != ids.user_id
-            or previous.response_mode not in {"build", "edit"}
-            or previous.created_at == current.created_at or previous.user_message_id is None
+            request is None or request.project_id != ids.project_id or request.role != "user"
+            or not checkpoint_resume_request(request.content)
         ):
             return None
-        state: Any = (previous.agent_state or {}).get("source_checkpoint")
+        previous = await _adjacent_run(session, current)
+        if (
+            not _owned_failed_source(previous, ids)
+            or previous is None or previous.created_at == current.created_at
+        ):
+            return None
+        source = previous
+        state: Any = (source.agent_state or {}).get("source_checkpoint")
+        if state is None:
+            inherited = _resume_reference(previous, baseline.sha)
+            if inherited is None:
+                return None
+            message = await session.get(Message, previous.user_message_id)
+            parent = await _adjacent_run(session, previous)
+            inherited_source = await session.get(GenerationRun, UUID(inherited["source_run_id"]))
+            if (
+                message is None or message.project_id != ids.project_id or message.role != "user"
+                or not checkpoint_resume_request(message.content)
+                or not _owned_failed_source(parent, ids) or parent is None
+                or str(parent.id) != inherited["previous_run_id"]
+                or not _owned_failed_source(inherited_source, ids) or inherited_source is None
+                or inherited_source.created_at >= previous.created_at
+                or parent.created_at >= previous.created_at
+            ):
+                return None
+            source = inherited_source
+            if parent.id != source.id:
+                parent_reference = _resume_reference(parent, baseline.sha)
+                parent_message = await session.get(Message, parent.user_message_id)
+                if (
+                    parent_reference is None or parent.created_at <= source.created_at
+                    or parent_message is None or parent_message.project_id != ids.project_id
+                    or parent_message.role != "user"
+                    or not checkpoint_resume_request(parent_message.content)
+                    or parent_reference["previous_run_id"] in {
+                        str(parent.id), str(previous.id), str(current.id),
+                    }
+                    or any(parent_reference[key] != inherited[key]
+                           for key in ("source_run_id", "digest", "baseline_sha"))
+                ):
+                    return None
+            state = (source.agent_state or {}).get("source_checkpoint")
+            if not isinstance(state, dict) or state.get("digest") != inherited["digest"]:
+                return None
         if not isinstance(state, dict) or state.get("baseline_sha") != baseline.sha:
             return None
         digest = state.get("digest")
         if not isinstance(digest, str) or not re.fullmatch(r"[a-f0-9]{64}", digest):
             return None
-        message = await session.get(Message, previous.user_message_id)
+        message = await session.get(Message, source.user_message_id)
         if (
             message is None or message.project_id != ids.project_id or message.role != "user"
             or not message.content.strip()
         ):
             return None
-        data = await asyncio.to_thread(_get_checkpoint, ids.project_id, previous.id, digest)
+        # Keep the validated server-owned object identity before private storage
+        # or later setup can fail. Bytes are still verified on every actual return.
+        current.agent_state = {
+            **(current.agent_state or {}),
+            "source_checkpoint_resume": {
+                "previous_run_id": str(previous.id), "source_run_id": str(source.id),
+                "digest": digest, "baseline_sha": baseline.sha,
+            },
+        }
+        await session.commit()
+        data = await asyncio.to_thread(_get_checkpoint, ids.project_id, source.id, digest)
         if data is None:
             return None
         decoded = decode_checkpoint(
             data, project_id=ids.project_id, user_id=ids.user_id,
-            run_id=previous.id, baseline_sha=baseline.sha,
+            run_id=source.id, baseline_sha=baseline.sha,
         )
+        if decoded is None:
+            return None
         original_prompt = state.get("original_prompt")
         task = (
             original_prompt
             if isinstance(original_prompt, str) and original_prompt.strip() else message.content
         )
-        return (decoded, task) if decoded is not None else None
+        return decoded, task
+
+
+async def _adjacent_run(session: AsyncSession, current: GenerationRun) -> GenerationRun | None:
+    return cast(GenerationRun | None, await session.scalar(
+        select(GenerationRun).where(
+            GenerationRun.project_id == current.project_id,
+            GenerationRun.id != current.id,
+            GenerationRun.created_at <= current.created_at,
+        ).order_by(GenerationRun.created_at.desc(), GenerationRun.id.desc()).limit(1)
+    ))
+
+
+def _owned_failed_source(run: GenerationRun | None, ids: GenerationIds) -> bool:
+    return bool(
+        run is not None and run.status == "failed" and run.project_id == ids.project_id
+        and run.user_id == ids.user_id and run.response_mode in {"build", "edit"}
+        and run.user_message_id is not None
+    )
+
+
+def _resume_reference(run: GenerationRun, baseline_sha: str | None) -> dict[str, Any] | None:
+    state: Any = (run.agent_state or {}).get("source_checkpoint_resume")
+    if (
+        not isinstance(state, dict)
+        or set(state) != {"previous_run_id", "source_run_id", "digest", "baseline_sha"}
+        or state.get("baseline_sha") != baseline_sha
+        or not isinstance(state.get("digest"), str)
+        or not re.fullmatch(r"[a-f0-9]{64}", state["digest"])
+    ):
+        return None
+    try:
+        for key in ("previous_run_id", "source_run_id"):
+            value = state[key]
+            if not isinstance(value, str) or str(UUID(value)) != value or value == str(run.id):
+                return None
+    except ValueError:
+        return None
+    return state

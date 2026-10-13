@@ -203,7 +203,7 @@ function capitalize(value: string): string {
  * пояснение подставляем по инструменту. Словарь ниже работает и для старых
  * сохранённых лент, где в `action` лежит сырое имя инструмента.
  */
-export function stepCopy(step: AgentStep): StepCopy {
+export function stepCopy(step: AgentStep, generationCompleted = false): StepCopy {
   if (step.skipped) {
     return {
       title: "Шаг пропущен",
@@ -228,6 +228,23 @@ export function stepCopy(step: AgentStep): StepCopy {
       hint: "Сейчас заняты все мощности. Проект сохранён и стартует сам, как только освободится место.",
       tone: "wait",
       icon: "wait",
+    };
+  }
+  if ((step.tool ?? step.action) === "done" && !generationCompleted) {
+    return {
+      title: "Правки подготовлены",
+      hint: "Финальные проверки ещё выполняются. Готовность подтвердит завершение сборки.",
+      tone: "check", icon: "build",
+    };
+  }
+  if (step.kind === "heartbeat") {
+    return {
+      title: step.action || "Выполняю проверку",
+      hint: step.toolLifecycle === "finished"
+        ? "Проверка завершена; готовность приложения подтверждается отдельно."
+        : "Проверка продолжается — связь есть. Результат ещё не подтверждён.",
+      tone: step.ok === true ? "check" : "wait",
+      icon: step.ok === true ? "build" : "wait",
     };
   }
   const byKind = step.kind !== "step" ? KIND_COPY[step.kind] : undefined;

@@ -34,6 +34,7 @@ function collapseRepeatedWaiting(steps: AgentStep[]): AgentStep[] {
 }
 
 function identity(step: AgentStep, index: number): string {
+  if (step.operationId) return `operation:${step.runId ?? "legacy"}:${step.operationId}`;
   if (step.eventId) return step.eventId;
   if (step.runId && typeof step.seq === "number") {
     return `${step.runId}:${step.seq}`;
@@ -60,7 +61,20 @@ export function mergeAgentStepsBySequence(
 ): AgentStep[] {
   const byId = new Map<string, AgentStep>();
   [...current, ...incoming].forEach((step, index) => {
-    byId.set(identity(step, index), step);
+    const key = identity(step, index);
+    const previous = byId.get(key);
+    if (previous && (previous.seq ?? -1) > (step.seq ?? -1)) return;
+    if (previous && (step.operationId || step.eventId?.startsWith("phase:"))) {
+      // A delayed liveness update cannot undo a confirmed terminal tool result.
+      const terminal = previous.toolLifecycle === "finished" && step.toolLifecycle !== "finished";
+      byId.set(key, {
+        ...previous, ...step,
+        ...(terminal ? { action: previous.action, ok: previous.ok,
+          detail: previous.detail, toolLifecycle: previous.toolLifecycle } : {}),
+        detail: terminal ? previous.detail : step.detail ?? previous.detail,
+        orderSeq: previous.orderSeq ?? previous.seq,
+      });
+    } else byId.set(key, step);
   });
   const rows = [...byId.values()];
   const durableCounts = new Map<string, number>();
@@ -81,8 +95,8 @@ export function mergeAgentStepsBySequence(
     return false;
   });
   const ordered = reconciled.sort((left, right) => {
-    const leftSeq = left.seq ?? Number.MAX_SAFE_INTEGER;
-    const rightSeq = right.seq ?? Number.MAX_SAFE_INTEGER;
+    const leftSeq = left.orderSeq ?? left.seq ?? Number.MAX_SAFE_INTEGER;
+    const rightSeq = right.orderSeq ?? right.seq ?? Number.MAX_SAFE_INTEGER;
     return leftSeq - rightSeq;
   });
   return collapseRepeatedWaiting(ordered);
@@ -124,7 +138,7 @@ export type CollapsedAgentStep = {
 };
 
 function visibleIdentity(step: AgentStep): string {
-  return JSON.stringify([step.kind, step.action, step.path ?? "", step.tool ?? ""]);
+  return JSON.stringify([step.kind, step.action, step.path ?? "", step.tool ?? "", step.operationId]);
 }
 
 /**

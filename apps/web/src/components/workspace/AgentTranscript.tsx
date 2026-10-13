@@ -51,21 +51,6 @@ const ACTION_ICON: Record<string, typeof FileCode2> = {
   done: CheckCircle2,
 };
 
-// Tool → short Russian verb, so the row reads like a developer narrating.
-const ACTION_LABEL: Record<string, string> = {
-  list_dir: "Смотрю папку",
-  read_file: "Читаю",
-  grep: "Ищу в коде",
-  write_file: "Пишу",
-  edit_file: "Правлю",
-  build: "Проверяю сборку",
-  bash: "Команда",
-  read_logs: "Читаю логи",
-  runtime_check: "Проверяю запуск",
-  generate_media: "Генерирую медиа",
-  done: "Готово",
-};
-
 function stepIcon(s: AgentStep): typeof FileCode2 {
   if (s.kind === "heartbeat") return Loader2;
   if (s.kind === "escalate") return Zap;
@@ -81,13 +66,6 @@ function formatElapsed(sec: number): string {
   const m = Math.floor(sec / 60);
   const s = sec % 60;
   return `${m}м ${String(s).padStart(2, "0")}с`;
-}
-
-function stepLabel(s: AgentStep): string {
-  // Backend now sends a ready human phrase in `action` («Пишу главную страницу»).
-  // ACTION_LABEL still resolves an older raw tool name; otherwise show as-is.
-  if (s.kind !== "step") return s.action;
-  return ACTION_LABEL[s.action] ?? s.action;
 }
 
 // Разряд шага → цвет строки. Владельцу важно различать «агент думает»,
@@ -215,6 +193,10 @@ export function AgentTranscript({
   // Одинаковое действие подряд — одна строка со счётчиком повторов: десять
   // строк «Ожидаю ресурсы сервера» читаются как поломка, а не как ожидание.
   const rows = collapseAgentSteps(visibleSteps);
+  const actionCount = rows.reduce((count, row) => count + (
+    row.step.kind === "step" && row.step.action !== CAPACITY_WAITING_COPY.title
+      ? row.repeats : 0
+  ), 0);
   if (!projectId || (visibleSteps.length === 0 && !capacityWaiting)) return null;
   const incomplete =
     !streaming &&
@@ -259,7 +241,8 @@ export function AgentTranscript({
             </span>
           )}
           <span>
-            {rows.length > 0 ? `${rows.length} шаг. · детали` : "детали"}
+            {actionCount > 0 ? `${actionCount} шаг. · детали`
+              : rows.length > 0 ? `${rows.length} этап. · детали` : "детали"}
           </span>
         </span>
       </button>
@@ -281,13 +264,15 @@ export function AgentTranscript({
             <ol className="space-y-0.5 p-1.5">
               {rows.map((row, i) => {
                 const s = row.step;
-                const copy = stepCopy(s);
+                const copy = stepCopy(s, generationStatus === "completed");
                 const Icon = STEP_ICON[copy.icon] ?? stepIcon(s);
                 const last = i === rows.length - 1;
                 const live =
                   streaming &&
-                  last &&
+                  (last || s.toolLifecycle === "started" || s.toolLifecycle === "heartbeat") &&
                   (s.kind === "step" || s.kind === "heartbeat") &&
+                  s.toolLifecycle !== "finished" &&
+                  s.ok !== false &&
                   s.action !== "done";
                 const failed = s.ok === false;
                 const detail = (s.detail ?? "").trim();
@@ -302,7 +287,7 @@ export function AgentTranscript({
                     transition={{ duration: 0.18, ease: EASE_OUT }}
                     // Полный путь к файлу — в подсказке: в строке он только
                     // мешает, а при разборе проблемы нужен целиком.
-                    title={stepLabel(s) + (s.path ? " · " + s.path : "")}
+                    title={copy.title + (s.path ? " · " + s.path : "")}
                   >
                     <button
                       type="button"

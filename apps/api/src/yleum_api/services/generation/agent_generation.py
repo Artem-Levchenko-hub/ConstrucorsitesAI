@@ -31,11 +31,20 @@ _SOURCE_CHECKPOINT_FAILURE = "Не удалось сохранить черно�
 
 
 class SourceCheckpointError(ProjectCellInfrastructureError):
-    """Stop native tools through their existing terminal-error boundary."""
+    """Stop source edits through their existing terminal-error boundary."""
 
     def __init__(self, candidate: agent_builder.AgentResult) -> None:
         super().__init__("checkpoint_error")
         self.candidate = candidate
+
+
+def raise_if_source_checkpoint_failed(candidate: agent_builder.AgentResult) -> None:
+    if candidate.stop_reason == "checkpoint_error":
+        candidate.done = False
+        candidate.needs_finalization = False
+        candidate.proof_checkpoint = None
+        candidate.summary = _SOURCE_CHECKPOINT_FAILURE
+        raise SourceCheckpointError(candidate)
 
 
 def checkpoint_source_actions(
@@ -567,8 +576,11 @@ async def execute_agent_turn(
                     else None
                 ),
                 edit_deadline=(
-                    await runtime.coordinator.source_edit_deadline()
-                    if runtime.coordinator is not None else None
+                    getattr(operations, "edit_deadline", None)
+                    or (
+                        await runtime.coordinator.source_edit_deadline()
+                        if runtime.coordinator is not None else None
+                    )
                 ),
                 edit_source_changed=edit_source_changed,
             )
@@ -611,8 +623,11 @@ async def execute_agent_turn(
             ),
             checkpoint=source_checkpoint,
             edit_deadline=(
-                await runtime.coordinator.source_edit_deadline()
-                if runtime.coordinator is not None else None
+                getattr(operations, "edit_deadline", None)
+                or (
+                    await runtime.coordinator.source_edit_deadline()
+                    if runtime.coordinator is not None else None
+                )
             ),
         )
     if (
@@ -718,6 +733,7 @@ async def complete_empty_legacy_build(
             "provider_stopped_green",
             "provider_stopped_rolled_back",
             "unsafe_changes_rolled_back",
+            "core_only_rolled_back",
         }
     ):
         print("[PP] agentic_build files=0 → one escalated write-floor retry", flush=True)
@@ -754,7 +770,10 @@ async def complete_empty_legacy_build(
             require_green_before_done=get_settings().agent_require_green_before_done,
             coordinator_handoff=runtime.legacy_coordinator_handoff(),
             ship_green_on_abort=get_settings().agent_ship_green_on_abort,
+            edit_deadline=getattr(operations, "edit_deadline", None),
+            checkpoint=getattr(operations, "checkpoint", None),
         )
+        raise_if_source_checkpoint_failed(_floor_res)
         _total_steps += _floor_res.steps
         if _floor_res.files:
             _all_files.update(_floor_res.files)

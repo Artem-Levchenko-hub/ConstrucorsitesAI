@@ -885,6 +885,10 @@ export type AgentStep = {
   action: string;
   path: string;
   operationId?: Uuid;
+  /** Client projection of one durable tool call, not an extra agent action. */
+  toolLifecycle?: "started" | "heartbeat" | "finished";
+  /** Preserve the original row position while its latest observation advances seq. */
+  orderSeq?: number;
   /** Raw tool name (write_file/build/…) for icon selection. */
   tool?: string;
   /** Сколько одинаковых событий схлопнулось в эту строку при сборке ленты.

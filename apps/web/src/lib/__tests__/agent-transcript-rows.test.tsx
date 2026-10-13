@@ -42,7 +42,8 @@ describe("лента работы агента", () => {
     expect(html).toContain(CAPACITY_WAITING_COPY.title);
     expect(html).toContain("×10");
     expect(html).toContain("agent-step-pulse");
-    expect(html).toContain("1 шаг.");
+    expect(html).toContain("1 этап.");
+    expect(html).not.toContain("шаг.");
   });
 
   it("объясняет текущий шаг словами, понятными без знания кода", () => {
