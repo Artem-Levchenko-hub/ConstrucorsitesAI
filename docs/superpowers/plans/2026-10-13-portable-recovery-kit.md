@@ -55,22 +55,26 @@ pg_dump не считается basebackup для WAL replay. Logical mode яв�
 **Files:** Create `contracts.py`, `manifest.py`, `tests/conftest.py`, `tests/test_contracts.py`, package/lock files указанной структуры.
 **Interfaces:** `verify_manifests(release: ReleaseManifest, backup: BackupManifest) -> Proof`; `select_restore_point(points: tuple[RestorePoint, ...]) -> RestorePoint`.
 
-- [ ] Написать tests `test_complete_three_roles`, `test_missing_component`, `test_new_main_not_selected`, `test_logical_dump_cannot_replay_wal`: `assert proof.ok is True`, missing ⇒ `False`, chosen SHA равен backup release; несовместимая пара ⇒ `FORMAT_MISMATCH`.
-- [ ] Из корня запустить `uv run --project apps/api --frozen pytest -o addopts='' -q infra/recovery/tests/test_contracts.py`; ожидается FAIL с отсутствующим `yleum_recovery`. Test conftest добавляет только новый `src` в import path.
-- [ ] Реализовать models и две функции; создать самостоятельный проект/lock, read-only CLI `yleum verify`; никакой интеграции с production.
-- [ ] Из `infra/recovery`: `uv run --frozen pytest -q tests/test_contracts.py`, `uv run --frozen ruff check src tests`, `uv run --frozen mypy src`; ожидается PASS.
-- [ ] Commit только этих файлов: `feat: define portable recovery manifest contracts`.
+- [x] Написать tests `test_complete_three_roles`, `test_missing_component`, `test_new_main_not_selected`, `test_logical_dump_cannot_replay_wal`: `assert proof.ok is True`, missing ⇒ `False`, chosen SHA равен backup release; несовместимая пара ⇒ `FORMAT_MISMATCH`.
+- [x] Из корня запустить `uv run --project apps/api --frozen pytest -o addopts='' -q infra/recovery/tests/test_contracts.py`; ожидается FAIL с отсутствующим `yleum_recovery`. Test conftest добавляет только новый `src` в import path.
+- [x] Реализовать models и две функции; создать самостоятельный проект/lock, read-only CLI `yleum verify`; никакой интеграции с production.
+- [x] Из `infra/recovery`: `uv run --frozen pytest -q tests/test_contracts.py`, `uv run --frozen ruff check src tests`, `uv run --frozen mypy src`; ожидается PASS.
+- [x] Commit только этих файлов: `feat: define portable recovery manifest contracts`.
 
 ### K2: Один секретный файл и разблокирование на компьютерах владельца
 
 **Files:** Create `profile.py`, `local_unlock.py`, `redaction.py`, `tests/test_profile.py`; Modify `cli.py` для `profile activate`/`profile verify`.
 **Interfaces:** `seal_profile(profile: RecoveryProfile, key: bytes) -> bytes`; `open_profile(ciphertext: bytes, key: bytes) -> RecoveryProfile`; `resolve_profile(name: str, home: Path) -> Path`; `activate_local_key(name: str, key: bytes) -> None`; `load_local_key(name: str) -> bytes`.
 
-- [ ] Написать tests round-trip: `assert open_profile(seal_profile(p, k), k) == p`; tamper/key/name mismatch ⇒ `PROFILE_INVALID`; логи не содержат sentinel secret; fake second-PC unlock возвращает тот же профиль.
-- [ ] Запустить `uv run --frozen pytest -q tests/test_profile.py`; ожидается FAIL для отсутствующих функций.
-- [ ] Реализовать AES-256-GCM envelope со свежим 12-byte nonce и authenticated format/profile ID. Случайный 32-byte recovery key хранится отдельно владельцем; ежедневное разблокирование использует DPAPI текущего пользователя. DPAPI защищает только локальную обёртку ключа, а не переносимый файл; `LOCAL_MACHINE` не использовать. Активировать второй ПК через защищённый ввод ключа, не argv/env/chat; ACL ограничить текущим пользователем, неизвестную OS закрыть отказом. См. [AESGCM](https://cryptography.io/en/50.0.0/hazmat/primitives/aead/) и [DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata).
+- [x] Написать tests round-trip: `assert open_profile(seal_profile(p, k), k) == p`; tamper/key/name mismatch ⇒ `PROFILE_INVALID`; логи не содержат sentinel secret; fake second-PC unlock возвращает тот же профиль.
+- [x] Запустить `uv run --frozen pytest -q tests/test_profile.py`; ожидается FAIL для отсутствующих функций.
+- [x] Реализовать AES-256-GCM envelope со свежим 12-byte nonce и authenticated format/profile ID. Случайный 32-byte recovery key хранится отдельно владельцем; ежедневное разблокирование использует DPAPI текущего пользователя. DPAPI защищает только локальную обёртку ключа, а не переносимый файл; `LOCAL_MACHINE` не использовать. Активировать второй ПК через защищённый ввод ключа, не argv/env/chat; ACL ограничить текущим пользователем, неизвестную OS закрыть отказом. См. [AESGCM](https://cryptography.io/en/50.0.0/hazmat/primitives/aead/) и [DPAPI](https://learn.microsoft.com/en-us/windows/win32/api/dpapi/nf-dpapi-cryptprotectdata).
 - [ ] Запустить указанный pytest и lint/type checks; на двух доверенных Windows-профилях проверить activation/decryption синтетического файла. Ожидается PASS без plaintext следов.
-- [ ] Commit: `feat: add portable encrypted recovery profile`.
+- [x] Commit: `feat: add portable encrypted recovery profile`.
+
+Статус: реализация и независимая проверка завершены; 50 K2 tests прошли.
+Native Windows DPAPI/ACL и синтетические независимые машины проверены. Шаг проверки
+на двух реальных доверенных ПК остаётся открытым; действующий полный профиль не создан.
 
 ### K3: Полный проверенный выпуск вне прежнего registry
 
@@ -82,6 +86,12 @@ pg_dump не считается basebackup для WAL replay. Logical mode яв�
 - [ ] Реализовать publisher на независимом build runner после CI точного full SHA. Сохранить API/web/gateway/billing, orchestrator source+Python/uv locks+units, machine/guard/core/helper/DB/Redis и входные kit/Node artifacts; OCI archives обязательны для offline registry recovery. Staging upload → verify → isolated runtime test → certified index. Archive/tag update атомарен, старые complete releases не перезаписываются; recovery VPS ничего не пересобирают.
 - [ ] Новый pytest ⇒ PASS; regressions из `apps/orchestrator`: `uv run --frozen pytest -q tests/test_public_core_build_provenance.py tests/test_public_core_runtime.py`; пройти скачивание при заблокированном старом registry, сверить digests.
 - [ ] Commit: `feat: publish independent certified recovery releases`.
+
+Статус staging: основа сверки точного SHA, состава и скачанных байтов реализована
+и независимо одобрена (`86d43269`); последняя общая проверка — 133 recovery tests,
+0 skips, Ruff/mypy/compile прошли. Исходные шаги K3 выше остаются открытыми:
+workflow, полный внешний выпуск, реальная публикация и runtime certification
+ещё не подтверждены. Полная копия и восстановление одним нажатием не готовы.
 
 ### K4: Полный inventory и экспорт всех трёх ролей
 
