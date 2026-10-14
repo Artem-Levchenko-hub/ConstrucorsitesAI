@@ -622,8 +622,8 @@ describe("MAX live preview recovery", () => {
     await waitForValue(() => events.includes("session:200"));
     expect(frame.getAttribute("src")).toBe("https://preview-1.example");
     expect(events).toEqual(race
-      ? ["get:running", "session:409", "get:stopped", "start", "session:200"]
-      : ["get:stopped", "start", "session:200"]);
+      ? ["get:running", "get:running", "session:409", "get:stopped", "start", "session:200"]
+      : ["get:stopped", "start", "get:running", "session:200"]);
     expect(startRuntime).toHaveBeenCalledTimes(1);
     nextSession.resolve(session("https://preview-2.example"));
     await waitForValue(() => container.querySelector<HTMLIFrameElement>(
@@ -631,13 +631,71 @@ describe("MAX live preview recovery", () => {
     )?.getAttribute("src") === "https://preview-2.example");
   });
 
+  it("automatically wakes a parked new snapshot before managed-kit sync can succeed", async () => {
+    let latest = false;
+    let parked = false;
+    const requireOwnerProject = (projectId: string) => {
+      if (projectId !== PROJECT.id) {
+        throw new ApiError(403, { code: "forbidden", message: "owner mismatch" });
+      }
+    };
+    getRuntime.mockImplementation(async (projectId) => {
+      requireOwnerProject(projectId);
+      return runtime(parked ? "stopped" : "running");
+    });
+    startRuntime.mockImplementation(async (projectId) => {
+      requireOwnerProject(projectId);
+      parked = false;
+      return runtime();
+    });
+    syncMaxManagedKit.mockImplementation(async (projectId) => {
+      requireOwnerProject(projectId);
+      if (parked) {
+        throw new ApiError(503, {
+          code: "orchestrator_unavailable", message: "draft runtime is not running",
+        });
+      }
+      return managedKit(latest ? "snapshot-2" : "snapshot-1");
+    });
+    createMaxPreviewSession.mockImplementation(async (projectId) => {
+      requireOwnerProject(projectId);
+      if (parked) {
+        throw new ApiError(409, {
+          code: "orchestrator_rejected",
+          message: "Orchestrator rejected request: draft runtime is not running",
+        });
+      }
+      return session(latest ? "https://preview-2.example" : "https://preview-1.example");
+    });
+    renderPreview("snapshot-1");
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>(
+      "[data-testid='max-live-iframe']",
+    ));
+    act(() => frame.dispatchEvent(new Event("load")));
+    vi.useFakeTimers();
+    latest = true;
+    parked = true;
+    renderPreview("snapshot-2");
+    await flushPromises();
+    for (let index = 0; index < 10; index += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    }
+    expect(container.querySelector<HTMLIFrameElement>(
+      "[data-testid='max-live-iframe']",
+    )?.getAttribute("src")).toBe("https://preview-2.example");
+    expect(container.textContent).not.toContain("Приложение не открылось");
+  });
+
   it("bounds an explicit parked-runtime recovery and never loops owner starts", async () => {
-    let reads = 0;
-    getRuntime.mockImplementation(async () => runtime(++reads <= 2 ? "running" : "stopped"));
+    let parked = false;
+    getRuntime.mockImplementation(async () => runtime(parked ? "stopped" : "running"));
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
-    createMaxPreviewSession.mockRejectedValue(new ApiError(409, {
-      code: "orchestrator_rejected", message: "Orchestrator rejected request: draft runtime is not running",
-    }));
+    createMaxPreviewSession.mockImplementation(async () => {
+      parked = true;
+      throw new ApiError(409, {
+        code: "orchestrator_rejected", message: "Orchestrator rejected request: draft runtime is not running",
+      });
+    });
     renderPreview("snapshot-1");
     await waitForValue(() => container.textContent?.includes("Превью пока недоступно"));
     expect(startRuntime).toHaveBeenCalledTimes(1);
@@ -683,10 +741,12 @@ describe("MAX live preview recovery", () => {
 
   it("refreshes preview from the header and restarts a retained draft without dropping the iframe", async () => {
     const nextSession = deferred<MaxPreviewSession>();
-    getRuntime
-      .mockResolvedValueOnce(runtime())
-      .mockResolvedValueOnce(runtime("stopped"));
-    startRuntime.mockResolvedValueOnce(runtime());
+    let parked = false;
+    getRuntime.mockImplementation(async () => runtime(parked ? "stopped" : "running"));
+    startRuntime.mockImplementation(async () => {
+      parked = false;
+      return runtime();
+    });
     syncMaxManagedKit
       .mockResolvedValueOnce(managedKit("snapshot-1"))
       .mockResolvedValueOnce(managedKit("snapshot-1"));
@@ -707,6 +767,8 @@ describe("MAX live preview recovery", () => {
     act(() => {
       initialFrame?.dispatchEvent(new Event("load"));
     });
+    expect(startRuntime).not.toHaveBeenCalled();
+    parked = true;
 
     const refreshButton = container.querySelector<HTMLButtonElement>(
       "[data-testid='max-refresh-preview']",
@@ -742,6 +804,57 @@ describe("MAX live preview recovery", () => {
     );
     expect(recoveredFrame?.getAttribute("src")).toBe("https://preview-2.example");
     expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not wake or sync after a fresh runtime ownership refusal", async () => {
+    vi.useFakeTimers();
+    getRuntime.mockResolvedValueOnce(runtime()).mockRejectedValue(new ApiError(403, {
+      code: "forbidden", message: "owner mismatch",
+    }));
+    renderPreview("snapshot-1");
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(container.textContent).toContain("Превью пока недоступно");
+    expect(getRuntime).toHaveBeenCalledTimes(2);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+  });
+
+  it("does not wake or sync when a deferred runtime check belongs to a retired activity", async () => {
+    vi.useFakeTimers();
+    const pendingRuntime = deferred<RuntimeStatus>();
+    const running = buildMessage("running");
+    queryClient.setQueryData(["messages", PROJECT.id], [running]);
+    listMessages.mockResolvedValue([running]);
+    getRuntime.mockResolvedValueOnce(runtime()).mockImplementationOnce(() => pendingRuntime.promise);
+    renderPreview("seed-snapshot", { versions: [buildVersion("running")] });
+    await act(async () => { await vi.advanceTimersByTimeAsync(20); });
+    expect(getRuntime).toHaveBeenCalledTimes(2);
+
+    const failed = buildMessage("failed");
+    listMessages.mockResolvedValue([failed]);
+    act(() => queryClient.setQueryData(["messages", PROJECT.id], [failed]));
+    renderPreview("seed-snapshot", { versions: [buildVersion()] });
+    pendingRuntime.resolve(runtime("stopped"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(container.textContent).toContain("Первая сборка не завершена");
+    expect(getRuntime).toHaveBeenCalledTimes(2);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(syncMaxManagedKit).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
+  });
+
+  it("does not retry or wake after managed-kit ownership refusal", async () => {
+    vi.useFakeTimers();
+    syncMaxManagedKit.mockRejectedValue(new ApiError(403, {
+      code: "forbidden", message: "owner mismatch",
+    }));
+    renderPreview("snapshot-1");
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(container.textContent).toContain("Превью пока недоступно");
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).not.toHaveBeenCalled();
   });
 
   it("does not auto-retry permanent preview auth errors", async () => {

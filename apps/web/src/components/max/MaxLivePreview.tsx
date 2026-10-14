@@ -218,10 +218,42 @@ export function MaxLivePreview({
       if (activity === previewActivity.current) queryClient.setQueryData(["runtime", project.id], value);
     },
   });
+  const assertPreviewActivity = (activity: typeof previewActivity.current) => {
+    if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
+  };
+  const refreshPreviewRuntime = async (activity: typeof previewActivity.current) => {
+    assertPreviewActivity(activity);
+    let current = await getRuntime(project.id);
+    assertPreviewActivity(activity);
+    if (["stopped", "paused", "failed"].includes(current.state)) {
+      started.current = true;
+      try {
+        current = await start.mutateAsync(activity);
+      } catch (error) {
+        // The mutation owns the wake retry budget. A preparation-query retry
+        // must not begin another full series after that budget is exhausted.
+        throw new PreviewRecoveryExhaustedError(
+          error instanceof Error ? error.message : "Не удалось запустить превью.",
+        );
+      }
+      assertPreviewActivity(activity);
+    }
+    queryClient.setQueryData(["runtime", project.id], current);
+    if (current.state !== "running") {
+      throw new ApiError(409, { code: "conflict", message: "MAX preview ещё готовится" });
+    }
+  };
   const runtimeRunning = runtime.data?.state === "running";
   const managedKit = useQuery({
     queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId],
-    queryFn: () => syncMaxManagedKit(project.id),
+    queryFn: async () => {
+      const activity = previewActivity.current;
+      // Release can park the pair while its shared runtime cache still says
+      // running. Sync needs the same fresh runtime as the session mint below.
+      await refreshPreviewRuntime(activity);
+      assertPreviewActivity(activity);
+      return syncMaxManagedKit(project.id);
+    },
     enabled: !previewDisabled && runtimeRunning,
     retry: (failureCount, error) =>
       failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
@@ -232,41 +264,16 @@ export function MaxLivePreview({
   });
   const loadPreviewSession = async () => {
     const activity = previewActivity.current;
-    const assertCurrent = () => {
-      if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
-    };
-    const refreshRuntime = async () => {
-      assertCurrent();
-      let current = await getRuntime(project.id);
-      assertCurrent();
-      if (["stopped", "paused", "failed"].includes(current.state)) {
-        started.current = true;
-        try {
-          current = await start.mutateAsync(activity);
-        } catch (error) {
-          // The mutation owns the wake retry budget. A session-query retry
-          // must not begin another full series after that budget is exhausted.
-          throw new PreviewRecoveryExhaustedError(
-            error instanceof Error ? error.message : "Не удалось запустить превью.",
-          );
-        }
-        assertCurrent();
-      }
-      queryClient.setQueryData(["runtime", project.id], current);
-      if (current.state !== "running") {
-        throw new ApiError(409, { code: "conflict", message: "MAX preview ещё готовится" });
-      }
-    };
-    // A new snapshot does not invalidate the shared runtime cache. Release
-    // parks the product/database pair even if its old gateway still runs.
-    await refreshRuntime();
+    await refreshPreviewRuntime(activity);
+    assertPreviewActivity(activity);
     try {
       return await createMaxPreviewSession(project.id);
     } catch (error) {
       if (!isParkedPreviewError(error)) throw error;
       // Release may park the pair after that fresh GET. Recover this precise
       // conflict once; ownership/auth failures never enter the wake path.
-      await refreshRuntime();
+      await refreshPreviewRuntime(activity);
+      assertPreviewActivity(activity);
       try {
         return await createMaxPreviewSession(project.id);
       } catch (retryError) {
