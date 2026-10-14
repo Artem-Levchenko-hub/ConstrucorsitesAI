@@ -1,0 +1,34 @@
+{
+  "date_moscow": "2026-10-14",
+  "scope": "Fresh generation acceptance after the explicitly authorized disposable-project reset",
+  "reset": {
+    "authorized_targets": 16,
+    "deleted": 16,
+    "remaining_catalog_projects": 1,
+    "retained_project": "2c7bb4d4-e661-45aa-8ad3-eb515838bd83",
+    "retained_bot": "se13771437_bot",
+    "protected_project_snapshot_owner_binding_and_integration_digest": "unchanged at final canonical maintenance guard",
+    "runner_exit_code": 0,
+    "fresh_owner_studio_project_count": 0,
+    "active_generations_leases_operations_restorations_after_reset": [0, 0, 0, 0],
+    "accounts_roles_grants_wallets_external_crm": "not reset"
+  },
+  "release_attempt": {
+    "previous_live_sha": "865de9716d2a23196446d3776ee774d50c988d3d",
+    "prepared_sha": "c035581877749ea1b7989fd0b5f91eac8cf6abfe",
+    "exact_ci": "38368327260; 10 of 10 jobs succeeded",
+    "result": "Stopped before application deployment because the mandatory backup failed",
+    "backup_cell_report": "18 ok; 0 busy, deferred or failed",
+    "failed_check": "project sources archive is suspiciously small",
+    "archive_bytes": 197,
+    "source_entries": "two regular files, two bytes each",
+    "installed_verifier_sha256": "931e59dbde4900488a24f57f393c875fd7b220b94c0030123d36bcd162619bb5",
+    "same_checked_in_verifier_at_both_revisions": true
+  },
+  "acceptance": {
+    "new_paid_generations": 0,
+    "accepted_latest_release_pairs": 0,
+    "historical_or_deleted_app_results": "not counted",
+    "next": "Verify small archives by exact source content; finish the complete reviewed production rollout; then run fresh paired generations and real function/data checks"
+  }
+}
