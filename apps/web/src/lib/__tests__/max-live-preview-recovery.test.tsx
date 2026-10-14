@@ -1,5 +1,5 @@
 import { act, type ButtonHTMLAttributes, type ComponentProps, type ReactNode } from "react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { focusManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -253,6 +253,7 @@ describe("MAX live preview recovery", () => {
   afterEach(() => {
     act(() => root.unmount());
     queryClient.clear();
+    focusManager.setFocused(undefined);
     container.remove();
     if (originalResizeObserver === undefined) {
       delete (globalThis as { ResizeObserver?: unknown }).ResizeObserver;
@@ -261,6 +262,7 @@ describe("MAX live preview recovery", () => {
     }
     vi.useRealTimers();
     vi.resetAllMocks();
+    vi.restoreAllMocks();
   });
 
   function renderPreview(
@@ -285,6 +287,193 @@ describe("MAX live preview recovery", () => {
       );
     });
   }
+
+  async function readySeparatePreview() {
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1");
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => frame.dispatchEvent(new Event("load")));
+    return container.querySelector<HTMLButtonElement>("[data-testid='max-open-preview-separate']")!;
+  }
+
+  function captureSeparatePopup() {
+    const replace = vi.fn();
+    const close = vi.fn();
+    const popup = { opener: window, location: { replace }, close };
+    const open = vi.spyOn(window, "open").mockReturnValue(popup as unknown as Window);
+    return { open, popup, replace, close };
+  }
+
+  it("does not enable separate preview from the old iframe while the current snapshot prepares", async () => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    const nextSync = deferred<MaxProjectConfig>();
+    syncMaxManagedKit.mockImplementationOnce(() => nextSync.promise);
+    renderPreview("snapshot-2");
+    await flushPromises();
+    expect(container.querySelector("iframe")?.getAttribute("src")).toBe("https://preview-1.example");
+    expect(button.disabled).toBe(true);
+    act(() => button.click());
+    expect(popup.open).not.toHaveBeenCalled();
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([503, 429])("opens separate preview once after a parked runtime and transient %s", async (status) => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    let parked = true;
+    getRuntime.mockImplementation(async () => runtime(parked ? "stopped" : "running"));
+    startRuntime.mockImplementation(async () => { parked = false; return runtime(); });
+    createMaxPreviewSession.mockRejectedValueOnce(new ApiError(status, {
+      code: "orchestrator_unavailable", message: "preview preparing",
+    })).mockResolvedValue(session("https://separate.example"));
+    vi.useFakeTimers();
+    act(() => button.click());
+    expect(popup.open).toHaveBeenCalledTimes(1);
+    expect(popup.popup.opener).toBeNull();
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(popup.replace).toHaveBeenCalledWith("https://separate.example");
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(2);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(3);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("recovers one parked-runtime session race for ordinary separate preview", async () => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    let parked = false;
+    getRuntime.mockImplementation(async () => runtime(parked ? "stopped" : "running"));
+    startRuntime.mockImplementation(async () => { parked = false; return runtime(); });
+    createMaxPreviewSession.mockImplementationOnce(async () => {
+      parked = true;
+      throw new ApiError(409, {
+        code: "orchestrator_rejected", message: "Orchestrator rejected request: draft runtime is not running",
+      });
+    }).mockResolvedValue(session("https://separate.example"));
+    act(() => button.click());
+    await flushPromises();
+    expect(popup.replace).toHaveBeenCalledWith("https://separate.example");
+    expect(startRuntime).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(3);
+    expect(popup.close).not.toHaveBeenCalled();
+  });
+
+  it.each(["wake", "sync", "session"] as const)("finishes ordinary open after transient %s while the popup hides Studio", async (stage) => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    popup.open.mockImplementationOnce(() => {
+      focusManager.setFocused(false);
+      return popup.popup as unknown as Window;
+    });
+    const unavailable = new ApiError(503, { code: "orchestrator_unavailable", message: "preparing" });
+    if (stage === "wake") {
+      let parked = true;
+      getRuntime.mockImplementation(async () => runtime(parked ? "stopped" : "running"));
+      startRuntime.mockRejectedValueOnce(unavailable).mockImplementation(async () => {
+        parked = false;
+        return runtime();
+      });
+    }
+    if (stage === "sync") syncMaxManagedKit.mockRejectedValueOnce(unavailable);
+    if (stage === "session") createMaxPreviewSession.mockRejectedValueOnce(unavailable);
+    createMaxPreviewSession.mockResolvedValue(session("https://separate.example"));
+    vi.useFakeTimers();
+    act(() => button.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(focusManager.isFocused()).toBe(false);
+    expect(popup.replace).toHaveBeenCalledWith("https://separate.example");
+    expect(popup.open).toHaveBeenCalledTimes(1);
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(toastError).not.toHaveBeenCalled();
+    expect(startRuntime).toHaveBeenCalledTimes(stage === "wake" ? 2 : 0);
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(stage === "sync" ? 3 : 2);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(stage === "session" ? 3 : 2);
+  });
+
+  it.each(["runtime", "sync", "session"] as const)("never retries or wakes an ordinary open after %s 403", async (stage) => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    const reads = getRuntime.mock.calls.length;
+    const forbidden = new ApiError(403, { code: "forbidden", message: "owner mismatch" });
+    if (stage === "runtime") getRuntime.mockRejectedValue(forbidden);
+    if (stage === "sync") syncMaxManagedKit.mockRejectedValue(forbidden);
+    if (stage === "session") createMaxPreviewSession.mockRejectedValue(forbidden);
+    vi.useFakeTimers();
+    act(() => button.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(getRuntime).toHaveBeenCalledTimes(reads + (stage === "session" ? 2 : 1));
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(stage === "runtime" ? 1 : 2);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(stage === "session" ? 2 : 1);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(popup.replace).not.toHaveBeenCalled();
+    expect(popup.close).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["snapshot", "project", "unmount"] as const)("never navigates an ordinary popup after %s retires its activity", async (change) => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    const pendingSession = deferred<MaxPreviewSession>();
+    createMaxPreviewSession.mockImplementationOnce(() => pendingSession.promise);
+    act(() => button.click());
+    await waitForValue(() => createMaxPreviewSession.mock.calls.length === 2);
+    if (change === "snapshot") renderPreview("snapshot-2");
+    if (change === "project") renderPreview("snapshot-2", { project: { ...PROJECT, id: "other-project" } });
+    if (change === "unmount") act(() => root.render(<div />));
+    pendingSession.resolve(session("https://retired.example"));
+    await flushPromises();
+    expect(popup.replace).not.toHaveBeenCalled();
+    expect(popup.close).toHaveBeenCalledTimes(1);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("stops hidden-popup retries when the component retires during the delay", async () => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    popup.open.mockImplementationOnce(() => {
+      focusManager.setFocused(false);
+      return popup.popup as unknown as Window;
+    });
+    createMaxPreviewSession.mockRejectedValue(new ApiError(503, {
+      code: "orchestrator_unavailable", message: "preparing",
+    }));
+    vi.useFakeTimers();
+    act(() => button.click());
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
+    act(() => root.render(<div />));
+    await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
+    expect(popup.replace).not.toHaveBeenCalled();
+    expect(popup.close).toHaveBeenCalledTimes(1);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("does not multiply an exhausted ordinary-open wake budget", async () => {
+    const button = await readySeparatePreview();
+    const popup = captureSeparatePopup();
+    popup.open.mockImplementationOnce(() => {
+      focusManager.setFocused(false);
+      return popup.popup as unknown as Window;
+    });
+    getRuntime.mockResolvedValue(runtime("stopped"));
+    const unavailable = new ApiError(503, { code: "orchestrator_unavailable", message: "preparing" });
+    startRuntime.mockRejectedValue(unavailable);
+    createMaxPreviewSession.mockRejectedValue(unavailable);
+    vi.useFakeTimers();
+    act(() => button.click());
+    for (let index = 0; index < 45; index += 1) {
+      await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    }
+    expect(startRuntime).toHaveBeenCalledTimes(21);
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+    expect(popup.replace).not.toHaveBeenCalled();
+    expect(popup.close).toHaveBeenCalledTimes(1);
+    expect(toastError).toHaveBeenCalledTimes(1);
+  });
 
   it.each(["failed", "cancelled"] as const)(
     "stops first-build preparation after durable %s even with a seed snapshot",

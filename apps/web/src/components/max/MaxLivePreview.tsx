@@ -35,7 +35,7 @@ import {
 import { listMessages } from "@/lib/api/messages";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
-import type { Project, ProjectVersion } from "@/lib/api/types";
+import type { Project, ProjectVersion, RuntimeStatus } from "@/lib/api/types";
 import { versionStatusLabel } from "@/lib/project-version";
 import { maxHistoryState, maxVersionImage } from "@/lib/max-version-history";
 import { VersionImagePreview } from "../workspace/VersionImagePreview";
@@ -66,7 +66,7 @@ function isParkedPreviewError(error: unknown): boolean {
 function isTransientPreviewError(error: unknown): boolean {
   if (error instanceof PreviewPreparationStoppedError || error instanceof PreviewRecoveryExhaustedError) return false;
   if (!(error instanceof ApiError)) return true;
-  if (error.status === 0 || error.status === 409 || error.status >= 500) {
+  if (error.status === 0 || error.status === 409 || error.status === 429 || error.status >= 500) {
     return true;
   }
   if (error.status >= 400 && error.status < 500) {
@@ -170,14 +170,21 @@ export function MaxLivePreview({
       ? lastMessage.generation_status : null;
   const previewDisabled = viewingHistorical || Boolean(firstBuildTerminal) ||
     (noSuccessfulBuild && messages.isPending);
+  const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
   // Each pause/project change retires the old mutation, including retries
   // already sleeping when a new generation releases the pause again.
-  const activity = useMemo(() => ({ projectId: project.id, disabled: previewDisabled }), [project.id, previewDisabled]);
+  const activity = useMemo(() => ({
+    projectId: project.id, snapshotId: previewTargetSnapshotId, disabled: previewDisabled,
+  }), [project.id, previewTargetSnapshotId, previewDisabled]);
   const previewActivity = useRef(activity);
   useEffect(() => {
     previewActivity.current = activity;
+    return () => {
+      if (previewActivity.current === activity) previewActivity.current = { ...activity, disabled: true };
+    };
   }, [activity]);
-  const activityBlocked = () => previewActivity.current.projectId !== project.id || previewActivity.current.disabled;
+  const activityBlocked = () => previewActivity.current.projectId !== project.id ||
+    previewActivity.current.snapshotId !== previewTargetSnapshotId || previewActivity.current.disabled;
   const started = useRef(false);
   useEffect(() => {
     started.current = false;
@@ -193,7 +200,6 @@ export function MaxLivePreview({
   const previewFrame = useRef<HTMLIFrameElement>(null);
   const [deviceScale, setDeviceScale] = useState(0.72);
   const [restoreTargetId, setRestoreTargetId] = useState<string | null>(null);
-  const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
   const runtime = useQuery({
     queryKey: ["runtime", project.id],
     queryFn: () => getRuntime(project.id),
@@ -204,23 +210,41 @@ export function MaxLivePreview({
       return state === "running" || state === "failed" ? false : 2_000;
     },
   });
+  const assertPreviewActivity = (activity: typeof previewActivity.current) => {
+    if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
+  };
+  const retryPreviewPreparation = async <T,>(
+    activity: typeof previewActivity.current,
+    prepare: () => Promise<T>,
+    retryLimit: number,
+  ): Promise<T> => {
+    const attempt = async (failureCount: number): Promise<T> => {
+      assertPreviewActivity(activity);
+      try {
+        const result = await prepare();
+        assertPreviewActivity(activity);
+        return result;
+      } catch (error) {
+        assertPreviewActivity(activity);
+        if (failureCount >= retryLimit || !isTransientPreviewError(error)) throw error;
+        await new Promise((resolve) => setTimeout(resolve, previewRetryDelay(failureCount)));
+        return attempt(failureCount + 1);
+      }
+    };
+    return attempt(0);
+  };
   const start = useMutation({
-    mutationFn: (activity: typeof previewActivity.current) => {
-      if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
-      return startRuntime(project.id);
-    },
+    mutationFn: (activity: typeof previewActivity.current) =>
+      retryPreviewPreparation(activity, () => startRuntime(project.id), 20),
     // Cold restoration is bounded by the server. A competing start or a lost
     // response is retryable; auth/ownership failures are not.
-    retry: (failureCount, error) =>
-      !activityBlocked() && failureCount < 20 && isTransientPreviewError(error),
-    retryDelay: previewRetryDelay,
+    // Query-library retries pause when Studio is hidden by the new popup.
+    // Preparation owns the same bounded retries independently of tab focus.
+    retry: false,
     onSuccess: (value, activity) => {
       if (activity === previewActivity.current) queryClient.setQueryData(["runtime", project.id], value);
     },
   });
-  const assertPreviewActivity = (activity: typeof previewActivity.current) => {
-    if (activityBlocked() || activity !== previewActivity.current) throw new PreviewPreparationStoppedError();
-  };
   const refreshPreviewRuntime = async (activity: typeof previewActivity.current) => {
     assertPreviewActivity(activity);
     let current = await getRuntime(project.id);
@@ -244,30 +268,31 @@ export function MaxLivePreview({
     }
   };
   const runtimeRunning = runtime.data?.state === "running";
+  const loadManagedKit = (activity: typeof previewActivity.current) => retryPreviewPreparation(activity, async () => {
+    // Release can park the pair while its shared runtime cache still says
+    // running. Sync needs the same fresh runtime as the session mint below.
+    await refreshPreviewRuntime(activity);
+    assertPreviewActivity(activity);
+    const result = await syncMaxManagedKit(project.id);
+    assertPreviewActivity(activity);
+    return result;
+  }, PREVIEW_RETRY_LIMIT);
   const managedKit = useQuery({
     queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId],
-    queryFn: async () => {
-      const activity = previewActivity.current;
-      // Release can park the pair while its shared runtime cache still says
-      // running. Sync needs the same fresh runtime as the session mint below.
-      await refreshPreviewRuntime(activity);
-      assertPreviewActivity(activity);
-      return syncMaxManagedKit(project.id);
-    },
+    queryFn: () => loadManagedKit(previewActivity.current),
     enabled: !previewDisabled && runtimeRunning,
-    retry: (failureCount, error) =>
-      failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
-    retryDelay: previewRetryDelay,
+    retry: false,
     staleTime: Number.POSITIVE_INFINITY,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const loadPreviewSession = async () => {
-    const activity = previewActivity.current;
+  const loadPreviewSession = (activity: typeof previewActivity.current) => retryPreviewPreparation(activity, async () => {
     await refreshPreviewRuntime(activity);
     assertPreviewActivity(activity);
     try {
-      return await createMaxPreviewSession(project.id);
+      const result = await createMaxPreviewSession(project.id);
+      assertPreviewActivity(activity);
+      return result;
     } catch (error) {
       if (!isParkedPreviewError(error)) throw error;
       // Release may park the pair after that fresh GET. Recover this precise
@@ -275,7 +300,9 @@ export function MaxLivePreview({
       await refreshPreviewRuntime(activity);
       assertPreviewActivity(activity);
       try {
-        return await createMaxPreviewSession(project.id);
+        const result = await createMaxPreviewSession(project.id);
+        assertPreviewActivity(activity);
+        return result;
       } catch (retryError) {
         if (isParkedPreviewError(retryError)) {
           throw new PreviewRecoveryExhaustedError("Превью пока не запустилось. Повторите проверку.");
@@ -283,7 +310,7 @@ export function MaxLivePreview({
         throw retryError;
       }
     }
-  };
+  }, PREVIEW_RETRY_LIMIT);
   const previewSession = useQuery({
     queryKey: [
       "max-preview-session",
@@ -292,18 +319,36 @@ export function MaxLivePreview({
       runtime.data?.container_name ?? null,
       managedKit.data?.synced_snapshot_id ?? null,
     ],
-    queryFn: loadPreviewSession,
+    queryFn: () => loadPreviewSession(previewActivity.current),
     enabled: !previewDisabled && runtimeRunning && managedKit.isSuccess,
-    retry: (failureCount, error) =>
-      failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
-    retryDelay: previewRetryDelay,
+    retry: false,
     staleTime: 60_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const separatePreview = useMutation({
-    mutationFn: () => createMaxPreviewSession(project.id),
-  });
+  const prepareCurrentPreview = async (activity: typeof previewActivity.current) => {
+    assertPreviewActivity(activity);
+    // fetchQuery shares any preparation already in flight. The helpers own
+    // retries, so the outer open action cannot multiply an exhausted wake budget.
+    const currentManagedKit = await queryClient.fetchQuery({
+      queryKey: ["max-managed-kit-sync", project.id, activity.snapshotId],
+      queryFn: () => loadManagedKit(activity),
+      retry: false,
+      staleTime: 0,
+    });
+    assertPreviewActivity(activity);
+    const currentRuntime = queryClient.getQueryData<RuntimeStatus>(["runtime", project.id]);
+    return queryClient.fetchQuery({
+      queryKey: [
+        "max-preview-session", project.id, activity.snapshotId,
+        currentRuntime?.container_name ?? null, currentManagedKit.synced_snapshot_id,
+      ],
+      queryFn: () => loadPreviewSession(activity),
+      retry: false,
+      staleTime: 0,
+    });
+  };
+  const separatePreview = useMutation({ mutationFn: prepareCurrentPreview });
   const recoverPreview = useMutation({
     mutationFn: async () => {
       const activity = previewActivity.current;
@@ -339,10 +384,8 @@ export function MaxLivePreview({
           activeRuntime?.container_name ?? null,
           managedKitResult.data.synced_snapshot_id ?? null,
         ],
-        queryFn: loadPreviewSession,
-        retry: (failureCount, error) =>
-          failureCount < PREVIEW_RETRY_LIMIT && isTransientPreviewError(error),
-        retryDelay: previewRetryDelay,
+        queryFn: () => loadPreviewSession(activity),
+        retry: false,
         staleTime: 0,
       });
     },
@@ -420,6 +463,9 @@ export function MaxLivePreview({
   }, [project.id, activity, displayPreviewUrl, viewingHistorical]);
 
   const connected = Boolean(displayPreviewUrl);
+  const currentPreviewReady = !previewDisabled && !snapshotsLoading && runtimeRunning &&
+    !runtime.isFetching && !start.isPending && managedKit.isSuccess && !managedKit.isFetching &&
+    previewSession.isSuccess && !previewSession.isFetching && Boolean(previewUrl);
   const connectionLabel = connected ? "Подключено" : firstBuildTerminal ? "Сборка не завершена" : "Запускается";
   // A cold provision can outlive an earlier start request. Once polling sees
   // the runtime running, that old mutation error is no longer relevant and
@@ -464,11 +510,13 @@ export function MaxLivePreview({
     !displayPreviewUrl;
 
   async function openSeparatePreview() {
+    if (!currentPreviewReady || activityBlocked()) return;
     const popup = window.open("about:blank", "_blank");
     if (popup) popup.opener = null;
 
     try {
-      const session = await separatePreview.mutateAsync();
+      const session = await separatePreview.mutateAsync(activity);
+      assertPreviewActivity(activity);
       if (!popup) {
         toast.error("Браузер заблокировал новую вкладку", {
           description: "Разрешите всплывающие окна и повторите попытку.",
@@ -478,6 +526,7 @@ export function MaxLivePreview({
       popup.location.replace(session.url);
     } catch {
       popup?.close();
+      if (activityBlocked() || activity !== previewActivity.current) return;
       toast.error("Не удалось открыть превью", {
         description: "Обновите безопасную сессию и повторите попытку.",
       });
@@ -801,10 +850,10 @@ export function MaxLivePreview({
             <button
               type="button"
               onClick={() => void openSeparatePreview()}
-              disabled={!connected || separatePreview.isPending}
+              disabled={!currentPreviewReady || separatePreview.isPending}
               className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               data-testid="max-open-preview-separate"
-              title={connected ? undefined : "Сначала дождитесь запуска предпросмотра"}
+              title={currentPreviewReady ? undefined : "Сначала дождитесь запуска предпросмотра"}
             >
               {separatePreview.isPending ? (
                 <Loader2 className="size-3 animate-spin" />
