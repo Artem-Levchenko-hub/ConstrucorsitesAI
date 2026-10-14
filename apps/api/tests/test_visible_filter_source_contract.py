@@ -143,6 +143,151 @@ export default function Page({filteredCatalog}: {filteredCatalog: {id:string;pri
   return <main>{filteredCatalog.map(item=><article key={item.id}>{item.price}</article>)}</main>;
 }'''
 
+CATALOG_SORT_PROMPT = (
+    "В существующем приложении добавь сортировку каталога: „По умолчанию“, "
+    "„Цена по возрастанию“, „Цена по убыванию“. "
+    "Проверь реальные цены и порядок всех трёх напитков."
+)
+MEMO_SORT_PAGE = SORT_PAGE.replace(
+    "import {useState}", "import {useState,useMemo}",
+).replace(
+    "const sortedCatalog=[...filteredCatalog].sort(",
+    "const sortedCatalog=useMemo(()=>[...filteredCatalog].sort(",
+).replace(": 0);", ": 0), [filteredCatalog,sortOrder]);")
+MEMO_CATALOG_PAGE = '''"use client";
+import {useState,useMemo} from "react";
+const BASE_CATALOG = [{id:"latte",priceRub:260},{id:"americano",priceRub:220}];
+export default function Page() {
+  const [sort,setSort]=useState<"default"|"asc"|"desc">("default");
+  const CATALOG=useMemo(()=>{
+    const list=[...BASE_CATALOG];
+    if(sort === "asc") list.sort((a,b)=>a.priceRub-b.priceRub);
+    else if(sort === "desc") list.sort((a,b)=>b.priceRub-a.priceRub);
+    return list;
+  },[sort]);
+  return <main>{CATALOG.map(item=><article key={item.id}>{item.priceRub}</article>)}</main>;
+}'''
+
+
+def test_requested_catalog_sort_does_not_need_an_extra_control_keyword() -> None:
+    gap = max_source_completion_gap(CATALOG_SORT_PROMPT, candidate(SORT_PAGE), portable=True)
+    assert gap is not None and "setSortOrder" in gap
+
+
+def test_memo_sort_with_unreferenced_setter_is_not_source_completion() -> None:
+    gap = max_source_completion_gap(SORT_PROMPT, candidate(MEMO_SORT_PAGE), portable=True)
+    assert gap is not None and "setSortOrder" in gap
+
+
+@pytest.mark.parametrize("prompt", [SORT_PROMPT, CATALOG_SORT_PROMPT])
+def test_rendered_memo_catalog_cannot_hide_unreferenced_sort_setter(prompt: str) -> None:
+    gap = max_source_completion_gap(prompt, candidate(MEMO_CATALOG_PAGE), portable=True)
+    assert gap is not None and "setSort" in gap
+
+
+@pytest.mark.parametrize("prompt", [
+    "Не добавляй сортировку каталога.",
+    "Только API: добавь сортировку каталога.",
+    "API-only: add catalog sorting.",
+    "Sort only API results, catalog UI unchanged.",
+    "Добавь сортировку каталога в SQL, интерфейс не менять.",
+    "Добавь сортировку каталога на сервере, интерфейс менять не нужно.",
+    "Add server-side catalog sorting, keep UI unchanged.",
+    "Keep catalog sorting unchanged. Change the title.",
+    "Сортировку каталога оставь без изменений. Добавь новый заголовок.",
+    "Добавь заголовок и сохрани сортировку каталога без изменений.",
+    "Объясни сортировку каталога.",
+])
+def test_catalog_sort_does_not_invent_interactive_intent(prompt: str) -> None:
+    assert max_source_completion_gap(prompt, candidate(MEMO_CATALOG_PAGE), portable=True) is None
+
+
+@pytest.mark.parametrize("change", [
+    ('import {useState,useMemo} from "react";',
+     'import {useState} from "react"; import {useMemo} from "./custom";'),
+    ('import {useState,useMemo}', 'import {useState,useMemo as memo}'),
+    ('const CATALOG=useMemo', 'const memo=useMemo; const CATALOG=memo'),
+    ('function Page()', 'function Page({useMemo})'),
+    ('const CATALOG=useMemo', 'function useMemo(fn){return fn();} const CATALOG=useMemo'),
+    ('useMemo(()=>{', 'useMemo((sort)=>{'),
+    ('useMemo(()=>{', 'useMemo(function sort(){'),
+    ('const list=[...BASE_CATALOG];', 'const sort="asc"; const list=[...BASE_CATALOG];'),
+    ('const list=[...BASE_CATALOG];', 'function sort(){} const list=[...BASE_CATALOG];'),
+    ('const list=[...BASE_CATALOG];', 'const list=copyCatalog(BASE_CATALOG);'),
+    ('const list=[...BASE_CATALOG];', 'const list=[...BASE_CATALOG]; recordVisit();'),
+    ('a.priceRub-b.priceRub', '(recordVisit(), a.priceRub-b.priceRub)'),
+    ('list.sort((a,b)', 'list.sort(async (a,b)'),
+    ('const CATALOG=useMemo', 'const CATALOG=()=>useMemo'),
+    ('return list;', 'return decorate(list);'),
+    ('if(sort === "asc")', 'if(mode === "asc")'),
+])
+def test_unknown_memo_catalog_dataflow_remains_inconclusive(change: tuple[str, str]) -> None:
+    page = MEMO_CATALOG_PAGE.replace(*change)
+    assert max_source_completion_gap(SORT_PROMPT, candidate(page), portable=True) is None
+
+
+@pytest.mark.parametrize("alias", [False, True])
+def test_memo_sort_does_not_reject_delegated_original_catalog(alias: bool) -> None:
+    page = MEMO_CATALOG_PAGE.replace(
+        'return <main>',
+        ('const items=BASE_CATALOG; ' if alias else '') + 'return <main><Catalog items={'
+        + ('items' if alias else 'BASE_CATALOG') + '}/>',
+    )
+    assert max_source_completion_gap(SORT_PROMPT, candidate(page), portable=True) is None
+
+
+@pytest.mark.parametrize("setup,prop", [
+    ("", "data={{items:BASE_CATALOG}}"),
+    ("const data={items:BASE_CATALOG}; ", "data={data}"),
+    ("", "{...{items:BASE_CATALOG}}"),
+    ("", "items={transform(BASE_CATALOG)}"),
+    ("", "data={[BASE_CATALOG]}"),
+    ("", "items={available ? BASE_CATALOG : CATALOG}"),
+])
+def test_memo_sort_does_not_reject_catalog_delegated_in_object(setup: str, prop: str) -> None:
+    page = MEMO_CATALOG_PAGE.replace(
+        'return <main>', setup + 'return <main><Catalog ' + prop + '/>',
+    )
+    assert max_source_completion_gap(SORT_PROMPT, candidate(page), portable=True) is None
+
+
+def test_connected_memo_catalog_control_has_no_negative_witness() -> None:
+    page = MEMO_CATALOG_PAGE.replace(
+        'return <main>', 'return <main><button onClick={()=>setSort("asc")}>Дешевле</button>',
+    )
+    assert max_source_completion_gap(CATALOG_SORT_PROMPT, candidate(page), portable=True) is None
+
+
+@pytest.mark.parametrize("change", [
+    ('[...filteredCatalog]', '[...readCatalog(filteredCatalog)]'),
+    ('(a,b)=>sortOrder', '(sortOrder,b)=>sortOrder'),
+    ('useMemo(()=>', 'useMemo(async ()=>'),
+    ('[filteredCatalog,sortOrder]', '[filteredCatalog,sortOrder,recordVisit()]'),
+    ('sortOrder ===', 'mode ==='),
+])
+def test_unknown_memo_expression_stays_inconclusive(change: tuple[str, str]) -> None:
+    page = MEMO_SORT_PAGE.replace(*change)
+    assert max_source_completion_gap(SORT_PROMPT, candidate(page), portable=True) is None
+
+
+@pytest.mark.parametrize("import_line", [
+    'import React,{useState} from "react";',
+    'import * as React from "react"; import {useState} from "react";',
+])
+def test_genuine_react_namespace_memo_reports_unreferenced_sort(import_line: str) -> None:
+    page = MEMO_CATALOG_PAGE.replace('import {useState,useMemo} from "react";', import_line)
+    page = page.replace('CATALOG=useMemo', 'CATALOG=React.useMemo')
+    gap = max_source_completion_gap(CATALOG_SORT_PROMPT, candidate(page), portable=True)
+    assert gap is not None and "setSort" in gap
+
+
+def test_shadowed_react_namespace_memo_is_inconclusive() -> None:
+    page = MEMO_CATALOG_PAGE.replace(
+        'import {useState,useMemo} from "react";', 'import React,{useState} from "react";',
+    ).replace('function Page()', 'function Page({React})')
+    page = page.replace('CATALOG=useMemo', 'CATALOG=React.useMemo')
+    assert max_source_completion_gap(SORT_PROMPT, candidate(page), portable=True) is None
+
 
 def test_coffee_sort_setter_and_result_missing_is_not_source_completion() -> None:
     files = candidate(SORT_PAGE)

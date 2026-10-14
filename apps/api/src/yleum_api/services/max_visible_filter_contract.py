@@ -139,13 +139,159 @@ def _depends(value: Node, getter: str, operation: str) -> bool:
     return False
 
 
+def _memo_hooks(program: Node, root: Node, body: Node) -> frozenset[str]:
+    names: set[str] = set()
+    for statement in program.named_children:
+        if statement.type != "import_statement" or _text(
+            statement.child_by_field_name("source")
+        )[1:-1] != "react":
+            continue
+        for node in _walk(statement):
+            if (node.type == "import_specifier"
+                    and _text(node.child_by_field_name("name")) == "useMemo"
+                    and node.child_by_field_name("alias") is None):
+                names.add("useMemo")
+            if node.type in {"import_clause", "namespace_import"} and any(
+                child.type == "identifier" and _text(child) == "React"
+                for child in node.named_children
+            ):
+                names.add("React.useMemo")
+    shadows: list[Node | None] = [name for name, _ in _declarations(body)]
+    parameters = root.child_by_field_name("parameters")
+    if parameters is not None:
+        shadows.extend(parameters.named_children)
+    for scope in (program, body):
+        for statement in scope.named_children:
+            if statement.type in {"function_declaration", "class_declaration"}:
+                shadows.append(statement.child_by_field_name("name"))
+            elif scope == program and statement.type in {
+                "lexical_declaration", "variable_declaration",
+            }:
+                shadows.extend(
+                    child.child_by_field_name("name") for child in statement.named_children
+                    if child.type == "variable_declarator"
+                )
+    return frozenset(name for name in names if not any(
+        _declared(binding, name.split(".")[0]) for binding in shadows
+    ))
+
+
+def _memo_sort_input(value: Node, getter: str, hooks: frozenset[str]) -> Node | None:
+    """Attribute only a pure sort expression or conditional sorts of a fresh copy."""
+    if value.type != "call_expression" or _text(value.child_by_field_name("function")) not in hooks:
+        return None
+    arguments = value.child_by_field_name("arguments")
+    args = arguments.named_children if arguments is not None else []
+    if len(args) != 2 or args[0].type != "arrow_function" or args[1].type != "array":
+        return None
+    callback = args[0]
+    parameters = callback.child_by_field_name("parameters")
+    if (parameters is None or parameters.named_children or any(
+        child.type == "async" for child in callback.children
+    ) or any(node.type != "identifier" for node in args[1].named_children)
+            or not any(_text(node) == getter for node in args[1].named_children)):
+        return None
+    body = callback.child_by_field_name("body")
+    if body is None:
+        return None
+    if body.type == "call_expression":
+        if any(node.type in {"new_expression", "assignment_expression", "update_expression"}
+               or (node.type == "call_expression" and node.id != body.id)
+               for node in _walk(body)):
+            return None
+        return body if _pure_copy_sort(body) and _depends(body, getter, "sort") else None
+    if body.type != "statement_block":
+        return None
+    statements = [node for node in body.named_children if node.type != "comment"]
+    if len(statements) < 3 or statements[0].type != "lexical_declaration":
+        return None
+    declaration = statements[0]
+    variables = [node for node in declaration.named_children if node.type == "variable_declarator"]
+    if _text(declaration.child_by_field_name("kind")) != "const" or len(variables) != 1:
+        return None
+    name = variables[0].child_by_field_name("name")
+    copied = variables[0].child_by_field_name("value")
+    if (name is None or name.type != "identifier" or _text(name) == getter
+            or copied is None or copied.type != "array" or len(copied.named_children) != 1):
+        return None
+    spread = copied.named_children[0]
+    if (spread.type != "spread_element" or len(spread.named_children) != 1
+            or spread.named_children[0].type != "identifier"):
+        return None
+    returned = statements[-1]
+    if (returned.type != "return_statement" or len(returned.named_children) != 1
+            or _text(returned.named_children[0]) != _text(name)):
+        return None
+
+    def conditional_sort(statement: Node) -> bool:
+        if statement.type != "if_statement":
+            return False
+        condition = statement.child_by_field_name("condition")
+        if condition is None or len(condition.named_children) != 1:
+            return False
+        comparison = condition.named_children[0]
+        left = comparison.child_by_field_name("left")
+        right = comparison.child_by_field_name("right")
+        if (comparison.type != "binary_expression"
+                or _text(comparison.child_by_field_name("operator")) not in {
+                    "===", "==", "!==", "!=",
+                }
+                or not any(a is not None and b is not None and a.type == "identifier"
+                           and _text(a) == getter and b.type == "string"
+                           for a, b in ((left, right), (right, left)))):
+            return False
+        consequence = statement.child_by_field_name("consequence")
+        if consequence is not None and consequence.type == "statement_block":
+            consequence = (
+                consequence.named_children[0] if len(consequence.named_children) == 1 else None
+            )
+        if (consequence is None or consequence.type != "expression_statement"
+                or len(consequence.named_children) != 1):
+            return False
+        call = consequence.named_children[0]
+        function = call.child_by_field_name("function")
+        arguments = call.child_by_field_name("arguments")
+        if (call.type != "call_expression" or function is None
+                or function.type != "member_expression"
+                or _text(function.child_by_field_name("object")) != _text(name)
+                or _text(function.child_by_field_name("property")) != "sort"
+                or arguments is None or len(arguments.named_children) != 1):
+            return False
+        comparator = arguments.named_children[0]
+        comparator_body = comparator.child_by_field_name("body")
+        if (comparator.type != "arrow_function" or comparator_body is None
+                or _declared(comparator.child_by_field_name("parameters"), getter)
+                or any(child.type == "async" for child in comparator.children)
+                or any(node.type in {"statement_block", "call_expression", "assignment_expression",
+                                    "augmented_assignment_expression", "update_expression",
+                                    "await_expression", "new_expression", "arrow_function",
+                                    "function_expression"}
+                       for node in _walk(comparator_body))):
+            return False
+        alternative = statement.child_by_field_name("alternative")
+        return alternative is None or (
+            len(alternative.named_children) == 1 and conditional_sort(alternative.named_children[0])
+        )
+
+    return copied if all(conditional_sort(node) for node in statements[1:-1]) else None
+
+
 def _delegates_collection(body: Node, values: list[Node], names: set[str]) -> bool:
     receivers = set(names)
     for value in values:
         function = value.child_by_field_name("function")
-        receiver = function.child_by_field_name("object") if function else None
+        receiver = value if value.type == "array" else (
+            function.child_by_field_name("object") if function else None
+        )
         if receiver is not None:
             receivers.update(_text(node) for node in _walk(receiver) if node.type == "identifier")
+    declarations = _declarations(body)
+    for _ in range(len(declarations)):
+        for name, value in declarations:
+            if (name.type == "identifier" and value.type in {"identifier", "object", "array"}
+                    and any(node.type == "identifier" and _text(node) in receivers
+                            for node in _walk(value))):
+                receivers.add(_text(name))
     for element in _walk(body):
         if element.type not in {"jsx_opening_element", "jsx_self_closing_element"}:
             continue
@@ -153,14 +299,10 @@ def _delegates_collection(body: Node, values: list[Node], names: set[str]) -> bo
         if not component or not component[0].isupper():
             continue
         for child in element.named_children:
-            if child.type != "jsx_attribute":
+            if child.type not in {"jsx_attribute", "jsx_expression"}:
                 continue
-            for expression in child.named_children:
-                if expression.type == "jsx_expression" and any(
-                    node.type == "identifier" and _text(node) in receivers
-                    for node in expression.named_children
-                ):
-                    return True
+            if any(node.type == "identifier" and _text(node) in receivers for node in _walk(child)):
+                return True
     return False
 
 
@@ -301,6 +443,17 @@ def _visible_control_intent(clause: str) -> bool:
     ) is not None
 
 
+def _catalog_sort_intent(clause: str) -> bool:
+    return bool(
+        re.search(r"\b(?:каталог\w*|catalog\w*)\b", clause, re.I)
+        and re.search(r"\b(?:добав\w*|сдела\w*|реализ\w*|add|implement|enable)\b", clause, re.I)
+        and not re.search(
+            r"\b(?:sql|api|server\w*|backend|database|сервер\w*|баз\w*|"
+            r"unchanged|preserve|keep|сохран\w*|остав\w*)\b|без\s+изменен", clause, re.I,
+        )
+    )
+
+
 def _priority_filter_gap(
     prompt: str, program: Node, body: Node, source: str,
     declarations: list[tuple[Node, Node]], bindings: list[tuple[str, str, bool]],
@@ -365,7 +518,9 @@ def unused_visible_filter_gap(
             r"\b(?:фильтр\w*|filters?)\b" if operation == "filter"
             else r"\b(?:сортиров\w*|sort\w*)\b", clause, re.IGNORECASE,
         )
-        and _visible_control_intent(clause)
+        and (_visible_control_intent(clause) or (
+            operation == "sort" and _catalog_sort_intent(clause)
+        ))
         and not re.search(
             r"\b(?:не\s+(?:добав\w*|меня\w*|трог\w*|нуж\w*|треб\w*)|do\s+not|without)\b",
             clause, re.IGNORECASE,
@@ -424,6 +579,13 @@ def unused_visible_filter_gap(
         literal = bool(arguments and len(arguments.named_children) == 1
                        and arguments.named_children[0].type == "string")
         bindings.append((_text(pair[0]), _text(pair[1]), literal))
+    memo_hooks = _memo_hooks(program, root, body)
+
+    def depends(value: Node, getter: str, operation: str) -> bool:
+        return _depends(value, getter, operation) or (
+            operation == "sort" and _memo_sort_input(value, getter, memo_hooks) is not None
+        )
+
     if "filter" in positive:
         priority_gap = _priority_filter_gap(prompt, program, body, source, declarations, bindings)
         if priority_gap:
@@ -432,7 +594,7 @@ def unused_visible_filter_gap(
         dependent = [
             (getter, setter, literal, _text(name)) for getter, setter, literal in bindings
             for name, value in declarations if name.type == "identifier"
-            and _depends(value, getter, operation)
+            and depends(value, getter, operation)
         ]
         if len({item[0] for item in dependent}) > 1 and any(
             _reference(item[1], source) > 1 for item in dependent
@@ -441,16 +603,19 @@ def unused_visible_filter_gap(
         for getter, setter, literal, derived in dependent:
             related_values = [
                 value for name, value in declarations
-                if name.type == "identifier" and _depends(value, getter, operation)
+                if name.type == "identifier" and depends(value, getter, operation)
             ]
             derived_names = {
                 result for other, _, _, result in dependent if other == getter
             }
-            if _delegates_collection(body, related_values, derived_names):
+            collection_inputs = [
+                _memo_sort_input(value, getter, memo_hooks) or value for value in related_values
+            ] if operation == "sort" else related_values
+            if _delegates_collection(body, collection_inputs, derived_names):
                 continue
             if any(
                 other_getter != getter and _reference(other_setter, source) > 1
-                and any(_depends(call, other_getter, operation) for call in _walk(body)
+                and any(depends(call, other_getter, operation) for call in _walk(body)
                         if call.type == "call_expression")
                 for other_getter, other_setter, _ in bindings
             ):
@@ -471,7 +636,7 @@ def unused_visible_filter_gap(
             if any(
                 call.type == "call_expression"
                 and call.id not in {value.id for value in related_values}
-                and _depends(call, getter, operation)
+                and depends(call, getter, operation)
                 for call in _walk(body)
             ):
                 continue  # Same-state inline operations may render a working result.
