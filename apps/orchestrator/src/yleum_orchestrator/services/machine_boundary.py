@@ -12,8 +12,9 @@ import os
 import re
 import secrets
 import time
+from html import escape
 from typing import Any, cast
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 
 _RESERVED = ("/api/omnia", "/api/max", "/__omnia", "/auth")
 _HOP = {
@@ -43,13 +44,113 @@ _FALLBACK_OWNER_ORIGINS = ("https://constructor.lead-generator.ru",)
 _ORIGIN_RE = re.compile(r"^https://[a-z0-9.-]{1,253}(:\d{1,5})?$")
 
 
+def owner_origins(origins: object) -> list[str]:
+    """Only controller-configured HTTPS origins may receive the owner bridge."""
+    allowed: list[str] = []
+    for origin in origins if isinstance(origins, list) else []:
+        if not isinstance(origin, str) or not _ORIGIN_RE.fullmatch(origin):
+            continue
+        try:
+            parsed = urlsplit(origin)
+            port = parsed.port
+        except ValueError:
+            continue
+        if port == 0:
+            continue
+        # Browser MessageEvent.origin omits HTTPS's default port.
+        canonical = f"https://{parsed.hostname}" + (f":{port}" if port not in {None, 443} else "")
+        if canonical not in allowed:
+            allowed.append(canonical)
+    return allowed or list(_FALLBACK_OWNER_ORIGINS)
+
+
 def owner_framing(origins: object) -> str:
     """Политика встраивания превью владельца для перечисленных кабинетов."""
-    allowed = [
-        origin for origin in (origins if isinstance(origins, list) else [])
-        if isinstance(origin, str) and _ORIGIN_RE.match(origin)
-    ] or list(_FALLBACK_OWNER_ORIGINS)
-    return "frame-ancestors 'self' " + " ".join(dict.fromkeys(allowed))
+    return "frame-ancestors 'self' " + " ".join(owner_origins(origins))
+
+
+_OWNER_RECOVERY_SCRIPT = """
+(() => {
+  const config = __OWNER_RECOVERY_CONFIG__;
+  const status = document.getElementById('status');
+  let active = true;
+  let cancelBridge = null;
+  const controllers = new Set();
+  const unavailable = () => {
+    status.textContent = 'Откройте превью в редакторе проекта.';
+  };
+  window.addEventListener('pagehide', () => {
+    active = false;
+    cancelBridge?.();
+    for (const controller of controllers) controller.abort();
+  }, {once: true});
+  const capability = () => new Promise(resolve => {
+    const nonce = Array.from(window.crypto.getRandomValues(new Uint8Array(16)),
+      value => value.toString(16).padStart(2, '0')).join('');
+    let settled = false;
+    const finish = url => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      window.removeEventListener('message', listener);
+      cancelBridge = null;
+      resolve(url);
+    };
+    const listener = event => {
+      if (!active || settled || event.source !== window.parent ||
+          !config.origins.includes(event.origin) ||
+          event.data?.type !== 'omnia:preview-session:result' ||
+          event.data?.nonce !== nonce) return;
+      try {
+        const url = new URL(event.data.url);
+        finish(!event.data.error && url.protocol === 'https:' &&
+          url.origin === location.origin && url.pathname === '/api/omnia/preview-session' &&
+          !url.username && !url.password && !url.hash ? url.href : null);
+      } catch (_) { finish(null); }
+    };
+    const timer = setTimeout(() => finish(null), 10000);
+    cancelBridge = () => finish(null);
+    window.addEventListener('message', listener);
+    try {
+      for (const origin of config.origins) {
+        window.parent.postMessage({type: 'omnia:preview-session:renew', nonce}, origin);
+      }
+    } catch (_) { finish(null); }
+  });
+  async function evidence(url, headers = {}) {
+    const controller = new AbortController();
+    controllers.add(controller);
+    const timer = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch(url, {credentials: 'include', cache: 'no-store',
+        redirect: 'error', headers, signal: controller.signal});
+      if (!response.ok) throw new Error('Session unavailable');
+      return await response.json();
+    } finally {
+      clearTimeout(timer);
+      controllers.delete(controller);
+    }
+  }
+  async function recover() {
+    if (window.parent === window) { unavailable(); return; }
+    try {
+      const url = await capability();
+      if (!active || !url) { unavailable(); return; }
+      const bootstrap = await evidence(url, {Accept: 'application/json'});
+      if (!active || bootstrap?.mode !== 'preview' || bootstrap?.user?.id !== 'preview') {
+        unavailable(); return;
+      }
+      const identity = await evidence('/__omnia/identity');
+      if (!active || identity?.user_id !== 'preview' || identity?.project_id !== config.project ||
+          identity?.epoch !== config.epoch) { unavailable(); return; }
+      // Reload only the original document after the gateway proves its cookie.
+      // No product code or business request has run in this trusted shell.
+      location.reload();
+    } catch (_) { unavailable(); }
+  }
+  void recover();
+})();
+"""
 
 
 _BOOTSTRAP_SCRIPT = """
@@ -334,10 +435,74 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _private_document(self, path: str, length: int) -> bool:
+        if (
+            self.command != "GET" or length
+            or self.headers.get("Sec-Fetch-Dest", "") not in {"", "document", "iframe", "frame"}
+            or self.headers.get("Sec-Fetch-Mode", "") not in {"", "navigate"}
+            or any(name in self.headers for name in (
+                "RSC", "Next-Action", "Next-Router-State-Tree", "Next-Router-Prefetch",
+            ))
+            or any(path == prefix or path.startswith(prefix + "/") for prefix in (
+                "/api", "/_next", "/__omnia", "/auth",
+            ))
+        ):
+            return False
+        for media in self.headers.get("Accept", "").split(","):
+            kind, *parameters = media.strip().lower().split(";")
+            if kind.strip() != "text/html":
+                continue
+            try:
+                qualities = [float(value.strip()[2:]) for value in parameters
+                             if value.strip().startswith("q=")]
+                if not qualities or (len(qualities) == 1 and 0 < qualities[0] <= 1):
+                    return True
+            except ValueError:
+                pass
+        return False
+
+    def _owner_recovery(self) -> None:
+        config = cast(BoundaryServer, self.server).config
+        origins = owner_origins(config.get("owner_origins"))
+        owner_link = origins[0] + "/max/" + quote(str(config["project_id"]), safe="") + "/preview"
+        nonce = secrets.token_urlsafe(24)
+        script_config = json.dumps({
+            "origins": origins, "project": str(config["project_id"]), "epoch": config["epoch"],
+        }).replace("<", "\\u003c")
+        script = _OWNER_RECOVERY_SCRIPT.replace("__OWNER_RECOVERY_CONFIG__", script_config)
+        body = (
+            '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+            '<meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<title>Превью проекта</title></head><body><main>'
+            '<h1>Превью проекта</h1><p id="status" role="status">Подключаем превью…</p>'
+            f'<a href="{escape(owner_link, quote=True)}" target="_top" rel="noreferrer">'
+            'Открыть превью в редакторе</a></main>'
+            f'<script nonce="{nonce}">{script}</script></body></html>'
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header(
+            "Content-Security-Policy",
+            f"default-src 'none'; script-src 'nonce-{nonce}'; connect-src 'self'; "
+            "base-uri 'none'; form-action 'none'",
+        )
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def _forward(self) -> None:
         config = cast(BoundaryServer, self.server).config
         path = canonical_request_path(self.path)
-        if path is None or self.headers.get("Transfer-Encoding"):
+        # BaseHTTPRequestHandler collapses leading // before assigning self.path.
+        # Validate the original request target too, before choosing any shell.
+        raw_target = self.requestline.split()[1]
+        if (
+            path is None or canonical_request_path(raw_target) != path
+            or self.headers.get("Transfer-Encoding")
+        ):
             return self._reply(400)
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -399,6 +564,10 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                 }
         else:
             if user is None:
+                if not public and self._private_document(path, length) and route_port(
+                    self.path, cast(list[dict[str, Any]], config["routes"]),
+                ) is not None:
+                    return self._owner_recovery()
                 if (
                     public and self.command == "GET"
                     # Native MAX webviews need not send browser navigation headers.

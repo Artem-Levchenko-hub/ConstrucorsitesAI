@@ -381,3 +381,245 @@ def test_owner_framing_follows_the_cabinet_address_and_keeps_the_spare_one(monke
     assert owner_framing(["http://evil.example", "https://ok.example", "junk"]) == (
         "frame-ancestors 'self' https://ok.example"
     )
+
+
+@pytest.fixture
+def private_boundary():
+    import http.client
+    import http.server
+    import threading
+
+    boundary = module()
+    received = []
+
+    class Product(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def do_GET(self):
+            received.append(self.path)
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"private product HTML")
+
+    product = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Product)
+    gateway = boundary.BoundaryServer(("127.0.0.1", 0), boundary.BoundaryHandler)
+    gateway.config = {
+        "secret": "private-recovery-secret", "project_id": "project-A", "epoch": 7,
+        "machine_host": "127.0.0.1", "core_host": "127.0.0.1",
+        "routes": [{"path": "/", "port": product.server_port}],
+        "owner_origins": [
+            "http://insecure.example", "https://editor.example", "https://legacy.example",
+            "https://injected.example\n", "https://bad.example/'><script>",
+        ],
+    }
+    threads = [threading.Thread(target=s.serve_forever, daemon=True) for s in (product, gateway)]
+    for thread in threads:
+        thread.start()
+
+    def request(path, headers=None, method="GET", body=None):
+        connection = http.client.HTTPConnection("127.0.0.1", gateway.server_port, timeout=3)
+        try:
+            connection.request(method, path, headers=headers or {}, body=body)
+            response = connection.getresponse()
+            return response.status, response.read(), response.getheaders()
+        finally:
+            connection.close()
+
+    yield request, received, gateway.config
+    for server in (gateway, product):
+        server.shutdown()
+        server.server_close()
+    for thread in threads:
+        thread.join(timeout=3)
+
+
+def test_private_document_returns_only_trusted_recovery_shell(private_boundary):
+    request, received, _ = private_boundary
+    status, body, raw_headers = request("/orders?filter=%3Cscript%3E", {
+        "Accept": "text/html", "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Mode": "navigate",
+        "Host": "forged.example", "Origin": "https://forged.example",
+        "Referer": "https://forged.example/editor", "X-Forwarded-Host": "forged.example",
+    })
+    assert status == 200
+    headers = dict(raw_headers)
+    assert headers["Content-Type"] == "text/html; charset=utf-8"
+    assert headers["Cache-Control"] == "no-store"
+    assert headers["Referrer-Policy"] == "no-referrer"
+    assert headers["X-Content-Type-Options"] == "nosniff"
+    policies = [value for key, value in raw_headers if key == "Content-Security-Policy"]
+    assert any("default-src 'none'" in value and "connect-src 'self'" in value
+               and "base-uri 'none'" in value and "form-action 'none'" in value
+               for value in policies)
+    assert any(value == "frame-ancestors 'self' https://editor.example https://legacy.example"
+               for value in policies)
+    text = body.decode()
+    assert 'href="https://editor.example/max/project-A/preview"' in text
+    assert not any(value in text for value in (
+        "private product HTML", "private-recovery-secret", "forged.example", "injected.example",
+        "insecure.example", "bad.example", "max-web-app.js", "<script>", "filter=",
+    ))
+    assert "Set-Cookie" not in headers
+    assert not received
+
+
+def test_private_recovery_never_opens_non_documents_or_unsafe_paths(private_boundary):
+    request, received, _ = private_boundary
+    document = {"Accept": "text/html", "Sec-Fetch-Dest": "document"}
+    for path in ("/api/orders", "/api", "/_next/static/private.js", "/_next",
+                 "/__omnia/identity", "/__omnia", "/auth/login", "/auth"):
+        assert request(path, document)[0] == 401, path
+    for headers in ({}, {"Accept": "application/json"},
+                    {"Accept": "text/html", "Sec-Fetch-Dest": "script"},
+                    {"Accept": "text/html", "Sec-Fetch-Mode": "cors"},
+                    {"Accept": "text/html;q=0"},
+                    {"Accept": "text/html", "RSC": "1"},
+                    {"Accept": "text/html", "Next-Action": "business-action"}):
+        assert request("/orders", headers)[0] == 401, headers
+    for method in ("POST", "PUT", "PATCH", "DELETE", "HEAD"):
+        assert request("/orders", document, method)[0] == 401, method
+    assert request("/orders", document, body=b"business payload")[0] == 401
+    for path in ("/%2fapi/orders", "/%5capi/orders", "/x/../orders", "/%252forders",
+                 "https://evil.example/orders", "//evil.example/orders"):
+        assert request(path, document)[0] == 400, path
+    assert not received
+
+
+def test_private_recovery_preserves_authenticated_forwarding_and_identity(private_boundary):
+    request, received, _ = private_boundary
+    headers = {"Accept": "text/html", "Cookie": "__Host-max_session=" + cookie(
+        "private-recovery-secret", {"id": "preview", "expiresAt": 9_999_999_999},
+    )}
+    status, body, _ = request("/orders?filter=mine", headers)
+    assert status == 200 and body == b"private product HTML"
+    assert received == ["/orders?filter=mine"]
+    status, body, _ = request("/__omnia/identity", headers)
+    assert status == 200
+    assert json.loads(body) == {"project_id": "project-A", "user_id": "preview", "epoch": 7}
+
+
+def test_private_recovery_validates_origins_and_encodes_owner_link(private_boundary):
+    request, received, config = private_boundary
+    config["owner_origins"] = [
+        "https://invalid-port.example:65536", "https://editor.example:443",
+    ]
+    config["project_id"] = "project/with\"<markup>"
+    status, body, headers = request("/", {"Accept": "text/html"})
+    assert status == 200
+    assert (
+        'href="https://editor.example/max/project%2Fwith%22%3Cmarkup%3E/preview"' in body.decode()
+    )
+    assert b"invalid-port.example" not in body
+    assert ("Content-Security-Policy", "frame-ancestors 'self' https://editor.example") in headers
+    assert b"<markup>" not in body
+    assert not received
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="Node.js required for recovery execution")
+def test_private_recovery_requires_parent_capability_and_server_session_proof(private_boundary):
+    request, received, _ = private_boundary
+    status, html, _ = request("/orders?filter=mine", {"Accept": "text/html"})
+    assert status == 200
+    script = re.findall(r"<script[^>]*>(.*?)</script>", html.decode(), re.S)[-1]
+    harness = r"""
+const vm = require('node:vm');
+const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
+const calls = [], navigation = [], messages = [], listeners = new Map(), timers = new Map();
+const status = {textContent: ''}; let sequence = 0;
+const parent = {postMessage: (data, origin) => messages.push({data, origin})};
+const location = {origin: 'https://private.example', href: 'https://private.example/orders?filter=mine',
+  reload: () => navigation.push('/orders?filter=mine')};
+const window = {parent, location, crypto: {getRandomValues: bytes => bytes.fill(161)},
+  addEventListener: (type, fn) => listeners.set(type, fn),
+  removeEventListener: (type, fn) => {if (listeners.get(type) === fn) listeners.delete(type);}};
+if (input.scenario === 'top-level') window.parent = window;
+const context = {window, location, document: {getElementById: () => status},
+  URL, Uint8Array, AbortController,
+  setTimeout: (fn, delay) => {const key = ++sequence; timers.set(key, {fn, delay}); return key;},
+  clearTimeout: key => timers.delete(key),
+  fetch: async (url, options) => {
+    calls.push({url, options}); const first = calls.length === 1;
+    if (input.scenario === (first ? 'bootstrap-timeout' : 'identity-timeout') ||
+        (first && input.scenario === 'unload-during-bootstrap')) {
+      return new Promise((_, reject) => options.signal.addEventListener('abort',
+        () => reject(new Error('timeout'))));
+    }
+    const identity = {project_id: 'project-A', user_id: 'preview', epoch: 7};
+    if (input.scenario === 'bad-proof-user') identity.user_id = '123';
+    if (input.scenario === 'bad-proof-project') identity.project_id = 'project-B';
+    if (input.scenario === 'bad-proof-epoch') identity.epoch = 8;
+    return {ok: input.scenario !== (first ? 'bootstrap-http-failure' : 'identity-http-failure'),
+      json: async () => {
+        if (!first && input.scenario === 'identity-json-failure') throw Error('not JSON');
+        return first ? (input.scenario === 'bad-bootstrap'
+          ? {mode: 'max', user: {id: '123'}} : {mode: 'preview', user: {id: 'preview'}}) : identity;
+      }};
+  }};
+const settle = async () => {for (let i=0; i<8; i++) await new Promise(setImmediate);};
+(async () => {
+  vm.runInNewContext(input.script, context); await settle();
+  if (messages.length && input.scenario !== 'timeout') {
+    const data = {type: 'omnia:preview-session:result', nonce: messages[0].data.nonce,
+      url: 'https://private.example/api/omnia/preview-session?expires=1&signature=opaque'};
+    let source = parent, origin = 'https://editor.example';
+    if (input.scenario === 'forged-source') source = {};
+    if (input.scenario === 'forged-origin') origin = 'https://evil.example';
+    if (input.scenario === 'forged-nonce') data.nonce = 'b'.repeat(32);
+    if (input.scenario === 'wrong-capability-origin') data.url = 'https://evil.example/api/omnia/preview-session';
+    if (input.scenario === 'capability-path') data.url = 'https://private.example/api/orders';
+    if (input.scenario === 'capability-credentials') data.url = 'https://x:y@private.example/api/omnia/preview-session';
+    if (input.scenario === 'capability-fragment') data.url += '#credential';
+    if (input.scenario === 'parent-error') {delete data.url; data.error = 'session_unavailable';}
+    if (input.scenario === 'unload-before-reply') listeners.get('pagehide')?.();
+    const listener = listeners.get('message'); listener?.({source, origin, data});
+    // A matching response must be consumed once even while bootstrap is pending.
+    listener?.({source, origin, data});
+    await settle();
+    if (input.scenario === 'unload-during-bootstrap') listeners.get('pagehide')?.();
+  }
+  for (const timer of [...timers.values()]) timer.fn();
+  await settle();
+  process.stdout.write(JSON.stringify({calls, navigation, messages, status,
+    listening: listeners.has('message'), timers: [...timers.values()].map(t => t.delay)}));
+})().catch(error => {console.error(error); process.exit(1);});
+"""
+    cases = [
+        ("valid", 2, 1), ("forged-source", 0, 0), ("forged-origin", 0, 0),
+        ("forged-nonce", 0, 0), ("wrong-capability-origin", 0, 0),
+        ("capability-path", 0, 0), ("capability-credentials", 0, 0),
+        ("capability-fragment", 0, 0), ("parent-error", 0, 0),
+        ("bad-bootstrap", 1, 0), ("bootstrap-http-failure", 1, 0),
+        ("bad-proof-user", 2, 0), ("bad-proof-project", 2, 0), ("bad-proof-epoch", 2, 0),
+        ("identity-http-failure", 2, 0), ("identity-json-failure", 2, 0),
+        ("timeout", 0, 0), ("bootstrap-timeout", 1, 0), ("identity-timeout", 2, 0),
+        ("top-level", 0, 0), ("unload-before-reply", 0, 0), ("unload-during-bootstrap", 1, 0),
+    ]
+    for scenario, count, reloads in cases:
+        process = subprocess.run(["node", "-e", harness], input=json.dumps({
+            "script": script, "scenario": scenario,
+        }), text=True, capture_output=True, timeout=5, check=True)
+        result = json.loads(process.stdout)
+        assert len(result["calls"]) == count, scenario
+        assert result["navigation"] == ["/orders?filter=mine"] * reloads, scenario
+        assert not result["listening"] and not result["timers"], scenario
+        if scenario != "top-level":
+            assert [item["origin"] for item in result["messages"]] == [
+                "https://editor.example", "https://legacy.example",
+            ], scenario
+            assert all(item["data"]["type"] == "omnia:preview-session:renew"
+                       and re.fullmatch("[a-f0-9]{32}", item["data"]["nonce"])
+                       for item in result["messages"]), scenario
+        if count:
+            first = result["calls"][0]
+            assert first["url"] == (
+                "https://private.example/api/omnia/preview-session?expires=1&signature=opaque"
+            ), scenario
+            assert first["options"]["headers"]["Accept"] == "application/json", scenario
+            assert first["options"]["redirect"] == "error", scenario
+            assert first["options"]["credentials"] == "include", scenario
+            assert first["options"].get("method", "GET") == "GET", scenario
+        if count == 2:
+            assert result["calls"][1]["url"] == "/__omnia/identity", scenario
+        if not reloads:
+            assert result["status"]["textContent"], scenario
+    assert not received
