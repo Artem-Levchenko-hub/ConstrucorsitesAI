@@ -1,4 +1,4 @@
-/** Only a server-confirmed private owner preview installs this guard. */
+/** Startup and installed guards use the same scoped owner-session proof. */
 const EDITOR_ORIGINS = ["https://yleum.ru", "https://www.yleum.ru", "https://constructor.lead-generator.ru"];
 const SESSION_PATH = "/api/max/session";
 const BOOTSTRAP_PATH = "/api/omnia/preview-session";
@@ -9,13 +9,12 @@ function denied(): Response {
   return Response.json({ error: "Сессия превью закончилась. Откройте превью в редакторе и повторите сохранение.", code: "preview_session_required" }, { status: 401 });
 }
 
-export function installOwnerPreviewFetch(boundary: Window = window, configuredOrigins: readonly string[] = EDITOR_ORIGINS): () => void {
+function createOwnerRecovery(boundary: Window, configuredOrigins: readonly string[]) {
   const editorOrigins = configuredOrigins.filter(value => {
     try { const url = new URL(value); return url.protocol === "https:" && url.origin === value; }
     catch { return false; }
   });
-  const previous = boundary.fetch;
-  const native = previous.bind(boundary);
+  const native = boundary.fetch.bind(boundary);
   let active = true;
   let pending: Promise<boolean> | null = null;
   let cancelBridge: (() => void) | null = null;
@@ -85,6 +84,41 @@ export function installOwnerPreviewFetch(boundary: Window = window, configuredOr
     })().finally(() => { pending = null; });
     return pending;
   };
+  const dispose = () => {
+    active = false;
+    cancelBridge?.();
+    for (const controller of authControllers) controller.abort();
+  };
+  return { ensure, dispose };
+}
+
+const startupRecovery = new WeakMap<Window, Map<string, Promise<boolean>>>();
+
+/** Request a capability only from an explicitly trusted parent; never install a fetch guard here. */
+export function recoverOwnerPreviewSession(boundary: Window, configuredOrigins: readonly string[] = EDITOR_ORIGINS): Promise<boolean> {
+  if (boundary.parent === boundary) return Promise.resolve(false);
+  // Only callers with the same explicit trust scope may share a capability.
+  const scope = JSON.stringify(configuredOrigins);
+  const attempts = startupRecovery.get(boundary) ?? new Map<string, Promise<boolean>>();
+  const existing = attempts.get(scope);
+  if (existing) return existing;
+  const recovery = createOwnerRecovery(boundary, configuredOrigins);
+  const pending = recovery.ensure().finally(() => {
+    recovery.dispose();
+    attempts.delete(scope);
+    if (!attempts.size) startupRecovery.delete(boundary);
+  });
+  attempts.set(scope, pending);
+  startupRecovery.set(boundary, attempts);
+  return pending;
+}
+
+/** Only a server-confirmed private owner preview installs this guard. */
+export function installOwnerPreviewFetch(boundary: Window = window, configuredOrigins: readonly string[] = EDITOR_ORIGINS): () => void {
+  const previous = boundary.fetch;
+  const native = previous.bind(boundary);
+  const { ensure, dispose } = createOwnerRecovery(boundary, configuredOrigins);
+  let active = true;
   const waitForSession = (signal?: AbortSignal | null): Promise<boolean> => {
     if (!signal) return ensure();
     return new Promise((resolve, reject) => {
@@ -120,8 +154,7 @@ export function installOwnerPreviewFetch(boundary: Window = window, configuredOr
   boundary.fetch = guarded;
   return () => {
     active = false;
-    cancelBridge?.();
-    for (const controller of authControllers) controller.abort();
+    dispose();
     if (boundary.fetch === guarded) boundary.fetch = previous;
   };
 }

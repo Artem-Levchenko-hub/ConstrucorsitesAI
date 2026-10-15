@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import { configureMaxShell, getMaxWebApp } from "@/lib/max/bridge";
-import { installOwnerPreviewFetch } from "@/lib/max/owner-preview-renewal";
+import { installOwnerPreviewFetch, recoverOwnerPreviewSession } from "@/lib/max/owner-preview-renewal";
 import type { MaxSessionUser } from "@/lib/max/session";
 import { YleumCompliance } from "@/components/YleumCompliance";
 
@@ -176,7 +176,7 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
       });
     }
     try {
-      const response = await fetch("/api/max/session", webApp?.initData ? {
+      let response = await fetch("/api/max/session", webApp?.initData ? {
         method: "POST",
         credentials: "include",
         cache: "no-store",
@@ -187,6 +187,13 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
         credentials: "include",
         cache: "no-store",
       });
+      // An expired owner cookie has no launch data. Repair only authentication;
+      // the product stays unmounted until the server proves the private actor.
+      const recovered = !webApp?.initData && response.status === 401 &&
+        await recoverOwnerPreviewSession(window);
+      if (recovered) {
+        response = await fetch("/api/max/session", { method: "GET", credentials: "include", cache: "no-store" });
+      }
       const body = (await response.json().catch(() => ({}))) as {
         user?: MaxSessionUser;
         code?: string;
@@ -196,7 +203,7 @@ export function MaxAppProvider({ children }: { children: React.ReactNode }) {
       const ownerPreview = !webApp?.initData && body.mode === "preview" && body.user?.id === "preview";
       const validUser = body.user && (
         ownerPreview ||
-        (typeof body.user.id === "string" && /^[1-9][0-9]{0,19}$/.test(body.user.id))
+        (!recovered && body.mode !== "preview" && typeof body.user.id === "string" && /^[1-9][0-9]{0,19}$/.test(body.user.id))
       );
       if (!response.ok || !body.user || !validUser) {
         if (response.status === 401) {

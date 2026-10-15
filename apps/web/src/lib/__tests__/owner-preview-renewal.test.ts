@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { installOwnerPreviewFetch } from "../../../../orchestrator/templates/max-miniapp-nextjs/src/lib/max/owner-preview-renewal";
+import { installOwnerPreviewFetch, recoverOwnerPreviewSession as recover } from "../../../../orchestrator/templates/max-miniapp-nextjs/src/lib/max/owner-preview-renewal";
 import { installPreviewSessionRenewal } from "../max-preview-session-renewal";
 const origin = "https://qa-dev.dev2.yleum.ru";
 const session = () => Response.json({ mode: "preview", user: { id: "preview" } });
@@ -14,6 +14,136 @@ function child(native: ReturnType<typeof vi.fn>) {
   } as unknown as Window;
   return { boundary, parent, listeners };
 }
+
+describe("initial owner preview recovery", () => {
+  it("shares bounded recovery and proves the server session before granting startup access", async () => {
+    let expired = true;
+    let finish!: (response: Response) => void;
+    const native = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/max/session") return expired ? new Response(null, { status: 401 }) : session();
+      if (String(input).includes("preview-session?")) {
+        expect(init).toMatchObject({ credentials: "include", redirect: "error", headers: { Accept: "application/json" } });
+        return new Promise<Response>(resolve => { finish = resolve; });
+      }
+      throw new Error("Startup must not call business APIs");
+    });
+    const { boundary, listeners } = child(native);
+    const first = recover(boundary); const second = recover(boundary);
+    await vi.waitFor(() => expect(finish).toBeTypeOf("function"));
+    expect(boundary.fetch).toBe(native);
+    expired = false; finish(session());
+    expect(await Promise.all([first, second])).toEqual([true, true]);
+    expect(native.mock.calls.map(c => String(c[0]))).toEqual([
+      "/api/max/session", `${origin}/api/omnia/preview-session?expires=1&signature=test`, "/api/max/session",
+    ]);
+    expect(listeners.size).toBe(0);
+  });
+  it("does not bootstrap a standalone window", async () => {
+    const native = vi.fn(async () => new Response(null, { status: 401 }));
+    const { boundary, parent } = child(native);
+    Object.defineProperty(boundary, "parent", { value: boundary });
+    expect(await recover(boundary)).toBe(false);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+    expect(boundary.fetch).toBe(native);
+  });
+  it("ignores forged startup replies until the trusted parent answers with the exact nonce", async () => {
+    let expired = true;
+    const native = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/max/session") return expired ? new Response(null, { status: 401 }) : session();
+      expired = false; return session();
+    });
+    const { boundary, parent, listeners } = child(native);
+    parent.postMessage.mockImplementation(() => undefined);
+    const pending = recover(boundary);
+    await vi.waitFor(() => expect(parent.postMessage).toHaveBeenCalled());
+    const nonce = parent.postMessage.mock.calls[0][0].nonce;
+    expect(nonce).toMatch(/^[a-f0-9]{32}$/);
+    const data = { type: "omnia:preview-session:result", nonce, url: `${origin}/api/omnia/preview-session?signature=ok` };
+    for (const event of [{ source: {}, origin: "https://yleum.ru", data },
+      { source: parent, origin: "https://evil.invalid", data },
+      { source: parent, origin: "https://yleum.ru", data: { ...data, nonce: "f".repeat(32) } }]) {
+      listeners.forEach(fn => fn(event as unknown as MessageEvent));
+    }
+    expect(native).toHaveBeenCalledTimes(1);
+    listeners.forEach(fn => fn({ source: parent, origin: "https://yleum.ru", data } as unknown as MessageEvent));
+    expect(await pending).toBe(true);
+  });
+  it.each(["https://public.example.com/api/omnia/preview-session?signature=ok", `${origin}/api/tasks/one`, `${origin}/api/omnia/preview-session#fragment`])(
+    "rejects capability outside the private bootstrap scope: %s", async url => {
+      const native = vi.fn(async () => new Response(null, { status: 401 }));
+      const { boundary, parent, listeners } = child(native);
+      parent.postMessage.mockImplementation(message => queueMicrotask(() => listeners.forEach(fn => fn({
+        source: parent, origin: "https://yleum.ru", data: { type: "omnia:preview-session:result", nonce: message.nonce, url },
+      } as unknown as MessageEvent))));
+      expect(await recover(boundary)).toBe(false);
+      expect(native).toHaveBeenCalledTimes(1);
+    },
+  );
+  it.each([
+    { mode: "preview", user: { id: "123" } }, { user: { id: "preview" } }, { mode: "preview" },
+  ])("rejects invalid server bootstrap identity %j", async body => {
+    const native = vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/max/session" ? new Response(null, { status: 401 }) : Response.json(body));
+    const { boundary } = child(native);
+    expect(await recover(boundary)).toBe(false);
+    expect(native).toHaveBeenCalledTimes(2);
+    expect(boundary.fetch).toBe(native);
+  });
+  it("rejects bootstrap success when the cookie session is not confirmed", async () => {
+    const native = vi.fn(async (input: RequestInfo | URL) => String(input) === "/api/max/session" ? new Response(null, { status: 401 }) : session());
+    const { boundary } = child(native);
+    expect(await recover(boundary)).toBe(false);
+    expect(native).toHaveBeenCalledTimes(3);
+  });
+  it("times out an unanswered parent and removes its listener without installing fetch", async () => {
+    vi.useFakeTimers();
+    try {
+      const native = vi.fn(async () => new Response(null, { status: 401 }));
+      const { boundary, parent, listeners } = child(native);
+      parent.postMessage.mockImplementation(() => undefined);
+      const pending = recover(boundary);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await pending).toBe(false);
+      expect(listeners.size).toBe(0);
+      expect(boundary.fetch).toBe(native);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("aborts a stalled session probe after the bounded authentication timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      let signal!: AbortSignal;
+      const native = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        signal = init!.signal!;
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+      }));
+      const { boundary, parent } = child(native);
+      const pending = recover(boundary);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await pending).toBe(false);
+      expect(signal.aborted).toBe(true);
+      expect(parent.postMessage).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("does not treat unavailable session evidence as an expired owner session", async () => {
+    const native = vi.fn(async () => new Response(null, { status: 503 }));
+    const { boundary, parent } = child(native);
+    expect(await recover(boundary)).toBe(false);
+    expect(native).toHaveBeenCalledTimes(1);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+  it("does not share a broader in-flight trust scope with a caller allowing no editor origins", async () => {
+    let expired = true;
+    const native = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/max/session") return expired ? new Response(null, { status: 401 }) : session();
+      expired = false; return session();
+    });
+    const { boundary } = child(native);
+    const allowed = recover(boundary);
+    const disallowed = recover(boundary, []);
+    expect(await Promise.all([allowed, disallowed])).toEqual([true, false]);
+  });
+});
 describe("owner preview expiry without business replay", () => {
   it("renews once before concurrent writes, preserving body, revision and operation key", async () => {
     let expired = true;

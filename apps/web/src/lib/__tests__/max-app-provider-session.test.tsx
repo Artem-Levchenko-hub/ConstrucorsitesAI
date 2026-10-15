@@ -5,7 +5,7 @@ import { act, createElement, type ComponentType, type ReactNode } from "react";
 import * as jsxRuntime from "react/jsx-runtime";
 import { createRoot, type Root } from "react-dom/client";
 import ts from "typescript";
-import { installOwnerPreviewFetch } from "../../../../orchestrator/templates/max-miniapp-nextjs/src/lib/max/owner-preview-renewal";
+import * as renewal from "../../../../orchestrator/templates/max-miniapp-nextjs/src/lib/max/owner-preview-renewal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const source = readFileSync(resolve(process.cwd(), "../orchestrator/templates/max-miniapp-nextjs/src/components/MaxAppProvider.tsx"), "utf8");
@@ -20,11 +20,12 @@ function loadProvider(fetch: ReturnType<typeof vi.fn>, initData = "", hostname =
     useMaxApp: () => { mode: string; user: typeof user | null };
   };
   const windowBoundary = (override ?? { fetch, parent: window.parent, crypto: window.crypto, addEventListener: window.addEventListener.bind(window), removeEventListener: window.removeEventListener.bind(window), setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window), location: { hostname, href: `https://${hostname}/`, origin: `https://${hostname}` } }) as Window;
+  if (!override) Object.defineProperty(windowBoundary, "parent", { value: windowBoundary });
   const imports: Record<string, unknown> = {
     react: React, "react/jsx-runtime": jsxRuntime,
     "next/dynamic": { default: () => ({ children }: { children: ReactNode }) => children },
     "@/lib/max/bridge": { getMaxWebApp: () => ({ initData, platform: "ios" }), configureMaxShell: vi.fn() },
-    "@/lib/max/owner-preview-renewal": { installOwnerPreviewFetch },
+    "@/lib/max/owner-preview-renewal": renewal,
     "@/components/YleumCompliance": { YleumCompliance: () => null },
   };
   new Function("exports", "require", "fetch", "window", compiled)(exports, (id: string) => {
@@ -37,6 +38,19 @@ function loadProvider(fetch: ReturnType<typeof vi.fn>, initData = "", hostname =
     return <><div data-product>{context.mode}:{context.user?.firstName}</div><input aria-label="draft" value={draft} onInput={event => setDraft(event.currentTarget.value)} /><button data-save onClick={() => void windowBoundary.fetch("/api/tasks/own", { method: "PATCH", body: draft, headers: { "If-Match": "revision-7" } })}>Save</button></>;
   }
   return createElement(exports.MaxAppProvider, { children: createElement(Product) });
+}
+
+function ownerFrame(fetch: ReturnType<typeof vi.fn>) {
+  const listeners = new Set<(event: MessageEvent) => void>();
+  const parent = { postMessage: vi.fn(message => queueMicrotask(() => listeners.forEach(fn => fn({
+    source: parent, origin: "https://yleum.ru", data: { type: "omnia:preview-session:result", nonce: message.nonce,
+      url: "https://private.example.com/api/omnia/preview-session?signature=opaque" },
+  } as unknown as MessageEvent)))) };
+  const boundary = { fetch, parent, crypto, location: { origin: "https://private.example.com", href: "https://private.example.com/" },
+    setTimeout, clearTimeout, addEventListener: (_: string, fn: (e: MessageEvent) => void) => listeners.add(fn),
+    removeEventListener: (_: string, fn: (e: MessageEvent) => void) => listeners.delete(fn),
+  } as unknown as Window;
+  return { boundary, parent, listeners };
 }
 
 describe("canonical MAX provider session recovery", () => {
@@ -152,6 +166,64 @@ describe("canonical MAX provider session recovery", () => {
     expect(input.value).toBe("unsaved personal draft");
     expect(container.querySelector('[role="status"]')).toBeNull();
     expect(fetch.mock.calls.filter(c => c[0] === "/api/tasks/own")).toEqual([["/api/tasks/own", { method: "PATCH", body: "unsaved personal draft", headers: { "If-Match": "revision-7" } }]]);
+  });
+
+  it("recovers an initial owner iframe 401 without installing a guard before server proof", async () => {
+    let expired = true;
+    let finish!: (response: Response) => void;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/max/session") return expired ? new Response(null, { status: 401 }) : Response.json({ mode: "preview", user: { id: "preview" } });
+      return new Promise<Response>(resolve => { finish = resolve; });
+    });
+    const { boundary, listeners } = ownerFrame(fetch);
+    await act(async () => root.render(loadProvider(fetch, "", undefined, boundary)));
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="status"]')).not.toBeNull();
+    expect(boundary.fetch).toBe(fetch);
+    expect(finish).toBeTypeOf("function");
+    await act(async () => { expired = false; finish(Response.json({ mode: "preview", user: { id: "preview" } })); });
+    expect(container.querySelector("[data-product]")?.textContent).toBe("preview:");
+    expect(listeners.size).toBe(0);
+    expect(fetch.mock.calls.every(c => String(c[0]) === "/api/max/session" || String(c[0]).includes("/api/omnia/preview-session?"))).toBe(true);
+  });
+  it("never requests an owner capability after actual MAX initData rejection in an iframe", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const fetch = vi.fn(async () => new Response(null, { status: 401 }));
+    const { boundary, parent } = ownerFrame(fetch);
+    await act(async () => root.render(loadProvider(fetch, "invalid-launch", undefined, boundary)));
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(parent.postMessage).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+  it.each([
+    { mode: "preview", user: { id: "123" } }, { mode: "preview", user: { id: "" } }, { user: { id: "preview" } },
+  ])("does not grant access after invalid recovery identity %j", async body => {
+    let bootstrapped = false;
+    const fetch = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/api/max/session") return bootstrapped ? Response.json(body) : new Response(null, { status: 401 });
+      bootstrapped = true; return Response.json({ mode: "preview", user: { id: "preview" } });
+    });
+    const { boundary } = ownerFrame(fetch);
+    await act(async () => root.render(loadProvider(fetch, "", undefined, boundary)));
+    expect(bootstrapped).toBe(true);
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+    expect(boundary.fetch).toBe(fetch);
+  });
+  it("rejects a numeric identity mislabeled as owner preview", async () => {
+    await render(vi.fn(async () => Response.json({ mode: "preview", user })));
+    expect(container.querySelector("[data-product]")).toBeNull();
+    expect(container.querySelector('[role="alert"]')).not.toBeNull();
+  });
+  it("keeps unknown server failures visible without attempting iframe recovery", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 503 }));
+    const { boundary, parent } = ownerFrame(fetch);
+    await act(async () => root.render(loadProvider(fetch, "", undefined, boundary)));
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("временно недоступен");
+    expect(parent.postMessage).not.toHaveBeenCalled();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(boundary.fetch).toBe(fetch);
   });
 
 });
