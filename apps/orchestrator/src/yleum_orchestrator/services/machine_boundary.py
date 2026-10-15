@@ -44,8 +44,8 @@ _FALLBACK_OWNER_ORIGINS = ("https://constructor.lead-generator.ru",)
 _ORIGIN_RE = re.compile(r"^https://[a-z0-9.-]{1,253}(:\d{1,5})?$")
 
 
-def owner_origins(origins: object) -> list[str]:
-    """Only controller-configured HTTPS origins may receive the owner bridge."""
+def _validated_owner_origins(origins: object) -> list[str]:
+    """Preserve validated controller origin spelling for the framing contract."""
     allowed: list[str] = []
     for origin in origins if isinstance(origins, list) else []:
         if not isinstance(origin, str) or not _ORIGIN_RE.fullmatch(origin):
@@ -57,16 +57,27 @@ def owner_origins(origins: object) -> list[str]:
             continue
         if port == 0:
             continue
+        if origin not in allowed:
+            allowed.append(origin)
+    return allowed or list(_FALLBACK_OWNER_ORIGINS)
+
+
+def owner_origins(origins: object) -> list[str]:
+    """Only canonical configured HTTPS origins may receive the owner bridge."""
+    allowed: list[str] = []
+    for origin in _validated_owner_origins(origins):
+        parsed = urlsplit(origin)
+        port = parsed.port
         # Browser MessageEvent.origin omits HTTPS's default port.
         canonical = f"https://{parsed.hostname}" + (f":{port}" if port not in {None, 443} else "")
         if canonical not in allowed:
             allowed.append(canonical)
-    return allowed or list(_FALLBACK_OWNER_ORIGINS)
+    return allowed
 
 
 def owner_framing(origins: object) -> str:
     """Политика встраивания превью владельца для перечисленных кабинетов."""
-    return "frame-ancestors 'self' " + " ".join(owner_origins(origins))
+    return "frame-ancestors 'self' " + " ".join(_validated_owner_origins(origins))
 
 
 _OWNER_RECOVERY_SCRIPT = """

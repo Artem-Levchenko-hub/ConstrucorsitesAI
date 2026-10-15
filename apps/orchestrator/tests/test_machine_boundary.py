@@ -510,14 +510,17 @@ def test_private_recovery_validates_origins_and_encodes_owner_link(private_bound
         'href="https://editor.example/max/project%2Fwith%22%3Cmarkup%3E/preview"' in body.decode()
     )
     assert b"invalid-port.example" not in body
-    assert ("Content-Security-Policy", "frame-ancestors 'self' https://editor.example") in headers
+    assert (
+        "Content-Security-Policy", "frame-ancestors 'self' https://editor.example:443",
+    ) in headers
     assert b"<markup>" not in body
     assert not received
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js required for recovery execution")
 def test_private_recovery_requires_parent_capability_and_server_session_proof(private_boundary):
-    request, received, _ = private_boundary
+    request, received, config = private_boundary
+    config["owner_origins"] = ["https://editor.example:443", "https://legacy.example:443"]
     status, html, _ = request("/orders?filter=mine", {"Accept": "text/html"})
     assert status == 200
     script = re.findall(r"<script[^>]*>(.*?)</script>", html.decode(), re.S)[-1]
