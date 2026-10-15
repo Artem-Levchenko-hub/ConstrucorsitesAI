@@ -740,11 +740,13 @@ class MaxFinalizationCoordinator:
         if proof is None:
             return frozenset()
         receipts = set()
+        loaded_results = {}
         for dimension in (ProofDimension.BOOTSTRAP, ProofDimension.FAST_CHECK):
             result = await self._find(proof, dimension)
+            loaded_results[dimension] = result
             if result is not None and result.outcome == ProofOutcome.GREEN.value:
                 receipts.add(dimension.value)
-        bundle = await self._load_bundle(proof)
+        bundle = await self._load_bundle(proof, loaded_results=loaded_results)
         build = bundle.full_build
         if build is None or not _current_build_result(build, canonical_files_digest(files)):
             return frozenset(receipts)
@@ -2401,8 +2403,19 @@ class MaxFinalizationCoordinator:
         await self._log_terminal(outcome)
         return outcome
 
-    async def _load_bundle(self, proof: ProjectCellProof) -> ProofBundle:
-        bootstrap = await self._find(proof, ProofDimension.BOOTSTRAP)
+    async def _load_bundle(
+        self,
+        proof: ProjectCellProof,
+        *,
+        loaded_results: Mapping[ProofDimension, ProjectCellProofResult | None] | None = None,
+    ) -> ProofBundle:
+        # Membership distinguishes an already checked missing receipt from one
+        # that still needs loading. Reuse is local to this assembly operation.
+        bootstrap = (
+            loaded_results[ProofDimension.BOOTSTRAP]
+            if loaded_results is not None and ProofDimension.BOOTSTRAP in loaded_results
+            else await self._find(proof, ProofDimension.BOOTSTRAP)
+        )
         build = await self._find(proof, ProofDimension.FULL_BUILD)
         runtime = release = None
         if build is not None and build.artifact_ref:
