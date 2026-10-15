@@ -35,4 +35,12 @@ describe("loadMaxProject", () => {
     serverApiFetchResult.mockResolvedValue({ ok: false, status: 404 });
     await expect(loadMaxProject("p3", "/max/p3/publish")).rejects.toThrow("redirect:/max");
   });
+
+  it.each([401, 403, 404])("applies real owner admission to the stable preview path for %s", async status => {
+    const { loadMaxProject } = await import("@/lib/max-project-server");
+    serverApiFetchResult.mockResolvedValue({ ok: false, status });
+    await expect(loadMaxProject("p3", "/max/p3/preview")).rejects.toThrow(status === 401
+      ? "redirect:/login?next=%2Fmax%2Fp3%2Fpreview" : "redirect:/max");
+    expect(serverApiFetchResult).toHaveBeenCalledWith("/api/projects/p3");
+  });
 });

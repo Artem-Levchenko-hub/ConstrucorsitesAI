@@ -35,7 +35,7 @@ import {
 import { listMessages } from "@/lib/api/messages";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
-import type { Project, ProjectVersion, RuntimeStatus } from "@/lib/api/types";
+import type { Project, ProjectVersion } from "@/lib/api/types";
 import { versionStatusLabel } from "@/lib/project-version";
 import { maxHistoryState, maxVersionImage } from "@/lib/max-version-history";
 import { VersionImagePreview } from "../workspace/VersionImagePreview";
@@ -98,6 +98,7 @@ export function MaxLivePreview({
   onPrepareRestoration,
   restorationEnabled,
   restorationBusy,
+  showOpenSeparately = true,
 }: {
   project: Project;
   versions: ProjectVersion[];
@@ -105,7 +106,7 @@ export function MaxLivePreview({
   currentSnapshotId: string | null;
   selectedVersionId: string | null;
   onSelectVersion: (versionId: string | null) => void;
-  onRestoreSnapshot: (snapshotId: string) => Promise<void>;
+  onRestoreSnapshot?: (snapshotId: string) => Promise<void>;
   restoringSnapshot: boolean;
   onClose?: () => void;
   historyError?: boolean;
@@ -116,6 +117,7 @@ export function MaxLivePreview({
   onPrepareRestoration?: (version: ProjectVersion) => Promise<void>;
   restorationEnabled?: boolean;
   restorationBusy?: boolean;
+  showOpenSeparately?: boolean;
 }) {
   const selectedVersionId = MAX_CUSTOMER_VERSIONING ? requestedVersionId : null;
   const queryClient = useQueryClient();
@@ -238,7 +240,7 @@ export function MaxLivePreview({
       retryPreviewPreparation(activity, () => startRuntime(project.id), 20),
     // Cold restoration is bounded by the server. A competing start or a lost
     // response is retryable; auth/ownership failures are not.
-    // Query-library retries pause when Studio is hidden by the new popup.
+    // Query-library retries pause when the owner tab is hidden.
     // Preparation owns the same bounded retries independently of tab focus.
     retry: false,
     onSuccess: (value, activity) => {
@@ -326,29 +328,6 @@ export function MaxLivePreview({
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   });
-  const prepareCurrentPreview = async (activity: typeof previewActivity.current) => {
-    assertPreviewActivity(activity);
-    // fetchQuery shares any preparation already in flight. The helpers own
-    // retries, so the outer open action cannot multiply an exhausted wake budget.
-    const currentManagedKit = await queryClient.fetchQuery({
-      queryKey: ["max-managed-kit-sync", project.id, activity.snapshotId],
-      queryFn: () => loadManagedKit(activity),
-      retry: false,
-      staleTime: 0,
-    });
-    assertPreviewActivity(activity);
-    const currentRuntime = queryClient.getQueryData<RuntimeStatus>(["runtime", project.id]);
-    return queryClient.fetchQuery({
-      queryKey: [
-        "max-preview-session", project.id, activity.snapshotId,
-        currentRuntime?.container_name ?? null, currentManagedKit.synced_snapshot_id,
-      ],
-      queryFn: () => loadPreviewSession(activity),
-      retry: false,
-      staleTime: 0,
-    });
-  };
-  const separatePreview = useMutation({ mutationFn: prepareCurrentPreview });
   const recoverPreview = useMutation({
     mutationFn: async () => {
       const activity = previewActivity.current;
@@ -509,28 +488,9 @@ export function MaxLivePreview({
     versions.length === 0 &&
     !displayPreviewUrl;
 
-  async function openSeparatePreview() {
+  function openSeparatePreview() {
     if (!currentPreviewReady || activityBlocked()) return;
-    const popup = window.open("about:blank", "_blank");
-    if (popup) popup.opener = null;
-
-    try {
-      const session = await separatePreview.mutateAsync(activity);
-      assertPreviewActivity(activity);
-      if (!popup) {
-        toast.error("Браузер заблокировал новую вкладку", {
-          description: "Разрешите всплывающие окна и повторите попытку.",
-        });
-        return;
-      }
-      popup.location.replace(session.url);
-    } catch {
-      popup?.close();
-      if (activityBlocked() || activity !== previewActivity.current) return;
-      toast.error("Не удалось открыть превью", {
-        description: "Обновите безопасную сессию и повторите попытку.",
-      });
-    }
+    window.open(`/max/${project.id}/preview`, "_blank", "noopener,noreferrer");
   }
 
   function retryPreview() {
@@ -538,7 +498,7 @@ export function MaxLivePreview({
   }
 
   async function confirmRestoreSnapshot() {
-    if (!restoreTargetSnapshot?.snapshot_id || !restoreTargetSnapshot.can_restore) return;
+    if (!onRestoreSnapshot || !restoreTargetSnapshot?.snapshot_id || !restoreTargetSnapshot.can_restore) return;
     try {
       await onRestoreSnapshot(restoreTargetSnapshot.snapshot_id);
       setRestoreTargetId(null);
@@ -835,7 +795,7 @@ export function MaxLivePreview({
                 title={!selectedSnapshot?.snapshot_id ? "У этой версии нет сохранённых исходников"
                   : !restorationEnabled ? "Подготовка восстановления сейчас недоступна"
                     : restorationBusy ? "Сначала завершите текущую операцию восстановления" : undefined}
-              >Восстановить версию v{selectedVersion}</button> : !historyUnavailable && <button
+              >Восстановить версию v{selectedVersion}</button> : onRestoreSnapshot && !historyUnavailable && <button
                 type="button"
                 onClick={() => setRestoreTargetId(selectedSnapshot?.id ?? null)}
                 disabled={restoringSnapshot || !selectedSnapshot?.can_restore || !selectedSnapshot.snapshot_id}
@@ -846,23 +806,19 @@ export function MaxLivePreview({
                 Восстановить v{selectedVersion}
               </button>}
             </div>
-          ) : (
+          ) : showOpenSeparately ? (
             <button
               type="button"
-              onClick={() => void openSeparatePreview()}
-              disabled={!currentPreviewReady || separatePreview.isPending}
+              onClick={openSeparatePreview}
+              disabled={!currentPreviewReady}
               className="mt-1 inline-flex min-h-9 items-center gap-1.5 text-[11px] font-medium text-fg-tertiary transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-45"
               data-testid="max-open-preview-separate"
               title={currentPreviewReady ? undefined : "Сначала дождитесь запуска предпросмотра"}
             >
-              {separatePreview.isPending ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <ExternalLink className="size-3" />
-              )}
+              <ExternalLink className="size-3" />
               Открыть отдельно
             </button>
-          )}
+          ) : null}
         </div>
         </div>
       </div>

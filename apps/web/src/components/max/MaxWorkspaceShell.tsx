@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { LayoutGrid, Smartphone } from "lucide-react";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import { MaxEditorLayout } from "./MaxEditorLayout";
 import { ChatPanel, type ChatPanelAdaptationHandle } from "@/components/workspace/ChatPanel";
 import { listProjects } from "@/lib/api/projects";
-import { listProjectVersions, listSnapshots, rollback as rollbackSnapshot } from "@/lib/api/snapshots";
+import { rollback as rollbackSnapshot } from "@/lib/api/snapshots";
 import { getMaxReadiness } from "@/lib/api/max-studio";
 import type { Message, Project, Snapshot } from "@/lib/api/types";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
@@ -26,6 +26,7 @@ import { MaxRestorationPanel } from "./MaxRestorationPanel";
 import { useMaxAdaptation, type MaxAdaptationAttachment } from "@/lib/use-max-adaptation";
 import { cancelRestoration, getRestoration } from "@/lib/api/restorations";
 import { Button } from "@/components/ui/button";
+import { useMaxPreviewHistory } from "@/lib/use-max-preview-history";
 import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
 
 export function MaxWorkspaceShell({
@@ -46,10 +47,7 @@ export function MaxWorkspaceShell({
   } | null>(null);
   const queryClient = useQueryClient();
   const projects = useQuery({ queryKey: ["projects"], queryFn: listProjects });
-  const snapshots = useQuery({
-    queryKey: ["snapshots", project.id],
-    queryFn: () => listSnapshots(project.id),
-  });
+  const { currentSnapshotId, versions, historyCurrent, history } = useMaxPreviewHistory(project);
   const readiness = useQuery({
     queryKey: ["max-readiness", project.id],
     queryFn: () => getMaxReadiness(project.id),
@@ -67,34 +65,6 @@ export function MaxWorkspaceShell({
     () => (projects.data ?? []).filter((item) => item.template === "max_miniapp"),
     [projects.data],
   );
-  const currentSnapshotId = snapshots.data?.[0]?.id ?? project.current_snapshot_id;
-  const history = useInfiniteQuery({
-    queryKey: MAX_CUSTOMER_VERSIONING ? ["project-versions", project.id] : ["project-versions", project.id, "current-build"],
-    maxPages: MAX_CUSTOMER_VERSIONING ? undefined : 1,
-    queryFn: async ({ pageParam, signal }) => {
-      // Capture before the request: a late response for an earlier HEAD must
-      // not authorize live preview of that HEAD's selected user version.
-      const snapshotIdAtRequest = queryClient.getQueryData<Snapshot[]>(["snapshots", project.id])?.[0]?.id
-        ?? project.current_snapshot_id;
-      const page = await listProjectVersions(project.id, pageParam, signal);
-      return { ...page, snapshotIdAtRequest };
-    },
-    initialPageParam: undefined as number | undefined,
-    getNextPageParam: (page) => page.next_cursor ?? undefined,
-    refetchInterval: 5_000,
-  });
-  const versions = useMemo(() => {
-    const seen = new Set<string>();
-    return (history.data?.pages.flatMap((page) => page.versions) ?? []).filter((version) => {
-      if (seen.has(version.id)) return false;
-      seen.add(version.id); return true;
-    });
-  }, [history.data]);
-  const historyCurrent = !!history.data?.pages.length
-    && history.data.pages.every((page) => page.snapshotIdAtRequest === currentSnapshotId);
-  useEffect(() => {
-    void queryClient.invalidateQueries({ queryKey: ["project-versions", project.id] });
-  }, [currentSnapshotId, project.id, queryClient]);
   // Selection belongs to the project, never the moving HEAD. Clear during
   // render so switching A → B → A cannot resurrect a stale selection.
   if (versionSelection && versionSelection.projectId !== project.id) setVersionSelection(null);

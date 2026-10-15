@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { getSession } from "@/lib/auth-mock";
 import { headers } from "next/headers";
+import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
 
 export default async function AppLayout({
   children,
@@ -11,7 +12,8 @@ export default async function AppLayout({
   if (!session) {
     const target = (await headers()).get("x-omnia-return-to");
     const accountReturn = target && /^\/(account|billing)(?:[/?]|$)/.test(target);
-    redirect(accountReturn ? `/login?next=${encodeURIComponent(target)}` : "/login");
+    const ownerPreviewReturn = target && isMaxOwnerPreviewPath(target);
+    redirect(accountReturn || ownerPreviewReturn ? `/login?next=${encodeURIComponent(target!)}` : "/login");
   }
 
   // h-dvh (а не min-h-svh) — фиксируем высоту обёртки = viewport. Без этого

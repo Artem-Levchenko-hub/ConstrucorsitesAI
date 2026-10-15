@@ -219,7 +219,7 @@ describe("project version refetch ownership", () => {
     await loadTwoPages();
     await act(async () => preview().onSelectVersion("version-old"));
     vi.mocked(rollback).mockResolvedValue(snapshot("head-restored"));
-    await act(async () => preview().onRestoreSnapshot("snapshot-old"));
+    await act(async () => preview().onRestoreSnapshot!("snapshot-old"));
     await flush();
     expect(rollback).toHaveBeenCalledWith(project.id, "snapshot-old");
     expect(output("data-selected")).toBe("live");
@@ -282,7 +282,7 @@ describe("project version refetch ownership", () => {
       await flush();
     }
     vi.mocked(rollback).mockResolvedValue(snapshot("head-1"));
-    await act(async () => preview().onRestoreSnapshot("snapshot-old"));
+    await act(async () => preview().onRestoreSnapshot!("snapshot-old"));
     await flush();
     expect(counts()).toEqual({ starts: 1, aborts: 0 });
     await act(async () => requests.at(-1)!.resolve(page("fresh-rollback-metadata")));

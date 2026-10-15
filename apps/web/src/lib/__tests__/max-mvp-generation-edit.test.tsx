@@ -61,7 +61,7 @@ it("preserves generation/edit, current preview and publication without historica
   expect(api.observed?.restorationEnabled).toBe(false);
   expect(api.restorations).not.toHaveBeenCalled();
   expect(api.prepare).not.toHaveBeenCalled();
-  await act(async () => api.observed?.onRestoreSnapshot("historical"));
+  await act(async () => api.observed?.onRestoreSnapshot!("historical"));
   expect(api.rollback).not.toHaveBeenCalled();
   expect(container.querySelector("textarea")).not.toBeNull();
   expect(container.querySelector('[data-testid="current-preview"]')).not.toBeNull();

@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { isMaxOwnerPreviewPath } from "@/lib/max-owner-preview-path";
 
 // Real api JWT cookie (api/auth sets this; middleware just checks presence —
 // the layout calls /api/auth/me to validate the token).
@@ -50,7 +51,7 @@ export function middleware(req: NextRequest) {
 
   if (!session && !isGeneralAuthRoute && !isPublicMaxRoute && isProtectedRoute) {
     const url = req.nextUrl.clone();
-    url.pathname = path.startsWith("/max") ? "/max/register" : "/login";
+    url.pathname = path.startsWith("/max") && !isMaxOwnerPreviewPath(path) ? "/max/register" : "/login";
     // Preserve where the user actually wanted to land — including any
     // query string, since /projects?filter=… should round-trip too.
     const target = `${path}${req.nextUrl.search}`;
