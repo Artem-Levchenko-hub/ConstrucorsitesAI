@@ -1,0 +1,350 @@
+{
+  "period_moscow": "14–15 октября 2026",
+  "tested_api_sha": "06d11e1d83ab322459bd83fa6dd707a171cd9847",
+  "tested_web_sha": "daf984d82e31adc65a80e19151e9b906560c3c28",
+  "counts": {
+    "attempts": 16,
+    "completed": 12,
+    "failed": 4,
+    "build_completed": 6,
+    "build_failed": 4,
+    "edit_completed": 6,
+    "edit_failed": 0
+  },
+  "finance": {
+    "matched_supplier_rub": "2496.40",
+    "matched_receipts": 327,
+    "provider_attempts": 328,
+    "fully_reconciled_generations": 15,
+    "last_generation_matched_partial_rub": "26.85",
+    "last_generation_unresolved_calls": 1,
+    "unknown_call_cost": "unknown"
+  },
+  "purpose": "Generation evidence, not a claim of 99% reliability",
+  "runs": [
+    {
+      "number": 1,
+      "run_prefix": "03914a47",
+      "app": "coffee",
+      "kind": "build",
+      "status": "completed",
+      "supplier_matched_rub": "260.31",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 36,
+      "provider_recorded_attempts": 36,
+      "screenshots": 2,
+      "events": 100,
+      "requirements_evidence_status": {
+        "PASS": 3,
+        "NOT_RUN": 14
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 2,
+      "run_prefix": "c866f242",
+      "app": "coffee",
+      "kind": "edit",
+      "status": "completed",
+      "supplier_matched_rub": "53.32",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 7,
+      "provider_recorded_attempts": 7,
+      "screenshots": 17,
+      "events": 42,
+      "requirements_evidence_status": {
+        "PASS": 9,
+        "NOT_RUN": 14
+      },
+      "current_preview_scope": "separate diagnostic; exact served artifact is not independently proven",
+      "current_preview_observations": {
+        "PASS": 156,
+        "NOT_RUN": 15
+      }
+    },
+    {
+      "number": 3,
+      "run_prefix": "68ecd0da",
+      "app": "salon",
+      "kind": "build",
+      "status": "completed",
+      "supplier_matched_rub": "458.16",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 65,
+      "provider_recorded_attempts": 65,
+      "screenshots": 2,
+      "events": 167,
+      "requirements_evidence_status": {
+        "PASS": 3,
+        "NOT_RUN": 14
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 4,
+      "run_prefix": "798cba4b",
+      "app": "salon",
+      "kind": "edit",
+      "status": "completed",
+      "supplier_matched_rub": "36.75",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 6,
+      "provider_recorded_attempts": 6,
+      "screenshots": 14,
+      "events": 41,
+      "requirements_evidence_status": {
+        "PASS": 9,
+        "NOT_RUN": 14
+      },
+      "current_preview_scope": "separate diagnostic; exact served artifact is not independently proven",
+      "current_preview_observations": {
+        "PASS": 156,
+        "NOT_RUN": 15
+      }
+    },
+    {
+      "number": 5,
+      "run_prefix": "8ecd2ce2",
+      "app": "rental",
+      "kind": "build",
+      "status": "failed",
+      "supplier_matched_rub": "43.34",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 3,
+      "provider_recorded_attempts": 3,
+      "screenshots": 1,
+      "events": 6,
+      "requirements_evidence_status": {
+        "FAIL": 1,
+        "NOT_RUN": 8
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 6,
+      "run_prefix": "1cfbb70e",
+      "app": "rental-1",
+      "kind": "build",
+      "status": "completed",
+      "supplier_matched_rub": "283.53",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 34,
+      "provider_recorded_attempts": 34,
+      "screenshots": 26,
+      "events": 92,
+      "requirements_evidence_status": {
+        "PASS": 9,
+        "NOT_RUN": 9
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 7,
+      "run_prefix": "26dc0005",
+      "app": "rental-1",
+      "kind": "edit",
+      "status": "completed",
+      "supplier_matched_rub": "45.51",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 6,
+      "provider_recorded_attempts": 6,
+      "screenshots": 26,
+      "events": 41,
+      "requirements_evidence_status": {
+        "PASS": 14,
+        "NOT_RUN": 12
+      },
+      "current_preview_scope": "separate diagnostic; exact served artifact is not independently proven",
+      "current_preview_observations": {
+        "PASS": 156,
+        "NOT_RUN": 15,
+        "BLOCKED": 3
+      }
+    },
+    {
+      "number": 8,
+      "run_prefix": "3069e45e",
+      "app": "restaurant-1",
+      "kind": "build",
+      "status": "completed",
+      "supplier_matched_rub": "242.06",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 32,
+      "provider_recorded_attempts": 32,
+      "screenshots": 14,
+      "events": 95,
+      "requirements_evidence_status": {
+        "PASS": 9,
+        "NOT_RUN": 9
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 9,
+      "run_prefix": "ede87c77",
+      "app": "restaurant-1",
+      "kind": "edit",
+      "status": "completed",
+      "supplier_matched_rub": "29.53",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 4,
+      "provider_recorded_attempts": 4,
+      "screenshots": 37,
+      "events": 36,
+      "requirements_evidence_status": {
+        "PASS": 14,
+        "NOT_RUN": 12
+      },
+      "current_preview_scope": "separate diagnostic; exact served artifact is not independently proven",
+      "current_preview_observations": {
+        "NOT_RUN": 15,
+        "PASS": 156,
+        "BLOCKED": 3
+      }
+    },
+    {
+      "number": 10,
+      "run_prefix": "d12f3dff",
+      "app": "flowers-1",
+      "kind": "build",
+      "status": "failed",
+      "supplier_matched_rub": "277.03",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 32,
+      "provider_recorded_attempts": 32,
+      "screenshots": 1,
+      "events": 71,
+      "requirements_evidence_status": {
+        "FAIL": 1,
+        "NOT_RUN": 8
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 11,
+      "run_prefix": "4b27abfb",
+      "app": "books-1",
+      "kind": "build",
+      "status": "failed",
+      "supplier_matched_rub": "113.69",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 12,
+      "provider_recorded_attempts": 12,
+      "screenshots": 1,
+      "events": 21,
+      "requirements_evidence_status": {
+        "FAIL": 1,
+        "NOT_RUN": 8
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 12,
+      "run_prefix": "fb5543bb",
+      "app": "fitness-1",
+      "kind": "build",
+      "status": "completed",
+      "supplier_matched_rub": "278.59",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 37,
+      "provider_recorded_attempts": 37,
+      "screenshots": 14,
+      "events": 96,
+      "requirements_evidence_status": {
+        "PASS": 9,
+        "NOT_RUN": 9
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 13,
+      "run_prefix": "97ef82fd",
+      "app": "fitness-1",
+      "kind": "edit",
+      "status": "completed",
+      "supplier_matched_rub": "38.14",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 5,
+      "provider_recorded_attempts": 5,
+      "screenshots": 26,
+      "events": 38,
+      "requirements_evidence_status": {
+        "PASS": 14,
+        "NOT_RUN": 12
+      },
+      "current_preview_scope": "separate diagnostic; exact served artifact is not independently proven",
+      "current_preview_observations": {
+        "PASS": 156,
+        "NOT_RUN": 15
+      }
+    },
+    {
+      "number": 14,
+      "run_prefix": "aa9096b6",
+      "app": "rental-2",
+      "kind": "build",
+      "status": "completed",
+      "supplier_matched_rub": "256.86",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 36,
+      "provider_recorded_attempts": 36,
+      "screenshots": 14,
+      "events": 103,
+      "requirements_evidence_status": {
+        "PASS": 9,
+        "NOT_RUN": 9
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    },
+    {
+      "number": 15,
+      "run_prefix": "d0bd2b7a",
+      "app": "rental-2",
+      "kind": "edit",
+      "status": "completed",
+      "supplier_matched_rub": "52.73",
+      "supplier_total_confirmed": true,
+      "supplier_matched_calls": 7,
+      "provider_recorded_attempts": 7,
+      "screenshots": 26,
+      "events": 42,
+      "requirements_evidence_status": {
+        "PASS": 14,
+        "NOT_RUN": 12
+      },
+      "current_preview_scope": "separate diagnostic; exact served artifact is not independently proven",
+      "current_preview_observations": {
+        "PASS": 156,
+        "NOT_RUN": 15
+      }
+    },
+    {
+      "number": 16,
+      "run_prefix": "e1bd82b5",
+      "app": "restaurant-2",
+      "kind": "build",
+      "status": "failed",
+      "supplier_matched_rub": "26.85",
+      "supplier_total_confirmed": false,
+      "supplier_matched_calls": 5,
+      "provider_recorded_attempts": 6,
+      "screenshots": 1,
+      "events": 12,
+      "requirements_evidence_status": {
+        "FAIL": 1,
+        "NOT_RUN": 8
+      },
+      "current_preview_scope": "not available",
+      "current_preview_observations": {}
+    }
+  ]
+}
