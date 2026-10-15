@@ -51,6 +51,24 @@ def test_unknown_provider_category_remains_unclassified(category):
     assert str(error) == 'Требуется проверка доступа и средств у LLM-провайдера (HTTP 401).'
 
 
+@pytest.mark.parametrize("status,details", [
+    (502, {"upstream_http_status": 429}),
+    (502, {"upstream_http_status": 429, "provider_refusal_category": "unknown"}),
+    (429, {}),
+])
+def test_unclassified_429_does_not_invent_frequency_or_funds(status, details):
+    error = llm_client._gateway_failure(httpx.Response(status, json={"detail": {"error": {
+        "code": "model_unavailable", "message": "PRIVATE insufficient balance rate limit",
+        "details": details,
+    }}}))
+    assert "HTTP 429" in str(error) and "точная причина не установлена" in str(error)
+    assert "сверк" in str(error)
+    assert "частот" not in str(error) and "средств" not in str(error)
+    assert "PRIVATE" not in str(error)
+    assert error.provider_refusal_category is None
+    assert error.retry_safe is False and error.retry_after_seconds is None
+
+
 @pytest.mark.parametrize("response_after_seconds", [97.5, 240.0])
 async def test_default_builder_waits_for_gateway_response_without_replaying(
     monkeypatch, response_after_seconds,

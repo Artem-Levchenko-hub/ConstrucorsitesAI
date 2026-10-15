@@ -630,7 +630,11 @@ async def _native_messages_impl(
         )
         if safe_to_retry and recorded:
             # These failures occur before the request reaches the provider.
-            return _err(502, "api_error", f"upstream transport: {type(exc).__name__}")
+            # Publish permission only after the failed attempt receipt commits.
+            return _err(502, "api_error", "Provider connection could not be established", details={
+                "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+                "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+            })
         # Once a request may have been accepted, replay risks a second paid call.
         # Deployed API callers already stop on this terminal billing error.
         return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")

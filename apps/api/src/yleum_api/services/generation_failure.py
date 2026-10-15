@@ -71,8 +71,8 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
         code = "provider_unavailable"
         retryable = False
         message = (
-            "Провайдер модели ограничил частоту запросов. Автоматический повтор остановлен. "
-            "Требуется дождаться восстановления доступности модели."
+            "Провайдер модели вернул HTTP 429; точная причина не установлена. "
+            "Автоматический повтор остановлен; требуется сверка запроса."
         )
     elif "provider_request_failed:" in error or re.search(r"\bprovider_http_[45]\d\d:", error):
         code = "provider_unavailable"

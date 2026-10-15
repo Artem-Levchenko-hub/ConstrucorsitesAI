@@ -1,4 +1,4 @@
-"""Сборка не должна умирать от минутной просадки провайдера моделей.
+"""Доказанный отказ до отправки переживается в ограниченном окне повторов.
 
 22.09.2026, 07:29 МСК: внешний провайдер `api.llmgw.ru` отдавал 502 Bad Gateway
 51 секунду. Этого хватило, чтобы сборка пользователя упала целиком с
@@ -9,6 +9,8 @@
 (~3.5 минуты)», а бюджет попыток стоял 3 — то есть примерно 50 секунд. Тесты
 ниже закрепляют не константу, а само свойство: сколько длится окно, что
 короткий сбой переживается, и что последняя пауза не тратится впустую.
+HTTP 502 сам по себе не доказывает отсутствие оплаченного запроса: теперь
+фикстуры несут закрытое подтверждение preconnect после записи квитанции.
 """
 
 from __future__ import annotations
@@ -26,6 +28,15 @@ _OBSERVED_FLAKE_SECONDS = 51.0
 _PROMISED_WINDOW_SECONDS = 150.0
 
 
+def _preconnect_refusal() -> httpx.Response:
+    return httpx.Response(502, json={"type": "error", "error": {
+        "type": "api_error", "details": {
+            "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+            "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+        },
+    }})
+
+
 def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     slept: list[float] = []
 
@@ -40,7 +51,7 @@ def _record_sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
 async def test_a_flake_as_long_as_the_live_one_no_longer_kills_the_build(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ровно живой случай: 502 дольше минуты, потом провайдер вернулся."""
+    """Окно живого сбоя, но повтор разрешён только доказанным preconnect."""
     slept = _record_sleeps(monkeypatch)
     elapsed = {"s": 0.0}
     attempts: list[int] = []
@@ -50,7 +61,7 @@ async def test_a_flake_as_long_as_the_live_one_no_longer_kills_the_build(
         # Каждая попытка сама по себе тратит время сети, и к ней добавляется пауза.
         elapsed["s"] += 5.0 + (slept[-1] if slept else 0.0)
         if elapsed["s"] < _OBSERVED_FLAKE_SECONDS:
-            return httpx.Response(502, text="<html>502 Bad Gateway</html>")
+            return _preconnect_refusal()
         return httpx.Response(
             200, json={"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
         )
@@ -70,10 +81,10 @@ async def test_the_retry_window_is_as_wide_as_the_code_claims(
     slept = _record_sleeps(monkeypatch)
 
     def always_502(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(502, text="bad gateway")
+        return _preconnect_refusal()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(always_502)) as client:
-        with pytest.raises(httpx.HTTPError):
+        with pytest.raises(RuntimeError, match=r"^provider_request_failed:"):
             await agent_native._call_messages(client, _URL, [], "s")
 
     assert sum(slept) >= _PROMISED_WINDOW_SECONDS, (
@@ -92,10 +103,10 @@ async def test_giving_up_is_not_delayed_by_a_pause_nobody_waits_for(
 
     def always_502(request: httpx.Request) -> httpx.Response:
         attempts.append(1)
-        return httpx.Response(502, text="bad gateway")
+        return _preconnect_refusal()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(always_502)) as client:
-        with pytest.raises(httpx.HTTPError):
+        with pytest.raises(RuntimeError, match=r"^provider_request_failed:"):
             await agent_native._call_messages(client, _URL, [], "s")
 
     assert len(slept) == len(attempts) - 1
@@ -107,10 +118,10 @@ async def test_the_backoff_grows_and_stays_capped(monkeypatch: pytest.MonkeyPatc
     slept = _record_sleeps(monkeypatch)
 
     def always_502(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(502, text="bad gateway")
+        return _preconnect_refusal()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(always_502)) as client:
-        with pytest.raises(httpx.HTTPError):
+        with pytest.raises(RuntimeError, match=r"^provider_request_failed:"):
             await agent_native._call_messages(client, _URL, [], "s")
 
     assert slept == sorted(slept), "откат обязан расти, а не скакать"
@@ -126,7 +137,7 @@ async def test_a_provider_that_hangs_cannot_eat_the_whole_deadline(
 ) -> None:
     """Второй бок бюджета: потолок не по числу попыток, а по реальному времени.
 
-    Провайдер, который принимает соединение и молчит до таймаута, укладывается в
+    Долгое установление соединения без отправки оплаченного запроса укладывается в
     отпущенные попытки, но каждая стоит минуты. Без потолка семь таких попыток
     съели бы весь дедлайн генерации на одном шаге.
     """
@@ -153,10 +164,10 @@ async def test_a_provider_that_hangs_cannot_eat_the_whole_deadline(
         # MockTransport не применяет timeout сам: моделируем ожидание строго
         # в пределах бюджета, который передал настоящий клиент.
         clock["now"] += min(120.0, budget)
-        return httpx.Response(502, text="bad gateway")
+        return _preconnect_refusal()
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(hangs_then_fails)) as client:
-        with pytest.raises(httpx.HTTPError):
+        with pytest.raises(RuntimeError, match=r"^provider_request_failed:"):
             await agent_native._call_messages(client, _URL, [], "s")
 
     assert len(attempts) == expected_attempts

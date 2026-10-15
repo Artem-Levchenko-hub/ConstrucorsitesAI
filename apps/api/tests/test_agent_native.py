@@ -2191,11 +2191,10 @@ async def test_billing_unavailable_is_terminal_without_exposing_response(monkeyp
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status,body", [
-    (502, {"error": {"type": "api_error"}}),
-    (503, {"error": {"type": "api_error"}}),
-    (503, {"error": {"message": "billing_unavailable in an untrusted message"}}),
-    (503, {"error": "temporary failure"}),
-    (503, []),
+    (502, {"error": {"type": "api_error", "details": {
+        "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+        "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+    }}}),
     (429, {"error": {"type": "api_error", "details": {
         "upstream_http_status": 429, "provider_refusal_category": "rate_limit",
         "provider_charge_ambiguous": False, "retry_safe": True,

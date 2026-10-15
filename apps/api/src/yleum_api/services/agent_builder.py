@@ -445,6 +445,8 @@ async def _run_agent_segment(
     wrote_since_check = False  # a write happened with no runtime_check after it
     active_model = model
     escalated = False
+    truncations_without_progress = 0
+    pending_truncation = False
 
     async def _step_result(
         action: Action,
@@ -542,7 +544,7 @@ async def _run_agent_segment(
         gate itself only requires a clean build (see `require_green_before_done`),
         so a green abort meets the same bar. Falls through to the original abort
         when there is no green build to rescue."""
-        if ship_green_on_abort and fast_check_fresh and (
+        if ship_green_on_abort and not pending_truncation and fast_check_fresh and (
             coordinator_handoff or not require_green_before_done
             or (last_runtime_ok is True and not wrote_since_check)
         ):
@@ -602,6 +604,7 @@ async def _run_agent_segment(
         # Only confirmed refusal/preconnect evidence permits another paid POST.
         retry_started = asyncio.get_running_loop().time()
         rate_retry_deadline: float | None = None
+        truncated_response = False
         for attempt in range(5):
             if (rate_retry_deadline is not None
                     and asyncio.get_running_loop().time() >= rate_retry_deadline):
@@ -642,6 +645,33 @@ async def _run_agent_segment(
                         temperature=0.0,
                     )
                 break
+            except llm_client.LLMOutputTruncated as exc:
+                # A settled truncated response is not a transport retry. Discard every
+                # partial action and spend the next normal control step on a new plan.
+                truncations_without_progress += 1
+                pending_truncation = truncated_response = True
+                fast_check_fresh = False
+                if emit:
+                    await emit("agent.tool", {
+                        "step": step, "tool": "provider_response", "reason": "output_limit",
+                        "human": "Ответ модели достиг предела — разбиваю изменение на меньшие шаги",
+                        "ok": False, "recovery_attempt": truncations_without_progress,
+                        "finish_reason": exc.finish_reason,
+                        "requested_max_tokens": exc.requested_max_tokens,
+                        "completion_tokens": exc.completion_tokens,
+                    })
+                if truncations_without_progress >= 3:
+                    return AgentResult(
+                        done=False, summary="Три обрезанных ответа без изменения исходников.",
+                        files=written, steps=step + 1, transcript=convo, stop_reason="output_limit",
+                    )
+                convo.append({"role": "user", "content": (
+                    "PROVIDER OUTPUT LIMIT: the previous response was truncated and discarded. "
+                    "Every action in it was not applied. Do not replay the same oversized action. "
+                    "Read the current source, split files/actions into smaller complete steps, "
+                    "and emit one smaller complete action. Then run build before done."
+                )})
+                break
             except Exception as exc:
                 failure = exc if isinstance(exc, llm_client.LLMError) else None
                 retry_safe = failure is not None and failure.retry_safe is True
@@ -671,6 +701,11 @@ async def _run_agent_segment(
                     "provider_refusal_category": (
                         failure.provider_refusal_category if failure is not None else None
                     ),
+                    "finish_reason": failure.finish_reason if failure is not None else None,
+                    "requested_max_tokens": (
+                        failure.requested_max_tokens if failure is not None else None
+                    ),
+                    "completion_tokens": failure.completion_tokens if failure is not None else None,
                 }
                 if emit:
                     await emit("agent.provider_error", diagnostic)
@@ -705,6 +740,8 @@ async def _run_agent_segment(
                 if emit:
                     await emit("agent.retry", diagnostic)
                 await asyncio.sleep(delay)
+        if truncated_response:
+            continue
         if reply is None:
             return AgentResult(
                 done=False,
@@ -757,6 +794,13 @@ async def _run_agent_segment(
         stalls = 0
 
         if action.name == "done":
+            if pending_truncation:
+                await _step_result(action, step, skipped="Truncated response requires a fresh build")
+                convo.append({"role": "user", "content": (
+                    "NOT DONE: the truncated action was not applied. Finish a smaller complete "
+                    "step and run build successfully before done."
+                )})
+                continue
             # Green-gate: refuse a premature `done`. The model loves to declare
             # victory on a clean typecheck without ever opening the route, so a
             # broken-at-runtime app ships. Require last build clean + a
@@ -1039,6 +1083,7 @@ async def _run_agent_segment(
             # Consume the allowance even on red builds; no extra model/retry budget.
             pending_source_build = False
         if changed_source_paths and obs.get("ok") is True:
+            truncations_without_progress = 0
             no_write_streak = 0
             if action.name != "build":
                 for path in changed_source_paths:
@@ -1080,6 +1125,8 @@ async def _run_agent_segment(
             infra_dead_streak = 0
         if action.name == "build":
             last_build_ok = bool(obs.get("ok"))
+            if last_build_ok:
+                pending_truncation = False
             fast_check_fresh = last_build_ok
             # Building clears the build-pressure / rotation window: the agent got
             # real typecheck feedback, so writes that follow are progress (a
@@ -1169,6 +1216,11 @@ async def _run_agent_segment(
         if no_write_streak == (_EDIT_NO_WRITE_NUDGE_AT if edit_mode else _NO_WRITE_NUDGE_AT):
             await _nudge_exploration(step)
 
+    if pending_truncation:
+        return AgentResult(
+            done=False, summary="Ответ модели обрезан; завершение ещё не подтверждено.",
+            files=written, steps=max_steps, transcript=convo, stop_reason="output_limit",
+        )
     return _ship_green_or(
         AgentResult(
             done=False, summary="hit step budget without calling done",

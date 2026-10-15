@@ -18,6 +18,7 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import asyncio
+import json
 import posixpath
 import re
 from collections.abc import Awaitable, Callable, Mapping
@@ -100,6 +101,47 @@ def _provider_refusal_category(response: httpx.Response) -> str | None:
 def _terminal_provider_error(marker: str) -> RuntimeError:
     """Fixed internal marker and public summary; no upstream text survives."""
     return RuntimeError(f"{marker}: {failure_for_error(marker + ':').message}")
+
+
+def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
+    """Accept only the internal gateway's closed, post-journal refusal proof."""
+    if response.status_code != 502 or len(response.content) > 16_384 or response.history:
+        return False
+    try:
+        request = response.request
+        if (request.method != "POST" or request.url != httpx.URL(url)
+                or request.url.path not in {"/v1/messages", "/v1/project-cell/messages"}):
+            return False
+
+        def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+            result: dict[str, Any] = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("duplicate key")
+                result[key] = value
+            return result
+
+        body = json.loads(response.content, object_pairs_hook=unique)
+    except (RuntimeError, ValueError, RecursionError):
+        return False
+    if (not isinstance(body, dict) or set(body) - {"type", "error"}
+            or body.get("type", "error") != "error"):
+        return False
+    error = body.get("error")
+    if (not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}
+            or error.get("type") != "api_error" or error.get("code", "api_error") != "api_error"):
+        return False
+    details = error.get("details")
+    return (
+        isinstance(details, dict)
+        and set(details) == {
+            "provider_failure_kind", "provider_charge_ambiguous", "retry_safe", "retry_policy",
+        }
+        and details["provider_failure_kind"] == "preconnect"
+        and details["provider_charge_ambiguous"] is False
+        and details["retry_safe"] is True
+        and details["retry_policy"] == "llmgw_preconnect_v1"
+    )
 
 
 # The gateway allows 240s per upstream I/O. A 210s caller window discarded
@@ -1061,7 +1103,9 @@ async def _call_messages(
                 # Repeating the same rejected request cannot fix its contract.
                 # Keep only the HTTP class; never infer quota or expose its body.
                 raise _terminal_provider_error(f"provider_http_{r.status_code}")
-            if r.status_code == 429 or category == "rate_limit":
+            if _gateway_preconnect_proven(r, url):
+                last = _terminal_provider_error("provider_request_failed")
+            elif r.status_code == 429 or category == "rate_limit":
                 rate_delay = (
                     rate_limit_retry_delay(output_error.get("details"))
                     if r.status_code == 429 and isinstance(output_error, dict)
@@ -1069,7 +1113,10 @@ async def _call_messages(
                     and output_error.get("type") == "api_error"
                     and output_error.get("code", "api_error") == "api_error" else None
                 )
-                last = _terminal_provider_error("provider_refusal_rate_limit")
+                last = _terminal_provider_error(
+                    "provider_refusal_rate_limit"
+                    if category == "rate_limit" else "provider_http_429"
+                )
                 if rate_delay is None:
                     raise last
                 delay = max(6.0 * (attempt + 1), rate_delay)
@@ -1086,12 +1133,14 @@ async def _call_messages(
             # The gateway may still finish/account the accepted upstream call.
             # Replaying it could pay twice while the original response settles.
             raise RuntimeError("PROVIDER_TIMEOUT: native response read timed out") from exc
-        except httpx.HTTPError as exc:
-            # The provider flakes in SUSTAINED bursts. Live on 2026-09-22 a plain
-            # 502 window of 51 s was enough to fail a user's whole build, because
-            # three attempts only covered ~28 s of backoff while the comment here
-            # claimed minutes. The budget now really spans the window it promises.
-            last = exc
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
+            # These failures precede dispatch to the gateway. Keep the existing
+            # bounded backoff; an HTTP error alone proves no such thing.
+            last = _terminal_provider_error("provider_request_failed")
+        except httpx.HTTPError:
+            # A proxy error or lost response can follow accepted, paid work.
+            # Stop without forwarding transport details or replaying the POST.
+            raise _terminal_provider_error("provider_request_failed") from None
         # A pause is only worth taking if another attempt follows it.
         if attempt + 1 >= _CALL_RETRIES or loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
             break
@@ -1525,8 +1574,9 @@ async def _run_native_segment(
                     else "PROVIDER_UNAVAILABLE: вызов модели не завершился; повторите позже."
                 )
                 marker = re.match(
-                    r"\A(PLATFORM_WALLET_EMPTY|provider_refusal_(?:access|funds|rate_limit)|"
-                    r"provider_http_(?:400|401|402|403|404|413|422)):",
+                    r"\A(PLATFORM_WALLET_EMPTY|provider_request_failed|"
+                    r"provider_refusal_(?:access|funds|rate_limit)|"
+                    r"provider_http_(?:400|401|402|403|404|413|422|429)):",
                     str(exc),
                 )
                 if marker is not None:

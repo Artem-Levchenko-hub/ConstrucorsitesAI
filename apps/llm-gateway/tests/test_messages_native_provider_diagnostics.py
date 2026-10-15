@@ -1,6 +1,7 @@
 """Native error diagnostics keep provider text inside the gateway boundary."""
 
 from decimal import Decimal
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
@@ -15,6 +16,67 @@ from yleum_gateway.services import billing, provider_calls
 def client(neutralize_lifespan, neutralize_side_effects):
     with TestClient(create_app()) as client:
         yield client
+
+
+@pytest.mark.parametrize("kind", [httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout])
+@pytest.mark.parametrize("journal_ok", [False, True])
+def test_preconnect_permission_requires_closed_failed_receipt(client, monkeypatch, kind, journal_ok):
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://provider.test/v1"))
+    closed = []
+
+    async def finish(*args, **kwargs):
+        assert kwargs["status"] == "failed"
+        if not journal_ok:
+            raise RuntimeError("private journal detail")
+        closed.append(True)
+
+    monkeypatch.setattr(provider_calls, "finish_call", AsyncMock(side_effect=finish))
+
+    def fail(*args):
+        raise kind("private transport detail")
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", fail)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert "private" not in response.text
+    if journal_ok:
+        assert closed == [True]
+        assert response.status_code == 502
+        assert response.json()["error"] == {
+            "type": "api_error", "message": "Provider connection could not be established",
+            "details": {
+                "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+                "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+            },
+        }
+    else:
+        assert response.status_code == 503
+        assert "retry_safe" not in response.text and "llmgw_preconnect_v1" not in response.text
+    assert provider_calls.finish_call.await_count == 1
+    assert billing.charge.await_count == 0
+
+
+@pytest.mark.parametrize("kind", [httpx.WriteTimeout, httpx.ReadTimeout, httpx.RemoteProtocolError])
+def test_uncertain_transport_outcome_never_publishes_preconnect_permission(client, monkeypatch, kind):
+    monkeypatch.setattr(messages_native, "native_messages_route",
+                        lambda: ("synthetic", "https://provider.test/v1"))
+    calls = []
+
+    def fail(*args):
+        calls.append(1)
+        raise kind("private transport detail")
+
+    monkeypatch.setattr(messages_native, "_post_llmgw", fail)
+    response = client.post("/v1/messages", json={
+        "model": "claude-sonnet-5", "messages": [{"role": "user", "content": "synthetic"}],
+    })
+    assert calls == [1] and response.status_code == 503
+    assert response.json()["error"]["type"] == "billing_unavailable"
+    assert "retry_safe" not in response.text and "private" not in response.text
+    assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    assert billing.charge.await_count == 0
 
 
 @pytest.mark.parametrize("status,body,category", [

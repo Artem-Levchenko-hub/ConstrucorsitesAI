@@ -66,6 +66,8 @@ class LLMError(Exception):
         provider_charge_ambiguous: bool | None = None, retry_safe: bool = False,
         provider_refusal_category: str | None = None,
         retry_after_seconds: int | None = None,
+        finish_reason: object = None, requested_max_tokens: object = None,
+        completion_tokens: object = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -75,6 +77,31 @@ class LLMError(Exception):
         self.retry_safe = retry_safe
         self.provider_refusal_category = provider_refusal_category
         self.retry_after_seconds = retry_after_seconds
+        self.finish_reason = (
+            finish_reason if isinstance(finish_reason, str) and finish_reason in {
+                "stop", "tool_calls", "length", "content_filter", "refusal", "pause_turn",
+            } else "unknown" if finish_reason is not None else None
+        )
+        self.requested_max_tokens = (
+            requested_max_tokens if type(requested_max_tokens) is int
+            and 0 < requested_max_tokens < 2**63 else None
+        )
+        self.completion_tokens = (
+            completion_tokens if type(completion_tokens) is int
+            and 0 <= completion_tokens < 2**63 else None
+        )
+
+
+class LLMOutputTruncated(LLMError):
+    """A confirmed response ended at its ceiling; its partial content is discarded."""
+
+    def __init__(self, *, requested_max_tokens: object, completion_tokens: object) -> None:
+        super().__init__(
+            "Ответ модели достиг предела вывода; неприменённое действие нужно разбить.",
+            code="provider_output_truncated", http_status=200, retry_safe=False,
+            finish_reason="length", requested_max_tokens=requested_max_tokens,
+            completion_tokens=completion_tokens,
+        )
 
 
 _GATEWAY_ERROR_CODES = {
@@ -147,8 +174,8 @@ def _gateway_failure(response: httpx.Response) -> LLMError:
         message = "LLM-провайдер запретил доступ к запросу (HTTP 403)."
     elif upstream == 402:
         message = "LLM-провайдер отклонил запрос по оплате (HTTP 402)."
-    elif upstream == 429:
-        message = "LLM-провайдер ограничил частоту запросов (HTTP 429)."
+    elif upstream == 429 or (upstream is None and response.status_code == 429):
+        message = "LLM-провайдер вернул HTTP 429; точная причина не установлена, требуется сверка."
     elif upstream is not None:
         message = f"LLM-провайдер завершил запрос ошибкой (HTTP {upstream})."
     elif code == "wallet_empty":
@@ -371,6 +398,16 @@ async def complete_chat(
     choices = data.get("choices") if isinstance(data, dict) else None
     choice = choices[0] if isinstance(choices, list) and choices else None
     reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+    usage = data.get("usage") if isinstance(data, dict) else None
+    completion_tokens = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if (
+        resp.status_code == 200 and reason == "length" and isinstance(choice, dict)
+        and isinstance(choice.get("message"), dict)
+        and not choice["message"].get("refusal") and not data.get("error")
+    ):
+        raise LLMOutputTruncated(
+            requested_max_tokens=max_tokens, completion_tokens=completion_tokens,
+        )
     if not isinstance(reason, str) or reason not in {"stop", "tool_calls"}:
         raise LLMError(
             "LLM-провайдер не подтвердил завершение ответа; автоматический повтор остановлен.",
@@ -379,6 +416,8 @@ async def complete_chat(
                 if reason == "content_filter" else "provider_output_invalid"
             ),
             retry_safe=False,
+            finish_reason=reason, requested_max_tokens=max_tokens,
+            completion_tokens=completion_tokens,
         )
     assert isinstance(choice, dict)
     message = choice.get("message")

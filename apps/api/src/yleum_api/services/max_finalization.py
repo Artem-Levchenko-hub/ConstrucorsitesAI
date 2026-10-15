@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from pathlib import PurePosixPath
 from typing import cast
 from uuid import UUID, uuid5
 
@@ -220,6 +221,52 @@ def _content_digest(label: str, *parts: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def _local_import_source_error(detail: str, file_pattern: str) -> bool:
+    """Recognize a compiler-local import without authorizing paths outside the cell."""
+    pattern = (
+        r"(?m)^(?P<importer>" + file_pattern + r")\r?\n"
+        r"Module not found: Can't resolve (?P<quote>['\"])"
+        r"(?P<missing>\.\.?/[^'\"\r\n]+)(?P=quote)\r?$"
+    )
+    for match in re.finditer(pattern, detail):
+        importer = match["importer"].removeprefix("/workspace/").removeprefix("./")
+        missing = match["missing"]
+        if len(importer) > 1024 or len(missing) > 1024 or any(
+            character in importer + missing for character in ("\\", "\x00", "?", "#", ":")
+        ):
+            continue
+        parts = list(PurePosixPath(importer).parts)
+        if any(
+            part == ".." or part.lower().startswith(".env")
+            or part.lower() in {".git", ".ssh", "node_modules"}
+            for part in parts
+        ):
+            continue
+        target = parts[:-1]
+        escaped = False
+        for part in PurePosixPath(missing).parts:
+            if part == "..":
+                if not target:
+                    escaped = True
+                    break
+                target.pop()
+            elif part != ".":
+                target.append(part)
+        if escaped or not target or any(
+            part.lower().startswith(".env") or part.lower() in {".git", ".ssh", "node_modules"}
+            for part in target
+        ):
+            continue
+        suffix = PurePosixPath(target[-1]).suffix.lower()
+        if suffix in {
+            ".css", ".scss", ".sass", ".less", ".js", ".jsx", ".ts", ".tsx", ".mjs",
+            ".cjs", ".json", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif",
+            ".ico", ".woff", ".woff2", ".ttf", ".otf",
+        } or (not suffix and re.fullmatch(r"[A-Za-z0-9_-]+", target[-1])):
+            return True
+    return False
+
+
 def _confirmed_build_source_error(
     observation: ProjectCellCommandObservation, identity: ProofIdentity,
 ) -> bool:
@@ -245,6 +292,7 @@ def _confirmed_build_source_error(
             r"(?m)^" + file + r"(?::\d+(?::\d+)?)?\r?\n(?:Type error|Syntax error): ",
             detail,
         )
+        or _local_import_source_error(detail, file)
     )
 
 

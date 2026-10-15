@@ -10,7 +10,7 @@ from yleum_api.services import agent_builder, agent_native, llm_client
 from .test_legacy_provider_error_policy import install_transport
 
 
-@pytest.mark.parametrize("reason", [None, "length", "content_filter", "pause_turn", "unknown", []])
+@pytest.mark.parametrize("reason", [None, "content_filter", "pause_turn", "unknown", []])
 async def test_classic_invalid_finish_does_not_reach_action_executor(monkeypatch, reason):
     requests = []
 

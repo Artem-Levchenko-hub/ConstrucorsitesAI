@@ -138,6 +138,20 @@ def test_historical_http_401_without_structured_category_does_not_assert_lack_of
 
 
 @pytest.mark.parametrize("raw", [
+    "provider_http_429: private-key",
+    "provider_http_429: insufficient balance private-key",
+    "provider_http_429: provider_refusal_rate_limit: private-key",
+])
+def test_unclassified_http_429_history_does_not_invent_a_cause(raw):
+    failure = public_generation_failure(SimpleNamespace(status="failed", error=raw, agent_state={}))
+    assert failure.code == "provider_unavailable" and failure.retryable is False
+    assert "HTTP 429" in failure.message and "точная причина не установлена" in failure.message
+    assert "сверк" in failure.message
+    assert "частот" not in failure.message and "средств" not in failure.message
+    assert "private" not in failure.model_dump_json()
+
+
+@pytest.mark.parametrize("raw", [
     "provider_refusal_funds_extra: private-key",
     "provider_refusal_funds private-key",
     "upstream said provider_refusal_funds: private-key",

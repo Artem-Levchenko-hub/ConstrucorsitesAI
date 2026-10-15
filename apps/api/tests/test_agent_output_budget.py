@@ -38,7 +38,7 @@ async def test_legacy_gateway_payload_raises_ceiling_without_accepting_truncated
     assert payloads[0]["max_tokens"] == 128000
     assert actions == (["bash"] if reason == "stop" else [])
     if reason == "length":
-        assert result.stop_reason == "provider_error"
+        assert result.stop_reason == "output_limit"
 
 
 @pytest.mark.parametrize("entry", [agent_builder.run_agent_build, agent_builder._run_agent_segment])

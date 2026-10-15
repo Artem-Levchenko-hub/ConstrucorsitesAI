@@ -1,0 +1,53 @@
+{
+  "date_moscow": "2026-10-15",
+  "scope": "Offline fixes for the generation failures documented on 14–15 October",
+  "base_commit": "b133901626cc4be8f9727b484c5b2016bd303a6e",
+  "pull_request": "https://github.com/Artem-Levchenko-hub/ConstrucorsitesAI/pull/105",
+  "source_report": "reports/GenerationReliability-2026-10-14-15/Yleum_Generation_Detailed_2026-10-14_15.pdf",
+  "fixes": [
+    {
+      "problem": "Known output truncation terminated the legacy agent",
+      "result": "Confirmed HTTP 200 length is a separate control step. Partial actions are discarded; the next request asks for a smaller complete change. Three truncations without source progress stop the loop; an earlier green build cannot authorize completion."
+    },
+    {
+      "problem": "Missing local flower.css did not enter source repair",
+      "result": "A completed frozen-source full build can admit local source or asset import repair. Wrong identity, infrastructure failures, package imports, sensitive paths and traversal outside the workspace remain excluded. Repair is followed by a new build; no-op repair does not buy another build."
+    },
+    {
+      "problem": "Ambiguous native HTTP or transport failures could replay a paid request",
+      "result": "Unknown HTTP 502/503/504, WriteTimeout and RemoteProtocolError are terminal without replay. Preconnect retries require either a direct pre-dispatch failure or the gateway's strict post-journal llmgw_preconnect_v1 proof. The existing closed 429 contract is preserved."
+    },
+    {
+      "problem": "The report lacked finish metadata and an unclassified 429 implied a frequency limit",
+      "result": "Allowlisted finish_reason, requested_max_tokens and completion_tokens survive progress persistence. Unclassified HTTP 429 has neutral diagnostics; only a verified category identifies rate limiting."
+    }
+  ],
+  "verification": {
+    "api_isolated_tests_passed": 666,
+    "gateway_unit_tests_passed": 658,
+    "api_ruff": "passed",
+    "changed_gateway_files_ruff": "passed",
+    "api_mypy_linux_target_source_files": 287,
+    "api_mypy_linux_target": "passed",
+    "diff_check": "passed",
+    "independent_review": "No remaining actionable findings after the importer-path correction",
+    "real_next_fixture": {
+      "version": "15.5.24",
+      "missing_css_build_exit": 1,
+      "restored_nonempty_css_build_exit": 0,
+      "page_http_status": 200,
+      "stylesheet_http_status": 200,
+      "expected_page_text_and_styles": true,
+      "scope": "Synthetic local fixture; not a generated customer application or live product acceptance"
+    }
+  },
+  "boundaries": {
+    "paid_model_calls": 0,
+    "production_changed": false,
+    "real_database_contracts": "Deferred to exact-revision CI with disposable PostgreSQL",
+    "live_llmgw_128000_acceptance": "Unverified; provider access and positive balance are required",
+    "long_response_streaming_and_latency": "Unchanged and unverified by this offline slice",
+    "unclassified_report_429": "Historical upstream cause and final charge remain unresolved",
+    "generation_reliability_claim": "No claim of 100 percent live completion"
+  }
+}

@@ -136,6 +136,7 @@ class GenerationProgress:
             if code in (
                 "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
                 "billing_reconciliation_required",
+                "provider_output_truncated", "provider_output_invalid", "provider_output_filtered",
             ):
                 step_row["error_code"] = code
             for key in ("provider_charge_ambiguous", "will_retry"):
@@ -156,6 +157,18 @@ class GenerationProgress:
             recovery_attempt = data.get("recovery_attempt")
             if type(recovery_attempt) is int and 1 <= recovery_attempt <= 3:
                 step_row["recovery_attempt"] = recovery_attempt
+        if kind == "provider_error" or raw_tool == "provider_response":
+            # Keep observed protocol facts, never arbitrary provider response text.
+            finish_reason = data.get("finish_reason")
+            if isinstance(finish_reason, str) and finish_reason in {
+                "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
+                "max_tokens", "refusal", "pause_turn", "stop_sequence", "unknown",
+            }:
+                step_row["finish_reason"] = finish_reason
+            for key, minimum in (("requested_max_tokens", 1), ("completion_tokens", 0)):
+                value = data.get(key)
+                if type(value) is int and minimum <= value <= 2_000_000:
+                    step_row[key] = value
         await self.record_agent_step(step_row)
 
 
