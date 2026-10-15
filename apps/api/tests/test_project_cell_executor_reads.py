@@ -79,13 +79,20 @@ def test_default_and_selected_reads_keep_existing_char_cap_and_mark_truncation()
         result = executor._read_file({"a.ts": content}, "a.ts", args)
         assert result["content"].startswith("x" * executor._MAX_READ_CHARS)
         assert "[truncated " in result["content"]
-        assert result["read_range"]["truncated"] is True
+        if args:
+            assert result["read_range"]["truncated"] is True
+        else:
+            assert set(result) == {"ok", "content"}
         assert "last" not in result["content"]
     assert executor._read_file({"a.ts": ""}, "a.ts", {}) == {
-        "ok": True, "content": "", "read_range": {
-            "start_line": 1, "end_line": 0, "total_lines": 0, "truncated": False,
-        },
+        "ok": True, "content": "",
     }
     assert executor._read_file({}, "absent.ts", {}) == {
         "ok": False, "error": "not found: absent.ts",
+    }
+
+
+def test_path_only_read_preserves_the_legacy_response_contract():
+    assert executor._read_file({"a.ts": "old"}, "a.ts", {}) == {
+        "ok": True, "content": "old",
     }

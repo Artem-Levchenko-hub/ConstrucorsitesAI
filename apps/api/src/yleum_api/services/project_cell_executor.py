@@ -1661,6 +1661,8 @@ def _read_file(files: dict[str, str], path: str, args: dict[str, Any]) -> dict[s
     content = files.get(path)
     if content is None:
         return {"ok": False, "error": f"not found: {path}"}
+    if "start_line" not in args and "end_line" not in args:
+        return {"ok": True, "content": _truncate(content, _MAX_READ_CHARS)}
     lines = content.splitlines(keepends=True)
     start = args.get("start_line", 1)
     end = args.get("end_line", len(lines))

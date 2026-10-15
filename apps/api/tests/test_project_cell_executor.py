@@ -1618,9 +1618,6 @@ async def test_ready_owner_executor_bootstraps_workspace_and_syncs_preview(
     assert read == {
         "ok": True,
         "content": "export default function Page(){return null}\n",
-        "read_range": {
-            "start_line": 1, "end_line": 1, "total_lines": 1, "truncated": False,
-        },
     }
     assert listed == {"ok": True, "detail": "page.tsx"}
     assert grep == {
@@ -1844,12 +1841,7 @@ async def test_write_file_preserves_zero_byte_file_in_cell(
             "after_sha256": hashlib.sha256(b"").hexdigest(),
         },
     }
-    assert read == {
-        "ok": True, "content": "",
-        "read_range": {
-            "start_line": 1, "end_line": 0, "total_lines": 0, "truncated": False,
-        },
-    }
+    assert read == {"ok": True, "content": ""}
     assert harness.write_calls == [
         {
             "generation_run_id": harness.run_id,
