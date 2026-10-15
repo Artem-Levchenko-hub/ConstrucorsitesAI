@@ -318,9 +318,10 @@ async def test_complete_chat_free_override_reaches_gateway_metadata(monkeypatch)
         async def __aexit__(self, *_args):
             return None
 
-        async def post(self, url, json):
+        async def post(self, url, json, headers=None):
             captured["url"] = url
             captured["json"] = json
+            captured["headers"] = headers
             return FakeResponse()
 
     monkeypatch.setattr(
@@ -345,3 +346,4 @@ async def test_complete_chat_free_override_reaches_gateway_metadata(monkeypatch)
     assert result == "ok"
     assert captured["json"]["metadata"]["free"] is True
     assert captured["timeout"].read == 12.0
+    assert captured["headers"] is None
