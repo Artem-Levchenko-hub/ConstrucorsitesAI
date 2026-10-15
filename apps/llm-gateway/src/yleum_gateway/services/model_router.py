@@ -16,6 +16,7 @@ from typing import Any
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import ModelNotFoundError
 from yleum_gateway.providers import llmgw
+from yleum_gateway.services.output_budget import output_tokens
 from yleum_gateway.services.pricing import PRICE_TABLE
 
 
@@ -60,5 +61,5 @@ async def acompletion(
         model=model,
         messages=messages,
         temperature=0.5 if temperature is None else temperature,
-        max_tokens=8192 if max_tokens is None else max_tokens,
+        max_tokens=output_tokens(model, max_tokens, fallback=8192),
     )

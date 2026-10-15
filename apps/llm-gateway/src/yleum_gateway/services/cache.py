@@ -15,6 +15,7 @@ import structlog
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.redis import get_redis
+from yleum_gateway.services.output_budget import uses_provider_output_default
 
 log = structlog.get_logger(__name__)
 
@@ -39,6 +40,8 @@ def make_cache_key(
             "project_id": project_id,
             "temperature": temperature,
             "max_tokens": max_tokens,
+            **({"output_policy": "provider-default-v1"}
+               if uses_provider_output_default(model, max_tokens) else {}),
         },
         ensure_ascii=False,
         sort_keys=True,

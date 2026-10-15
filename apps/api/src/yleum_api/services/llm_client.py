@@ -334,7 +334,7 @@ async def complete_chat(
     user_id: str | None = None,
     project_id: str | None = None,
     stage: str | None = None,
-    max_tokens: int = 1024,
+    max_tokens: int | None = 1024,
     temperature: float | None = 0.0,
     free: bool | None = None,
     timeout_seconds: float | None = None,
@@ -365,7 +365,7 @@ async def complete_chat(
             "free": _free_generation.get() if free is None else free,
             **({"stage": stage} if stage else {}),
         },
-        "max_tokens": max_tokens,
+        **({"max_tokens": max_tokens} if max_tokens is not None else {}),
     }
     if temperature is not None:
         payload["temperature"] = temperature

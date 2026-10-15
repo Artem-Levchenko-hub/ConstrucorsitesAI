@@ -68,7 +68,7 @@ NativeMessagesAuthFactory = Callable[[int], Awaitable[NativeMessagesAttemptAuth]
 # production model instead of the retired Gemini/Opus-era default.
 _MODEL = "claude-sonnet-5"
 # Existing fallback for models without a specific output profile. Sonnet 5.5
-# uses its own ceiling and does not send the legacy manual thinking budget.
+# uses the provider default and does not send the legacy manual thinking budget.
 _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
@@ -970,9 +970,10 @@ async def _call_messages(
     Anthropic response dict, or raises the last error."""
     import asyncio
 
+    output_tokens = agent_output_tokens(model, fallback=_MAX_TOKENS)
     payload: dict[str, Any] = {
         "model": model,
-        "max_tokens": agent_output_tokens(model, fallback=_MAX_TOKENS),
+        **({"max_tokens": output_tokens} if output_tokens is not None else {}),
         "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
         # Prompt caching: cache the stable system prompt + tool schemas, and a
         # moving breakpoint on the transcript tail (see _with_incremental_cache).

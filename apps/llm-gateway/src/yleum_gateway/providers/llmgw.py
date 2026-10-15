@@ -34,6 +34,7 @@ import httpx
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
+from yleum_gateway.services.output_budget import output_tokens
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
@@ -273,7 +274,7 @@ async def astream(
     messages: list[dict[str, Any]],
     *,
     temperature: float = 0.5,
-    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = None,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
     receipt: dict[str, Any] | None = None,
 ) -> AsyncGenerator[tuple[str, str], None]:
@@ -289,11 +290,12 @@ async def astream(
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
     key, url = _key_and_url()
 
+    budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
     payload: dict[str, Any] = {
         "model": slug,
         "messages": _to_messages(messages, vision=_is_vision(model)),
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        **({"max_tokens": budget} if budget is not None else {}),
         "stream": True,
         # The final chunk is the provider's usage receipt, including cache/reasoning.
         "stream_options": {"include_usage": True},
@@ -425,7 +427,7 @@ async def acompletion(
     model: str,
     messages: list[dict[str, Any]],
     temperature: float = 0.5,
-    max_tokens: int = _DEFAULT_MAX_TOKENS,
+    max_tokens: int | None = None,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
 ) -> dict[str, Any]:
     """Call llmgw's chat surface and return an OpenAI-shaped completion dict.
@@ -439,11 +441,12 @@ async def acompletion(
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
     key, url = _key_and_url()
 
+    budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
     payload: dict[str, Any] = {
         "model": slug,
         "messages": _to_messages(messages, vision=_is_vision(model)),
         "temperature": temperature,
-        "max_tokens": max_tokens,
+        **({"max_tokens": budget} if budget is not None else {}),
         "stream": False,
     }
     headers = {

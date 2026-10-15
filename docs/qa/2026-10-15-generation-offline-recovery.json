@@ -41,6 +41,19 @@
       "scope": "Synthetic local fixture; not a generated customer application or live product acceptance"
     }
   },
+  "provider_default_output_followup": {
+    "base_commit": "35d1cec118fe7186164d3de89db5bfdfa359833e",
+    "user_decision": "Delegate the automatic per-response Sonnet 5.5 output budget to LLMGW",
+    "catalog_url": "https://app.llmgw.ru/api/v1/models/models-with-pricing?limit=200",
+    "catalog_observation_date": "2026-10-15",
+    "catalog_model": "anthropic/claude-sonnet-5.5",
+    "catalog_max_output_tokens": null,
+    "behavior": "For exact Sonnet 5.5 IDs, an automatic budget is omitted from the final provider JSON. Explicit budgets and other model defaults remain unchanged. No claim that omission chooses the provider maximum or removes its limits.",
+    "safety": "Native wallet estimation retains its former estimate independently of the sent budget. Cache keys distinguish the new automatic policy. Truncated actions are rejected; ambiguous paid POSTs are not replayed.",
+    "offline_verification": "331 focused API checks; full gateway suite plus added wallet refusal checks; affected-file Ruff and Linux-target API mypy. Complete API and real PostgreSQL contracts require exact-revision Linux CI.",
+    "live_provider_acceptance": "Not performed; only free catalog GETs and mocked final-wire assertions. Provider defaults, rejection behavior and long-response latency remain unverified.",
+    "paid_model_calls": 0
+  },
   "boundaries": {
     "paid_model_calls": 0,
     "production_changed": false,

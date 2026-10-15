@@ -42,6 +42,7 @@ from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry
 from yleum_gateway.services import billing, file_logger, provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.model_router import is_supported, native_messages_route, slug_to_omnia
+from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.pricing import (
     ReportedCost,
@@ -372,6 +373,10 @@ def _estimate_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
     )
     estimated_input = max(1, len(serialized) // 4)
     requested_output = _non_negative_int(payload.get("max_tokens"))
+    if uses_provider_output_default(model, payload.get("max_tokens")):
+        # Estimate only: retain the prior 128k-request wallet check without
+        # sending that ceiling or treating the provider's null catalog as a max.
+        requested_output = 128000
     estimated_output = max(256, min(requested_output, max(256, estimated_input // 4)))
     try:
         return calculate_cost_rub(model, estimated_input, estimated_output)
@@ -540,6 +545,8 @@ async def _native_messages_impl(
     model = str(body.get("model") or "")
     if not model:
         return _err(400, "invalid_request_error", "model is required")
+    if model == "anthropic/claude-sonnet-5.5":
+        model = "claude-sonnet-5.5"
 
     route = native_messages_route()
     if route is None:
@@ -566,10 +573,15 @@ async def _native_messages_impl(
     except ValueError as exc:
         return _err(400, "invalid_request_error", str(exc))
 
+    requested_budget = body.get("max_tokens")
+    budget = output_tokens(
+        model, int(requested_budget or 8192) if requested_budget is not None else None,
+        fallback=8192,
+    )
     payload: dict[str, Any] = {
         "model": llmgw.native_slug(model),
         "messages": messages,
-        "max_tokens": int(body.get("max_tokens") or 8192),
+        **({"max_tokens": budget} if budget is not None else {}),
         "stream": False,
     }
     tools = _openai_tools(body.get("tools"))

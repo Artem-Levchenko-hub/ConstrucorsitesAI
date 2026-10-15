@@ -1,4 +1,4 @@
-"""Model-specific output ceilings reach the real agent request boundaries."""
+"""Model-specific provider defaults reach the real agent request boundaries."""
 
 import json
 
@@ -11,8 +11,10 @@ from .test_legacy_provider_error_policy import install_transport
 
 
 @pytest.mark.parametrize("reason", ["stop", "length"])
-async def test_legacy_gateway_payload_raises_ceiling_without_accepting_truncated_actions(
-    monkeypatch, reason,
+@pytest.mark.parametrize("model", ["claude-sonnet-5.5", "anthropic/claude-sonnet-5.5"])
+@pytest.mark.parametrize("override", [None, 4096])
+async def test_legacy_wire_uses_provider_default_without_accepting_truncated_actions(
+    monkeypatch, reason, model, override,
 ):
     payloads = []
     actions = []
@@ -30,12 +32,16 @@ async def test_legacy_gateway_payload_raises_ceiling_without_accepting_truncated
 
     install_transport(monkeypatch, gateway)
     result = await agent_builder.run_agent_build(
-        system_prompt="s", user_prompt="t", model="claude-sonnet-5.5",
+        system_prompt="s", user_prompt="t", model=model,
         execute=execute, max_steps=1,
+        **({"max_tokens": override} if override is not None else {}),
     )
 
     assert len(payloads) == 1
-    assert payloads[0]["max_tokens"] == 128000
+    if override is None:
+        assert "max_tokens" not in payloads[0]
+    else:
+        assert payloads[0]["max_tokens"] == override
     assert actions == (["bash"] if reason == "stop" else [])
     if reason == "length":
         assert result.stop_reason == "output_limit"
@@ -43,8 +49,8 @@ async def test_legacy_gateway_payload_raises_ceiling_without_accepting_truncated
 
 @pytest.mark.parametrize("entry", [agent_builder.run_agent_build, agent_builder._run_agent_segment])
 @pytest.mark.parametrize("model,expected", [
-    ("claude-sonnet-5.5", 128000),
-    ("anthropic/claude-sonnet-5.5", 128000),
+    ("claude-sonnet-5.5", None),
+    ("anthropic/claude-sonnet-5.5", None),
     ("claude-sonnet-5", 16384),
     ("claude-sonnet-5.50", 16384),
 ])
@@ -71,7 +77,7 @@ async def test_legacy_model_default_and_explicit_override_reach_completion(
     assert calls == [(model, expected if override is None else override)]
 
 
-@pytest.mark.parametrize("override,expected", [(None, [16384, 16384, 128000]),
+@pytest.mark.parametrize("override,expected", [(None, [16384, 16384, None]),
                                                (4096, [4096, 4096, 4096])])
 async def test_legacy_escalation_uses_active_model_budget_unless_overridden(override, expected):
     calls = []
@@ -95,12 +101,12 @@ async def test_legacy_escalation_uses_active_model_budget_unless_overridden(over
 
 
 @pytest.mark.parametrize("model,expected", [
-    ("claude-sonnet-5.5", 128000),
-    ("anthropic/claude-sonnet-5.5", 128000),
+    ("claude-sonnet-5.5", None),
+    ("anthropic/claude-sonnet-5.5", None),
     ("claude-sonnet-5", 20000),
     ("claude-sonnet-5.50", 20000),
 ])
-async def test_native_request_uses_model_ceiling_and_matching_request_profile(model, expected):
+async def test_native_request_uses_provider_default_and_matching_request_profile(model, expected):
     payloads = []
     reply = {"stop_reason": "end_turn", "content": [{"type": "text", "text": "ready"}]}
 
@@ -116,8 +122,11 @@ async def test_native_request_uses_model_ceiling_and_matching_request_profile(mo
 
     assert result == reply
     assert len(payloads) == 1
-    assert payloads[0]["max_tokens"] == expected
-    if expected == 128000:
+    if expected is None:
+        assert "max_tokens" not in payloads[0]
+    else:
+        assert payloads[0]["max_tokens"] == expected
+    if expected is None:
         assert "thinking" not in payloads[0]
         assert payloads[0]["tool_choice"] == {"type": "auto"}
     else:
@@ -126,7 +135,10 @@ async def test_native_request_uses_model_ceiling_and_matching_request_profile(mo
 
 
 @pytest.mark.parametrize("source_repair", [False, True])
-async def test_native_build_and_source_repair_send_the_large_ceiling(monkeypatch, source_repair):
+@pytest.mark.parametrize("model", ["claude-sonnet-5.5", "anthropic/claude-sonnet-5.5"])
+async def test_native_build_and_source_repair_omit_automatic_budget(
+    monkeypatch, source_repair, model,
+):
     payloads = []
 
     def gateway(request):
@@ -144,11 +156,11 @@ async def test_native_build_and_source_repair_send_the_large_ceiling(monkeypatch
         pytest.fail("refused provider request must not execute workspace tools")
 
     result = await agent_native.run_native_build(
-        model="claude-sonnet-5.5", system="s", task="Repair source", execute=execute,
+        model=model, system="s", task="Repair source", execute=execute,
         source_repair=source_repair, max_steps=1,
         messages_url="https://gateway.test/v1/messages",
     )
 
     assert result.stop_reason == "provider_error"
     assert len(payloads) == 1
-    assert payloads[0]["max_tokens"] == 128000
+    assert "max_tokens" not in payloads[0]
