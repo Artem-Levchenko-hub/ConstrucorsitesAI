@@ -31,6 +31,7 @@ import structlog
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
+from yleum_api.services.agent_output_budget import agent_output_tokens, is_sonnet55_model
 from yleum_api.services.generation.continuation import SourceNoveltyTracker
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
@@ -65,12 +66,8 @@ NativeMessagesAuthFactory = Callable[[int], Awaitable[NativeMessagesAttemptAuth]
 # Keep the proven pre-cost native loop, but route it through the current MAX
 # production model instead of the retired Gemini/Opus-era default.
 _MODEL = "claude-sonnet-5"
-# Providers can pre-reserve the full max_tokens × output price on every call and 402
-# if the key balance is below that reserve — so an over-large ceiling caps how many
-# calls fit the balance (an oversized reserve can 402 mid-build,
-# which surfaced to the user as "соединение потеряно"). 20000 still leaves ~12000
-# tokens for tool args after the 8000 thinking budget — enough for a large file —
-# while cutting the reserve ~35%. Env override: NATIVE_MAX_TOKENS (future).
+# Existing fallback for models without a specific output profile. Sonnet 5.5
+# uses its own ceiling and does not send the legacy manual thinking budget.
 _MAX_TOKENS = 20000
 _THINKING_BUDGET = 8000
 _MAX_TOOL_RESULT_CHARS = 20000
@@ -933,7 +930,7 @@ async def _call_messages(
 
     payload: dict[str, Any] = {
         "model": model,
-        "max_tokens": _MAX_TOKENS,
+        "max_tokens": agent_output_tokens(model, fallback=_MAX_TOKENS),
         "thinking": {"type": "enabled", "budget_tokens": _THINKING_BUDGET},
         # Prompt caching: cache the stable system prompt + tool schemas, and a
         # moving breakpoint on the transcript tail (see _with_incremental_cache).
@@ -942,7 +939,7 @@ async def _call_messages(
         "tool_choice": dict(tool_choice) if tool_choice is not None else {"type": "auto"},
         "messages": _with_incremental_cache(convo),
     }
-    if model == "claude-sonnet-5.5":
+    if is_sonnet55_model(model):
         # The pinned Gateway model rejects forced tool use. It does not expose
         # verified adaptive/effort controls; do not send a legacy manual budget.
         payload.pop("thinking")

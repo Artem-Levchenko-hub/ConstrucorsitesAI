@@ -3035,7 +3035,7 @@ async def test_native_named_model_request_profile_preserves_legacy(model, choice
     assert result == reply and len(captured) == 1
     payload = captured[0]
     assert payload["model"] == model
-    assert payload["max_tokens"] == 20000
+    assert payload["max_tokens"] == (128000 if model == "claude-sonnet-5.5" else 20000)
     if model == "claude-sonnet-5.5":
         assert payload["tool_choice"] == {"type":"auto"}
         assert "thinking" not in payload

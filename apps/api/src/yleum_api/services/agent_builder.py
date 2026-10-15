@@ -55,6 +55,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from yleum_api.services import llm_client
+from yleum_api.services.agent_output_budget import agent_output_tokens
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.generation.continuation import SourceNoveltyTracker
 
@@ -241,7 +242,7 @@ async def run_agent_build(
     complete: Callable[..., Awaitable[str]] | None = None,
     user_id: str | None = None,
     project_id: str | None = None,
-    max_tokens: int = 16384,
+    max_tokens: int | None = None,
     require_green_before_done: bool = False,
     coordinator_handoff: bool = False,
     ship_green_on_abort: bool = True,
@@ -386,10 +387,7 @@ async def _run_agent_segment(
     complete: Callable[..., Awaitable[str]] | None = None,
     user_id: str | None = None,
     project_id: str | None = None,
-    max_tokens: int = 16384,  # Opus emits a full page/route in one write; 8192
-    # truncated large files mid-content (→ broken file the next build must fix).
-    # The model stops when done, so short replies are unaffected — this only lifts
-    # the ceiling so a big file isn't cut off. No call site overrides it.
+    max_tokens: int | None = None,
     require_green_before_done: bool = False,
     coordinator_handoff: bool = False,
     ship_green_on_abort: bool = True,
@@ -637,7 +635,10 @@ async def _run_agent_segment(
                         active_model,
                         user_id=user_id,
                         project_id=project_id,
-                        max_tokens=max_tokens,
+                        max_tokens=(
+                            agent_output_tokens(active_model, fallback=16384)
+                            if max_tokens is None else max_tokens
+                        ),
                         temperature=0.0,
                     )
                 break
