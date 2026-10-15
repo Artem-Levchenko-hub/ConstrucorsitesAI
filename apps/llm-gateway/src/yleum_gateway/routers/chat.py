@@ -10,6 +10,8 @@ emits SSE chunks and bills based on what the wire actually delivered.
 from __future__ import annotations
 
 import asyncio
+import math
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -24,12 +26,15 @@ from yleum_gateway.core.errors import (
     BillingReconciliationRequiredError,
     GatewayError,
     ModelNotFoundError,
+    UpstreamProviderError,
     WalletEmptyError,
 )
 from yleum_gateway.providers import llmgw
+from yleum_gateway.providers.native_stream import RECEIPT_RESERVE_SECONDS
 from yleum_gateway.services import billing, cache, file_logger, provider_calls, safety, streaming
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
+from yleum_gateway.services.output_budget import uses_provider_output_default
 from yleum_gateway.services.output_stop import completion_finish_reason, output_stop_error
 from yleum_gateway.services.pricing import (
     calculate_cost_rub,
@@ -120,6 +125,7 @@ def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
 
 @router.post("/chat/completions")
 async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
+    received_at = asyncio.get_running_loop().time()
     raw_messages = [m.model_dump() for m in req.messages]
     filtered_messages = safety.sanitize_messages(raw_messages)
 
@@ -248,26 +254,63 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     except GatewayError as exc:
         raise _gateway_error_to_http(exc) from exc
 
+    transport_evidence: dict[str, Any] = {}
     try:
-        response = await router_module.acompletion(
+        completion: Callable[..., Awaitable[dict[str, Any]]] = router_module.acompletion
+        completion_options: dict[str, Any] = {}
+        if uses_provider_output_default(req.model, req.max_tokens):
+            # Internal API caller supplies its *remaining* editing budget. Clamp
+            # untrusted/non-finite headers to the existing generation ceiling;
+            # this never enlarges the caller's independently enforced deadline.
+            try:
+                wait_seconds = float(request.headers.get("x-yleum-provider-timeout-seconds", "270"))
+            except ValueError:
+                wait_seconds = 270.0
+            if not math.isfinite(wait_seconds) or wait_seconds <= 0:
+                wait_seconds = 270.0
+            remaining = min(wait_seconds, 1500.0) - (
+                asyncio.get_running_loop().time() - received_at
+            ) - RECEIPT_RESERVE_SECONDS
+            if remaining <= 0:
+                raise UpstreamProviderError(
+                    "Provider budget exhausted before dispatch",
+                    details={"provider_charge_ambiguous": False,
+                             "provider_failure_kind": "deadline_before_dispatch"},
+                )
+            completion = llmgw.acompletion
+            completion_options = {"response_budget": remaining, "evidence": transport_evidence}
+        else:
+            completion_options = {"user": str(req.user) if req.user else None}
+        response = await completion(
             model=req.model,
             messages=filtered_messages,
-            user=str(req.user) if req.user else None,
-            temperature=req.temperature,
+            temperature=0.5 if req.temperature is None else req.temperature,
             max_tokens=req.max_tokens,
+            **completion_options,
         )
     except BaseException as exc:
         details = exc.details if isinstance(exc, GatewayError) else {}
         retry_candidate = details.pop("_rate_limit_retry_candidate", None)
         status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
-        with CancelScope(shield=True):
+        failure_type = type(exc.__cause__ or exc).__name__
+        async def finish_failed() -> None:
             try:
                 await provider_calls.finish_call(
-                    call_id, status=status, error_type=type(exc.__cause__ or exc).__name__,
-                    **receipt_evidence(details),
+                    call_id, status=status, error_type=failure_type,
+                    **receipt_evidence({**transport_evidence, **details}),
                 )
             except GatewayError as journal_error:
                 raise _gateway_error_to_http(journal_error) from journal_error
+        # One owner survives level cancellation and repeated Task.cancel().
+        receipt_task = asyncio.create_task(finish_failed())
+        with CancelScope(shield=True):
+            while True:
+                try:
+                    await asyncio.shield(receipt_task)
+                    break
+                except asyncio.CancelledError:
+                    if receipt_task.cancelled():
+                        raise
         if isinstance(exc, GatewayError):
             if status == "failed" and isinstance(retry_candidate, dict):
                 exc.details.update(retry_candidate)

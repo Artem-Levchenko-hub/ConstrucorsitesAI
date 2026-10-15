@@ -376,8 +376,12 @@ async def complete_chat(
         read=request_timeout,
     )
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload)
+        request_headers = None
+        if max_tokens is None and model in {"claude-sonnet-5.5", "anthropic/claude-sonnet-5.5"}:
+            request_headers = {"x-yleum-provider-timeout-seconds": str(request_timeout)}
+        response_budget = request_timeout if request_headers else None
+        async with asyncio.timeout(response_budget), httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url, json=payload, headers=request_headers)
             if resp.status_code >= 400:
                 raise _gateway_failure(resp)
             try:
@@ -387,7 +391,7 @@ async def complete_chat(
                     "Не удалось прочитать подтверждённый результат LLM-запроса.",
                     http_status=resp.status_code, provider_charge_ambiguous=True,
                 ) from None
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, TimeoutError) as exc:
         preconnect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
         raise LLMError(
             "Не удалось установить соединение с LLM-сервисом." if preconnect else

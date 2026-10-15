@@ -18,6 +18,11 @@ URL = "https://api.llmgw.ru/v1/chat/completions"
 BODY = {"error": {"code": "rate_limit_exceeded", "type": "rate_limit_error", "message": "private"}}
 
 
+def install_transport(monkeypatch, reply):
+    for transport in ("HTTPTransport", "AsyncHTTPTransport"):
+        monkeypatch.setattr(httpx, transport, lambda *a, **kw: httpx.MockTransport(reply))
+
+
 @pytest.fixture
 def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
     monkeypatch.setenv("LLMGW_API_KEY", "synthetic")
@@ -53,7 +58,7 @@ def test_retry_after_durable_failed_receipt(client, monkeypatch, native):
         calls.append(request)
         return httpx.Response(429, json=BODY, headers={"retry-after": "17"})
 
-    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    install_transport(monkeypatch, reply)
     response = send(client, native)
     assert len(calls) == 1 and response.status_code == (429 if native else 502)
     envelope = error(response, native)
@@ -76,11 +81,7 @@ def test_retry_after_durable_failed_receipt(client, monkeypatch, native):
 
 @pytest.mark.parametrize("native", [False, True])
 def test_failed_journal_never_releases_retry(client, monkeypatch, native):
-    monkeypatch.setattr(
-        httpx,
-        "HTTPTransport",
-        lambda *a, **kw: httpx.MockTransport(lambda request: httpx.Response(429, json=BODY)),
-    )
+    install_transport(monkeypatch, lambda request: httpx.Response(429, json=BODY))
     monkeypatch.setattr(
         provider_calls,
         "finish_call",
@@ -102,13 +103,7 @@ def test_failed_journal_never_releases_retry(client, monkeypatch, native):
     ],
 )
 def test_conflicts_stay_ambiguous(client, monkeypatch, native, addition):
-    monkeypatch.setattr(
-        httpx,
-        "HTTPTransport",
-        lambda *a, **kw: httpx.MockTransport(
-            lambda request: httpx.Response(429, json={**BODY, **addition})
-        ),
-    )
+    install_transport(monkeypatch, lambda request: httpx.Response(429, json={**BODY, **addition}))
     response = send(client, native)
     assert error(response, native)["details"]["provider_charge_ambiguous"] is True
     assert "retry_policy" not in response.text
@@ -190,13 +185,7 @@ def test_invalid_original_bytes_deny_permission(raw):
     "headers", [{"retry-after": "86401"}, {"retry-after": "broken"}, {"x-cost-rub": "0"}]
 )
 def test_transport_invalid_evidence_never_releases_retry(client, monkeypatch, native, headers):
-    monkeypatch.setattr(
-        httpx,
-        "HTTPTransport",
-        lambda *a, **kw: httpx.MockTransport(
-            lambda request: httpx.Response(429, json=BODY, headers=headers)
-        ),
-    )
+    install_transport(monkeypatch, lambda request: httpx.Response(429, json=BODY, headers=headers))
     response = send(client, native)
     assert "retry_policy" not in response.text
     assert error(response, native)["details"]["provider_charge_ambiguous"] is True

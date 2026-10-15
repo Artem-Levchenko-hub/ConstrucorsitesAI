@@ -12,10 +12,26 @@ from collections.abc import Iterator
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
+import httpx
 import pytest
 
 from yleum_gateway.core.config import reset_settings_cache
 from yleum_gateway.services import pricing, provider_calls
+
+
+@pytest.fixture(autouse=True)
+def _forbid_unmocked_http(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """A missed sync/async transport fixture must fail locally, even if caught."""
+    attempted: list[bool] = []
+
+    def denied(*args, **kwargs):
+        attempted.append(True)
+        raise AssertionError("Unmocked HTTP transport is forbidden in gateway tests")
+
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", denied)
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", denied)
+    yield
+    assert not attempted, "Test attempted unmocked HTTP; a caught transport failure is not a pass"
 
 
 @pytest.fixture(autouse=True)

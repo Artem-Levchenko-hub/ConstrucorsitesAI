@@ -39,8 +39,9 @@ def test_chat_upstream_budget(client, monkeypatch, stream, model, default, budge
     def provider(request):
         payload = json.loads(request.content)
         captured.append(payload)
-        if stream:
-            chunk = {"choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
+        if payload["stream"]:
+            chunk = {"id": "synthetic", "model": payload["model"],
+                     "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}],
                      "usage": {"prompt_tokens": 10, "completion_tokens": 1}}
             return httpx.Response(200, text="data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n")
         return httpx.Response(200, json={
@@ -49,6 +50,7 @@ def test_chat_upstream_budget(client, monkeypatch, stream, model, default, budge
         })
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(provider))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda *a, **kw: httpx.MockTransport(provider))
     body = {"model": model, "messages": [{"role": "user", "content": "hello"}], "stream": stream}
     if budget != "absent":
         body["max_tokens"] = budget

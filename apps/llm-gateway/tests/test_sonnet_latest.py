@@ -65,6 +65,12 @@ async def test_exact_routing_and_response_identity(monkeypatch, model, slug):
 
     def reply(request):
         calls.append(json.loads(request.content))
+        if calls[-1]["stream"]:
+            event = {"id": "synthetic-id", "model": slug, "choices": [{
+                "delta": {"content": "answer"}, "finish_reason": "stop",
+            }], "usage": {"prompt_tokens": 1000, "completion_tokens": 100,
+                           "cache_read_input_tokens": 600}}
+            return httpx.Response(200, text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n")
         return httpx.Response(
             200,
             json={
@@ -79,6 +85,7 @@ async def test_exact_routing_and_response_identity(monkeypatch, model, slug):
         )
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
     messages = [
         {
             "role": "user",

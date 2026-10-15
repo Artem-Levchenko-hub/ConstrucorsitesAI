@@ -1,0 +1,232 @@
+"""Collect one bounded upstream SSE response before exposing any tool actions.
+
+The mutable evidence belongs to the caller's single journal owner. It survives
+transport errors and cancellation, even when no complete response can be used.
+"""
+
+import asyncio
+import json
+import math
+from typing import Any
+
+import httpx
+
+from yleum_gateway.services.pricing import read_reported_cost
+
+IDLE_TIMEOUT_SECONDS = 240.0
+CONNECT_TIMEOUT_SECONDS = 30.0
+RECEIPT_RESERVE_SECONDS = 15.0
+MAX_WIRE_BYTES = 16 * 1024 * 1024
+MAX_EVENT_BYTES = 2 * 1024 * 1024
+MAX_EVENTS = 100_000
+MAX_TOOLS = 256
+
+
+class StreamReceiptError(ValueError):
+    """A response could be paid but is not a coherent, complete receipt."""
+
+
+def _identity(value: Any) -> str:
+    if (not isinstance(value, str) or not value.strip() or len(value) > 512
+            or any(ord(char) < 32 for char in value)):
+        raise StreamReceiptError("Invalid response identity")
+    return value
+
+
+class _Collector:
+    def __init__(self, evidence: dict[str, Any]) -> None:
+        self.evidence = evidence
+        self.provider_header_id: str | None = None
+        self.identity: dict[str, str] = {}
+        self.text: list[str] = []
+        self.tools: dict[int, dict[str, Any]] = {}
+        self.finish: str | None = None
+        self.usage: dict[str, Any] | None = None
+        self.metadata: dict[str, Any] = {}
+        self.done = False
+        self.events = 0
+
+    def feed(self, raw: str) -> None:
+        self.events += 1
+        if self.events > MAX_EVENTS or self.done:
+            raise StreamReceiptError("Unexpected response event")
+        if raw == "[DONE]":
+            self.done = True
+            return
+        try:
+            event = json.loads(raw)
+        except (ValueError, RecursionError) as exc:
+            raise StreamReceiptError("Invalid response event") from exc
+        if not isinstance(event, dict) or event.get("error") is not None:
+            raise StreamReceiptError("Invalid response event")
+        for key in ("id", "model"):
+            if event.get(key) is not None:
+                value = _identity(event[key])
+                if key in self.identity and value != self.identity[key]:
+                    raise StreamReceiptError("Conflicting response identity")
+                self.identity[key] = value
+                if key == "id" and self.provider_header_id is None:
+                    self.evidence["provider_request_id"] = value
+        usage = event.get("usage")
+        if usage is not None:
+            if not isinstance(usage, dict) or (self.usage is not None and usage != self.usage):
+                raise StreamReceiptError("Conflicting response usage")
+            self.usage = usage
+        metadata = event.get("metadata")
+        if isinstance(metadata, dict):
+            for key in ("cost_rub", "cost_usd"):
+                if key in metadata:
+                    self.metadata[key] = metadata[key]
+        reported = read_reported_cost(event, {})
+        for field, reported_value in (("provider_cost_rub", reported.cost_rub),
+                             ("provider_cost_usd", reported.cost_usd)):
+            if reported_value is not None and self.evidence.get(field) is None:
+                self.evidence[field] = reported_value
+        choices = event.get("choices")
+        if not isinstance(choices, list) or len(choices) > 1:
+            raise StreamReceiptError("Invalid completion choices")
+        if not choices:
+            return
+        choice = choices[0]
+        if not isinstance(choice, dict) or choice.get("index", 0) != 0:
+            raise StreamReceiptError("Invalid completion choice")
+        delta = choice.get("delta", {})
+        if not isinstance(delta, dict):
+            raise StreamReceiptError("Invalid completion delta")
+        if self.finish is not None and any(delta.get(k) for k in ("content", "tool_calls")):
+            raise StreamReceiptError("Content after completion")
+        content = delta.get("content")
+        if content is not None:
+            if not isinstance(content, str):
+                raise StreamReceiptError("Invalid completion text")
+            self.text.append(content)
+        tools = delta.get("tool_calls", [])
+        if not isinstance(tools, list):
+            raise StreamReceiptError("Invalid tool delta")
+        for tool in tools:
+            if not isinstance(tool, dict):
+                raise StreamReceiptError("Invalid tool delta")
+            index = tool.get("index")
+            if type(index) is not int or not 0 <= index < MAX_TOOLS:
+                raise StreamReceiptError("Invalid tool index")
+            target = self.tools.setdefault(index, {"type": "function", "function": {
+                "name": [], "arguments": []}})
+            if tool.get("type", "function") != "function":
+                raise StreamReceiptError("Invalid tool type")
+            if tool.get("id") is not None:
+                identity = _identity(tool["id"])
+                if target.get("id", identity) != identity:
+                    raise StreamReceiptError("Conflicting tool identity")
+                target["id"] = identity
+            function = tool.get("function", {})
+            if not isinstance(function, dict):
+                raise StreamReceiptError("Invalid function delta")
+            for key in ("name", "arguments"):
+                if key in function:
+                    if not isinstance(function[key], str):
+                        raise StreamReceiptError("Invalid function delta")
+                    target["function"][key].append(function[key])
+        reason = choice.get("finish_reason")
+        if reason is not None:
+            if not isinstance(reason, str) or (self.finish is not None and self.finish != reason):
+                raise StreamReceiptError("Conflicting completion reason")
+            self.finish = reason
+
+    def result(self) -> dict[str, Any]:
+        if (not self.done or self.finish is None or self.usage is None
+                or not all(key in self.identity for key in ("id", "model"))):
+            raise StreamReceiptError("Incomplete response receipt")
+        for key in ("prompt_tokens", "completion_tokens"):
+            value = self.usage.get(key)
+            if type(value) is not int or value < 0:
+                raise StreamReceiptError("Invalid response usage")
+        message: dict[str, Any] = {"role": "assistant", "content": ""}
+        # A truncated reply can still be accounted for but must never execute.
+        if self.finish != "length":
+            message["content"] = "".join(self.text)
+            if self.tools:
+                if self.finish != "tool_calls" or sorted(self.tools) != list(range(len(self.tools))):
+                    raise StreamReceiptError("Incomplete tool response")
+                ids = []
+                for tool in self.tools.values():
+                    tool["function"] = {key: "".join(parts)
+                                        for key, parts in tool["function"].items()}
+                    ids.append(_identity(tool.get("id")))
+                    _identity(tool["function"]["name"])
+                    try:
+                        args = json.loads(tool["function"]["arguments"])
+                    except (ValueError, RecursionError) as exc:
+                        raise StreamReceiptError("Incomplete tool arguments") from exc
+                    if not isinstance(args, dict):
+                        raise StreamReceiptError("Invalid tool arguments")
+                if len(set(ids)) != len(ids):
+                    raise StreamReceiptError("Duplicate tool identity")
+                message["tool_calls"] = [self.tools[index] for index in sorted(self.tools)]
+            elif self.finish == "tool_calls":
+                raise StreamReceiptError("Missing tool response")
+        return {**self.identity, "choices": [{"index": 0, "message": message,
+                "finish_reason": self.finish}], "usage": self.usage, "metadata": self.metadata}
+
+
+async def collect_response(
+    url: str, payload: dict[str, Any], headers: dict[str, str], *,
+    budget_seconds: float, evidence: dict[str, Any],
+) -> httpx.Response:
+    """One POST, bounded by wall time and idle time; never retries internally."""
+    if not math.isfinite(budget_seconds) or budget_seconds <= 0:
+        raise TimeoutError("Provider response budget exhausted")
+    collector = _Collector(evidence)
+    request_headers = httpx.Headers(headers)
+    request_headers["accept"] = "text/event-stream"
+    async with asyncio.timeout(budget_seconds), httpx.AsyncClient(
+        timeout=httpx.Timeout(IDLE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
+        trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
+    ) as client, client.stream("POST", url, json={**payload, "stream": True,
+            "stream_options": {"include_usage": True}},
+            headers=request_headers) as response:
+        provider_header_id = response.headers.get("x-llmgw-request-id")
+        collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None
+        raw_id = collector.provider_header_id or response.headers.get("x-request-id")
+        if raw_id:
+            # Generic x-request-id can identify a proxy hop. Keep it only until
+            # the completion supplies its canonical body ID; LLMGW's own header
+            # retains the existing chat receipt precedence.
+            evidence["provider_request_id"] = _identity(raw_id)
+        reported = read_reported_cost({}, response.headers)
+        evidence.update(provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd)
+        raw = bytearray()
+        wire_bytes = 0
+        event_lines: list[bytes] = []
+        event_bytes = 0
+        async for part in response.aiter_bytes():
+            wire_bytes += len(part)
+            if wire_bytes > (16_384 if response.status_code >= 400 else MAX_WIRE_BYTES):
+                raise StreamReceiptError("Response exceeds byte limit")
+            raw.extend(part)
+            if response.status_code >= 400:
+                continue
+            while b"\n" in raw:
+                line, _, rest = raw.partition(b"\n")
+                raw = bytearray(rest)
+                line = line.rstrip(b"\r")
+                event_bytes += len(line)
+                if event_bytes > MAX_EVENT_BYTES:
+                    raise StreamReceiptError("Response event exceeds byte limit")
+                if not line:
+                    if event_lines:
+                        try:
+                            collector.feed(b"\n".join(event_lines).decode("utf-8"))
+                        except UnicodeError as exc:
+                            raise StreamReceiptError("Invalid response encoding") from exc
+                    event_lines, event_bytes = [], 0
+                    if collector.done:
+                        return httpx.Response(response.status_code, headers=response.headers,
+                                              json=collector.result(), request=response.request)
+                elif line.startswith(b"data:"):
+                    event_lines.append(bytes(line[5:].lstrip(b" ")))
+            if len(raw) + event_bytes > MAX_EVENT_BYTES:
+                raise StreamReceiptError("Response event exceeds byte limit")
+        if response.status_code >= 400:
+            return httpx.Response(response.status_code, headers=response.headers,
+                                  content=bytes(raw), request=response.request)
+        raise StreamReceiptError("Response ended without completion receipt")

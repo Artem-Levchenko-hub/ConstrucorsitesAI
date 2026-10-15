@@ -33,8 +33,9 @@ import httpx
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedError
+from yleum_gateway.providers import native_stream
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
-from yleum_gateway.services.output_budget import output_tokens
+from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
@@ -429,6 +430,8 @@ async def acompletion(
     temperature: float = 0.5,
     max_tokens: int | None = None,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
+    response_budget: float | None = None,
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Call llmgw's chat surface and return an OpenAI-shaped completion dict.
 
@@ -488,8 +491,17 @@ async def acompletion(
                 raise
         raise last  # type: ignore[misc]  # unreachable — loop returns or raises
 
+    evidence = evidence if evidence is not None else {}
     try:
-        data = await asyncio.to_thread(_completion_sync)
+        if uses_provider_output_default(model, max_tokens):
+            response = await native_stream.collect_response(
+                url, payload, headers, budget_seconds=response_budget or timeout, evidence=evidence,
+            )
+            response.raise_for_status()
+            data = response.json()
+            data["_provider_headers"] = _receipt_headers(response.headers)
+        else:
+            data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
         details = _failure_details(bounded_error_body(exc.response) or {}, _receipt_headers(exc.response.headers))
         status = exc.response.status_code
@@ -510,10 +522,16 @@ async def acompletion(
         raise UpstreamProviderError(
             f"llmgw transport error: {type(exc).__name__}",
             details={
+                **_failure_details(evidence),
                 "provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY),
                 "provider_failure_kind": "preconnect" if isinstance(exc, _SAFE_TO_RETRY)
                 else "transport",
             },
+        ) from exc
+    except (TimeoutError, native_stream.StreamReceiptError) as exc:
+        raise UpstreamProviderError(
+            "llmgw response receipt incomplete",
+            details=_failure_details(evidence),
         ) from exc
 
     safe_receipt = receipt_evidence(data)
@@ -553,7 +571,9 @@ async def acompletion(
             },
             "choices": [{
                 "index": 0,
-                "message": {"role": "assistant", "content": content},
+                "message": {"role": "assistant", "content": content,
+                            **({"tool_calls": choice["message"]["tool_calls"]}
+                               if choice.get("message", {}).get("tool_calls") else {})},
                 "finish_reason": choice.get("finish_reason"),
             }],
             "usage": usage,

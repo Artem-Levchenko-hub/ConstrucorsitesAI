@@ -622,7 +622,11 @@ async def _run_agent_segment(
                     files=written, steps=step, transcript=convo, stop_reason="source_deadline",
                 )
             bounded_complete = (
-                partial(llm_client.complete_chat, timeout_seconds=min(300.0, remaining))
+                partial(llm_client.complete_chat, timeout_seconds=(
+                    remaining if max_tokens is None
+                    and agent_output_tokens(active_model, fallback=16384) is None
+                    else min(300.0, remaining)
+                ))
                 if uses_gateway and remaining is not None else complete
             )
             try:
