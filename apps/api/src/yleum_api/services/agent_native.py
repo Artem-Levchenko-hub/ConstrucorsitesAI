@@ -305,7 +305,14 @@ def _tool(
 
 _TOOLS: list[dict[str, Any]] = [
     _tool("list_dir", "List a directory in the project.", {"path": _STR}),
-    _tool("read_file", "Read a file's full contents.", {"path": _STR}, ["path"]),
+    _tool(
+        "read_file",
+        "Read a file or an optional 1-based inclusive line range. "
+        "For truncated output use grep, then a narrow start_line/end_line range.",
+        {"path": _STR, "start_line": {"type": "integer", "minimum": 1},
+         "end_line": {"type": "integer", "minimum": 1}},
+        ["path"],
+    ),
     _tool("grep", "Regex-search files under a path.", {"pattern": _STR, "path": _STR}, ["pattern"]),
     _tool(
         "docs",

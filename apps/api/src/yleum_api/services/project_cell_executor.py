@@ -1272,11 +1272,7 @@ async def maybe_create_project_cell_executor(
                     "detail": _list_dir(workspace_files, action.path or "."),
                 }
             if action.name == "read_file":
-                path = _normalize_path(action.path)
-                content = workspace_files.get(path)
-                if content is None:
-                    return {"ok": False, "error": f"not found: {path}"}
-                return {"ok": True, "content": _truncate(content, _MAX_READ_CHARS)}
+                return _read_file(workspace_files, action.path, action.args)
             if action.name == "grep":
                 pattern = str(action.args.get("pattern", ""))
                 path = str(action.path or "src")
@@ -1660,6 +1656,32 @@ def _normalize_path(path: str) -> str:
     return normalized_path.as_posix()
 
 
+def _read_file(files: dict[str, str], path: str, args: dict[str, Any]) -> dict[str, Any]:
+    path = _normalize_path(path)
+    content = files.get(path)
+    if content is None:
+        return {"ok": False, "error": f"not found: {path}"}
+    lines = content.splitlines(keepends=True)
+    start = args.get("start_line", 1)
+    end = args.get("end_line", len(lines))
+    if type(start) is not int or start < 1:
+        raise ValueError("read_file range: start_line must be a positive integer")
+    if "end_line" in args and (type(end) is not int or end < start):
+        raise ValueError("read_file range: end_line must be an integer >= start_line")
+    if start > max(len(lines), 1):
+        raise ValueError("read_file range: start_line exceeds file length")
+    end = min(end, len(lines))
+    selected = "".join(lines[start - 1:end])
+    return {
+        "ok": True,
+        "content": _truncate(selected, _MAX_READ_CHARS),
+        "read_range": {
+            "start_line": start, "end_line": end, "total_lines": len(lines),
+            "truncated": len(selected) > _MAX_READ_CHARS,
+        },
+    }
+
+
 def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
@@ -1687,6 +1709,8 @@ def _list_dir(files: dict[str, str], path: str) -> str:
 
 def _grep(files: dict[str, str], *, pattern: str, path: str) -> str:
     prefix = _normalize_dir_prefix(path)
+    exact_file = prefix.removesuffix("/")
+    file_only = exact_file in files
     if not pattern:
         return "(empty pattern)"
     try:
@@ -1696,7 +1720,9 @@ def _grep(files: dict[str, str], *, pattern: str, path: str) -> str:
     lines: list[str] = []
     total_chars = 0
     for file_path, content in sorted(files.items()):
-        if prefix and not file_path.startswith(prefix):
+        if file_only and file_path != exact_file:
+            continue
+        if not file_only and prefix and not file_path.startswith(prefix):
             continue
         for line_no, line in enumerate(content.splitlines(), start=1):
             if matcher.search(line) is None:

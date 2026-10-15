@@ -26,7 +26,7 @@ Design rules that keep it safe to ship:
 
 Actions (file tools + real build/runtime observations):
     list_dir     {"path": "src/app"}
-    read_file    {"path": "src/app/page.tsx"}
+    read_file    {"path": "src/app/page.tsx", "start_line": 1, "end_line": 80}
     grep         {"pattern": "useState", "path": "src"}
     write_file   {"path": "...", "content": "...full file..."}
     edit_file    {"path": "...", "search": "...", "replace": "..."}
@@ -212,7 +212,24 @@ def _format_observation(action: Action, obs: dict[str, Any]) -> str:
     head = f"[observation: {action.name}{(' ' + action.path) if action.path else ''} "
     head += "SKIPPED]" if obs.get("skipped") is True else "OK]" if ok else "FAILED]"
     body = obs.get("detail") or obs.get("content") or obs.get("error") or ""
-    return f"{head}\n{_truncate(body, _MAX_OBS_CHARS)}"
+    scope = ""
+    read_range = obs.get("read_range")
+    if action.name == "read_file" and ok and isinstance(read_range, dict):
+        scope = (
+            f"[read_file lines {read_range['start_line']}-{read_range['end_line']} "
+            f"of {read_range['total_lines']}]\n"
+        )
+    rendered = _truncate(body, _MAX_OBS_CHARS)
+    if action.name == "read_file" and ok and (
+        len(str(body)) > _MAX_OBS_CHARS
+        or (isinstance(read_range, dict) and read_range.get("truncated"))
+    ):
+        rendered += (
+            "\nSource is truncated. Use grep on this exact file, then read_file "
+            "with a narrow start_line/end_line range (1-based, inclusive). "
+            "Do not repeat the same full-file read or guess an omitted signature."
+        )
+    return f"{head}\n{scope}{rendered}"
 
 
 # Executor contract: an async callable Action -> {ok: bool, detail/content/error}.
@@ -1358,7 +1375,7 @@ PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE acti
 
 ACTIONS:
 - list_dir   {"path": "src/app"}
-- read_file  {"path": "src/app/page.tsx"}
+- read_file  {"path": "src/app/page.tsx", "start_line": 1, "end_line": 80} — optional 1-based inclusive line range; narrow it if output is truncated
 - grep       {"pattern": "regex", "path": "src"}
 - docs       {"library": "drizzle-orm", "query": "select where"}  — pull CURRENT official docs/signatures for an EXTERNAL library (Next.js, Drizzle, NextAuth, aiogram…) when unsure of an API; use it INSTEAD of guessing
 - provider_docs {"provider": "aitunnel", "query": "authentication and chat completions"} — read bounded official provider documentation; never pass credentials or arbitrary URLs
@@ -1433,7 +1450,7 @@ PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE acti
 
 ACTIONS:
 - grep       {"pattern": "text", "path": "src"}   — locate where to change
-- read_file  {"path": "..."}                       — read before editing (mandatory)
+- read_file  {"path": "...", "start_line": 1, "end_line": 80} — optional 1-based inclusive range; read the exact edit context and full SDK signature
 - edit_file  {"path": "...", "search": "EXACT TEXT", "replace": "NEW TEXT"} — preferred: minimal patch
 - write_file {"path": "...", "content": "FULL FILE"} — only when creating a new file
 - list_dir   {"path": "..."}
@@ -1493,7 +1510,7 @@ PROTOCOL — every reply: ONE short sentence of reasoning, then EXACTLY ONE acti
 
 ACTIONS:
 - list_dir   {"path": "src/app"}
-- read_file  {"path": "src/app/page.tsx"}
+- read_file  {"path": "src/app/page.tsx", "start_line": 1, "end_line": 80} — optional 1-based inclusive line range; narrow it if output is truncated
 - grep       {"pattern": "regex", "path": "src"}
 - docs       {"library": "drizzle-orm", "query": "select where"}  — pull CURRENT official docs/signatures for an EXTERNAL library (Next.js, Drizzle, NextAuth, aiogram…) when unsure of an API; use it INSTEAD of guessing
 - provider_docs {"provider": "aitunnel", "query": "authentication and chat completions"} — read bounded official provider documentation; never pass credentials or arbitrary URLs

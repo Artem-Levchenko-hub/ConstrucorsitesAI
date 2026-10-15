@@ -18,6 +18,34 @@ import pytest
 from yleum_api.services import agent_builder as ab
 
 
+def test_read_observation_identifies_range_and_how_to_recover_truncated_source():
+    action = ab.Action("read_file", {"path": "src/lib/omnia/integration-client.ts"})
+    observation = ab._format_observation(action, {
+        "ok": True,
+        "content": "x" * (ab._MAX_OBS_CHARS + 40),
+        "read_range": {"start_line": 1, "end_line": 450, "total_lines": 450, "truncated": False},
+    })
+    assert "lines 1-450 of 450" in observation
+    assert "start_line" in observation and "end_line" in observation
+    assert "truncated" in observation
+    assert len(observation) < ab._MAX_OBS_CHARS + 500
+
+
+def test_ranged_read_observation_preserves_complete_sdk_signature():
+    signature = (
+        "export async function updateMaxAction(id: string, input: Input, expectedRevision: number)"
+    )
+    action = ab.Action("read_file", {
+        "path": "src/lib/omnia/integration-client.ts", "start_line": 340, "end_line": 360,
+    })
+    observation = ab._format_observation(action, {
+        "ok": True, "content": signature,
+        "read_range": {"start_line": 340, "end_line": 360, "total_lines": 450, "truncated": False},
+    })
+    assert signature in observation
+    assert "lines 340-360 of 450" in observation
+
+
 @pytest.mark.parametrize('opening,closing', [
     ('invoke', 'invoke'), ('action', 'action'), ('action', 'omnia:action'),
 ])
