@@ -89,6 +89,8 @@ class PromptRequest(BaseModel):
     # same key replays the original response and never starts another generation.
     # Optional for backward compatibility; new clients always send it.
     idempotency_key: str | None = Field(default=None, min_length=8, max_length=128)
+    # An amendment is a new normally admitted run after proven predecessor cleanup.
+    supersedes_run_id: UUID | None = None
     # Deprecated / ignored: the server orchestrates per-role models (no user
     # model picker). Kept optional so a stale frontend that still sends it
     # doesn't 422. Honoured only as an admin override via env OMNIA_FORCE_MODEL.

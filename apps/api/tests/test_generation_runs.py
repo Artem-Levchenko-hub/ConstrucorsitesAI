@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -208,6 +209,155 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
         "active_message_id": None,
         "active_status": "pending",
     }
+
+
+async def _physically_released_predecessor(session):
+    from datetime import UTC, datetime
+
+    from yleum_api.services.build_spec import FidelitySpec
+    from yleum_api.services.generation.recovery_requirements import store_frozen_requirements
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
+    from yleum_api.services.project_cells import _canonical_operation_envelope
+
+    owner, project = await _owner_and_project(session)
+    original = "Original full request"
+    run = GenerationRun(project_id=project.id, user_id=owner.id,
+        idempotency_key="previous-request", status="cancelled",
+        prompt_hash=hashlib.sha256(original.encode()).hexdigest())
+    session.add(run)
+    await session.flush()
+    store_frozen_requirements(run, original, FidelitySpec(), None)
+    workspace = ProjectCellWorkspace(project_id=project.id, owner_id=owner.id,
+        provider="docker", state="ready", generation_run_id=None, fencing_epoch=7)
+    session.add(workspace)
+    await session.flush()
+    envelope, digest = _canonical_operation_envelope(workspace.id, run.id, "release", {})
+    response = ProjectCellResourceResponse(workspace.id, "resources_ready", None, 7, None,
+                                          True, True, True, True)
+    release = ProjectCellOperation(workspace_id=workspace.id, generation_run_id=run.id,
+        kind="release", idempotency_key="physical-release", request_payload=envelope,
+        request_digest=digest, status="completed", fencing_epoch=7,
+        result_payload=response.to_wire_json(), finished_at=datetime.now(UTC))
+    session.add(release)
+    await session.commit()
+    return owner, project, run, workspace
+
+
+async def test_amended_prompt_has_new_run_identity(db_session):
+    import copy
+
+    from yleum_api.services.generation.recovery_requirements import superseded_run_id
+
+    owner, project, original, _ = await _physically_released_predecessor(db_session)
+    original_id, original_hash = original.id, original.prompt_hash
+    original_state = copy.deepcopy(original.agent_state)
+    amended, replayed = await reserve_generation_run(db_session, project_id=project.id,
+        user_id=owner.id, idempotency_key="new-linked-request", prompt="Revised full request",
+        supersedes_run_id=original.id)
+    await db_session.commit()
+    assert not replayed and amended.id != original_id
+    assert superseded_run_id(amended) == original_id
+    assert original.prompt_hash == original_hash and original.status == "cancelled"
+    assert original.agent_state == original_state
+    replay, replayed = await reserve_generation_run(db_session, project_id=project.id,
+        user_id=owner.id, idempotency_key="new-linked-request", prompt="Revised full request",
+        supersedes_run_id=original_id)
+    assert replayed and replay.id == amended.id
+    with pytest.raises(ApiError) as conflict:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Revised full request",
+            supersedes_run_id=uuid.uuid4())
+    assert conflict.value.code == "idempotency_conflict"
+    with pytest.raises(ApiError) as missing_link:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Revised full request")
+    assert missing_link.value.code == "idempotency_conflict"
+
+
+async def test_linked_admission_refreshes_terminal_predecessor(db_session, test_engine):
+    owner, project, original, _ = await _physically_released_predecessor(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        changed = await other.get(GenerationRun, original.id)
+        changed.status = "running"
+        await other.commit()
+    assert original.status == "cancelled"  # Deliberately stale identity map.
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    assert rejected.value.details["reason"] == "amendment_not_ready"
+
+
+async def test_linked_admission_refreshes_workspace_release_fact(db_session, test_engine):
+    owner, project, original, workspace = await _physically_released_predecessor(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        changed = await other.get(ProjectCellWorkspace, workspace.id)
+        changed.generation_run_id = original.id
+        await other.commit()
+    assert workspace.generation_run_id is None
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    assert rejected.value.details["reason"] == "amendment_not_ready"
+
+
+async def test_linked_admission_holds_predecessor_lock_until_commit(db_session, test_engine):
+    owner, project, original, _ = await _physically_released_predecessor(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as admission, factory() as other:
+        await reserve_generation_run(admission, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+        await other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(DBAPIError) as locked:
+            await other.execute(text("UPDATE generation_runs SET status='running' WHERE id=:id"),
+                                {"id": original.id})
+        assert getattr(locked.value.orig, "sqlstate", None) == "55P03"
+        await other.rollback()
+        await admission.rollback()
+
+
+async def test_linked_admission_refreshes_finished_activity_fact(db_session, test_engine):
+    from datetime import UTC, datetime
+
+    from yleum_api.models.project_cell import ProjectCellActivityLease
+
+    owner, project, original, workspace = await _physically_released_predecessor(db_session)
+    now = datetime.now(UTC)
+    lease = ProjectCellActivityLease(workspace_id=workspace.id, generation_run_id=original.id,
+        kind="promotion", state="completed", fencing_epoch=7, started_at=now,
+        heartbeat_at=now, deadline_at=now, finished_at=now)
+    db_session.add(lease)
+    await db_session.commit()
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        changed = await other.get(ProjectCellActivityLease, lease.operation_id)
+        changed.state, changed.finished_at = "active", None
+        await other.commit()
+    assert lease.state == "completed"  # Deliberately stale identity map.
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    assert rejected.value.details["reason"] == "amendment_not_ready"
+
+
+async def test_linked_admission_fails_closed_for_legacy_terminal_run(db_session):
+    owner, project = await _owner_and_project(db_session)
+    original = GenerationRun(project_id=project.id, user_id=owner.id,
+        idempotency_key="legacy", status="completed", prompt_hash="a" * 64)
+    db_session.add(original)
+    await db_session.commit()
+    original_id = original.id
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    await db_session.rollback()
+    runs = list((await db_session.scalars(select(GenerationRun))).all())
+    assert [run.id for run in runs] == [original_id]
 
 
 async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(

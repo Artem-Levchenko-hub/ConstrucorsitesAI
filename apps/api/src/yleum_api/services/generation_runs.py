@@ -646,6 +646,7 @@ async def reserve_generation_run(
     user_id: UUID,
     idempotency_key: str,
     prompt: str,
+    supersedes_run_id: UUID | None = None,
 ) -> tuple[GenerationRun, bool]:
     """Atomically reserve the only active execution slot for a project.
 
@@ -653,6 +654,13 @@ async def reserve_generation_run(
     processes. A retry with the same key replays the original run. A different
     request while work is active is rejected instead of racing the same repo.
     """
+
+    from yleum_api.services.generation.recovery_contract import RecoveryContractError
+    from yleum_api.services.generation.recovery_requirements import (
+        AMENDMENT_KEY,
+        require_quiesced_predecessor,
+        superseded_run_id,
+    )
 
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
@@ -664,14 +672,19 @@ async def reserve_generation_run(
             select(GenerationRun).where(
                 GenerationRun.project_id == project_id,
                 GenerationRun.idempotency_key == idempotency_key,
-            )
+            ).execution_options(populate_existing=True)
         )
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.prompt_hash != prompt_hash(prompt):
+        try:
+            same_parent = superseded_run_id(existing) == supersedes_run_id
+        except RecoveryContractError:
+            same_parent = False
+        if (existing.prompt_hash != prompt_hash(prompt) or not same_parent
+                or (supersedes_run_id is not None and existing.user_id != user_id)):
             raise ApiError(
                 "idempotency_conflict",
-                "idempotency key was already used for another prompt",
+                "idempotency key was already used for another request",
                 status.HTTP_409_CONFLICT,
                 details={"run_id": str(existing.id)},
             )
@@ -686,6 +699,17 @@ async def reserve_generation_run(
 
     await session.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     await assert_no_active_restoration(session, project_id)
+    if supersedes_run_id is not None:
+        try:
+            await require_quiesced_predecessor(session, project_id=project_id, user_id=user_id,
+                                               predecessor_id=supersedes_run_id)
+        except RecoveryContractError as exc:
+            raise ApiError(
+                "conflict", "Previous generation cleanup is not proven complete",
+                status.HTTP_409_CONFLICT,
+                details={"supersedes_run_id": str(supersedes_run_id),
+                         "reason": "amendment_not_ready"},
+            ) from exc
 
     active = (
         await session.execute(
@@ -756,6 +780,9 @@ async def reserve_generation_run(
         prompt_hash=prompt_hash(prompt),
         status="pending",
     )
+    if supersedes_run_id is not None:
+        run.agent_state = {AMENDMENT_KEY: {"version": 1,
+                                          "supersedes_run_id": str(supersedes_run_id)}}
     session.add(run)
     await session.flush()
     return run, False
