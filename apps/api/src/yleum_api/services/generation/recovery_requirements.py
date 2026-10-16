@@ -13,6 +13,7 @@ from typing import Any, Literal, cast
 from uuid import UUID
 
 from sqlalchemy import select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.models.generation_run import GenerationRun
@@ -292,11 +293,42 @@ def requirements_complete(
 async def require_quiesced_predecessor(
     session: AsyncSession, *, project_id: UUID, user_id: UUID, predecessor_id: UUID,
 ) -> None:
-    """Check settled fenced release facts under normal admission's project lock.
+    """Serialize with resource operations before acquiring conflicting row/FK locks.
 
     Never perform cancellation/release here. Existing cleanup owns those effects.
     Legacy runs with no durable physical release evidence fail closed for links.
     """
+    from yleum_api.services.project_cells import lock_workspace_operations
+
+    # This is a lookup hint only. Project ownership, parent, workspace and all
+    # evidence are refreshed below after joining the owning advisory namespace.
+    workspace_id = await session.scalar(select(ProjectCellWorkspace.id).where(
+        ProjectCellWorkspace.project_id == project_id, ProjectCellWorkspace.owner_id == user_id,
+    ))
+    _need(workspace_id is not None, "amendment predecessor physical release is unproven")
+    assert workspace_id is not None
+    await lock_workspace_operations(session, workspace_id)
+    # Older lifecycle callers may enter reservation while holding rows. Busy
+    # evidence is not quiescence: NOWAIT avoids reversing their order. A
+    # savepoint restores transaction usability after a 55P03 refusal; locks
+    # from successful validation remain held until outer admission commits.
+    async with session.begin_nested():
+        try:
+            await _require_locked_predecessor_evidence(
+                session, project_id=project_id, user_id=user_id,
+                predecessor_id=predecessor_id, workspace_id=workspace_id,
+            )
+        except DBAPIError as exc:
+            if getattr(exc.orig, "sqlstate", None) == "55P03":
+                raise RecoveryContractError("amendment predecessor evidence is busy") from exc
+            raise
+
+
+async def _require_locked_predecessor_evidence(
+    session: AsyncSession, *, project_id: UUID, user_id: UUID,
+    predecessor_id: UUID, workspace_id: UUID,
+) -> None:
+    """Fresh evidence under owning serialization; never wait behind a row owner."""
     from yleum_api.services.generation_deployment_drain import reconciliation_settles
     from yleum_api.services.orchestrator_client import (
         OrchestratorUnavailable,
@@ -304,29 +336,31 @@ async def require_quiesced_predecessor(
     )
     from yleum_api.services.project_cells import ProjectCellValidationError, _stored_request_payload
 
-    project = await session.get(Project, project_id, populate_existing=True, with_for_update=True)
+    project = await session.get(Project, project_id, populate_existing=True,
+                                with_for_update={"nowait": True})
     parent = await session.scalar(select(GenerationRun).where(
         GenerationRun.id == predecessor_id, GenerationRun.project_id == project_id,
         GenerationRun.user_id == user_id,
-    ).execution_options(populate_existing=True).with_for_update())
+    ).execution_options(populate_existing=True).with_for_update(nowait=True))
     _need(project is not None and project.owner_id == user_id and parent is not None
           and parent.status in {"completed", "failed", "cancelled"},
           "amendment predecessor ownership or terminal state conflict")
     workspace = await session.scalar(select(ProjectCellWorkspace).where(
+        ProjectCellWorkspace.id == workspace_id,
         ProjectCellWorkspace.project_id == project_id, ProjectCellWorkspace.owner_id == user_id,
-    ).execution_options(populate_existing=True).with_for_update())
+    ).execution_options(populate_existing=True).with_for_update(nowait=True))
     _need(workspace is not None and workspace.generation_run_id is None
           and workspace.deleted_at is None and workspace.state == "ready",
           "amendment predecessor physical release is unproven")
     assert workspace is not None
     leases = list((await session.scalars(select(ProjectCellActivityLease).where(
         ProjectCellActivityLease.workspace_id == workspace.id,
-    ).execution_options(populate_existing=True).with_for_update())).all())
+    ).execution_options(populate_existing=True).with_for_update(nowait=True))).all())
     _need(not any(lease.state == "active" or lease.finished_at is None for lease in leases),
           "amendment predecessor activity cleanup is pending")
     operations = list((await session.scalars(select(ProjectCellOperation).where(
         ProjectCellOperation.workspace_id == workspace.id,
-    ).execution_options(populate_existing=True).with_for_update())).all())
+    ).execution_options(populate_existing=True).with_for_update(nowait=True))).all())
     _need(not any(op.status in {"pending", "waiting_capacity", "running"} for op in operations),
           "amendment predecessor resource cleanup is pending")
     _need(not any(op.status == "indeterminate" and not any(

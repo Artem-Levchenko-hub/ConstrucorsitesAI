@@ -243,6 +243,15 @@ async def _advisory_lock(session: AsyncSession, workspace_key: UUID) -> None:
     )
 
 
+async def lock_workspace_operations(session: AsyncSession, workspace_id: UUID) -> None:
+    """Share operation reservation/claim serialization before taking evidence locks.
+
+    This delegates to the existing owning namespace, including its transaction
+    lifetime. Callers must not already hold conflicting run/workspace row locks.
+    """
+    await _advisory_lock(session, workspace_id)
+
+
 def _validate_workspace_ownership(project: Project, user: User, run: GenerationRun) -> None:
     if project.owner_id != user.id:
         raise ProjectCellOwnershipError("authenticated user does not own the project")

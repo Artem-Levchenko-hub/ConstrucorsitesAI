@@ -5,12 +5,14 @@ import copy
 import hashlib
 import importlib
 import importlib.util
+from contextlib import asynccontextmanager
 from types import SimpleNamespace as NS
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import JSON, Column, MetaData, Table, create_engine
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from tests.test_max_behavior_proof import driver
@@ -128,6 +130,11 @@ async def receipt_case(monkeypatch):
     sync = Session(engine, expire_on_commit=False)
 
     class BoundarySession:
+        @asynccontextmanager
+        async def begin_nested(self):
+            with sync.begin_nested():
+                yield
+
         async def get(self, model, key, **kwargs):
             return sync.get(model, key, **kwargs)
 
@@ -172,6 +179,13 @@ async def receipt_case(monkeypatch):
         return case.physical
 
     monkeypatch.setattr(rr, "project_cell_agent_identity", identity_reader)
+
+    async def sqlite_advisory_boundary(session, workspace_arg):
+        # PostgreSQL locking is tested with actual owning callers separately.
+        assert workspace_arg == workspace_id
+
+    monkeypatch.setattr("yleum_api.services.project_cells._advisory_lock",
+                        sqlite_advisory_boundary)
     case = NS(rr=rr, sync=sync, session=BoundarySession(), project=project, run=run,
               workspace=workspace, candidate=candidate, proof=proof, binding=binding,
               physical=physical, receipt=receipt, requirements=frozen(),
@@ -348,6 +362,35 @@ async def test_terminal_predecessor_requires_real_physical_release(receipt_case)
     released(c)
     await c.rr.require_quiesced_predecessor(c.session, project_id=c.project.id,
         user_id=c.run.user_id, predecessor_id=c.run.id)
+
+
+@pytest.mark.parametrize("sqlstate", ["55P03", "40P01", "08006"])
+async def test_only_busy_evidence_lock_becomes_an_amendment_refusal(
+    receipt_case, monkeypatch, sqlstate,
+):
+    c = receipt_case
+    released(c)
+
+    class DatabaseFailure(Exception):
+        pass
+
+    original_error = DatabaseFailure("evidence row acquisition failed")
+    original_error.sqlstate = sqlstate
+    failure = DBAPIError("SELECT locked evidence", None, original_error)
+    original_scalar = c.session.scalar
+
+    async def acquire(statement):
+        if statement.column_descriptions[0]["entity"] is GenerationRun:
+            raise failure
+        return await original_scalar(statement)
+
+    monkeypatch.setattr(c.session, "scalar", acquire)
+    expected = RecoveryContractError if sqlstate == "55P03" else DBAPIError
+    with pytest.raises(expected) as rejected:
+        await c.rr.require_quiesced_predecessor(c.session, project_id=c.project.id,
+            user_id=c.run.user_id, predecessor_id=c.run.id)
+    if sqlstate != "55P03":
+        assert rejected.value is failure
 
 
 @pytest.mark.parametrize("broken", ["owner", "project", "active", "workspace", "lease",
