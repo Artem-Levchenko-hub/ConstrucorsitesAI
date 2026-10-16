@@ -8,6 +8,7 @@ import httpx
 import pytest
 
 from yleum_api.services import agent_builder, llm_client
+from yleum_api.services.generation.recovery_actions import ResponseRecovery
 
 from .test_legacy_provider_error_policy import install_transport
 
@@ -96,9 +97,12 @@ async def test_truncated_action_is_discarded_then_smaller_change_is_checked_and_
     assert not any(event == "agent.retry" for event, _ in events)
 
 
-async def test_only_actual_source_progress_renews_the_truncation_allowance(monkeypatch):
-    calls = []
+async def test_source_write_without_verified_receipt_does_not_renew_truncation_allowance(
+    monkeypatch,
+):
+    calls, executed = [], []
     files = {"a.ts": "old"}
+    recovery = ResponseRecovery()
     replies = iter([
         response(action("done"), reason="length"), response(action("done"), reason="length"),
         response(action("write_file", path="a.ts", content="new")),
@@ -114,19 +118,24 @@ async def test_only_actual_source_progress_renews_the_truncation_allowance(monke
         return dict(files)
 
     async def execute(command):
-        if command.name == "write_file":
-            files[command.path] = command.args["content"]
-        else:
-            assert command.name == "build"
+        executed.append(command.name)
+        assert command.name == "write_file"
+        files[command.path] = command.args["content"]
         return {"ok": True, "content": files.get(command.path, "")}
 
     install_transport(monkeypatch, handler)
     result = await agent_builder.run_agent_build(
         system_prompt="s", user_prompt="t", model="m", execute=execute,
         snapshot_files=snapshot, coordinator_handoff=True, max_steps=7,
+        response_recovery=recovery,
     )
-    assert result.done and result.needs_finalization
-    assert len(calls) == 7 and result.files == {"a.ts": "new"}
+    assert not result.done and not result.needs_finalization
+    assert result.stop_reason == "output_limit"
+    assert result.files == files == {"a.ts": "new"}
+    assert executed == ["write_file"]
+    assert len(calls) == 4  # The third truncation stops before queued build/done.
+    assert len({request.content for request in calls}) == 4  # No provider replay.
+    assert recovery.budget.total == recovery.budget.since_progress == 3
 
 
 @pytest.mark.parametrize("interleave", [False, True])
