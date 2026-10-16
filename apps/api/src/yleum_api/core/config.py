@@ -751,6 +751,9 @@ class Settings(BaseSettings):
     project_cell_general_availability_enabled: bool = Field(default=True)
     project_cell_canary_emails: str = Field(default="")
     use_generation_worker: bool = Field(default=False)
+    # Reader/storage rollout only; dispatch and finalization keep their legacy paths.
+    generation_recovery_mode: Literal["off", "shadow", "canary", "on"] = "off"
+    generation_recovery_canary_project_ids: str = ""
     # Сколько сборок воркер ведёт одновременно. Это ГЛАВНЫЙ предел числа
     # пользователей, которые могут запустить генерацию в одну минуту: мощности
     # ячеек с 26.09 хватает на 14 на площадку, а воркер пускал ровно 8 — и это

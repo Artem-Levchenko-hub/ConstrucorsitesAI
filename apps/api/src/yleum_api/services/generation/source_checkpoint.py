@@ -159,6 +159,26 @@ def _get_checkpoint(project_id: UUID, run_id: UUID, digest: str) -> bytes | None
     return data if hashlib.sha256(data).hexdigest() == digest else None
 
 
+async def store_checkpoint_object(project_id: UUID, run_id: UUID, data: bytes) -> tuple[str, str]:
+    """Store immutable private bytes; callers validate authorization before upload."""
+    digest = await asyncio.to_thread(_put_checkpoint, project_id, run_id, data)
+    if digest != hashlib.sha256(data).hexdigest():
+        raise ValueError("checkpoint storage returned an invalid content digest")
+    return _object_key(project_id, run_id, digest), digest
+
+
+async def load_checkpoint_object(
+    project_id: UUID, run_id: UUID, *, object_key: str, digest: str,
+) -> bytes | None:
+    """Resolve only an exact content-addressed object in the current run's namespace."""
+    if object_key != _object_key(project_id, run_id, digest):
+        raise ValueError("checkpoint reference ownership mismatch")
+    data = await asyncio.to_thread(_get_checkpoint, project_id, run_id, digest)
+    if data is None or len(data) > MAX_REPO_BYTES or hashlib.sha256(data).hexdigest() != digest:
+        return None
+    return data
+
+
 def checkpoint_sources(files: dict[str, str]) -> dict[str, str]:
     """Remove server-owned/secret files; validate everything that will be resumed."""
     selected: dict[str, str] = {}
