@@ -7,6 +7,7 @@ committed state at the event boundary, without requiring a PostgreSQL server.
 
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -15,6 +16,7 @@ import pytest
 
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
+from yleum_api.models.project import Project
 from yleum_api.services import restorations
 from yleum_api.services.agent_builder import AgentResult
 from yleum_api.services.generation import (
@@ -29,6 +31,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
     SourceBaseline,
 )
+from yleum_api.services.generation.recovery_requirements import STATE_KEY, frozen_requirements
 
 
 def test_output_limit_failure_survives_rollback_but_not_successful_finalization():
@@ -94,9 +97,20 @@ def pipeline_turn(monkeypatch):
                   checkpoint_failure_phase=None, source_deadline=None,
                   multi_path_checkpoint_failure=False, checkpoint_snapshot_failure=False):
         ids = GenerationIds(*(uuid4() for _ in range(5)))
-        run_row = GenerationRun(id=ids.run_id, status="running", agent_state={})
-        message = Message(id=ids.assistant_message_id, content="", tokens_out=None)
+        original_prompt = "Change title"
+        project = Project(id=ids.project_id, owner_id=ids.user_id, template="max_miniapp",
+                          name="Fixture", slug="fixture", discovery_spec=None)
+        original_message = Message(id=ids.user_message_id, project_id=ids.project_id,
+                                   role="user", content=original_prompt)
+        run_row = GenerationRun(id=ids.run_id, project_id=ids.project_id, user_id=ids.user_id,
+                                status="running", agent_state={}, idempotency_key="terminal-turn",
+                                prompt_hash=sha256(original_prompt.encode()).hexdigest(),
+                                user_message_id=original_message.id,
+                                assistant_message_id=ids.assistant_message_id)
+        message = Message(id=ids.assistant_message_id, project_id=ids.project_id,
+                          role="assistant", content="", tokens_out=None)
         committed = {}
+        scope_commit = {}
         trace = []
         events = []
         cards = []
@@ -113,9 +127,14 @@ def pipeline_turn(monkeypatch):
                 return run_row
 
             async def get(self, model, key, **_kwargs):
+                if model is Project:
+                    assert key == ids.project_id
+                    return project
                 if model is GenerationRun:
                     assert key == ids.run_id
                     return run_row
+                if model is Message and key == ids.user_message_id:
+                    return original_message
                 assert model is Message and key == ids.assistant_message_id
                 return message
 
@@ -127,7 +146,12 @@ def pipeline_turn(monkeypatch):
                     tokens_out=message.tokens_out,
                     snapshot_id=message.snapshot_id,
                 )
-                trace.append("commit")
+                if not scope_commit:
+                    assert set(run_row.agent_state) == {STATE_KEY}
+                    scope_commit.update(deepcopy(committed))
+                    trace.append("freeze_requirements")
+                else:
+                    trace.append("commit")
 
         async def publish(project_id, kind, payload):
             assert project_id == ids.project_id
@@ -317,9 +341,17 @@ def pipeline_turn(monkeypatch):
             if checkpoint_failure_phase is None:
                 raise
             failure = exc
+        assert scope_commit and scope_commit["status"] == "running"
+        assert scope_commit["content"] == "" and scope_commit["tokens_out"] is None
+        assert scope_commit["snapshot_id"] is None
+        requirements = frozen_requirements(run_row)
+        assert any(not requirement.required and requirement.text == original_prompt
+                   for requirement in requirements)
+        assert any(requirement.required and requirement.check_kind == "manual"
+                   and requirement.text == original_prompt for requirement in requirements)
         return SimpleNamespace(
             ids=ids, committed=committed, trace=trace, events=events, cards=cards,
-            tree=tree, failure=failure,
+            tree=tree, failure=failure, scope_commit=scope_commit,
             phases={name: getattr(agent_pipeline, name) for name in phase_results},
         )
 
@@ -351,10 +383,10 @@ async def test_pipeline_checkpoint_failure_restores_accepted_source_before_stopp
     )
     assert turn.failure is not None
     assert turn.tree == {"src/page.tsx": "original"}
-    assert turn.trace == ["restored_accepted_source"]
+    assert turn.trace == ["freeze_requirements", "restored_accepted_source"]
     assert turn.phases["recover_stopped_candidate"].await_count == 2
     turn.phases["finalize_max_candidate"].assert_not_awaited()
-    assert turn.events == [] and turn.cards == [] and turn.committed == {}
+    assert turn.events == [] and turn.cards == [] and turn.committed == turn.scope_commit
 
 
 @pytest.mark.parametrize("phase", [
@@ -376,7 +408,7 @@ async def test_heal_checkpoint_failure_restores_every_run_change_to_exact_accept
         "src/heal.tsx": "accepted heal",
         "src/deleted.tsx": "accepted deleted",
     }
-    assert turn.trace == ["restored_accepted_source"]
+    assert turn.trace == ["freeze_requirements", "restored_accepted_source"]
     heal_phases = (
         "check_backend_and_normalize_css", "repair_legacy_edit",
         "check_runtime_security_gates", "check_coverage_gate",
@@ -384,7 +416,7 @@ async def test_heal_checkpoint_failure_restores_every_run_change_to_exact_accept
     for later_phase in heal_phases[heal_phases.index(phase) + 1:]:
         turn.phases[later_phase].assert_not_awaited()
     turn.phases["finalize_max_candidate"].assert_not_awaited()
-    assert turn.events == [] and turn.cards == [] and turn.committed == {}
+    assert turn.events == [] and turn.cards == [] and turn.committed == turn.scope_commit
 
 
 @pytest.mark.parametrize("native,done", [(True, True), (True, False), (False, False)])
@@ -409,7 +441,7 @@ async def test_identical_edit_emits_error_after_failure_commit_without_snapshot_
     assert saved["tokens_out"] == 0
     assert saved["snapshot_id"] is None
     assert saved["status"] == "running"  # Executor cleanup still owns finalization.
-    assert turn.trace == ["commit", "commit", "llm.error", "clear_stream"]
+    assert turn.trace == ["freeze_requirements", "commit", "commit", "llm.error", "clear_stream"]
     assert turn.cards == []
 
 
@@ -441,7 +473,7 @@ async def test_successful_noop_and_legacy_partial_keep_done_event(pipeline_turn,
         "tokens_out": None,
         "cost_rub": None,
     }
-    assert saved["outcome"] == {}
+    assert saved["outcome"] == turn.scope_commit["outcome"]
     assert saved["tokens_out"] == 0
     assert turn.trace[-2:] == ["llm.done", "clear_stream"]
     assert bool(turn.cards) is (not done)

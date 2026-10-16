@@ -120,14 +120,25 @@ async def test_real_freeze_recovers_original_message_before_guidance(monkeypatch
     from unittest.mock import AsyncMock
     from uuid import uuid4
 
-    project_id = uuid4()
-    run = NS(
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.message import Message
+
+    project_id, user_id, run_id, message_id = (uuid4() for _ in range(4))
+    run = GenerationRun(
+        id=run_id, project_id=project_id, user_id=user_id, status="running",
+        idempotency_key="coffee-original-guidance",
         prompt_hash=hashlib.sha256(REQUEST.encode()).hexdigest(),
-        user_message_id=uuid4(),
+        user_message_id=message_id,
         agent_state={},
     )
+    original_message = Message(id=message_id, project_id=project_id, role="user", content=REQUEST)
+
+    async def get_message(model, ident, **kwargs):
+        assert model is Message and ident == run.user_message_id
+        return original_message
+
     session = NS(
-        get=AsyncMock(return_value=NS(project_id=project_id, role="user", content=REQUEST)),
+        get=get_message,
         commit=AsyncMock(),
     )
 
@@ -139,11 +150,14 @@ async def test_real_freeze_recovers_original_message_before_guidance(monkeypatch
             return None
 
     coordinator = NS(
-        project_id=project_id, session_factory=Context, _locked_run=AsyncMock(return_value=run)
+        project_id=project_id, generation_run_id=run_id,
+        session_factory=Context, _locked_run=AsyncMock(return_value=run),
     )
     plan, _ = await prompt(monkeypatch, "adaptation", "Synthesized server context.", coordinator)
     assert SELECTORS["button"] in plan.user
     assert run.agent_state["max_named_behavior_contract"]["request_sha256"] == run.prompt_hash
+    assert run.user_message_id == original_message.id
+    assert run.project_id == original_message.project_id
     session.commit.assert_awaited_once()
 
 
