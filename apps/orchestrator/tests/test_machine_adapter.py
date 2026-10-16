@@ -16,6 +16,20 @@ def module():
     return importlib.import_module(name)
 
 
+@pytest.mark.parametrize("backend_image,guard,expected", [
+    (None, "guard@sha256:" + "4" * 64, False),
+    ("backup", "guard@sha256:" + "4" * 64, False),
+    ("guard:tag", "guard:tag", False),
+    ("guard@sha256:" + "4" * 64, "guard@sha256:" + "4" * 64, True),
+])
+def test_guarded_write_capability_is_bound_to_actual_pinned_backend(backend_image, guard, expected):
+    runtime = module().MachineAdapter(
+        SimpleNamespace(docker=SimpleNamespace(write_helper_image=backend_image)),
+        SimpleNamespace(cell_machine_guard_image=guard),
+    )
+    assert runtime.capabilities()["source_write_nofollow_v1"] is expected
+
+
 @pytest.mark.parametrize("mode", ["release", "default", "no_capture", "network", "recovery"])
 async def test_halt_retains_trusted_only_after_successful_release_capture(tmp_path, mode):
     from unittest.mock import AsyncMock

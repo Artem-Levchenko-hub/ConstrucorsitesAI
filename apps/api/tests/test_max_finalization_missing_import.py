@@ -15,6 +15,7 @@ from yleum_api.services.project_cell_executor import (
     ProjectCellCommandRole,
 )
 from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity, ProofOutcome
+from yleum_api.services.promotion_permit import workspace_revision_digest
 
 FLOWER_BUILD_FAILURE = """[install] Lockfile is up to date, resolution step is skipped
 Already up to date
@@ -36,11 +37,15 @@ ELIFECYCLE Command failed with exit code 1.
 """
 
 
+SOURCE_FILES = {"src/app/page.tsx": "import './flower.css';", "src/app/page.jsx": "jsx"}
+
+
 @pytest.fixture
 def identity():
     return ProofIdentity(
         workspace_id=uuid4(), generation_run_id=uuid4(), fencing_epoch=3,
-        workspace_revision="1" * 64, dependency_digest="2" * 64, schema_data_digest="3" * 64,
+        workspace_revision=workspace_revision_digest(SOURCE_FILES), dependency_digest="2" * 64,
+        schema_data_digest="3" * 64,
         cell_manifest_digest="4" * 64, base_image_digest="5" * 64, toolchain_digest="6" * 64,
         resource_profile_version="v2", build_config_digest="7" * 64,
     )
@@ -55,7 +60,7 @@ def observation(identity, detail=FLOWER_BUILD_FAILURE, **changes):
 
 
 def test_finished_frozen_flower_build_is_a_repairable_source_error(identity):
-    assert finalization._confirmed_build_source_error(observation(identity), identity)
+    assert finalization._confirmed_build_source_error(observation(identity), identity, SOURCE_FILES)
 
 
 @pytest.mark.parametrize("detail", [
@@ -68,7 +73,9 @@ def test_finished_frozen_flower_build_is_a_repairable_source_error(identity):
     './src/app/page.tsx\nSyntax error: Unexpected token.',
 ])
 def test_local_import_formats_and_existing_compiler_errors_remain_repairable(identity, detail):
-    assert finalization._confirmed_build_source_error(observation(identity, detail), identity)
+    assert finalization._confirmed_build_source_error(
+        observation(identity, detail), identity, SOURCE_FILES,
+    )
 
 
 @pytest.mark.parametrize("importer,missing", [
@@ -93,7 +100,9 @@ def test_nonlocal_or_untrusted_missing_import_is_not_a_repair_authorization(
     identity, importer, missing,
 ):
     detail = f"{importer}\nModule not found: Can't resolve '{missing}'"
-    assert not finalization._confirmed_build_source_error(observation(identity, detail), identity)
+    assert not finalization._confirmed_build_source_error(
+        observation(identity, detail), identity, SOURCE_FILES,
+    )
 
 
 @pytest.mark.parametrize("guard", [
@@ -109,7 +118,7 @@ def test_missing_import_does_not_bypass_observation_guards(identity, guard):
         "infra": {"redacted_detail": FLOWER_BUILD_FAILURE + "\nworker_lost SIGKILL ENOMEM"},
     }[guard]
     assert not finalization._confirmed_build_source_error(
-        observation(identity, **changes), identity,
+        observation(identity, **changes), identity, SOURCE_FILES,
     )
 
 
@@ -124,7 +133,7 @@ async def test_flower_failure_enters_repair_and_rebuilds_only_after_source_chang
     async def sessions():
         yield SimpleNamespace(commit=AsyncMock())
 
-    files = {"src/app/page.tsx": "import './flower.css';"}
+    files = dict(SOURCE_FILES)
     coordinator = object.__new__(finalization.MaxFinalizationCoordinator)
     coordinator.session_factory = sessions
     coordinator.executor = SimpleNamespace(

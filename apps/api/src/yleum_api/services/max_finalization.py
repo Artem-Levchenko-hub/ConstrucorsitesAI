@@ -6,12 +6,10 @@ import asyncio
 import hashlib
 import json
 import logging
-import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from pathlib import PurePosixPath
 from typing import cast
 from uuid import UUID, uuid5
 
@@ -22,17 +20,26 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellCandidate,
     ProjectCellProof,
     ProjectCellProofResult,
+    ProjectCellWorkspace,
 )
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services import repo
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from yleum_api.services.generation.continuation import SourceNoveltyTracker
+from yleum_api.services.generation.recovery_actions import recovery_binding
+from yleum_api.services.generation.recovery_contract import RecoveryContractError
+from yleum_api.services.generation.recovery_requirements import load_compiler_witness
+from yleum_api.services.generation.source_error_classification import (
+    SourceFailure,
+    classify_source_failure,
+)
 from yleum_api.services.generation_deadline import (
     generation_deadline,
     note_proof_sealed,
@@ -58,7 +65,11 @@ from yleum_api.services.max_behavior_proof import (
 )
 from yleum_api.services.max_generation_contract import max_source_completion_gap
 from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
-from yleum_api.services.orchestrator_client import RestorationAdaptationProof
+from yleum_api.services.orchestrator_client import (
+    ProjectCellAgentOperationStatus,
+    RestorationAdaptationProof,
+    RestorationAdaptationWorkspace,
+)
 from yleum_api.services.project_cell_activity import (
     ActivityKind,
     ActivityStart,
@@ -191,6 +202,21 @@ class MaxFinalizationOutcome:
     redacted_detail: str
 
 
+def _source_result_signature(result: ProjectCellProofResult) -> tuple[object, ...]:
+    return (
+        result.id, result.proof_id, result.workspace_id, result.dimension,
+        result.dimension_key, result.operation_id, result.outcome, result.artifact_ref,
+        result.detail_digest, result.redacted_detail,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _TransientSourceReceipt:
+    result: ProjectCellProofResult
+    observation: ProjectCellCommandObservation
+    signature: tuple[object, ...]
+
+
 @dataclass(frozen=True, slots=True)
 class _LocalActivityStatus:
     state: str
@@ -221,79 +247,20 @@ def _content_digest(label: str, *parts: str) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _local_import_source_error(detail: str, file_pattern: str) -> bool:
-    """Recognize a compiler-local import without authorizing paths outside the cell."""
-    pattern = (
-        r"(?m)^(?P<importer>" + file_pattern + r")\r?\n"
-        r"Module not found: Can't resolve (?P<quote>['\"])"
-        r"(?P<missing>\.\.?/[^'\"\r\n]+)(?P=quote)\r?$"
-    )
-    for match in re.finditer(pattern, detail):
-        importer = match["importer"].removeprefix("/workspace/").removeprefix("./")
-        missing = match["missing"]
-        if len(importer) > 1024 or len(missing) > 1024 or any(
-            character in importer + missing for character in ("\\", "\x00", "?", "#", ":")
-        ):
-            continue
-        parts = list(PurePosixPath(importer).parts)
-        if any(
-            part == ".." or part.lower().startswith(".env")
-            or part.lower() in {".git", ".ssh", "node_modules"}
-            for part in parts
-        ):
-            continue
-        target = parts[:-1]
-        escaped = False
-        for part in PurePosixPath(missing).parts:
-            if part == "..":
-                if not target:
-                    escaped = True
-                    break
-                target.pop()
-            elif part != ".":
-                target.append(part)
-        if escaped or not target or any(
-            part.lower().startswith(".env") or part.lower() in {".git", ".ssh", "node_modules"}
-            for part in target
-        ):
-            continue
-        suffix = PurePosixPath(target[-1]).suffix.lower()
-        if suffix in {
-            ".css", ".scss", ".sass", ".less", ".js", ".jsx", ".ts", ".tsx", ".mjs",
-            ".cjs", ".json", ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif", ".avif",
-            ".ico", ".woff", ".woff2", ".ttf", ".otf",
-        } or (not suffix and re.fullmatch(r"[A-Za-z0-9_-]+", target[-1])):
-            return True
-    return False
-
-
 def _confirmed_build_source_error(
     observation: ProjectCellCommandObservation, identity: ProofIdentity,
+    files: Mapping[str, str] | None = None,
 ) -> bool:
-    """Only a finished compiler rejection of the frozen source permits editing."""
-    if (
-        observation.ok or observation.timed_out
-        or observation.role is not ProjectCellCommandRole.FULL_BUILD
-        or observation.before != identity or observation.after != identity
-    ):
-        return False
-    detail = observation.redacted_detail
-    if re.search(
-        r"(?i)\b(?:SIGKILL|SIGTERM|ENOSPC|ENOMEM|ECONNRESET|ETIMEDOUT|worker_lost)\b"
-        r"|out of memory|heap limit|command timed out|connection refused",
-        detail,
-    ):
-        return False
-    source = r"(?:\./|/workspace/)?(?:src/|app/|pages/|components/|lib/|\.next/types/)"
-    file = source + r"[^\r\n]*\.(?:tsx?|jsx?)"
-    return bool(
-        re.search(r"(?m)^" + file + r"\(\d+,\d+\): error TS\d{4}:", detail)
-        or re.search(
-            r"(?m)^" + file + r"(?::\d+(?::\d+)?)?\r?\n(?:Type error|Syntax error): ",
-            detail,
-        )
-        or _local_import_source_error(detail, file)
+    """Classify only a finished compiler rejection of the verified frozen files."""
+    finished = (
+        not observation.ok and not observation.timed_out
+        and observation.role is ProjectCellCommandRole.FULL_BUILD
+        and observation.before == identity and observation.after == identity
     )
+    return bool(classify_source_failure(
+        observation.redacted_detail, files=files or {}, command_finished=finished,
+        frozen_source_sha256=identity.workspace_revision,
+    ).allowed_paths)
 
 
 def _versioned_build_detail(detail: str, *, source_repair: bool = False) -> str:
@@ -357,6 +324,7 @@ class MaxFinalizationCoordinator:
         self.emit = emit or _discard_event
         self._last_files: dict[str, str] | None = None
         self._last_prompt: str | None = None
+        self._transient_source_receipts: dict[UUID, _TransientSourceReceipt] = {}
 
     async def _adaptation_capability_gap(self, files: Mapping[str, str]) -> str | None:
         """AV06: an adaptation run must keep every route the draft had before it.
@@ -674,6 +642,7 @@ class MaxFinalizationCoordinator:
         *,
         prompt: str,
         repair: Callable[[str], Awaitable[None]],
+        repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
     ) -> MaxFinalizationOutcome:
         """Continue repairs while actual source or verified gate evidence is novel.
 
@@ -715,7 +684,18 @@ class MaxFinalizationCoordinator:
                 raise TimeoutError("generation deadline exceeded before source repair")
             try:
                 async with asyncio.timeout(remaining):
-                    await repair(outcome.redacted_detail)
+                    if repair_source is not None and outcome.redacted_detail.startswith(
+                        _FULL_BUILD_DETAIL_PREFIX + "\n[source-repair:confirmed]\n"
+                    ):
+                        receipt = outcome.proof.full_build
+                        if receipt is None:
+                            return outcome
+                        failure = await self.source_failure(receipt)
+                        if failure is None or not failure.allowed_paths:
+                            return outcome
+                        await repair_source(outcome.redacted_detail, failure)
+                    else:
+                        await repair(outcome.redacted_detail)
             except TimeoutError as exc:
                 # A bare TimeoutError has no text; the run would fail with an empty reason.
                 raise TimeoutError("generation deadline exceeded during source repair") from exc
@@ -857,11 +837,17 @@ class MaxFinalizationCoordinator:
         artifact_ref = None
         artifact_digest = None
         if dimension is ProofDimension.FULL_BUILD:
+            frozen_files = (
+                await self._verified_workspace_files(identity)
+                if not changed_frozen_identity and not observation.timed_out else {}
+            )
             detail = _versioned_build_detail(
-                detail, source_repair=_confirmed_build_source_error(observation, identity),
+                detail, source_repair=_confirmed_build_source_error(
+                    observation, identity, frozen_files,
+                ),
             )
             if outcome is ProofOutcome.GREEN:
-                artifact_files = await self._verified_workspace_files(identity)
+                artifact_files = frozen_files
                 artifact_digest = canonical_files_digest(artifact_files)
                 artifact_ref = f"build/sha256/{artifact_digest}"
                 self._last_files = artifact_files
@@ -875,6 +861,19 @@ class MaxFinalizationCoordinator:
             artifact_ref=artifact_ref,
             artifact_digest=artifact_digest,
         )
+        if (
+            dimension in {ProofDimension.FAST_CHECK, ProofDimension.FULL_BUILD}
+            and observation.operation_id == operation_id and observation.role is role
+            and not observation.ok and not observation.timed_out
+            and observation.before == identity and observation.after == identity
+        ):
+            # Process-local authority is tied to the actual server result object.
+            # Reconstructed/serialized result fields are deliberately insufficient.
+            if not hasattr(self, "_transient_source_receipts"):
+                self._transient_source_receipts = {}
+            self._transient_source_receipts[result.id] = _TransientSourceReceipt(
+                result, observation, _source_result_signature(result),
+            )
         return result, final_identity, final_proof
 
     async def _adaptation_fast_check(self) -> ProjectCellProofResult:
@@ -1723,6 +1722,115 @@ class MaxFinalizationCoordinator:
             raise MaxFinalizationConflict("workspace files do not match the active revision")
         return files
 
+    async def source_failure(self, result: ProjectCellProofResult) -> SourceFailure | None:
+        """Reload the owned terminal receipt; text/model objects never grant write paths."""
+        identity = await self._identity()
+        transient = getattr(self, "_transient_source_receipts", {}).get(result.id)
+        if transient is not None:
+            return await self._transient_source_failure(result, transient, identity)
+        try:
+            async with self.session_factory() as session:
+                witness = await load_compiler_witness(
+                    session, run_id=self.generation_run_id, receipt_id=result.id,
+                    binding=recovery_binding(identity),
+                )
+                run = await session.get(GenerationRun, self.generation_run_id)
+                if run is None or run.project_id != self.project_id:
+                    return None
+                if run.status == "cancel_requested":
+                    raise asyncio.CancelledError
+                if run.status != "running" or witness.passed:
+                    return None
+                owned = await session.get(ProjectCellProofResult, witness.receipt_id)
+                assert owned is not None
+                detail = owned.redacted_detail
+            files = await self._verified_workspace_files(identity)
+            return classify_source_failure(
+                detail, files=files, command_finished=True,
+                frozen_source_sha256=identity.workspace_revision,
+            )
+        except RecoveryContractError:
+            return None
+
+    async def _transient_source_failure(
+        self, result: ProjectCellProofResult, receipt: _TransientSourceReceipt,
+        identity: ProofIdentity,
+    ) -> SourceFailure | None:
+        observation = receipt.observation
+        adaptation = getattr(self.executor, "restoration_adaptation_workspace", None)
+        control_id = getattr(self.executor, "control_workspace_id", None)
+        control_epoch = getattr(self.executor, "control_fencing_epoch", None)
+        if (
+            receipt.result is not result or receipt.signature != _source_result_signature(result)
+            or observation.before != identity or observation.after != identity
+            or not isinstance(adaptation, RestorationAdaptationWorkspace)
+            or adaptation.source_workspace_id != control_id
+            or adaptation.candidate_workspace_id != identity.workspace_id
+            or adaptation.source_workspace_id == adaptation.candidate_workspace_id
+            or adaptation.candidate_fencing_epoch != identity.fencing_epoch
+            or adaptation.project_id != self.project_id
+            or adaptation.generation_run_id != self.generation_run_id
+            or type(control_epoch) is not int or control_epoch < 1
+        ):
+            return None
+        async with self.session_factory() as session:
+            # Match the durable receipt loader's ownership checks and lock order.
+            project = await session.get(
+                Project, self.project_id, populate_existing=True, with_for_update=True,
+            )
+            run = await session.get(
+                GenerationRun, self.generation_run_id,
+                populate_existing=True, with_for_update=True,
+            )
+            if (
+                project is None or run is None or run.project_id != project.id
+                or project.owner_id != run.user_id
+            ):
+                return None
+            if run.status == "cancel_requested":
+                raise asyncio.CancelledError
+            state = run.agent_state if isinstance(run.agent_state, dict) else {}
+            binding = state.get("restoration_adaptation")
+            if (
+                adaptation.owner_id != run.user_id or not isinstance(binding, dict)
+                or binding.get("operation_id") != str(adaptation.operation_id)
+                or binding.get("adaptation_run_id") != str(run.id)
+            ):
+                return None
+            workspace = await session.get(
+                ProjectCellWorkspace, control_id,
+                populate_existing=True, with_for_update=True,
+            )
+            if (
+                run.status != "running" or workspace is None
+                or workspace.project_id != run.project_id or workspace.owner_id != run.user_id
+                or workspace.generation_run_id != run.id
+                or workspace.fencing_epoch != control_epoch
+                or workspace.state != "ready" or workspace.deleted_at is not None
+            ):
+                return None
+        status_reader, replay = self.executor.operation_status, self.executor.replay_role_response
+        if status_reader is None or replay is None or observation.role is None:
+            return None
+        status = await status_reader(observation.operation_id)
+        if (
+            not isinstance(status, ProjectCellAgentOperationStatus)
+            or status.operation_id != observation.operation_id or status.state != "failed"
+            or status.terminal_response is None
+            or status.terminal_response.operation_id != observation.operation_id
+            or status.terminal_response.ok or status.terminal_response.timed_out
+        ):
+            return None
+        # Reuse the executor's authenticated terminal decoder; this never runs a command.
+        current = await replay(observation.role, status.terminal_response, identity)
+        if current != observation:
+            return None
+        files = await self._verified_workspace_files(identity)
+        return classify_source_failure(
+            result.redacted_detail, files=files, command_finished=True,
+            frozen_source_sha256=identity.workspace_revision,
+        )
+
     async def _proof(self, identity: ProofIdentity) -> ProjectCellProof:
         async with self.session_factory() as session:
             proof = await create_proof_identity(session, identity=identity)
@@ -1806,8 +1914,16 @@ class MaxFinalizationCoordinator:
             self._last_files = artifact_files
             artifact_ref = f"build/sha256/{digest}"
         if dimension is ProofDimension.FULL_BUILD:
+            source_repair = False
+            if (
+                not observation.ok and not observation.timed_out
+                and observation.before == identity and observation.after == identity
+            ):
+                source_repair = _confirmed_build_source_error(
+                    observation, identity, await self._verified_workspace_files(identity),
+                )
             detail = _versioned_build_detail(
-                detail, source_repair=_confirmed_build_source_error(observation, identity),
+                detail, source_repair=source_repair,
             )
         return await self._record(
             proof=proof,

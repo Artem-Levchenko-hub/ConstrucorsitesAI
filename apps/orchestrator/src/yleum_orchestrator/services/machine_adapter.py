@@ -167,8 +167,16 @@ class MachineAdapter:
                     raise CellResourceError("trusted core bootstrap cleanup failed") from None
 
     def capabilities(self) -> dict[str, object]:
+        from yleum_orchestrator.services.docker_machine_backend import _PIN
+
+        write_image = getattr(getattr(self.manager, "docker", None), "write_helper_image", None)
+        guard_image = getattr(self.settings, "cell_machine_guard_image", "")
         return {
             "portable_machine": True,
+            "source_write_nofollow_v1": bool(
+                isinstance(guard_image, str) and _PIN.fullmatch(guard_image)
+                and write_image == guard_image
+            ),
             "manifest_path": ".omnia/cell.json",
             "public_package_egress": True,
             "persistent_environment": True,

@@ -1634,7 +1634,8 @@ async def test_full_build_source_repair_boundary_without_database(
     files = _files()
     identity = ProofIdentity(
         workspace_id=uuid.uuid4(), generation_run_id=uuid.uuid4(), fencing_epoch=3,
-        workspace_revision="1" * 64, dependency_digest="2" * 64, schema_data_digest="3" * 64,
+        workspace_revision=workspace_revision_digest(files), dependency_digest="2" * 64,
+        schema_data_digest="3" * 64,
         cell_manifest_digest="4" * 64, base_image_digest="5" * 64, toolchain_digest="6" * 64,
         resource_profile_version="v2", build_config_digest="7" * 64,
     )

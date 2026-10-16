@@ -78,6 +78,9 @@ def build_workspace_provider(settings: Settings) -> WorkspaceProvider:
     docker_backend = DockerPyCellBackend(
         docker_host=settings.docker_host,
         helper_image=profile.backup_image,
+        write_helper_image=(
+            settings.cell_machine_guard_image if settings.cell_machine_enabled else None
+        ),
         # PostgreSQL reserves half the bundle, Redis one quarter. The agent
         # gets only the remainder; compilation must not use the 256 MiB
         # filesystem-helper limit or exceed admission's bundle reservation.

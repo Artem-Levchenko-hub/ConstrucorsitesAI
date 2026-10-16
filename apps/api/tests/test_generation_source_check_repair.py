@@ -248,9 +248,14 @@ async def test_timeout_cleanup_denied_by_fence_preserves_primary_timeout(source_
 
 
 async def test_trusted_compiler_failure_uses_same_bounded_repair(source_check):
+    from yleum_api.services.generation.source_error_classification import SourceFailure
+
     kwargs, _, calls, rollback, _ = source_check
     detail = "[typecheck]\nsrc/app/page.tsx(12,3): error TS2322: wrong prop"
     kwargs["runtime"].coordinator.fast_check.return_value.redacted_detail = detail
+    kwargs["runtime"].coordinator.source_failure = AsyncMock(return_value=SourceFailure(
+        "type_error", "src/app/page.tsx", ("src/app/page.tsx",),
+    ))
     result = await agent_recovery.recover_rejected_candidate(**kwargs)
     assert not result.candidate_failed
     assert detail in calls[0][0]["content"]
@@ -284,6 +289,14 @@ async def test_partial_cancel_or_terminal_fence_never_writes_cleanup(source_chec
     # Unaccepted draft remains: restoring it through a lost fence is forbidden.
     assert workspace["src/lib/new-filter.ts"] == "new candidate helper"
     assert kwargs["runtime"].coordinator.fast_check.await_count == 1
+
+
+async def test_rejected_terminal_receipt_cannot_authorize_assertion_repair(source_check):
+    kwargs, _, calls, _, _ = source_check
+    kwargs["runtime"].coordinator.source_failure = AsyncMock(return_value=None)
+    result = await agent_recovery.recover_rejected_candidate(**kwargs)
+    assert result.candidate_failed
+    assert calls == []
 
 
 async def test_green_source_repair_still_requires_final_coordinator_proof(source_check):

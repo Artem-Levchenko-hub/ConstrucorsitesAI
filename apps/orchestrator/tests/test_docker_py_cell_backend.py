@@ -9,6 +9,7 @@ import threading
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any, cast
+from uuid import uuid4
 
 import docker  # type: ignore[import-untyped]
 import pytest
@@ -20,6 +21,182 @@ from yleum_orchestrator.services.docker_py_cell_backend import (
     _WORKSPACE_SOURCE_ARCHIVE_EXCLUDES,
     DockerPyCellBackend,
 )
+
+
+@pytest.mark.skipif(os.environ.get("YLEUM_TEST_LOCAL_DOCKER") != "1",
+                    reason="explicit disposable local Docker fixtures only")
+async def test_guarded_source_write_real_volume_links_and_missing_runtime():
+    """Real daemon, unchanged helper restrictions; no production or shared volumes."""
+    client = docker.DockerClient(base_url="unix:///var/run/docker.sock")
+    labels = {**_labels("workspace"), "task6.disposable": "true"}
+    name = "task6-write-" + uuid4().hex
+    volume = client.volumes.create(name=name, labels=labels)
+    observed = []
+
+    class ObservedBackend(DockerPyCellBackend):
+        async def _start_helper_container(self, **kwargs):
+            container = await super()._start_helper_container(**kwargs)
+            if kwargs["labels"]["omnia.resource_kind"] == "volume-write":
+                setup = container.exec_run([
+                    "sh", "-eu", "-c", "mkdir -p /tmp/task6-outside; "
+                    "printf outside >/tmp/task6-outside/sentinel",
+                ])
+                assert setup.exit_code == 0, setup.output
+            return container
+
+        async def _remove_container_object(self, container):
+            try:
+                if self._labels(container).get("omnia.resource_kind") == "volume-write":
+                    result = container.exec_run(["cat", "/tmp/task6-outside/sentinel"])
+                    assert result.exit_code == 0
+                    observed.append(result.output)
+            finally:
+                await super()._remove_container_object(container)
+
+    backend = ObservedBackend(
+        "unix:///var/run/docker.sock", "alpine:3.20",
+        write_helper_image="ghcr.io/astral-sh/uv:python3.12-bookworm-slim",
+    )
+    try:
+        await backend.write_volume_files(name, {"src/control.txt": b"ordinary"})
+        assert (await backend.read_volume_files(name))["src/control.txt"] == b"ordinary"
+        setup = await backend._start_helper_container(
+            name="task6-fixture", labels=labels,
+            volumes={name: {"bind": "/volume", "mode": "rw"}},
+        )
+        try:
+            prepared = setup.exec_run([
+                "sh", "-eu", "-c",
+                "mkdir -p /volume/outside; printf sentinel >/volume/outside/sentinel; "
+                "ln -s ../outside/sentinel /volume/src/leaf; "
+                "ln -s ../outside /volume/src/ancestor; "
+                "ln -s /tmp/task6-outside/sentinel /volume/src/external-leaf; "
+                "ln -s /tmp/task6-outside /volume/src/external-ancestor; "
+                "ln /volume/outside/sentinel /volume/src/hardlink",
+            ])
+            assert prepared.exit_code == 0, prepared.output
+            owned = io.BytesIO()
+            with tarfile.open(fileobj=owned, mode="w") as archive:
+                for uid in (1000, 10001):
+                    directory = tarfile.TarInfo(f"foreign-{uid}")
+                    directory.uid = directory.gid = uid
+                    directory.mode, directory.type = 0o755, tarfile.DIRTYPE
+                    archive.addfile(directory)
+                    source = tarfile.TarInfo(f"foreign-{uid}/source.txt")
+                    source.uid = source.gid = uid
+                    source.mode, source.size = 0o644, len(b"guest-owned")
+                    archive.addfile(source, io.BytesIO(b"guest-owned"))
+            assert setup.put_archive(path="/volume", data=owned.getvalue())
+        finally:
+            await backend._remove_container_object(setup)
+        for path in ("src/leaf", "src/ancestor/sentinel", "../escape",
+                     "src/external-leaf", "src/external-ancestor/sentinel"):
+            with pytest.raises(CellResourceError):
+                await backend.write_volume_files(name, {path: b"CHANGED"})
+        await backend.write_volume_files(name, {"src/hardlink": b"new inode"})
+        files = await backend.read_volume_files(name)
+        assert files["outside/sentinel"] == b"sentinel"
+        assert files["src/hardlink"] == b"new inode"
+        assert files["src/control.txt"] == b"ordinary"
+        for uid in (1000, 10001):
+            with pytest.raises(CellResourceError):
+                await backend.write_volume_files(name, {f"foreign-{uid}/source.txt": b"changed"})
+            preserved = await backend.read_volume_files(name)
+            assert preserved[f"foreign-{uid}/source.txt"] == b"guest-owned"
+        # A selected guarded runtime lacking Python must fail, not extract into volume.
+        backend.write_helper_image = "alpine:3.20"
+        with pytest.raises(CellResourceError):
+            await backend.write_volume_files(name, {"src/control.txt": b"unsafe fallback"})
+        assert (await backend.read_volume_files(name))["src/control.txt"] == b"ordinary"
+        assert observed and all(value == b"outside" for value in observed)
+    finally:
+        volume.remove()
+        client.close()
+
+
+@pytest.mark.parametrize("failure", ["send", "receive", "running", "exit", "success"])
+async def test_guarded_transfer_has_one_attempt_bounded_socket_and_cleanup(failure):
+    from types import SimpleNamespace
+
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"source": b"unchanged"},
+    )
+    sent, started, closed, timeouts = [], [], [], []
+
+    class Stream:
+        def settimeout(self, value):
+            timeouts.append(value)
+
+        def sendall(self, data):
+            sent.append(data)
+            if failure == "send":
+                raise BrokenPipeError("partial transfer")
+
+        def recv(self, size):
+            if failure == "receive":
+                raise TimeoutError("hung helper")
+            return b""
+
+        def close(self):
+            closed.append(True)
+
+    client.api = SimpleNamespace(
+        exec_create=lambda *args, **kw: {"Id": "owned"},
+        exec_start=lambda *args, **kw: started.append(kw) or Stream(),
+        exec_inspect=lambda _: {"Running": failure == "running",
+                                "ExitCode": 1 if failure == "exit" else 0},
+    )
+    backend = _backend(client)
+    backend.write_helper_image = "guard@sha256:" + "1" * 64
+    if failure == "success":
+        await backend.write_volume_files("workspace-vol", {"source": b"new"})
+    else:
+        with pytest.raises(CellResourceError):
+            await backend.write_volume_files("workspace-vol", {"source": b"new"})
+    assert len(sent) == len(started) == len(closed) == 1
+    assert timeouts == [60]
+    assert client.volumes.items["workspace-vol"].files == {"source": b"unchanged"}
+    assert not client.containers.items  # No fallback extraction; every helper retired.
+
+
+async def test_cancel_during_guarded_transfer_retires_helper_without_replay():
+    client = _FakeClient()
+    client.volumes.items["workspace-vol"] = _FakeVolume(
+        "workspace-vol", _labels("workspace"), files={"source": b"unchanged"},
+    )
+    started, retired = threading.Event(), threading.Event()
+    attempts = []
+
+    class BlockingBackend(DockerPyCellBackend):
+        def _guarded_source_write(self, container, archive):
+            attempts.append(container.id)
+            started.set()
+            assert retired.wait(5), "cancel did not retire the owning helper"
+
+        async def _remove_container_object(self, container):
+            await super()._remove_container_object(container)
+            retired.set()
+
+    backend = BlockingBackend(
+        "unix:///var/run/docker.sock", "backup", client_factory=lambda _: client,
+        write_helper_image="guard@sha256:" + "1" * 64,
+    )
+    task = asyncio.create_task(backend.write_volume_files("workspace-vol", {"source": b"new"}))
+    assert await asyncio.to_thread(started.wait, 2)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert retired.is_set() and len(attempts) == 1
+    assert not client.containers.items
+    assert client.volumes.items["workspace-vol"].files == {"source": b"unchanged"}
+
+
+async def test_guarded_payload_limit_rejects_before_starting_helper():
+    backend = DockerPyCellBackend("unused", "unused", write_helper_image="guard")
+    # No client is installed: validation must precede every Docker/API operation.
+    with pytest.raises(CellResourceError, match="exceeds budget"):
+        await backend.write_volume_files("unused", {"too-large": b"x" * (2 * 1024 * 1024 + 1)})
 
 
 def test_source_archive_ignores_compiler_outputs_but_keeps_application_source(

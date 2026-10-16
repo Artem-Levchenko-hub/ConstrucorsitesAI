@@ -96,6 +96,25 @@ roots bootstrap HTTPS apt before installing distro CA certificates; TLS and apt
 signature verification remain enabled. Guard source is copied with deterministic
 readable modes. Neither image includes project or platform secrets.
 
+Portable source writes use the existing pinned guard image as a private Python
+helper when `CELL_MACHINE_ENABLED=true`; backup and other helpers retain their
+existing images. The helper has no network or credentials, a read-only root,
+all capabilities dropped, and a private 128 MiB tmpfs. It validates the complete
+payload before applying regular files through no-follow directory descriptors
+and same-directory atomic rename, with a constant number of open descriptors.
+Static symlinks are rejected; a leaf symlink raced after validation may be
+replaced safely, but is never followed. Existing hardlinks are replaced with a
+new inode. Writes are atomic per file, not a transaction across the whole payload.
+
+The bounded payload allows 5,000 files, 2 MiB per file and 64 MiB total contents.
+The current writer runs as UID 0 without DAC bypass capabilities: directories
+owned by another UID with mode 0755 deny writes. Missing Python, failed transfer,
+timeout, cancellation or helper failure never fall back to archive extraction.
+The machine-disabled legacy path keeps its existing writer and does not advertise
+`source_write_nofollow_v1`. The API accepts that capability only from the server
+bootstrap; targeted compiler repair requires it before creating a new source
+path. A model-provided marker cannot authorize target creation.
+
 Add these **host orchestrator** settings (JSON syntax for the CIDR list):
 
 ```dotenv

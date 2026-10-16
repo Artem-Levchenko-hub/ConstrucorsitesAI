@@ -229,7 +229,12 @@ async def recover_rejected_candidate(
         )
 
         proof = await runtime.coordinator.fast_check()
-        if source_check_is_repairable(proof.dimension, proof.outcome, proof.redacted_detail):
+        classify_receipt = getattr(runtime.coordinator, "source_failure", None)
+        source_failure = await classify_receipt(proof) if callable(classify_receipt) else None
+        receipt_current = not callable(classify_receipt) or source_failure is not None
+        if receipt_current and source_check_is_repairable(
+            proof.dimension, proof.outcome, proof.redacted_detail, source_failure,
+        ):
             deadline = await runtime.coordinator.source_edit_deadline(repair=True)
             remaining = (deadline - datetime.now(UTC)).total_seconds() if deadline else 0
             if remaining < 60:
@@ -264,6 +269,10 @@ async def recover_rejected_candidate(
                         is_free=is_free,
                         shell_enabled=_max_shell_enabled,
                         edit_deadline=deadline,
+                        source_failure=(
+                            source_failure
+                            if source_failure and source_failure.allowed_paths else None
+                        ),
                     )
                     after = await runtime.handle.snapshot_files()
                     files = {

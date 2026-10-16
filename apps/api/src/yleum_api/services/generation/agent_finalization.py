@@ -20,6 +20,7 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
 )
 from yleum_api.services.generation.runtime import _restore_project_cell_source
+from yleum_api.services.generation.source_error_classification import SourceFailure
 from yleum_api.services.max_finalization import ProofBundle
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -128,13 +129,15 @@ def validate_edit_source_change(
     return EditSourceChangeVerdict({}, _NO_SOURCE_CHANGE_MESSAGE, _NO_SOURCE_CHANGE_FAILURE)
 
 
-def source_check_is_repairable(dimension: str, outcome: str, detail: str) -> bool:
+def source_check_is_repairable(
+    dimension: str, outcome: str, detail: str, source_failure: SourceFailure | None = None,
+) -> bool:
     """Only trusted fast-check compiler/assertion diagnostics permit this repair."""
-    if dimension != "fast_check" or outcome != "red":
+    if dimension != "fast_check" or outcome != "red" or (
+        source_failure is not None and source_failure.kind == "infrastructure"
+    ):
         return False
-    compiler = "[typecheck]" in detail and re.search(
-        r"(?m)^.+\(\d+,\d+\): error TS\d{4}:", detail,
-    )
+    compiler = source_failure is not None and bool(source_failure.allowed_paths)
     test = (
         "[targeted-test]" in detail
         and re.search(r"(?m)^not ok \d+ - ", detail)
@@ -150,6 +153,7 @@ async def run_native_source_repair(
     runtime: GenerationRuntime, ids: GenerationIds, plan: AgentPromptPlan,
     operations: AgentOperations, is_free: bool, shell_enabled: bool,
     edit_deadline: datetime | None,
+    source_failure: SourceFailure | None = None,
 ) -> agent_builder.AgentResult:
     """Reuse the guarded editor's progress windows without accepting proof."""
     from yleum_api.services import agent_native
@@ -160,8 +164,25 @@ async def run_native_source_repair(
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
     from yleum_api.services.max_generation_contract import max_source_completion_gap
 
+    execute = operations.execute
+    if source_failure is not None:
+        allowed = frozenset(source_failure.allowed_paths)
+        capability = getattr(runtime.handle, "capabilities", {})
+        guarded_write = capability.get("source_write_nofollow_v1") is True
+
+        async def targeted_execute(action: agent_builder.Action) -> dict[str, object]:
+            if action.name in {"write_file", "edit_file"}:
+                if action.path not in allowed or (
+                    action.path not in baseline and not guarded_write
+                ):
+                    return {"ok": False, "detail": "Source repair path is not authorized."}
+            elif action.name not in {"read_file", "list_dir", "grep", "build", "done"}:
+                return {"ok": False, "detail": "Source repair action is not authorized."}
+            return await operations.execute(action)
+
+        execute = targeted_execute
     repair_execute, repair_completion = await guard_native_source_contract(
-        runtime, ids, operations.execute,
+        runtime, ids, execute,
         lambda written, evidence: max_source_completion_gap(
             prompt_text, {**baseline, **written}, portable=True,
         ),
@@ -247,7 +268,9 @@ async def finalize_max_candidate(
 
         _repair_history: list[str] = []
 
-        async def _repair_finalization_source(detail: str) -> None:
+        async def _repair_finalization_source(
+            detail: str, source_failure: SourceFailure | None = None,
+        ) -> None:
             assert runtime.handle is not None
             assert runtime.coordinator is not None
             baseline = await runtime.handle.snapshot_files()
@@ -286,12 +309,14 @@ async def finalize_max_candidate(
                 plan=plan, operations=operations, is_free=is_free,
                 shell_enabled=_max_shell_enabled,
                 edit_deadline=await runtime.coordinator.source_edit_deadline(repair=True),
+                source_failure=source_failure,
             )
 
         try:
             _finalization = await runtime.coordinator.finalize_with_repair(
                 prompt=prompt_text,
                 repair=_repair_finalization_source,
+                repair_source=_repair_finalization_source,
             )
             if _finalization.status is MaxFinalizationStatus.ACTIVATING:
                 raise AdaptationActivationPending(_finalization.redacted_detail)

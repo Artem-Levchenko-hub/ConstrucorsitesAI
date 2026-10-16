@@ -190,6 +190,7 @@ class DockerPyCellBackend:
     exec_memory_limit_bytes: int = 1024 * 1024 * 1024
     exec_cpu_cores: float = 0.5
     network_pool: str = ""
+    write_helper_image: str | None = None
     base_url: str = field(init=False)
     api: Any = field(init=False, repr=False)
     _client: Any | None = field(default=None, init=False, repr=False)
@@ -433,6 +434,13 @@ printf '%s\n' 'empty'
     async def write_volume_files(self, name: str, files: dict[str, bytes]) -> None:
         if not files:
             return
+        if self.write_helper_image is not None and (
+            len(files) > 5000 or any(len(data) > 2 * 1024 * 1024 for data in files.values())
+            or sum(map(len, files.values())) > 64 * 1024 * 1024
+            or any(len(path) > 1024 for path in files)
+        ):
+            raise CellResourceError("source write payload exceeds budget")
+        archive = _files_to_archive(files)
         volume = await self._get_volume_obj(name)
         if volume is None:
             raise CellResourceError(f"missing volume: {name}")
@@ -441,9 +449,16 @@ printf '%s\n' 'empty'
             name=self._helper_name("volume-write", name),
             labels=self._helper_labels(labels, "volume-write"),
             volumes={name: {"bind": _VOLUME_ROOT, "mode": "rw"}},
+            image=self.write_helper_image,
+            tmpfs=(
+                {**_HELPER_TMPFS, "/tmp": "rw,nosuid,nodev,noexec,size=128m"}
+                if self.write_helper_image is not None else None
+            ),
         )
         try:
-            archive = _files_to_archive(files)
+            if self.write_helper_image is not None:
+                await asyncio.to_thread(self._guarded_source_write, container, archive)
+                return
 
             def _put() -> bool:
                 return bool(container.put_archive(path=_VOLUME_ROOT, data=archive))
@@ -453,6 +468,35 @@ printf '%s\n' 'empty'
                 raise CellResourceError(f"put_archive returned False for {name}")
         finally:
             await self._remove_container_object(container)
+
+    def _guarded_source_write(self, container: Any, archive: bytes) -> None:
+        from yleum_orchestrator.services.volume_source_write import SOURCE_WRITE_SCRIPT
+
+        if len(archive) > min(self.archive_limit_bytes, 128 * 1024 * 1024):
+            raise CellResourceError("source write archive exceeds budget")
+        api = self._client_obj().api
+        try:
+            execution = api.exec_create(
+                container.id,
+                ["python3", "-I", "-S", "-c", SOURCE_WRITE_SCRIPT, _VOLUME_ROOT,
+                 "/tmp/source-" + uuid4().hex + ".tar", str(len(archive))],
+                stdin=True, stdout=True, stderr=True, user="0:0",
+            )
+            stream = api.exec_start(execution["Id"], socket=True)
+            try:
+                # docker-py7 exposes a SocketIO wrapper; the raw socket supports sendall.
+                channel = getattr(stream, "_sock", stream)
+                channel.settimeout(60)
+                channel.sendall(archive)
+                while channel.recv(65536):
+                    pass  # The trusted helper emits only a static rejection, no payload.
+            finally:
+                stream.close()
+            status = api.exec_inspect(execution["Id"])
+            if status.get("Running") or status.get("ExitCode") != 0:
+                raise CellResourceError("guarded source write rejected")
+        except (docker.errors.DockerException, OSError) as exc:
+            raise CellResourceError("guarded source write unavailable") from exc
 
     async def delete_volume_paths(self, name: str, paths: tuple[str, ...]) -> None:
         if not paths:
@@ -1380,12 +1424,13 @@ printf '%s\n' 'empty'
         labels: dict[str, str],
         volumes: dict[str, dict[str, str]],
         tmpfs: dict[str, str] | None = None,
+        image: str | None = None,
     ) -> Any:
         self._require_identity_labels(labels)
 
         def _create() -> Any:
             return self._client_obj().containers.create(
-                self.helper_image,
+                self.helper_image if image is None else image,
                 command=_HELPER_SLEEP,
                 # Helpers belong to a single call, not to the shared volume.
                 # Never remove a namesake: it may be serving another request.

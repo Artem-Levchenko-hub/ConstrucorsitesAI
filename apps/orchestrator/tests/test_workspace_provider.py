@@ -245,6 +245,29 @@ async def test_selected_enabled_docker_owner_provider_is_ready(
     assert status.detail == "docker owner canary is ready"
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_factory_selects_guard_image_only_for_portable_source_writes(monkeypatch, enabled):
+    from yleum_orchestrator.services.machine_adapter import MachineAdapter
+
+    monkeypatch.setattr(
+        workspace_provider_factory, "_host_supports_live_docker_provider", lambda: True,
+    )
+    monkeypatch.setattr(MachineAdapter, "validate_available", lambda _: None)
+    guard = "guard@sha256:" + "4" * 64
+    provider = build_workspace_provider(_settings(
+        workspace_provider="docker_owner_canary", docker_owner_canary_enabled=True,
+        cell_postgres_image="postgres@sha256:" + "1" * 64,
+        cell_redis_image="redis@sha256:" + "2" * 64,
+        cell_backup_image="alpine@sha256:" + "3" * 64,
+        cell_machine_enabled=enabled, cell_machine_guard_image=guard,
+    ))
+    backend = provider.resource_manager.docker
+    assert backend.helper_image == "alpine@sha256:" + "3" * 64
+    assert backend.write_helper_image == (guard if enabled else None)
+    if enabled:
+        assert provider.resource_manager.machine_runtime.capabilities()["source_write_nofollow_v1"]
+
+
 async def test_release_control_clears_generation_without_stopping_compute(tmp_path: Path) -> None:
     manager, checkpoints, docker = _make_checkpoint_fixture(tmp_path)
     provider = DockerOwnerCanaryProvider(
