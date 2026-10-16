@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
 from yleum_api.services import max_behavior_proof as proof
 from yleum_api.services.generation import agent_pipeline
 from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime, SourceBaseline
@@ -23,16 +24,22 @@ def before_provider(monkeypatch):
         ids = GenerationIds(*(uuid4() for _ in range(5)))
         original = authoritative or request
         contract = proof.required_contract(original, template="max_miniapp")
-        record = NS(prompt_hash=hashlib.sha256(original.encode()).hexdigest(),
+        record = NS(id=ids.run_id, prompt_hash=hashlib.sha256(original.encode()).hexdigest(),
                     user_message_id=ids.user_message_id, agent_state={},
                     project_id=ids.project_id, user_id=ids.user_id)
         if saved:
             record.agent_state[proof.STATE_KEY] = contract.to_json()
+            from yleum_api.services.build_spec import FidelitySpec
+            from yleum_api.services.generation.recovery_requirements import (
+                store_frozen_requirements,
+            )
+            store_frozen_requirements(record, original, FidelitySpec(), contract)
         if corrupt_binding:
             record.project_id = uuid4()
         project_id = ids.project_id
         session = NS(commit=AsyncMock(), get=AsyncMock(side_effect=lambda model, *_a, **_k:
-            record if model is GenerationRun else NS(
+            record if model is GenerationRun else NS(owner_id=ids.user_id, discovery_spec=None)
+            if model is Project else NS(
                 project_id=project_id, role="user", content=original,
             )))
 
@@ -41,7 +48,8 @@ def before_provider(monkeypatch):
             yield session
 
         coordinator = NS(session_factory=factory, _locked_run=AsyncMock(return_value=record),
-                         project_id=project_id, behavior_driver=driver)
+                         project_id=project_id, generation_run_id=ids.run_id,
+                         behavior_driver=driver)
         runtime = GenerationRuntime(coordinator=coordinator if coordinator_enabled else None)
         monkeypatch.setattr(agent_pipeline, "get_settings", lambda: NS(
             use_design_intelligence_plugin=False,
@@ -80,6 +88,18 @@ def before_provider(monkeypatch):
                       stack=stack, prompt=prompt)
         pytest.fail("preflight did not stop at the expected boundary")
     return run
+
+
+async def test_full_original_scope_is_frozen_before_planner_or_provider(before_provider):
+    from yleum_api.services.generation import recovery_requirements as rr
+
+    original = "task_density_v1; also export payroll to my private system"
+    result = await before_provider("Synthetic repair context", authoritative=original)
+    requirements = rr.frozen_requirements(result.record)
+    assert any(r.required and r.check_kind == "manual" and r.text == original
+               for r in requirements)
+    assert any(not r.required and r.text == original for r in requirements)
+    assert result.record.prompt_hash == hashlib.sha256(original.encode()).hexdigest()
 
 
 @pytest.mark.parametrize("driver", [None, object(), proof.ControllerBehaviorDriver(

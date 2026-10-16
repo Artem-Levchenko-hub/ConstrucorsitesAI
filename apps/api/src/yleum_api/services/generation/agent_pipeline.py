@@ -103,6 +103,13 @@ async def run_agent_generation(
     runtime: GenerationRuntime,
     selected_elements: list[dict[str, Any]] | None,
 ) -> None:
+    from yleum_api.services.generation.recovery_requirements import freeze_for_run
+
+    async with factory() as scope_session:
+        await freeze_for_run(
+            scope_session, run_id=ids.run_id, project_id=ids.project_id,
+            user_id=ids.user_id, prompt=prompt_text, template=project_info.template,
+        )
     # Phase 2: container EDITS go through the agent too (read→edit→build→
     # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
     # First-build/rebuild = full build prompt; a surgical follow-up = a

@@ -46,6 +46,8 @@ from yleum_api.services.generation import (
     supervisor,
 )
 from yleum_api.services.generation import lifecycle as messages
+from yleum_api.services.generation.recovery_requirements import frozen_requirements
+from yleum_api.services.generation_runs import prompt_hash
 
 
 def set_generation_settings(monkeypatch, settings):
@@ -172,7 +174,7 @@ async def flow_factory(test_engine, monkeypatch):
                 user_message_id=user_message.id,
                 assistant_message_id=assistant.id,
                 idempotency_key="flow-contract",
-                prompt_hash="f" * 64,
+                prompt_hash=prompt_hash(user_message.content),
                 status="pending",
                 response_mode="build",
             )
@@ -331,6 +333,11 @@ async def test_real_max_failure_or_cancel_waits_for_executor_cleanup(
             work.cancel()
         await asyncio.gather(work, return_exceptions=True)
     run, project, message, owner, snapshots, durable_events = await flow.saved()
+    requirements = frozen_requirements(run)
+    assert any(not requirement.required and requirement.text == "Implement calculation"
+               for requirement in requirements)
+    assert any(requirement.required and requirement.check_kind == "manual"
+               and requirement.text == "Implement calculation" for requirement in requirements)
     assert releases == ["started", "finished"]
     assert project.current_snapshot_id == flow.parent_id and message.snapshot_id is None
     assert owner.free_generations_used == 3 and len(snapshots) == 1

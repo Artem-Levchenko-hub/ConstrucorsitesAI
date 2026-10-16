@@ -737,55 +737,67 @@ def _validate_saved_receipt(
     need(witness.digest == receipt["compiled_asset_digest"], "BEHAVIOR_RECEIPT_UNVERIFIED")
 
 
+async def original_request(
+    session: Any, run: Any, prompt: str, *, project_id: UUID, run_id: UUID,
+) -> str:
+    """Recover exact immutable admission text, never synthesized runtime context."""
+    from yleum_api.models.message import Message
+
+    original = prompt
+    if hashlib.sha256(original.encode()).hexdigest() != run.prompt_hash:
+        message = (
+            await session.get(Message, run.user_message_id, populate_existing=True)
+            if run.user_message_id else None
+        )
+        if (
+            message is not None
+            and message.project_id == project_id
+            and message.role == "user"
+        ):
+            original = message.content
+            if hashlib.sha256(original.encode()).hexdigest() != run.prompt_hash:
+                # Adaptation admission hashes the canonical user request plus
+                # its typed operation/snapshot reference, while Message stores
+                # raw user text. Recover that exact existing admission format;
+                # historical files and synthesized model context are not intent.
+                from yleum_api.schemas.message import RestorationAdaptationReference
+                from yleum_api.services.restoration_adaptation import (
+                    adaptation_reservation_prompt,
+                )
+
+                raw = run.agent_state.get("restoration_adaptation")
+                try:
+                    if (
+                        isinstance(raw, dict)
+                        and raw.get("version") in {1, 2}
+                        and raw.get("project_id") == str(project_id)
+                        and raw.get("owner_id") == str(run.user_id)
+                        and raw.get("adaptation_run_id") == str(run_id)
+                    ):
+                        reference = RestorationAdaptationReference(
+                            operation_id=UUID(raw["operation_id"]),
+                            expected_draft_snapshot_id=UUID(raw["base_draft_snapshot_id"]),
+                        )
+                        original = adaptation_reservation_prompt(original, reference)
+                except Exception:
+                    raise BehaviorProofError("BEHAVIOR_REQUEST_BINDING_INVALID") from None
+    need(
+        hashlib.sha256(original.encode()).hexdigest() == run.prompt_hash,
+        "BEHAVIOR_REQUEST_BINDING_INVALID",
+        "NEEDS_REVIEW",
+    )
+    return original
+
+
 async def freeze_for_turn(
     coordinator: Any, prompt: str, *, template: str
 ) -> NamedBehaviorContract | None:
     """Freeze from the authoritative exact user turn before any model call."""
-    from yleum_api.models.message import Message
-
     async with coordinator.session_factory() as session:
         run = await coordinator._locked_run(session)
-        original = prompt
-        if hashlib.sha256(original.encode()).hexdigest() != run.prompt_hash:
-            message = (
-                await session.get(Message, run.user_message_id) if run.user_message_id else None
-            )
-            if (
-                message is not None
-                and message.project_id == coordinator.project_id
-                and message.role == "user"
-            ):
-                original = message.content
-                if hashlib.sha256(original.encode()).hexdigest() != run.prompt_hash:
-                    # Adaptation admission hashes the canonical user request plus
-                    # its typed operation/snapshot reference, while Message stores
-                    # raw user text. Recover that exact existing admission format;
-                    # historical files and synthesized model context are not intent.
-                    from yleum_api.schemas.message import RestorationAdaptationReference
-                    from yleum_api.services.restoration_adaptation import (
-                        adaptation_reservation_prompt,
-                    )
-
-                    raw = run.agent_state.get("restoration_adaptation")
-                    try:
-                        if (
-                            isinstance(raw, dict)
-                            and raw.get("version") in {1, 2}
-                            and raw.get("project_id") == str(coordinator.project_id)
-                            and raw.get("owner_id") == str(run.user_id)
-                            and raw.get("adaptation_run_id") == str(coordinator.generation_run_id)
-                        ):
-                            reference = RestorationAdaptationReference(
-                                operation_id=UUID(raw["operation_id"]),
-                                expected_draft_snapshot_id=UUID(raw["base_draft_snapshot_id"]),
-                            )
-                            original = adaptation_reservation_prompt(original, reference)
-                    except Exception:
-                        raise BehaviorProofError("BEHAVIOR_REQUEST_BINDING_INVALID") from None
-        need(
-            hashlib.sha256(original.encode()).hexdigest() == run.prompt_hash,
-            "BEHAVIOR_REQUEST_BINDING_INVALID",
-            "NEEDS_REVIEW",
+        original = await original_request(
+            session, run, prompt, project_id=coordinator.project_id,
+            run_id=coordinator.generation_run_id,
         )
         selected = required_contract(original, template=template)
         root = dict(run.agent_state)

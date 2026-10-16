@@ -16,6 +16,7 @@ from yleum_api.core import config as core_config
 from yleum_api.core.config import Settings
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.max_project_config import MaxProjectConfig
+from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import (
@@ -41,6 +42,7 @@ from yleum_api.services.generation import (
     progress,
     source_checkpoint,
 )
+from yleum_api.services.generation.recovery_requirements import frozen_requirements
 
 
 class RenderBoundary(BaseException):
@@ -366,9 +368,6 @@ def _assert_render_golden(files, expected, *, portable=False):
 )
 async def test_real_process_config_render(caller, stored, portable, fallback, fault, monkeypatch):
     pid, uid, mid, rid = (UUID(int=i) for i in range(1, 5))
-    # Source checkpoint persistence must see the active owner/run identity even
-    # though this render contract replaces database I/O with a local session.
-    run = GenerationRun(id=rid, project_id=pid, user_id=uid, status="running", agent_state={})
     state = {"model_ran": False, "runtime_probed": False, "config_reads": 0}
     rendered = []
     # Snapshot is the full staged tree, including seed; export is only the model diff.
@@ -376,7 +375,16 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     prompt = "Создай сервис " + "я" * 1050
     if fallback == "empty":
         prompt = ""
-    project = SimpleNamespace(
+    # Empty synthesized render context is valid here, but normal admission has
+    # a nonempty original user turn. Preserve its real owned Message/run link.
+    original_prompt = prompt or "Создай сервис внутри MAX"
+    user_message = Message(id=UUID(int=6), project_id=pid, role="user", content=original_prompt)
+    run = GenerationRun(id=rid, project_id=pid, user_id=uid, status="running", agent_state={},
+                        idempotency_key="config-render-contract",
+                        prompt_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
+                        user_message_id=user_message.id, assistant_message_id=mid)
+    project = Project(
+        id=pid, owner_id=uid,
         template="max_miniapp",
         slug="isolated-config-baseline",
         name="",
@@ -415,9 +423,11 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
 
         async def get(self, model, ident, **_kwargs):
             if model is Project:
-                return project
+                return project if ident == pid else None
             if model is GenerationRun:
                 return run if ident == rid else None
+            if model is Message:
+                return user_message if ident == user_message.id else None
             if model is MaxProjectConfig:
                 state["config_reads"] += 1
                 target = (caller == "seed" and state["config_reads"] == 2) or state["model_ran"]
@@ -590,6 +600,12 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
             "test-model",
             orchestrate=True,
         )
+    requirements = frozen_requirements(run)
+    assert run.prompt_hash == hashlib.sha256(original_prompt.encode()).hexdigest()
+    assert any(not requirement.required and requirement.text == original_prompt
+               for requirement in requirements)
+    assert any(requirement.required and requirement.check_kind == "manual"
+               and requirement.text == original_prompt for requirement in requirements)
     if caller != "seed":
         checkpoint = run.agent_state["source_checkpoint"]
         assert checkpoint["baseline_sha"] is None

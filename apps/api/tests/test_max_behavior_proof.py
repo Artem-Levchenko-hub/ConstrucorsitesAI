@@ -414,7 +414,7 @@ def coordinator_harness(monkeypatch, *, registered=None, required=True, frozen=N
         async def refresh(self, obj):
             pass
 
-        async def get(self, model, key):
+        async def get(self, model, key, **kwargs):
             if model.__name__ == "Project":
                 return NS(template="max_miniapp")
             if model.__name__ == "Message":

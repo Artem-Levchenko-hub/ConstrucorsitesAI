@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import uuid
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -208,6 +209,410 @@ async def test_same_idempotency_key_replays_and_other_key_is_blocked(
         "active_message_id": None,
         "active_status": "pending",
     }
+
+
+async def _physically_released_predecessor(session):
+    from datetime import UTC, datetime
+
+    from yleum_api.services.build_spec import FidelitySpec
+    from yleum_api.services.generation.recovery_requirements import store_frozen_requirements
+    from yleum_api.services.orchestrator_client import ProjectCellResourceResponse
+    from yleum_api.services.project_cells import _canonical_operation_envelope
+
+    owner, project = await _owner_and_project(session)
+    original = "Original full request"
+    run = GenerationRun(project_id=project.id, user_id=owner.id,
+        idempotency_key="previous-request", status="cancelled",
+        prompt_hash=hashlib.sha256(original.encode()).hexdigest())
+    session.add(run)
+    await session.flush()
+    store_frozen_requirements(run, original, FidelitySpec(), None)
+    workspace = ProjectCellWorkspace(project_id=project.id, owner_id=owner.id,
+        provider="docker", state="ready", generation_run_id=None, fencing_epoch=7)
+    session.add(workspace)
+    await session.flush()
+    envelope, digest = _canonical_operation_envelope(workspace.id, run.id, "release", {})
+    response = ProjectCellResourceResponse(workspace.id, "resources_ready", None, 7, None,
+                                          True, True, True, True)
+    release = ProjectCellOperation(workspace_id=workspace.id, generation_run_id=run.id,
+        kind="release", idempotency_key="physical-release", request_payload=envelope,
+        request_digest=digest, status="completed", fencing_epoch=7,
+        result_payload=response.to_wire_json(), finished_at=datetime.now(UTC))
+    session.add(release)
+    await session.commit()
+    return owner, project, run, workspace
+
+
+async def test_amended_prompt_has_new_run_identity(db_session):
+    import copy
+
+    from yleum_api.services.generation.recovery_requirements import superseded_run_id
+
+    owner, project, original, _ = await _physically_released_predecessor(db_session)
+    original_id, original_hash = original.id, original.prompt_hash
+    original_state = copy.deepcopy(original.agent_state)
+    amended, replayed = await reserve_generation_run(db_session, project_id=project.id,
+        user_id=owner.id, idempotency_key="new-linked-request", prompt="Revised full request",
+        supersedes_run_id=original.id)
+    await db_session.commit()
+    assert not replayed and amended.id != original_id
+    assert superseded_run_id(amended) == original_id
+    assert original.prompt_hash == original_hash and original.status == "cancelled"
+    assert original.agent_state == original_state
+    replay, replayed = await reserve_generation_run(db_session, project_id=project.id,
+        user_id=owner.id, idempotency_key="new-linked-request", prompt="Revised full request",
+        supersedes_run_id=original_id)
+    assert replayed and replay.id == amended.id
+    with pytest.raises(ApiError) as conflict:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Revised full request",
+            supersedes_run_id=uuid.uuid4())
+    assert conflict.value.code == "idempotency_conflict"
+    with pytest.raises(ApiError) as missing_link:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Revised full request")
+    assert missing_link.value.code == "idempotency_conflict"
+
+
+async def test_linked_admission_refreshes_terminal_predecessor(db_session, test_engine):
+    owner, project, original, _ = await _physically_released_predecessor(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        changed = await other.get(GenerationRun, original.id)
+        changed.status = "running"
+        await other.commit()
+    assert original.status == "cancelled"  # Deliberately stale identity map.
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    assert rejected.value.details["reason"] == "amendment_not_ready"
+
+
+async def test_linked_admission_refreshes_workspace_release_fact(db_session, test_engine):
+    owner, project, original, workspace = await _physically_released_predecessor(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        changed = await other.get(ProjectCellWorkspace, workspace.id)
+        changed.generation_run_id = original.id
+        await other.commit()
+    assert workspace.generation_run_id is None
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    assert rejected.value.details["reason"] == "amendment_not_ready"
+
+
+async def test_linked_admission_holds_predecessor_lock_until_commit(db_session, test_engine):
+    owner, project, original, _ = await _physically_released_predecessor(db_session)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as admission, factory() as other:
+        await reserve_generation_run(admission, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+        await other.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        with pytest.raises(DBAPIError) as locked:
+            await other.execute(text("UPDATE generation_runs SET status='running' WHERE id=:id"),
+                                {"id": original.id})
+        assert getattr(locked.value.orig, "sqlstate", None) == "55P03"
+        await other.rollback()
+        await admission.rollback()
+
+
+async def test_linked_admission_refreshes_finished_activity_fact(db_session, test_engine):
+    from datetime import UTC, datetime
+
+    from yleum_api.models.project_cell import ProjectCellActivityLease
+
+    owner, project, original, workspace = await _physically_released_predecessor(db_session)
+    now = datetime.now(UTC)
+    lease = ProjectCellActivityLease(workspace_id=workspace.id, generation_run_id=original.id,
+        kind="promotion", state="completed", fencing_epoch=7, started_at=now,
+        heartbeat_at=now, deadline_at=now, finished_at=now)
+    db_session.add(lease)
+    await db_session.commit()
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        changed = await other.get(ProjectCellActivityLease, lease.operation_id)
+        changed.state, changed.finished_at = "active", None
+        await other.commit()
+    assert lease.state == "completed"  # Deliberately stale identity map.
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    assert rejected.value.details["reason"] == "amendment_not_ready"
+
+
+async def test_linked_admission_fails_closed_for_legacy_terminal_run(db_session):
+    owner, project = await _owner_and_project(db_session)
+    original = GenerationRun(project_id=project.id, user_id=owner.id,
+        idempotency_key="legacy", status="completed", prompt_hash="a" * 64)
+    db_session.add(original)
+    await db_session.commit()
+    original_id = original.id
+    with pytest.raises(ApiError) as rejected:
+        await reserve_generation_run(db_session, project_id=project.id, user_id=owner.id,
+            idempotency_key="new-linked-request", prompt="Amend", supersedes_run_id=original.id)
+    assert rejected.value.code == "conflict"
+    await db_session.rollback()
+    runs = list((await db_session.scalars(select(GenerationRun))).all())
+    assert [run.id for run in runs] == [original_id]
+
+
+async def _assert_linked_admission_serializes_actual_operation_claim(
+    db_session, test_engine, monkeypatch, *, replay: bool,
+):
+    """Use the real wait graph, whether admission waits on a row or advisory lock."""
+    from yleum_api.services import project_cells
+
+    owner, project, predecessor, workspace = await _physically_released_predecessor(db_session)
+    envelope, digest = project_cells._canonical_operation_envelope(
+        workspace.id, predecessor.id, "pause", {},
+    )
+    operation = ProjectCellOperation(
+        workspace_id=workspace.id, generation_run_id=predecessor.id,
+        kind="pause", idempotency_key="racing-pause", request_payload=envelope,
+        request_digest=digest, status="indeterminate" if replay else "pending",
+        fencing_epoch=workspace.fencing_epoch if replay else None,
+    )
+    db_session.add(operation)
+    await db_session.commit()
+    operation_id, project_id, owner_id = operation.id, project.id, owner.id
+    predecessor_id = predecessor.id
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    operation_locked, release_claim, admission_connected = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event(),
+    )
+    pids: dict[str, int] = {}
+    original_locked_operation = project_cells._locked_operation
+
+    async def hold_actual_operation_lock(session, requested_id):
+        locked = await original_locked_operation(session, requested_id)
+        if requested_id == operation_id:
+            pids["claim"] = await session.scalar(text("SELECT pg_backend_pid()"))
+            operation_locked.set()
+            await asyncio.wait_for(release_claim.wait(), timeout=12)
+        return locked
+
+    monkeypatch.setattr(project_cells, "_locked_operation", hold_actual_operation_lock)
+    claim = (
+        project_cells.reclaim_indeterminate_cell_operation_committed if replay
+        else project_cells.claim_cell_operation_committed
+    )
+
+    async def admit_link():
+        async with factory() as session:
+            await session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            pids["admission"] = await session.scalar(text("SELECT pg_backend_pid()"))
+            admission_connected.set()
+            try:
+                return await reserve_generation_run(
+                    session, project_id=project_id, user_id=owner_id,
+                    idempotency_key="admission-vs-claim", prompt="Revised request",
+                    supersedes_run_id=predecessor_id,
+                )
+            except ApiError:
+                # In particular, a NOWAIT refusal must roll back its savepoint;
+                # normal admission's outer transaction remains usable and empty.
+                assert await session.scalar(text("SELECT 1")) == 1
+                assert not (await session.scalars(select(GenerationRun).where(
+                    GenerationRun.project_id == project_id,
+                    GenerationRun.idempotency_key == "admission-vs-claim",
+                ))).all()
+                raise
+            finally:
+                await session.rollback()
+
+    claim_task = asyncio.create_task(claim(factory, operation_id))
+    admission_task = None
+    try:
+        await asyncio.wait_for(operation_locked.wait(), timeout=5)
+        admission_task = asyncio.create_task(admit_link())
+        await asyncio.wait_for(admission_connected.wait(), timeout=5)
+        # Do not require admission to have acquired the workspace row: the fixed
+        # implementation must instead wait earlier on the claimant's advisory
+        # lock. Observe the real blocker before letting the claimant continue.
+        deadline = asyncio.get_running_loop().time() + 5
+        blockers = []
+        async with factory() as observer:
+            while asyncio.get_running_loop().time() < deadline:
+                blockers = await observer.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": pids["admission"]},
+                )
+                if pids["claim"] in blockers:
+                    break
+                if admission_task.done():
+                    break
+                await asyncio.sleep(0.01)
+        assert pids["claim"] in blockers, (
+            "linked admission did not reach the actual claimant serialization boundary",
+            blockers,
+        )
+        release_claim.set()
+        claim_result, admission_result = await asyncio.wait_for(
+            asyncio.gather(claim_task, admission_task, return_exceptions=True), timeout=15,
+        )
+        deadlocks = [result for result in (claim_result, admission_result)
+                     if isinstance(result, DBAPIError)
+                     and getattr(result.orig, "sqlstate", None) == "40P01"]
+        assert not deadlocks, (
+            f"linked admission inverted the operation owner's locks: {deadlocks!r}"
+        )
+        assert not isinstance(claim_result, BaseException), repr(claim_result)
+        assert claim_result.operation_id == operation_id
+        assert isinstance(admission_result, ApiError), repr(admission_result)
+        assert admission_result.code == "conflict"
+        assert admission_result.details["reason"] == "amendment_not_ready"
+        async with factory() as observed:
+            current = await observed.get(ProjectCellOperation, operation_id)
+            assert current.status == "running" and current.attempt_count == 1
+            links = list((await observed.scalars(select(GenerationRun).where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.idempotency_key == "admission-vs-claim",
+            ))).all())
+            assert links == []
+    finally:
+        release_claim.set()
+        tasks = [claim_task] + ([admission_task] if admission_task is not None else [])
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def test_linked_admission_serializes_pending_operation_claim(
+    db_session, test_engine, monkeypatch,
+):
+    await _assert_linked_admission_serializes_actual_operation_claim(
+        db_session, test_engine, monkeypatch, replay=False,
+    )
+
+
+async def test_linked_admission_serializes_indeterminate_operation_reclaim(
+    db_session, test_engine, monkeypatch,
+):
+    await _assert_linked_admission_serializes_actual_operation_claim(
+        db_session, test_engine, monkeypatch, replay=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "held_row", [None, "run", "workspace"],
+    ids=["advisory-before-fks", "run-before-reserve", "workspace-before-reserve"],
+)
+async def test_linked_admission_serializes_actual_operation_reservation(
+    db_session, test_engine, monkeypatch, held_row,
+):
+    """Reservation's INSERT takes workspace/run FK locks under its advisory lock."""
+    from yleum_api.services import project_cells
+
+    owner, project, predecessor, workspace = await _physically_released_predecessor(db_session)
+    project_id, owner_id, predecessor_id, workspace_id = (
+        project.id, owner.id, predecessor.id, workspace.id,
+    )
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    owner_ready, continue_reservation, admission_connected = (
+        asyncio.Event(), asyncio.Event(), asyncio.Event(),
+    )
+    pids: dict[str, int] = {}
+    original_advisory = project_cells._advisory_lock
+
+    async def hold_reservation_before_insert(session, key):
+        await original_advisory(session, key)
+        if session.info.get("reservation_actor") and held_row is None:
+            owner_ready.set()
+            await asyncio.wait_for(continue_reservation.wait(), timeout=12)
+
+    monkeypatch.setattr(project_cells, "_advisory_lock", hold_reservation_before_insert)
+
+    async def reserve_operation():
+        async with factory() as session:
+            session.info["reservation_actor"] = True
+            pids["owner"] = await session.scalar(text("SELECT pg_backend_pid()"))
+            if held_row is not None:
+                # Exercise each pre-held lock separately: in particular normal
+                # executor release holds only workspace before reservation.
+                model, row_id = (
+                    (GenerationRun, predecessor_id) if held_row == "run"
+                    else (ProjectCellWorkspace, workspace_id)
+                )
+                await session.get(model, row_id, with_for_update=True)
+                owner_ready.set()
+                await asyncio.wait_for(continue_reservation.wait(), timeout=12)
+            operation, _ = await project_cells.reserve_cell_operation(
+                session, workspace_id=workspace_id, generation_run_id=predecessor_id,
+                kind="pause", idempotency_key="reservation-race", request={},
+            )
+            await session.commit()
+            return operation.id
+
+    async def admit_link():
+        async with factory() as session:
+            await session.execute(text("SET LOCAL statement_timeout = '10s'"))
+            pids["admission"] = await session.scalar(text("SELECT pg_backend_pid()"))
+            admission_connected.set()
+            try:
+                return await reserve_generation_run(
+                    session, project_id=project_id, user_id=owner_id,
+                    idempotency_key="admission-vs-reservation", prompt="Revised request",
+                    supersedes_run_id=predecessor_id,
+                )
+            except ApiError:
+                assert await session.scalar(text("SELECT 1")) == 1
+                assert not (await session.scalars(select(GenerationRun).where(
+                    GenerationRun.project_id == project_id,
+                    GenerationRun.idempotency_key == "admission-vs-reservation",
+                ))).all()
+                raise
+            finally:
+                await session.rollback()
+
+    owner_task = asyncio.create_task(reserve_operation())
+    admission_task = None
+    try:
+        await asyncio.wait_for(owner_ready.wait(), timeout=5)
+        admission_task = asyncio.create_task(admit_link())
+        await asyncio.wait_for(admission_connected.wait(), timeout=5)
+        deadline = asyncio.get_running_loop().time() + 5
+        blockers = []
+        async with factory() as observer:
+            while asyncio.get_running_loop().time() < deadline:
+                blockers = await observer.scalar(
+                    text("SELECT pg_blocking_pids(:pid)"), {"pid": pids["admission"]},
+                )
+                # A conservative NOWAIT rejection is also valid for the
+                # prelocked-row writer; no barrier demands a blocking inversion.
+                if pids["owner"] in blockers or admission_task.done():
+                    break
+                await asyncio.sleep(0.01)
+        assert pids["owner"] in blockers or admission_task.done()
+        continue_reservation.set()
+        owner_result, admission_result = await asyncio.wait_for(
+            asyncio.gather(owner_task, admission_task, return_exceptions=True), timeout=15,
+        )
+        deadlocks = [result for result in (owner_result, admission_result)
+                     if isinstance(result, DBAPIError)
+                     and getattr(result.orig, "sqlstate", None) == "40P01"]
+        assert not deadlocks, f"linked admission inverted reservation/FK locks: {deadlocks!r}"
+        assert not isinstance(owner_result, BaseException), repr(owner_result)
+        assert isinstance(admission_result, ApiError), repr(admission_result)
+        assert admission_result.code == "conflict"
+        assert admission_result.details["reason"] == "amendment_not_ready"
+        async with factory() as observed:
+            reserved = await observed.get(ProjectCellOperation, owner_result)
+            assert reserved.status == "pending"
+            assert not (await observed.scalars(select(GenerationRun).where(
+                GenerationRun.project_id == project_id,
+                GenerationRun.idempotency_key == "admission-vs-reservation",
+            ))).all()
+    finally:
+        continue_reservation.set()
+        tasks = [owner_task] + ([admission_task] if admission_task is not None else [])
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 async def test_final_assistant_closes_lifecycle_gap_for_queued_prompt(

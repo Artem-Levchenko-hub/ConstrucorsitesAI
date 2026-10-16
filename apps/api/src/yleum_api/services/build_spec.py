@@ -179,6 +179,19 @@ class FidelitySpec:
             "tone": self.tone,
         }
 
+    def requirement_axes(self) -> tuple[tuple[str, str], ...]:
+        """Explicit decisions only; each remains pending without functional evidence."""
+        axes: list[tuple[str, str]] = []
+        if self.dark_mode is not None:
+            axes.append(("fidelity:dark_mode", f"Theme dark_mode={self.dark_mode}"))
+        if self.primary_family:
+            axes.append(("fidelity:primary_family", f"Primary color family: {self.primary_family}"))
+        for section in sorted(set(self.sections)):
+            axes.append((f"fidelity:section:{section}", f"Required section: {section}"))
+        if self.tone:
+            axes.append(("fidelity:tone", f"Required tone: {self.tone}"))
+        return tuple(axes)
+
     @classmethod
     def from_dict(cls, data: dict[str, Any] | None) -> FidelitySpec:
         """Rebuild a spec from a persisted ``discovery_spec`` JSONB row.

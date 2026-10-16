@@ -150,6 +150,7 @@ class PromptAcceptance:
             prompt=adaptation_reservation_prompt(
                 self.payload.prompt, self.payload.restoration_adaptation
             ),
+            supersedes_run_id=self.payload.supersedes_run_id,
         )
         if replayed:
             if self.generation_run.response_payload is not None:

@@ -70,6 +70,8 @@ class RequirementWitness(_Record):
 
     The receipt loader (Task 3) must validate server ownership and candidate
     binding before constructing a trusted witness. Model output is not evidence.
+    Serialization deliberately loses in-process loader authority; persisted
+    references must be loaded again before checking completeness.
     """
 
     requirement_id: Nonblank
