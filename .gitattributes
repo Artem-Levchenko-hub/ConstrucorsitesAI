@@ -1,2 +1,4 @@
 # Template bytes must match Linux production and the frozen materialization fixtures.
 apps/api/src/yleum_api/templates/** text eol=lf
+# Generated reports must retain exact PDF bytes and use binary diffs.
+reports/**/*.pdf binary
