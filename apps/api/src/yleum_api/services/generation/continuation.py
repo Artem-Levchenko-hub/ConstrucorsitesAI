@@ -4,7 +4,54 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING, Any
+
+import structlog
+
+from yleum_api.services.generation.recovery_contract import (
+    RecoveryBinding,
+    RecoveryDirective,
+    RecoveryObservation,
+)
+
+if TYPE_CHECKING:
+    from yleum_api.services.agent_builder import Action
+
+RecoveryObserver = Callable[[RecoveryObservation], Awaitable[RecoveryDirective]]
+RecoveryBindingReader = Callable[[], Awaitable[RecoveryBinding]]
+
+
+def shadow_recovery_executor(
+    execute: Callable[[Action], Awaitable[dict[str, Any]]], *,
+    recovery: RecoveryObserver | None, recovery_binding: RecoveryBindingReader | None,
+) -> Callable[[Action], Awaitable[dict[str, Any]]]:
+    """Observe both loop executors without changing their effects or return values.
+
+    Binding comes only from the owning server caller. Tool output is never
+    promoted into a witness; directives remain shadow. Cancellation propagates,
+    ordinary observer failures cannot fail or replay the completed operation.
+    """
+    if recovery is None or recovery_binding is None:
+        return execute
+
+    async def observed(action: Action) -> dict[str, Any]:
+        result = await execute(action)
+        try:
+            binding = await recovery_binding()
+            signature = hashlib.sha256(json.dumps(
+                {"tool": action.name, "args": action.args}, sort_keys=True,
+                separators=(",", ":"), default=str,
+            ).encode()).hexdigest()
+            await recovery(RecoveryObservation(kind="tool", binding=binding,
+                requirement_id=None, action_signature=signature,
+                diagnostic_signatures=(), witness=None))
+        except Exception:
+            # No exception/response text: callbacks may contain private data.
+            structlog.get_logger(__name__).warning("generation.recovery_shadow_unavailable")
+        return result
+
+    return observed
 
 
 def source_fingerprint(files: Mapping[str, str]) -> str:

@@ -33,7 +33,12 @@ import structlog
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
 from yleum_api.services.agent_output_budget import agent_output_tokens, is_sonnet55_model
-from yleum_api.services.generation.continuation import SourceNoveltyTracker
+from yleum_api.services.generation.continuation import (
+    RecoveryBindingReader,
+    RecoveryObserver,
+    SourceNoveltyTracker,
+    shadow_recovery_executor,
+)
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import rate_limit_retry_delay
@@ -2347,8 +2352,13 @@ async def run_native_build(
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
     edit_source_changed: Callable[[], bool] | None = None,
+    recovery: RecoveryObserver | None = None,
+    recovery_binding: RecoveryBindingReader | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
+    execute = shadow_recovery_executor(
+        execute, recovery=recovery, recovery_binding=recovery_binding,
+    )
 
     async def run_segment(
         segment_task: str,

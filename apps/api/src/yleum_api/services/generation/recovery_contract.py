@@ -82,6 +82,25 @@ class RequirementWitness(_Record):
     passed: bool
 
 
+class CompilerWitness(_Record):
+    """Reference to an owned terminal check; only the server loader grants authority.
+
+    A RED excerpt has no complete error count. Only a verified transition from
+    RED to GREEN can establish an error reduction with this receipt version.
+    """
+
+    receipt_id: UUID
+    operation_id: UUID
+    run_id: UUID
+    project_id: UUID
+    user_id: UUID
+    prompt_hash: Sha256
+    binding: RecoveryBinding
+    comparison_sha256: Sha256
+    dimension: Literal["fast_check", "full_build"]
+    passed: bool
+
+
 class RecoveryObservation(_Record):
     kind: Literal["source", "diagnostics", "proof", "tool", "truncated", "dependency"]
     binding: RecoveryBinding
@@ -89,6 +108,7 @@ class RecoveryObservation(_Record):
     action_signature: str | None
     diagnostic_signatures: tuple[str, ...]
     witness: RequirementWitness | None
+    compiler: CompilerWitness | None = None
 
 
 class RecoveryDirective(_Record):
@@ -143,6 +163,10 @@ class RecoveryState(_Record):
     next_check_at: datetime | None = None
     unresolved_operation_ids: tuple[UUID, ...] = ()
     tried_strategies: tuple[str, ...] = ()
+    # Append-only observations retain failed approaches across strategy/context
+    # changes. Accepted compiler references are separate from untrusted input.
+    observations: tuple[RecoveryObservation, ...] = ()
+    compiler_witnesses: tuple[CompilerWitness, ...] = ()
     incomplete_response_budget: IncompleteResponseBudget = Field(
         default_factory=IncompleteResponseBudget,
     )
@@ -182,6 +206,13 @@ class RecoveryState(_Record):
             raise ValueError("requirements must have unique IDs and original prompt scope")
         if any(witness.requirement_id not in ids for witness in self.witnesses):
             raise ValueError("witness has no recovery requirement")
+        if any(
+            (w.run_id, w.project_id, w.user_id, w.prompt_hash)
+            != (self.identity.run_id, self.identity.project_id,
+                self.identity.user_id, self.identity.prompt_hash)
+            for w in self.compiler_witnesses
+        ):
+            raise ValueError("compiler witness belongs to another request")
         if self.continuation_claim is not None and (
             self.continuation_claim.run_id != self.identity.run_id
             or self.continuation_claim.attempt_seq != self.attempt_seq

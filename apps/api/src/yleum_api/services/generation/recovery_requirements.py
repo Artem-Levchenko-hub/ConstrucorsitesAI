@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import weakref
 from collections.abc import Sequence
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Literal, cast
 from uuid import UUID
@@ -23,18 +24,21 @@ from yleum_api.models.project_cell import (
     ProjectCellCandidate,
     ProjectCellOperation,
     ProjectCellProof,
+    ProjectCellProofResult,
     ProjectCellWorkspace,
 )
 from yleum_api.services import max_behavior_proof as behavior
 from yleum_api.services.build_spec import FidelitySpec
 from yleum_api.services.generation.recovery_contract import (
+    CompilerWitness,
     RecoveryBinding,
     RecoveryContractError,
+    RecoveryIdentity,
     RecoveryRequirement,
     RequirementWitness,
 )
 from yleum_api.services.orchestrator_client import project_cell_agent_identity
-from yleum_api.services.project_cell_proofs import proof_identity_from_model
+from yleum_api.services.project_cell_proofs import ProofDimension, proof_identity_from_model
 
 STATE_KEY = "recovery_requirements_v1"
 AMENDMENT_KEY = "generation_amendment_v1"
@@ -42,8 +46,9 @@ AMENDMENT_KEY = "generation_amendment_v1"
 _CANONICAL = frozenset({"task_density_v1", "header_theme_v1", "coffee_local_summary_v1"})
 _trusted: dict[int, tuple[
     weakref.ReferenceType[RequirementWitness], RecoveryRequirement, RecoveryBinding,
-    tuple[RecoveryRequirement, ...],
+    tuple[RecoveryRequirement, ...], tuple[UUID, UUID, UUID, str],
 ]] = {}
+_trusted_compilers: dict[int, weakref.ReferenceType[CompilerWitness]] = {}
 
 
 def _need(condition: object, message: str) -> None:
@@ -261,8 +266,25 @@ async def load_requirement_witness(
         environment_sha256=binding.environment_sha256, passed=True)
     key = id(witness)
     _trusted[key] = (weakref.ref(witness, lambda _: _trusted.pop(key, None)),
-                     requirement, binding, manifest)
+                     requirement, binding, manifest,
+                     (run.id, run.project_id, run.user_id, run.prompt_hash))
     return witness
+
+
+def requirement_witness_is_trusted(
+    witness: RequirementWitness, *, requirements: Sequence[RecoveryRequirement],
+    binding: RecoveryBinding, identity: RecoveryIdentity | None = None,
+) -> bool:
+    """Reuse loader authority for one obligation without weakening full acceptance."""
+    trusted = _trusted.get(id(witness))
+    requirement = next((r for r in requirements if r.id == witness.requirement_id), None)
+    return bool(
+        trusted is not None and trusted[0]() is witness
+        and requirement is not None and trusted[1] == requirement
+        and trusted[2] == binding and trusted[3] == tuple(requirements) and witness.passed
+        and (identity is None or trusted[4] == (
+            identity.run_id, identity.project_id, identity.user_id, identity.prompt_hash))
+    )
 
 
 def requirements_complete(
@@ -277,17 +299,103 @@ def requirements_complete(
             continue
         if requirement.check_kind == "manual":
             return False
-        found = False
-        for witness in witnesses:
-            trusted = _trusted.get(id(witness))
-            if (trusted is not None and trusted[0]() is witness
-                    and trusted[1] == requirement and trusted[2] == binding
-                    and trusted[3] == tuple(requirements) and witness.passed):
-                found = True
-                break
-        if not found:
+        if not any(
+            witness.requirement_id == requirement.id and requirement_witness_is_trusted(
+                witness, requirements=requirements, binding=binding,
+            ) for witness in witnesses
+        ):
             return False
     return any(r.required for r in requirements)
+
+
+async def load_compiler_witness(
+    session: AsyncSession, *, run_id: UUID, receipt_id: UUID, binding: RecoveryBinding,
+) -> CompilerWitness:
+    """Read the owning check journal and current physical identity; never model JSON.
+
+    The bounded RED detail is deliberately not parsed into an alleged complete
+    error set. The receipt proves only a completed red/green check, under the
+    same project -> run -> workspace lock order as functional receipt loading.
+    """
+    hint = await session.get(GenerationRun, run_id)
+    _need(hint is not None, "compiler run missing")
+    assert hint is not None
+    project = await session.get(Project, hint.project_id,
+                                populate_existing=True, with_for_update=True)
+    run = await session.get(GenerationRun, run_id, populate_existing=True, with_for_update=True)
+    _need(project is not None and run is not None and project.id == run.project_id
+          and project.owner_id == run.user_id, "compiler receipt owner conflict")
+    assert project is not None and run is not None
+    try:
+        workspace_id = UUID(binding.workspace_id)
+        _need(str(workspace_id) == binding.workspace_id, "invalid compiler workspace identity")
+        workspace = await session.get(ProjectCellWorkspace, workspace_id,
+                                     populate_existing=True, with_for_update=True)
+        _need(workspace is not None and workspace.project_id == run.project_id
+              and workspace.owner_id == run.user_id and workspace.generation_run_id == run.id
+              and workspace.fencing_epoch == binding.fencing_epoch
+              and workspace.state == "ready" and workspace.deleted_at is None,
+              "compiler workspace ownership or fence conflict")
+        result = await session.get(ProjectCellProofResult, receipt_id,
+                                   populate_existing=True, with_for_update=True)
+        _need(result is not None and result.workspace_id == workspace_id
+              and result.dimension in {"fast_check", "full_build"}
+              and result.outcome in {"red", "green"}, "compiler terminal receipt missing")
+        assert result is not None
+        proof = await session.get(ProjectCellProof, result.proof_id,
+                                  populate_existing=True, with_for_update=True)
+        _need(proof is not None and proof.workspace_id == workspace_id
+              and proof.generation_run_id == run.id
+              and proof.fencing_epoch == binding.fencing_epoch, "compiler proof scope conflict")
+        assert proof is not None
+        physical = proof_identity_from_model(proof)
+        _need(physical.proof_key == proof.proof_key
+              and physical.workspace_revision == binding.source_sha256
+              and physical.schema_data_digest == binding.schema_sha256
+              and physical.base_image_digest == binding.environment_sha256
+              and physical.toolchain_digest == binding.environment_sha256
+              and result.dimension_key == physical.dimension_key(ProofDimension(result.dimension))
+              and result.detail_digest
+              == hashlib.sha256(result.redacted_detail.encode()).hexdigest(),
+              "compiler proof binding or receipt digest conflict")
+        lease = await session.get(ProjectCellActivityLease, result.operation_id,
+                                  populate_existing=True, with_for_update=True)
+        _need(lease is not None and lease.workspace_id == workspace_id
+              and lease.generation_run_id == run.id and lease.kind == "command"
+              and lease.fencing_epoch == binding.fencing_epoch
+              and lease.proof_key == proof.proof_key
+              and lease.phase
+              == ("fast_check" if result.dimension == "fast_check" else "final_build")
+              and lease.state == ("completed" if result.outcome == "green" else "failed")
+              and lease.finished_at is not None, "compiler operation is not terminal or owned")
+        current = await project_cell_agent_identity(workspace_id,
+            generation_run_id=run.id, fencing_epoch=binding.fencing_epoch)
+        _need(current.workspace_revision == physical.workspace_revision
+              and current.schema_data_digest == physical.schema_data_digest
+              and current.environment_digest == binding.environment_sha256
+              and current.dependency_digest == physical.dependency_digest
+              and current.cell_manifest_digest == physical.cell_manifest_digest
+              and current.build_config_digest == physical.build_config_digest,
+              "compiler current physical identity conflict")
+    except (ValueError, TypeError, AttributeError, KeyError) as exc:
+        raise RecoveryContractError("compiler receipt unavailable or invalid") from exc
+    witness = CompilerWitness(receipt_id=result.id, operation_id=result.operation_id,
+        run_id=run.id, project_id=run.project_id, user_id=run.user_id, prompt_hash=run.prompt_hash,
+        binding=binding, dimension=cast(Literal["fast_check", "full_build"], result.dimension),
+        comparison_sha256=replace(physical, workspace_revision="0" * 64).proof_key,
+        passed=result.outcome == "green")
+    key = id(witness)
+    _trusted_compilers[key] = weakref.ref(witness, lambda _: _trusted_compilers.pop(key, None))
+    return witness
+
+
+def compiler_witness_is_trusted(
+    witness: CompilerWitness, *, identity: RecoveryIdentity, binding: RecoveryBinding,
+) -> bool:
+    trusted = _trusted_compilers.get(id(witness))
+    return bool(trusted is not None and trusted() is witness and witness.binding == binding
+        and (witness.run_id, witness.project_id, witness.user_id, witness.prompt_hash)
+        == (identity.run_id, identity.project_id, identity.user_id, identity.prompt_hash))
 
 
 async def require_quiesced_predecessor(

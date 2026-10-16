@@ -1,13 +1,199 @@
 """Progressive continuation uses real source snapshots, never model counters."""
 
 import asyncio
+import json
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from uuid import uuid4
 
 import pytest
 
 from yleum_api.services import agent_builder, agent_native
 from yleum_api.services.agent_builder import AgentResult
+
+
+async def test_legacy_write_floor_preserves_the_recovery_observer(monkeypatch):
+    from tests.test_generation_recovery_policy import binding
+    from yleum_api.services.generation import agent_generation
+    from yleum_api.services.generation.contracts import GenerationRuntime
+    from yleum_api.services.generation.recovery_contract import RecoveryDirective
+
+    monkeypatch.setattr(agent_generation, "get_settings", lambda: SimpleNamespace(
+        use_agentic_builder=True, use_native_agent=False,
+        agent_require_green_before_done=False, agent_ship_green_on_abort=False))
+    replies = iter([
+        '<omnia:action name="write_file">{"path":"app.ts","content":"saved"}</omnia:action>',
+        '<omnia:action name="done">{}</omnia:action>',
+    ])
+
+    async def provider(*args, **kwargs):
+        return next(replies)
+
+    monkeypatch.setattr(agent_builder.llm_client, "complete_chat", provider)
+    observer = AsyncMock(return_value=RecoveryDirective(action="needs_input", reason="shadow"))
+    result, files, _ = await agent_generation.complete_empty_legacy_build(
+        _agent_res=AgentResult(done=True, summary="empty", files={}, steps=1),
+        _is_edit=False, _max_seed_files={},
+        ids=SimpleNamespace(user_id=uuid4(), project_id=uuid4()), runtime=GenerationRuntime(),
+        plan=SimpleNamespace(stack_system="s", seed_context="", model="m",
+                             escalate_model=None, steps=3),
+        operations=SimpleNamespace(execute=AsyncMock(return_value={"ok": True, "content": "saved"}),
+            emit=AsyncMock(), snapshot_files=None, recovery=observer,
+            recovery_binding=AsyncMock(return_value=binding())),
+    )
+    assert result.done and files == {"app.ts": "saved"}
+    assert observer.await_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_real_loops_keep_shadow_directives_and_provider_count(monkeypatch, native, cancelled):
+    from tests.test_agent_native import _turn
+    from tests.test_generation_recovery_policy import binding
+    from yleum_api.core.config import get_settings
+    from yleum_api.services.generation.recovery_contract import RecoveryDirective
+
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://unit:unit@127.0.0.1:1/unit")
+    monkeypatch.setenv("JWT_SECRET", "unit-test-no-live-credentials")
+    get_settings.cache_clear()
+    actions = iter([("read_file", {"path": "src/app.ts"}), ("build", {}),
+                    ("done", {"summary": "finished"})])
+    provider_calls = 0
+    effects = []
+    observations = []
+
+    async def provider(*args, **kwargs):
+        nonlocal provider_calls
+        provider_calls += 1
+        name, arguments = next(actions)
+        if native:
+            return _turn((name, arguments))
+        return f'<omnia:action name="{name}">{json.dumps(arguments)}</omnia:action>'
+
+    async def execute(action):
+        effects.append(action.name)
+        return {"ok": True, "detail": "clean", "content": "source"}
+
+    async def observer(observation):
+        observations.append(observation)
+        if cancelled:
+            raise asyncio.CancelledError
+        return RecoveryDirective(action="needs_input", reason="shadow only")
+
+    async def current_binding():
+        return binding()
+
+    common = dict(execute=execute, recovery=observer, recovery_binding=current_binding,
+                  max_steps=4)
+
+    async def invoke():
+        if native:
+            monkeypatch.setattr(agent_native, "_call_messages", provider)
+            return await agent_native.run_native_build(system="s", task="t", **common)
+        return await agent_builder.run_agent_build(system_prompt="s", user_prompt="t",
+            model="m", complete=provider, **common)
+
+    try:
+        if cancelled:
+            with pytest.raises(asyncio.CancelledError):
+                await invoke()
+            assert provider_calls == 1 and effects == ["read_file"]
+        else:
+            assert (await invoke()).done
+            assert provider_calls == 3 and effects == ["read_file", "build"]
+        assert len(observations) == len(effects)
+        assert all(o.kind == "tool" and o.witness is None for o in observations)
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("action", ["needs_input", "yield", "reset_context"])
+async def test_recovery_observer_is_shared_but_directives_stay_shadow(monkeypatch, native, action):
+    from tests.test_generation_recovery_policy import binding
+    from yleum_api.services.agent_builder import Action
+    from yleum_api.services.generation.recovery_contract import RecoveryDirective
+
+    observed = []
+    effects = []
+
+    async def execute(tool):
+        effects.append(tool.name)
+        return {"ok": True, "content": "secret raw output is not recovery evidence"}
+
+    async def recovery(observation):
+        observed.append(observation)
+        return RecoveryDirective(action=action, reason="shadow only")
+
+    async def current_binding():
+        return binding()
+
+    async def segment(**kwargs):
+        await kwargs["execute"](Action("read_file", {"path": "src/app.ts"}))
+        return AgentResult(done=True, summary="unchanged result", files={}, steps=1)
+
+    module = agent_native if native else agent_builder
+    monkeypatch.setattr(module, "_run_native_segment" if native else "_run_agent_segment", segment)
+    common = dict(execute=execute, recovery=recovery, recovery_binding=current_binding)
+    result = (await agent_native.run_native_build(system="s", task="t", **common) if native
+              else await agent_builder.run_agent_build(
+                  system_prompt="s", user_prompt="t", model="m", **common))
+    assert result.done and result.summary == "unchanged result"
+    assert effects == ["read_file"] and len(observed) == 1
+    assert observed[0].kind == "tool" and observed[0].binding == binding()
+    assert observed[0].witness is None
+    assert "secret raw" not in observed[0].model_dump_json()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", [False, True])
+@pytest.mark.parametrize("failure", ["executor", "observer", "cancelled", "missing_binding"])
+async def test_shadow_observation_preserves_executor_errors_and_cancellation(
+    monkeypatch, native, failure,
+):
+    from tests.test_generation_recovery_policy import binding
+    from yleum_api.services.agent_builder import Action
+
+    effects = []
+
+    async def execute(tool):
+        effects.append(tool.name)
+        if failure == "executor":
+            raise RuntimeError("original executor error")
+        return {"ok": True}
+
+    async def recovery(observation):
+        if failure == "cancelled":
+            raise asyncio.CancelledError
+        raise RuntimeError("observer unavailable")
+
+    async def current_binding():
+        return binding()
+
+    async def segment(**kwargs):
+        await kwargs["execute"](Action("read_file", {}))
+        return AgentResult(done=True, summary="unchanged", files={}, steps=1)
+
+    module = agent_native if native else agent_builder
+    monkeypatch.setattr(module, "_run_native_segment" if native else "_run_agent_segment", segment)
+    common = dict(execute=execute, recovery=recovery,
+                  recovery_binding=None if failure == "missing_binding" else current_binding)
+
+    async def invoke():
+        if native:
+            return await agent_native.run_native_build(system="s", task="t", **common)
+        return await agent_builder.run_agent_build(
+            system_prompt="s", user_prompt="t", model="m", **common)
+
+    if failure in {"executor", "cancelled"}:
+        with pytest.raises(RuntimeError if failure == "executor" else asyncio.CancelledError):
+            await invoke()
+    else:
+        assert (await invoke()).done
+    assert effects == ["read_file"]
 
 
 @pytest.mark.asyncio

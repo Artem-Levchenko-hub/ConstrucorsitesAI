@@ -57,7 +57,12 @@ from typing import Any
 from yleum_api.services import llm_client
 from yleum_api.services.agent_output_budget import agent_output_tokens
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
-from yleum_api.services.generation.continuation import SourceNoveltyTracker
+from yleum_api.services.generation.continuation import (
+    RecoveryBindingReader,
+    RecoveryObserver,
+    SourceNoveltyTracker,
+    shadow_recovery_executor,
+)
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -269,8 +274,13 @@ async def run_agent_build(
     max_segments: int | None = 1,
     checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None,
     edit_deadline: datetime | None = None,
+    recovery: RecoveryObserver | None = None,
+    recovery_binding: RecoveryBindingReader | None = None,
 ) -> AgentResult:
     """Continue a progressing candidate without a new run, cell or blind replay."""
+    execute = shadow_recovery_executor(
+        execute, recovery=recovery, recovery_binding=recovery_binding,
+    )
     if max_segments is None and (
         edit_deadline is None or edit_deadline.utcoffset() is None or snapshot_files is None
     ):

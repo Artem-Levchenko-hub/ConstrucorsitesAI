@@ -10,6 +10,7 @@ from uuid import UUID
 from yleum_api.models.project import Project
 from yleum_api.services.agent_builder import Action, AgentResult
 from yleum_api.services.generation.recovery_contract import (
+    RecoveryBinding,
     RecoveryDirective,
     RecoveryObservation,
 )
@@ -95,6 +96,7 @@ class AgentOperations:
     checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None
     edit_deadline: datetime | None = None
     recovery: Callable[[RecoveryObservation], Awaitable[RecoveryDirective]] | None = None
+    recovery_binding: Callable[[], Awaitable[RecoveryBinding]] | None = None
 
 
 class FinalizedAgentSource(NamedTuple):
