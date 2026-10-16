@@ -13,7 +13,7 @@ from yleum_api.core.redis import publish_event
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.services.agent_progress import REDACTED, bounded_redacted_text, sanitize_agent_step
-from yleum_api.services.generation.recovery_trace import safe_recovery_trace
+from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
 
 _MAX_STRING_BYTES = 4096
 _MAX_PAYLOAD_BYTES = 16_384
@@ -83,11 +83,11 @@ def redact_event_payload(payload: Mapping[str, object]) -> dict[str, object]:
 
 
 def _event_envelope(event: GenerationEvent) -> GenerationEventEnvelope:
-    payload = event.payload
+    payload = bind_recovery_payload(
+        event.payload, run_id=str(event.generation_run_id), event_type=event.event_type,
+    )
     if event.event_type in {"generation.trace", "recovery.trace"}:
-        payload = redact_event_payload(
-            safe_recovery_trace({**payload, "run_id": str(event.generation_run_id)})
-        )
+        payload = redact_event_payload(payload)
     safe_payload = (
         sanitize_agent_step(cast(dict[str, Any], payload))
         if isinstance(payload, dict) and (
@@ -137,8 +137,7 @@ async def append_generation_event(
         seq=int(next_seq or 1),
         event_type=safe_event_type,
         payload=redact_event_payload(
-            safe_recovery_trace({**payload, "run_id": str(run_id)})
-            if safe_event_type in {"generation.trace", "recovery.trace"} else payload
+            bind_recovery_payload(payload, run_id=str(run.id), event_type=safe_event_type)
         ),
     )
     session.add(event)

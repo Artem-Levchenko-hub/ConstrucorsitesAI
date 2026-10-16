@@ -201,3 +201,103 @@ def test_browser_redaction_catches_quoted_secret_crossing_storage_boundary():
     message = safe["console_error"]["message"]
     assert "private-" not in message
     assert "[REDACTED]" in message and len(message.encode()) <= 4096
+
+
+@pytest.mark.parametrize("cookie_list", [
+    "cookies: theme=public; sessionid=private-session",
+    "cookie: theme=public; sessionid=private-session",
+    "set-cookie: theme=public; sessionid=private-session",
+    "cookies=theme=public; sessionid=private-session",
+    "cookie=theme=public; sessionid=private-session",
+    "set-cookie=theme=public; sessionid=private-session",
+    '"cookies": "theme=public; sessionid=private-session"',
+])
+def test_browser_cookie_list_redacts_every_pair_and_keeps_next_source_line(cookie_list):
+    safe = normalize({"error_origin": "browser", "console_error": {
+        "message": f"request failed {cookie_list}\n at /src/main.tsx:12:4",
+    }})
+    message = safe["console_error"]["message"]
+    assert message.startswith("request failed")
+    assert "private-session" not in message and "[REDACTED]" in message
+    assert "at /src/main.tsx:12:4" in message
+
+
+@pytest.mark.parametrize("location,expected", [
+    ("/api/proof?session=private-session#private-fragment", "/api/proof"),
+    ("//user:private-password@app.test/socket?session=private-session", "//app.test/socket"),
+    ("wss://user:private-password@app.test/socket?session=private-session", "wss://app.test/socket"),
+    ("ws://user:private-password@[::1]/socket?session=private-session", "ws://[::1]/socket"),
+    ("api/proof?session=private-session#private-fragment", "api/proof"),
+    ("../src/страница.tsx?session=private-session", "../src/страница.tsx"),
+    ("proof?session=private-session", "proof"),
+])
+@pytest.mark.parametrize("field", ["url", "source", "message", "stack"])
+def test_browser_locations_scrub_credentials_for_relative_and_websocket_urls(
+    field, location, expected,
+):
+    value = location if field in {"url", "source"} else f"request failed ({location})"
+    safe = normalize({"error_origin": "browser", "console_error": {field: value}})
+    diagnostic = safe["console_error"][field]
+    assert "private-" not in diagnostic
+    assert expected in diagnostic
+    if field in {"url", "source"}:
+        assert diagnostic == expected
+    else:
+        assert "request failed" in diagnostic
+    assert len(diagnostic.encode()) <= 4096
+
+
+@pytest.mark.parametrize("field", ["url", "source", "message", "stack"])
+def test_browser_url_userinfo_crossing_inspection_boundary_never_leaks(field):
+    location = "wss://user:private-" + "s" * 6000 + "@app.test/socket"
+    value = location if field in {"url", "source"} else f"request failed ({location})"
+    safe = normalize({"error_origin": "browser", "console_error": {field: value}})
+    diagnostic = safe["console_error"][field]
+    assert "private-" not in diagnostic and "[REDACTED]" in diagnostic
+    assert len(diagnostic.encode()) <= 4096
+
+
+@pytest.mark.parametrize("event_type", ["agent.step", "generation.phase"])
+def test_nested_trace_replay_binds_authoritative_run_without_mutating_history(event_type):
+    run_id = uuid4()
+    payload = {"step": 1, "kind": "provider_error", "action": "Failure", "recovery_trace": {
+        "run_id": "foreign-run", "error_origin": "provider", "provider_call_id": "call-1",
+    }}
+    event = SimpleNamespace(
+        id=uuid4(), generation_run_id=run_id, seq=1, event_type=event_type, payload=payload,
+    )
+    trace = generation_event_envelope(event)["data"]["recovery_trace"]
+    assert trace["run_id"] == str(run_id) and trace["provider_call_id"] == "call-1"
+    assert payload["recovery_trace"]["run_id"] == "foreign-run"
+
+
+@pytest.mark.parametrize("event_type", ["agent.step", "generation.phase"])
+async def test_nested_trace_persistence_binds_authoritative_run(event_type):
+    run_id, project_id = uuid4(), uuid4()
+    session = AsyncMock(spec=AsyncSession)
+    session.scalar.side_effect = [SimpleNamespace(id=run_id, project_id=project_id), 1]
+    event = await append_generation_event(
+        session, run_id=run_id, project_id=project_id, message_id=None, event_type=event_type,
+        payload={"step": 1, "kind": "provider_error", "action": "Failure", "recovery_trace": {
+            "run_id": "foreign-run", "error_origin": "provider", "provider_call_id": "call-1",
+        }},
+    )
+    assert event.payload["recovery_trace"]["run_id"] == str(run_id)
+    assert event.payload["recovery_trace"]["provider_call_id"] == "call-1"
+
+
+async def test_recorder_binds_nested_trace_for_transcript_and_generation_event(monkeypatch):
+    recorder = GenerationProgress(None, uuid4(), uuid4(), uuid4())
+    record = AsyncMock()
+    monkeypatch.setattr(recorder, "_record", record)
+    payload = {"step": 1, "kind": "provider_error", "action": "Failure", "recovery_trace": {
+        "run_id": "foreign-run", "error_origin": "provider", "provider_call_id": "call-1",
+    }}
+    await recorder.record_agent_step(payload)
+    recorded = record.await_args
+    assert recorded.args[1]["recovery_trace"]["run_id"] == str(recorder.run_id)
+    assert recorded.kwargs["transcript_step"]["recovery_trace"]["run_id"] == str(recorder.run_id)
+    assert recorded.args[1]["recovery_trace"]["provider_call_id"] == "call-1"
+    await recorder.record_generation_event("generation.phase", payload)
+    assert record.await_args.args[1]["recovery_trace"]["run_id"] == str(recorder.run_id)
+    assert payload["recovery_trace"]["run_id"] == "foreign-run"

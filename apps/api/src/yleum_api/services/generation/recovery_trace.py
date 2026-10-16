@@ -43,29 +43,44 @@ _INTEGER_RANGES = {
     "attempt": (0, 4),
     "fence": (0, 2**63 - 1),
 }
-_URL = re.compile(r"https?://[^\s<>\"')\]]+", re.IGNORECASE)
+_URL = re.compile(
+    r"(?<![\w])(?:(?:[a-z][a-z0-9+.-]*:)?//|/|\.\.?/|[\w.@%+-]+[/\?#])"
+    r"[^\s<>\"')]+",
+    re.IGNORECASE,
+)
+_COOKIE_ASSIGNMENT = re.compile(r"(?i)(\b(?:cookies?|set-cookie)[\"']?\s*[=:]\s*)[^\r\n]*")
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)(\b(?:authorization|cookie|set-cookie)\s*:\s*)[^\r\n]+|"
-    r"(\b(?:[\w-]*(?:token|secret|password|api[_-]?key|access[_-]?key)|key|cookies?|"
-    r"authorization|set-cookie)[\"']?\s*[=:]\s*)"
+    r"(?i)(\bauthorization\s*:\s*)[^\r\n]+|"
+    r"(\b(?:[\w-]*(?:token|secret|password|api[_-]?key|access[_-]?key)|key|"
+    r"authorization)[\"']?\s*[=:]\s*)"
     r"(?:\"[^\"\r\n]*\"?|'[^'\r\n]*'?|[^\s,;\"'}]+)"
 )
 
 
-def _safe_url(match: re.Match[str]) -> str:
+def _safe_location(value: str) -> str:
     """Queries, fragments and userinfo are unnecessary for locating a source."""
     try:
-        parsed = urlsplit(match.group())
+        parsed = urlsplit(value)
+        if parsed.netloc:
+            # A bounded preview may end before a userinfo '@'. Reject an
+            # invalid authority rather than treating a password as a port.
+            _ = parsed.port  # Validates numeric syntax and the port's range.
+            if parsed.hostname is None or len(parsed.hostname) > 253:
+                return REDACTED
         return urlunsplit((parsed.scheme, parsed.netloc.rsplit("@", 1)[-1], parsed.path, "", ""))
     except ValueError:
         return REDACTED
 
 
-def _browser_text(value: str) -> str:
+def _browser_text(value: str, *, location: bool = False) -> str:
     # Inspect a bounded prefix before cutting so credentials crossing 4 KiB
     # cannot escape redaction. Retain only source location, never URL secrets.
     preview = value.encode("utf-8")[:5120].decode("utf-8", errors="ignore")
-    preview = _URL.sub(_safe_url, preview)
+    preview = (
+        _safe_location(preview)
+        if location else _URL.sub(lambda match: _safe_location(match.group()), preview)
+    )
+    preview = _COOKIE_ASSIGNMENT.sub(lambda match: match[1] + REDACTED, preview)
     preview = _SECRET_ASSIGNMENT.sub(lambda match: (match[1] or match[2]) + REDACTED, preview)
     return bounded_redacted_text(preview, max_bytes=4096)
 
@@ -106,8 +121,21 @@ def safe_recovery_trace(payload: Mapping[str, object]) -> dict[str, object]:
     diagnostic = payload.get("console_error")
     if safe.get("error_origin") == "browser" and isinstance(diagnostic, Mapping):
         safe["console_error"] = {
-            key: _browser_text(value)
+            key: _browser_text(value, location=key in {"source", "url"})
             for key in ("message", "source", "stack", "url")
             if isinstance(value := diagnostic.get(key), str)
         }
     return safe
+
+
+def bind_recovery_payload(
+    payload: Mapping[str, object], *, run_id: str, event_type: str,
+) -> dict[str, object]:
+    """Bind canonical trace slots to the durable owner without mutating input."""
+    if event_type in {"generation.trace", "recovery.trace"}:
+        return safe_recovery_trace({**payload, "run_id": run_id})
+    bound = dict(payload)
+    trace = bound.get("recovery_trace")
+    if isinstance(trace, Mapping):
+        bound["recovery_trace"] = safe_recovery_trace({**trace, "run_id": run_id})
+    return bound

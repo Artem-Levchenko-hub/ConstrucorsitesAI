@@ -17,7 +17,7 @@ from yleum_api.services.agent_progress import (
     sanitize_agent_step,
 )
 from yleum_api.services.generation.agent_messages import _humanize_step
-from yleum_api.services.generation.recovery_trace import safe_recovery_trace
+from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
 from yleum_api.services.generation_events import append_generation_event, generation_event_envelope
 
 """Durable generation progress and the bounded assistant transcript."""
@@ -35,12 +35,13 @@ class GenerationProgress:
     steps: list[dict[str, Any]] = field(default_factory=list)
 
     async def record_agent_step(self, step_row: dict[str, Any]) -> None:
-        safe = sanitize_agent_step(step_row)
+        safe = sanitize_agent_step(bind_recovery_payload(
+            step_row, run_id=str(self.run_id), event_type="agent.step",
+        ))
         await self._record("agent.step", safe, transcript_step=safe)
 
     async def record_generation_event(self, event_type: str, payload: Mapping[str, object]) -> None:
-        if event_type in {"generation.trace", "recovery.trace"}:
-            payload = safe_recovery_trace({**payload, "run_id": str(self.run_id)})
+        payload = bind_recovery_payload(payload, run_id=str(self.run_id), event_type=event_type)
         await self._record(event_type, payload)
 
     async def _record(
