@@ -60,6 +60,16 @@ async def test_complete_response_has_usage_and_no_240_second_total_cap(monkeypat
     assert request.extensions["timeout"]["read"] == 240
 
 
+async def test_complete_receipt_records_protocol_trace_without_body(monkeypatch):
+    _, evidence, _ = await collect(monkeypatch, completed())
+    assert evidence["transport_stage"] == "complete"
+    assert evidence["finish_reason"] == "stop"
+    assert evidence["prompt_tokens"] == 12 and evidence["completion_tokens"] == 3
+    assert evidence["max_tokens_mode"] == "omitted"
+    assert "requested_max_tokens" not in evidence
+    assert "hello" not in str(evidence)
+
+
 async def test_fragmented_interleaved_tools_are_assembled_atomically(monkeypatch):
     events = [chunk({"tool_calls": [
         {"index": 0, "id": "tool-a", "type": "function", "function": {"name": "write", "arguments": '{"a":'}},
@@ -89,10 +99,13 @@ async def test_length_discards_partial_actions_but_retains_usage(monkeypatch):
     events = [chunk({"tool_calls": [{"index": 0, "id": "tool", "function": {
         "name": "write", "arguments": '{"partial":'}}]}),
         chunk(finish="length", usage={"prompt_tokens": 12, "completion_tokens": 65536}), "[DONE]"]
-    body, _, _ = await collect(monkeypatch, events)
+    body, evidence, _ = await collect(monkeypatch, events)
     assert body["choices"][0]["finish_reason"] == "length"
     assert body["choices"][0]["message"] == {"role": "assistant", "content": ""}
     assert body["usage"]["completion_tokens"] == 65536
+    assert evidence["finish_reason"] == "length"
+    assert evidence["transport_stage"] == "complete"
+    assert evidence["completion_tokens"] == 65536
 
 
 class Chunks(httpx.AsyncByteStream):
@@ -144,9 +157,26 @@ async def test_headers_survive_lost_body_without_invented_cost(monkeypatch, fail
     with pytest.raises((httpx.HTTPError, native_stream.StreamReceiptError)):
         await native_stream.collect_response("https://provider.test", {}, {},
                                              budget_seconds=600, evidence=evidence)
-    assert evidence == {"provider_request_id": "header-id", "provider_cost_rub": None,
-                        "provider_cost_usd": None}
+    assert evidence["provider_request_id"] == "header-id"
+    assert evidence["provider_cost_rub"] is None and evidence["provider_cost_usd"] is None
+    assert evidence["transport_stage"] == "headers"
+    assert "finish_reason" not in evidence and "completion_tokens" not in evidence
     assert stream.closed
+
+
+async def test_disconnected_receipt_keeps_observed_facts_without_claiming_completion(monkeypatch):
+    evidence = {}
+    stream = Chunks([encode([chunk(finish="length", usage={
+        "prompt_tokens": 12, "completion_tokens": 99})])], httpx.ReadTimeout("private-body"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kw: httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=stream)))
+    with pytest.raises(httpx.ReadTimeout):
+        await native_stream.collect_response("https://provider.test", {"max_tokens": 128000}, {},
+                                             budget_seconds=600, evidence=evidence)
+    assert evidence["transport_stage"] == "body"
+    assert evidence["finish_reason"] == "length" and evidence["completion_tokens"] == 99
+    assert evidence["max_tokens_mode"] == "sent" and evidence["requested_max_tokens"] == 128000
+    assert "private-body" not in str(evidence) and stream.closed
 
 
 @pytest.mark.parametrize("complete", [False, True])
