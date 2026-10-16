@@ -12,6 +12,13 @@ No silent exceptions are allowed. If verification, commit, push, credentials, SS
 
 Use only the documented production deployment path. Do not deploy the development `infra/` stack in place of production. Preserve unrelated working-tree changes and never force-push or rewrite history.
 
+## Refactor touched code as part of every change (mandatory)
+
+- Whenever changing a function, review and refactor that function and the directly related surrounding code in the same change. Remove relevant duplication, simplify control flow, clarify names and responsibilities, and reuse existing helpers where this improves the work. Do not postpone necessary local cleanup to an unspecified future task.
+- Keep the refactoring focused on the behavior being changed and its immediate collaborators. Preserve existing behavior outside the requested change, public contracts, ownership and security checks, data, and side effects. Review nearby code even when it needs no change; do not manufacture cosmetic edits in already clear code.
+- Verify the changed behavior and the behavior affected by the refactoring with appropriate existing checks; add regression coverage where a meaningful risk is not covered. Report the local cleanup and verification alongside the functional change.
+- If cleanup requires a cross-subsystem redesign or unrelated migration, record it as a separate scoped task instead of expanding the current change silently. This rule does not authorize extra paid model calls or concurrent edits to the same files.
+
 ## MAX versioning and restoration work
 
 - For live rollback/readiness work, identify the local, pushed, and live revisions where applicable and reproduce the smallest safe failing user flow before a detailed plan or implementation. Use an isolated test app and existing version pairs where possible; protect customer data and avoid extra AI generations or paid canaries without a concrete evidence gap. If live testing is unavailable, record the exact blocker and continue safe independent checks.
