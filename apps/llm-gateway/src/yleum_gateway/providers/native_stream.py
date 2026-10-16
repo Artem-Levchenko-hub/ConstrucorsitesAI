@@ -20,6 +20,25 @@ MAX_WIRE_BYTES = 16 * 1024 * 1024
 MAX_EVENT_BYTES = 2 * 1024 * 1024
 MAX_EVENTS = 100_000
 MAX_TOOLS = 256
+_FINISH_REASONS = {
+    "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
+    "max_tokens", "refusal", "pause_turn", "stop_sequence",
+}
+
+
+def _record_protocol_facts(evidence: dict[str, Any], event: dict[str, Any]) -> None:
+    """Observe only normalized scalars; this must not influence receipt validation."""
+    usage = event.get("usage")
+    if isinstance(usage, dict):
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if type(value) is int and 0 <= value <= 2_000_000:
+                evidence[key] = value
+    choices = event.get("choices")
+    if isinstance(choices, list) and len(choices) == 1 and isinstance(choices[0], dict):
+        reason = choices[0].get("finish_reason")
+        if isinstance(reason, str):
+            evidence["finish_reason"] = reason if reason in _FINISH_REASONS else "unknown"
 
 
 class StreamReceiptError(ValueError):
@@ -59,6 +78,7 @@ class _Collector:
             raise StreamReceiptError("Invalid response event") from exc
         if not isinstance(event, dict) or event.get("error") is not None:
             raise StreamReceiptError("Invalid response event")
+        _record_protocol_facts(self.evidence, event)
         for key in ("id", "model"):
             if event.get(key) is not None:
                 value = _identity(event[key])
@@ -175,6 +195,11 @@ async def collect_response(
     """One POST, bounded by wall time and idle time; never retries internally."""
     if not math.isfinite(budget_seconds) or budget_seconds <= 0:
         raise TimeoutError("Provider response budget exhausted")
+    evidence["transport_stage"] = "connect"
+    evidence["max_tokens_mode"] = "sent" if "max_tokens" in payload else "omitted"
+    maximum = payload.get("max_tokens")
+    if type(maximum) is int and 1 <= maximum <= 2_000_000:
+        evidence["requested_max_tokens"] = maximum
     collector = _Collector(evidence)
     request_headers = httpx.Headers(headers)
     request_headers["accept"] = "text/event-stream"
@@ -184,6 +209,7 @@ async def collect_response(
     ) as client, client.stream("POST", url, json={**payload, "stream": True,
             "stream_options": {"include_usage": True}},
             headers=request_headers) as response:
+        evidence["transport_stage"] = "headers"
         provider_header_id = response.headers.get("x-llmgw-request-id")
         collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None
         raw_id = collector.provider_header_id or response.headers.get("x-request-id")
@@ -199,6 +225,7 @@ async def collect_response(
         event_lines: list[bytes] = []
         event_bytes = 0
         async for part in response.aiter_bytes():
+            evidence["transport_stage"] = "body"
             wire_bytes += len(part)
             if wire_bytes > (16_384 if response.status_code >= 400 else MAX_WIRE_BYTES):
                 raise StreamReceiptError("Response exceeds byte limit")
@@ -220,8 +247,10 @@ async def collect_response(
                             raise StreamReceiptError("Invalid response encoding") from exc
                     event_lines, event_bytes = [], 0
                     if collector.done:
+                        result = collector.result()
+                        evidence["transport_stage"] = "complete"
                         return httpx.Response(response.status_code, headers=response.headers,
-                                              json=collector.result(), request=response.request)
+                                              json=result, request=response.request)
                 elif line.startswith(b"data:"):
                     event_lines.append(bytes(line[5:].lstrip(b" ")))
             if len(raw) + event_bytes > MAX_EVENT_BYTES:

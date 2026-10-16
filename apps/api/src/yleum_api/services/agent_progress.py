@@ -12,6 +12,13 @@ import re
 from typing import Any
 
 REDACTED = "[REDACTED]"
+PROVIDER_RESPONSE_DETAIL = "Ответ модели проверен перед применением действий."
+PROVIDER_ERROR_DETAILS = {
+    "access": "Провайдер отказал в доступе к запросу.",
+    "funds": "Провайдер сообщил о недостатке средств.",
+    "rate_limit": "Провайдер ограничил частоту запросов.",
+}
+PROVIDER_ERROR_DETAIL = "Не получен подтверждённый результат запроса к модели."
 
 _SENSITIVE_NAME = (
     r"(?:"
@@ -107,6 +114,44 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 
     safe = dict(step)
+    provider_error = safe.get("kind") == "provider_error"
+    if provider_error or safe.get("tool") == "provider_response":
+        from yleum_api.services.generation.recovery_trace import safe_recovery_trace
+
+        # Historical rows cross the same public boundary as new observations.
+        # A provider's arbitrary text must not survive in display/extra fields.
+        safe = {
+            key: value for key, value in safe.items()
+            if key in {"step", "kind", "tool", "ok", "skipped", "message_id", "recovery_trace"}
+        }
+        safe.update(safe_recovery_trace({**step, "error_origin": "provider"}))
+        safe["path"] = ""
+        safe["tool"] = "provider_request" if provider_error else "provider_response"
+        safe["action"] = (
+            "Запрос к модели не завершён" if provider_error else "Проверяю ответ модели"
+        )
+        category = safe.get("provider_refusal_category")
+        safe["detail"] = PROVIDER_RESPONSE_DETAIL
+        if provider_error:
+            safe["detail"] = (
+                PROVIDER_ERROR_DETAILS.get(category, PROVIDER_ERROR_DETAIL)
+                if isinstance(category, str) else PROVIDER_ERROR_DETAIL
+            )
+        reason = step.get("reason")
+        if isinstance(reason, str) and reason in {
+            "output_limit", "invalid_tool_arguments", "missing_tool_arguments",
+        }:
+            safe["reason"] = reason
+        attempt = step.get("recovery_attempt")
+        if type(attempt) is int and 1 <= attempt <= 3:
+            safe["recovery_attempt"] = attempt
+    if "recovery_trace" in safe:
+        from yleum_api.services.generation.recovery_trace import safe_recovery_trace
+
+        trace = safe["recovery_trace"]
+        if isinstance(trace, dict) and (provider_error or safe.get("tool") == "provider_response"):
+            trace = {**trace, "error_origin": "provider"}
+        safe["recovery_trace"] = safe_recovery_trace(trace) if isinstance(trace, dict) else {}
     for key in ("action", "tool", "path", "detail", "human"):
         value = safe.get(key)
         if isinstance(value, str):

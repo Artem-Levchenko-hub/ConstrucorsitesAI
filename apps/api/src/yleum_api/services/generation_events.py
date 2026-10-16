@@ -13,6 +13,7 @@ from yleum_api.core.redis import publish_event
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.services.agent_progress import REDACTED, bounded_redacted_text, sanitize_agent_step
+from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
 
 _MAX_STRING_BYTES = 4096
 _MAX_PAYLOAD_BYTES = 16_384
@@ -50,15 +51,20 @@ def _normalize_json(value: Any, *, depth: int = 0) -> Any:
             for item in value[:_MAX_COLLECTION_ITEMS]
         ]
     if isinstance(value, dict):
+        if value.get("kind") == "provider_error" or value.get("tool") == "provider_response":
+            value = sanitize_agent_step(value)
         out: dict[str, Any] = {}
         for key, item in list(value.items())[:_MAX_COLLECTION_ITEMS]:
             if isinstance(key, str):
                 safe_key = _trim_text(key, max_bytes=256)
-                out[safe_key] = (
-                    REDACTED
-                    if _SENSITIVE_KEY_RE.search(safe_key)
-                    else _normalize_json(item, depth=depth + 1)
-                )
+                if safe_key == "recovery_trace":
+                    item = safe_recovery_trace(item) if isinstance(item, Mapping) else {}
+                if _SENSITIVE_KEY_RE.search(safe_key):
+                    # Validated token counts and sent/omitted budget metadata
+                    # are protocol facts, not credentials.
+                    out[safe_key] = safe_recovery_trace({safe_key: item}).get(safe_key, REDACTED)
+                else:
+                    out[safe_key] = _normalize_json(item, depth=depth + 1)
         return out
     return _trim_text(str(value))
 
@@ -77,10 +83,18 @@ def redact_event_payload(payload: Mapping[str, object]) -> dict[str, object]:
 
 
 def _event_envelope(event: GenerationEvent) -> GenerationEventEnvelope:
-    payload = event.payload
+    payload = bind_recovery_payload(
+        event.payload, run_id=str(event.generation_run_id), event_type=event.event_type,
+    )
+    if event.event_type in {"generation.trace", "recovery.trace"}:
+        payload = redact_event_payload(payload)
     safe_payload = (
         sanitize_agent_step(cast(dict[str, Any], payload))
-        if isinstance(payload, dict) and {"step", "kind", "action"}.issubset(payload)
+        if isinstance(payload, dict) and (
+            {"step", "kind", "action"}.issubset(payload)
+            or payload.get("kind") == "provider_error"
+            or payload.get("tool") == "provider_response"
+        )
         else payload
     )
     return {
@@ -122,7 +136,9 @@ async def append_generation_event(
         message_id=message_id,
         seq=int(next_seq or 1),
         event_type=safe_event_type,
-        payload=redact_event_payload(payload),
+        payload=redact_event_payload(
+            bind_recovery_payload(payload, run_id=str(run.id), event_type=safe_event_type)
+        ),
     )
     session.add(event)
     await session.flush()

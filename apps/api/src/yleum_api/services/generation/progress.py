@@ -10,8 +10,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.redis import publish_event
 from yleum_api.models.message import Message
-from yleum_api.services.agent_progress import sanitize_agent_step
+from yleum_api.services.agent_progress import (
+    PROVIDER_ERROR_DETAIL,
+    PROVIDER_ERROR_DETAILS,
+    PROVIDER_RESPONSE_DETAIL,
+    sanitize_agent_step,
+)
 from yleum_api.services.generation.agent_messages import _humanize_step
+from yleum_api.services.generation.recovery_trace import bind_recovery_payload, safe_recovery_trace
 from yleum_api.services.generation_events import append_generation_event, generation_event_envelope
 
 """Durable generation progress and the bounded assistant transcript."""
@@ -29,10 +35,13 @@ class GenerationProgress:
     steps: list[dict[str, Any]] = field(default_factory=list)
 
     async def record_agent_step(self, step_row: dict[str, Any]) -> None:
-        safe = sanitize_agent_step(step_row)
+        safe = sanitize_agent_step(bind_recovery_payload(
+            step_row, run_id=str(self.run_id), event_type="agent.step",
+        ))
         await self._record("agent.step", safe, transcript_step=safe)
 
     async def record_generation_event(self, event_type: str, payload: Mapping[str, object]) -> None:
+        payload = bind_recovery_payload(payload, run_id=str(self.run_id), event_type=event_type)
         await self._record(event_type, payload)
 
     async def _record(
@@ -119,36 +128,14 @@ class GenerationProgress:
             step_row["skipped"] = True
         if kind == "provider_error":
             step_row["ok"] = False
-            step_row["detail"] = "Не получен подтверждённый результат запроса к модели."
+            step_row["detail"] = PROVIDER_ERROR_DETAIL
             category = data.get("provider_refusal_category")
             if category in ("access", "funds", "rate_limit"):
                 step_row["provider_refusal_category"] = category
-                step_row["detail"] = {
-                    "access": "Провайдер отказал в доступе к запросу.",
-                    "funds": "Провайдер сообщил о недостатке средств.",
-                    "rate_limit": "Провайдер ограничил частоту запросов.",
-                }[category]
-            for key in ("http_status", "upstream_http_status"):
-                value = data.get(key)
-                if type(value) is int and 400 <= value <= 599:
-                    step_row[key] = value
-            code = data.get("error_code")
-            if code in (
-                "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
-                "billing_reconciliation_required",
-                "provider_output_truncated", "provider_output_invalid", "provider_output_filtered",
-            ):
-                step_row["error_code"] = code
-            for key in ("provider_charge_ambiguous", "will_retry"):
-                value = data.get(key)
-                if type(value) is bool:
-                    step_row[key] = value
-            attempt = data.get("attempt")
-            if type(attempt) is int and 0 <= attempt <= 4:
-                step_row["attempt"] = attempt
+                step_row["detail"] = PROVIDER_ERROR_DETAILS[category]
         if raw_tool == "provider_response":
             reason = data.get("reason")
-            if reason in {
+            if isinstance(reason, str) and reason in {
                 "output_limit",
                 "invalid_tool_arguments",
                 "missing_tool_arguments",
@@ -158,17 +145,30 @@ class GenerationProgress:
             if type(recovery_attempt) is int and 1 <= recovery_attempt <= 3:
                 step_row["recovery_attempt"] = recovery_attempt
         if kind == "provider_error" or raw_tool == "provider_response":
-            # Keep observed protocol facts, never arbitrary provider response text.
-            finish_reason = data.get("finish_reason")
-            if isinstance(finish_reason, str) and finish_reason in {
-                "stop", "tool_calls", "length", "content_filter", "end_turn", "tool_use",
-                "max_tokens", "refusal", "pause_turn", "stop_sequence", "unknown",
-            }:
-                step_row["finish_reason"] = finish_reason
-            for key, minimum in (("requested_max_tokens", 1), ("completion_tokens", 0)):
-                value = data.get(key)
-                if type(value) is int and minimum <= value <= 2_000_000:
-                    step_row[key] = value
+            trace = safe_recovery_trace({
+                **data, "run_id": str(self.run_id), "error_origin": "provider",
+            })
+            step_row["recovery_trace"] = trace
+            # Preserve the existing flat diagnostic contract using the same
+            # normalizer as durable traces. Never copy provider content.
+            for key in ("finish_reason", "requested_max_tokens", "completion_tokens"):
+                if key in trace:
+                    step_row[key] = trace[key]
+            if kind == "provider_error":
+                for key in ("http_status", "upstream_http_status", "error_code",
+                            "provider_charge_ambiguous", "will_retry", "attempt"):
+                    value = trace.get(key)
+                    if key in trace and (
+                        key != "http_status" or (type(value) is int and value >= 400)
+                    ):
+                        step_row[key] = trace[key]
+            else:
+                step_row["action"] = "Проверяю ответ модели"
+                step_row["detail"] = PROVIDER_RESPONSE_DETAIL
+        elif isinstance(data.get("recovery_trace"), Mapping):
+            step_row["recovery_trace"] = safe_recovery_trace({
+                **data["recovery_trace"], "run_id": str(self.run_id),
+            })
         await self.record_agent_step(step_row)
 
 
