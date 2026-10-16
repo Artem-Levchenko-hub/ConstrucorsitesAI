@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, NamedTuple
 from uuid import UUID
 
 from yleum_api.models.project import Project
 from yleum_api.services.agent_builder import Action, AgentResult
+from yleum_api.services.generation.recovery_actions import (
+    ProgressReader,
+    PureCheckReader,
+    ResponseRecovery,
+    VerifiedProgressCollector,
+)
 from yleum_api.services.generation.recovery_contract import (
     RecoveryBinding,
     RecoveryDirective,
@@ -58,6 +64,8 @@ class GenerationRuntime:
     # Accepted source plus the intentional platform seed, fixed before model
     # writes. Never refresh from a mutable draft after a failed check.
     migration_baseline: dict[str, str] | None = None
+    response_recovery: ResponseRecovery = field(default_factory=ResponseRecovery)
+    verified_progress: VerifiedProgressCollector | None = None
 
     def legacy_coordinator_handoff(self) -> bool:
         """Only this invocation's portable coordinator owns deferred runtime proof."""
@@ -97,6 +105,9 @@ class AgentOperations:
     edit_deadline: datetime | None = None
     recovery: Callable[[RecoveryObservation], Awaitable[RecoveryDirective]] | None = None
     recovery_binding: Callable[[], Awaitable[RecoveryBinding]] | None = None
+    response_recovery: ResponseRecovery | None = None
+    take_verified_progress: ProgressReader | None = None
+    pure_check: PureCheckReader | None = None
 
 
 class FinalizedAgentSource(NamedTuple):

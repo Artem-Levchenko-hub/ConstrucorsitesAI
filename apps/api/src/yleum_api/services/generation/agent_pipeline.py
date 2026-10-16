@@ -249,7 +249,12 @@ async def run_agent_generation(
         await _agent_emit("agent.continuation", {
             "human": "Восстанавливаю сохранённый черновик и продолжаю проверку", "ok": None,
         })
+    progress_collector = getattr(runtime, "verified_progress", None)
     _operations = AgentOperations(
+        response_recovery=getattr(runtime, "response_recovery", None),
+        take_verified_progress=(
+            progress_collector.take if progress_collector else None
+        ),
         snapshot_files=getattr(runtime.handle, "snapshot_files", None),
         edit_deadline=(
             await runtime.coordinator.source_edit_deadline()

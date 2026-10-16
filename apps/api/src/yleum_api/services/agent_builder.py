@@ -63,6 +63,11 @@ from yleum_api.services.generation.continuation import (
     SourceNoveltyTracker,
     shadow_recovery_executor,
 )
+from yleum_api.services.generation.recovery_actions import (
+    ProgressReader,
+    ResponseRecovery,
+    verified_progress_executor,
+)
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -276,8 +281,11 @@ async def run_agent_build(
     edit_deadline: datetime | None = None,
     recovery: RecoveryObserver | None = None,
     recovery_binding: RecoveryBindingReader | None = None,
+    response_recovery: ResponseRecovery | None = None,
+    take_verified_progress: ProgressReader | None = None,
 ) -> AgentResult:
     """Continue a progressing candidate without a new run, cell or blind replay."""
+    response_recovery = response_recovery or ResponseRecovery()
     execute = shadow_recovery_executor(
         execute, recovery=recovery, recovery_binding=recovery_binding,
     )
@@ -340,6 +348,7 @@ async def run_agent_build(
             ship_green_on_abort=ship_green_on_abort,
             edit_mode=edit_mode, bare_mode=bare_mode, snapshot_files=snapshot_files,
             initial_written=cumulative_files,
+            response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             on_progress=segment_progress,
             edit_deadline=edit_deadline,
         )
@@ -422,6 +431,8 @@ async def _run_agent_segment(
     bare_mode: bool = False,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
     initial_written: dict[str, str] | None = None,
+    response_recovery: ResponseRecovery | None = None,
+    take_verified_progress: ProgressReader | None = None,
     on_progress: Callable[[AgentResult], Awaitable[None]] | None = None,
     edit_deadline: datetime | None = None,
 ) -> AgentResult:
@@ -472,7 +483,8 @@ async def _run_agent_segment(
     wrote_since_check = False  # a write happened with no runtime_check after it
     active_model = model
     escalated = False
-    truncations_without_progress = 0
+    response_recovery = response_recovery or ResponseRecovery()
+    execute = verified_progress_executor(execute, response_recovery, take_verified_progress)
     pending_truncation = False
 
     async def _step_result(
@@ -679,21 +691,21 @@ async def _run_agent_segment(
             except llm_client.LLMOutputTruncated as exc:
                 # A settled truncated response is not a transport retry. Discard every
                 # partial action and spend the next normal control step on a new plan.
-                truncations_without_progress += 1
+                response_recovery.truncated()
                 pending_truncation = truncated_response = True
                 fast_check_fresh = False
                 if emit:
                     await emit("agent.tool", {
                         "step": step, "tool": "provider_response", "reason": "output_limit",
                         "human": "Ответ модели достиг предела — разбиваю изменение на меньшие шаги",
-                        "ok": False, "recovery_attempt": truncations_without_progress,
+                        "ok": False, "recovery_attempt": response_recovery.budget.since_progress,
                         "finish_reason": exc.finish_reason,
                         "requested_max_tokens": exc.requested_max_tokens,
                         "completion_tokens": exc.completion_tokens,
                     })
-                if truncations_without_progress >= 3:
+                if response_recovery.budget.since_progress >= 3:
                     return AgentResult(
-                        done=False, summary="Три обрезанных ответа без изменения исходников.",
+                        done=False, summary="Три обрезанных ответа без подтверждённого прогресса.",
                         files=written, steps=step + 1, transcript=convo, stop_reason="output_limit",
                     )
                 convo.append({"role": "user", "content": (
@@ -1114,7 +1126,6 @@ async def _run_agent_segment(
             # Consume the allowance even on red builds; no extra model/retry budget.
             pending_source_build = False
         if changed_source_paths and obs.get("ok") is True:
-            truncations_without_progress = 0
             no_write_streak = 0
             if action.name != "build":
                 for path in changed_source_paths:

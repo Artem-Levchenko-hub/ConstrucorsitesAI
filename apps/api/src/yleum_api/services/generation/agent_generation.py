@@ -585,6 +585,9 @@ async def execute_agent_turn(
                 edit_source_changed=edit_source_changed,
                 recovery=getattr(operations, "recovery", None),
                 recovery_binding=getattr(operations, "recovery_binding", None),
+                response_recovery=getattr(operations, "response_recovery", None),
+                take_verified_progress=getattr(operations, "take_verified_progress", None),
+                pure_check=getattr(operations, "pure_check", None),
             )
         except SourceCheckpointError as exc:
             _agent_res = exc.candidate
@@ -626,6 +629,8 @@ async def execute_agent_turn(
             checkpoint=source_checkpoint,
             recovery=getattr(operations, "recovery", None),
             recovery_binding=getattr(operations, "recovery_binding", None),
+            response_recovery=getattr(operations, "response_recovery", None),
+            take_verified_progress=getattr(operations, "take_verified_progress", None),
             edit_deadline=(
                 getattr(operations, "edit_deadline", None)
                 or (
@@ -778,6 +783,8 @@ async def complete_empty_legacy_build(
             checkpoint=getattr(operations, "checkpoint", None),
             recovery=getattr(operations, "recovery", None),
             recovery_binding=getattr(operations, "recovery_binding", None),
+            response_recovery=getattr(operations, "response_recovery", None),
+            take_verified_progress=getattr(operations, "take_verified_progress", None),
         )
         raise_if_source_checkpoint_failed(_floor_res)
         _total_steps += _floor_res.steps

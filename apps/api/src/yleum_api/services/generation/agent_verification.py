@@ -165,6 +165,8 @@ async def check_backend_and_normalize_css(
                 flush=True,
             )
             _heal = await agent_builder.run_agent_build(
+                response_recovery=getattr(operations, "response_recovery", None),
+                take_verified_progress=getattr(operations, "take_verified_progress", None),
                 system_prompt=plan.system,
                 user_prompt=_instr + plan.seed_context,
                 model=plan.escalate_model or plan.model,
@@ -426,6 +428,8 @@ async def repair_legacy_edit(
                 pass
             try:
                 _rep = await agent_builder.run_agent_build(
+                    response_recovery=getattr(operations, "response_recovery", None),
+                    take_verified_progress=getattr(operations, "take_verified_progress", None),
                     system_prompt=agent_builder.build_edit_system_prompt(plan.stack_guide),
                     user_prompt=_repair_user,
                     model=plan.escalate_model or plan.model,
@@ -682,6 +686,8 @@ async def check_runtime_security_gates(
                     flush=True,
                 )
                 _fheal = await agent_builder.run_agent_build(
+                    response_recovery=getattr(operations, "response_recovery", None),
+                    take_verified_progress=getattr(operations, "take_verified_progress", None),
                     system_prompt=plan.stack_system,
                     user_prompt=_fix + plan.seed_context,
                     model=plan.escalate_model or plan.model,
@@ -844,6 +850,8 @@ async def check_coverage_gate(
                     flush=True,
                 )
                 _cheal = await agent_builder.run_agent_build(
+                    response_recovery=getattr(operations, "response_recovery", None),
+                    take_verified_progress=getattr(operations, "take_verified_progress", None),
                     system_prompt=plan.stack_system,
                     user_prompt=_cfix + plan.seed_context,
                     model=plan.escalate_model or plan.model,

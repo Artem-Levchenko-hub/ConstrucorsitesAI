@@ -19,6 +19,7 @@ from yleum_api.services.generation.contracts import (
     ProjectGenerationFacts,
 )
 from yleum_api.services.generation.progress import GenerationProgress
+from yleum_api.services.generation.recovery_actions import VerifiedProgressCollector
 from yleum_api.services.generation.runtime import (
     _execute_max_agent_action,
     _prepare_max_runtime_context,
@@ -115,6 +116,8 @@ async def checked_fast_check(runtime: GenerationRuntime, ids: GenerationIds) -> 
         return {"ok": False, "detail": gap, "environment_mutated": False}
     assert runtime.coordinator is not None
     result = await runtime.coordinator.fast_check()
+    if (collector := getattr(runtime, "verified_progress", None)) is not None:
+        await collector.record(result.id)
     return {"ok": result.outcome == "green", "detail": result.redacted_detail}
 
 
@@ -264,6 +267,12 @@ async def prepare_agent_runtime(
                 emit=progress.record_generation_event,
                 behavior_driver=behavior_driver,
             )
+            if (identity_reader := getattr(runtime.handle, "current_identity", None)) is not None:
+                runtime.verified_progress = VerifiedProgressCollector(
+                    factory=factory, run_id=ids.run_id, project_id=ids.project_id,
+                    user_id=ids.user_id, current_identity=identity_reader,
+                    response_recovery=getattr(runtime, "response_recovery", None),
+                )
 
             if get_settings().use_project_cell_activity_watchdog:
                 runtime.deadline_task = asyncio.create_task(

@@ -39,6 +39,13 @@ from yleum_api.services.generation.continuation import (
     SourceNoveltyTracker,
     shadow_recovery_executor,
 )
+from yleum_api.services.generation.recovery_actions import (
+    ProgressReader,
+    PureCheckBatch,
+    PureCheckReader,
+    ResponseRecovery,
+    verified_progress_executor,
+)
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import rate_limit_retry_delay
@@ -1189,6 +1196,9 @@ async def _run_native_segment(
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
     edit_source_changed: Callable[[], bool] | None = None,
+    response_recovery: ResponseRecovery | None = None,
+    take_verified_progress: ProgressReader | None = None,
+    pure_check: PureCheckReader | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1223,7 +1233,8 @@ async def _run_native_segment(
     proof_after_write: set[str] = set()
     invalidated_proofs: set[str] = set()
     checkpoint_at: float | None = None
-    incomplete_responses = 0
+    response_recovery = response_recovery or ResponseRecovery()
+    execute = verified_progress_executor(execute, response_recovery, take_verified_progress)
     unverified_response_problem: str | None = None
 
     effective_max_steps = min(_HARD_MAX_STEPS, max(1, int(max_steps)))
@@ -1312,7 +1323,8 @@ async def _run_native_segment(
                         "detail": _step_detail("build", Action("build", {}, ""), checked),
                         "ok": fast_check_green, "reason": "output_limit",
                     })
-        if incomplete_responses and last_build_ok is not True and not fast_check_green:
+        if (response_recovery.budget.since_progress
+                and last_build_ok is not True and not fast_check_green):
             return AgentResult(
                 done=False, summary=(
                     "Модель достигла лимита ответа. Текущий кандидат не прошёл обязательную "
@@ -1652,7 +1664,7 @@ async def _run_native_segment(
                 # Validate the entire response before executing ANY call. A valid
                 # prefix of a truncated batch is not an authorized complete plan.
                 # Never replay earlier successful calls or echo broken/raw JSON.
-                incomplete_responses += 1
+                response_recovery.truncated()
                 unverified_response_problem = response_problem
                 # A rejected verification/done response cannot reuse an earlier
                 # green checkpoint as completion of the requested change.
@@ -1687,9 +1699,9 @@ async def _run_native_segment(
                     await emit("agent.step", {
                         "step": step, "action": "provider_response", "ok": False,
                         "detail": feedback, "reason": response_problem,
-                        "recovery_attempt": incomplete_responses,
+                        "recovery_attempt": response_recovery.budget.since_progress,
                     })
-                if incomplete_responses > 2:
+                if response_recovery.budget.since_progress > 2:
                     if coordinated_max and response_problem == "output_limit":
                         return await _finish_without_provider(
                             steps=step + 1, reason="output_limit", detail=feedback,
@@ -1779,6 +1791,7 @@ async def _run_native_segment(
                     )
                 continue
 
+            batch = PureCheckBatch(pure_check)
             results: list[dict[str, Any]] = []
             done_summary: str | None = None
             pending_done: list[tuple[str, dict[str, Any]]] = []
@@ -1817,6 +1830,7 @@ async def _run_native_segment(
                     and (_max_prewrite_locked or non_entry_writes_before_entry > 0)
                 )
                 obs: dict[str, Any]
+                action_executed = False
                 if name not in _KNOWN_ACTIONS:
                     obs = {"ok": False, "error": f"unknown action {name}"}
                 elif edit_source_changed is not None and not edit_source_changed() and (
@@ -1863,10 +1877,13 @@ async def _run_native_segment(
                     if name in {"build", "runtime_check", "probe", "verify_isolation"}:
                         _invalidate_proofs(name)
                     try:
-                        obs = await execute(action)
+                        action_executed = True
+                        obs, _ = await batch.execute(action, execute)
                     except Exception as exc:  # a tool crash must not kill the build
                         raise_if_terminal_cell_error(exc)
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
+                if not action_executed:
+                    batch.clear()
                 if obs.get("environment_mutated"):
                     _invalidate_proofs("build", "runtime_check", "probe", "verify_isolation")
                     wrote_since_build = True
@@ -2352,10 +2369,14 @@ async def run_native_build(
     edit_deadline: datetime | None = None,
     source_repair: bool = False,
     edit_source_changed: Callable[[], bool] | None = None,
+    response_recovery: ResponseRecovery | None = None,
+    take_verified_progress: ProgressReader | None = None,
+    pure_check: PureCheckReader | None = None,
     recovery: RecoveryObserver | None = None,
     recovery_binding: RecoveryBindingReader | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
+    response_recovery = response_recovery or ResponseRecovery()
     execute = shadow_recovery_executor(
         execute, recovery=recovery, recovery_binding=recovery_binding,
     )
@@ -2387,6 +2408,8 @@ async def run_native_build(
             edit_deadline=edit_deadline,
             source_repair=source_repair,
             edit_source_changed=edit_source_changed,
+            response_recovery=response_recovery, take_verified_progress=take_verified_progress,
+            pure_check=pure_check,
         )
 
     return await _run_native_segments(

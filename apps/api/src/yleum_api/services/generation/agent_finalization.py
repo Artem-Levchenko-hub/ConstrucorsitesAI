@@ -176,6 +176,9 @@ async def run_native_source_repair(
         )
     try:
         result = await agent_native.run_native_build(
+            response_recovery=getattr(operations, "response_recovery", None),
+            take_verified_progress=getattr(operations, "take_verified_progress", None),
+            pure_check=getattr(operations, "pure_check", None),
             model=plan.model,
             system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
             task=task, execute=repair_execute,
