@@ -6,6 +6,7 @@ from collections.abc import Mapping, Sequence
 from uuid import UUID
 
 from pydantic import ValidationError
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import get_settings
@@ -143,20 +144,31 @@ async def _baseline_sha(
         or project.current_snapshot_id != identity.accepted_snapshot_id
     ):
         raise RecoveryContractError("recovery original prompt/baseline conflict")
-    baseline_sha = None
+    baseline_sha: str | None = None
+    # All facts consulted here stay locked until the writer commits its private
+    # reference. Scope queries before locking to avoid taking foreign-project
+    # locks from an invalid identity. The project lock already serializes this
+    # project's current/predecessor run ordering with other recovery writers.
     if identity.accepted_snapshot_id is not None:
-        snapshot = await session.get(Snapshot, identity.accepted_snapshot_id)
-        if snapshot is None or snapshot.project_id != project.id:
+        snapshot = await session.scalar(
+            select(Snapshot).where(
+                Snapshot.id == identity.accepted_snapshot_id,
+                Snapshot.project_id == project.id,
+            ).execution_options(populate_existing=True).with_for_update()
+        )
+        if snapshot is None:
             raise RecoveryContractError("recovery baseline ownership mismatch")
         baseline_sha = snapshot.commit_sha
     if identity.supersedes_run_id is not None:
-        parent = await session.get(GenerationRun, identity.supersedes_run_id)
-        if (
-            parent is None or parent.id == run.id or parent.project_id != project.id
-            or parent.user_id != run.user_id or parent.status not in {
-                "completed", "failed", "cancelled",
-            }
-        ):
+        parent = await session.scalar(
+            select(GenerationRun).where(
+                GenerationRun.id == identity.supersedes_run_id,
+                GenerationRun.id != run.id,
+                GenerationRun.project_id == project.id,
+                GenerationRun.user_id == run.user_id,
+            ).execution_options(populate_existing=True).with_for_update()
+        )
+        if parent is None or parent.status not in {"completed", "failed", "cancelled"}:
             raise RecoveryContractError("recovery superseded run ownership conflict")
     return baseline_sha
 

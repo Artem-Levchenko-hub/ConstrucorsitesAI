@@ -11,7 +11,7 @@ from uuid import uuid4
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import JSON, Column, MetaData, Table, create_engine, select, text
+from sqlalchemy import JSON, Column, MetaData, Table, create_engine, select, text, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -392,6 +392,64 @@ async def test_saved_checkpoint_rejects_changed_original_baseline_sha(checkpoint
     assert c.run.agent_state == before and len(c.uploads) == 1
 
 
+async def test_cached_snapshot_rejects_independent_baseline_change_before_upload(checkpoint_case):
+    c = checkpoint_case
+    snapshot = Snapshot(id=uuid4(), project_id=c.project.id, commit_sha="a" * 40)
+    c.sync.add(snapshot)
+    c.project.current_snapshot_id = snapshot.id
+    dispatch = copy.deepcopy(c.run.agent_state["dispatch"])
+    dispatch["current_snapshot_id"] = str(snapshot.id)
+    c.run.agent_state = c.run.agent_state | {"dispatch": dispatch}
+    c.sync.commit()
+    raw = c.state.model_dump(mode="json")
+    raw["identity"]["accepted_snapshot_id"] = str(snapshot.id)
+    await save(c, c.rc.decode_recovery(raw))
+    before = copy.deepcopy(c.run.agent_state)
+    assert c.sync.get(Snapshot, snapshot.id) is snapshot
+    assert not c.sync.dirty and not c.sync.new
+    with Session(c.sync.get_bind()) as other:
+        authoritative = other.get(Snapshot, snapshot.id)
+        authoritative.commit_sha = "b" * 40
+        other.commit()
+    assert snapshot.commit_sha == "a" * 40  # Clean identity-map data is stale.
+    with pytest.raises(c.rc.RecoveryContractError, match="retained checkpoint"):
+        await save(c, c.rc.decode_recovery(before["recovery_v1"]), revision=1)
+    assert c.run.agent_state == before and len(c.uploads) == 1
+    assert before["recovery_v1"]["checkpoint"]["sha256"] in c.objects
+
+
+@pytest.mark.parametrize("change", ["owner", "project", "terminal"])
+async def test_cached_predecessor_rejects_independent_identity_or_status_change(
+    checkpoint_case, change,
+):
+    c = checkpoint_case
+    parent = GenerationRun(id=uuid4(), project_id=c.project.id, user_id=c.run.user_id,
+                           status="failed", prompt_hash="a" * 64, idempotency_key="predecessor")
+    c.sync.add(parent)
+    c.sync.commit()
+    raw = c.state.model_dump(mode="json")
+    raw["identity"]["supersedes_run_id"] = str(parent.id)
+    await save(c, c.rc.decode_recovery(raw))
+    before = copy.deepcopy(c.run.agent_state)
+    original = (parent.project_id, parent.user_id, parent.status)
+    assert c.sync.get(GenerationRun, parent.id) is parent
+    assert not c.sync.dirty and not c.sync.new
+    with Session(c.sync.get_bind()) as other:
+        authoritative = other.get(GenerationRun, parent.id)
+        if change == "owner":
+            authoritative.user_id = uuid4()
+        elif change == "project":
+            authoritative.project_id = uuid4()
+        else:
+            authoritative.status = "running"
+        other.commit()
+    assert (parent.project_id, parent.user_id, parent.status) == original
+    with pytest.raises(c.rc.RecoveryContractError, match="superseded run ownership"):
+        await save(c, c.rc.decode_recovery(before["recovery_v1"]), revision=1)
+    assert c.run.agent_state == before and len(c.uploads) == 1
+    assert before["recovery_v1"]["checkpoint"]["sha256"] in c.objects
+
+
 async def test_unavailable_retained_checkpoint_is_not_replaced(checkpoint_case):
     c = checkpoint_case
     ref = await save(c)
@@ -564,3 +622,98 @@ async def test_postgres_recovery_ownership_concurrent_cas_and_json_preservation(
         await _assert_postgres_owner_and_fence(c, conflict)
     await _assert_postgres_concurrent_cas(c, test_engine, monkeypatch)
     await _assert_postgres_roundtrip_and_unknown_json(c)
+
+
+async def _postgres_saved_baseline_and_predecessor(c):
+    snapshot = Snapshot(project_id=c.project.id, commit_sha="a" * 40)
+    parent = GenerationRun(project_id=c.project.id, user_id=c.run.user_id, status="failed",
+                           prompt_hash="a" * 64, idempotency_key="predecessor")
+    c.session.add_all([snapshot, parent])
+    await c.session.flush()
+    c.project.current_snapshot_id = snapshot.id
+    dispatch = copy.deepcopy(c.run.agent_state["dispatch"])
+    dispatch["current_snapshot_id"] = str(snapshot.id)
+    c.run.agent_state = c.run.agent_state | {"dispatch": dispatch}
+    await c.session.commit()
+    raw = c.state.model_dump(mode="json")
+    raw["identity"]["accepted_snapshot_id"] = str(snapshot.id)
+    raw["identity"]["supersedes_run_id"] = str(parent.id)
+    await save(c, c.rc.decode_recovery(raw))
+    return snapshot, parent, copy.deepcopy(c.run.agent_state)
+
+
+@pytest.mark.parametrize("change", ["baseline", "predecessor_owner"])
+async def test_postgres_cached_baseline_and_predecessor_refuse_independent_changes(
+    postgres_case, test_engine, change,
+):
+    c = postgres_case
+    snapshot, parent, before = await _postgres_saved_baseline_and_predecessor(c)
+    snapshot_id, parent_id = snapshot.id, parent.id
+    assert await c.session.get(Snapshot, snapshot_id) is snapshot
+    assert await c.session.get(GenerationRun, parent_id) is parent
+    assert not c.session.dirty and not c.session.new
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as other:
+        if change == "baseline":
+            authoritative = await other.get(Snapshot, snapshot_id)
+            authoritative.commit_sha = "b" * 40
+        else:
+            owner = User(email=f"changed-{uuid4().hex}@example.com", password_hash="synthetic")
+            other.add(owner)
+            await other.flush()
+            authoritative = await other.get(GenerationRun, parent_id)
+            authoritative.user_id = owner.id
+        await other.commit()
+    assert snapshot.commit_sha == "a" * 40
+    assert parent.user_id == c.run.user_id
+    with pytest.raises(c.rc.RecoveryContractError):
+        await save(c, c.rc.decode_recovery(before["recovery_v1"]), revision=1)
+    await c.session.refresh(c.run)
+    assert c.run.agent_state == before and len(c.uploads) == 1
+    assert before["recovery_v1"]["checkpoint"]["sha256"] in c.objects
+
+
+async def test_postgres_baseline_and_predecessor_locks_survive_until_reference_installation(
+    postgres_case, test_engine, monkeypatch,
+):
+    c = postgres_case
+    snapshot, parent, before = await _postgres_saved_baseline_and_predecessor(c)
+    run_id, snapshot_id, parent_id = c.run.id, snapshot.id, parent.id
+    entered, release = asyncio.Event(), asyncio.Event()
+    original_reader = c.rs.project_cell_agent_identity
+    reads = 0
+
+    async def block_after_upload(*args, **kwargs):
+        nonlocal reads
+        reads += 1
+        if reads == 2:
+            entered.set()
+            await release.wait()
+        return await original_reader(*args, **kwargs)
+
+    monkeypatch.setattr(c.rs, "project_cell_agent_identity", block_after_upload)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as writer, factory() as mutator:
+        task = asyncio.create_task(c.rs.save_recovery_checkpoint(
+            writer, run_id=run_id, expected_attempt=0, expected_revision=1,
+            state=c.rc.decode_recovery(before["recovery_v1"]), files=c.files, deleted_paths=(),
+        ))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=10)
+            assert len(c.uploads) == 2  # Awaiting reference installation after object upload.
+            for mutation in (
+                update(Snapshot).where(Snapshot.id == snapshot_id).values(commit_sha="b" * 40),
+                update(GenerationRun).where(GenerationRun.id == parent_id).values(
+                    status="cancelled",
+                ),
+            ):
+                await mutator.execute(text("SET LOCAL lock_timeout = '250ms'"))
+                with pytest.raises(DBAPIError, match="lock timeout"):
+                    await mutator.execute(mutation)
+                await mutator.rollback()
+        finally:
+            release.set()
+            await asyncio.wait_for(task, timeout=10)
+        saved = await mutator.get(GenerationRun, run_id)
+        assert saved.agent_state["recovery_v1"]["state_revision"] == 2
+        assert saved.agent_state["unrelated"] == before["unrelated"]
