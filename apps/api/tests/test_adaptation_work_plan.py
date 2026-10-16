@@ -8,6 +8,7 @@ each repair pass.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from types import SimpleNamespace
 from typing import Any
 from uuid import uuid4
@@ -15,6 +16,7 @@ from uuid import uuid4
 import pytest
 
 from tests.test_restoration_adaptation import source_case  # noqa: F401  (fixture)
+from yleum_api.services.generation.source_error_classification import SourceFailure
 from yleum_api.services.restoration_adaptation import _adaptation_work_plan
 
 
@@ -290,7 +292,11 @@ async def test_each_repair_pass_carries_what_the_earlier_ones_were_told(
     monkeypatch.setattr(agent_native, "run_native_build", run_native_build)
     repairs: list[str] = []
 
-    async def coordinator_finalize(*, prompt: str, repair: Any) -> Any:
+    async def coordinator_finalize(
+        *, prompt: str, repair: Callable[[str], Awaitable[None]],
+        repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
+    ) -> Any:
+        assert callable(repair_source) and repair_source is repair
         for detail in ("missing screen", "missing route"):
             repairs.append(detail)
             await repair(detail)
@@ -361,7 +367,11 @@ async def test_finalization_repair_rejects_unverified_output_limit(
     monkeypatch.setattr(agent_native, "run_native_build", run_native_build)
     observed: list[str] = []
 
-    async def coordinator_finalize(*, prompt: str, repair: Any) -> Any:
+    async def coordinator_finalize(
+        *, prompt: str, repair: Callable[[str], Awaitable[None]],
+        repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
+    ) -> Any:
+        assert callable(repair_source) and repair_source is repair
         if needs_finalization:
             await repair("build failed")
             observed.append("verified handoff")
