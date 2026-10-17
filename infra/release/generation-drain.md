@@ -14,6 +14,72 @@ directory. Database zero counts alone are insufficient: queued/building/swapping
 unknown or malformed publication journals block restart. Only the latest known
 terminal journal response is accepted; the helper never reconciles or edits it.
 
+## Durable waiters and complete reader inventory
+
+A saved recovery wait is excluded from the generation count only after its
+strict supported contract, owner, execution lease, workspace fence and terminal
+release/hold receipts have been checked. Provider accounting alone does not
+prove that a response receiver has stopped. Corrupt or unsupported saved state,
+unknown receiver state and active physical writers keep the release fenced;
+the release helper never completes, cancels or rewrites these runs.
+
+The privileged observer inventories all five reader slots: API, worker,
+generation-worker and orchestrator on core, plus orchestrator on commerce.
+Actual processes, container images, supervisors and every live registration
+must agree with the target release and supported contracts. An aggregate worker
+heartbeat cannot substitute for this inventory. Reader startup and physical
+dispatch stay in standby while the observation is missing, stale or incomplete,
+including when new recovery execution is disabled.
+
+`generation-reader-observer.timer` runs the root-owned observer on core. It
+publishes the same complete snapshot to both hosts; observations expire within
+30 seconds. A failed scan or distribution invalidates readiness instead of
+refreshing the age of an older result. The authoritative directory
+`/run/yleum-generation-readers` is a read-only directory mount in each of the
+three API containers and in each orchestrator's systemd mount namespace. Redis
+registration and epoch writes can invalidate readiness, never authorize it by
+themselves.
+
+The canonical release captures the existing supervisors and installs the same
+owned `rollout-inhibit.json` on both hosts before replacing a reader. Its exact
+target SHA and random owner nonce are stored durably in
+`/var/lib/yleum-generation-readers` before the corresponding runtime marker is
+written in `/run/yleum-generation-readers`. The observer restores the runtime
+inhibit after reboot before publishing a new observation. Any runtime marker
+presence or uncertain access blocks mutating reader callbacks and dispatch;
+health and registration remain available so the rollout can finish.
+
+Keep both inhibits and the SQL admission fence until the actual target reader
+set, matching host snapshots, old supervisor retirement and fresh database and
+physical quiescence have been verified. Dormant containers are retained, and
+are excluded only with complete stopped/no-restart/no-live-process evidence.
+Unknown restart targets or affected helpers block release. Published business
+services are not classified as generation writers solely because they exist.
+
+An interrupted release can resume only for its exact saved target and nonce.
+During a partial rollout the CURRENT reader set can legitimately be mixed. The
+separate CLI `resume-check` only classifies current database quiescence under
+the exclusive lock of the existing owning SQL drain. The privileged launcher
+must first verify both real root-owned supervisor captures and durable/runtime
+inhibits, and execute the classifier from the exact target source. A supplied
+JSON receipt is not permission. This read-only check never opens a fence,
+creates a drain, supplies CURRENT readiness or bypasses either host's physical
+gate. The complete actual TARGET reader set is still required before `end`.
+
+Before SQL `end`, a failure retains the saved captures, inhibits and admission
+fence. After SQL `end`, admission is already open: a failed marker clear leaves
+the remaining inhibits in place and the release incomplete. Standby remains
+local to each inhibited host; sequential marker removal is not an atomic global
+switch. Retry the canonical script after inspecting the failure and deployment
+lock owner. Do not clear an inhibit by age, invent a new nonce for an unfinished
+cycle, overwrite a foreign capture or remove an unknown deployment lock.
+After successful target checks, the owning release opens SQL admission and
+removes only its own durable marker, then its runtime marker. Any remaining
+runtime marker continues to deny execution; the same owner can retry clearing.
+Fresh inventory
+is an observation of the managed topology, not instantaneous exclusion of
+out-of-band privileged processes.
+
 The executable `generation-ingress-drain.py` snapshots the exact vhost and SHA,
 validates nginx before reload, probes the live 503 using an unauthenticated
 impossible-project request, and refuses to overwrite another release or a later

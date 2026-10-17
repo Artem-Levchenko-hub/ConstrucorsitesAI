@@ -1,6 +1,8 @@
 import asyncio
 import logging
-from collections.abc import AsyncIterator
+import os
+import signal
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
@@ -62,12 +64,19 @@ from yleum_api.services.ws_hub import hub
 logger = logging.getLogger(__name__)
 
 
+async def _reader_compatibility_gate() -> None:
+    from yleum_api.services.generation.recovery_readers import wait_for_readers
+
+    await wait_for_readers()
+
+
 async def _monitor_capacity_queued_generations() -> None:
     """Reclaim expired durable dispatch leases after rolling restarts/crashes."""
 
     while True:
         await asyncio.sleep(10)
         try:
+            await _reader_compatibility_gate()
             resumed = await resume_capacity_queued_generations()
         except Exception:
             logger.exception("generation capacity queue recovery scan failed")
@@ -85,6 +94,7 @@ async def _monitor_owner_wake_operations() -> None:
     while True:
         await asyncio.sleep(10)
         try:
+            await _reader_compatibility_gate()
             advanced = await advance_owner_wake_operations()
         except Exception:
             logger.exception("owner preview capacity queue recovery scan failed")
@@ -101,52 +111,119 @@ async def _monitor_terminal_generation_cleanup() -> None:
     while True:
         await asyncio.sleep(10)
         try:
+            await _reader_compatibility_gate()
             await advance_terminal_generation_cleanup()
         except Exception:
             logger.exception("terminal generation cleanup scan failed")
 
 
+_BACKGROUND_CLEANUP_SECONDS = 5
+
+
+@asynccontextmanager
+async def _background_services(
+    *, on_failure: Callable[[], None] | None = None,
+) -> AsyncIterator[None]:
+    initialized = False
+    monitors: list[asyncio.Task[None]] = []
+    try:
+        await _reader_compatibility_gate()
+        await asyncio.to_thread(reconcile_public_bucket_policies)
+        get_engine()
+        initialized = True
+        await _reader_compatibility_gate()
+        recovered = await recover_interrupted_generation_runs()
+        if recovered:
+            logger.warning(
+                "finalised interrupted generation runs after API restart",
+                extra={"generation_run_count": recovered},
+            )
+        await _reader_compatibility_gate()
+        recovered_cells = await recover_interrupted_cell_operations()
+        if recovered_cells:
+            logger.warning(
+                "finalised interrupted Project Cell operations after API restart",
+                extra={"project_cell_operation_count": recovered_cells},
+            )
+        await hub.start_listener()
+        await _reader_compatibility_gate()
+        resumed = await resume_capacity_queued_generations()
+        if resumed:
+            logger.warning(
+                "resumed capacity-queued generation runs after API restart",
+                extra={"generation_run_count": resumed},
+            )
+        monitors = [
+            asyncio.create_task(_monitor_capacity_queued_generations()),
+            asyncio.create_task(_monitor_owner_wake_operations()),
+            asyncio.create_task(_monitor_terminal_generation_cleanup()),
+        ]
+        yield
+    except Exception:
+        # A configured API already serves liveness while admission waits. Stop
+        # it on a fatal startup error before any potentially blocked cleanup.
+        if on_failure is not None:
+            on_failure()
+        raise
+    finally:
+        if initialized:
+            async with asyncio.timeout(
+                _BACKGROUND_CLEANUP_SECONDS if on_failure is not None else None
+            ):
+                for task in monitors:
+                    task.cancel()
+                for task in monitors:
+                    with suppress(asyncio.CancelledError):
+                        await task
+                await hub.stop_listener()
+                await dispose_redis()
+                await dispose_engine()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    await asyncio.to_thread(reconcile_public_bucket_policies)
-    get_engine()
-    recovered = await recover_interrupted_generation_runs()
-    if recovered:
-        logger.warning(
-            "finalised interrupted generation runs after API restart",
-            extra={"generation_run_count": recovered},
-        )
-    recovered_cells = await recover_interrupted_cell_operations()
-    if recovered_cells:
-        logger.warning(
-            "finalised interrupted Project Cell operations after API restart",
-            extra={"project_cell_operation_count": recovered_cells},
-        )
-    await hub.start_listener()
-    resumed = await resume_capacity_queued_generations()
-    if resumed:
-        logger.warning(
-            "resumed capacity-queued generation runs after API restart",
-            extra={"generation_run_count": resumed},
-        )
-    capacity_monitor = asyncio.create_task(_monitor_capacity_queued_generations())
-    owner_wake_monitor = asyncio.create_task(_monitor_owner_wake_operations())
-    cleanup_monitor = asyncio.create_task(_monitor_terminal_generation_cleanup())
-    try:
-        yield
-    finally:
-        capacity_monitor.cancel()
-        owner_wake_monitor.cancel()
-        cleanup_monitor.cancel()
-        with suppress(asyncio.CancelledError):
-            await capacity_monitor
-        with suppress(asyncio.CancelledError):
-            await owner_wake_monitor
-        with suppress(asyncio.CancelledError):
-            await cleanup_monitor
-        await hub.stop_listener()
-        await dispose_redis()
-        await dispose_engine()
+    from yleum_api.services.generation.recovery_readers import (
+        reader_lifecycle,
+        wait_for_readers,
+    )
+
+    async with reader_lifecycle("api", wait=False):
+        if not get_settings().generation_recovery_inventory_dir:
+            async with _background_services():
+                yield
+            return
+
+        stopping = False
+        failed = False
+
+        def fail_stop() -> None:
+            nonlocal failed
+            if not stopping and not failed:
+                failed = True
+                app.state.background_services_failed = True
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        async def admitted_background() -> None:
+            try:
+                await wait_for_readers()
+                async with _background_services(on_failure=fail_stop):
+                    await asyncio.Event().wait()
+            except Exception:
+                # Also cover gate/cleanup failure; consume the task exception
+                # now, not for the first time during lifespan shutdown.
+                fail_stop()
+                logger.exception("API background startup failed; process stop requested")
+
+        # Liveness must work while the release replaces the other readers.
+        # No recovery callback runs until the full target inventory is ready.
+        background = asyncio.create_task(admitted_background())
+        try:
+            yield
+        finally:
+            stopping = True
+            background.cancel()
+            with suppress(asyncio.CancelledError):
+                await background
 
 
 def create_app() -> FastAPI:
@@ -209,6 +286,8 @@ def create_app() -> FastAPI:
     @app.get("/api/health", tags=["meta"])
     async def readiness_health() -> JSONResponse:
         report = await readiness.probe_readiness()
+        if getattr(app.state, "background_services_failed", False):
+            report.checks["background_services"] = "failed"
         healthy = all(value == "ok" for value in report.checks.values())
         return JSONResponse(
             status_code=200 if healthy else 503,

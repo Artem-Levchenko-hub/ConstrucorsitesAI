@@ -37,6 +37,7 @@ from yleum_orchestrator.schemas.restoration_adaptation import (
 from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     RestorationAdaptationActivationOfferRequest,
 )
+from yleum_orchestrator.services import generation_reader_inventory as readers
 from yleum_orchestrator.services.cell_admission import CellAdmissionGate
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.code_restoration_engine import (
@@ -2270,6 +2271,7 @@ def start_restoration_adaptation_recovery() -> asyncio.Task[None]:
     async def run() -> None:
         while True:
             try:
+                await asyncio.to_thread(readers.require_if_configured)
                 await get_restoration_adaptation_workspace_service().recover()
             except Exception as exc:
                 _log.warning("recovery_failed", error_type=type(exc).__name__)

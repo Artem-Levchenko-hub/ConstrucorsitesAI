@@ -28,6 +28,10 @@ import docker  # type: ignore[import-untyped]
 
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
 from yleum_orchestrator.core.project_machine import MachineManifest, MachineService
+from yleum_orchestrator.services.generation_reader_inventory import (
+    reader_dispatch,
+    require_if_configured,
+)
 from yleum_orchestrator.services.machine_egress import GuardPolicy
 from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
 from yleum_orchestrator.services.machine_network_allocation import (
@@ -316,7 +320,9 @@ class DockerMachineBackend:
         found = self._lookup(self.client.volumes, name, "project-volume")
         if found is not None:
             return found
-        return self.client.volumes.create(name=name, labels=self.labels("project-volume"))
+        return reader_dispatch(
+            self.client.volumes.create, name=name, labels=self.labels("project-volume")
+        )
 
     def volume_mapping(self, manifest: MachineManifest) -> dict[str, dict[str, str]]:
         volumes = {
@@ -448,7 +454,7 @@ class DockerMachineBackend:
         postgres = self._project_postgres()
         if postgres is None:
             raise CellResourceError("project database is not running")
-        result = postgres.exec_run(
+        result = reader_dispatch(postgres.exec_run,
             ["sh", "-eu", "-c", "umask 077; printf '%s' " + shlex.quote(project_role_hba())
              + " > " + shlex.quote(_PROJECT_POSTGRES_DATA + "/pg_hba.conf")],
             user="postgres",
@@ -487,7 +493,7 @@ class DockerMachineBackend:
         metadata = self._metadata()
         metadata.update(services={}, exec_logs={}, exec_pids={}, quiesce_state=None)
         write_controller_json(self.metadata_path, metadata)
-        machine.start()
+        reader_dispatch(machine.start)
 
     def environment_digest(self) -> str:
         """Hash controller-selected runtime and package inventory without environment values."""
@@ -508,7 +514,7 @@ class DockerMachineBackend:
                     separators=(",", ":"),
                 ).encode("utf-8")
             ).hexdigest()
-        result = machine.exec_run(
+        result = reader_dispatch(machine.exec_run,
             ["python3", "-I", "-S", "-c", _ENVIRONMENT_INVENTORY_SCRIPT],
             user="0:0",
             workdir="/workspace",
@@ -688,7 +694,7 @@ class DockerMachineBackend:
                 if existing.status != "running":
                     metadata.update(quiesce_state=None, services={}, exec_logs={}, exec_pids={})
                     write_controller_json(self.metadata_path, metadata)
-                    existing.start()
+                    reader_dispatch(existing.start)
                 reuse_existing = True
         internal = self.client.networks.get(self.internal_network)
         if not internal.attrs.get("Internal"):
@@ -699,7 +705,7 @@ class DockerMachineBackend:
         outward = self._network(self.stem + "-public", internal=False)
         proxy = self._lookup(self.client.containers, self.stem + "-proxy", "egress-proxy")
         if proxy is None:
-            proxy = self.client.containers.create(
+            proxy = reader_dispatch(self.client.containers.create,
                 self.guard_image,
                 [
                     "python3",
@@ -724,10 +730,10 @@ class DockerMachineBackend:
                 tmpfs={"/tmp": "size=8m"},
             )
             internal.connect(proxy)
-            proxy.start()
+            reader_dispatch(proxy.start)
         proxy.reload()
         if proxy.status != "running":
-            proxy.start()
+            reader_dispatch(proxy.start)
             proxy.reload()
         proxy_ip = proxy.attrs["NetworkSettings"]["Networks"][self.internal_network]["IPAddress"]
         self._wait_proxy_ready(proxy, proxy_ip)
@@ -765,11 +771,11 @@ class DockerMachineBackend:
         if reuse_existing:
             return
         image = metadata.get("restored_image", self.base_image)
-        machine = self.client.containers.create(
+        machine = reader_dispatch(self.client.containers.create,
             image,
             **self.container_options(manifest, guard.id, epoch),
         )
-        machine.start()
+        reader_dispatch(machine.start)
 
     def _ensure_namespace_guard(self, policy: GuardPolicy) -> Any:
         """The running guard whose policy matches ``policy`` — started or recreated as needed.
@@ -791,9 +797,9 @@ class DockerMachineBackend:
                 guard.remove(force=True)
                 guard = None
             elif guard.status != "running":
-                guard.start()
+                reader_dispatch(guard.start)
         if guard is None:
-            guard = self.client.containers.create(
+            guard = reader_dispatch(self.client.containers.create,
                 self.guard_image,
                 [
                     "python3",
@@ -816,7 +822,7 @@ class DockerMachineBackend:
                 nano_cpus=50_000_000,
                 volumes={self.stem + "-logs": {"bind": "/run/omnia-logs", "mode": "ro"}},
             )
-            guard.start()
+            reader_dispatch(guard.start)
         deadline = time.monotonic() + machine_remaining_seconds(30)
         while time.monotonic() < deadline:
             guard.reload()
@@ -891,7 +897,7 @@ class DockerMachineBackend:
         helper = self._lookup(self.client.containers, helper_name, "project-postgres-prepare")
         if helper is not None:
             helper.remove(force=True)
-        helper = self.client.containers.create(
+        helper = reader_dispatch(self.client.containers.create,
             self.postgres_image,
             [
                 "sh",
@@ -929,7 +935,7 @@ class DockerMachineBackend:
             ),
         )
         try:
-            helper.start()
+            reader_dispatch(helper.start)
             outcome = helper.wait(timeout=machine_remaining_seconds(30))
             if outcome.get("StatusCode") != 0:
                 raise CellResourceError("project postgres volume ownership setup failed")
@@ -964,7 +970,7 @@ class DockerMachineBackend:
                 + ' > "$PGDATA/pg_hba.conf";',
             ]
         )
-        helper = self.client.containers.create(
+        helper = reader_dispatch(self.client.containers.create,
             self.postgres_image,
             ["sh", "-eu", "-c", script],
             name=helper_name,
@@ -998,7 +1004,7 @@ class DockerMachineBackend:
             ),
         )
         try:
-            helper.start()
+            reader_dispatch(helper.start)
             outcome = helper.wait(timeout=machine_remaining_seconds(60))
             if outcome.get("StatusCode") != 0:
                 raise CellResourceError("project postgres initialization failed")
@@ -1030,13 +1036,13 @@ class DockerMachineBackend:
                 postgres = None
         if postgres is None:
             self._prepare_project_postgres_volume()
-            postgres = self.client.containers.create(
+            postgres = reader_dispatch(self.client.containers.create,
                 self.postgres_image,
                 **self._project_postgres_options(namespace_id, epoch),
             )
         postgres.reload()
         if postgres.status != "running":
-            postgres.start()
+            reader_dispatch(postgres.start)
         self._wait_project_postgres_ready(postgres)
 
     def _project_postgres_matches(self, postgres: Any, namespace_id: str, epoch: int) -> bool:
@@ -1080,7 +1086,7 @@ class DockerMachineBackend:
             postgres.reload()
             if postgres.status != "running":
                 raise CellResourceError("project postgres stopped during startup")
-            result = postgres.exec_run(
+            result = reader_dispatch(postgres.exec_run,
                 [
                     "pg_isready",
                     "-h",
@@ -1143,7 +1149,7 @@ class DockerMachineBackend:
             raise CellResourceError("machine is missing")
         log = "/run/omnia-logs/command-" + str(UUID(operation_id)) + ".log"
         pidfile = "/run/omnia-logs/command-" + str(UUID(operation_id)) + ".pid"
-        response = self.client.api.exec_create(
+        response = reader_dispatch(self.client.api.exec_create,
             machine.id,
             [
                 "python3",
@@ -1168,7 +1174,7 @@ class DockerMachineBackend:
         metadata["exec_logs"][exec_id] = log
         metadata["exec_pids"][exec_id] = pidfile
         write_controller_json(self.metadata_path, metadata)
-        self.client.api.exec_start(exec_id, detach=True)
+        reader_dispatch(self.client.api.exec_start, exec_id, detach=True)
         return str(exec_id)
 
     def _read_log(self, path: str) -> str:
@@ -1187,6 +1193,8 @@ class DockerMachineBackend:
             "sys.stdout.buffer.write(os.read(fd,24000))\\n os.close(fd)\\n"
             'except FileNotFoundError: pass")'
         )
+        # Fixed bounded read of an owned exec log remains available while
+        # admission is inhibited; it cannot start a new workspace command.
         result = guard.exec_run(["python3", "-I", "-S", "-c", script, path], user="0:0")
         if result.exit_code:
             return "command log is unavailable (bounded read failed)"
@@ -1226,6 +1234,9 @@ class DockerMachineBackend:
             " time.sleep(.1)\\n"
             'else:\\n os.killpg(pid,signal.SIGKILL)")'
         )
+        # ProjectMachine already checks the current lease/operation fence;
+        # metadata + Docker ContainerID above bind this stop to its old exec.
+        # Positive reader readiness must not prevent draining that writer.
         result = machine.exec_run(
             ["python3", "-I", "-S", "-c", script, pidfile, str(grace_seconds)],
             user="0:0",
@@ -1249,7 +1260,7 @@ class DockerMachineBackend:
             if info["Running"]:
                 return
         log = f"/run/omnia-logs/service-{service.name}-{epoch}.log"
-        response = self.client.api.exec_create(
+        response = reader_dispatch(self.client.api.exec_create,
             machine.id,
             [
                 "python3",
@@ -1264,7 +1275,7 @@ class DockerMachineBackend:
         )
         metadata["services"][service.name] = {"exec_id": response["Id"], "log": log, "epoch": epoch}
         write_controller_json(self.metadata_path, metadata)
-        self.client.api.exec_start(response["Id"], detach=True)
+        reader_dispatch(self.client.api.exec_start, response["Id"], detach=True)
 
     def service_status(
         self,
@@ -1348,6 +1359,7 @@ class DockerMachineBackend:
     def remove_machine(self) -> None:
         """Retire only the product container (P09); volumes, guard, proxy and the
         project database are environment resources, not part of one release."""
+        require_if_configured()
         self._require_recovery_access("remove")
         machine = self._container()
         if machine is None:
@@ -1357,6 +1369,7 @@ class DockerMachineBackend:
             raise CellResourceError("machine removal was not confirmed")
 
     def remove(self, expected_epoch: int | None = None) -> None:
+        require_if_configured()
         self._require_recovery_access("remove")
         machine = self._container()
         project_postgres = self._project_postgres()
@@ -1414,7 +1427,7 @@ class DockerMachineBackend:
                        f"for i in range({len(names)}):\n" +
                        "    sys.argv = ['statx', '/proof/' + str(i)]\n" +
                        f"    exec({VOLUME_STATX_SCRIPT!r})\n")
-        helper = self.client.containers.create(
+        helper = reader_dispatch(self.client.containers.create,
             self.base_image,
             ["python3", "-I", "-S", "-c", command],
             name=name,
@@ -1436,7 +1449,7 @@ class DockerMachineBackend:
             },
         )
         try:
-            helper.start()
+            reader_dispatch(helper.start)
             if helper.wait(timeout=machine_remaining_seconds(15)).get("StatusCode") != 0:
                 return None
             output = helper.logs(stdout=True, stderr=False)
@@ -1941,7 +1954,7 @@ class DockerMachineBackend:
         helper = self._lookup(self.client.containers, helper_name, "project-postgres-restore")
         if helper is not None:
             helper.remove(force=True)
-        helper = self.client.containers.create(
+        helper = reader_dispatch(self.client.containers.create,
             self.postgres_image,
             [
                 "postgres",
@@ -1983,9 +1996,9 @@ class DockerMachineBackend:
             ),
         )
         try:
-            helper.start()
+            reader_dispatch(helper.start)
             self._wait_project_postgres_ready(helper)
-            smoke = helper.exec_run(
+            smoke = reader_dispatch(helper.exec_run,
                 [
                     "psql",
                     "-h",
@@ -2018,7 +2031,7 @@ class DockerMachineBackend:
         tasks = {task.name: task for task in manifest.tasks}
         for name in dict.fromkeys(store.restore_check_task for store in manifest.data_stores):
             task = tasks[name]
-            helper = self.client.containers.create(
+            helper = reader_dispatch(self.client.containers.create,
                 self._metadata()["pending_image"],
                 task.argv,
                 entrypoint=[],
@@ -2043,7 +2056,7 @@ class DockerMachineBackend:
                 ),
             )
             try:
-                helper.start()
+                reader_dispatch(helper.start)
                 outcome = helper.wait(timeout=machine_remaining_seconds(task.timeout_seconds))
                 if outcome.get("StatusCode") != 0:
                     raise CellResourceError(f"restore check {name} failed")
@@ -2298,7 +2311,7 @@ class DockerMachineBackend:
                     raise CellIdentityConflict("archive source volume identity mismatch")
             elif self._lookup(self.client.volumes, volume, "project-volume") is None:
                 raise CellIdentityConflict("archive source volume is missing")
-        return self.client.containers.create(
+        return reader_dispatch(self.client.containers.create,
             self.base_image,
             ["python3", "-c", "import signal; signal.pause()"],
             entrypoint=[],
@@ -2337,8 +2350,8 @@ class DockerMachineBackend:
         helper = self._archive_helper(name, writable=True)
         try:
             # Import into a new/empty named volume; never merge an old revision.
-            helper.start()
-            result = helper.exec_run(
+            reader_dispatch(helper.start)
+            result = reader_dispatch(helper.exec_run,
                 [
                     "python3",
                     "-c",
@@ -2351,7 +2364,7 @@ class DockerMachineBackend:
             if result.exit_code != 0:
                 raise CellResourceError("cannot clear owned volume for restore")
             with path.open("rb") as handle:
-                if not helper.put_archive("/volume", handle):
+                if not reader_dispatch(helper.put_archive, "/volume", handle):
                     raise CellResourceError("volume archive restore failed")
         finally:
             helper.remove(force=True)
@@ -2383,8 +2396,8 @@ class DockerMachineBackend:
             restoration_identity=immutable,
         )
         try:
-            helper.start()
-            result = helper.exec_run(
+            reader_dispatch(helper.start)
+            result = reader_dispatch(helper.exec_run,
                 [
                     "python3",
                     "-c",
@@ -2397,7 +2410,7 @@ class DockerMachineBackend:
             if result.exit_code != 0:
                 raise CellResourceError("cannot clear owned restoration database")
             with path.open("rb") as handle:
-                if not helper.put_archive("/volume", handle):
+                if not reader_dispatch(helper.put_archive, "/volume", handle):
                     raise CellResourceError("restoration database archive restore failed")
         finally:
             helper.remove(force=True)
@@ -2411,6 +2424,7 @@ class DockerMachineBackend:
         database_artifact_digest: str,
     ) -> None:
         """Remove only the detached, exactly-bound pair of a reverted operation."""
+        require_if_configured()
         self._require_recovery_access("remove")
         self._reconcile_recovery_helpers()
         candidates: list[tuple[str, Any, str]] = []

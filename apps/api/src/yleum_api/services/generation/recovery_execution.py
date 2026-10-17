@@ -82,7 +82,9 @@ def execution_enabled(project_id: UUID) -> bool:
     return settings.generation_recovery_mode == "canary" and str(project_id) in allowed
 
 
-async def _require_session_owner(run_id: UUID) -> None:
+async def _require_session_owner(run_id: UUID, *, compatibility: bool = True) -> None:
+    from yleum_api.services.generation.recovery_readers import require_recovery_readers
+
     owner = _SESSION_OWNER.get()
     if owner is None or owner.run_id != run_id:
         raise RecoveryContractError("continuation has no session owner")
@@ -99,6 +101,8 @@ async def _require_session_owner(run_id: UUID) -> None:
         await owner.connection.commit()
     if not held:
         raise RecoveryContractError("continuation session lock was lost")
+    if compatibility:
+        await require_recovery_readers()
 
 
 async def _initial_quiescent(session: AsyncSession, run_id: UUID) -> bool:
@@ -223,6 +227,7 @@ async def claim_continuation(
     )
     if not quiescent:
         return None
+    await _require_session_owner(run_id)
     execution = (
         state.execution
         if initial
@@ -489,7 +494,7 @@ async def commit_current_wait(
     """
     from yleum_api.services.generation.recovery_store import _locked_owner
 
-    await _require_session_owner(previous.identity.run_id)
+    await _require_session_owner(previous.identity.run_id, compatibility=False)
     async with factory() as session:
         run, _ = await _locked_owner(
             session, run_id=previous.identity.run_id,
@@ -550,7 +555,7 @@ async def commit_current_wait(
                 raise RecoveryContractError("wait workspace ownership changed")
         if current.phase not in {"working", "repairing", "verifying", "waiting_dependency"}:
             raise RecoveryContractError("wait execution phase changed")
-        await _require_session_owner(run.id)
+        await _require_session_owner(run.id, compatibility=False)
         if current.phase == "waiting_dependency" and execution == current.execution:
             return current  # Confirmed SQL read, not an inferred commit acknowledgement.
         updated = current.model_copy(update={

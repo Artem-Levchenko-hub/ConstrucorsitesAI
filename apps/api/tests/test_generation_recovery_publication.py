@@ -13,6 +13,7 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from tests.test_generation_recovery_execution import _bootstrap_wait
+from tests.test_generation_recovery_readers import install_healthy_reader_inventory
 from tests.test_max_finalization import _install_exact_release_probe, _new_harness
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
@@ -44,6 +45,7 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
     lost_ack,
     damage,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     cleanup = _install_exact_release_probe(monkeypatch)
     harness = await _new_harness(db_session, test_engine, toolchain_digest="5" * 64)
     coordinator = harness.coordinator

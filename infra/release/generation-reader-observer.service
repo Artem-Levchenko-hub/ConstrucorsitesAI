@@ -1,0 +1,17 @@
+[Unit]
+Description=Privileged complete generation reader observation
+After=docker.service network-online.target systemd-tmpfiles-setup.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0022
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/omnia/apps/orchestrator/.venv/bin/python /opt/omnia/infra/release/generation-reader-inventory.py scan
+TimeoutStartSec=30
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/run/yleum-generation-readers /var/lib/yleum-generation-readers
+PrivateTmp=true

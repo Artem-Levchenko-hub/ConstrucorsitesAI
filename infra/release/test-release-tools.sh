@@ -2,6 +2,12 @@
 set -euo pipefail
 
 release_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python3 -B -m unittest discover -s "${release_dir}" -p test_generation_reader_inventory.py
+python3 -B -m unittest discover -s "${release_dir}" -p test_generation_reader_readonly.py
+python3 -B -m unittest discover -s "${release_dir}" -p test_generation_reader_resume.py
+python3 -B -m unittest discover -s "${release_dir}" -p test_generation_reader_deploy.py
+python3 -B -m unittest discover -s "${release_dir}" -p test_generation_reader_capture_cycles.py
+python3 -B -m unittest discover -s "${release_dir}" -p test_generation_physical_drain_contract.py
 updater="${release_dir}/update-env-value.sh"
 remover="${release_dir}/remove-env-value.sh"
 gate="${release_dir}/local-release-gate.sh"

@@ -615,9 +615,19 @@ async def _run_terminal_notification_forever() -> None:
 
 
 async def run_forever() -> None:
-    async with asyncio.TaskGroup() as tasks:
-        tasks.create_task(_run_dispatch_forever())
-        tasks.create_task(_run_terminal_notification_forever())
+    from yleum_api.services.generation.recovery_readers import reader_lifecycle, wait_for_readers
+
+    async def standby_heartbeat() -> None:
+        await get_redis().set(
+            HEARTBEAT_KEY,
+            dispatch_heartbeat_payload(active=0, limit=current_dispatch_limit()), ex=30,
+        )
+
+    async with reader_lifecycle("generation-worker", wait=False):
+        await wait_for_readers(standby_heartbeat)
+        async with asyncio.TaskGroup() as tasks:
+            tasks.create_task(_run_dispatch_forever())
+            tasks.create_task(_run_terminal_notification_forever())
 
 
 if __name__ == "__main__":

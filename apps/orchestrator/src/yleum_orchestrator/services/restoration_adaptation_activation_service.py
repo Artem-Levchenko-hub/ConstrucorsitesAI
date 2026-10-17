@@ -28,6 +28,7 @@ from yleum_orchestrator.schemas.restoration_adaptation_activation import (
     RestorationAdaptationActivationRequest,
     RestorationAdaptationActivationStatus,
 )
+from yleum_orchestrator.services import generation_reader_inventory as readers
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.project_machine import machine_effect, write_controller_json
 from yleum_orchestrator.services.restoration_binding import canonical_digest
@@ -1342,6 +1343,7 @@ def start_restoration_adaptation_activation_recovery() -> asyncio.Task[None]:
     async def run() -> None:
         while True:
             try:
+                await asyncio.to_thread(readers.require_if_configured)
                 batch = await get_restoration_adaptation_activation_service().recover_all()
                 for failure in batch.failures:
                     _log.warning("journal_recovery_failed", **failure.model_dump())
