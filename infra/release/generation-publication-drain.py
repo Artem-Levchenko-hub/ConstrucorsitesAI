@@ -274,9 +274,19 @@ def _command_absence_sample(client, state_parent, container):
     }
     services, _ = _machine_execs(state_parent, labels)
     fresh_exec_ids = attrs.get("ExecIDs")
-    _kernel_need(type(fresh_exec_ids) is list, "fresh_exec_inventory")
+    # Docker serializes an empty exec store as null. Accept that representation
+    # only for stopped containers, still requiring the full kernel absence proof.
+    _kernel_need(
+        "ExecIDs" in attrs
+        and (
+            type(fresh_exec_ids) is list
+            or fresh_exec_ids is None
+            and state.get("Status") == "exited"
+        ),
+        "fresh_exec_inventory",
+    )
     fresh_execs = {}
-    for exec_id in fresh_exec_ids:
+    for exec_id in fresh_exec_ids or []:
         _kernel_need(
             type(exec_id) is str and re.fullmatch(r"[0-9a-f]{64}", exec_id),
             "fresh_exec_identity",
