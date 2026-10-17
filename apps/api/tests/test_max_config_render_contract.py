@@ -291,6 +291,28 @@ def _normalize_preview_renewal(files):
     return normalized
 
 
+def _normalize_compliance(files):
+    """Require the reviewed footer bytes before projecting the unchanged historical golden."""
+    path = "src/components/YleumCompliance.tsx"
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    reviewed = json.loads(
+        (fixtures / "max_template_compliance_overrides.json").read_text(encoding="utf-8")
+    )
+    assert set(reviewed) == {path}
+    assert hashlib.sha256(files[path].encode()).hexdigest() == reviewed[path]["sha256"], path
+    legacy = json.loads(
+        (Path(__file__).parent / "fixtures/max_config_render_legacy_compliance.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(legacy) == {"revision", "path", "sha256", "source"}
+    assert legacy["revision"] == "5d7f281f3534f7218ca292cea029cd1eeeda4b4e"
+    assert legacy["path"] == path
+    assert legacy["sha256"] == "1663ed0ad3873d762518f9c7644e5ec7b7fff3007c9df73979b761c6e6193e20"
+    assert hashlib.sha256(legacy["source"].encode()).hexdigest() == legacy["sha256"], path
+    return files | {path: legacy["source"]}
+
+
 def _assert_render_golden(files, expected, *, portable=False):
     """Check reviewed changed files, then the unchanged original full SDK golden."""
     fixture_root = Path(__file__).parent / "fixtures"
@@ -306,9 +328,11 @@ def _assert_render_golden(files, expected, *, portable=False):
     overrides = json.loads(overrides_path.read_text(encoding="utf-8"))
     # Project only these two verified dependency blobs back to the old baseline;
     # all other rendered bytes must still match the unchanged original golden.
-    original_dependencies = _normalize_preview_renewal(
-        _normalize_analytics(
-            _normalize_reviewed_client(_normalize_managed_order_receipts(_normalize_consent(files)))
+    original_dependencies = _normalize_compliance(
+        _normalize_preview_renewal(
+            _normalize_analytics(
+                _normalize_reviewed_client(_normalize_managed_order_receipts(_normalize_consent(files)))
+            )
         )
     )
     for path, frozen_hash in _LEGACY_DEPENDENCY_HASHES.items():
@@ -656,6 +680,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
         "package scripts",
         "pnpm-lock.yaml",
         "src/app/support/page.tsx",
+        "src/components/YleumCompliance.tsx",
         "src/lib/max/owner-preview-renewal.ts",
         "src/components/MaxAppProvider.tsx",
         "src/app/api/max/session/route.ts",

@@ -141,6 +141,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_preview_renewal_overrides.json"),
             str(fixtures / "max_template_analytics_overrides.json"),
             str(fixtures / "max_template_consent_overrides.json"),
+            "--compliance-overrides",
+            str(fixtures / "max_template_compliance_overrides.json"),
         ],
         cwd=tmp_path,
         env=env,
@@ -168,6 +170,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_preview_renewal_overrides.json"),
         str(fixtures / "max_template_analytics_overrides.json"),
         str(fixtures / "max_template_consent_overrides.json"),
+        "--compliance-overrides",
+        str(fixtures / "max_template_compliance_overrides.json"),
     ]
     rejected = subprocess.run(
         args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
@@ -271,6 +275,43 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
 
     valid_args = args.copy()
     valid_args[4] = str(fixtures / "max_template_dependency_overrides.json")
+    # The footer exception is exactly one reviewed path, never a source bypass.
+    compliance_path = "src/components/YleumCompliance.tsx"
+    compliance = json.loads(
+        (fixtures / "max_template_compliance_overrides.json").read_text(encoding="utf-8")
+    )
+    for mutation in ("extra", "missing", "hash", "omitted"):
+        bad_compliance = dict(compliance)
+        if mutation == "extra":
+            bad_compliance["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64}
+        elif mutation == "missing":
+            bad_compliance.clear()
+        elif mutation == "hash":
+            bad_compliance[compliance_path] = {"sha256": "0" * 64, "mode": "100644"}
+        invalid_compliance = tmp_path / "untrusted-compliance.json"
+        invalid_compliance.write_text(json.dumps(bad_compliance), encoding="utf-8")
+        invalid_args = valid_args.copy()
+        invalid_args[-1] = str(invalid_compliance)
+        if mutation == "omitted":
+            invalid_args = invalid_args[:-2]
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+        )
+        assert rejected.returncode != 0
+        expected_error = (
+            "unexpected MAX compliance override paths"
+            if mutation in ("extra", "missing") else f"max-miniapp-nextjs/{compliance_path}"
+        )
+        assert expected_error in rejected.stderr
+    footer = mounted / "max-miniapp-nextjs" / compliance_path
+    footer_bytes = footer.read_bytes()
+    footer.write_bytes(footer_bytes + b"\n// unreviewed footer drift\n")
+    rejected = subprocess.run(
+        valid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30
+    )
+    assert rejected.returncode != 0
+    assert f"max-miniapp-nextjs/{compliance_path}" in rejected.stderr
+    footer.write_bytes(footer_bytes)
     consent_helper = mounted / "max-miniapp-nextjs/src/lib/omnia/consent.ts"
     consent_bytes = consent_helper.read_bytes()
     for mutation in ("missing", "drift"):

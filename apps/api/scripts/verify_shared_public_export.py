@@ -76,6 +76,7 @@ def main() -> None:
     parser.add_argument("preview_renewal_overrides", type=Path)
     parser.add_argument("analytics_overrides", type=Path)
     parser.add_argument("consent_overrides", type=Path)
+    parser.add_argument("--compliance-overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -105,6 +106,13 @@ def main() -> None:
     assert set(consent_overrides) == _CONSENT_OVERRIDE_PATHS, (
         "unexpected MAX consent override paths"
     )
+    # Omission preserves the historical CLI/golden contract, never trusts current bytes.
+    compliance_overrides = {}
+    if args.compliance_overrides is not None:
+        compliance_overrides = json.loads(args.compliance_overrides.read_text(encoding="utf-8"))
+        assert set(compliance_overrides) == {"src/components/YleumCompliance.tsx"}, (
+            "unexpected MAX compliance override paths"
+        )
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
             complete_tree = (
@@ -127,6 +135,7 @@ def main() -> None:
                 entry = support_overrides.get(relative, entry)
                 entry = analytics_overrides.get(relative, entry)
                 entry = consent_overrides.get(relative, entry)
+                entry = compliance_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"
