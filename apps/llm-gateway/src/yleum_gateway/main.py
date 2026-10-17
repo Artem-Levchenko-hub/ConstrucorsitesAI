@@ -28,6 +28,7 @@ from yleum_gateway.routers import (
     images,
     messages_native,
     models,
+    provider_health,
     videos,
 )
 from yleum_gateway.services.generation_response_capture import drain_captures
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(generation_responses.router)
+    app.include_router(provider_health.router)
     app.include_router(models.router)
     app.include_router(chat.router)
     app.include_router(messages_native.router)  # native Anthropic /v1/messages (tool-use agent)

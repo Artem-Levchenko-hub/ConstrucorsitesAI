@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 
 class SelectedElement(BaseModel):
@@ -217,6 +217,32 @@ class PromptResponse(BaseModel):
     survey_pending: bool = False
 
 
+class GenerationRecoveryPublic(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    version: Literal[1] = 1
+    phase: Literal[
+        "working", "repairing", "waiting_dependency", "reconciling", "verifying", "needs_input"
+    ]
+    last_verified_action: Literal["snapshot_saved", "publication_confirmed"] | None = None
+    reason: Literal[
+        "dependency_unavailable", "operation_pending", "progress_required", "state_unavailable"
+    ] | None = None
+    next_check_at: AwareDatetime | None = None
+    attempt_seq: int = Field(ge=0)
+
+
+class GenerationAcceptancePublic(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: UUID
+    assistant_message_id: UUID | None
+    snapshot_id: UUID | None = None
+    # No authoritative accepted-at field exists; do not relabel created/finished timestamps.
+    accepted_at: None = None
+    current_request_complete: bool = False
+
+
 class GenerationRunPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -236,3 +262,6 @@ class GenerationRunPublic(BaseModel):
     created_at: datetime
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    recovery: GenerationRecoveryPublic | None = None
+    recovery_unavailable: bool = False
+    acceptance: GenerationAcceptancePublic | None = None

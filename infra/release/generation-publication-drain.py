@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import copy
+import hashlib
 import json
 import os
 import re
@@ -28,8 +30,372 @@ _MACHINE_HELPERS = frozenset(
     }
 )
 _MACHINE_SERVICES = frozenset(
-    {"development", "project-postgres", "namespace-guard", "egress-proxy"}
+    {
+        "development",
+        "project-postgres",
+        "namespace-guard",
+        "egress-proxy",
+        "managed-max-core",
+        "max-gateway",
+    }
 )
+
+
+_PROC_ROOT = Path("/proc")
+_CGROUP_ROOT = Path("/sys/fs/cgroup")
+
+
+def _kernel_need(condition, reason):
+    if not condition:
+        raise PhysicalDrainError(reason)
+
+
+def _kernel_read(path: Path) -> bytes:
+    with path.open("rb") as handle:
+        value = handle.read(1048577)
+    _kernel_need(len(value) <= 1048576, "kernel_read_bound")
+    return value
+
+
+def _kernel_ids(path: Path) -> set[int]:
+    values = _kernel_read(path).decode("ascii").split()
+    _kernel_need(all(v.isdecimal() and int(v) > 0 for v in values), "kernel_id_shape")
+    return {int(v) for v in values}
+
+
+def _kernel_status(path: Path) -> dict[str, str]:
+    rows = _kernel_read(path).decode("ascii").splitlines()
+    return dict(row.split(":", 1) for row in rows if ":" in row)
+
+
+def _kernel_boot_id() -> str:
+    value = (
+        _kernel_read(_PROC_ROOT / "sys/kernel/random/boot_id").decode("ascii").strip()
+    )
+    _kernel_need(str(UUID(value)) == value, "host_boot_identity")
+    return value
+
+
+def _kernel_row(proc: Path, tid: int, group: str, namespace: int, allowed_caps: int):
+    root = proc / str(tid)
+    raw = _kernel_read(root / "stat").decode("ascii")
+    fields = raw.rsplit(")", 1)[1].split()
+    info = _kernel_status(root / "status")
+    _kernel_need(fields[0] not in {"Z", "X", "x"}, "process_not_live")
+    _kernel_need(int(info["Pid"]) == tid and int(fields[19]) > 0, "process_identity")
+    _kernel_need(
+        _kernel_read(root / "cgroup").decode("ascii").strip() == "0::" + group,
+        "process_cgroup",
+    )
+    _kernel_need((root / "ns/pid").stat().st_ino == namespace, "process_namespace")
+    _kernel_need(int(info["NoNewPrivs"]) == 1, "process_privileges")
+    for key in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb"):
+        _kernel_need(
+            int(info[key].strip(), 16) & ~allowed_caps == 0, "process_capabilities"
+        )
+    nspid = tuple(map(int, info["NSpid"].split()))
+    _kernel_need(nspid and nspid[0] == tid and nspid[-1] > 0, "process_namespace_pid")
+    return {
+        "pid": tid,
+        "parent": int(fields[1]),
+        "start": int(fields[19]),
+        "tgid": int(info["Tgid"]),
+        "nspid": nspid,
+        "cmd": hashlib.sha256(_kernel_read(root / "cmdline")).hexdigest(),
+        "exe": str((root / "exe").readlink()),
+        "namespace": namespace,
+        "group": group,
+    }
+
+
+def _kernel_snapshot(pid: int, *, proc=Path("/proc"), cgroups=Path("/sys/fs/cgroup")):
+    group_line = _kernel_read(proc / str(pid) / "cgroup").decode("ascii").strip()
+    _kernel_need(
+        group_line.startswith("0::/") and "\n" not in group_line, "cgroup_v2_required"
+    )
+    group = group_line[3:]
+    _kernel_need(
+        group != "/" and ".." not in Path(group).parts, "container_cgroup_required"
+    )
+    root = cgroups / group.lstrip("/")
+    _kernel_need(root.resolve() == root and root.is_dir(), "cgroup_path")
+    # Unknown nested delegation is not treated as an empty container.
+    _kernel_need(not any(p.is_dir() for p in root.iterdir()), "nested_cgroup_unknown")
+    processes, threads = (
+        _kernel_ids(root / "cgroup.procs"),
+        _kernel_ids(root / "cgroup.threads"),
+    )
+    _kernel_need(pid in processes and processes <= threads, "init_cgroup_membership")
+    namespace = (proc / str(pid) / "ns/pid").stat().st_ino
+    _kernel_need(
+        namespace != (proc / "1/ns/pid").stat().st_ino, "host_namespace_denied"
+    )
+    # Exact capabilities from DockerMachineBackend._USERLAND_CAPS.
+    allowed_caps = sum(1 << bit for bit in (0, 1, 3, 4, 6, 7, 31, 5, 10, 18))
+    rows = {}
+    for process in sorted(processes):
+        task_ids = {int(p.name) for p in (proc / str(process) / "task").iterdir()}
+        _kernel_need(process in task_ids and task_ids <= threads, "task_inventory")
+        _kernel_need(process != pid or task_ids == {pid}, "idle_init_tasks")
+        for tid in sorted(task_ids):
+            _kernel_need(tid not in rows, "duplicate_task")
+            item = _kernel_row(proc, tid, group, namespace, allowed_caps)
+            _kernel_need(item["tgid"] == process, "task_group")
+            rows[tid] = item
+    _kernel_need(set(rows) == threads, "unaccounted_thread")
+    _kernel_need(rows[pid]["nspid"][-1] == 1, "container_init_pid")
+    _kernel_need(
+        processes == _kernel_ids(root / "cgroup.procs")
+        and threads == _kernel_ids(root / "cgroup.threads"),
+        "kernel_inventory_changed",
+    )
+    return {
+        "boot": _kernel_boot_id(),
+        "group": group,
+        "namespace": namespace,
+        "processes": sorted(processes),
+        "rows": rows,
+    }
+
+
+def _service_forest(snapshot, roots: set[int], init: int):
+    processes = set(snapshot["processes"])
+    _kernel_need(roots <= processes and init not in roots, "service_root_missing")
+    for pid in processes - {init}:
+        seen, parent = set(), pid
+        while parent not in roots:
+            _kernel_need(
+                parent in processes and parent != init and parent not in seen,
+                "unknown_process",
+            )
+            seen.add(parent)
+            parent = snapshot["rows"][parent]["parent"]
+
+
+def _stopped_kernel_absence(container_id: str):
+    """Default Docker cgroup namespace only; any matching residual denies.
+
+    Read every cgroup directory and process membership, including nested groups.
+    Failed or racing reads cannot establish absence. No process is signalled.
+    """
+    boot = _kernel_boot_id()
+    names = {container_id, "docker-" + container_id + ".scope"}
+    _kernel_need(_CGROUP_ROOT.is_dir() and not _CGROUP_ROOT.is_symlink(), "cgroup_root")
+    pending = [_CGROUP_ROOT]
+    while pending:
+        directory = pending.pop()
+        _kernel_need(directory.name not in names, "stopped_cgroup_present")
+        for entry in directory.iterdir():
+            _kernel_need(not entry.is_symlink(), "cgroup_symlink")
+            if entry.is_dir():
+                pending.append(entry)
+    for process in _PROC_ROOT.iterdir():
+        if not process.name.isdecimal():
+            continue
+        _kernel_need(not process.is_symlink(), "process_path")
+        tasks = list((process / "task").iterdir())
+        _kernel_need(
+            any(task.name == process.name for task in tasks), "stopped_task_inventory"
+        )
+        for member in [process, *tasks]:
+            _kernel_need(
+                member.name.isdecimal() and not member.is_symlink(), "process_path"
+            )
+            membership = _kernel_read(member / "cgroup").decode("ascii").strip()
+            _kernel_need(
+                membership.startswith("0::/") and "\n" not in membership,
+                "cgroup_v2_required",
+            )
+            _kernel_need(
+                not (set(Path(membership[3:]).parts) & names), "stopped_process_present"
+            )
+    _kernel_need(_kernel_boot_id() == boot, "host_boot_changed")
+    return {"boot": boot, "stopped_absent": True}
+
+
+def _command_absence_sample(client, state_parent, container):
+    from yleum_orchestrator.services.docker_machine_backend import (
+        _SERVICE_WRAPPER,
+        _USERLAND_CAPS,
+    )
+
+    container.reload()
+    attrs = copy.deepcopy(container.attrs)
+    labels = attrs.get("Config", {}).get("Labels") or {}
+    _kernel_need(
+        labels.get("omnia.managed") == "true"
+        and labels.get("omnia.project_machine") == "true"
+        and labels.get("omnia.resource_kind") == "development",
+        "container_owner_labels",
+    )
+    for key in ("workspace_id", "project_id", "owner_id"):
+        value = labels.get("omnia." + key)
+        _kernel_need(
+            type(value) is str and str(UUID(value)) == value, "container_owner_identity"
+        )
+    config, host, state = attrs["Config"], attrs["HostConfig"], attrs["State"]
+    _kernel_need(
+        re.fullmatch(r"[0-9a-f]{64}", container.id) and attrs["Id"] == container.id,
+        "container_id",
+    )
+    _kernel_need(
+        state.get("Paused") is False
+        and state.get("Dead") is False
+        and state.get("Restarting") is False
+        and type(state.get("Pid")) is int
+        and bool(state.get("StartedAt")),
+        "container_state",
+    )
+    _kernel_need(
+        host.get("Privileged") is False
+        and host.get("PidMode") in ("", None)
+        and host.get("UsernsMode") in ("", None)
+        and host.get("CgroupnsMode") == "private"
+        and set(host.get("CapDrop") or []) == {"ALL"}
+        and set(host.get("CapAdd") or []) == set(_USERLAND_CAPS)
+        and host.get("SecurityOpt") == ["no-new-privileges:true"],
+        "container_security",
+    )
+    idle = "import signal,sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.pause()"
+    _kernel_need(
+        config.get("Entrypoint") == ["python3", "-c"]
+        and config.get("Cmd") == [idle]
+        and config.get("User") == "0:0"
+        and host.get("Init") in (None, False),
+        "idle_init_config",
+    )
+    common = {
+        "id": container.id,
+        "state": state,
+        "exec_ids": attrs.get("ExecIDs"),
+        "config": hashlib.sha256(
+            json.dumps({"config": config, "host": host}, sort_keys=True).encode()
+        ).hexdigest(),
+    }
+    services, _ = _machine_execs(state_parent, labels)
+    fresh_exec_ids = attrs.get("ExecIDs")
+    _kernel_need(type(fresh_exec_ids) is list, "fresh_exec_inventory")
+    fresh_execs = {}
+    for exec_id in fresh_exec_ids:
+        _kernel_need(
+            type(exec_id) is str and re.fullmatch(r"[0-9a-f]{64}", exec_id),
+            "fresh_exec_identity",
+        )
+        execution = client.api.exec_inspect(exec_id)
+        terminal = (
+            execution.get("Running") is False and type(execution.get("ExitCode")) is int
+        )
+        live_service = (
+            state.get("Status") == "running"
+            and exec_id in services
+            and execution.get("Running") is True
+            and execution.get("ExitCode") is None
+        )
+        _kernel_need(
+            execution.get("ContainerID") == container.id and (terminal or live_service),
+            "fresh_exec_unresolved",
+        )
+        fresh_execs[exec_id] = {
+            key: execution.get(key)
+            for key in ("ContainerID", "Running", "ExitCode", "Pid")
+        }
+    common["fresh_execs"] = fresh_execs
+    if state.get("Status") == "exited":
+        _kernel_need(
+            state.get("Running") is False
+            and state["Pid"] == 0
+            and host.get("RestartPolicy", {}).get("Name") == "no"
+            and host.get("CgroupParent") == "",
+            "stopped_container_state",
+        )
+        return {**common, "kernel": _stopped_kernel_absence(container.id)}
+    _kernel_need(
+        state.get("Status") == "running"
+        and state.get("Running") is True
+        and state["Pid"] > 0,
+        "container_state",
+    )
+    pid = state["Pid"]
+    _kernel_need(
+        _kernel_read(_PROC_ROOT / str(pid) / "cmdline").split(b"\0")[:-1]
+        == [b"python3", b"-c", idle.encode()],
+        "idle_init_process",
+    )
+    metadata = _journal(
+        state_parent / "project-machines" / labels["omnia.workspace_id"] / "docker.json"
+    )
+    declared = {item["name"]: item for item in metadata["manifest"]["services"]}
+    expected_arguments = {
+        record["exec_id"]: [
+            declared[name]["argv"],
+            "/workspace/" + declared[name]["cwd"],
+            record["log"],
+            declared[name]["restart"],
+        ]
+        for name, record in metadata["services"].items()
+    }
+    execs, roots = {}, set()
+    for exec_id in services:
+        _kernel_need(re.fullmatch(r"[0-9a-f]{64}", exec_id), "service_exec_id")
+        execution = client.api.exec_inspect(exec_id)
+        process = execution.get("ProcessConfig") or {}
+        arguments = process.get("arguments")
+        _kernel_need(
+            execution.get("ContainerID") == container.id
+            and execution.get("Running") is True
+            and execution.get("ExitCode") is None
+            and type(execution.get("Pid")) is int
+            and execution["Pid"] > 0
+            and process.get("entrypoint") == "python3"
+            and isinstance(arguments, list)
+            and len(arguments) == 3
+            and arguments[:2] == ["-c", _SERVICE_WRAPPER],
+            "live_service_binding",
+        )
+        _kernel_need(
+            json.loads(arguments[2]) == expected_arguments[exec_id],
+            "service_manifest_binding",
+        )
+        root = execution["Pid"]
+        _kernel_need(root not in roots, "duplicate_service_root")
+        roots.add(root)
+        _kernel_need(
+            _kernel_read(_PROC_ROOT / str(root) / "cmdline").split(b"\0")[:-1]
+            == [b"python3", *[v.encode() for v in arguments]],
+            "live_service_process",
+        )
+        execs[exec_id] = {
+            k: execution.get(k)
+            for k in ("ContainerID", "Running", "ExitCode", "Pid", "ProcessConfig")
+        }
+    snapshot = _kernel_snapshot(pid, proc=_PROC_ROOT, cgroups=_CGROUP_ROOT)
+    _kernel_need(
+        bool(
+            set(Path(snapshot["group"]).parts)
+            & {container.id, "docker-" + container.id + ".scope"}
+        ),
+        "container_cgroup_identity",
+    )
+    _service_forest(snapshot, roots, pid)
+    return {**common, "metadata": metadata, "execs": execs, "kernel": snapshot}
+
+
+def _require_current_command_absence(
+    state_parent: Path, client: object, containers: list
+) -> None:
+    """Current sampled absence only, never evidence of an old exec outcome.
+
+    Called solely after strict terminal journal validation and exact Docker404.
+    External admission/ingress closure must span this read-only sample.
+    """
+    try:
+        first = [_command_absence_sample(client, state_parent, c) for c in containers]
+        second = [_command_absence_sample(client, state_parent, c) for c in containers]
+        _kernel_need(first == second, "current command absence sample changed")
+    except PhysicalDrainError:
+        raise
+    except Exception as exc:
+        raise PhysicalDrainError("current command absence is unknown") from exc
 
 
 def _journal(path: Path) -> dict | None:
@@ -181,10 +547,15 @@ def require_physical_writers_drained(
         container.reload()
         attrs = container.attrs
         labels = attrs.get("Config", {}).get("Labels") or {}
+        kind = labels.get("omnia.resource_kind")
         affected = (
             labels.get("omnia.helper") == "true"
             or labels.get("omnia.project_machine") == "true"
             or "omnia.source_operation_id" in labels
+            # The trusted core bootstrap inherits project-cell identity labels,
+            # unlike helpers created by DockerMachineBackend.
+            or labels.get("omnia.project_cell") == "true"
+            and kind == "core-database-bootstrap"
         )
         if not affected:
             continue
@@ -196,10 +567,10 @@ def require_physical_writers_drained(
         by_id[container.id] = (attrs, labels)
         helper = (
             labels.get("omnia.helper") == "true"
-            or labels.get("omnia.resource_kind") in _MACHINE_HELPERS
+            or kind in _MACHINE_HELPERS
             or "omnia.source_operation_id" in labels
         )
-        if not helper and labels.get("omnia.resource_kind") not in _MACHINE_SERVICES:
+        if not helper and kind not in _MACHINE_SERVICES:
             raise PhysicalDrainError("affected physical resource kind is unknown")
         state = attrs.get("State", {})
         if helper and not (
@@ -236,6 +607,8 @@ def require_physical_writers_drained(
                 raise PhysicalDrainError("affected physical exec is active or unknown")
 
     journals = 0
+    missing_exec_workspaces = set()
+    missing_exec_ids = set()
     for family, filename in (
         ("project-machines", "machine.json"),
         ("source-write-operations", "*.json"),
@@ -295,17 +668,9 @@ def require_physical_writers_drained(
                     if record["kind"] == "command":
                         exec_id = _command_terminal(record, operation_id)
                         execution = inspect(exec_id)
-                        development = [
-                            labels
-                            for _attrs, labels in by_id.values()
-                            if labels["omnia.workspace_id"] == path.parent.name
-                            and labels.get("omnia.resource_kind") == "development"
-                        ]
                         if execution is None:
-                            if development:
-                                raise PhysicalDrainError(
-                                    "missing command exec has a remaining development container"
-                                )
+                            missing_exec_workspaces.add(path.parent.name)
+                            missing_exec_ids.add(exec_id)
                         else:
                             owner = by_id.get(execution.get("ContainerID"))
                             if (
@@ -319,6 +684,21 @@ def require_physical_writers_drained(
                                     "command physical owner or outcome is unknown"
                                 )
             journals += 1
+    # One complete repeated sample per workspace, not per historical command.
+    for workspace_id in sorted(missing_exec_workspaces):
+        development = [
+            container
+            for container in containers
+            if container.id in by_id
+            and by_id[container.id][1]["omnia.workspace_id"] == workspace_id
+            and by_id[container.id][1].get("omnia.resource_kind") == "development"
+        ]
+        if development:
+            _require_current_command_absence(state_parent, client, development)
+    for exec_id in missing_exec_ids:
+        inspected.pop(exec_id, None)
+        if inspect(exec_id) is not None:
+            raise PhysicalDrainError("missing command inspection changed")
     # A helper appearing after enumeration invalidates the sample; there is no
     # expiry-as-termination inference and no mutation of foreign resources.
     if {c.id for c in client.containers.list(all=True)} != {c.id for c in containers}:

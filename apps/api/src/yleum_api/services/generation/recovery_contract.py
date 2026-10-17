@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
@@ -364,16 +364,90 @@ class RecoveryStateV2(RecoveryState):
         return self
 
 
+class RecoveryClock(_Record):
+    """Durable arithmetic, not a serialized clock or progress authority."""
+
+    version: Literal[1] = 1
+    stage: Stage = "edit"
+    segment_seq: Nonnegative = 0
+    window_ms: Annotated[int, Field(gt=0)]
+    segment_used_ms: Nonnegative = 0
+    segment_deadline: datetime
+    interval_id: UUID
+    interval_open: bool = True
+    interval_charged_ms: Nonnegative = 0
+    repair_granted: bool = False
+    consumed_requirement_ids: tuple[Nonblank, ...] = ()
+    dependency_failures: Nonnegative = 0
+    wait_dependency: Literal["credentials", "funds", "provider"] | None = None
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def exact_version(cls, value: object) -> object:
+        if type(value) is not int or value != 1:
+            raise ValueError("unsupported work clock")
+        return value
+
+    @field_validator("segment_deadline")
+    @classmethod
+    def aware_deadline(cls, value: datetime) -> datetime:
+        if value.utcoffset() is None:
+            raise ValueError("work clock requires an absolute deadline")
+        return value
+
+    @model_validator(mode="after")
+    def unique_credit(self) -> Self:
+        if len(self.consumed_requirement_ids) != len(set(self.consumed_requirement_ids)):
+            raise ValueError("semantic credit cannot repeat")
+        return self
+
+
+class RecoveryStateV3(RecoveryStateV2):
+    version: Literal[3] = 3  # type: ignore[assignment]
+    clock: RecoveryClock
+
+    @field_validator("next_check_at")
+    @classmethod
+    def canonical_due(cls, value: datetime | None) -> datetime | None:
+        return value.astimezone(UTC) if value is not None else None
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def require_exact_version(cls, value: object) -> object:
+        if type(value) is not int or value != 3:
+            raise ValueError("unsupported clock recovery version")
+        return value
+
+    @model_validator(mode="after")
+    def valid_clock_scope(self) -> Self:
+        required = {
+            r.id for r in self.requirements if r.required and r.check_kind == "named_behavior"
+        }
+        if not set(self.clock.consumed_requirement_ids) <= required:
+            raise ValueError("clock credit has no frozen functional requirement")
+        if sum(self.stage_active_work_ms.values()) != self.active_work_ms:
+            raise ValueError("work clock stage accounting conflicts")
+        if self.clock.interval_charged_ms > self.active_work_ms:
+            raise ValueError("work clock interval exceeds known work")
+        return self
+
+
 def decode_recovery(raw: object) -> RecoveryState | None:
     """Only an absent value returns None; unknown/corrupt JSON is never replaced."""
     if raw is None:
         return None
-    if type(raw) is not dict or type(raw.get("version")) is not int or raw["version"] not in {1, 2}:
+    if (
+        type(raw) is not dict or type(raw.get("version")) is not int
+        or raw["version"] not in {1, 2, 3}
+    ):
         raise RecoveryContractError("unsupported or missing recovery version")
     try:
         # JSON mode accepts UUID/datetime/tuple wire representations while strict
         # fields still refuse coercions such as numeric strings and bool counters.
-        model = RecoveryState if raw["version"] == 1 else RecoveryStateV2
+        models: dict[int, type[RecoveryState]] = {
+            1: RecoveryState, 2: RecoveryStateV2, 3: RecoveryStateV3,
+        }
+        model = models[raw["version"]]
         return model.model_validate_json(json.dumps(raw, allow_nan=False))
     except (ValidationError, TypeError, ValueError, OverflowError) as exc:
         raise RecoveryContractError("corrupt recovery contract") from exc

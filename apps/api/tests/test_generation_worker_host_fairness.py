@@ -7,6 +7,7 @@ import sqlite3
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
@@ -22,6 +23,15 @@ from yleum_api.workers import generation
 
 def candidate(host, *, admitted=False, status="pending", maintenance=False):
     return generation.HostDispatch(uuid4(), host, status, admitted, maintenance)
+
+
+@pytest.fixture
+def ready_dependencies(monkeypatch):
+    # Scheduling-only rows have no SQL run/clock; the real health/owner boundary
+    # is covered separately by the recovery deadline and dependency tests.
+    from yleum_api.services.generation import recovery_dependencies
+
+    monkeypatch.setattr(recovery_dependencies, "poll_due_dependency", AsyncMock(return_value=True))
 
 
 def test_waiting_host_does_not_take_every_dispatch_slot():
@@ -76,7 +86,9 @@ def test_maintenance_has_one_reserved_place_but_keeps_global_budget():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("healthy_single_host", [False, True])
-async def test_actual_loop_blocked_host_does_not_hide_free_host(monkeypatch, healthy_single_host):
+async def test_actual_loop_blocked_host_does_not_hide_free_host(
+    monkeypatch, healthy_single_host, ready_dependencies,
+):
     a = [candidate("A") for _ in range(110)]
     b = candidate("B")
     rows = a[:9] if healthy_single_host else [*a, b]
@@ -114,7 +126,9 @@ async def test_actual_loop_blocked_host_does_not_hide_free_host(monkeypatch, hea
     monkeypatch.setattr(generation, "execute_dispatch", execute)
     monkeypatch.setattr(generation, "get_redis", lambda: SimpleNamespace(set=redis_set))
     monkeypatch.setattr(
-        generation, "asyncio", SimpleNamespace(create_task=asyncio.create_task, sleep=scan_sleep)
+        generation, "asyncio", SimpleNamespace(
+            create_task=asyncio.create_task, gather=asyncio.gather, sleep=scan_sleep,
+        )
     )
     loop = asyncio.create_task(generation._run_dispatch_forever())
     try:
@@ -233,7 +247,7 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
         connection.execute(
             "CREATE TABLE generation_runs (id text, project_id text, "
             "execution_backend text, status text, execution_started_at text, "
-            "created_at integer)"
+            "created_at integer, agent_state text NOT NULL DEFAULT '{}')"
         )
         connection.execute(
             "CREATE TABLE project_cell_workspaces (project_id text UNIQUE, orchestrator text)"
@@ -255,7 +269,9 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
         for index, (status, started, operation) in enumerate(cases):
             run_id = ids[index].hex
             connection.execute(
-                "INSERT INTO generation_runs VALUES (?,?,?,?,?,?)",
+                "INSERT INTO generation_runs "
+                "(id, project_id, execution_backend, status, execution_started_at, created_at) "
+                "VALUES (?,?,?,?,?,?)",
                 (run_id, run_id, "worker" if index < 7 else "in_process", status, started, index),
             )
             connection.execute("INSERT INTO project_cell_workspaces VALUES (?, 'A')", (run_id,))
@@ -372,7 +388,9 @@ def test_seven_running_plus_one_waiter_still_fills_global_budget():
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("limit", [1, 8])
-async def test_actual_loop_alternates_lock_busy_cleanup_and_fresh_with_one_slot(monkeypatch, limit):
+async def test_actual_loop_alternates_lock_busy_cleanup_and_fresh_with_one_slot(
+    monkeypatch, limit, ready_dependencies,
+):
     bootstrap = [candidate(f"bootstrap-{index}") for index in range(limit - 1)]
     cleanup = candidate("A", maintenance=True)
     fresh = candidate("B")
@@ -421,7 +439,9 @@ async def test_actual_loop_alternates_lock_busy_cleanup_and_fresh_with_one_slot(
     monkeypatch.setattr(generation, "current_dispatch_limit", lambda: limit)
     monkeypatch.setattr(generation, "get_redis", lambda: SimpleNamespace(set=redis_set))
     monkeypatch.setattr(
-        generation, "asyncio", SimpleNamespace(create_task=asyncio.create_task, sleep=scan_sleep)
+        generation, "asyncio", SimpleNamespace(
+            create_task=asyncio.create_task, gather=asyncio.gather, sleep=scan_sleep,
+        )
     )
     loop = asyncio.create_task(generation._run_dispatch_forever())
     try:

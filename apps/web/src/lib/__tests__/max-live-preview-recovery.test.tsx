@@ -10,6 +10,7 @@ import type {
   MaxProjectConfig,
   MaxPreviewSession,
   Project,
+  GenerationRun,
   Message,
   ProjectVersion,
   RuntimeStatus,
@@ -25,9 +26,11 @@ const getRuntime = vi.fn<(projectId: string) => Promise<RuntimeStatus>>();
 const startRuntime = vi.fn<(projectId: string) => Promise<RuntimeStatus>>();
 const toastError = vi.fn();
 const listMessages = vi.fn<(projectId: string) => Promise<Message[]>>();
+const getLatestGeneration = vi.fn<(projectId: string) => Promise<GenerationRun | null>>();
 
 vi.mock("@/lib/api/messages", () => ({
   listMessages: (projectId: string) => listMessages(projectId),
+  getLatestGeneration: (projectId: string) => getLatestGeneration(projectId),
 }));
 
 vi.mock("@/lib/api/max-studio", () => ({
@@ -244,6 +247,7 @@ describe("MAX live preview recovery", () => {
     getRuntime.mockResolvedValue(runtime());
     startRuntime.mockResolvedValue(runtime());
     listMessages.mockResolvedValue([]);
+    getLatestGeneration.mockResolvedValue(null);
     queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -293,6 +297,49 @@ describe("MAX live preview recovery", () => {
       );
     });
   }
+
+  it("keeps the accepted iframe during recovery status updates without starting another runtime", async () => {
+    const current: GenerationRun = {
+      id: "pending-run", project_id: PROJECT.id, assistant_message_id: "pending-message",
+      status: "running", response_mode: "edit", created_at: "2026-10-17T16:00:00Z",
+      started_at: "2026-10-17T16:00:00Z", finished_at: null,
+      recovery: { version: 1, phase: "waiting_dependency", last_verified_action: null,
+        reason: "dependency_unavailable", next_check_at: null, attempt_seq: 2 },
+    };
+    getLatestGeneration.mockResolvedValue(current);
+    queryClient.setQueryData(["generation", PROJECT.id], current);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(container.textContent).toContain("Показана последняя сохранённая версия. Текущий запрос ещё не завершён.");
+    const sessions = createMaxPreviewSession.mock.calls.length;
+    await act(async () => { queryClient.setQueryData(["generation", PROJECT.id], {
+      ...current, recovery: { ...current.recovery!, phase: "working" },
+    }); });
+    await flushPromises();
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(sessions);
+    expect(startRuntime).not.toHaveBeenCalled();
+  });
+
+  it("does not present an unaccepted completed first build as the accepted app", async () => {
+    const current: GenerationRun = {
+      id: "unaccepted", project_id: PROJECT.id, assistant_message_id: "m", status: "completed",
+      response_mode: "build", created_at: "2026-10-17T16:00:00Z",
+      started_at: "2026-10-17T16:00:00Z", finished_at: "2026-10-17T16:10:00Z",
+      acceptance: { run_id: "unaccepted", assistant_message_id: "m", snapshot_id: null,
+        accepted_at: null, current_request_complete: false },
+    };
+    getLatestGeneration.mockResolvedValue(current);
+    queryClient.setQueryData(["generation", PROJECT.id], current);
+    syncMaxManagedKit.mockResolvedValue(managedKit("seed-snapshot"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("seed-snapshot");
+    await flushPromises();
+    expect(container.querySelector("[data-testid='max-accepted-preview-status']")?.textContent)
+      .toContain("Готовая версия приложения пока не подтверждена.");
+  });
 
   async function readySeparatePreview() {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));

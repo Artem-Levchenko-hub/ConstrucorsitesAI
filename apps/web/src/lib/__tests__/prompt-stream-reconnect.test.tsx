@@ -79,6 +79,33 @@ afterEach(async () => {
 });
 
 describe("prompt stream reconnect", () => {
+  it("rejects a foreign durable run before changing transcript or replay ownership", async () => {
+    await mount(); const socket = Socket.instances[0];
+    await act(async () => socket.emit({ type: "generation.event", data: {
+      event_id: "foreign", run_id: "foreign", seq: 1, type: "generation.phase",
+      data: { message_id: "message-p", phase: "final_build" },
+    } }));
+    expect(client.getQueryData(["agent-steps", "p", "message-p"])).toBeUndefined();
+    await act(async () => socket.close());
+    await act(async () => vi.advanceTimersByTime(1000));
+    expect(Socket.instances.at(-1)?.url).toContain("run_id=run-p");
+  });
+
+  it("uses recovery notifications only to refetch bound durable truth", async () => {
+    await mount();
+    const current = { ...run(), recovery: { version: 1 as const, phase: "waiting_dependency" as const,
+      reason: "dependency_unavailable", last_verified_action: null, next_check_at: null, attempt_seq: 3 } };
+    client.setQueryData(["generation", "p"], current);
+    const invalidated = vi.spyOn(client, "invalidateQueries");
+    await act(async () => Socket.instances[0].emit({ type: "generation.event", data: {
+      event_id: "older", run_id: "run-p", seq: 1, type: "generation.recovery",
+      data: { message_id: "message-p", phase: "working", attempt_seq: 1 },
+    } }));
+    expect(invalidated).toHaveBeenCalledWith({ queryKey: ["generation", "p"] });
+    expect(client.getQueryData(["generation", "p"])).toEqual(current);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
   it("F5 reattaches active canonical run and reconnects after 1 second with replay watermark", async () => {
     await mount(); const first = Socket.instances[0];
     expect(first.url).toContain("/api/ws/projects/p?run_id=run-p&after_seq=0");

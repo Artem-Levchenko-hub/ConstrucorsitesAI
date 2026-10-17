@@ -756,6 +756,7 @@ class Settings(BaseSettings):
     # New V2 initialization only; existing V2 readers keep working when disabled.
     # Task10 reader inventory must pass before enabling new execution records.
     generation_recovery_execution_enabled: bool = False
+    generation_recovery_soft_windows_enabled: bool = False
     generation_recovery_inventory_dir: str = ""
     generation_recovery_reader_role: Literal["", "api", "worker", "generation-worker"] = ""
     generation_provider_attempts_enabled: bool = False

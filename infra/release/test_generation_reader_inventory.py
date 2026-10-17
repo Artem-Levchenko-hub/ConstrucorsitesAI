@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import importlib.util
 import json
@@ -15,6 +16,22 @@ from types import SimpleNamespace
 
 
 class CompleteInventoryTests(unittest.TestCase):
+    def test_privileged_observer_matches_actual_api_reader_contract(self):
+        source = Path(__file__).resolve().parents[2] / (
+            "apps/api/src/yleum_api/services/generation/recovery_readers.py"
+        )
+        tree = ast.parse(source.read_text(encoding="utf-8"))
+        declared = next(
+            node.value
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "API_CAPABILITIES"
+                for target in node.targets
+            )
+        )
+        self.assertEqual(self.observer.API_CAPABILITIES, ast.literal_eval(declared))
+
     def setUp(self) -> None:
         source = Path(__file__).with_name("generation-reader-inventory.py")
         self.assertTrue(source.is_file(), "authoritative reader observer is absent")
