@@ -19,7 +19,7 @@
     "Реальный клиент MAX, полная проверка БД и всех строк, вычисленные браузером шрифты не подтверждены. Изоляция данных между разными пользователями отдельно не проверена.",
     "Снимки показывают наблюдавшееся состояние браузера; не доказывают работу всех сценариев. На части мобильных кадров фиксированная навигация перекрывает карточки; доступность этих элементов прокруткой по снимкам не измерена."
   ],
-  "current_diagnosis": "Task9 WIP. Footer second-edit scoped acceptance18/18; full-app and recovery activation not accepted.",
+  "current_diagnosis": "Этап 9 доставлен на 67c27258 с recovery OFF; повторная ограниченная UI-проверка прогона 24: 23/23. Этапы 10-15 ожидают выполнения. Полная V2/live/A-B/финансовая приёмка не заявлена.",
   "runs": [
     {
       "number": 1,
@@ -25716,7 +25716,36 @@
         "baseline-02-source-comparison.json": "651f0a8b29fdc8cf56ce12b4448cd0afe301a678d8a820091f6a0f391f224d1f",
         "baseline-02-footer-390-metrics.json": "f20ed2b02e45ee08e151d20caa1f0d06b5c5c104c9063e6858c5a66cd140dede",
         "baseline-02-keyboard-focus-settled.json": "1c3c507bd1231ae3e868587db4c186106d0648298b1955fe06a07d1e4a0cdbb9"
-      }
+      },
+      "post_deployment_rechecks": [
+        {
+          "stage": 9,
+          "production_revision": "67c272583e0d44a34902e178f4e040ca3f5ec21f",
+          "recovery_activation": "OFF",
+          "new_generation": false,
+          "checks_passed": 23,
+          "checks_total": 23,
+          "viewports": [
+            390,
+            768,
+            1440
+          ],
+          "scope": "Existing run24 application/record, three viewport checks and final reload; existing MAX identity only.",
+          "screenshots": [
+            "screenshots/stage9-postdeploy-record-390.jpg",
+            "screenshots/stage9-postdeploy-record-768.jpg",
+            "screenshots/stage9-postdeploy-record-1440.jpg"
+          ],
+          "limits": [
+            "Recovery V2 остаётся OFF; production resume/сбой с включённым V2 не проверен.",
+            "Проверка относится к существующему приложению и записи прогона 24; новой генерации нет.",
+            "Доступна одна MAX identity: независимая проверка второй identity/A-B остаётся заблокирована.",
+            "Использован один browser context; полный сетевой журнал не записан.",
+            "Эта UI-проверка не доказывает production DB row hashes, финансовую сверку, полную приёмку или 99% надёжности."
+          ],
+          "live_evidence_sha256": "7d4ab66d32d01fa5832b4554e8de330530738195925fdeb12c81b583445c0371"
+        }
+      ]
     }
   ],
   "finance_scope": "Историческая финансовая сводка относится только к попыткам 1-22. Новые23-24 не сверены и в неё не добавлены.",
@@ -25776,14 +25805,69 @@
     {
       "number": 9,
       "title": "Продолжение генерации после сбоя без повтора действий",
-      "status": "in_progress",
+      "status": "deployed",
       "evidence": {
-        "physical": "2 hold/restart/rebind/publish цикла: raw schema/3 rows/sequence/files/all volumes preserved; recopy0; unknown halt1/redispatch0. 1PASS177.77s.",
-        "independent_review": "Gateway8+Controller17 No findings; physical evidence inspected independently.",
-        "api": "29 связанных PG-проверок PASS; mypy306 PASS; Ruff PASS. Adaptation bridge и full bootstrap→publication ещё WIP.",
-        "delivery": "NOT_DEPLOYED",
+        "production_revision": "67c272583e0d44a34902e178f4e040ca3f5ec21f",
         "activation": "OFF",
-        "limits": "Изолированная physical fixture с transport adapter; не production topology/SQL control lease/whole API acceptance."
+        "delivery": "PR117 merged; canonical deploy and four postflight checks confirmed",
+        "ci": {
+          "pr_run": 39031916765,
+          "main_run": 39033298912,
+          "successful_jobs_each": 10,
+          "history": "Initial CI: 28 failures; eight stale test fixtures corrected, product/migrations unchanged in follow-up."
+        },
+        "production_smoke": {
+          "run": 39034575134,
+          "revision": "67c272583e0d44a34902e178f4e040ca3f5ec21f",
+          "successful_jobs": 1,
+          "model_calls": 0
+        },
+        "tests": "170 pure;23 PG;44 linked;8 native;14 cancellation;33 role cases PASS. Overlapping scopes: do not sum.",
+        "independent_review": "Astra No findings: final API deltas, Gateway/Controller and eight CI fixture corrections.",
+        "restored_copy": {
+          "tables": 66,
+          "rows": 11478,
+          "indexes": 176,
+          "constraints": 365,
+          "second_upgrade_noop": true,
+          "limits": "Disposable copy; source object ownership parity has separately documented limits; not live application row-hash acceptance."
+        },
+        "live_source": "107 server files; API28 files in each of3 roles; Gateway8; controllers17 each, both new processes.",
+        "transport_history": "Canonical stdout exit0/foreground0; initial wrapper cleanup exit1 retained. Exact local read-only closure receipt confirmed absence/archive. Fresh postflight mux closed exit0.",
+        "limits": [
+          "Recovery V2 остаётся OFF; production resume/сбой с включённым V2 не проверен.",
+          "Проверка относится к существующему приложению и записи прогона 24; новой генерации нет.",
+          "Доступна одна MAX identity: независимая проверка второй identity/A-B остаётся заблокирована.",
+          "Использован один browser context; полный сетевой журнал не записан.",
+          "Эта UI-проверка не доказывает production DB row hashes, финансовую сверку, полную приёмку или 99% надёжности."
+        ],
+        "evidence_sha256": {
+          "task9-ci-followup-receipt.json": "13f6a2a7381927a5c7a19ebc3573e240032b5f0b384a4fad8f9e90ebd7c80747",
+          "task9-main-ci-receipt.json": "525a7d0de5016c54c302a10cbe6a46d74a4a8944fa4d8a92159f5ec3497ef51d",
+          "task9-pr-merged-receipt.json": "588a5c1b69875063f708b1bd5677cd58c8bc3a483550abe73f28c4d78f1d10e3",
+          "task9-production-smoke-receipt.json": "9e7123e2470f0e61a77513faff0ce30b5756a8ce8ff83fce0942f0c483714451",
+          "task9-canonical-deploy-execution.json": "5ee9922cadad7e05f39c7b9ec8506ecdc860cf8593af8c779ed5c5e5aed5c3ae",
+          "task9-canonical-deploy.stdout.log": "9a6709726df7143d4ab86c20bece87cfb7914bdc7fead316cd5f2f436c4647e3",
+          "task9-deploy-mux-closure-recovery.json": "85231e73ee93ffc121c096593d9566c882ac15a0d5338c9cf25e75f97b104675",
+          "task9-deploy-mux-receipt.json": "05d1e8dae218868b3991f75ba6ac7af70910bcd9838d3c56e446100c5879f84e",
+          "task9-postflight-execution.json": "44066555dc51c2fff2b20658197deb484ec66f0274bf095b2ad426686f33077b",
+          "task9-postflight-suite.json": "1371de136f4ae439c3dd99fa8c795d23a7806d0e1e66a1a0eed3abffacbfae43",
+          "task9-permission-after.json": "73dda146ff11b4edd2392c3dff9fa9c12ed7e33393472dc331d8181862306f35",
+          "task9-runtime-off-after.json": "fface23696d67abe3f6f3a784e204f327dac90fa5bde04ba8ddacbc1a6ed6473",
+          "task9-controller-runtime-after.json": "ffe90fc63781440e30ece078157e9f97c411bc761fb27868423c09b6abd9a0bc",
+          "task9-live-source-after.json": "9816af3e5bbf6e824f659f804fd1ed822cb7a41945ba15270f258e72710658cb",
+          "task9-permission-before.json": "7722242beffcd78a342fb8cbed2a3ff2d2908f6c3fa9708b2c2b47676b61f352",
+          "task9-controller-runtime-before.json": "75978cada1f6d84b897fa70055bca8768221a40e230c51f074a82f29387cb3c0",
+          "task9-restored-copy-proof.json": "8def4c0d8c762d4bdfce8e3f4af668d733fd0927f260b3f272fae35f5087d1db",
+          "task9-public-health-after.json": "2bc5ffea4ee314072f40d1a5ade5f454a4e989275f4c1b1145acc848c3351481",
+          "task9-api-final-review.md": "0ecba98da5d8dc432d37caa979ef5c77e9f3d67c26211b014527d58440768755",
+          "task9-integrated-gateway-controller-review.md": "7b45648921144504eb9d2668a89e58eb0cc57251dc51dd1dec71c09f1b22276c",
+          "task9-ci-eight-tests-review.md": "e462e4d3770783f822edaa6ce419f1f07edf1a375bef9bbfb1033796dc09a1a9",
+          "stage9-postdeploy-live.json": "7d4ab66d32d01fa5832b4554e8de330530738195925fdeb12c81b583445c0371",
+          "stage9-postdeploy-record-390.jpg": "da28c81f7df156c706015fa434fd1fb2661a67ee44d9f356ca7a6c3e62ead0d4",
+          "stage9-postdeploy-record-768.jpg": "609c9b22f2459f9933c27acc2c9b478d3d85803c07e3c3f75f7d0a86faeb37a5",
+          "stage9-postdeploy-record-1440.jpg": "b1b884028d16c703696786dc5b50041704516c882c980e7e89e8058a30b12552"
+        }
       }
     },
     {
