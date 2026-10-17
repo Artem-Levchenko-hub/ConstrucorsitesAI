@@ -2096,11 +2096,18 @@ async def test_actual_driver_cold_partial_batch_consumes_each_committed_result_o
     from sqlalchemy import select, text
 
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
+    from yleum_api.models.project_cell import ProjectCellWorkspace
     from yleum_api.services.agent_builder import Action
     from yleum_api.services.generation import source_checkpoint
     from yleum_api.services.generation.recovery_contract import CheckpointRef
 
     run, provider, _ = await _provider_context(db_session, test_engine, monkeypatch)
+    workspace = ProjectCellWorkspace(
+        project_id=run.project_id, owner_id=run.user_id, generation_run_id=run.id,
+        provider="docker_owner_canary", state="ready", fencing_epoch=1,
+    )
+    db_session.add(workspace)
+    await db_session.flush()
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     ref = CheckpointRef(object_key="synthetic/source", sha256="b" * 64)
     raw = dict(run.agent_state["recovery_v1"])
@@ -2109,7 +2116,7 @@ async def test_actual_driver_cold_partial_batch_consumes_each_committed_result_o
         checkpoint=ref.model_dump(mode="json"),
         context_ref=ref.model_dump(mode="json"),
         binding={
-            "workspace_id": str(uuid4()),
+            "workspace_id": str(workspace.id),
             "fencing_epoch": 1,
             "source_sha256": "a" * 64,
             "schema_sha256": "b" * 64,

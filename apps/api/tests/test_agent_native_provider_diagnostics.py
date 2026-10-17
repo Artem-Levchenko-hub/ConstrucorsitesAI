@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 from yleum_api.services import agent_native
+from yleum_api.services.generation import provider_attempts
 from yleum_api.services.generation_failure import failure_for_error
 
 URL = "https://gateway.test/v1/messages"
@@ -40,6 +41,10 @@ async def test_native_auth_refusal_is_terminal_even_after_a_success(
         pytest.fail("access/funds rejection must not repeat a provider POST")
 
     monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    # Keep this synthetic run label at the transport boundary; SQL admission is tested separately.
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=None),
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
         assert await agent_native._call_messages(
             client, URL, [], "s", run_id="synthetic",

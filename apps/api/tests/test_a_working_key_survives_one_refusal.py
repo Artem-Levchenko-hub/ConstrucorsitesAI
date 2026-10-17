@@ -6,10 +6,13 @@ fixed factual guidance; free-form provider complaints and keys never escape.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 
 from yleum_api.services import agent_native
+from yleum_api.services.generation import provider_attempts
 
 _URL = "https://gateway.test/v1/messages"
 _OK = {"content": [{"type": "text", "text": "ok"}], "stop_reason": "end_turn"}
@@ -21,6 +24,10 @@ def _no_real_waiting(monkeypatch: pytest.MonkeyPatch) -> None:
         pytest.fail("access refusal must not back off and replay a provider POST")
 
     monkeypatch.setattr(agent_native.asyncio, "sleep", fake_sleep)
+    # Synthetic attribution labels exercise the HTTP refusal policy, not SQL admission.
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=None),
+    )
 
 
 @pytest.mark.asyncio

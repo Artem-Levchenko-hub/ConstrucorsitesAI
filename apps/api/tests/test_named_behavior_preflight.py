@@ -191,7 +191,7 @@ async def test_readiness_failure_uses_terminal_cleanup_without_provider_or_quota
     from yleum_api.models.message import Message
     from yleum_api.models.project import Project
     from yleum_api.services import restoration_adaptation
-    from yleum_api.services.generation import lifecycle
+    from yleum_api.services.generation import lifecycle, recovery_execution
     from yleum_api.services.generation.agent_runtime import require_named_behavior_readiness
 
     project_id, run_id, user_id, user_message_id, assistant_id = (uuid4() for _ in range(5))
@@ -201,9 +201,16 @@ async def test_readiness_failure_uses_terminal_cleanup_without_provider_or_quota
                                  design_preset_id=None, image_gen_enabled=False,
                                  discovery_spec=None, language="ru", source="native"),
         (Message, assistant_id): assistant,
+        (GenerationRun, run_id): NS(
+            id=run_id, project_id=project_id, user_id=user_id,
+            user_message_id=user_message_id, assistant_message_id=assistant_id,
+            status="running", agent_state={},
+        ),
     }
-    monkeypatch.setattr(lifecycle, "get_engine", lambda: object())
-    monkeypatch.setattr(lifecycle, "async_sessionmaker", lambda *_a, **_k: lambda: Session(rows))
+    for module in (lifecycle, recovery_execution):
+        monkeypatch.setattr(module, "get_engine", lambda: object())
+        monkeypatch.setattr(module, "async_sessionmaker", lambda *_a, **_k: lambda: Session(rows))
+    assert await recovery_execution.recovery_failure_outcome(run_id) == "legacy"
     monkeypatch.setattr(lifecycle, "get_settings", lambda: NS(
         use_project_memory=False, use_agentic_builder=True, agentic_builder_canary_users="",
     ))

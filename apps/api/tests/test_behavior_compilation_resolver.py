@@ -178,12 +178,18 @@ async def test_replayed_compilation_cannot_cross_request_or_candidate():
 def test_strict_exec_transport_round_trip_preserves_receipt():
     from dataclasses import asdict
 
+    from yleum_api.services.orchestrator_client import OrchestratorUnavailable
+
     req, _, response, _, _ = setup()
     payload = asdict(response)
     payload["operation_id"] = str(response.operation_id)
+    # Untracked controller responses omit the prospective command receipt.
+    assert payload.pop("command_receipt") is None
     recovered = ProjectCellAgentExecResponse.from_json(payload)
     assert recovered.compiled_asset_receipt == response.compiled_asset_receipt
     assert recovered.operation_id == compilation_operation_id(req.binding)
+    with pytest.raises(OrchestratorUnavailable, match="invalid command receipt"):
+        ProjectCellAgentExecResponse.from_json({**payload, "command_receipt": None})
     payload["compiled_asset_receipt"] = "model self-report"
     with pytest.raises(Exception):
         ProjectCellAgentExecResponse.from_json(payload)

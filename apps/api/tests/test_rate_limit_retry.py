@@ -4,11 +4,13 @@ import asyncio
 import json
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from yleum_api.services import agent_builder, agent_native, llm_client
+from yleum_api.services.generation import provider_attempts
 
 from .test_legacy_provider_error_policy import install_transport
 
@@ -233,6 +235,10 @@ async def test_real_classic_http_path_retries_once_without_losing_attribution(mo
             sleeps.append(delay)
 
     install_transport(monkeypatch, handler)
+    # These synthetic attribution strings are not persisted generation identities.
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=None),
+    )
     monkeypatch.setattr(agent_builder.asyncio, "sleep", sleep)
     token = llm_client._generation_billing_context.set(("run-test", "user-test", "project-test"))
     try:

@@ -459,9 +459,16 @@ async def adaptation_source(source_receipt, monkeypatch):
     coordinator._repair_progress_receipts = AsyncMock(return_value=frozenset())
     coordinator._log_terminal = AsyncMock()
     coordinator._outcome = AsyncMock(side_effect=lambda *args: mf.MaxFinalizationOutcome(*args))
-    monkeypatch.setattr(mf, "generation_deadline", lambda _: SimpleNamespace(
-        at=now + timedelta(hours=1),
-    ))
+
+    def deadline(run):
+        # SQLite drops timezone information on reload; production timestamptz is UTC-aware.
+        for name in ("started_at", "created_at"):
+            value = getattr(run, name)
+            if value is not None and value.tzinfo is None:
+                setattr(run, name, value.replace(tzinfo=UTC))
+        return SimpleNamespace(at=now + timedelta(hours=1))
+
+    monkeypatch.setattr(mf, "generation_deadline", deadline)
     c.receipts = receipts
     return c
 

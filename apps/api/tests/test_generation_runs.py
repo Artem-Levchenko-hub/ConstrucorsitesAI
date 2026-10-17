@@ -130,8 +130,11 @@ async def test_process_failure_preserves_primary_error_after_finalization(
     await db_session.commit()
     monkeypatch.setenv("USE_PROJECT_MEMORY", "true")
     get_settings.cache_clear()
+    from yleum_api.services.generation import recovery_execution
+
     monkeypatch.setattr(lifecycle, "get_engine", lambda: test_engine)
     monkeypatch.setattr(db, "get_engine", lambda: test_engine)
+    monkeypatch.setattr(recovery_execution, "get_engine", lambda: test_engine)
 
     async def fail(*args, **kwargs):
         raise RuntimeError("PROVIDER_AUTH_FAILED: access denied PRIVATE_DIAGNOSTIC")
