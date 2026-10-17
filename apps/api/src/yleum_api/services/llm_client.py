@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 
 from yleum_api.core.config import get_settings
+from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 
 log = logging.getLogger(__name__)
 
@@ -228,103 +229,277 @@ async def stream_chat_completion(
             "free": _free_generation.get(),
         },
     }
-    # read=300s: the art_director Opus pass (vsegpt, non-streaming) can take
-    # ~150s+; the old 120s cut it off so the brief was dropped and the writer ran
-    # alone. Headroom over the gateway/vsegpt 240s provider timeout so a real
-    # upstream failure surfaces as an error, not a client-side socket teardown.
-    timeout = httpx.Timeout(300.0, connect=5.0, read=300.0)
-    print(f"[LLM] start url={url} model={model} msgs={len(messages)}", flush=True)
-    line_count = 0
-    delta_count = 0
-    usage_seen = False
-    last_line_sample = ""
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream("POST", url, json=payload) as resp:
-                print(f"[LLM] connected status={resp.status_code}", flush=True)
-                if resp.status_code >= 400:
-                    body = await resp.aread()
-                    print(f"[LLM] http_error {resp.status_code} {body[:300]!r}", flush=True)
-                    yield {"error": f"gateway {resp.status_code}: {body!r}"}
-                    return
-                async for line in resp.aiter_lines():
-                    line_count += 1
-                    if line_count <= 3 or line_count % 10 == 0:
-                        last_line_sample = line[:120]
-                        print(f"[LLM] line#{line_count}: {last_line_sample!r}", flush=True)
-                    if not line.startswith("data:"):
-                        continue
-                    chunk = line[5:].strip()
-                    if not chunk or chunk == "[DONE]":
-                        continue
-                    try:
-                        data = json.loads(chunk)
-                    except json.JSONDecodeError as exc:
-                        print(f"[LLM] json_err chunk={chunk[:100]!r} err={exc}", flush=True)
-                        continue
-                    # Upstream errors arrive INSIDE the SSE stream as
-                    # `data: {"error": {...}}` (vsegpt: out-of-budget / rate-limit
-                    # / model-unavailable). Without this they looked like an empty
-                    # response → the user saw a generic "timeout 90с". Surface a
-                    # clean, actionable message instead and end the stream.
-                    if isinstance(data, dict) and data.get("error"):
-                        _e = data["error"]
-                        _raw = (
-                            _e.get("message") if isinstance(_e, dict) else str(_e)
-                        ) or "upstream error"
-                        _low = _raw.lower()
-                        if any(k in _low for k in ("budget", "balance", "money", "out of")):
-                            _msg = (
-                                "Недостаточно средств на балансе LLM-провайдера — "
-                                "пополни баланс и попробуй снова."
-                            )
-                        elif "rate" in _low or "429" in _low:
-                            _msg = (
-                                "Провайдер перегружен (rate-limit) — попробуй ещё раз через минуту."
-                            )
-                        elif any(
-                            k in _low
-                            for k in ("unavailable", "501", "unknown main", "not available")
-                        ):
-                            _msg = (
-                                "Модель временно недоступна у провайдера — попробуй "
-                                "другую модель или позже."
-                            )
-                        else:
-                            _msg = f"Ошибка LLM-провайдера: {_raw[:200]}"
-                        print(f"[LLM] upstream_error {_raw[:200]!r}", flush=True)
-                        yield {"error": _msg}
-                        return
-                    delta = data.get("choices", [{}])[0].get("delta", {}).get("content")
-                    if delta:
-                        delta_count += 1
-                        yield {"delta": delta}
-                    usage = data.get("usage")
-                    if usage:
-                        usage_seen = True
-                        meta = data.get("metadata") or {}
-                        cost_rub = (
-                            float(meta.get("cost_rub", 0))
-                            if meta.get("cost_rub")
-                            else float(usage.get("cost_rub", 0))
-                        )
-                        yield {
-                            "usage": {
-                                "tokens_in": usage.get("prompt_tokens", 0),
-                                "tokens_out": usage.get("completion_tokens", 0),
-                                "cost_rub": cost_rub,
-                            }
-                        }
-    except httpx.HTTPError as e:
-        import traceback as _tb
+    from yleum_api.services.generation.provider_attempts import prepare_generation_attempt
 
-        print(f"[LLM] transport_error err={e!r}\n{_tb.format_exc()}", flush=True)
-        yield {"error": f"http: {e}"}
-    print(
-        f"[LLM] done lines={line_count} deltas={delta_count} "
-        f"usage_seen={usage_seen} last={last_line_sample!r}",
-        flush=True,
+    deadline = asyncio.get_running_loop().time() + 300.0
+    identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
+    try:
+        async for data in _chat_stream_data(payload, url, identity, deadline):
+            if data.get("error"):
+                yield {"error": _stream_error_message(data["error"])}
+                return
+            choices = data.get("choices") or [{}]
+            delta = choices[0].get("delta", {}).get("content")
+            if delta:
+                yield {"delta": delta}
+            usage = data.get("usage")
+            if usage:
+                meta = data.get("metadata") or {}
+                cost_rub = float(meta.get("cost_rub") or usage.get("cost_rub", 0))
+                yield {
+                    "usage": {
+                        "tokens_in": usage.get("prompt_tokens", 0),
+                        "tokens_out": usage.get("completion_tokens", 0),
+                        "cost_rub": cost_rub,
+                    }
+                }
+    except LLMError as exc:
+        yield {"error": str(exc)}
+    except (httpx.HTTPError, TimeoutError) as exc:
+        # Transport logs must not include request bodies/headers or private URLs.
+        log.warning("LLM stream transport failed: %s", type(exc).__name__)
+        yield {
+            "error": f"http: {exc}"
+            if identity is None
+            else "LLM stream outcome could not be confirmed"
+        }
+
+
+def _stream_error_message(error: object) -> str:
+    raw = (error.get("message") if isinstance(error, dict) else str(error)) or "upstream error"
+    low = raw.lower()
+    if any(key in low for key in ("budget", "balance", "money", "out of")):
+        return "Недостаточно средств на балансе LLM-провайдера — пополни баланс и попробуй снова."
+    if "rate" in low or "429" in low:
+        return "Провайдер перегружен (rate-limit) — попробуй ещё раз через минуту."
+    if any(key in low for key in ("unavailable", "501", "unknown main", "not available")):
+        return "Модель временно недоступна у провайдера — попробуй другую модель или позже."
+    return f"Ошибка LLM-провайдера: {raw[:200]}"
+
+
+async def _chat_stream_data(
+    payload: dict[str, Any],
+    url: str,
+    identity: GenerationProviderIdentity | None,
+    deadline: float,
+) -> AsyncIterator[dict[str, Any]]:
+    from yleum_api.services.generation.provider_attempts import (
+        attach_identity,
+        prepare_generation_attempt,
     )
+
+    allowance = _chat_attempt_allowance(payload) if identity is not None else 1
+    outward_event = False
+    accepted_headers = False
+    async with asyncio.timeout_at(deadline if identity is not None else None):
+        for attempt in range(allowance):
+            remaining = (
+                deadline - asyncio.get_running_loop().time() if identity is not None else 300.0
+            )
+            if remaining <= 0:
+                raise TimeoutError
+            attach_identity(payload, identity)
+            retry_parent = False
+            try:
+                timeout = httpx.Timeout(remaining, connect=min(5.0, remaining), read=remaining)
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    async with client.stream(
+                        "POST",
+                        url,
+                        json=payload,
+                        headers=(
+                            {"x-yleum-provider-timeout-seconds": str(remaining)}
+                            if identity is not None
+                            else None
+                        ),
+                    ) as response:
+                        accepted_headers = True
+                        if response.status_code >= 400:
+                            await response.aread()
+                            if (
+                                identity is not None
+                                and attempt + 1 < allowance
+                                and _response_preconnect(response)
+                            ):
+                                retry_parent = True
+                            else:
+                                if identity is None:
+                                    raise LLMError(
+                                        f"gateway {response.status_code}: {response.content!r}"
+                                    )
+                                raise _gateway_failure(response)
+                        else:
+                            async for line in response.aiter_lines():
+                                if not line.startswith("data:"):
+                                    continue
+                                chunk = line[5:].strip()
+                                if not chunk or chunk == "[DONE]":
+                                    continue
+                                try:
+                                    data = json.loads(chunk)
+                                except json.JSONDecodeError:
+                                    outward_event = (
+                                        True  # Unknown partial delivery never buys retry.
+                                    )
+                                    continue
+                                if not isinstance(data, dict):
+                                    outward_event = True
+                                    continue
+                                if (
+                                    identity is not None
+                                    and not outward_event
+                                    and attempt + 1 < allowance
+                                    and _committed_preconnect(data)
+                                ):
+                                    retry_parent = True
+                                    break
+                                # Role/usage events count even if the UI mapper yields no text.
+                                outward_event = True
+                                yield data
+                                if data.get("error"):
+                                    return
+                            if not retry_parent:
+                                return
+            except (httpx.ConnectError, httpx.ConnectTimeout):
+                if (
+                    outward_event or (identity is not None and accepted_headers)
+                    or attempt + 1 >= allowance
+                ):
+                    raise
+            await asyncio.sleep(0.5)
+            if retry_parent:
+                identity = await prepare_generation_attempt(
+                    payload, "/v1/chat/completions", parent=identity
+                )
+                accepted_headers = False  # A verified closed parent permits a fresh attempt.
+
+
+def _chat_attempt_allowance(payload: dict[str, Any]) -> int:
+    # Mirror only known existing llmgw adapter branches. Unknown models cannot
+    # acquire a retry allowance by claiming an arbitrary metadata value.
+    known = {
+        "gemini-3.1-pro-preview-customtools",
+        "claude-sonnet-5",
+        "claude-sonnet-5.5",
+        "~anthropic/claude-sonnet-latest",
+    }
+    model = payload.get("model")
+    if model not in known:
+        return 1
+    if (
+        not payload.get("stream")
+        and model == "claude-sonnet-5.5"
+        and (payload.get("max_tokens") is None)
+    ):
+        return 1  # collect_response never had the sync adapter's second attempt.
+    return 2
+
+
+def _committed_preconnect(data: object) -> bool:
+    if not isinstance(data, dict):
+        return False
+    error = data.get("error")
+    if not isinstance(error, dict) or error.get("code") != "model_unavailable":
+        return False
+    details = error.get("details")
+    return isinstance(details, dict) and (
+        details.get("provider_failure_kind") == "preconnect"
+        and details.get("provider_charge_ambiguous") is False
+        and details.get("retry_safe") is True
+        and details.get("retry_policy") == "llmgw_preconnect_v1"
+        and "upstream_http_status" not in details
+    )
+
+
+def _response_preconnect(response: httpx.Response) -> bool:
+    if response.status_code != 502 or len(response.content) > 16_384 or response.history:
+        return False
+    try:
+        body = response.json()
+    except (ValueError, RecursionError):
+        return False
+    return isinstance(body, dict) and _committed_preconnect(body.get("detail"))
+
+
+async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.Response:
+    from yleum_api.services.generation.provider_attempts import (
+        attach_identity,
+        prepare_generation_attempt,
+    )
+
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + budget
+    identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
+    allowance = _chat_attempt_allowance(payload) if identity is not None else 1
+    accepted_headers = False
+    omitted_default = payload.get("max_tokens") is None and payload["model"] in {
+        "claude-sonnet-5.5",
+        "anthropic/claude-sonnet-5.5",
+    }
+    try:
+        # Preserve legacy per-I/O timing; the new two-cycle path shares one total
+        # deadline, including intent SQL, the existing backoff and second intent.
+        async with asyncio.timeout_at(
+            deadline if identity is not None or omitted_default else None
+        ):
+            for attempt in range(allowance):
+                remaining = deadline - loop.time() if identity is not None else budget
+                if remaining <= 0:
+                    raise TimeoutError
+                attach_identity(payload, identity)
+                timeout = httpx.Timeout(remaining, connect=min(5.0, remaining), read=remaining)
+                try:
+                    async with httpx.AsyncClient(timeout=timeout) as client:
+                        headers = (
+                            {"x-yleum-provider-timeout-seconds": str(remaining)}
+                            if omitted_default or identity is not None
+                            else None
+                        )
+                        if identity is None:
+                            response = await client.post(url, json=payload, headers=headers)
+                        else:
+                            # Receiving headers proves this is no longer connection
+                            # establishment. A body fault must stay ambiguous for the
+                            # outer agent as well as this bounded transport cycle.
+                            async with client.stream(
+                                "POST", url, json=payload, headers=headers
+                            ) as response:
+                                accepted_headers = True
+                                await response.aread()
+                except (httpx.ConnectError, httpx.ConnectTimeout):
+                    if accepted_headers or attempt + 1 >= allowance:
+                        raise
+                    await asyncio.sleep(0.5)
+                    continue  # API-to-gateway transport: SAME committed identity.
+                if response.status_code < 400:
+                    return response
+                if (
+                    identity is not None
+                    and attempt + 1 < allowance
+                    and _response_preconnect(response)
+                ):
+                    await asyncio.sleep(0.5)
+                    identity = await prepare_generation_attempt(
+                        payload,
+                        "/v1/chat/completions",
+                        parent=identity,
+                    )  # SQL independently verifies the linked committed receipt.
+                    accepted_headers = False
+                    continue
+                raise _gateway_failure(response)
+    except (httpx.HTTPError, TimeoutError) as exc:
+        preconnect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout)) and (
+            identity is None or not accepted_headers
+        )
+        raise LLMError(
+            "Не удалось установить соединение с LLM-сервисом."
+            if preconnect
+            else "Не получен подтверждённый ответ LLM-сервиса; исход запроса требует сверки.",
+            code="preconnect" if preconnect else "transport",
+            provider_charge_ambiguous=not preconnect,
+            retry_safe=preconnect,
+        ) from None
+    raise AssertionError("chat attempt cycle exhausted without a result")
 
 
 async def complete_chat(
@@ -370,34 +545,14 @@ async def complete_chat(
     if temperature is not None:
         payload["temperature"] = temperature
     request_timeout = 90.0 if timeout_seconds is None else max(1.0, float(timeout_seconds))
-    timeout = httpx.Timeout(
-        request_timeout,
-        connect=min(5.0, request_timeout),
-        read=request_timeout,
-    )
+    resp = await _chat_post(payload, url, request_timeout)
     try:
-        request_headers = None
-        if max_tokens is None and model in {"claude-sonnet-5.5", "anthropic/claude-sonnet-5.5"}:
-            request_headers = {"x-yleum-provider-timeout-seconds": str(request_timeout)}
-        response_budget = request_timeout if request_headers else None
-        async with asyncio.timeout(response_budget), httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.post(url, json=payload, headers=request_headers)
-            if resp.status_code >= 400:
-                raise _gateway_failure(resp)
-            try:
-                data = resp.json()
-            except ValueError:
-                raise LLMError(
-                    "Не удалось прочитать подтверждённый результат LLM-запроса.",
-                    http_status=resp.status_code, provider_charge_ambiguous=True,
-                ) from None
-    except (httpx.HTTPError, TimeoutError) as exc:
-        preconnect = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout))
+        data = resp.json()
+    except ValueError:
         raise LLMError(
-            "Не удалось установить соединение с LLM-сервисом." if preconnect else
-            "Не получен подтверждённый ответ LLM-сервиса; исход запроса требует сверки.",
-            code="preconnect" if preconnect else "transport",
-            provider_charge_ambiguous=not preconnect, retry_safe=preconnect,
+            "Не удалось прочитать подтверждённый результат LLM-запроса.",
+            http_status=resp.status_code,
+            provider_charge_ambiguous=True,
         ) from None
     choices = data.get("choices") if isinstance(data, dict) else None
     choice = choices[0] if isinstance(choices, list) and choices else None

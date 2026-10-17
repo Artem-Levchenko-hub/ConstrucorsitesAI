@@ -36,6 +36,34 @@ def _model(value: str | None) -> bool:
     )
 
 
+async def insert_call(
+    conn: Any, call_id: UUID, *, route: str, model: str, user_id: UUID | None = None,
+    project_id: UUID | None = None, run_id: UUID | None = None,
+    message_id: UUID | None = None, stage: str | None = None, free: bool = False,
+) -> None:
+    """Insert into the caller's transaction; this helper never commits or dispatches."""
+    if (route not in _ROUTES or not _model(model) or type(free) is not bool
+            or any(v is not None and not isinstance(v, UUID)
+                   for v in (call_id, user_id, project_id, run_id, message_id))):
+        raise _error(call_id, started=False)
+    organization = get_settings().llmgw_organization_id
+    if organization is not None and (
+        not isinstance(organization, str) or not 0 < len(organization) <= 512
+        or organization != organization.strip()
+        or any(ord(c) < 32 or ord(c) == 127 for c in organization)
+    ):
+        raise _error(call_id, started=False)
+    await conn.execute(
+        "INSERT INTO provider_calls "
+        "(id,provider_scope,route,requested_model,expense_owner,user_id,project_id,"
+        "run_id,message_id,stage,free,status,provider_organization_id) "
+        "VALUES($1,'llmgw',$2,$3,$4,$5,$6,$7,$8,$9,$10,'started',$11)",
+        call_id, route, model, "user" if user_id is not None else "platform",
+        user_id, project_id, run_id, message_id,
+        stage if isinstance(stage, str) and stage in _STAGES else "unknown", free, organization,
+    )
+
+
 async def start_call(
     *, route: str, model: str, user_id: UUID | None = None,
     project_id: UUID | None = None, run_id: UUID | None = None,
@@ -43,29 +71,11 @@ async def start_call(
 ) -> UUID:
     """Commit admission before upstream I/O. DB failure prevents a paid call."""
     call_id = uuid4()
-    if (route not in _ROUTES or not _model(model) or type(free) is not bool
-            or any(v is not None and not isinstance(v, UUID)
-                   for v in (user_id, project_id, run_id, message_id))):
-        raise _error(call_id, started=False)
     try:
-        organization = get_settings().llmgw_organization_id
-        if organization is not None and (
-            not isinstance(organization, str) or not 0 < len(organization) <= 512
-            or organization != organization.strip()
-            or any(ord(c) < 32 or ord(c) == 127 for c in organization)
-        ):
-            raise ValueError
         async with get_pool().acquire() as conn, conn.transaction():
-            await conn.execute(
-                "INSERT INTO provider_calls "
-                "(id,provider_scope,route,requested_model,expense_owner,user_id,project_id,"
-                "run_id,message_id,stage,free,status,provider_organization_id) "
-                "VALUES($1,'llmgw',$2,$3,$4,$5,$6,$7,$8,$9,$10,'started',$11)",
-                call_id, route, model, "user" if user_id is not None else "platform",
-                user_id, project_id, run_id, message_id,
-                stage if isinstance(stage, str) and stage in _STAGES else "unknown", free,
-                organization,
-            )
+            await insert_call(conn, call_id, route=route, model=model, user_id=user_id,
+                              project_id=project_id, run_id=run_id, message_id=message_id,
+                              stage=stage, free=free)
     except Exception:
         raise _error(call_id, started=False) from None
     return call_id

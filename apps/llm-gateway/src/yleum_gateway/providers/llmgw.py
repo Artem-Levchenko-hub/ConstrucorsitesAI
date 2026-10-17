@@ -278,6 +278,7 @@ async def astream(
     max_tokens: int | None = None,
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
     receipt: dict[str, Any] | None = None,
+    retry_preconnect: bool = True,
 ) -> AsyncGenerator[tuple[str, str], None]:
     """TRUE token streaming from llmgw — the page builds live in the preview.
 
@@ -286,6 +287,10 @@ async def astream(
     ``(delta, omnia_id)``. The optional receipt collects provider usage, cost
     headers and request identity. Only connection establishment is retried.
     """
+    if timeout <= 0:
+        raise UpstreamProviderError("Provider budget exhausted before dispatch", details={
+            "provider_charge_ambiguous": False, "provider_failure_kind": "deadline_before_dispatch",
+        })
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
@@ -314,7 +319,10 @@ async def astream(
     receipt = receipt if receipt is not None else {}
 
     def _produce() -> None:
-        for attempt in range(2):
+        for attempt in range(2 if retry_preconnect else 1):
+            if stopped.is_set():
+                return
+            accepted_headers = False
             try:
                 with (
                     httpx.Client(
@@ -324,6 +332,7 @@ async def astream(
                     ) as client,
                     client.stream("POST", url, json=payload, headers=headers) as r,
                 ):
+                    accepted_headers = True
                     if r.status_code >= 400:
                         loop.call_soon_threadsafe(
                             queue.put_nowait,
@@ -373,14 +382,16 @@ async def astream(
                     details={"provider_charge_ambiguous": True},
                 )
             except httpx.HTTPError as exc:
-                if isinstance(exc, _SAFE_TO_RETRY) and attempt == 0:
+                safe = isinstance(exc, _SAFE_TO_RETRY) and (retry_preconnect or not accepted_headers)
+                if retry_preconnect and isinstance(exc, _SAFE_TO_RETRY) and attempt == 0:
                     time.sleep(0.5)
                     continue
                 loop.call_soon_threadsafe(
                     queue.put_nowait,
                     ("err", UpstreamProviderError(
                         f"llmgw stream transport: {type(exc).__name__}",
-                        details={"provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY)},
+                        details={"provider_charge_ambiguous": not safe,
+                                 "provider_failure_kind": "preconnect" if safe else "transport"},
                     )),
                 )
                 loop.call_soon_threadsafe(queue.put_nowait, _DONE)
@@ -432,6 +443,7 @@ async def acompletion(
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
     response_budget: float | None = None,
     evidence: dict[str, Any] | None = None,
+    retry_preconnect: bool = True,
 ) -> dict[str, Any]:
     """Call llmgw's chat surface and return an OpenAI-shaped completion dict.
 
@@ -458,18 +470,29 @@ async def acompletion(
         "Accept": "application/json",
     }
 
+    evidence = evidence if evidence is not None else {}
+
     def _completion_sync() -> dict[str, Any]:
         # trust_env=False + no-op mounts: ignore the container's HTTPS_PROXY so the
         # provider endpoint is hit DIRECT. Retry connection establishment only.
         last: Exception | None = None
-        for attempt in range(2):
+        for attempt in range(2 if retry_preconnect else 1):
             try:
                 with httpx.Client(
                     timeout=httpx.Timeout(timeout, connect=30.0),
                     trust_env=False,
                     mounts={"all://": httpx.HTTPTransport()},
                 ) as client:
-                    r = client.post(url, json=payload, headers=headers)
+                    if retry_preconnect:
+                        r = client.post(url, json=payload, headers=headers)
+                    else:
+                        # Durable admission has already spent its sole dispatch.
+                        # Capture acceptance before reading body, so a late transport
+                        # exception cannot be mistaken for zero-send preconnect.
+                        with client.stream("POST", url, json=payload, headers=headers) as r:
+                            evidence["transport_stage"] = "headers"
+                            evidence.update(receipt_evidence({}, _receipt_headers(r.headers)))
+                            r.read()
                     provider_headers = _receipt_headers(r.headers)
                     r.raise_for_status()
                     try:
@@ -485,13 +508,12 @@ async def acompletion(
                     return result
             except _SAFE_TO_RETRY as exc:
                 last = exc
-                if attempt == 0:
+                if retry_preconnect and attempt == 0:
                     time.sleep(0.5)
                     continue
                 raise
         raise last  # type: ignore[misc]  # unreachable — loop returns or raises
 
-    evidence = evidence if evidence is not None else {}
     try:
         if uses_provider_output_default(model, max_tokens):
             response = await native_stream.collect_response(
@@ -519,12 +541,13 @@ async def acompletion(
             details=details,
         ) from exc
     except httpx.HTTPError as exc:
+        safe = isinstance(exc, _SAFE_TO_RETRY) and (retry_preconnect or evidence.get("transport_stage") in {None, "connect"})
         raise UpstreamProviderError(
             f"llmgw transport error: {type(exc).__name__}",
             details={
                 **_failure_details(evidence),
-                "provider_charge_ambiguous": not isinstance(exc, _SAFE_TO_RETRY),
-                "provider_failure_kind": "preconnect" if isinstance(exc, _SAFE_TO_RETRY)
+                "provider_charge_ambiguous": not safe,
+                "provider_failure_kind": "preconnect" if safe
                 else "transport",
             },
         ) from exc

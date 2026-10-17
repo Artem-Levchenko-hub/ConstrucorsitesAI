@@ -8,6 +8,10 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
+from yleum_api.services.generation.provider_identity import (
+    GenerationProviderIdentity as GenerationProviderIdentity,
+)
+
 Sha256 = Annotated[str, Field(pattern=r"^[a-f0-9]{64}$")]
 Nonnegative = Annotated[int, Field(ge=0)]
 Nonblank = Annotated[str, Field(min_length=1, pattern=r"\S")]

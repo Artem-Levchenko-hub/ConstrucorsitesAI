@@ -272,12 +272,21 @@ async def test_final_metadata_cost_and_usage_survive_collection(monkeypatch):
     assert evidence["provider_cost_rub"] == Decimal("7.25")
 
 
+def _route_request(req, timeout):
+    async def receive():
+        return {"type": "http.request", "body": req.model_dump_json(exclude_unset=True).encode(),
+                "more_body": False}
+    return Request({"type": "http", "headers": [
+        (b"x-yleum-provider-timeout-seconds", timeout),
+    ]}, receive=receive)
+
+
 def setup_route(monkeypatch):
     monkeypatch.setenv("LLMGW_API_KEY", "synthetic")
     reset_settings_cache()
     req = chat.ChatCompletionRequest(model="claude-sonnet-5.5",
                                     messages=[{"role": "user", "content": "synthetic"}])
-    request = Request({"type": "http", "headers": [(b"x-yleum-provider-timeout-seconds", b"600")]})
+    request = _route_request(req, b"600")
     return req, request
 
 
@@ -310,9 +319,7 @@ async def test_header_cannot_create_unbounded_provider_wait(
     monkeypatch, neutralize_side_effects, value, ceiling,
 ):
     req, _ = setup_route(monkeypatch)
-    request = Request({"type": "http", "headers": [
-        (b"x-yleum-provider-timeout-seconds", value.encode()),
-    ]})
+    request = _route_request(req, value.encode())
     budgets = []
     async def reply(*args, **kwargs):
         budgets.append(kwargs["budget_seconds"])

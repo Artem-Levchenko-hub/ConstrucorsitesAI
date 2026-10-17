@@ -28,9 +28,10 @@ from yleum_gateway.core.errors import (
     UpstreamProviderError,
 )
 from yleum_gateway.providers import llmgw
-from yleum_gateway.services import billing, file_logger, provider_calls
+from yleum_gateway.services import billing, file_logger, generation_attempts, provider_calls
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
+from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.output_stop import output_stop_error
 from yleum_gateway.services.pricing import read_reported_cost, resolve_request_cost
 from yleum_gateway.services.receipt_evidence import receipt_evidence
@@ -64,6 +65,8 @@ async def stream_completion(
     run_id: UUID | None = None,
     stage: str | None = None,
     provider_call_id: UUID | None = None,
+    generation_identity: GenerationProviderIdentity | None = None,
+    provider_deadline: float | None = None,
 ) -> AsyncIterator[str]:
     """Generate the SSE stream + bill at end.
 
@@ -97,11 +100,16 @@ async def stream_completion(
         yield _sse({"error": {"code": exc.code, "message": exc.message, "details": exc.details}})
         return
     receipt_finished = False
+    source_options: dict[str, Any] = {}
+    if max_tokens is not None:
+        source_options["max_tokens"] = max_tokens
+    if generation_identity is not None:
+        source_options["retry_preconnect"] = False
+    if provider_deadline is not None:
+        source_options["timeout"] = provider_deadline - asyncio.get_running_loop().time()
     source = llmgw.astream(
-        model, messages,
-        temperature=0.5 if temperature is None else temperature,
-        receipt=receipt,
-        **({"max_tokens": max_tokens} if max_tokens is not None else {}),
+        model, messages, temperature=0.5 if temperature is None else temperature,
+        receipt=receipt, **source_options,
     )
 
     async def settle_receipt() -> None:
@@ -110,14 +118,17 @@ async def stream_completion(
         if (not accumulated and not receipt.get("usage")
                 and reported.cost_rub is None and reported.cost_usd is None):
             receipt_finished = True
-            await provider_calls.finish_call(
-                provider_call_id,
+            await generation_attempts.finish(
+                generation_identity, provider_call_id,
+                reason="preconnect" if upstream_error and upstream_error.details.get("provider_failure_kind") == "preconnect" else None,
                 status="failed" if upstream_error and upstream_error.details.get(
                     "provider_charge_ambiguous") is False else "ambiguous",
                 **receipt_evidence(receipt),
                 error_type=type(upstream_error).__name__ if upstream_error else
                            "CancelledError" if cancelled else None,
             )
+            if generation_identity is not None and upstream_error and upstream_error.details.get("provider_failure_kind") == "preconnect":
+                upstream_error.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
             return
         provider_request_id = receipt_evidence(receipt)["provider_request_id"]
         actual_model = llmgw.resolve_response_model(
@@ -145,8 +156,8 @@ async def stream_completion(
             }),
         )
         receipt_finished = True
-        await provider_calls.finish_call(
-            provider_call_id, status="ambiguous" if estimated else "completed",
+        await generation_attempts.finish(
+            generation_identity, provider_call_id, status="ambiguous" if estimated else "completed",
             actual_model=actual_model, provider_request_id=provider_request_id,
             tokens_in=tokens_in, tokens_out=tokens_out,
             cache_read_tokens=cache_read, cache_write_tokens=cache_write,
@@ -183,8 +194,8 @@ async def stream_completion(
         except Exception as exc:
             if not receipt_finished:
                 receipt_finished = True
-                await provider_calls.finish_call(
-                    provider_call_id, status="ambiguous", error_type=type(exc).__name__,
+                await generation_attempts.finish(
+                    generation_identity, provider_call_id, status="ambiguous", error_type=type(exc).__name__,
                     **known_receipt,
                 )
             if isinstance(exc, GatewayError):

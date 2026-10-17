@@ -8,6 +8,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.requests import Request
 
 from yleum_gateway.core.errors import BillingReconciliationRequiredError, UpstreamProviderError
 from yleum_gateway.main import create_app
@@ -259,7 +260,11 @@ async def test_cancel_received_chat_response_preserves_same_receipt(journal, mon
     req = chat.ChatCompletionRequest(
         model=MODEL, messages=[chat.ChatMessage(role="user", content="hi")], user=uuid4(),
     )
-    task = asyncio.create_task(chat.chat_completions(req, None))
+    async def receive():
+        return {"type": "http.request", "body": req.model_dump_json(exclude_unset=True).encode(),
+                "more_body": False}
+    request = Request({"type": "http", "headers": []}, receive=receive)
+    task = asyncio.create_task(chat.chat_completions(req, request))
     await asyncio.wait_for(entered.wait(), 1)
     task.cancel()
     await asyncio.sleep(0)

@@ -135,6 +135,8 @@ services:
         condition: service_healthy
     environment:
       # --- llmgw.ru — text, vision, and native-agent tool calls ---
+      # Durable writer remains OFF until response retention/auth rollout gates.
+      GENERATION_PROVIDER_ATTEMPTS_ENABLED: ${GENERATION_PROVIDER_ATTEMPTS_ENABLED:-false}
       LLMGW_API_KEY: ${LLMGW_API_KEY:-}
       LLMGW_BASE_URL: ${LLMGW_BASE_URL:-https://api.llmgw.ru/v1}
       # Configure only after verifying the identity in the authorized provider ledger.
@@ -249,6 +251,7 @@ services:
       SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:?set SECRETS_ENCRYPTION_KEY in .env}
       JWT_COOKIE_SECURE: "true"
       LLM_GATEWAY_URL: http://gateway:8001
+      GENERATION_PROVIDER_ATTEMPTS_ENABLED: ${GENERATION_PROVIDER_ATTEMPTS_ENABLED:-false}
       MOCK_LLM: "false"
       # Follow-up app-ification (P-H1, live-verified 2026-06-21): on a STATIC
       # project a "make it a real app" follow-up escalates the stack
@@ -492,6 +495,7 @@ services:
       # Hero-media render jobs run in this process, so image/video calls need
       # the same internal gateway route as synchronous API planner calls.
       LLM_GATEWAY_URL: http://gateway:8001
+      GENERATION_PROVIDER_ATTEMPTS_ENABLED: ${GENERATION_PROVIDER_ATTEMPTS_ENABLED:-false}
       # The preview-render job screenshots live container apps — it asks the
       # orchestrator for the running container's name (then reaches it on the
       # shared omnia-runtime network). Without these the worker can't reach the

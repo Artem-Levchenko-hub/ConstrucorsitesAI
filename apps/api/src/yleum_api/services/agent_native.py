@@ -1012,6 +1012,16 @@ async def _call_messages(
     last: Exception | None = None
     loop = asyncio.get_running_loop()
     started_at = loop.time()
+    from yleum_api.services.generation.provider_attempts import (
+        attach_identity,
+        prepare_generation_attempt,
+    )
+    generation_attempt = None
+    retry_parent = None
+    generation_route = (
+        "/v1/project-cell/messages" if url.rstrip("/").endswith("/v1/project-cell/messages")
+        else "/v1/messages"
+    )
     for attempt in range(_CALL_RETRIES):
         if loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
             break
@@ -1040,6 +1050,11 @@ async def _call_messages(
         # Every provider attempt is attributable. The gateway persists these
         # fields with the provider usage row, including a successful retry.
         payload["metadata"] = metadata
+        generation_attempt = await prepare_generation_attempt(
+            payload, generation_route, existing=generation_attempt, parent=retry_parent,
+        )
+        retry_parent = None
+        attach_identity(payload, generation_attempt)
         # Exponential with a cap: back off harder from a provider that is already
         # struggling, but never spend a whole minute inside one pause.
         delay = min(45.0, 4.0 * (2**attempt))
@@ -1125,6 +1140,7 @@ async def _call_messages(
                 raise _terminal_provider_error(f"provider_http_{r.status_code}")
             if _gateway_preconnect_proven(r, url):
                 last = _terminal_provider_error("provider_request_failed")
+                retry_parent, generation_attempt = generation_attempt, None
             elif r.status_code == 429 or category == "rate_limit":
                 rate_delay = (
                     rate_limit_retry_delay(output_error.get("details"))
@@ -1140,6 +1156,7 @@ async def _call_messages(
                 if rate_delay is None:
                     raise last
                 delay = max(6.0 * (attempt + 1), rate_delay)
+                retry_parent, generation_attempt = generation_attempt, None
             else:
                 r.raise_for_status()
                 body = r.json()

@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     proxyapi_openai_base_url: str = "https://api.proxyapi.ru/openai/v1"
 
     database_url: str = "postgresql://omnia:omnia@localhost:5432/omnia"
+    generation_provider_attempts_enabled: bool = False
     redis_url: str = "redis://localhost:6379/1"
 
     # Speech-to-text (voice prompt dictation) upstream model on proxyapi's OpenAI

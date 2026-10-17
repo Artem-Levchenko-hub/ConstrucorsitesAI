@@ -29,6 +29,7 @@ from yleum_api.models.generation_billing import (
     GenerationBillingPolicy,
 )
 from yleum_api.models.generation_event import GenerationEvent
+from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.hero_media_asset import HeroMediaAsset
 from yleum_api.models.hero_media_brief import HeroMediaBrief
@@ -95,6 +96,7 @@ __all__ = [
     "GenerationBillingOutbox",
     "GenerationBillingPolicy",
     "GenerationEvent",
+    "GenerationProviderAttempt",
     "GenerationRun",
     "HeroMediaAsset",
     "HeroMediaBrief",

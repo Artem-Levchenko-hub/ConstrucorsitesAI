@@ -31,8 +31,16 @@ from yleum_gateway.core.errors import (
 )
 from yleum_gateway.providers import llmgw
 from yleum_gateway.providers.native_stream import RECEIPT_RESERVE_SECONDS
-from yleum_gateway.services import billing, cache, file_logger, provider_calls, safety, streaming
+from yleum_gateway.services import (
+    billing,
+    cache,
+    file_logger,
+    generation_attempts,
+    safety,
+    streaming,
+)
 from yleum_gateway.services import model_router as router_module
+from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.output_budget import uses_provider_output_default
 from yleum_gateway.services.output_stop import completion_finish_reason, output_stop_error
@@ -59,6 +67,7 @@ class ChatMessage(BaseModel):
 
 
 class ChatMetadata(BaseModel):
+    generation_provider_identity: Any = None
     run_id: UUID | None = None
     project_id: UUID | None = None
     message_id: UUID | None = None
@@ -123,9 +132,28 @@ def _estimate_cost(model: str, messages: list[dict[str, str]]) -> Decimal:
         return Decimal("0")
 
 
+def _remaining_provider_budget(request: Request, received_at: float, *, reserve: float) -> float:
+    try:
+        seconds = float(request.headers.get("x-yleum-provider-timeout-seconds", "270"))
+    except ValueError:
+        seconds = 270.0
+    if not math.isfinite(seconds) or seconds <= 0:
+        seconds = 270.0
+    remaining = min(seconds, 1500.0) - (asyncio.get_running_loop().time() - received_at) - reserve
+    if remaining <= 0:
+        raise UpstreamProviderError("Provider budget exhausted before dispatch", details={
+            "provider_charge_ambiguous": False, "provider_failure_kind": "deadline_before_dispatch",
+        })
+    return remaining
+
+
 @router.post("/chat/completions")
 async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     received_at = asyncio.get_running_loop().time()
+    try:
+        identity = generation_attempts.parse_attempt(await request.body(), "/v1/chat/completions")
+    except GatewayError as exc:
+        raise _gateway_error_to_http(exc) from exc
     raw_messages = [m.model_dump() for m in req.messages]
     filtered_messages = safety.sanitize_messages(raw_messages)
 
@@ -167,7 +195,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         try:
             if not llmgw.is_llmgw_model(req.model):
                 raise ModelNotFoundError(f"Unknown model: {req.model}")
-            provider_call_id = await provider_calls.start_call(
+            provider_call_id = await generation_attempts.dispatch(identity,
                 route="/v1/chat/completions", model=req.model, user_id=req.user,
                 project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
                 stage=meta.stage, free=meta.free,
@@ -178,6 +206,9 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             streaming.stream_completion(
                 request=request,
                 provider_call_id=provider_call_id,
+                generation_identity=identity,
+                provider_deadline=(received_at + min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
+                                   if identity is not None else None),
                 model=req.model,
                 messages=filtered_messages,
                 user_id=req.user,
@@ -201,7 +232,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         max_tokens=req.max_tokens,
     )
     try:
-        cached = await cache.get(cache_key)
+        cached = await cache.get(cache_key) if identity is None else None
     except Exception:
         cached = None
         log.exception("cache.get_failed", key=cache_key)
@@ -246,7 +277,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
     if not llmgw.is_llmgw_model(req.model):
         raise _gateway_error_to_http(ModelNotFoundError(f"Unknown model: {req.model}"))
     try:
-        call_id = await provider_calls.start_call(
+        call_id = await generation_attempts.dispatch(identity,
             route="/v1/chat/completions", model=req.model, user_id=req.user,
             project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
             stage=meta.stage, free=meta.free,
@@ -259,28 +290,17 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         completion: Callable[..., Awaitable[dict[str, Any]]] = router_module.acompletion
         completion_options: dict[str, Any] = {}
         if uses_provider_output_default(req.model, req.max_tokens):
-            # Internal API caller supplies its *remaining* editing budget. Clamp
-            # untrusted/non-finite headers to the existing generation ceiling;
-            # this never enlarges the caller's independently enforced deadline.
-            try:
-                wait_seconds = float(request.headers.get("x-yleum-provider-timeout-seconds", "270"))
-            except ValueError:
-                wait_seconds = 270.0
-            if not math.isfinite(wait_seconds) or wait_seconds <= 0:
-                wait_seconds = 270.0
-            remaining = min(wait_seconds, 1500.0) - (
-                asyncio.get_running_loop().time() - received_at
-            ) - RECEIPT_RESERVE_SECONDS
-            if remaining <= 0:
-                raise UpstreamProviderError(
-                    "Provider budget exhausted before dispatch",
-                    details={"provider_charge_ambiguous": False,
-                             "provider_failure_kind": "deadline_before_dispatch"},
-                )
+            remaining = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
             completion = llmgw.acompletion
             completion_options = {"response_budget": remaining, "evidence": transport_evidence}
         else:
             completion_options = {"user": str(req.user) if req.user else None}
+        if identity is not None:
+            completion = llmgw.acompletion
+            completion_options.pop("user", None)
+            completion_options["retry_preconnect"] = False
+            if not uses_provider_output_default(req.model, req.max_tokens):
+                completion_options["timeout"] = min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
         response = await completion(
             model=req.model,
             messages=filtered_messages,
@@ -295,8 +315,10 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         failure_type = type(exc.__cause__ or exc).__name__
         async def finish_failed() -> None:
             try:
-                await provider_calls.finish_call(
-                    call_id, status=status, error_type=failure_type,
+                await generation_attempts.finish(
+                    identity, call_id, reason=("rate_limit_refused" if isinstance(retry_candidate, dict)
+                        else "preconnect" if details.get("provider_failure_kind") == "preconnect"
+                        and status == "failed" else None), status=status, error_type=failure_type,
                     **receipt_evidence({**transport_evidence, **details}),
                 )
             except GatewayError as journal_error:
@@ -314,6 +336,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         if isinstance(exc, GatewayError):
             if status == "failed" and isinstance(retry_candidate, dict):
                 exc.details.update(retry_candidate)
+            if identity is not None and status == "failed" and details.get("provider_failure_kind") == "preconnect":
+                exc.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
             exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
             raise _gateway_error_to_http(exc) from exc
         if isinstance(exc, asyncio.CancelledError):
@@ -349,8 +373,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
 
         except Exception as exc:
             try:
-                await provider_calls.finish_call(
-                    call_id, status="ambiguous", error_type=type(exc).__name__, **known_receipt,
+                await generation_attempts.finish(
+                    identity, call_id, status="ambiguous", error_type=type(exc).__name__, **known_receipt,
                 )
             except GatewayError as journal_error:
                 raise _gateway_error_to_http(journal_error) from journal_error
@@ -360,8 +384,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
             )) from None
 
         try:
-            await provider_calls.finish_call(
-                call_id, status="ambiguous" if response_meta.get("estimated_tokens") else "completed",
+            await generation_attempts.finish(
+                identity, call_id, status="ambiguous" if response_meta.get("estimated_tokens") else "completed",
                 actual_model=actual_model, provider_request_id=provider_request_id,
                 tokens_in=tokens_in, tokens_out=tokens_out,
                 cache_read_tokens=cache_read, cache_write_tokens=cache_write,
@@ -417,7 +441,8 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         response["metadata"]["cache_hit"] = False
 
         try:
-            await cache.set(cache_key, response)
+            if identity is None:
+                await cache.set(cache_key, response)
         except Exception:
             log.exception("cache.set_failed", key=cache_key)
 
