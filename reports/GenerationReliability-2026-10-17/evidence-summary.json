@@ -26517,9 +26517,96 @@
         "Provider calls and financial outcome are unknown; no zero-call or zero-cost inference.",
         "Historical completion/failure and financial totals are unchanged."
       ]
+    },
+    {
+      "version": 1,
+      "reference": "OWNERWEB-FOOTER-01",
+      "source": "owner_web_canary",
+      "revision": "5e360f1ad6b029ab9faf5307a1265c191378d611",
+      "stage": 15,
+      "admission": "CONFIRMED",
+      "prompt": "Исправь работу нижних ссылок «Поддержка», «Конфиденциальность» и «Условия» с клавиатурой. При переходах Tab и Shift+Tab фокус каждой ссылки должен оставаться видимым над фиксированной нижней навигацией на телефоне, планшете и компьютере, включая safe area; Enter должен открывать соответствующую страницу. Сохрани весь функционал первого запроса: точные шесть товаров, цены, категории, поиск, сортировки, авторизацию, названия кнопок и полей. Существующая единственная личная запись «QA17.10 — БД β» и её описание должны сохраниться в PostgreSQL и отображаться после обновления и повторного открытия приложения. Для этой правки переиспользуй существующую базу и записи. Не удаляй и не пересоздавай базу данных, не добавляй интеграции и внешние отправки. Сделай минимальную правку, проверь тесты, сборку и реальный runtime. Публикация не нужна. Начинай исправление сейчас.",
+      "scope": "owner_preview",
+      "actual_MAX": false,
+      "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+      "acceptance": "NOT_CLAIMED",
+      "recorded_at_utc": "2026-10-17T23:48:28.471045+00:00",
+      "evidence_sha256": [
+        "c3933f281b59cc857ea739c35544699ef9028d44bcba01c3715fa7e8fa77e42e",
+        "87d044b699913a69b52d6146b6e572ac6725518c07ad2c3260c3be3ba115814b",
+        "e2afc305fc2df8de6e47a65cb2105efa127ecffc174e2d0039cc2262228dde71",
+        "a7bbead3d6c4fde07892afb413015316af2672ad0906666a0262c8dbb75bea7e",
+        "510e003b3a05cda8d98e6d258da151fad2025c84e56f0f35a7e0399e677293a3"
+      ],
+      "functional_checks": [
+        {
+          "name": "Подготовка Project Cell для нового запроса",
+          "status": "FAIL",
+          "evidence_sha256": [
+            "c3933f281b59cc857ea739c35544699ef9028d44bcba01c3715fa7e8fa77e42e",
+            "a7bbead3d6c4fde07892afb413015316af2672ad0906666a0262c8dbb75bea7e"
+          ]
+        },
+        {
+          "name": "Финальная сборка точного кандидата",
+          "status": "NOT_RUN",
+          "evidence_sha256": []
+        },
+        {
+          "name": "Tab/Shift+Tab/Enter после правки на 390/768/1440 px",
+          "status": "NOT_RUN",
+          "evidence_sha256": []
+        },
+        {
+          "name": "Контрольная БД note до правки",
+          "status": "PASS",
+          "evidence_sha256": [
+            "87d044b699913a69b52d6146b6e572ac6725518c07ad2c3260c3be3ba115814b"
+          ]
+        },
+        {
+          "name": "Сравнение данных после сбоя: защитная проверка не дала измерения",
+          "status": "UNKNOWN",
+          "evidence_sha256": [
+            "e2afc305fc2df8de6e47a65cb2105efa127ecffc174e2d0039cc2262228dde71"
+          ]
+        },
+        {
+          "name": "Каталог до правки: шесть товаров, цены и фильтры",
+          "status": "PASS",
+          "evidence_sha256": [
+            "510e003b3a05cda8d98e6d258da151fad2025c84e56f0f35a7e0399e677293a3"
+          ]
+        }
+      ],
+      "generation": {
+        "status": "FAILED",
+        "terminal_cause": "PROJECT_CELL_LEASE_NOT_ACTIVE",
+        "evidence_sha256": [
+          "c3933f281b59cc857ea739c35544699ef9028d44bcba01c3715fa7e8fa77e42e",
+          "a7bbead3d6c4fde07892afb413015316af2672ad0906666a0262c8dbb75bea7e"
+        ]
+      },
+      "provider": {
+        "status": "UNKNOWN",
+        "calls": null,
+        "evidence_sha256": []
+      },
+      "finance": {
+        "status": "UNKNOWN",
+        "amount_rub": null,
+        "settlement": "UNKNOWN",
+        "evidence_sha256": []
+      },
+      "screenshot": {
+        "status": "CAPTURED",
+        "evidence_sha256": [
+          "a7bbead3d6c4fde07892afb413015316af2672ad0906666a0262c8dbb75bea7e"
+        ]
+      }
     }
   ],
-  "observed_attempts_total": 25,
+  "observed_attempts_total": 26,
   "historical_scope": {
     "attempts": 24,
     "runs": 24,
