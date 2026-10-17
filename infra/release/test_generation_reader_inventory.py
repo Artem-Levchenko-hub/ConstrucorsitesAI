@@ -6,12 +6,284 @@ import copy
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 from pathlib import Path
 import unittest
 import tempfile
 from unittest.mock import patch
 from types import SimpleNamespace
+
+
+class ControllerUnitInventoryTests(unittest.TestCase):
+    def setUp(self):
+        source = Path(__file__).with_name("generation-reader-inventory.py")
+        spec = importlib.util.spec_from_file_location("unit_observer", source)
+        self.observer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.observer)
+        self.template = "apport-coredump-hook@.service"
+        self.instance = "apport-coredump-hook@yleum-reader-inspection.service"
+        self.unit = "yleum-orchestrator.service"
+        self.installed = [self.template, self.unit]
+        self.loaded = [self.unit]
+        self.rows = {
+            self.unit: self.row(
+                self.unit,
+                ExecStart="{ path=/venv/bin/python ; argv[]=python -m uvicorn yleum_orchestrator.main:app ; }",
+                MainPID="42",
+                ActiveState="active",
+                ControlGroup="/system.slice/yleum-orchestrator.service",
+            ),
+            self.instance: self.row(
+                self.instance, FragmentPath="/usr/lib/systemd/system/" + self.template
+            ),
+        }
+        self.calls = []
+        self.bus_properties = {}
+        self.extra_properties = {}
+
+    def row(self, name, **values):
+        return {
+            "Id": name,
+            "Names": name,
+            "LoadState": "loaded",
+            "MainPID": "0",
+            "ControlGroup": "",
+            "ExecStart": "{ path=/usr/bin/true ; }",
+            "ActiveState": "inactive",
+            "FragmentPath": "/usr/lib/systemd/system/" + name,
+            "DropInPaths": "",
+            **values,
+        }
+
+    def command(self, argv):
+        self.calls.append(argv)
+        if argv[0] == "busctl":
+            self.assertEqual(
+                argv[1:6],
+                [
+                    "--system",
+                    "--json=short",
+                    "--auto-start=no",
+                    "get-property",
+                    "org.freedesktop.systemd1",
+                ],
+            )
+            self.assertEqual(
+                argv[6], "/org/freedesktop/systemd1/unit/systemd_2dexit_2eservice"
+            )
+            return json.dumps(self.bus_properties[argv[-1]])
+        if argv[1] == "list-unit-files":
+            return "\n".join(name + " enabled enabled" for name in self.installed)
+        if argv[1] == "list-units":
+            return "\n".join(
+                name + " loaded active running fixture" for name in self.loaded
+            )
+        self.assertEqual(argv[1], "show")
+        names = [item for item in argv[2:] if not item.startswith("--")]
+        if self.template in names:
+            raise ValueError(
+                "Failed to get properties: Unit name apport-coredump-hook@.service is neither a valid invocation ID nor unit name."
+            )
+        return "\n\n".join(
+            "\n".join(
+                f"{key}={value}"
+                for key, value in [
+                    *self.rows[name].items(),
+                    *self.extra_properties.get(name, []),
+                ]
+            )
+            for name in names
+            if name in self.rows
+        )
+
+    def inspect(self):
+        with patch.object(self.observer, "command", self.command):
+            return self.observer.controller_units()
+
+    def test_installed_template_effective_properties_and_repeat_are_complete(self):
+        self.rows[self.instance]["DropInPaths"] = (
+            "/etc/systemd/system/apport-coredump-hook@.service.d/override.conf"
+        )
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        self.loaded.append(self.instance)
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        self.assertTrue(any(self.instance in call for call in self.calls))
+        self.assertTrue(
+            all(
+                call[1] in {"show", "list-units", "list-unit-files"}
+                for call in self.calls
+            )
+        )
+
+    def test_template_and_loaded_instance_readers_are_rejected(self):
+        for name in (self.instance, "old@worker.service"):
+            with self.subTest(name=name):
+                original = copy.deepcopy(self.rows)
+                if name != self.instance:
+                    self.loaded.append(name)
+                    self.rows[name] = self.row(name)
+                self.rows[name]["ExecStart"] = "python -m yleum_api.workers.generation"
+                with self.assertRaises(ValueError):
+                    self.inspect()
+                self.rows = original
+                self.loaded = [self.unit]
+
+    def test_template_collision_instance_dropin_and_partial_output_deny(self):
+        for field, value in (
+            ("FragmentPath", "/etc/systemd/system/" + self.instance),
+            ("DropInPaths", "/etc/systemd/system/" + self.instance + ".d/hide.conf"),
+            ("LoadState", "not-found"),
+            ("ActiveState", "active"),
+            ("Names", "foreign.service"),
+        ):
+            with self.subTest(field=field):
+                original = self.rows[self.instance][field]
+                self.rows[self.instance][field] = value
+                with self.assertRaises(ValueError):
+                    self.inspect()
+                self.rows[self.instance][field] = original
+        del self.rows[self.instance]
+        with self.assertRaises(ValueError):
+            self.inspect()
+
+    def test_masked_template_is_only_inert_without_execution(self):
+        self.rows[self.instance].update(
+            LoadState="masked", FragmentPath="/dev/null", ExecStart=""
+        )
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        self.rows[self.instance]["MainPID"] = "7"
+        with self.assertRaises(ValueError):
+            self.inspect()
+
+    def test_passive_loaded_tombstone_is_complete_without_service_interface(self):
+        name = "old-absent.service"
+        self.loaded.append(name)
+        self.rows[name] = self.row(name, LoadState="not-found", FragmentPath="")
+        del self.rows[name]["ExecStart"]
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        for field, value in (
+            ("MainPID", "1"),
+            ("ControlGroup", "/old"),
+            ("FragmentPath", "/old"),
+            ("DropInPaths", "/old"),
+            ("ActiveState", "failed"),
+        ):
+            with self.subTest(field=field):
+                original = self.rows[name][field]
+                self.rows[name][field] = value
+                with self.assertRaises(ValueError):
+                    self.inspect()
+                self.rows[name][field] = original
+        self.installed.append(name)
+        with self.assertRaises(ValueError):
+            self.inspect()
+
+    def test_installed_mask_needs_actual_null_symlink_not_missing_defaults(self):
+        name = "masked.service"
+        self.installed.append(name)
+        self.rows[name] = self.row(
+            name, LoadState="masked", FragmentPath="/etc/systemd/system/" + name
+        )
+        del self.rows[name]["ExecStart"]
+        with (
+            patch.object(
+                Path,
+                "lstat",
+                return_value=SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777),
+            ),
+            patch.object(Path, "resolve", return_value=Path("/dev/null")),
+        ):
+            self.assertEqual(self.inspect()["Id"], self.unit)
+            self.rows[name]["DropInPaths"] = "/etc/override.conf"
+            with self.assertRaises(ValueError):
+                self.inspect()
+            self.rows[name]["DropInPaths"] = ""
+        with (
+            patch.object(
+                Path,
+                "lstat",
+                return_value=SimpleNamespace(st_uid=0, st_mode=stat.S_IFLNK | 0o777),
+            ),
+            patch.object(Path, "resolve", return_value=Path("/foreign")),
+        ):
+            with self.assertRaises(ValueError):
+                self.inspect()
+
+    def test_alias_duplicate_is_complete_but_unknown_controller_denies(self):
+        alias = "orchestrator-alias.service"
+        self.installed.append(alias)
+        self.rows[self.unit]["Names"] += " " + alias
+        self.rows[alias] = self.rows[self.unit]
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        unknown = "old-controller.service"
+        self.loaded.append(unknown)
+        self.rows[unknown] = self.row(
+            unknown,
+            ExecStart="uvicorn yleum_orchestrator.main:app",
+            MainPID="99",
+            ActiveState="active",
+        )
+        with self.assertRaises(ValueError):
+            self.inspect()
+
+    def test_quoted_escaped_loaded_names_preserve_exact_identity(self):
+        for label in ("BOOT", "UEFI"):
+            name = r"systemd-fsck@dev-disk-by\x2dlabel-" + label + ".service"
+            self.loaded.append(name)
+            self.rows[name] = self.row(
+                name, Names=json.dumps(name), ActiveState="active"
+            )
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        self.rows[name]["Names"] = json.dumps(name + "-foreign")
+        with self.assertRaises(ValueError):
+            self.inspect()
+
+    def test_loaded_missing_command_requires_typed_empty_list(self):
+        name = "systemd-exit.service"
+        self.installed.append(name)
+        self.rows[name] = self.row(name, ActiveState="active")
+        del self.rows[name]["ExecStart"]
+        self.bus_properties = {
+            "Id": {"type": "s", "data": name},
+            "LoadState": {"type": "s", "data": "loaded"},
+            "ExecStart": {"type": "a(sasbttttuii)", "data": []},
+        }
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        for key, bad in (
+            ("Id", {"type": "s", "data": "foreign.service"}),
+            ("LoadState", {"type": "s", "data": "not-found"}),
+            ("ExecStart", {"type": "as", "data": []}),
+            ("ExecStart", {"type": "a(sasbttttuii)", "data": [["hidden reader"]]}),
+            ("ExecStart", {"type": "a(sasbttttuii)", "data": None}),
+        ):
+            with self.subTest(key=key, bad=bad):
+                old = self.bus_properties[key]
+                self.bus_properties[key] = bad
+                with self.assertRaises(ValueError):
+                    self.inspect()
+                self.bus_properties[key] = old
+        self.rows[name]["Names"] = '"unterminated'
+        with self.assertRaises(ValueError):
+            self.inspect()
+
+    def test_multiple_exec_start_commands_all_remain_visible(self):
+        name = "oneshot.service"
+        self.installed.append(name)
+        self.rows[name] = self.row(name)
+        self.extra_properties[name] = [
+            ("ExecStart", "{ path=/usr/bin/true ; argv[]=true second ; }")
+        ]
+        self.assertEqual(self.inspect()["Id"], self.unit)
+        self.extra_properties[name] = [
+            ("ExecStart", "python -m yleum_api.workers.run"),
+            ("ExecStart", "true"),
+        ]
+        with self.assertRaises(ValueError):
+            self.inspect()
+        self.extra_properties[name] = [("Id", name)]
+        with self.assertRaises(ValueError):
+            self.inspect()
 
 
 class CompleteInventoryTests(unittest.TestCase):
