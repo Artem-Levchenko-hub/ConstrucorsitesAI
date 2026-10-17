@@ -258,6 +258,18 @@ async def test_complete_inventory_fails_closed(ready, monkeypatch, fault):
         )
 
 
+def test_publication_v2_reader_capability_is_required_for_every_api_role():
+    assert "publication:2" in readers.API_CAPABILITIES
+    for slot in ("core/api", "core/worker", "core/generation-worker"):
+        value = inventory()
+        row = next(item for item in value["observed"] if item["slot"] == slot)
+        row["capabilities"].remove("publication:2")
+        with pytest.raises(RecoveryContractError):
+            readers.validate_snapshot(
+                encode(value), release_sha="a" * 40, now_ms=time.time_ns() // 1_000_000
+            )
+
+
 def test_duplicate_keys_cannot_hide_identity_or_unknown_contract():
     value = inventory()
     raw = encode(value).decode().replace('"version":1', '"version":999,"version":1')

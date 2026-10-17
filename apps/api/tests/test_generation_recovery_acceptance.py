@@ -236,7 +236,7 @@ async def test_missing_action_and_forged_compiler_green_are_not_acceptance(recei
     assert not check_requirement_acceptance(c.requirements, [witness], binding=c.binding).ready
 
 
-async def _canonical(db_session, test_engine, monkeypatch):
+async def _canonical(db_session, test_engine, monkeypatch, *, version=2, prompt="task_density_v1"):
     import hashlib
     from datetime import UTC, datetime, timedelta
     from uuid import uuid4
@@ -263,7 +263,7 @@ async def _canonical(db_session, test_engine, monkeypatch):
     coordinator.behavior_driver, calls = driver(None)
     run = await db_session.get(GenerationRun, coordinator.generation_run_id)
     user_message = await db_session.get(Message, run.user_message_id)
-    user_message.content = "task_density_v1"
+    user_message.content = prompt
     run.prompt_hash = hashlib.sha256(user_message.content.encode()).hexdigest()
     message = Message(project_id=run.project_id, role="assistant", content="")
     db_session.add(message)
@@ -299,7 +299,13 @@ async def _canonical(db_session, test_engine, monkeypatch):
         physical_state="active",
         execution_context_ref=ref.model_dump(mode="json"),
     )
+    if version == 3:
+        from tests.test_generation_recovery_deadlines import _clock
+
+        raw.update(version=3, clock=_clock(datetime.now(UTC) + timedelta(minutes=5)))
     state = decode_recovery(raw)
+    if version == 3:
+        raw = state.model_dump(mode="json")
     run.agent_state = {**run.agent_state, "recovery_v1": raw}
     await db_session.commit()
 
@@ -420,8 +426,9 @@ async def test_real_sql_receipt_loading_and_candidate_acceptance(
         assert seal["prompt_hash"] == run.prompt_hash
 
 
+@pytest.mark.parametrize("version,scope", [(2, "named"), (3, "named"), (3, "empty"), (3, "manual")])
 async def test_saved_v2_obligations_survive_off_and_summary_fallback(
-    db_session, test_engine, monkeypatch
+    db_session, test_engine, monkeypatch, version, scope
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -435,7 +442,21 @@ async def test_saved_v2_obligations_survive_off_and_summary_fallback(
     from yleum_api.services.generation.recovery_contract import RecoveryContractError
     from yleum_api.services.generation_runs import terminalize_generation_run_locked
 
-    harness, run, message, _state, calls = await _canonical(db_session, test_engine, monkeypatch)
+    prompt = "Build tracker" if scope == "manual" else "task_density_v1"
+    harness, run, message, state, calls = await _canonical(
+        db_session, test_engine, monkeypatch, version=version, prompt=prompt
+    )
+    monkeypatch.setattr(get_settings(), "generation_recovery_execution_enabled", False)
+    monkeypatch.setattr(get_settings(), "generation_recovery_soft_windows_enabled", False)
+    if scope == "empty":
+        raw = state.model_dump(mode="json")
+        raw["requirements"] = []
+        run.agent_state = {**run.agent_state, "recovery_v1": raw}
+        await db_session.commit()
+    if scope == "manual":
+        result = await harness.coordinator.finalize(files=harness.files, prompt=prompt)
+        assert result.proof.full_build.outcome == "green"
+        assert result.status is not MaxFinalizationStatus.COMPLETE
     consume = AsyncMock()
     with pytest.raises(RecoveryContractError):
         await agent_publication.publish_agent_candidate(
@@ -464,12 +485,17 @@ async def test_saved_v2_obligations_survive_off_and_summary_fallback(
     assert not calls
 
 
-@pytest.mark.parametrize("damage", [None, "manifest", "source", "candidate", "old_binding"])
+@pytest.mark.parametrize("version", [2, 3])
+@pytest.mark.parametrize(
+    "damage", [None, "manifest", "source", "candidate", "old_binding", "copied_run"]
+)
 async def test_confirmed_gated_publication_completes_after_release_without_replaying(
     db_session,
     test_engine,
     monkeypatch,
     damage,
+    version,
+    client,
 ):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock
@@ -491,7 +517,10 @@ async def test_confirmed_gated_publication_completes_after_release_without_repla
     )
     from yleum_api.services.generation_runs import terminalize_generation_run_locked
 
-    harness, run, message, state, _calls = await _canonical(db_session, test_engine, monkeypatch)
+    harness, run, message, state, _calls = await _canonical(
+        db_session, test_engine, monkeypatch, version=version
+    )
+    saved_clock = run.agent_state["recovery_v1"].get("clock")
     proof = await harness.coordinator.finalize(files=harness.files, prompt="task_density_v1")
     assert proof.status == MaxFinalizationStatus.COMPLETE
     await db_session.refresh(run)
@@ -570,11 +599,13 @@ async def test_confirmed_gated_publication_completes_after_release_without_repla
         raw = dict(run.agent_state["recovery_v1"])
         raw["binding"] = {**raw["binding"], "source_sha256": "0" * 64}
         run.agent_state = {**run.agent_state, "recovery_v1": raw}
-    elif damage in {"candidate", "old_binding"}:
+    elif damage in {"candidate", "old_binding", "copied_run"}:
         bound = dict(effect.pre_binding)
         if damage == "candidate":
             bound["acceptance"] = {**bound["acceptance"], "candidate_id": str(uuid4())}
             bound["acceptance_sha256"] = publication._digest(bound["acceptance"])
+        elif damage == "copied_run":
+            bound["identity"] = {**bound["identity"], "run_id": str(uuid4())}
         else:
             bound.pop("acceptance")
             bound.pop("acceptance_sha256")
@@ -594,6 +625,27 @@ async def test_confirmed_gated_publication_completes_after_release_without_repla
         assert run.status == "completed"
         await terminalize_generation_run_locked(db_session, run, status="completed")
     assert commits == consumes == [True]
+    from yleum_api.core.deps import get_current_user
+    from yleum_api.main import app
+    from yleum_api.models.user import User
+
+    owner_user = await db_session.get(User, run.user_id)
+    async def current_user():
+        return owner_user
+
+    app.dependency_overrides[get_current_user] = current_user
+    try:
+        response = await client.get(f"/api/projects/{run.project_id}/generation")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["acceptance"]["current_request_complete"] is (damage is None)
+        if damage is None:
+            assert body["acceptance"]["snapshot_id"] == run.agent_state["snapshot_id"]
+            assert body["recovery"]["last_verified_action"] == "publication_confirmed"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+    await db_session.refresh(run)
+    assert run.agent_state["recovery_v1"].get("clock") == saved_clock
 
 
 def test_legacy_publication_binding_is_decoded_without_new_acceptance_authority():
