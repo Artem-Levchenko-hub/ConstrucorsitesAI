@@ -6,7 +6,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import shlex
 import subprocess
@@ -310,8 +310,143 @@ def require_no_hidden_readers(processes: dict[int, dict], groups: list[str]) -> 
             )
 
 
+_INSPECTION_INSTANCE = "yleum-reader-inspection"
+_UNIT_PROPERTIES = (
+    "Id",
+    "Names",
+    "LoadState",
+    "MainPID",
+    "ControlGroup",
+    "ExecStart",
+    "ActiveState",
+    "FragmentPath",
+    "DropInPaths",
+)
+
+
+def _require_passive_unit(data: dict[str, str]) -> None:
+    need(data["MainPID"] == "0" and data["ActiveState"] == "inactive")
+    need(not data["ControlGroup"] and not data["DropInPaths"])
+    need(not data.get("ExecStart", ""))
+
+
+def _require_mask_fragment(fragment: str) -> None:
+    if fragment == "/dev/null":
+        return
+    need(PurePosixPath(fragment).is_absolute())
+    path = Path(fragment)
+    info = path.lstat()
+    need(info.st_uid == 0 and stat.S_ISLNK(info.st_mode))
+    need(path.resolve(strict=True) == Path("/dev/null"))
+
+
+def _require_empty_service_start(unit: str) -> None:
+    # systemd v255 unit_dbus_path_from_name / bus_label_escape. Direct property
+    # lookup loads only metadata, avoiding a separate GetUnit/manager-GC race.
+    label = "".join(
+        chr(byte)
+        if 65 <= byte <= 90 or 97 <= byte <= 122 or (index > 0 and 48 <= byte <= 57)
+        else f"_{byte:02x}"
+        for index, byte in enumerate(unit.encode("utf-8"))
+    )
+    path = "/org/freedesktop/systemd1/unit/" + label
+    for interface, prop, expected in (
+        ("Unit", "Id", {"type": "s", "data": unit}),
+        ("Unit", "LoadState", {"type": "s", "data": "loaded"}),
+        ("Service", "ExecStart", {"type": "a(sasbttttuii)", "data": []}),
+    ):
+        value = json.loads(
+            command(
+                [
+                    "busctl",
+                    "--system",
+                    "--json=short",
+                    "--auto-start=no",
+                    "get-property",
+                    "org.freedesktop.systemd1",
+                    path,
+                    "org.freedesktop.systemd1." + interface,
+                    prop,
+                ]
+            )
+        )
+        need(value == expected)
+
+
+def _service_properties(
+    names: set[str], absent_allowed: set[str]
+) -> dict[str, dict[str, str]]:
+    """Require a complete effective-property response, including empty values."""
+    text = command(
+        [
+            "systemctl",
+            "show",
+            *sorted(names),
+            "--all",
+            "--no-pager",
+            "--property=" + ",".join(_UNIT_PROPERTIES),
+        ]
+    )
+    by_name: dict[str, dict[str, str]] = {}
+    for block in text.split("\n\n"):
+        pairs = [line.split("=", 1) for line in block.splitlines()]
+        need(all(len(pair) == 2 for pair in pairs))
+        data = {}
+        for key, value in pairs:
+            if key in data:
+                # oneshot services print one ExecStart line per command. Keep
+                # every command visible to the reader/restart-target checks.
+                need(key == "ExecStart")
+                data[key] += "\n" + value
+            else:
+                data[key] = value
+        need(
+            set(data) in (set(_UNIT_PROPERTIES), set(_UNIT_PROPERTIES) - {"ExecStart"})
+        )
+        aliases = set(shlex.split(data["Names"]))
+        need(data["Id"] in aliases and aliases & names)
+        if data["LoadState"] == "not-found":
+            need(aliases & names <= absent_allowed)
+            _require_passive_unit(data)
+            need(not data["FragmentPath"])
+        elif data["LoadState"] == "masked":
+            _require_passive_unit(data)
+            _require_mask_fragment(data["FragmentPath"])
+        else:
+            need(data["LoadState"] == "loaded")
+            if "ExecStart" not in data:
+                _require_empty_service_start(data["Id"])
+        # Missing formatted commands require passive or typed-empty proof.
+        data.setdefault("ExecStart", "")
+        for name in aliases & names:
+            need(name not in by_name or by_name[name] == data)
+            by_name[name] = data
+    need(set(by_name) == names)
+    return by_name
+
+
+def _inspect_template_instance(data: dict[str, str]) -> None:
+    """The fixed probe may load metadata, but must not shadow or run a template."""
+    need(data["MainPID"] == "0" and data["ActiveState"] == "inactive")
+    need(not data["ControlGroup"])
+    if data["LoadState"] == "masked":
+        _require_mask_fragment(data["FragmentPath"])
+    else:
+        need(PurePosixPath(data["FragmentPath"]).is_absolute())
+        need(PurePosixPath(data["FragmentPath"]).name.endswith("@.service"))
+    for path in shlex.split(data["DropInPaths"]):
+        need(PurePosixPath(path).is_absolute())
+        # Instance-specific overrides could hide the template's actual reader.
+        need(
+            all(
+                "@" not in part or part.endswith("@.service.d")
+                for part in PurePosixPath(path).parts
+            )
+        )
+
+
 def controller_units() -> dict:
-    """Inspect every service restart target; aliases may identify the same unit."""
+    """Inspect installed definitions and all loaded instances without starting any."""
     units = command(
         ["systemctl", "list-unit-files", "--type=service", "--no-legend", "--no-pager"]
     ).splitlines()
@@ -327,18 +462,22 @@ def controller_units() -> dict:
             "--no-pager",
         ]
     ).splitlines()
-    names = sorted({line.split()[0] for line in [*units, *loaded] if line.strip()})
+    installed = {line.split()[0] for line in units if line.strip()}
+    names = installed | {line.split()[0] for line in loaded if line.strip()}
     need(names and len(names) < 10000)
-    text = command(
-        [
-            "systemctl",
-            "show",
-            *names,
-            "--property=Id,MainPID,ControlGroup,ExecStart,ActiveState",
-        ]
-    )
-    for block in text.split("\n\n"):
-        data = dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+    need(all(re.fullmatch(r"[A-Za-z0-9_@.\\:\-]+\.service", name) for name in names))
+    templates = {name for name in names if name.endswith("@.service")}
+    probes = {
+        name[: -len(".service")] + _INSPECTION_INSTANCE + ".service"
+        for name in templates
+    }
+    # Repeated observations may find our inert metadata in list-units; an
+    # installed instance file, however, would override the template definition.
+    need(not probes & installed)
+    rows = _service_properties((names - templates) | probes, names - installed - probes)
+    for probe in probes:
+        _inspect_template_instance(rows[probe])
+    for data in rows.values():
         need(
             not any(
                 token in data.get("ExecStart", "")
