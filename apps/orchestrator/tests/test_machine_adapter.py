@@ -16,6 +16,21 @@ def module():
     return importlib.import_module(name)
 
 
+@pytest.fixture(autouse=True)
+def _legacy_adapter_controller_root(tmp_path, monkeypatch):
+    # Legacy unit doubles predate persistent controller state. Supply a real,
+    # empty isolated root; run the actual barrier guard, never bypass it.
+    adapter = module().MachineAdapter
+    original = adapter.__init__
+
+    def initialize(self, manager, settings):
+        if not hasattr(manager, "state_store"):
+            manager.state_store = SimpleNamespace(root=tmp_path / "controller-state")
+        original(self, manager, settings)
+
+    monkeypatch.setattr(adapter, "__init__", initialize)
+
+
 @pytest.mark.parametrize("backend_image,guard,expected", [
     (None, "guard@sha256:" + "4" * 64, False),
     ("backup", "guard@sha256:" + "4" * 64, False),
@@ -117,7 +132,7 @@ async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tm
         task_role="build",
     )
     result = await runtime.execute(
-        SimpleNamespace(), MachineManifest.model_validate(value), request
+        SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request
     )
     assert result.exit_code == 0
     assert commands == [
@@ -323,7 +338,7 @@ async def test_full_build_bootstraps_before_ast_but_never_executes_fast_check(
     )
 
     result = await runtime.execute(
-        SimpleNamespace(), MachineManifest.model_validate(value), request
+        SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request
     )
 
     assert result.exit_code == (1 if activation_fails else 0)
@@ -384,7 +399,7 @@ async def test_fresh_fast_check_installs_before_ast_and_replays_receipt(install_
         generation_run_id=uuid4(), fencing_epoch=7, expected_revision="a" * 64,
         cmd="omnia:fast_check", task_role="fast_check",
     )
-    first = await runtime.execute(SimpleNamespace(), manifest, request)
+    first = await runtime.execute(SimpleNamespace(workspace_id=uuid4()), manifest, request)
     assert first.exit_code == install_exit
     assert [argv for argv, _, _ in commands] == (
         [["pnpm", "install", "--frozen-lockfile"]] if install_exit else [
@@ -393,7 +408,7 @@ async def test_fresh_fast_check_installs_before_ast_and_replays_receipt(install_
         ]
     )
     count = len(commands)
-    replayed = await runtime.execute(SimpleNamespace(), manifest, request)
+    replayed = await runtime.execute(SimpleNamespace(workspace_id=uuid4()), manifest, request)
     assert replayed == first
     assert len(commands) == count
     runtime._project_migrations.assert_not_awaited()
@@ -421,7 +436,7 @@ async def test_full_build_migration_failure_never_builds_or_activates():
         cmd="omnia:full_build", task_role="full_build",
     )
     result = await runtime.execute(
-        SimpleNamespace(), MachineManifest.model_validate(value), request
+        SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request
     )
     assert result.exit_code == 1
     assert "pending SQL failed" in result.output
@@ -451,7 +466,7 @@ async def test_fast_check_missing_database_dependency_is_feedback_before_command
         cmd="omnia:fast_check", task_role="fast_check",
     )
     result = await runtime.execute(
-        SimpleNamespace(), MachineManifest.model_validate(value), request,
+        SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request,
     )
     assert result.exit_code == 1
     assert "public.max_users" in result.output
@@ -489,7 +504,9 @@ async def test_missing_manifest_tests_is_not_a_successful_build(tmp_path):
         task_role="build",
     )
     with pytest.raises(ValueError, match="test task"):
-        await runtime.execute(SimpleNamespace(), MachineManifest.model_validate(value), request)
+        await runtime.execute(
+            SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request
+        )
 
 
 async def test_explicit_legacy_restore_clears_marker_only_selection(tmp_path):
@@ -712,7 +729,7 @@ async def test_sequential_install_build_share_one_request_budget(monkeypatch, bu
         for task in ("bootstrap", role, "test")
     ]
     result = await runtime.execute(
-        SimpleNamespace(),
+        SimpleNamespace(workspace_id=uuid4()),
         MachineManifest.model_validate(value),
         WorkspaceAgentExecRequest(
             generation_run_id=uuid4(),
@@ -747,7 +764,8 @@ async def test_apply_total_timeout_drains_then_cleans_up(monkeypatch):
     runtime._apply = slow
     runtime.halt = AsyncMock()
     result = await runtime.apply(
-        SimpleNamespace(), MachineManifest.model_validate(payload()), SimpleNamespace()
+        SimpleNamespace(workspace_id=uuid4()),
+        MachineManifest.model_validate(payload()), SimpleNamespace()
     )
     assert result.timed_out and result.exit_code == 124
     runtime.halt.assert_awaited_once()
@@ -805,7 +823,8 @@ async def test_apply_shielded_readiness_uses_remaining_budget_and_cleanup_reserv
     runtime._apply = late_boundary
     runtime.halt = cleanup
     result = await runtime.apply(
-        SimpleNamespace(), MachineManifest.model_validate(payload()), SimpleNamespace()
+        SimpleNamespace(workspace_id=uuid4()),
+        MachineManifest.model_validate(payload()), SimpleNamespace()
     )
     assert result.exit_code == 124 and result.timed_out
     assert clock[0] == pytest.approx(870)
@@ -841,7 +860,8 @@ async def test_apply_timeout_cleans_up_after_shielded_helper_raises(monkeypatch)
     runtime.halt = cleanup
     task = asyncio.create_task(
         runtime.apply(
-            SimpleNamespace(), MachineManifest.model_validate(payload()), SimpleNamespace()
+            SimpleNamespace(workspace_id=uuid4()),
+            MachineManifest.model_validate(payload()), SimpleNamespace()
         )
     )
     cancellation_seen = asyncio.Event()
@@ -880,7 +900,8 @@ async def test_apply_cleans_all_resources_when_nested_execute_reports_timeout():
     runtime._apply = timed_out
     runtime.halt = cleanup
     result = await runtime.apply(
-        SimpleNamespace(), MachineManifest.model_validate(payload()), SimpleNamespace()
+        SimpleNamespace(workspace_id=uuid4()),
+        MachineManifest.model_validate(payload()), SimpleNamespace()
     )
     assert result.exit_code == 124 and result.timed_out
     assert events == [("remove-machine-core-gateway", False)]

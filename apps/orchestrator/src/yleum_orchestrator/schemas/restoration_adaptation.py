@@ -51,6 +51,7 @@ class RestorationAdaptationWorkspace(BaseModel):
     source_database_digest: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     proof_digest: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
     capabilities: dict[str, object]
+    request_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class RestorationAdaptationCleanup(BaseModel):
@@ -61,6 +62,14 @@ class RestorationAdaptationCleanup(BaseModel):
     candidate_workspace_id: UUID
     candidate_fencing_epoch: int = Field(gt=0)
     proof_digest: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    recovery_cycle: int | None = Field(default=None, ge=0)
+    recovery_receipt_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def recovery_pair(self) -> RestorationAdaptationCleanup:
+        if (self.recovery_cycle is None) != (self.recovery_receipt_digest is None):
+            raise ValueError("recovery cleanup requires both cycle and receipt")
+        return self
 
 
 class RestorationAdaptationProofRequest(BaseModel):
@@ -172,3 +181,64 @@ class RestorationAdaptationOwnerStatus(BaseModel):
     owner_id: UUID
     generation_run_id: UUID
     state: Literal["active", "terminal"]
+
+
+class RestorationAdaptationRecoveryIdentity(BaseModel):
+    """Immutable original preparation identity; transition IDs are separate effect IDs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    version: Literal[1] = 1
+    transition_id: UUID
+    workspace_id: UUID
+    generation_run_id: UUID
+    operation_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    candidate_workspace_id: UUID
+    request_digest: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def distinct_transition(self) -> RestorationAdaptationRecoveryIdentity:
+        if self.transition_id == self.operation_id:
+            raise ValueError("recovery transition must differ from preparation operation")
+        return self
+
+
+class RestorationAdaptationRecoveryHold(RestorationAdaptationRecoveryIdentity):
+    expected_cycle: int = Field(ge=0)
+    control_fencing_epoch: int = Field(gt=0)
+    candidate_fencing_epoch: int = Field(gt=0)
+
+
+class RestorationAdaptationRecoveryRebind(RestorationAdaptationRecoveryIdentity):
+    expected_cycle: int = Field(ge=0)
+    expected_hold_receipt_digest: Sha256 = Field(pattern=r"^[0-9a-f]{64}$")
+    new_control_fencing_epoch: int = Field(gt=0)
+
+
+class RestorationAdaptationRecoveryReceipt(RestorationAdaptationRecoveryIdentity):
+    state: Literal["hold_pending", "held", "rebinding", "resumable"]
+    cycle: int = Field(ge=0)
+    original_control_fencing_epoch: int = Field(gt=0)
+    current_control_fencing_epoch: int = Field(gt=0)
+    original_candidate_fencing_epoch: int = Field(gt=0)
+    current_candidate_fencing_epoch: int = Field(gt=0)
+    barrier_operation_id: UUID
+    barrier_receipt_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    checkpoint_ref_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    physical_incarnation_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    physical_proof_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    restore_operation_id: UUID | None = None
+    terminal_receipt_digest: Sha256 | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def terminal_requires_physical_proof(self) -> RestorationAdaptationRecoveryReceipt:
+        if self.state in {"held", "resumable"} and any(value is None for value in (
+            self.barrier_receipt_digest, self.checkpoint_ref_digest,
+            self.physical_incarnation_digest, self.physical_proof_digest,
+            self.terminal_receipt_digest,
+        )):
+            raise ValueError("terminal recovery receipt requires complete physical proof")
+        if self.state == "resumable" and self.restore_operation_id is None:
+            raise ValueError("resumable recovery receipt requires confirmed restore")
+        return self

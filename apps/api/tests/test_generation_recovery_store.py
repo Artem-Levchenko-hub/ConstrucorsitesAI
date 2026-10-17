@@ -143,6 +143,43 @@ async def test_checkpoint_preserves_other_state_and_never_publishes(checkpoint_c
     assert saved.binding.source_sha256 != ref.sha256
 
 
+@pytest.mark.parametrize('mode', ['off', 'shadow'])
+async def test_persisted_v2_checkpoint_continues_with_new_writers_disabled(
+    checkpoint_case, monkeypatch, mode,
+):
+    from datetime import UTC, datetime, timedelta
+    from unittest.mock import AsyncMock
+
+    from yleum_api.core.config import get_settings
+    from yleum_api.services import generation_deployment_drain
+    from yleum_api.services.generation import recovery_execution
+
+    c = checkpoint_case
+    raw = c.state.model_dump(mode='json')
+    raw.update(version=2, continuation_claim={
+        'run_id': str(c.run.id), 'token': str(uuid4()), 'attempt_seq': 0,
+        'worker_id': 'owned-test-worker',
+        'expires_at': (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+    }, execution={
+        'stage': 'bootstrap', 'substep': 'runtime_prepare', 'physical_state': 'active',
+    })
+    c.state = c.rc.decode_recovery(raw)
+    c.run.agent_state = {**c.run.agent_state, 'recovery_v1': c.state.model_dump(mode='json')}
+    c.sync.commit()
+    monkeypatch.setenv('GENERATION_RECOVERY_MODE', mode)
+    monkeypatch.setenv('GENERATION_RECOVERY_EXECUTION_ENABLED', 'false')
+    get_settings.cache_clear()
+    owned = AsyncMock()
+    admission = AsyncMock()
+    monkeypatch.setattr(recovery_execution, '_require_session_owner', owned)
+    monkeypatch.setattr(generation_deployment_drain, 'require_generation_admission', admission)
+    ref = await save(c)
+    assert c.run.agent_state['recovery_v1']['checkpoint'] == ref.model_dump(mode='json')
+    owned.assert_awaited_with(c.run.id)
+    admission.assert_awaited_once_with(c.session)
+    assert c.run.agent_state['recovery_v1']['state_revision'] == 1
+
+
 @pytest.mark.parametrize("problem", [
     "foreign_owner", "foreign_run", "workspace_owner", "workspace_run", "stale_fence",
     "stale_attempt", "stale_revision", "source", "schema", "environment", "baseline",

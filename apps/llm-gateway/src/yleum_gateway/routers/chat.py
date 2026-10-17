@@ -411,6 +411,8 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         if req.user is not None:
             try:
                 await billing.charge(
+                    provider_binding=(billing.ProviderUsageBinding(identity, call_id)
+                                      if identity is not None else None),
                     user_id=req.user,
                     project_id=meta.project_id,
                     message_id=meta.message_id,

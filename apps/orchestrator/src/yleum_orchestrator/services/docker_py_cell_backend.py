@@ -28,6 +28,11 @@ from yleum_orchestrator.services.docker_cell_resources import (
     DockerNetworkRecord,
     DockerVolumeRecord,
 )
+from yleum_orchestrator.services.project_machine import machine_budget, machine_effect
+from yleum_orchestrator.services.source_write_journal import (
+    expected_source_volume_identity,
+    plan_source_helper,
+)
 
 _VOLUME_ROOT = "/volume"
 _POSTGRES_ROOT = "/var/lib/postgresql"
@@ -236,6 +241,74 @@ class DockerPyCellBackend:
             files={},
         )
 
+    async def source_volume_identity(self, name: str) -> str:
+        """Inspect a pinned readonly root, never guest code or source bytes."""
+        if self.write_helper_image is None:
+            raise CellResourceError("tracked source identity requires trusted probe runtime")
+        volume = await self._get_volume_obj(name)
+        if volume is None:
+            raise CellResourceError("source volume is missing")
+        labels = self._labels(volume)
+        helper = await self._start_helper_container(
+            name=self._helper_name("volume-identity", name),
+            labels=self._source_helper_labels(name, labels, "volume-read"),
+            volumes={name: {"bind": _VOLUME_ROOT, "mode": "ro"}},
+            image=self.write_helper_image,
+        )
+        try:
+            return cast(str, await self._run_source_helper(
+                helper, self._mounted_volume_identity, helper, name, labels,
+            ))
+        finally:
+            await self._remove_container_object(helper)
+
+    def _mounted_volume_identity(
+        self, container: Any, name: str, labels: dict[str, str],
+    ) -> str:
+        from yleum_orchestrator.services.source_volume_identity import (
+            VOLUME_STATX_SCRIPT,
+            volume_incarnation,
+        )
+
+        container.reload()
+        mounts = [m for m in container.attrs.get("Mounts", []) if m.get("Type") != "tmpfs"]
+        if (len(mounts) != 1 or mounts[0].get("Type") != "volume"
+                or mounts[0].get("Name") != name or mounts[0].get("Destination") != _VOLUME_ROOT):
+            raise CellResourceError("source helper physical mount mismatch")
+        client = self._client_obj()
+        volume = client.volumes.get(name)
+        before = dict(volume.attrs)
+        result = container.exec_run(
+            ["python3", "-I", "-S", "-c", VOLUME_STATX_SCRIPT, _VOLUME_ROOT],
+            demux=False, user="0:0",
+        )
+        code, output = self._exec_result_parts(result)
+        if code != 0:
+            raise CellResourceError("source volume birth identity probe unavailable")
+        volume.reload()
+        if volume.attrs != before:
+            raise CellResourceError("source volume changed during identity probe")
+        return volume_incarnation(
+            daemon_id=client.info().get("ID"), name=name,
+            metadata=volume.attrs, labels=labels, stat_output=output,
+        )
+
+    async def _require_source_incarnation(
+        self, name: str, expected: str | None, *, helper: Any = None,
+        labels: dict[str, str] | None = None,
+    ) -> None:
+        if expected is None:
+            return
+        if helper is None:
+            actual = await self.source_volume_identity(name)
+        else:
+            assert labels is not None
+            actual = await self._run_source_helper(
+                helper, self._mounted_volume_identity, helper, name, labels,
+            )
+        if actual != expected:
+            raise CellResourceError("source volume incarnation changed")
+
     async def remove_volume(self, name: str) -> None:
         volume = await self._get_volume_obj(name)
         if volume is None:
@@ -267,12 +340,17 @@ class DockerPyCellBackend:
         if volume is None:
             return {}
         labels = self._labels(volume)
+        expected_identity = self._source_identity(name)
         container = await self._start_helper_container(
             name=self._helper_name("volume-read", name),
-            labels=self._helper_labels(labels, "volume-read"),
+            labels=self._source_helper_labels(name, labels, "volume-read"),
             volumes={name: {"bind": _VOLUME_ROOT, "mode": "ro"}},
+            image=self.write_helper_image if expected_identity is not None else None,
         )
         try:
+            await self._require_source_incarnation(
+                name, expected_identity, helper=container, labels=labels,
+            )
             raw = await asyncio.to_thread(self._get_archive_bytes, container, _VOLUME_ROOT, name)
             return _archive_to_files(raw, root_prefix=PurePosixPath(_VOLUME_ROOT).name)
         finally:
@@ -379,17 +457,22 @@ printf '%s\n' 'empty'
         if volume is None:
             return {}
         labels = self._labels(volume)
+        expected_identity = self._source_identity(name)
         source_tmpfs = dict(_HELPER_TMPFS)
         source_tmpfs["/tmp"] = (
             f"rw,nosuid,nodev,noexec,size={self.archive_limit_bytes + 1024 * 1024}"
         )
         container = await self._start_helper_container(
             name=self._helper_name("workspace-source-read", name),
-            labels=self._helper_labels(labels, "workspace-source-read"),
+            labels=self._source_helper_labels(name, labels, "workspace-source-read"),
             volumes={name: {"bind": _VOLUME_ROOT, "mode": "ro"}},
             tmpfs=source_tmpfs,
+            image=self.write_helper_image if expected_identity is not None else None,
         )
         try:
+            await self._require_source_incarnation(
+                name, expected_identity, helper=container, labels=labels,
+            )
             archive_command = [
                 "tar",
                 "-C",
@@ -445,9 +528,15 @@ printf '%s\n' 'empty'
         if volume is None:
             raise CellResourceError(f"missing volume: {name}")
         labels = self._labels(volume)
+        expected_identity = self._source_identity(name)
+        await self._require_source_incarnation(name, expected_identity)
+        exact_name, helper_labels = plan_source_helper(
+            self._helper_name("volume-write", name),
+            self._source_helper_labels(name, labels, "volume-write"), name,
+        )
         container = await self._start_helper_container(
-            name=self._helper_name("volume-write", name),
-            labels=self._helper_labels(labels, "volume-write"),
+            name=self._helper_name("volume-write", name), exact_name=exact_name,
+            labels=helper_labels,
             volumes={name: {"bind": _VOLUME_ROOT, "mode": "rw"}},
             image=self.write_helper_image,
             tmpfs=(
@@ -456,18 +545,43 @@ printf '%s\n' 'empty'
             ),
         )
         try:
+            await self._require_source_incarnation(
+                name, expected_identity, helper=container, labels=labels,
+            )
             if self.write_helper_image is not None:
-                await asyncio.to_thread(self._guarded_source_write, container, archive)
+                await self._run_source_helper(
+                    container, self._guarded_source_write, container, archive,
+                )
                 return
 
             def _put() -> bool:
                 return bool(container.put_archive(path=_VOLUME_ROOT, data=archive))
 
-            ok = await asyncio.to_thread(_put)
+            ok = await self._run_source_helper(container, _put)
             if ok is False:
                 raise CellResourceError(f"put_archive returned False for {name}")
         finally:
             await self._remove_container_object(container)
+
+    async def _run_source_helper(self, container: Any, call: Callable[..., Any], *args: Any) -> Any:
+        """Stop this helper on cancellation, then drain the thread before unlocking."""
+        work = asyncio.create_task(machine_effect(call, *args))
+        try:
+            return await asyncio.shield(work)
+        except asyncio.CancelledError:
+            cleanup = asyncio.create_task(self._remove_container_object(container))
+            for pending in (cleanup, work):
+                while not pending.done():
+                    try:
+                        await asyncio.shield(pending)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not pending.cancelled():
+                    # Retrieve failures without changing cancellation into success.
+                    pending.exception()
+            raise
 
     def _guarded_source_write(self, container: Any, archive: bytes) -> None:
         from yleum_orchestrator.services.volume_source_write import SOURCE_WRITE_SCRIPT
@@ -506,16 +620,26 @@ printf '%s\n' 'empty'
         if volume is None:
             raise CellResourceError(f"missing volume: {name}")
         labels = self._labels(volume)
+        expected_identity = self._source_identity(name)
+        await self._require_source_incarnation(name, expected_identity)
+        exact_name, helper_labels = plan_source_helper(
+            self._helper_name("volume-delete", name),
+            self._source_helper_labels(name, labels, "volume-delete"), name,
+        )
         container = await self._start_helper_container(
-            name=self._helper_name("volume-delete", name),
-            labels=self._helper_labels(labels, "volume-delete"),
+            name=self._helper_name("volume-delete", name), exact_name=exact_name,
+            labels=helper_labels,
             volumes={name: {"bind": _VOLUME_ROOT, "mode": "rw"}},
+            image=self.write_helper_image if expected_identity is not None else None,
         )
         try:
+            await self._require_source_incarnation(
+                name, expected_identity, helper=container, labels=labels,
+            )
             joined = " ".join(shlex.quote(path) for path in normalized)
             command = ["sh", "-eu", "-c", f"cd {_VOLUME_ROOT} && rm -rf -- {joined}"]
-            await asyncio.to_thread(
-                self._exec_checked,
+            await self._run_source_helper(
+                container, self._exec_checked,
                 container,
                 command,
                 f"delete volume paths {name}",
@@ -1407,6 +1531,21 @@ printf '%s\n' 'empty'
             return f"{host_ip}:{host_port}".strip(":")
         return str(value)
 
+    def _source_helper_labels(
+        self, name: str, labels: dict[str, str], resource_kind: str,
+    ) -> dict[str, str]:
+        from yleum_orchestrator.services.active_source_volume import active_source_helper_labels
+        return self._helper_labels(active_source_helper_labels(name, labels), resource_kind)
+
+    @staticmethod
+    def _source_identity(name: str) -> str | None:
+        from yleum_orchestrator.services.active_source_volume import active_source_identity
+        scoped = active_source_identity(name)
+        tracked = expected_source_volume_identity(name)
+        if scoped is not None and tracked is not None and scoped != tracked:
+            raise CellIdentityConflict("active source differs from tracked operation")
+        return tracked if tracked is not None else scoped
+
     def _helper_labels(self, labels: dict[str, str], resource_kind: str) -> dict[str, str]:
         merged = dict(labels)
         merged["omnia.resource_kind"] = resource_kind
@@ -1425,6 +1564,7 @@ printf '%s\n' 'empty'
         volumes: dict[str, dict[str, str]],
         tmpfs: dict[str, str] | None = None,
         image: str | None = None,
+        exact_name: str | None = None,
     ) -> Any:
         self._require_identity_labels(labels)
 
@@ -1434,7 +1574,7 @@ printf '%s\n' 'empty'
                 command=_HELPER_SLEEP,
                 # Helpers belong to a single call, not to the shared volume.
                 # Never remove a namesake: it may be serving another request.
-                name=f"{name}-{uuid4().hex}",
+                name=exact_name or f"{name}-{uuid4().hex}",
                 detach=True,
                 auto_remove=True,
                 labels=labels,
@@ -1461,7 +1601,8 @@ printf '%s\n' 'empty'
                 except docker.errors.APIError as exc:
                     detail = str(getattr(exc, "explanation", "") or "").lower()
                     if not (
-                        attempt < 2
+                        exact_name is None
+                        and attempt < 2
                         and exc.status_code == 409
                         and "container name" in detail
                         and "already in use" in detail
@@ -1498,7 +1639,8 @@ printf '%s\n' 'empty'
 
     async def _remove_container_object(self, container: Any) -> None:
         try:
-            await asyncio.to_thread(lambda: container.remove(force=True))
+            with machine_budget(None):
+                await machine_effect(lambda: container.remove(force=True))
         except docker.errors.NotFound:
             return
         except docker.errors.APIError as exc:

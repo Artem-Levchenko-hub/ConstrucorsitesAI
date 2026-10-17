@@ -462,6 +462,7 @@ class DockerMachineBackend:
         The controller starts services again after migration reconciliation and
         the full build. The database and every code/data/cache volume remain.
         """
+        self._require_recovery_access("exec")
         machine = self._container()
         if machine is None:
             raise CellResourceError("migration requires an owned development machine")
@@ -622,6 +623,7 @@ class DockerMachineBackend:
         }
 
     def ensure(self, manifest: MachineManifest, epoch: int) -> None:
+        self._require_recovery_access("ensure")
         self.invalidate_retained_preview()
         if self._metadata().get("restore_in_progress"):
             raise CellResourceError("environment restore is incomplete; startup is fenced")
@@ -1134,6 +1136,7 @@ class DockerMachineBackend:
         write_controller_json(self.metadata_path, metadata)
 
     def exec_start(self, argv: list[str], cwd: str, operation_id: str) -> str:
+        self._require_recovery_access("exec")
         self.invalidate_retained_preview()
         machine = self._container()
         if machine is None:
@@ -1231,6 +1234,7 @@ class DockerMachineBackend:
             raise CellResourceError("command termination could not be confirmed")
 
     def start_service(self, service: MachineService, epoch: int) -> None:
+        self._require_recovery_access("service")
         machine = self._container()
         if machine is None:
             raise CellResourceError("machine is missing")
@@ -1324,9 +1328,11 @@ class DockerMachineBackend:
 
     def stop_services(self) -> None:
         # Stop the whole container so daemonized descendants cannot keep writing.
+        self._require_recovery_access("quiesce")
         self.stop()
 
     def stop(self) -> None:
+        self._require_recovery_access("quiesce")
         self.stop_machine()
         project_postgres = self._project_postgres()
         if project_postgres is not None:
@@ -1334,6 +1340,7 @@ class DockerMachineBackend:
 
     def stop_machine(self) -> None:
         """Stop only the product container; the project database keeps running."""
+        self._require_recovery_access("quiesce")
         machine = self._container()
         if machine is not None:
             machine.stop(timeout=10)
@@ -1341,6 +1348,7 @@ class DockerMachineBackend:
     def remove_machine(self) -> None:
         """Retire only the product container (P09); volumes, guard, proxy and the
         project database are environment resources, not part of one release."""
+        self._require_recovery_access("remove")
         machine = self._container()
         if machine is None:
             return
@@ -1349,6 +1357,7 @@ class DockerMachineBackend:
             raise CellResourceError("machine removal was not confirmed")
 
     def remove(self, expected_epoch: int | None = None) -> None:
+        self._require_recovery_access("remove")
         machine = self._container()
         project_postgres = self._project_postgres()
         resources = tuple(item for item in (machine, project_postgres) if item is not None)
@@ -1376,12 +1385,15 @@ class DockerMachineBackend:
         return bool(project_postgres.status == "running")
 
     def invalidate_retained_preview(self) -> None:
+        self._require_recovery_access("quiesce")
         metadata = self._metadata()
         if "retained_preview_receipt" in metadata:
             metadata.pop("retained_preview_receipt")
             write_controller_json(self.metadata_path, metadata)
 
-    def _retained_volume_stats(self, names: list[str]) -> list[list[int]] | None:
+    def _retained_volume_stats(
+        self, names: list[str], *, birth: bool = False,
+    ) -> list[list[int]] | None:
         # One networkless helper reads inode identities only. The controller
         # need not have host filesystem access to Docker's volume directory.
         name = self.stem + "-retained-proof"
@@ -1396,6 +1408,12 @@ class DockerMachineBackend:
             "assert all(stat.S_ISDIR(x.st_mode) for x in s); "
             "print(json.dumps([[x.st_dev,x.st_ino,x.st_ctime_ns] for x in s]))"
         )
+        if birth:
+            from yleum_orchestrator.services.source_volume_identity import VOLUME_STATX_SCRIPT
+            command = ("import sys\n" +
+                       f"for i in range({len(names)}):\n" +
+                       "    sys.argv = ['statx', '/proof/' + str(i)]\n" +
+                       f"    exec({VOLUME_STATX_SCRIPT!r})\n")
         helper = self.client.containers.create(
             self.base_image,
             ["python3", "-I", "-S", "-c", command],
@@ -1425,7 +1443,8 @@ class DockerMachineBackend:
             if len(output) > 16384:
                 return None
             try:
-                values = json.loads(output)
+                values = ([json.loads(line) for line in output.splitlines()]
+                          if birth else json.loads(output))
             except (ValueError, TypeError):
                 return None
             if (
@@ -1433,7 +1452,7 @@ class DockerMachineBackend:
                 or len(values) != len(names)
                 or any(
                     not isinstance(item, list)
-                    or len(item) != 3
+                    or len(item) != (4 if birth else 3)
                     or any(type(value) is not int or value < 0 for value in item)
                     for item in values
                 )
@@ -1550,24 +1569,7 @@ class DockerMachineBackend:
             for item in reference.volumes:
                 volume = self.client.volumes.get(item.name)
                 attrs = volume.attrs
-                expected = self.labels("project-volume")
-                # Activated restoration code has its own owned project volume.
-                # The original Cell workspace uses the older workspace labels.
-                restored_code = re.fullmatch(
-                    re.escape(self.stem) + r"-code-[0-9a-f]{32}",
-                    item.name,
-                )
-                if item.name == self.workspace_volume and restored_code is None:
-                    expected = {
-                        "omnia.managed": "true",
-                        "omnia.project_cell": "true",
-                        "omnia.workspace_id": str(self.workspace_id),
-                        "omnia.project_id": str(self.project_id),
-                        "omnia.owner_id": str(self.owner_id),
-                        "omnia.provider": "docker_owner_canary",
-                        "omnia.resource_kind": "workspace",
-                        "omnia.profile_version": self.resource_profile_version,
-                    }
+                expected = self._recovery_volume_labels(item.name)
                 labels = attrs.get("Labels") or {}
                 if any(labels.get(key) != value for key, value in expected.items()):
                     raise CellIdentityConflict("retained volume ownership identity mismatch")
@@ -1605,6 +1607,138 @@ class DockerMachineBackend:
         except (docker.errors.APIError, OSError):
             return None
 
+    def _require_recovery_access(self, action: str) -> None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_machine_writers_allowed,
+        )
+
+        require_machine_writers_allowed(
+            self.root / str(self.workspace_id) / "machine.json", action=action
+        )
+
+    def _recovery_volume_labels(self, name: str) -> dict[str, str]:
+        restored_code = re.fullmatch(re.escape(self.stem) + r"-code-[0-9a-f]{32}", name)
+        if name != self.workspace_volume or restored_code is not None:
+            return self.labels("project-volume")
+        return {
+            "omnia.managed": "true",
+            "omnia.project_cell": "true",
+            "omnia.workspace_id": str(self.workspace_id),
+            "omnia.project_id": str(self.project_id),
+            "omnia.owner_id": str(self.owner_id),
+            "omnia.provider": "docker_owner_canary",
+            "omnia.resource_kind": "workspace",
+            "omnia.profile_version": self.resource_profile_version,
+        }
+
+    def recovery_runtime_proof(
+        self, reference: MachineEnvironmentRef, *, epoch: int
+    ) -> dict[str, Any]:
+        metadata = self._metadata()
+        if (
+            metadata.get("epoch") != epoch
+            or metadata.get("restore_in_progress")
+            or metadata.get("restore_target")
+            or metadata.get("pending_image")
+            or metadata.get("quiesce_state") in {"pending", "failed"}
+            or metadata.get("restored_image") != reference.image_id
+            or metadata.get("environment_ref") != reference.model_dump(mode="json")
+        ):
+            raise CellIdentityConflict("resumed candidate environment changed")
+        identities = {}
+        containers = {}
+        for kind, container in (
+            ("development", self._container()),
+            ("project-postgres", self._project_postgres()),
+        ):
+            if container is None:
+                raise CellIdentityConflict("resumed candidate runtime is missing")
+            container.reload()
+            labels = container.attrs.get("Config", {}).get("Labels") or {}
+            if (
+                container.status != "running"
+                or not container.id
+                or labels.get("omnia.fencing_epoch") != str(epoch)
+                or any(labels.get(k) != v for k, v in self.labels(kind).items())
+                or (kind == "development" and container.attrs.get("Image") != reference.image_id)
+            ):
+                raise CellIdentityConflict("resumed candidate runtime ownership changed")
+            identities[kind] = {"id": container.id, "image": container.attrs.get("Image")}
+            containers[kind] = container
+        development = containers["development"]
+        postgres = containers["project-postgres"]
+        namespace = (development.attrs.get("HostConfig") or {}).get("NetworkMode", "")
+        if (
+            not namespace.startswith("container:")
+            or not self._project_postgres_matches(
+                postgres, namespace.removeprefix("container:"), epoch
+            )
+            or postgres.attrs.get("Image") != self.client.images.get(self.postgres_image).id
+            or reference.manifest is None
+        ):
+            raise CellIdentityConflict("resumed candidate database binding changed")
+        expected_mounts = {
+            **self.volume_mapping(reference.manifest),
+            self.stem + "-logs": {"bind": "/run/omnia-logs", "mode": "rw"},
+        }
+        actual_mounts = {
+            item.get("Name"): {
+                "bind": item.get("Destination"), "mode": "rw" if item.get("RW") else "ro"
+            }
+            for item in development.attrs.get("Mounts", []) if item.get("Type") == "volume"
+        }
+        if actual_mounts != expected_mounts or any(
+            item.get("Type") not in {"volume", "tmpfs"}
+            for item in development.attrs.get("Mounts", [])
+        ):
+            raise CellIdentityConflict("resumed candidate source mounts changed")
+        own_ids = {item["id"] for item in identities.values()}
+        for volume in reference.volumes:
+            if any(
+                item.id not in own_ids
+                for item in self.client.containers.list(all=True, filters={"volume": volume.name})
+            ):
+                raise CellIdentityConflict("resumed candidate has an unknown volume writer")
+        return {
+            "epoch": epoch,
+            "containers": identities,
+            "reference": reference.model_dump(mode="json"),
+        }
+
+    def recovery_volume_identity(self, reference: MachineEnvironmentRef) -> str:
+        """Current controller-owned volume incarnations, including the candidate DB."""
+        from yleum_orchestrator.services.restoration_binding import canonical_digest
+        from yleum_orchestrator.services.source_volume_identity import volume_incarnation
+
+        self.validate_restore_reference(reference)
+        if reference.manifest is None or set(item.name for item in reference.volumes) != set(
+            self.environment_volume_names(reference.manifest)
+        ):
+            raise CellIdentityConflict("recovery volume scope changed")
+        snapshots: dict[str, dict[str, Any]] = {}
+        for item in reference.volumes:
+            attrs = self.client.volumes.get(item.name).attrs
+            labels = attrs.get("Labels") or {}
+            if any(labels.get(k) != v for k, v in self._recovery_volume_labels(item.name).items()):
+                raise CellIdentityConflict("recovery volume ownership changed")
+            snapshots[item.name] = json.loads(json.dumps(attrs))
+        stats = self._retained_volume_stats(list(snapshots), birth=True)
+        if stats is None or len(stats) != len(snapshots):
+            raise CellResourceError("recovery volume birth identity unavailable")
+        daemon = self.client.info().get("ID")
+        identities = {}
+        for (name, attrs), stat_values in zip(snapshots.items(), stats, strict=True):
+            if self.client.volumes.get(name).attrs != attrs:
+                raise CellIdentityConflict("recovery volume changed during probe")
+            identities[name] = volume_incarnation(
+                daemon_id=daemon,
+                name=name,
+                metadata=attrs,
+                labels=attrs["Labels"],
+                stat_output=json.dumps(stat_values).encode(),
+            )
+        return canonical_digest(identities)
+
     def record_retained_preview(
         self,
         reference: MachineEnvironmentRef,
@@ -1622,6 +1756,7 @@ class DockerMachineBackend:
         return True
 
     def consume_retained_preview(self, reference: MachineEnvironmentRef, *, epoch: int) -> bool:
+        self._require_recovery_access("restore")
         receipt = self._metadata().get("retained_preview_receipt")
         # Consume before examining Docker, so failure/interruption cannot leave
         # a usable receipt after a new execution or partially restored volume.
@@ -1674,6 +1809,7 @@ class DockerMachineBackend:
             return False
 
     def export_image(self) -> tuple[str, Iterable[bytes]]:
+        self._require_recovery_access("capture")
         machine = self._container()
         if machine is None:
             raise CellResourceError("cannot snapshot a missing machine")
@@ -1716,6 +1852,7 @@ class DockerMachineBackend:
         return image.id, image.save(named=False)
 
     def prepare_capture(self) -> None:
+        self._require_recovery_access("capture")
         metadata = self._metadata()
         if metadata.get("restore_in_progress"):
             raise CellResourceError("incomplete restore cannot be captured")
@@ -1914,6 +2051,7 @@ class DockerMachineBackend:
                 self._reconcile_recovery_helpers()
 
     def import_image(self, path: Path, image_id: str) -> None:
+        self._require_recovery_access("restore")
         with path.open("rb") as handle:
             loaded = self.client.images.load(handle)
         if len(loaded) != 1 or loaded[0].id != image_id:
@@ -1964,6 +2102,7 @@ class DockerMachineBackend:
             raise CellIdentityConflict("environment volume identity mismatch")
 
     def begin_restore(self, reference: MachineEnvironmentRef) -> None:
+        self._require_recovery_access("restore")
         self.invalidate_retained_preview()
         self.validate_restore_reference(reference)
         metadata = self._metadata()
@@ -2006,6 +2145,7 @@ class DockerMachineBackend:
         self._volume(self.project_postgres_volume)
 
     def finish_restore(self) -> None:
+        self._require_recovery_access("restore")
         self._reconcile_recovery_helpers()
         metadata = self._metadata()
         if not metadata.get("restore_in_progress") or not metadata.get("pending_image"):
@@ -2182,6 +2322,7 @@ class DockerMachineBackend:
         )
 
     def export_volume(self, name: str) -> Iterable[bytes]:
+        self._require_recovery_access("capture")
         self._reconcile_recovery_helpers()
         helper = self._archive_helper(name, writable=False)
         try:
@@ -2191,6 +2332,7 @@ class DockerMachineBackend:
             helper.remove(force=True)
 
     def import_volume(self, name: str, path: Path) -> None:
+        self._require_recovery_access("restore")
         self._reconcile_recovery_helpers()
         helper = self._archive_helper(name, writable=True)
         try:
@@ -2223,6 +2365,7 @@ class DockerMachineBackend:
         artifact_digest: str,
     ) -> None:
         """Import one bound empty-restoration DB without authorizing arbitrary volumes."""
+        self._require_recovery_access("restore")
         self._reconcile_recovery_helpers()
         name, _volume, immutable = self._restoration_volume(
             operation_id,
@@ -2268,6 +2411,7 @@ class DockerMachineBackend:
         database_artifact_digest: str,
     ) -> None:
         """Remove only the detached, exactly-bound pair of a reverted operation."""
+        self._require_recovery_access("remove")
         self._reconcile_recovery_helpers()
         candidates: list[tuple[str, Any, str]] = []
         for purpose, artifact_digest in (

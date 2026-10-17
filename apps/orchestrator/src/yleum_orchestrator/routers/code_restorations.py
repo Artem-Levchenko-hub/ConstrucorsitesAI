@@ -19,6 +19,10 @@ from yleum_orchestrator.schemas.restoration_adaptation import (
     RestorationAdaptationPrepare,
     RestorationAdaptationProof,
     RestorationAdaptationProofRequest,
+    RestorationAdaptationRecoveryHold,
+    RestorationAdaptationRecoveryIdentity,
+    RestorationAdaptationRecoveryRebind,
+    RestorationAdaptationRecoveryReceipt,
     RestorationAdaptationWorkspace,
 )
 from yleum_orchestrator.schemas.restoration_adaptation_activation import (
@@ -287,5 +291,62 @@ async def cancel_restoration_adaptation_activation(
     _activation_command_identity(workspace_id, generation_run_id, activation_id, body)
     try:
         return await get_restoration_adaptation_activation_service().cancel(body)
+    except CellResourceError:
+        raise _conflict() from None
+
+
+@router.post(
+    "/{workspace_id}/restoration-adaptations/{generation_run_id}/recovery/hold",
+    response_model=RestorationAdaptationRecoveryReceipt,
+)
+async def recovery_hold_restoration_adaptation(
+    workspace_id: UUID,
+    generation_run_id: UUID,
+    body: RestorationAdaptationRecoveryHold,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> RestorationAdaptationRecoveryReceipt:
+    verify_internal_token(x_internal_token)
+    if body.workspace_id != workspace_id or body.generation_run_id != generation_run_id:
+        raise _conflict()
+    try:
+        return await get_restoration_adaptation_workspace_service().recovery_hold(body)
+    except CellResourceError:
+        raise _conflict() from None
+
+
+@router.post(
+    "/{workspace_id}/restoration-adaptations/{generation_run_id}/recovery/status",
+    response_model=RestorationAdaptationRecoveryReceipt,
+)
+async def recovery_status_restoration_adaptation(
+    workspace_id: UUID,
+    generation_run_id: UUID,
+    body: RestorationAdaptationRecoveryIdentity,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> RestorationAdaptationRecoveryReceipt:
+    verify_internal_token(x_internal_token)
+    if body.workspace_id != workspace_id or body.generation_run_id != generation_run_id:
+        raise _conflict()
+    try:
+        return await get_restoration_adaptation_workspace_service().recovery_status(body)
+    except CellResourceError:
+        raise _conflict() from None
+
+
+@router.post(
+    "/{workspace_id}/restoration-adaptations/{generation_run_id}/recovery/rebind",
+    response_model=RestorationAdaptationRecoveryReceipt,
+)
+async def recovery_rebind_restoration_adaptation(
+    workspace_id: UUID,
+    generation_run_id: UUID,
+    body: RestorationAdaptationRecoveryRebind,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> RestorationAdaptationRecoveryReceipt:
+    verify_internal_token(x_internal_token)
+    if body.workspace_id != workspace_id or body.generation_run_id != generation_run_id:
+        raise _conflict()
+    try:
+        return await get_restoration_adaptation_workspace_service().recovery_rebind(body)
     except CellResourceError:
         raise _conflict() from None

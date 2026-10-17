@@ -8,10 +8,11 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import parse_qsl, urlsplit
@@ -19,6 +20,7 @@ from uuid import UUID
 
 import httpx
 import structlog
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.errors import ApiError
@@ -433,6 +435,7 @@ class RestorationAdaptationWorkspace:
     source_database_digest: str
     proof_digest: str
     capabilities: dict[str, object]
+    request_digest: str | None = None
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> RestorationAdaptationWorkspace:
@@ -452,7 +455,11 @@ class RestorationAdaptationWorkspace:
         capabilities = payload.get("capabilities")
         digests = (payload.get("source_database_digest"), payload.get("proof_digest"))
         if (
-            set(payload) != expected
+            set(payload) not in (expected, expected | {"request_digest"})
+            or ("request_digest" in payload and (
+                type(payload["request_digest"]) is not str
+                or _REQUEST_DIGEST_RE.fullmatch(payload["request_digest"]) is None
+            ))
             or payload.get("state") != "ready"
             or type(payload.get("candidate_fencing_epoch")) is not int
             or cast(int, payload["candidate_fencing_epoch"]) < 1
@@ -483,11 +490,129 @@ class RestorationAdaptationWorkspace:
                 source_database_digest=cast(str, payload["source_database_digest"]),
                 proof_digest=cast(str, payload["proof_digest"]),
                 capabilities=cast(dict[str, object], capabilities),
+                request_digest=cast(str | None, payload.get("request_digest")),
             )
         except (TypeError, ValueError, AttributeError) as exc:
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid restoration adaptation workspace"
             ) from exc
+
+
+class RestorationAdaptationRecoveryIdentity(BaseModel):
+    """Immutable original preparation identity; transition IDs are separate effect IDs."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    version: int = 1
+    transition_id: UUID
+    workspace_id: UUID
+    generation_run_id: UUID
+    operation_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    candidate_workspace_id: UUID
+    request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def distinct_transition(self) -> RestorationAdaptationRecoveryIdentity:
+        if self.version != 1:
+            raise ValueError("unsupported adaptation recovery version")
+        if self.transition_id == self.operation_id:
+            raise ValueError("recovery transition must differ from preparation operation")
+        return self
+
+
+class RestorationAdaptationRecoveryHold(RestorationAdaptationRecoveryIdentity):
+    expected_cycle: int = Field(ge=0)
+    control_fencing_epoch: int = Field(gt=0)
+    candidate_fencing_epoch: int = Field(gt=0)
+
+
+class RestorationAdaptationRecoveryRebind(RestorationAdaptationRecoveryIdentity):
+    expected_cycle: int = Field(ge=0)
+    expected_hold_receipt_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    new_control_fencing_epoch: int = Field(gt=0)
+
+
+class RestorationAdaptationRecoveryReceipt(RestorationAdaptationRecoveryIdentity):
+    state: Literal["hold_pending", "held", "rebinding", "resumable"]
+    cycle: int = Field(ge=0)
+    original_control_fencing_epoch: int = Field(gt=0)
+    current_control_fencing_epoch: int = Field(gt=0)
+    original_candidate_fencing_epoch: int = Field(gt=0)
+    current_candidate_fencing_epoch: int = Field(gt=0)
+    barrier_operation_id: UUID
+    barrier_receipt_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    checkpoint_ref_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    physical_incarnation_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    physical_proof_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    restore_operation_id: UUID | None = None
+    terminal_receipt_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def terminal_requires_physical_proof(self) -> RestorationAdaptationRecoveryReceipt:
+        if self.state in {"held", "resumable"} and any(value is None for value in (
+            self.barrier_receipt_digest, self.checkpoint_ref_digest,
+            self.physical_incarnation_digest, self.physical_proof_digest,
+            self.terminal_receipt_digest,
+        )):
+            raise ValueError("terminal recovery receipt requires complete physical proof")
+        if self.state == "resumable" and self.restore_operation_id is None:
+            raise ValueError("resumable recovery receipt requires confirmed restore")
+        return self
+
+
+async def project_cell_restoration_recovery(
+    action: Literal["hold", "status", "rebind"], command: dict[str, Any],
+) -> RestorationAdaptationRecoveryReceipt:
+    """Authenticated transition/read; callers still recheck SQL ownership after await."""
+    models: dict[str, type[RestorationAdaptationRecoveryIdentity]] = {
+        "hold": RestorationAdaptationRecoveryHold,
+        "status": RestorationAdaptationRecoveryIdentity,
+        "rebind": RestorationAdaptationRecoveryRebind,
+    }
+    try:
+        request_type = models[action]
+        request = request_type.model_validate_json(json.dumps(command, allow_nan=False))
+    except (KeyError, ValueError, TypeError):
+        raise OrchestratorUnavailable("Invalid adaptation recovery request") from None
+    payload = await _request(
+        "POST",
+        f"/internal/workspaces/{request.workspace_id}/restoration-adaptations/"
+        f"{request.generation_run_id}/recovery/{action}",
+        json=request.model_dump(mode="json"), timeout=120.0,
+    )
+    try:
+        receipt = RestorationAdaptationRecoveryReceipt.model_validate_json(
+            json.dumps(payload, allow_nan=False),
+        )
+        if any(getattr(receipt, key) != getattr(request, key)
+               for key in RestorationAdaptationRecoveryIdentity.model_fields):
+            raise ValueError("foreign recovery envelope")
+        if isinstance(request, RestorationAdaptationRecoveryHold) and (
+            receipt.state not in {"hold_pending", "held"}
+            or receipt.cycle != request.expected_cycle
+            or receipt.current_control_fencing_epoch != request.control_fencing_epoch
+            or receipt.current_candidate_fencing_epoch != request.candidate_fencing_epoch
+        ):
+            raise ValueError("hold cycle conflicts")
+        if isinstance(request, RestorationAdaptationRecoveryRebind) and (
+            receipt.state not in {"rebinding", "resumable"}
+            or receipt.cycle != request.expected_cycle + 1
+            or receipt.current_control_fencing_epoch != request.new_control_fencing_epoch
+        ):
+            raise ValueError("rebind cycle conflicts")
+        if receipt.state in {"held", "resumable"}:
+            digest = hashlib.sha256(json.dumps(
+                receipt.model_dump(mode="json", exclude={"terminal_receipt_digest"}),
+                sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            if receipt.terminal_receipt_digest != digest:
+                raise ValueError("terminal recovery receipt digest conflicts")
+        elif receipt.terminal_receipt_digest is not None:
+            raise ValueError("pending recovery has no terminal receipt")
+        return receipt
+    except (ValueError, TypeError, AttributeError):
+        raise OrchestratorUnavailable("Invalid adaptation recovery receipt") from None
 
 
 @dataclass(frozen=True, slots=True)
@@ -697,10 +822,74 @@ class RestorationAdaptationProof:
 
 
 @dataclass(frozen=True, slots=True)
+class ProjectCellSourceWriteReceipt:
+    version: int
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    fencing_epoch: int
+    physical_volume: str
+    physical_volume_identity: str
+    request_sha256: str
+    before_revision: str
+    after_revision: str
+    written: int
+    deleted: int
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProjectCellSourceWriteReceipt:
+        try:
+            if type(payload) is not dict or set(payload) != set(cls.__dataclass_fields__):
+                raise ValueError("invalid receipt shape")
+            values = dict(payload)
+            for key in ("version", "fencing_epoch", "written", "deleted"):
+                if type(values[key]) is not int:
+                    raise ValueError("invalid receipt integer")
+            if values["version"] != 1 or min(values["written"], values["deleted"]) < 0:
+                raise ValueError("invalid receipt version or counts")
+            _validate_fencing_epoch(values["fencing_epoch"])
+            for key in (
+                "operation_id", "workspace_id", "project_id", "owner_id", "generation_run_id",
+            ):
+                if type(values[key]) is not str:
+                    raise ValueError("invalid receipt identity")
+                values[key] = UUID(values[key])
+            for key in (
+                "request_sha256", "before_revision", "after_revision", "physical_volume_identity",
+            ):
+                _validate_workspace_revision(values[key])
+            if type(values["physical_volume"]) is not str or not values["physical_volume"].strip():
+                raise ValueError("invalid receipt volume")
+            return cls(**values)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid source write receipt"
+            ) from exc
+
+    def require_identity(
+        self, workspace_id: UUID, generation_run_id: UUID, operation_id: UUID,
+    ) -> None:
+        if (self.workspace_id, self.generation_run_id, self.operation_id) != (
+            workspace_id, generation_run_id, operation_id,
+        ):
+            raise OrchestratorUnavailable("Orchestrator source write receipt identity mismatch")
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellSourceWriteStatus:
+    operation_id: UUID
+    state: Literal["pending", "terminal"]
+    receipt: ProjectCellSourceWriteReceipt | None
+
+
+@dataclass(frozen=True, slots=True)
 class ProjectCellAgentWriteResponse:
     written: int
     deleted: int
     workspace_revision: str
+    receipt: ProjectCellSourceWriteReceipt | None = None
 
     def __post_init__(self) -> None:
         if self.written < 0 or self.deleted < 0:
@@ -709,7 +898,7 @@ class ProjectCellAgentWriteResponse:
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentWriteResponse:
-        expected = {"written", "deleted", "workspace_revision"}
+        expected = {"written", "deleted", "workspace_revision", "receipt"}
         unexpected = set(payload) - expected
         if unexpected:
             raise OrchestratorUnavailable(
@@ -731,6 +920,8 @@ class ProjectCellAgentWriteResponse:
                 written=written,
                 deleted=deleted,
                 workspace_revision=workspace_revision,
+                receipt=(ProjectCellSourceWriteReceipt.from_json(payload["receipt"])
+                         if "receipt" in payload else None),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(
@@ -785,6 +976,70 @@ class ProjectCellWorkspaceIdentity:
             ) from exc
 
 
+def command_wire_digest(value: object) -> str:
+    """The controller's versioned ASCII-escaped canonical command envelope."""
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                    ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellCommandReceipt:
+    version: int
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    dispatch_fencing_epoch: int
+    physical_volume: str
+    physical_volume_identity: str
+    request_sha256: str
+    before_revision: str
+    after_revision: str
+    response_sha256: str
+
+    @classmethod
+    def from_json(cls, payload: object) -> ProjectCellCommandReceipt:
+        try:
+            if type(payload) is not dict or set(payload) != set(cls.__dataclass_fields__):
+                raise ValueError("invalid command receipt shape")
+            values = dict(payload)
+            if type(values["version"]) is not int or values["version"] != 1:
+                raise ValueError("invalid command receipt version")
+            if type(values["dispatch_fencing_epoch"]) is not int:
+                raise ValueError("invalid command receipt fence")
+            _validate_fencing_epoch(values["dispatch_fencing_epoch"])
+            for key in ("operation_id", "workspace_id", "project_id", "owner_id",
+                        "generation_run_id"):
+                if type(values[key]) is not str:
+                    raise ValueError("invalid command receipt identity")
+                values[key] = UUID(values[key])
+            for key in ("request_sha256", "response_sha256", "before_revision",
+                        "after_revision", "physical_volume_identity"):
+                _validate_workspace_revision(values[key])
+            if type(values["physical_volume"]) is not str or not values["physical_volume"].strip():
+                raise ValueError("invalid command receipt volume")
+            return cls(**values)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise OrchestratorUnavailable(
+                "Orchestrator returned an invalid command receipt"
+            ) from exc
+
+    def require_identity(self, workspace_id: UUID, run_id: UUID, operation_id: UUID) -> None:
+        if (self.workspace_id, self.generation_run_id, self.operation_id) != (
+            workspace_id, run_id, operation_id,
+        ):
+            raise OrchestratorUnavailable("Orchestrator command receipt identity mismatch")
+
+    def require_response(self, response: ProjectCellAgentExecResponse) -> None:
+        if (response.operation_id != self.operation_id or response.before_identity is None
+            or response.after_identity is None
+            or response.before_identity.workspace_revision != self.before_revision
+            or response.after_identity.workspace_revision != self.after_revision
+            or command_wire_digest(response.command_wire_json()) != self.response_sha256):
+            raise OrchestratorUnavailable("Orchestrator command receipt response mismatch")
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellAgentExecResponse:
     ok: bool
@@ -798,6 +1053,13 @@ class ProjectCellAgentExecResponse:
     environment_mutated: bool = False
     project_migration_receipt: dict[str, object] | None = None
     compiled_asset_receipt: dict[str, object] | None = None
+    command_receipt: ProjectCellCommandReceipt | None = None
+
+    def command_wire_json(self) -> dict[str, Any]:
+        values = asdict(self)
+        values.pop("command_receipt")
+        values["operation_id"] = str(self.operation_id) if self.operation_id else None
+        return values
 
     def __post_init__(self) -> None:
         _validate_workspace_revision(self.workspace_revision)
@@ -811,6 +1073,8 @@ class ProjectCellAgentExecResponse:
                 raise ValueError("workspace revision does not match command evidence")
             if self.environment_mutated != (self.before_identity != self.after_identity):
                 raise ValueError("mutation flag does not match command evidence")
+        if self.command_receipt is not None:
+            self.command_receipt.require_response(self)
 
     @classmethod
     def from_json(cls, payload: dict[str, object]) -> ProjectCellAgentExecResponse:
@@ -827,6 +1091,8 @@ class ProjectCellAgentExecResponse:
             expected = expected | {"project_migration_receipt"}
         if "compiled_asset_receipt" in payload:
             expected = expected | {"compiled_asset_receipt"}
+        if "command_receipt" in payload:
+            expected = expected | {"command_receipt"}
         unexpected = set(payload) - expected
         if unexpected or set(payload) != expected:
             raise OrchestratorUnavailable(
@@ -876,11 +1142,21 @@ class ProjectCellAgentExecResponse:
                 environment_mutated=cast(bool, environment_mutated),
                 project_migration_receipt=cast(dict[str, object] | None, receipt),
                 compiled_asset_receipt=cast(dict[str, object] | None, compiled),
+                command_receipt=(ProjectCellCommandReceipt.from_json(payload["command_receipt"])
+                                 if "command_receipt" in payload else None),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(
                 "Orchestrator returned an invalid Project Cell exec response"
             ) from exc
+
+
+@dataclass(frozen=True, slots=True)
+class ProjectCellCommandStatus:
+    operation_id: UUID
+    state: Literal["unknown", "pending", "terminal"]
+    receipt: ProjectCellCommandReceipt | None
+    terminal_response: ProjectCellAgentExecResponse | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1484,19 +1760,31 @@ async def project_cell_prepare_restoration_adaptation(
 
 async def project_cell_cleanup_restoration_adaptation(
     workspace: RestorationAdaptationWorkspace,
+    *,
+    recovery_cycle: int | None = None,
+    recovery_receipt_digest: str | None = None,
 ) -> None:
+    if (recovery_cycle is None) != (recovery_receipt_digest is None) or (
+        recovery_cycle is not None and (
+            type(recovery_cycle) is not int or recovery_cycle < 0
+            or type(recovery_receipt_digest) is not str
+            or _REQUEST_DIGEST_RE.fullmatch(recovery_receipt_digest) is None
+        )
+    ):
+        raise OrchestratorUnavailable("Invalid adaptation cleanup cycle binding")
+    body: dict[str, object] = {
+        "workspace_id": str(workspace.source_workspace_id),
+        "generation_run_id": str(workspace.generation_run_id),
+        "candidate_workspace_id": str(workspace.candidate_workspace_id),
+        "candidate_fencing_epoch": workspace.candidate_fencing_epoch,
+        "proof_digest": workspace.proof_digest,
+    }
+    if recovery_cycle is not None:
+        body.update(recovery_cycle=recovery_cycle, recovery_receipt_digest=recovery_receipt_digest)
     payload = await _request(
         "POST",
         f"/internal/workspaces/{workspace.source_workspace_id}/restoration-adaptations/"
-        f"{workspace.generation_run_id}/cleanup",
-        json={
-            "workspace_id": str(workspace.source_workspace_id),
-            "generation_run_id": str(workspace.generation_run_id),
-            "candidate_workspace_id": str(workspace.candidate_workspace_id),
-            "candidate_fencing_epoch": workspace.candidate_fencing_epoch,
-            "proof_digest": workspace.proof_digest,
-        },
-        timeout=120.0,
+        f"{workspace.generation_run_id}/cleanup", json=body, timeout=120.0,
     )
     if payload != {"state": "cleaned"}:
         raise OrchestratorUnavailable(
@@ -1679,6 +1967,7 @@ async def project_cell_agent_write_files(
     expected_revision: str,
     files: dict[str, str],
     deletes: Sequence[str] = (),
+    operation_id: UUID | None = None,
 ) -> ProjectCellAgentWriteResponse:
     if type(files) is not dict:
         raise ValueError("files must be an object")
@@ -1694,23 +1983,59 @@ async def project_cell_agent_write_files(
         raise ValueError("the same path cannot be written and deleted")
     _validate_fencing_epoch(fencing_epoch)
     _validate_workspace_revision(expected_revision)
+    body: dict[str, Any] = {
+        "generation_run_id": str(generation_run_id) if generation_run_id is not None else None,
+        "fencing_epoch": fencing_epoch, "expected_revision": expected_revision,
+        "files": files, "deletes": normalized_deletes,
+    }
+    if operation_id is not None:
+        if not isinstance(operation_id, UUID) or generation_run_id is None:
+            raise ValueError("tracked writes require operation and generation identities")
+        body["operation_id"] = str(operation_id)
     payload = await _request(
         "POST",
         f"/internal/workspaces/{workspace_id}/agent/write-files",
-        json={
-            "generation_run_id": (
-                str(generation_run_id) if generation_run_id is not None else None
-            ),
-            "fencing_epoch": fencing_epoch,
-            "expected_revision": expected_revision,
-            "files": files,
-            "deletes": normalized_deletes,
-        },
+        json=body,
         # The first guarded write can resume a retained machine and its database.
         # Match the bounded cold-start allowance used by owner preview startup.
         timeout=300.0,
     )
-    return ProjectCellAgentWriteResponse.from_json(payload)
+    result = ProjectCellAgentWriteResponse.from_json(payload)
+    if operation_id is not None:
+        if result.receipt is None or generation_run_id is None:
+            raise OrchestratorUnavailable("Tracked source write has no terminal receipt")
+        result.receipt.require_identity(workspace_id, generation_run_id, operation_id)
+        if (result.receipt.fencing_epoch, result.receipt.before_revision,
+            result.receipt.after_revision, result.receipt.written, result.receipt.deleted) != (
+            fencing_epoch, expected_revision, result.workspace_revision,
+            result.written, result.deleted,
+        ):
+            raise OrchestratorUnavailable("Tracked source write receipt conflicts with response")
+    elif result.receipt is not None:
+        raise OrchestratorUnavailable("Untracked source write returned an unexpected receipt")
+    return result
+
+
+async def project_cell_agent_write_operation(
+    workspace_id: UUID, *, operation_id: UUID, generation_run_id: UUID,
+) -> ProjectCellSourceWriteStatus:
+    payload = await _request(
+        "GET", f"/internal/workspaces/{workspace_id}/agent/write-operations/{operation_id}",
+        params={"generation_run_id": str(generation_run_id)},
+    )
+    if (set(payload) != {"operation_id", "state", "receipt"}
+        or payload["operation_id"] != str(operation_id)
+        or payload["state"] not in ("pending", "terminal")):
+        raise OrchestratorUnavailable("Orchestrator returned an invalid source write status")
+    receipt = (ProjectCellSourceWriteReceipt.from_json(payload["receipt"])
+               if payload["receipt"] is not None else None)
+    if (payload["state"] == "terminal") != (receipt is not None):
+        raise OrchestratorUnavailable("Source write terminal status has no matching receipt")
+    if receipt is not None:
+        receipt.require_identity(workspace_id, generation_run_id, operation_id)
+    return ProjectCellSourceWriteStatus(
+        operation_id, cast(Literal["pending", "terminal"], payload["state"]), receipt,
+    )
 
 
 @dataclass(frozen=True)
@@ -1783,6 +2108,7 @@ async def project_cell_agent_exec(
     timeout_seconds: int = 180,
     task_role: str | None = None,
     operation_id: UUID | None = None,
+    track_receipt: bool = False,
 ) -> ProjectCellAgentExecResponse:
     if not isinstance(cmd, str) or not cmd.strip():
         raise ValueError("cmd must be a non-empty string")
@@ -1800,23 +2126,41 @@ async def project_cell_agent_exec(
         "test",
     ):
         raise ValueError("invalid portable task role")
+    if type(track_receipt) is not bool or (track_receipt and (
+        generation_run_id is None or operation_id is None
+    )):
+        raise ValueError("tracked command requires an exact run and operation")
+    request = {
+        "generation_run_id": str(generation_run_id) if generation_run_id is not None else None,
+        "fencing_epoch": fencing_epoch, "expected_revision": expected_revision,
+        "cmd": cmd, "timeout_seconds": timeout_seconds,
+        **({"task_role": task_role} if task_role is not None or track_receipt else {}),
+        **({"operation_id": str(operation_id)} if operation_id is not None else {}),
+        **({"track_receipt": True} if track_receipt else {}),
+    }
     payload = await _request(
         "POST",
         f"/internal/workspaces/{workspace_id}/agent/exec",
-        json={
-            "generation_run_id": (
-                str(generation_run_id) if generation_run_id is not None else None
-            ),
-            "fencing_epoch": fencing_epoch,
-            "expected_revision": expected_revision,
-            "cmd": cmd,
-            "timeout_seconds": timeout_seconds,
-            **({"task_role": task_role} if task_role is not None else {}),
-            **({"operation_id": str(operation_id)} if operation_id is not None else {}),
-        },
+        json=request,
         timeout=float(timeout_seconds + 30),
     )
-    return ProjectCellAgentExecResponse.from_json(payload)
+    result = ProjectCellAgentExecResponse.from_json(payload)
+    if track_receipt:
+        assert generation_run_id is not None and operation_id is not None
+        receipt = result.command_receipt
+        if receipt is None:
+            raise OrchestratorUnavailable("Orchestrator omitted tracked command receipt")
+        receipt.require_identity(workspace_id, generation_run_id, operation_id)
+        if (receipt.dispatch_fencing_epoch != fencing_epoch
+            or receipt.before_revision != expected_revision
+            or receipt.request_sha256 != command_wire_digest({
+                "protocol": "tracked-command/v1", "workspace_id": str(workspace_id),
+                "request": request,
+            })):
+            raise OrchestratorUnavailable("Orchestrator command request binding mismatch")
+    elif result.command_receipt is not None:
+        raise OrchestratorUnavailable("Orchestrator returned an unsolicited command receipt")
+    return result
 
 
 async def project_cell_agent_identity(
@@ -1835,6 +2179,34 @@ async def project_cell_agent_identity(
         },
     )
     return ProjectCellWorkspaceIdentity.from_json(payload)
+
+
+async def project_cell_agent_command_operation(
+    workspace_id: UUID, *, operation_id: UUID, generation_run_id: UUID, fencing_epoch: int,
+) -> ProjectCellCommandStatus:
+    _validate_fencing_epoch(fencing_epoch)
+    payload = await _request(
+        "GET", f"/internal/workspaces/{workspace_id}/agent/command-operations/{operation_id}",
+        params={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch},
+    )
+    if (type(payload) is not dict or set(payload) != {
+        "operation_id", "state", "receipt", "terminal_response",
+    } or payload["operation_id"] != str(operation_id)
+        or payload["state"] not in {"unknown", "pending", "terminal"}):
+        raise OrchestratorUnavailable("Orchestrator returned an invalid command status")
+    state = cast(Literal["unknown", "pending", "terminal"], payload["state"])
+    if state != "terminal":
+        if payload["receipt"] is not None or payload["terminal_response"] is not None:
+            raise OrchestratorUnavailable("Nonterminal command has terminal evidence")
+        return ProjectCellCommandStatus(operation_id, state, None, None)
+    receipt = ProjectCellCommandReceipt.from_json(payload["receipt"])
+    raw = payload["terminal_response"]
+    if type(raw) is not dict or "command_receipt" in raw:
+        raise OrchestratorUnavailable("Orchestrator omitted the terminal command response")
+    response = ProjectCellAgentExecResponse.from_json(raw)
+    receipt.require_identity(workspace_id, generation_run_id, operation_id)
+    receipt.require_response(response)
+    return ProjectCellCommandStatus(operation_id, state, receipt, response)
 
 
 async def project_cell_agent_operation_status(

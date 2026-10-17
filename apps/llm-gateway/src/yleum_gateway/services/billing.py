@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
-from decimal import Decimal
+from dataclasses import dataclass
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -13,6 +14,7 @@ import structlog
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
 from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
+from yleum_gateway.services.generation_identity import GenerationProviderIdentity
 from yleum_gateway.services.pricing import validate_cost_provenance
 
 log = structlog.get_logger(__name__)
@@ -24,6 +26,193 @@ _RESOLVED_ACCOUNT = """
      WHERE ba.scope = 'personal' AND ba.personal_user_id = $1
      LIMIT 1
 """
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderUsageBinding:
+    """Server dispatch result, revalidated against its journal inside charge."""
+
+    identity: GenerationProviderIdentity
+    call_id: UUID
+
+
+def settlement_receipt_hash(
+    *, user_id: UUID, project_id: UUID | None, run_id: UUID | None, model_id: str,
+    tokens_in: int, tokens_out: int, cost_rub: Decimal, free: bool, stage: str | None,
+    cache_read_tokens: int, cache_write_tokens: int, provider_cost_usd: Decimal | None,
+) -> str:
+    """Preserve the established settlement identity exactly across cold readers."""
+    return hashlib.sha256(json.dumps(
+        [str(user_id), str(project_id), str(run_id), model_id, tokens_in, tokens_out,
+         str(cost_rub.normalize()), free, stage, max(0, cache_read_tokens),
+         max(0, cache_write_tokens),
+         str(provider_cost_usd.normalize()) if provider_cost_usd is not None else None],
+        separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
+def _sql_amount(value: Decimal | None, places: int) -> Decimal | None:
+    """Check PostgreSQL NUMERIC projections without changing original receipts."""
+    return value.quantize(Decimal(1).scaleb(-places), rounding=ROUND_HALF_UP) if value is not None else None
+
+
+def _journal_amounts(call: Any) -> tuple[dict[str, Any] | None, tuple[Decimal | None, ...]]:
+    provenance = json.loads(call["cost_provenance"]) if call["cost_provenance"] else None
+    keys = ("calculated_cost_rub", "provider_cost_rub", "provider_cost_usd")
+    if provenance is None:
+        return None, tuple(call[key] for key in keys)
+    validate_cost_provenance(provenance)
+    originals = tuple(
+        Decimal(provenance[key]) if provenance[key] is not None else None
+        for key in ("calculated_cost_rub", "reported_cost_rub", "provider_cost_usd")
+    )
+    if (
+        any(call[key] != _sql_amount(value, 8) for key, value in zip(keys, originals, strict=True))
+        or any(call[key] != provenance[key] for key in (
+            "tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens",
+        ))
+    ):
+        raise BillingReconciliationRequiredError("Journal cost projection conflicts")
+    return provenance, originals
+
+
+def _journal_receipt_matches(call: Any, provenance: Any, amounts: tuple[Any, ...]) -> bool:
+    from yleum_gateway.services.provider_calls import receipt_digest
+
+    return bool(call["receipt_hash"] == receipt_digest(
+        call["status"], call["actual_model"], call["provider_request_id"],
+        tuple(call[key] for key in ("tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens")),
+        amounts, provenance, call["error_type"],
+    ))
+
+
+async def _lock_usage_call(
+    conn: Any, binding: ProviderUsageBinding, *, user_id: UUID,
+    project_id: UUID | None, run_id: UUID | None, model_id: str,
+    tokens_in: int, tokens_out: int, cache_read_tokens: int, cache_write_tokens: int,
+    cost_rub: Decimal,
+    provider_scope: str, provider_request_id: str | None,
+    provider_cost_usd: Decimal | None, provenance_json: str | None,
+) -> Any:
+    # Existing billing takes the run lock first. Never use _owned here: it locks
+    # the attempt and denies late financial receipts after Stop/terminal state.
+    row = await conn.fetchrow(
+        "SELECT c.*,a.run_id AS bound_run,a.project_id AS bound_project,"
+        "a.user_id AS bound_user,a.prompt_hash,a.request_sha256,a.version "
+        "FROM provider_calls c JOIN generation_provider_attempts a ON a.provider_call_id=c.id "
+        "WHERE c.id=$1 AND a.attempt_id=$2 FOR UPDATE OF c",
+        binding.call_id, binding.identity.attempt_id,
+    )
+    expected = {
+        "bound_run": binding.identity.run_id, "bound_project": binding.identity.project_id,
+        "bound_user": binding.identity.user_id, "prompt_hash": binding.identity.prompt_hash,
+        "request_sha256": binding.identity.request_sha256, "version": 1,
+        "user_id": user_id, "project_id": project_id, "run_id": run_id,
+        "actual_model": model_id, "tokens_in": tokens_in, "tokens_out": tokens_out,
+        "cache_read_tokens": max(0, cache_read_tokens),
+        "cache_write_tokens": max(0, cache_write_tokens),
+        "provider_scope": provider_scope, "provider_request_id": provider_request_id,
+        "provider_cost_usd": _sql_amount(provider_cost_usd, 8),
+    }
+    if (
+        row is None or row["status"] not in {"completed", "ambiguous"}
+        or row["finished_at"] is None or not row["receipt_hash"]
+        or any(row[key] != value for key, value in expected.items())
+        or row["bound_run"] != run_id or row["bound_project"] != project_id
+        or row["bound_user"] != user_id
+        or (json.loads(row["cost_provenance"]) if row["cost_provenance"] else None)
+        != (json.loads(provenance_json) if provenance_json else None)
+        or (provenance_json is None and _sql_amount(cost_rub, 8) != (
+            row["provider_cost_rub"] if row["provider_cost_rub"] is not None else row["calculated_cost_rub"]
+        ))
+    ):
+        raise BillingReconciliationRequiredError("Provider usage binding conflicts")
+    provenance, amounts = _journal_amounts(row)
+    if not _journal_receipt_matches(row, provenance, amounts):
+        raise BillingReconciliationRequiredError("Provider journal receipt conflicts")
+    return row
+
+
+async def _link_usage(conn: Any, call: Any, usage_id: UUID) -> None:
+    if call is None:
+        return
+    changed = await conn.fetchval(
+        "UPDATE provider_calls SET usage_id=$2 WHERE id=$1 "
+        "AND (usage_id IS NULL OR usage_id=$2) RETURNING id", call["id"], usage_id,
+    )
+    if changed != call["id"]:
+        raise BillingReconciliationRequiredError("Provider usage link conflicts")
+
+
+async def confirmed_provider_accounting(conn: Any, attempt: Any) -> bool:
+    """Read an exact committed receipt chain; never charge, match by time, or lock writers.
+
+    Caller owns current attempt/body locks. This reader takes no run/call/budget
+    write locks, so it cannot invert billing or storage cleanup lock ordering.
+    """
+    if attempt["phase"] != "closed":
+        return False
+    call = await conn.fetchrow("SELECT * FROM provider_calls WHERE id=$1", attempt["provider_call_id"])
+    if (
+        call is None or call["finished_at"] is None
+        or any(call[key] != attempt[key] for key in ("run_id", "project_id", "user_id"))
+    ):
+        return False
+    provenance, amounts = _journal_amounts(call)
+    if not _journal_receipt_matches(call, provenance, amounts):
+        return False
+    if attempt["terminal_reason"] in {"preconnect", "rate_limit_refused"}:
+        return call["status"] == "failed" and call["usage_id"] is None
+    if (
+        attempt["terminal_reason"] != "completed" or call["status"] != "completed"
+        or call["usage_id"] is None
+    ):
+        return False
+    usage = await conn.fetchrow("SELECT * FROM usage WHERE id=$1", call["usage_id"])
+    settlement = await conn.fetchrow("SELECT * FROM usage_settlements WHERE usage_id=$1", call["usage_id"])
+    if (
+        usage is None or settlement is None or settlement["status"] not in {"settled", "free", "deferred"}
+        or any(usage[key] != call[key] for key in (
+            "run_id", "project_id", "user_id", "message_id", "tokens_in", "tokens_out",
+            "cache_read_tokens", "cache_write_tokens", "provider_request_id", "provider_cost_usd",
+        ))
+        or usage["model_id"] != call["actual_model"]
+        or settlement["user_id"] != call["user_id"]
+        or settlement["provider_scope"] != call["provider_scope"]
+        or settlement["provider_request_id"] != call["provider_request_id"]
+        or (json.loads(usage["cost_provenance"]) if usage["cost_provenance"] else None) != provenance
+    ):
+        return False
+    original_cost = (
+        Decimal(provenance["effective_cost_rub"]) if provenance is not None else
+        amounts[1] if amounts[1] is not None else amounts[0]
+    )
+    if original_cost is None or usage["cost_rub"] != _sql_amount(original_cost, 4):
+        return False
+    policy = await conn.fetchrow("SELECT version,is_free FROM generation_billing_policies WHERE run_id=$1", call["run_id"])
+    if policy is not None and policy["version"] != "accepted-build-v1":
+        return False
+    free = bool(policy["is_free"]) if policy is not None else call["free"]
+    if settlement["receipt_hash"] != settlement_receipt_hash(
+        user_id=usage["user_id"], project_id=usage["project_id"], run_id=usage["run_id"],
+        model_id=usage["model_id"], tokens_in=usage["tokens_in"], tokens_out=usage["tokens_out"],
+        cost_rub=original_cost, free=free, stage=usage["stage"],
+        cache_read_tokens=usage["cache_read_tokens"], cache_write_tokens=usage["cache_write_tokens"],
+        provider_cost_usd=amounts[2],
+    ):
+        return False
+    if settlement["status"] == "settled":
+        wallet = await conn.fetchrow("SELECT * FROM wallet_charges WHERE id=$1", settlement["wallet_charge_id"])
+        return (
+            not free and wallet is not None and wallet["user_id"] == call["user_id"]
+            and wallet["billing_account_id"] == settlement["billing_account_id"]
+            and wallet["entry_type"] == "usage" and wallet["amount_rub"] == -usage["cost_rub"]
+            and wallet["external_ref"] == f"usage:{usage['id']}"
+            and wallet["message_id"] == usage["message_id"]
+        )
+    return settlement["wallet_charge_id"] is None and (
+        settlement["status"] == "deferred" or free
+    )
 
 
 async def get_balance(user_id: UUID) -> Decimal:
@@ -80,6 +269,7 @@ async def charge(
     provider_cost_usd: Decimal | None = None,
     provider_scope: str = "llmgw",
     cost_provenance: dict[str, Any] | None = None,
+    provider_binding: ProviderUsageBinding | None = None,
 ) -> UUID:
     """Commit usage even when unpaid, then raise 402 outside the transaction.
 
@@ -163,25 +353,36 @@ async def charge(
                 # Missing trusted policy is never permission to charge a build.
                 # Historical debits remain immutable; new/late expense is ours.
                 deferred = True
-        receipt_hash = hashlib.sha256(
-            json.dumps(
-                [
-                    str(user_id),
-                    str(project_id),
-                    str(run_id),
-                    model_id,
-                    tokens_in,
-                    tokens_out,
-                    str(cost_rub.normalize()),
-                    free,
-                    stage,
-                    max(0, cache_read_tokens),
-                    max(0, cache_write_tokens),
-                    str(provider_cost_usd.normalize()) if provider_cost_usd is not None else None,
-                ],
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        receipt_hash = settlement_receipt_hash(
+            user_id=user_id, project_id=project_id, run_id=run_id, model_id=model_id,
+            tokens_in=tokens_in, tokens_out=tokens_out, cost_rub=cost_rub, free=free, stage=stage,
+            cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
+            provider_cost_usd=provider_cost_usd,
+        )
+        call = None
+        if provider_binding is not None:
+            call = await _lock_usage_call(
+                conn, provider_binding, user_id=user_id, project_id=project_id, run_id=run_id,
+                model_id=model_id, tokens_in=tokens_in, tokens_out=tokens_out,
+                cost_rub=cost_rub,
+                cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
+                provider_scope=provider_scope, provider_request_id=provider_request_id,
+                provider_cost_usd=provider_cost_usd, provenance_json=provenance_json,
+            )
+            if call["usage_id"] is not None:
+                linked = await conn.fetchrow(
+                    "SELECT s.* FROM usage_settlements s JOIN usage u ON u.id=s.usage_id "
+                    "WHERE s.usage_id=$1 AND s.user_id=$2 AND u.user_id=$2 "
+                    "AND u.project_id IS NOT DISTINCT FROM $3 AND u.run_id IS NOT DISTINCT FROM $4",
+                    call["usage_id"], user_id, project_id, run_id,
+                )
+                if linked is None or linked["receipt_hash"] != receipt_hash:
+                    raise BillingReconciliationRequiredError("Linked provider receipt conflicts")
+                if linked["status"] == "unpaid":
+                    raise WalletEmptyError("Completed provider receipt remains unpaid")
+                if linked["status"] not in {"settled", "free", "deferred"}:
+                    raise BillingReconciliationRequiredError("Linked provider receipt is unresolved")
+                return UUID(str(linked["wallet_charge_id"] or linked["id"]))
         if provider_request_id is not None:
             # Lock before reading: concurrent deliveries observe the first commit.
             # Hash collisions only serialize unrelated receipts; uniqueness is exact.
@@ -191,7 +392,7 @@ async def charge(
                 lock_key,
             )
             existing = await conn.fetchrow(
-                "SELECT id, wallet_charge_id, receipt_hash, status FROM usage_settlements "
+                "SELECT id, usage_id, wallet_charge_id, receipt_hash, status FROM usage_settlements "
                 "WHERE user_id=$1 AND provider_scope=$2 AND provider_request_id=$3",
                 user_id,
                 provider_scope,
@@ -202,6 +403,10 @@ async def charge(
                     raise BillingReconciliationRequiredError(
                         "Provider receipt was replayed with conflicting settlement data"
                     )
+                if call is not None:
+                    if existing["status"] not in {"settled", "free", "deferred", "unpaid"}:
+                        raise BillingReconciliationRequiredError("Provider receipt is unresolved")
+                    await _link_usage(conn, call, existing["usage_id"])
                 if existing["status"] != "unpaid":
                     return UUID(str(existing["wallet_charge_id"] or existing["id"]))
                 unpaid = True
@@ -300,6 +505,7 @@ async def charge(
                 charge_id if not free and not unpaid and not deferred else None,
                 "unpaid" if unpaid else "deferred" if deferred else "free" if free else "settled",
             )
+            await _link_usage(conn, call, usage_id)
 
     if unpaid:
         raise WalletEmptyError(

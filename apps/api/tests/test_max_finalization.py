@@ -254,6 +254,7 @@ async def _new_harness(
     *,
     build_green: bool = True,
     build_detail: str = "TS2322",
+    toolchain_digest: str = "6" * 64,
 ) -> _Harness:
     owner = User(
         email=f"finalization-{uuid.uuid4().hex}@example.com",
@@ -307,7 +308,7 @@ async def _new_harness(
         schema_data_digest="3" * 64,
         cell_manifest_digest="4" * 64,
         base_image_digest="5" * 64,
-        toolchain_digest="6" * 64,
+        toolchain_digest=toolchain_digest,
         resource_profile_version="docker-owner-cell-resources-v2",
         build_config_digest="7" * 64,
     )
@@ -1561,18 +1562,108 @@ async def test_deadline_watchdog_retry_pause_preserves_cancellation(monkeypatch)
     monkeypatch.setattr(finalization.asyncio, "sleep", sleep)
     with pytest.raises(asyncio.CancelledError) as caught:
         await finalization.run_generation_deadline_watchdog(
-            session_factory=None, generation_run_id=uuid.uuid4(),
+            session_factory=None,
+            generation_run_id=uuid.uuid4(),
         )
     assert caught.value is original
     assert waits == [1.0]
 
 
+@pytest.mark.parametrize("repair_complete", [False, True])
+async def test_cold_finalization_consumes_pending_repair_before_any_promotion(
+    monkeypatch,
+    repair_complete,
+):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services.generation.continuation import SourceNoveltyTracker
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+    from yleum_api.services.generation.source_error_classification import SourceFailure
+    from yleum_api.services.max_finalization import MaxFinalizationConflict
+
+    now = datetime.now(UTC)
+    run = GenerationRun(status="running", agent_state={}, created_at=now, started_at=now)
+
+    @asynccontextmanager
+    async def sessions():
+        yield SimpleNamespace(commit=AsyncMock())
+
+    files = {"src/app/page.tsx": "unchanged"}
+    progress = {
+        "version": 1,
+        "source_history": list(SourceNoveltyTracker(files).source_history()),
+        "feedback": ["original red diagnostic"],
+        "pending_detail": "original red diagnostic",
+        "pending_targeted": True,
+        "no_progress": False,
+    }
+    driver = SimpleNamespace(
+        context={
+            "completed": {
+                "finalization_progress": progress,
+                "source_repair": {
+                    "version": 1,
+                    "status": "complete" if repair_complete else "active",
+                    "task": "original paid task",
+                    "baseline": files,
+                    "edit_deadline": (now + timedelta(hours=1)).isoformat(),
+                    "targeted": True,
+                    "response_budget": {"total": 0, "since_progress": 0},
+                    "result": None,
+                },
+            }
+        },
+        state=SimpleNamespace(execution=SimpleNamespace()),
+    )
+    if repair_complete:
+        from dataclasses import asdict
+
+        from yleum_api.services.agent_builder import AgentResult
+
+        driver.context["completed"]["source_repair"]["result"] = asdict(
+            AgentResult(False, "checks", {}, 1)
+        )
+
+    async def save(execution, *, context, **kwargs):
+        driver.context = context
+
+    driver.save = save
+    coordinator = object.__new__(MaxFinalizationCoordinator)
+    coordinator.session_factory = sessions
+    coordinator._locked_run = AsyncMock(return_value=run)
+    coordinator._raise_persisted_infrastructure_failure = AsyncMock()
+    coordinator.executor = SimpleNamespace(snapshot_files=AsyncMock(return_value=files))
+    coordinator.finalize = AsyncMock(side_effect=AssertionError("promotion before pending repair"))
+    coordinator._repair_progress_receipts = AsyncMock(return_value=frozenset({"old-green"}))
+    coordinator.revalidate_pending_repair = AsyncMock(
+        return_value=SourceFailure("type_error", "src/app/page.tsx", ("src/app/page.tsx",))
+    )
+
+    async def repair(*args):
+        coordinator.revalidate_pending_repair.assert_awaited_once()
+        raise GenerationYielded(
+            run_id=uuid.uuid4(), checkpoint=None, attempt_seq=0, phase="waiting_dependency"
+        )
+
+    expected = MaxFinalizationConflict if repair_complete else GenerationYielded
+    with pytest.raises(expected):
+        await coordinator.finalize_with_repair(
+            prompt="original", repair=repair, repair_source=repair, continuation=driver
+        )
+    coordinator.finalize.assert_not_awaited()
+    if repair_complete:
+        coordinator.revalidate_pending_repair.assert_not_awaited()
+        assert driver.context["completed"]["finalization_progress"]["no_progress"] is True
+
+
 _PAGE_EXPORT_FAILURE = (
-    'Failed to compile.\n'
-    'src/app/page.tsx\n'
+    "Failed to compile.\n"
+    "src/app/page.tsx\n"
     'Type error: Page "src/app/page.tsx" does not match the required types of a Next.js Page.\n'
     '  "STATUS_LABELS" is not a valid Page export field.\n'
-    'Next.js build worker exited with code: 1 and signal: null'
+    "Next.js build worker exited with code: 1 and signal: null"
 )
 
 
@@ -1598,6 +1689,42 @@ async def test_page_export_repair_rebuilds_only_changed_source(db_session, test_
                               else MaxFinalizationStatus.NEEDS_EDIT)
     assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == (2 if changed else 1)
     assert len(harness.runtime_probes) == (1 if changed else 0)
+
+
+@pytest.mark.parametrize("green", [False, True])
+async def test_pending_repair_current_probe_never_accepts_or_promotes(
+    db_session, test_engine, green, monkeypatch,
+):
+    from yleum_api.services.generation import recovery_requirements
+
+    harness = await _new_harness(db_session, test_engine, build_green=green,
+                                 build_detail=_PAGE_EXPORT_FAILURE, toolchain_digest="5" * 64)
+
+    async def current_identity(workspace_id, *, generation_run_id, fencing_epoch):
+        identity = await harness.coordinator.executor.current_identity()
+        assert (workspace_id, generation_run_id, fencing_epoch) == (
+            identity.workspace_id, identity.generation_run_id, identity.fencing_epoch,
+        )
+        return ProjectCellWorkspaceIdentity(
+            workspace_revision=identity.workspace_revision,
+            dependency_digest=identity.dependency_digest,
+            schema_data_digest=identity.schema_data_digest,
+            cell_manifest_digest=identity.cell_manifest_digest,
+            environment_digest=identity.base_image_digest,
+            build_config_digest=identity.build_config_digest,
+        )
+
+    monkeypatch.setattr(recovery_requirements, "project_cell_agent_identity", current_identity)
+    failure = await harness.coordinator.revalidate_pending_repair(targeted=True)
+    assert failure is not None
+    assert failure.allowed_paths == (() if green else ("src/app/page.tsx",))
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 1
+    assert harness.runtime_probes == []
+    assert await db_session.scalar(select(func.count()).select_from(ProjectCellCandidate)) == 0
+    again = await harness.coordinator.revalidate_pending_repair(targeted=True)
+    assert again == failure
+    assert harness.roles.count(ProjectCellCommandRole.FULL_BUILD) == 1
+    assert await db_session.scalar(select(func.count()).select_from(ProjectCellCandidate)) == 0
 
 
 @pytest.mark.parametrize("detail,timed_out,changed_identity,edit_source,expected_repairs", [

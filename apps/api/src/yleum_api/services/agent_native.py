@@ -18,6 +18,7 @@ stays the prod default until this is verified on real builds and billing is wire
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import posixpath
 import re
@@ -25,10 +26,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from itertools import count as segment_numbers
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 import structlog
+from pydantic import BaseModel, ConfigDict, NonNegativeInt
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.agent_builder import _KNOWN_ACTIONS, Action, AgentResult
@@ -46,10 +48,57 @@ from yleum_api.services.generation.recovery_actions import (
     ResponseRecovery,
     verified_progress_executor,
 )
+from yleum_api.services.generation.recovery_contract import (
+    IncompleteResponseBudget,
+    RecoveryContractError,
+)
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
 from yleum_api.services.llm_client import rate_limit_retry_delay
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
+
+
+class _NativeLoopFrame(BaseModel):
+    """Executable data only. Historical green flags are invalidated on cold entry."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+    contract: str
+    step: NonNegativeInt
+    convo: list[dict[str, Any]]
+    baseline_files: dict[str, str]
+    written: dict[str, str]
+    repair_read_paths: list[str]
+    repair_read_attempts: list[str]
+    repair_targeted_read_used: bool
+    last_build_ok: bool | None
+    wrote_since_build: bool
+    edit_tool_choice_ignored: bool
+    no_write_turns: NonNegativeInt
+    non_entry_writes_before_entry: NonNegativeInt
+    infra_dead_turns: NonNegativeInt
+    successful_tools: dict[str, NonNegativeInt]
+    proof_after_write: list[str]
+    invalidated_proofs: list[str]
+    unverified_response_problem: str | None
+    response_budget: IncompleteResponseBudget
+    request: dict[str, Any]
+
+
+class _NativeOuterFrame(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    contract: str
+    segment: NonNegativeInt
+    total_steps: NonNegativeInt
+    cumulative_files: dict[str, str]
+    cumulative_evidence: dict[str, NonNegativeInt]
+    cumulative_transcript: list[dict[str, Any]]
+    segment_task: str
+    observed_source: dict[str, str]
+    source_history: list[str] | None
+
 
 log = structlog.get_logger(__name__)
 
@@ -1016,15 +1065,27 @@ async def _call_messages(
     started_at = loop.time()
     from yleum_api.services.generation.provider_attempts import (
         attach_identity,
+        confirm_generation_preconnect,
         prepare_generation_attempt,
+        reserve_generation_wire,
+        resume_generation_wire,
     )
+    from yleum_api.services.generation.recovery_reconciliation import (
+        begin_provider_dispatch,
+        provider_dispatch_remaining,
+    )
+    initial_window = _CALL_RETRY_WINDOW_S
+    if edit_deadline is not None:
+        initial_window = min(initial_window, (edit_deadline - datetime.now(UTC)).total_seconds())
+    begin_provider_dispatch("native", allowance=_CALL_RETRIES, seconds=initial_window)
     generation_attempt = None
     retry_parent = None
     generation_route = (
         "/v1/project-cell/messages" if url.rstrip("/").endswith("/v1/project-cell/messages")
         else "/v1/messages"
     )
-    for attempt in range(_CALL_RETRIES):
+    attempt = 0
+    while attempt < _CALL_RETRIES:
         if loop.time() - started_at >= _CALL_RETRY_WINDOW_S:
             break
         request_headers = dict(headers) if headers is not None else None
@@ -1055,7 +1116,41 @@ async def _call_messages(
         generation_attempt = await prepare_generation_attempt(
             payload, generation_route, existing=generation_attempt, parent=retry_parent,
         )
+        from yleum_api.services.generation.recovery_reconciliation import (
+            provider_reconciliation_requested,
+        )
+
+        if provider_reconciliation_requested():
+            from yleum_api.services.llm_client import LLMError, require_recovered_response
+            try:
+                retained = await require_recovered_response(generation_attempt)
+            except LLMError as failure:
+                resumed = await resume_generation_wire(
+                    generation_attempt, allow_provider_refusal=(
+                        failure.retry_safe is True and failure.provider_charge_ambiguous is False
+                        and (failure.code == "model_unavailable"
+                             or failure.retry_after_seconds is not None)
+                    ),
+                )
+                if resumed is None:
+                    raise
+                attempt, provider_refusal = resumed
+                remaining = provider_dispatch_remaining()
+                delay = min(45.0, 4.0 * (2 ** (attempt - 1)))
+                if failure.retry_after_seconds is not None:
+                    delay = max(6.0 * attempt, failure.retry_after_seconds)
+                if remaining is None or delay >= remaining:
+                    raise
+                started_at = loop.time() - (_CALL_RETRY_WINDOW_S - remaining)
+                if provider_refusal:
+                    retry_parent, generation_attempt = generation_attempt, None
+                await asyncio.sleep(delay)
+                continue  # Remint one-use runner authentication for the exact saved index.
+            _validate_response_stop_reason(retained)
+            return retained
         retry_parent = None
+        wire = await reserve_generation_wire(generation_attempt, wire_attempt=attempt)
+        accepted_headers = False
         attach_identity(payload, generation_attempt)
         request_headers = record_headers(generation_attempt, request_headers)
         # Exponential with a cap: back off harder from a provider that is already
@@ -1065,18 +1160,27 @@ async def _call_messages(
             remaining = _CALL_RETRY_WINDOW_S - (loop.time() - started_at)
             if edit_deadline is not None:
                 remaining = min(remaining, (edit_deadline - datetime.now(UTC)).total_seconds())
+            durable_remaining = provider_dispatch_remaining()
+            if durable_remaining is not None:
+                remaining = min(remaining, durable_remaining)
             if remaining <= 0:
                 break
             # httpx's timeout is per I/O operation. The outer scope also bounds
             # an active request by total remaining wall time; no retry follows
             # an exhausted request whose upstream accounting may still settle.
             async with asyncio.timeout(remaining):
-                r = await client.post(
-                    url,
-                    json=payload,
-                    timeout=min(_HTTP_TIMEOUT_S, remaining),
-                    headers=request_headers,
-                )
+                if wire is None:
+                    r = await client.post(
+                        url, json=payload, timeout=min(_HTTP_TIMEOUT_S, remaining),
+                        headers=request_headers,
+                    )
+                else:
+                    async with client.stream(
+                        "POST", url, json=payload, timeout=min(_HTTP_TIMEOUT_S, remaining),
+                        headers=request_headers,
+                    ) as r:
+                        accepted_headers = True
+                        await r.aread()
             if r.status_code >= 400:
                 try:
                     output_body = r.json()
@@ -1176,6 +1280,9 @@ async def _call_messages(
         except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
             # These failures precede dispatch to the gateway. Keep the existing
             # bounded backoff; an HTTP error alone proves no such thing.
+            if accepted_headers:
+                raise _terminal_provider_error("provider_request_failed") from None
+            await confirm_generation_preconnect(wire, generation_attempt)
             last = _terminal_provider_error("provider_request_failed")
         except httpx.HTTPError:
             # A proxy error or lost response can follow accepted, paid work.
@@ -1190,6 +1297,7 @@ async def _call_messages(
         if delay >= wait_budget:
             break
         await asyncio.sleep(delay)
+        attempt += 1
     raise last or RuntimeError("messages call failed")
 
 
@@ -1219,6 +1327,7 @@ async def _run_native_segment(
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
     pure_check: PureCheckReader | None = None,
+    continuation: ExecutionDriver | None = None,
 ) -> AgentResult:
     """Drive the native tool-use loop until the model calls ``done`` (with a clean
     build) or the step budget is hit. Returns the written files + transcript.
@@ -1262,6 +1371,40 @@ async def _run_native_segment(
     coordinated_max = max_runtime and portable_cell and settings.use_max_finalization_coordinator
     if coordinated_max:
         system += "\n\n" + _MAX_COORDINATOR_HANDOFF
+
+    contract = hashlib.sha256(json.dumps({
+        "model": model, "system": system, "task": task, "max_steps": effective_max_steps,
+        "source_repair": source_repair, "portable_cell": portable_cell,
+        "allow_max_bash": allow_max_bash,
+        "edit_deadline": edit_deadline.isoformat() if edit_deadline else None,
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
+    restored = continuation.restore_frame("native") if continuation is not None else None
+    saved_frame = _NativeLoopFrame.model_validate(restored) if restored is not None else None
+    start_step = 0
+    if saved_frame is not None:
+        if saved_frame.contract != contract or saved_frame.step >= effective_max_steps:
+            raise RecoveryContractError("native continuation inputs or step budget changed")
+        start_step = saved_frame.step
+        convo = saved_frame.convo
+        baseline_files, written = saved_frame.baseline_files, saved_frame.written
+        repair_read_paths = set(saved_frame.repair_read_paths)
+        repair_read_attempts = set(saved_frame.repair_read_attempts)
+        repair_targeted_read_used = saved_frame.repair_targeted_read_used
+        last_build_ok, wrote_since_build = saved_frame.last_build_ok, saved_frame.wrote_since_build
+        edit_tool_choice_ignored = saved_frame.edit_tool_choice_ignored
+        no_write_turns = saved_frame.no_write_turns
+        non_entry_writes_before_entry = saved_frame.non_entry_writes_before_entry
+        infra_dead_turns = saved_frame.infra_dead_turns
+        successful_tools = saved_frame.successful_tools
+        proof_after_write = set(saved_frame.proof_after_write)
+        invalidated_proofs = set(saved_frame.invalidated_proofs)
+        unverified_response_problem = saved_frame.unverified_response_problem
+        response_recovery.budget = IncompleteResponseBudget(
+            total=max(response_recovery.budget.total, saved_frame.response_budget.total),
+            since_progress=max(
+                response_recovery.budget.since_progress, saved_frame.response_budget.since_progress,
+            ),
+        )
 
     def _evidence() -> dict[str, int]:
         result = dict(successful_tools)
@@ -1485,12 +1628,13 @@ async def _run_native_segment(
         )
 
     async with httpx.AsyncClient() as client:
-        for step in range(effective_max_steps):
+        for step in range(start_step, effective_max_steps):
+            restoring = saved_frame is not None and step == start_step
             remaining = (
                 (edit_deadline - datetime.now(UTC)).total_seconds()
                 if edit_deadline is not None else None
             )
-            if remaining is not None and remaining <= 0:
+            if not restoring and remaining is not None and remaining <= 0:
                 return await _finish_without_provider(
                     steps=step, reason="finalization_reserve",
                     detail="Source editing budget ended; final checks remain mandatory.",
@@ -1499,7 +1643,7 @@ async def _run_native_segment(
             # while it changes. Compiler feedback must reach the model while it
             # still has time to repair, rather than after twenty minutes of work.
             now = asyncio.get_running_loop().time()
-            if coordinated_max and wrote_since_build and (
+            if not restoring and coordinated_max and wrote_since_build and (
                 edit_source_changed is None or edit_source_changed()
             ) and (
                 checkpoint_at is None or now - checkpoint_at >= 180
@@ -1526,7 +1670,7 @@ async def _run_native_segment(
                         return await _finish_without_provider(
                             steps=step, reason="finalization_reserve", detail=detail,
                         )
-            if remaining is not None and remaining <= 180:
+            if not restoring and remaining is not None and remaining <= 180:
                 convo.append({"role": "user", "content": (
                     f"Editing time remaining: {int(remaining)} seconds. Complete the requested "
                     "source now, fix known errors and call done. Final production checks "
@@ -1557,24 +1701,11 @@ async def _run_native_segment(
                 if last_build_ok is True and not wrote_since_build
                 else "native_agent"
             )
-            call_budget = asyncio.timeout(remaining)
+            call_budget = asyncio.timeout(None if restoring else remaining)
             try:
                 async with call_budget:
-                    resp = await _call_messages(
-                        client,
-                        url,
-                        convo,
-                        system,
-                        model=model,
-                        user_id=str(user_id) if user_id else None,
-                        project_id=str(project_id) if project_id else None,
-                        run_id=str(run_id) if run_id else None,
-                        message_id=str(message_id) if message_id else None,
-                        free=free,
-                        stage=call_stage,
-                        headers=messages_headers,
-                        auth_factory=messages_auth_factory,
-                        edit_deadline=edit_deadline,
+                    request = dict(
+                        convo=convo, system=system, model=model, stage=call_stage,
                         tools=(
                             _SOURCE_REPAIR_TOOLS_CACHED
                             if edit_write_required
@@ -1601,7 +1732,65 @@ async def _run_native_segment(
                             else _MAX_ENTRY_WRITE_CHOICE if force_max_entry_write else None
                         ),
                     )
+                    if restoring:
+                        assert saved_frame is not None
+                        request = saved_frame.request
+                    async def invoke(request: dict[str, Any] = request) -> dict[str, Any]:
+                        expected = {"convo", "system", "model", "stage", "tools", "tool_choice"}
+                        if set(request) != expected:
+                            raise RecoveryContractError("native continuation request shape changed")
+                        return await _call_messages(
+                            client, url, request["convo"], request["system"],
+                            model=request["model"], stage=request["stage"],
+                            tools=request["tools"], tool_choice=request["tool_choice"],
+                            user_id=str(user_id) if user_id else None,
+                            project_id=str(project_id) if project_id else None,
+                            run_id=str(run_id) if run_id else None,
+                            message_id=str(message_id) if message_id else None, free=free,
+                            headers=messages_headers, auth_factory=messages_auth_factory,
+                            edit_deadline=edit_deadline,
+                        )
+                    if continuation is None:
+                        resp = await invoke()
+                    else:
+                        frame = saved_frame if restoring else _NativeLoopFrame(
+                            contract=contract, step=step, convo=convo,
+                            baseline_files=baseline_files,
+                            written=written, repair_read_paths=sorted(repair_read_paths),
+                            repair_read_attempts=sorted(repair_read_attempts),
+                            repair_targeted_read_used=repair_targeted_read_used,
+                            last_build_ok=last_build_ok, wrote_since_build=wrote_since_build,
+                            edit_tool_choice_ignored=edit_tool_choice_ignored,
+                            no_write_turns=no_write_turns,
+                            non_entry_writes_before_entry=non_entry_writes_before_entry,
+                            infra_dead_turns=infra_dead_turns, successful_tools=successful_tools,
+                            proof_after_write=sorted(proof_after_write),
+                            invalidated_proofs=sorted(invalidated_proofs),
+                            unverified_response_problem=unverified_response_problem,
+                            response_budget=response_recovery.budget, request=request,
+                        )
+                        assert frame is not None
+                        resp = await continuation.provider(
+                            {"version": 1, "kind": "native",
+                             "value": frame.model_dump(mode="json")},
+                            invoke,
+                        )
+                    if restoring:
+                        # These values reconstruct the exact paid request; they do
+                        # not establish current functional/compiler authority.
+                        last_build_ok = None
+                        proof_after_write.clear()
+                        invalidated_proofs.update({
+                            "build", "runtime_check", "probe", "verify_isolation",
+                        })
+                        saved_frame = None
                     _validate_response_stop_reason(resp)
+                    if (restoring and edit_deadline is not None
+                            and datetime.now(UTC) >= edit_deadline):
+                        return await _finish_without_provider(
+                            steps=step, reason="finalization_reserve",
+                            detail="Saved response reconciled after the original editing deadline.",
+                        )
             except Exception as exc:
                 if isinstance(exc, TimeoutError) and call_budget.expired():
                     return await _finish_without_provider(
@@ -1898,7 +2087,15 @@ async def _run_native_segment(
                         _invalidate_proofs(name)
                     try:
                         action_executed = True
-                        obs, _ = await batch.execute(action, execute)
+                        async def execute_batch(
+                            current: Action = action, checks: PureCheckBatch = batch,
+                        ) -> dict[str, Any]:
+                            result, _ = await checks.execute(current, execute)
+                            return result
+
+                        tool = getattr(continuation, "tool", None)
+                        obs = (await tool(tu_id, action, execute_batch)
+                               if tool is not None else await execute_batch())
                     except Exception as exc:  # a tool crash must not kill the build
                         raise_if_terminal_cell_error(exc)
                         obs = {"ok": False, "error": f"tool {name} crashed: {exc}"}
@@ -2218,6 +2415,7 @@ async def _run_native_segments(
     initial_files: Mapping[str, str] | None = None,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
     edit_deadline: datetime | None = None,
+    continuation: ExecutionDriver | None = None,
 ) -> AgentResult:
     """Continue one native build without creating another run or workspace.
 
@@ -2233,9 +2431,19 @@ async def _run_native_segments(
     ):
         raise ValueError("Progressive continuation requires an aware deadline and source snapshot")
     segment_limit = max(1, int(max_segments)) if max_segments is not None else None
+    contract = hashlib.sha256(json.dumps({
+        "task": task, "max_segments": max_segments,
+        "edit_deadline": edit_deadline.isoformat() if edit_deadline else None,
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
+    raw = continuation.context.get("native_outer") if continuation is not None else None
+    restored = _NativeOuterFrame.model_validate(raw) if raw is not None else None
+    if restored is not None and (restored.contract != contract or restored.segment < 1
+                                or (segment_limit is not None
+                                    and restored.segment > segment_limit)):
+        raise RecoveryContractError("native outer continuation contract changed")
     novelty = None
     observed_source = dict(initial_files or {})
-    if segment_limit is None:
+    if segment_limit is None and restored is None:
         assert snapshot_files is not None and edit_deadline is not None
         if datetime.now(UTC) < edit_deadline:
             async with asyncio.timeout((edit_deadline - datetime.now(UTC)).total_seconds()):
@@ -2248,7 +2456,22 @@ async def _run_native_segments(
     segment_task = task
     last_result: AgentResult | None = None
 
-    for segment in segment_numbers(1):
+    start_segment = 1
+    if restored is not None:
+        start_segment, total_steps = restored.segment, restored.total_steps
+        cumulative_files = restored.cumulative_files
+        cumulative_transcript = restored.cumulative_transcript
+        cumulative_evidence = {
+            key: 0 if key.endswith("_after_write") else value
+            for key, value in restored.cumulative_evidence.items()
+        }
+        segment_task, observed_source = restored.segment_task, restored.observed_source
+        if segment_limit is None:
+            if restored.source_history is None:
+                raise RecoveryContractError("native continuation source history is unavailable")
+            novelty = SourceNoveltyTracker.from_source_history(tuple(restored.source_history))
+
+    for segment in segment_numbers(start_segment):
         files_before = dict(cumulative_files)
         effective_files_before = {**(initial_files or {}), **files_before}
         evidence_before = dict(cumulative_evidence)
@@ -2264,7 +2487,8 @@ async def _run_native_segments(
         )
 
         if (
-            segment_limit is None and segment > 1 and edit_deadline is not None
+            segment_limit is None and segment > 1 and restored is None
+            and edit_deadline is not None
             and datetime.now(UTC) >= edit_deadline
         ):
             return AgentResult(
@@ -2272,10 +2496,19 @@ async def _run_native_segments(
                 steps=total_steps, transcript=cumulative_transcript,
                 stop_reason="finalization_reserve", segments=segment - 1,
             )
+        if continuation is not None:
+            continuation.context = {**continuation.context, "native_outer": _NativeOuterFrame(
+                contract=contract, segment=segment, total_steps=total_steps,
+                cumulative_files=cumulative_files, cumulative_evidence=cumulative_evidence,
+                cumulative_transcript=cumulative_transcript, segment_task=segment_task,
+                observed_source=observed_source,
+                source_history=list(novelty.source_history()) if novelty is not None else None,
+            ).model_dump(mode="json")}
         result = await run_segment(
             segment_task, segment_completion_check,
             observed_source if novelty is not None else effective_files_before
         )
+        restored = None  # Only the saved segment may reconcile beyond the source deadline.
         last_result = result
         total_steps += result.steps
         cumulative_transcript.extend(result.transcript)
@@ -2394,6 +2627,7 @@ async def run_native_build(
     pure_check: PureCheckReader | None = None,
     recovery: RecoveryObserver | None = None,
     recovery_binding: RecoveryBindingReader | None = None,
+    continuation: ExecutionDriver | None = None,
 ) -> AgentResult:
     """Run one native generation, optionally continuing inside the same run."""
     response_recovery = response_recovery or ResponseRecovery()
@@ -2429,15 +2663,18 @@ async def run_native_build(
             source_repair=source_repair,
             edit_source_changed=edit_source_changed,
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
-            pure_check=pure_check,
+            pure_check=pure_check, continuation=continuation,
         )
 
-    return await _run_native_segments(
+    result = await _run_native_segments(
         task=task,
         completion_check=completion_check,
         max_segments=max_segments,
         run_segment=run_segment,
         initial_files=initial_files,
         snapshot_files=snapshot_files,
-        edit_deadline=edit_deadline,
+        edit_deadline=edit_deadline, continuation=continuation,
     )
+    if continuation is not None:
+        continuation.context.pop("native_outer", None)
+    return result

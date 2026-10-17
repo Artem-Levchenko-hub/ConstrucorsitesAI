@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests._machine_adapter_fakes import legacy_machine_controller  # noqa: F401
 from yleum_orchestrator.core.cell_resources import CellResourceError
 from yleum_orchestrator.services.machine_adapter import MachineAdapter
 
@@ -193,7 +194,8 @@ def test_legacy_uncompiled_core_fails_before_any_mutation(tmp_path):
     adapter = MachineAdapter(SimpleNamespace(), SimpleNamespace())
     with pytest.raises(CellResourceError, match="compiled"):
         adapter._start_boundary(
-            SimpleNamespace(resource_names=None), None, SimpleNamespace(client=None), 1
+            SimpleNamespace(workspace_id=uuid4(), resource_names=None),
+            None, SimpleNamespace(client=None), 1
         )
 
 
@@ -220,7 +222,8 @@ def test_invalid_public_image_is_rejected_before_changing_live_auth(image_ref, p
     )
     with pytest.raises(CellResourceError, match="image"):
         adapter._start_boundary(
-            SimpleNamespace(resource_names=None), None, backend, 1, public_mode=True
+            SimpleNamespace(workspace_id=uuid4(), resource_names=None),
+            None, backend, 1, public_mode=True
         )
 
 
@@ -253,7 +256,9 @@ def test_preview_rejects_unpinned_or_incompatible_image_before_any_runtime_chang
         )
     )
     with pytest.raises(CellResourceError, match="image"):
-        adapter._start_boundary(SimpleNamespace(resource_names=None), None, backend, 1)
+        adapter._start_boundary(
+            SimpleNamespace(workspace_id=uuid4(), resource_names=None), None, backend, 1
+        )
 
 
 @pytest.mark.parametrize("core_state", ["absent", "exited", "outdated", "running"])
@@ -311,7 +316,7 @@ def test_existing_runtime_secret_failure_precedes_public_auth_rotation(tmp_path,
 def test_docker_reserved_database_environment_fails_before_any_access(key):
     adapter = MachineAdapter(SimpleNamespace(), SimpleNamespace())
     with pytest.raises(CellResourceError, match="reserved"):
-        adapter._start_boundary(SimpleNamespace(resource_names=None), None,
+        adapter._start_boundary(SimpleNamespace(workspace_id=uuid4(), resource_names=None), None,
                                 SimpleNamespace(client=None), 1, runtime_env={key: "ignored"})
 
 

@@ -30,6 +30,7 @@ from yleum_api.models.generation_billing import (
 )
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
+from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.hero_media_asset import HeroMediaAsset
 from yleum_api.models.hero_media_brief import HeroMediaBrief
@@ -97,6 +98,7 @@ __all__ = [
     "GenerationBillingPolicy",
     "GenerationEvent",
     "GenerationProviderAttempt",
+    "GenerationRecoveryEffect",
     "GenerationRun",
     "HeroMediaAsset",
     "HeroMediaBrief",

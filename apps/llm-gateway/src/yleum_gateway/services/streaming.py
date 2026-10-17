@@ -170,6 +170,10 @@ async def stream_completion(
         if user_id is not None and (output_text or receipt):
             try:
                 await billing.charge(
+                    provider_binding=(
+                        billing.ProviderUsageBinding(generation_identity, provider_call_id)
+                        if generation_identity is not None else None
+                    ),
                     user_id=user_id, project_id=project_id, message_id=message_id,
                     run_id=run_id, stage=stage, model_id=actual_model,
                     tokens_in=tokens_in, tokens_out=tokens_out, cost_rub=cost_rub,

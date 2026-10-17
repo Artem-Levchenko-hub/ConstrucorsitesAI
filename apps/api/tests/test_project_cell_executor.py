@@ -2642,3 +2642,783 @@ async def test_saved_role_response_replays_without_command_and_rejects_other_ide
             role, saved[0], replace(original.before, fencing_epoch=2)
         )
     assert len(harness.exec_calls) == 1
+
+
+@pytest.mark.parametrize("action", [
+    Action(name="write_file", args={"path": "src/a.ts", "content": "changed"}),
+    Action(name="bash", args={"cmd": "echo synthetic"}),
+    Action(name="build", args={}),
+])
+async def test_v2_executor_without_owned_effect_never_dispatches(
+    monkeypatch, db_session, test_engine, action,
+):
+    from tests.test_generation_recovery_execution import _bootstrap_wait
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    run = await db_session.get(GenerationRun, harness.run_id)
+    run.prompt_hash = "a" * 64
+    run.agent_state = {"recovery_v1": _bootstrap_wait(run)}
+    await db_session.commit()
+    before = (len(harness.write_calls), len(harness.exec_calls))
+    result = await harness.handle.execute(action)
+    assert result["ok"] is False
+    assert (len(harness.write_calls), len(harness.exec_calls)) == before
+
+
+async def test_v2_release_records_owned_terminal_operation_before_continuation(
+    monkeypatch,
+    db_session,
+    test_engine,
+):
+    from tests.test_generation_recovery_execution import _bootstrap_wait
+    from yleum_api.services.generation.recovery_execution import recovery_state
+
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine)
+    run = await db_session.get(GenerationRun, harness.run_id)
+    run.prompt_hash = "a" * 64
+    state = _bootstrap_wait(run)
+    state["execution"]["physical_state"] = "active"
+    run.agent_state = {"recovery_v1": state}
+    await db_session.commit()
+    await harness.handle.release()
+    await db_session.refresh(run)
+    current = recovery_state(run)
+    assert current.execution.physical_state == "released"
+    assert current.execution.release_operation_id is not None
+    operation = await db_session.get(ProjectCellOperation, current.execution.release_operation_id)
+    assert operation.kind == "release" and operation.status == "completed"
+    assert operation.generation_run_id == run.id
+    assert operation.idempotency_key.endswith(":cycle:0")
+    assert current.execution.control_workspace_id == harness.handle.control_workspace_id
+    assert current.execution.control_fencing_epoch == operation.fencing_epoch
+
+
+@pytest.mark.parametrize("action_name", ["write_file", "edit_file", "stage_patch"])
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        "pending",
+        "foreign",
+        "request",
+        "post_state",
+        "cancel",
+        "context",
+        "partial",
+        "incarnation_during_read",
+        "noop",
+        "driver",
+        "bootstrap",
+    ],
+)
+async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_replay(
+    monkeypatch,
+    db_session,
+    test_engine,
+    action_name,
+    damage,
+):
+    from datetime import timedelta
+
+    from tests.test_generation_recovery_execution import _bootstrap_wait
+    from yleum_api.services import orchestrator_client
+    from yleum_api.services.generation import recovery_execution as ex
+    from yleum_api.services.generation import source_checkpoint
+    from yleum_api.services.generation.recovery_contract import ContinuationClaim
+    from yleum_api.services.generation.recovery_reconciliation import (
+        ToolEffectCursor,
+        tool_effect_scope,
+    )
+
+    objects = {}
+
+    async def store(project_id, run_id, data):
+        sha = hashlib.sha256(data).hexdigest()
+        key = f"{project_id}/{run_id}/{sha}"
+        objects[key] = data
+        return key, sha
+
+    async def load(project_id, run_id, *, object_key, digest):
+        if object_key != f"{project_id}/{run_id}/{digest}":
+            return None
+        data = objects.get(object_key)
+        return data if data is not None and hashlib.sha256(data).hexdigest() == digest else None
+
+    monkeypatch.setattr(source_checkpoint, "store_checkpoint_object", store)
+    monkeypatch.setattr(source_checkpoint, "load_checkpoint_object", load)
+    before = {"src/app/page.tsx": "old", "src/remove.ts": "obsolete"}
+    harness = await _prepare_executor(monkeypatch, db_session, test_engine, snapshot_files=before)
+    run = await db_session.get(GenerationRun, harness.run_id)
+    run.status, run.prompt_hash = "running", "a" * 64
+    claim = ContinuationClaim(
+        run_id=run.id,
+        token=uuid4(),
+        attempt_seq=1,
+        worker_id="synthetic",
+        expires_at=datetime.now(UTC) + timedelta(seconds=60),
+    )
+    cursor = ToolEffectCursor(claim, 0, 0, "write-once")
+    state = _bootstrap_wait(run)
+    state.update(
+        phase="working",
+        next_check_at=None,
+        attempt_seq=1,
+        continuation_claim=claim.model_dump(mode="json"),
+    )
+    state["execution"].update(physical_state="active", pending_effect_id=str(cursor.root_effect_id))
+    run.agent_state = {"recovery_v1": state}
+    await db_session.commit()
+    original = project_cell_executor.project_cell_agent_write_files
+    receipts = {}
+    status_calls = 0
+    target_content = "old" if damage == "noop" else "paid change"
+
+    async def lose_ack(workspace_id, *, operation_id, **kwargs):
+        if damage == "partial":
+            await original(workspace_id, **{**kwargs, "files": {}})
+            raise OrchestratorUnavailable("synthetic partial preterminal write")
+        response = await original(workspace_id, **kwargs)
+        if damage == "noop":
+            response = replace(response, written=0)
+        request = {
+            "protocol": "source-write/v1",
+            "workspace_id": str(workspace_id),
+            "generation_run_id": str(run.id),
+            "fencing_epoch": kwargs["fencing_epoch"],
+            "expected_revision": kwargs["expected_revision"],
+            "files": {
+                p: hashlib.sha256(c.encode()).hexdigest() for p, c in kwargs["files"].items()
+            },
+            "deletes": sorted(kwargs.get("deletes", ())),
+        }
+        receipts[operation_id] = orchestrator_client.ProjectCellSourceWriteReceipt(
+            version=1,
+            operation_id=operation_id,
+            workspace_id=workspace_id,
+            project_id=run.project_id,
+            owner_id=run.user_id,
+            generation_run_id=run.id,
+            fencing_epoch=kwargs["fencing_epoch"],
+            physical_volume="synthetic-owned-volume",
+            physical_volume_identity="d" * 64,
+            request_sha256=hashlib.sha256(
+                json.dumps(
+                    request, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+                ).encode()
+            ).hexdigest(),
+            before_revision=kwargs["expected_revision"],
+            after_revision=response.workspace_revision,
+            written=response.written,
+            deleted=response.deleted,
+        )
+        raise OrchestratorUnavailable("synthetic post-terminal acknowledgement lost")
+
+    async def status(workspace_id, *, operation_id, generation_run_id):
+        nonlocal status_calls
+        status_calls += 1
+        assert workspace_id == harness.workspace_id and generation_run_id == run.id
+        if damage in {"pending", "partial"}:
+            return orchestrator_client.ProjectCellSourceWriteStatus(operation_id, "pending", None)
+        receipt = receipts[operation_id]
+        if damage == "incarnation_during_read" and status_calls > 1:
+            receipt = replace(receipt, physical_volume_identity="f" * 64)
+        if damage == "foreign":
+            receipt = replace(receipt, owner_id=uuid4())
+        elif damage == "request":
+            receipt = replace(receipt, request_sha256="e" * 64)
+        elif damage == "post_state":
+            receipt = replace(receipt, after_revision="f" * 64)
+        elif damage == "cancel":
+            run.status = "cancel_requested"
+            await db_session.commit()
+        return orchestrator_client.ProjectCellSourceWriteStatus(operation_id, "terminal", receipt)
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_write_files", lose_ack)
+    monkeypatch.setattr(orchestrator_client, "project_cell_agent_write_operation", status)
+    async with test_engine.connect() as owner:
+        await owner.execute(
+            text("SELECT pg_advisory_lock(1195724366,:key)"),
+            {"key": int.from_bytes(run.id.bytes[-4:], "big", signed=True)},
+        )
+        await owner.commit()
+        token = ex._SESSION_OWNER.set(ex.SessionOwnership(run.id, owner))
+        try:
+            args = {"path": "src/app/page.tsx"}
+            args.update(
+                {"content": target_content}
+                if action_name == "write_file"
+                else {"search": "old", "replace": target_content}
+            )
+            action = Action(action_name, args, "")
+
+            async def execute():
+                if action_name != "stage_patch":
+                    return await harness.handle.execute(action)
+                try:
+                    await harness.handle.stage_patch(
+                        {"src/app/page.tsx": target_content}, ("src/remove.ts",)
+                    )
+                except Exception as exc:
+                    return {"ok": False, "error": str(exc)}
+                return {"ok": True}
+
+            if damage in {"driver", "bootstrap"}:
+                from copy import deepcopy
+
+                from sqlalchemy.ext.asyncio import async_sessionmaker
+
+                from yleum_api.services.generation.recovery_contract import (
+                    CheckpointRef,
+                    RecoveryBinding,
+                )
+
+                factory = async_sessionmaker(test_engine, expire_on_commit=False)
+                initial = ex.recovery_state(run)
+                ref = CheckpointRef(object_key="synthetic/pre-tool", sha256="b" * 64)
+                initial = initial.model_copy(
+                    update={
+                        "cursor": "bootstrap" if damage == "bootstrap" else "agent",
+                        "checkpoint": ref,
+                        "context_ref": ref,
+                        "binding": RecoveryBinding(
+                            workspace_id=str(harness.workspace_id),
+                            fencing_epoch=1,
+                            source_sha256="a" * 64,
+                            schema_sha256="b" * 64,
+                            environment_sha256="c" * 64,
+                        ),
+                        "execution": initial.execution.model_copy(
+                            update={
+                                "stage": "bootstrap" if damage == "bootstrap" else "agent",
+                                "substep": (
+                                    "runtime_prepare" if damage == "bootstrap"
+                                    else "response_validated"
+                                ),
+                                "provider_effect_id": None if damage == "bootstrap" else uuid4(),
+                                "execution_context_ref": ref,
+                            }
+                        ),
+                    }
+                )
+                run.agent_state = {"recovery_v1": initial.model_dump(mode="json")}
+                await db_session.commit()
+
+                async def commit(factory, *, previous, execution, context, phase="working"):
+                    updated = previous.model_copy(
+                        update={
+                            "execution": execution,
+                            "phase": phase,
+                            "next_check_at": datetime.now(UTC) if phase != "working" else None,
+                            "state_revision": previous.state_revision + 1,
+                        }
+                    )
+                    async with factory() as session:
+                        current = await session.get(GenerationRun, run.id, with_for_update=True)
+                        assert ex.recovery_state(current) == previous
+                        current.agent_state = {"recovery_v1": updated.model_dump(mode="json")}
+                        await session.commit()
+                    return updated
+
+                monkeypatch.setattr(ex, "commit_execution_cursor", commit)
+                snapshots = []
+
+                def new_driver(current, context):
+                    driver = ex.ExecutionDriver(factory, current, context, None)
+
+                    async def save(execution, *, context, phase="working"):
+                        # Falsifier: no source checkpoint until terminal receipt and
+                        # fresh post-state/second incarnation check both completed.
+                        if damage != "bootstrap" or execution.pending_effect_id is None:
+                            assert status_calls >= 2
+                            snapshots.append(dict(await harness.handle.snapshot_files()))
+                        driver.state = await commit(
+                            factory,
+                            previous=driver.state,
+                            execution=execution,
+                            context=context,
+                            phase=phase,
+                        )
+                        driver.context = context
+
+                    monkeypatch.setattr(driver, "save", save)
+                    return driver
+
+                if damage == "bootstrap":
+                    from unittest.mock import AsyncMock
+
+                    from yleum_api.services.generation.recovery_pipeline import run_bootstrap_stage
+
+                    async def prepare():
+                        current_files = await harness.handle.snapshot_files()
+                        if current_files.get("src/app/page.tsx") != target_content:
+                            await harness.handle.stage_patch(
+                                {"src/app/page.tsx": target_content},
+                                ("src/remove.ts",) if action_name == "stage_patch" else (),
+                            )
+                        return await harness.handle.snapshot_files(), None
+
+                    driver = new_driver(initial, {"completed": {}})
+                    with pytest.raises(ex.GenerationYielded):
+                        await run_bootstrap_stage(
+                            driver, "starter_apply", prepare, handle=harness.handle,
+                        )
+                    assert len(harness.write_calls) == 1 and snapshots == []
+                    async with factory() as session:
+                        current = await session.get(GenerationRun, run.id)
+                        resumed = ex.recovery_state(current).model_copy(
+                            update={"phase": "working", "next_check_at": None}
+                        )
+                        current.agent_state = {"recovery_v1": resumed.model_dump(mode="json")}
+                        await session.commit()
+                    cold = new_driver(resumed, deepcopy(driver.context))
+                    result, agent_result = await run_bootstrap_stage(
+                        cold, "starter_apply", prepare, handle=harness.handle,
+                    )
+                    assert result["src/app/page.tsx"] == target_content and agent_result is None
+                    assert len(harness.write_calls) == 1 and len(snapshots) == 1
+                    # Receipt checked even though conditional preparation skipped the write.
+                    assert status_calls >= 2
+                    assert await run_bootstrap_stage(
+                        cold, "starter_apply",
+                        AsyncMock(side_effect=AssertionError("replayed stage")),
+                        handle=harness.handle,
+                    ) == (result, None)
+                    return
+                driver = new_driver(initial, {"schema_version": 1, "entry": "pipeline"})
+                with pytest.raises(ex.GenerationYielded):
+                    await driver.tool("write-once", action, execute)
+                assert len(harness.write_calls) == 1 and snapshots == []
+                async with factory() as session:
+                    current = await session.get(GenerationRun, run.id)
+                    resumed = ex.recovery_state(current).model_copy(
+                        update={"phase": "working", "next_check_at": None}
+                    )
+                    current.agent_state = {"recovery_v1": resumed.model_dump(mode="json")}
+                    await session.commit()
+                cold = new_driver(resumed, deepcopy(driver.context))
+                result = await cold.tool("write-once", action, execute)
+                assert result["ok"] is True and len(harness.write_calls) == 1
+                expected = {"src/app/page.tsx": target_content}
+                if action_name != "stage_patch":
+                    expected["src/remove.ts"] = "obsolete"
+                    assert (
+                        result["content_change"]["before_sha256"]
+                        == hashlib.sha256(b"old").hexdigest()
+                    )
+                assert snapshots == [expected]
+                return
+            with tool_effect_scope(cursor):
+                first = await execute()
+            assert first["ok"] is False and len(harness.write_calls) == 1
+            expected = {"src/app/page.tsx": "old" if damage == "partial" else target_content}
+            if action_name != "stage_patch":
+                expected["src/remove.ts"] = "obsolete"
+            assert await harness.handle.refresh_snapshot_files() == expected
+            if damage == "context":
+                objects.clear()  # Missing private executable data is never source authority.
+            cold = ToolEffectCursor(claim, 0, 0, "write-once")
+            with tool_effect_scope(cold):
+                result = await execute()
+            assert result["ok"] is (damage in {None, "noop"}), result
+            if damage in {None, "noop"} and action_name != "stage_patch":
+                assert (
+                    result["content_change"]["before_sha256"] == hashlib.sha256(b"old").hexdigest()
+                )
+                assert (
+                    result["content_change"]["after_sha256"]
+                    == hashlib.sha256(target_content.encode()).hexdigest()
+                )
+            assert len(harness.write_calls) == 1
+            assert await harness.handle.snapshot_files() == expected
+            if damage is None:
+                operation_id = next(iter(receipts))
+                receipts[operation_id] = replace(
+                    receipts[operation_id], physical_volume_identity="e" * 64
+                )
+                with tool_effect_scope(ToolEffectCursor(claim, 0, 0, "write-once")):
+                    changed_instance = await execute()
+                assert changed_instance["ok"] is False
+                assert len(harness.write_calls) == 1
+        finally:
+            ex._SESSION_OWNER.reset(token)
+            await owner.execute(text("SELECT pg_advisory_unlock_all()"))
+            await owner.commit()
+
+
+@pytest.mark.parametrize("damage", [
+    None, "pending", "foreign", "request", "incarnation", "cancel",
+    "driver", "role", "coordinator", "coordinator_tool",
+    "role_foreign", "role_proof", "role_cancel", "role_expired", "role_cold_proof"])
+async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
+    monkeypatch,
+    db_session,
+    test_engine,
+    damage,
+):
+    from datetime import timedelta
+
+    from tests.test_generation_recovery_execution import _bootstrap_wait
+    from yleum_api.services import orchestrator_client as client
+    from yleum_api.services.generation import recovery_execution as ex
+    from yleum_api.services.generation import source_checkpoint
+    from yleum_api.services.generation.recovery_contract import ContinuationClaim
+    from yleum_api.services.generation.recovery_reconciliation import (
+        ToolEffectCursor,
+        tool_effect_scope,
+    )
+
+    objects = {}
+
+    async def store(project_id, run_id, data):
+        sha = hashlib.sha256(data).hexdigest()
+        key = f"{project_id}/{run_id}/{sha}"
+        objects[key] = data
+        return key, sha
+
+    async def load(project_id, run_id, *, object_key, digest):
+        data = objects.get(object_key)
+        return data if data is not None and hashlib.sha256(data).hexdigest() == digest else None
+
+    monkeypatch.setattr(source_checkpoint, "store_checkpoint_object", store)
+    monkeypatch.setattr(source_checkpoint, "load_checkpoint_object", load)
+    command_changes = {"src/a.ts": "completed command"}
+    harness = await _prepare_executor(
+        monkeypatch,
+        db_session,
+        test_engine,
+        snapshot_files={".omnia/cell.json": '{"version":1}', "src/a.ts": "old"},
+        cell_exec_files=command_changes,
+        capabilities={"portable_machine": True},
+    )
+    run = await db_session.get(GenerationRun, harness.run_id)
+    run.status, run.prompt_hash = "running", "a" * 64
+    claim = ContinuationClaim(
+        run_id=run.id,
+        token=uuid4(),
+        attempt_seq=1,
+        worker_id="synthetic",
+        expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    cursor = ToolEffectCursor(claim, 0, 0, "command-once")
+    raw = _bootstrap_wait(run)
+    raw.update(
+        phase="working",
+        next_check_at=None,
+        attempt_seq=1,
+        continuation_claim=claim.model_dump(mode="json"),
+    )
+    raw["execution"].update(physical_state="active", pending_effect_id=str(cursor.root_effect_id))
+    run.agent_state = {"recovery_v1": raw}
+    await db_session.commit()
+    is_role = isinstance(damage, str) and damage.startswith("role")
+    role_operation = uuid4()
+    if is_role:
+        from yleum_api.models.project_cell import ProjectCellActivityLease
+        physical = await harness.handle.current_identity()
+        now = datetime.now(UTC)
+        db_session.add(ProjectCellActivityLease(
+            operation_id=role_operation, workspace_id=harness.workspace_id,
+            generation_run_id=run.id, kind="command", state="active", fencing_epoch=1,
+            phase="fast_check", proof_key=physical.proof_key, started_at=now, heartbeat_at=now,
+            deadline_at=now+timedelta(minutes=5),
+        ))
+        await db_session.commit()
+    original = project_cell_executor.project_cell_agent_exec
+    saved, sent, reads = {}, [], []
+
+    async def lose_ack(workspace, cmd, **kw):
+        sent.append(dict(kw))
+        track = kw.pop("track_receipt", False)
+        response = await original(workspace, cmd, **kw)
+        request = {**kw, "cmd": cmd, "task_role": kw.get("task_role"), "track_receipt": True}
+        request["generation_run_id"] = str(run.id)
+        request["operation_id"] = str(kw["operation_id"])
+        receipt = client.ProjectCellCommandReceipt(
+            version=1,
+            operation_id=kw["operation_id"],
+            workspace_id=workspace,
+            project_id=run.project_id,
+            owner_id=run.user_id,
+            generation_run_id=run.id,
+            dispatch_fencing_epoch=kw["fencing_epoch"],
+            physical_volume="owned-command-volume",
+            physical_volume_identity="d" * 64,
+            before_revision=kw["expected_revision"],
+            after_revision=response.workspace_revision,
+            request_sha256=client.command_wire_digest(
+                dict(protocol="tracked-command/v1", workspace_id=str(workspace), request=request)
+            ),
+            response_sha256=client.command_wire_digest(response.command_wire_json()),
+        )
+        saved.update(response=response, receipt=receipt, tracked=track)
+        if saved.get("acknowledge"):
+            return replace(response, command_receipt=receipt)
+        raise OrchestratorUnavailable("synthetic terminal command ACK lost")
+
+    async def status(workspace, *, operation_id, generation_run_id, fencing_epoch):
+        reads.append(operation_id)
+        assert workspace == harness.workspace_id and generation_run_id == run.id
+        assert fencing_epoch == 1
+        if damage == "pending":
+            return client.ProjectCellCommandStatus(operation_id, "pending", None, None)
+        receipt = saved["receipt"]
+        if damage == "foreign":
+            receipt = replace(receipt, owner_id=uuid4())
+        elif damage == "request":
+            receipt = replace(receipt, request_sha256="9" * 64)
+        elif damage == "incarnation" and len(reads) > 1:
+            receipt = replace(receipt, physical_volume_identity="9" * 64)
+        elif damage == "cancel":
+            run.status = "cancel_requested"
+            await db_session.commit()
+        return client.ProjectCellCommandStatus(operation_id, "terminal", receipt, saved["response"])
+
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_exec", lose_ack)
+    monkeypatch.setattr(client, "project_cell_agent_command_operation", status)
+    async with test_engine.connect() as owner:
+        await owner.execute(
+            text("SELECT pg_advisory_lock(1195724366,:key)"),
+            {"key": int.from_bytes(run.id.bytes[-4:], "big", signed=True)},
+        )
+        await owner.commit()
+        token = ex._SESSION_OWNER.set(ex.SessionOwnership(run.id, owner))
+        try:
+            action = Action("bash", {"cmd": "synthetic-write"}, "")
+            if damage in {"driver", "coordinator", "coordinator_tool"}:
+                from copy import deepcopy
+
+                from sqlalchemy.ext.asyncio import async_sessionmaker
+
+                from yleum_api.services.generation.recovery_contract import (
+                    CheckpointRef,
+                    RecoveryBinding,
+                )
+
+                factory = async_sessionmaker(test_engine, expire_on_commit=False)
+                initial = ex.recovery_state(run)
+                ref = CheckpointRef(object_key="synthetic/pre-tool", sha256="b" * 64)
+                initial = initial.model_copy(
+                    update={
+                        "cursor": "finalization" if damage == "coordinator" else "agent",
+                        "checkpoint": ref,
+                        "context_ref": ref,
+                        "binding": RecoveryBinding(
+                            workspace_id=str(harness.workspace_id),
+                            fencing_epoch=1,
+                            source_sha256="a" * 64,
+                            schema_sha256="b" * 64,
+                            environment_sha256="c" * 64,
+                        ),
+                        "execution": initial.execution.model_copy(
+                            update={
+                                "stage": "finalization" if damage == "coordinator" else "agent",
+                                "substep": ("checkpoint_ready" if damage == "coordinator"
+                                            else "response_validated"),
+                                "provider_effect_id": uuid4(),
+                                "execution_context_ref": ref,
+                            }
+                        ),
+                    }
+                )
+                run.agent_state = {"recovery_v1": initial.model_dump(mode="json")}
+                await db_session.commit()
+
+                async def commit(factory, *, previous, execution, context, phase="working"):
+                    updated = previous.model_copy(
+                        update={
+                            "execution": execution,
+                            "phase": phase,
+                            "next_check_at": datetime.now(UTC) if phase != "working" else None,
+                            "state_revision": previous.state_revision + 1,
+                        }
+                    )
+                    async with factory() as session:
+                        current = await session.get(GenerationRun, run.id, with_for_update=True)
+                        assert ex.recovery_state(current) == previous
+                        current.agent_state = {"recovery_v1": updated.model_dump(mode="json")}
+                        await session.commit()
+                    return updated
+
+                monkeypatch.setattr(ex, "commit_execution_cursor", commit)
+                snapshots = []
+
+                def new_driver(current, context):
+                    driver = ex.ExecutionDriver(factory, current, context, None)
+
+                    async def save(execution, *, context, phase="working"):
+                        # Falsifier: no source checkpoint until terminal receipt and
+                        # fresh post-state/second incarnation check both completed.
+                        if "pending_role" not in context.get("completed", {}):
+                            assert len(reads) >= 2
+                        snapshots.append(dict(await harness.handle.snapshot_files()))
+                        driver.state = await commit(
+                            factory,
+                            previous=driver.state,
+                            execution=execution,
+                            context=context,
+                            phase=phase,
+                        )
+                        driver.context = context
+
+                    monkeypatch.setattr(driver, "save", save)
+                    return driver
+
+                if damage == "coordinator_tool":
+                    from types import SimpleNamespace
+
+                    from yleum_api.services import max_finalization as final
+                    from yleum_api.services.generation.agent_runtime import checked_fast_check
+                    driver = new_driver(initial, {"completed": {}})
+                    coordinator = final.MaxFinalizationCoordinator(
+                        session_factory=factory, generation_run_id=run.id,
+                        project_id=run.project_id, project_slug="synthetic",
+                        executor=harness.handle, continuation=driver,
+                    )
+                    runtime = SimpleNamespace(coordinator=coordinator)
+                    action = Action("build", {}, "")
+                    async def checked():
+                        return await checked_fast_check(runtime, None)
+                    with pytest.raises(ex.GenerationYielded):
+                        await driver.tool("command-once", action, checked)
+                    assert len(sent) == 1 and snapshots == []
+                    async with factory() as session:
+                        current = await session.get(GenerationRun, run.id)
+                        resumed = ex.recovery_state(current).model_copy(
+                            update={"phase": "working", "next_check_at": None})
+                        current.agent_state = {"recovery_v1": resumed.model_dump(mode="json")}
+                        await session.commit()
+                    cold = new_driver(resumed, deepcopy(driver.context))
+                    coordinator.continuation = cold
+                    saved["acknowledge"] = True
+                    command_changes.clear()
+                    result = await cold.tool("command-once", action, checked)
+                    assert result["ok"] is True
+                    assert len(sent) == 3 and len({item["operation_id"] for item in sent}) == 3
+                    assert cold.state.execution.next_tool_index == 1
+                    assert snapshots[-1]["src/a.ts"] == "completed command"
+                    return
+                if damage == "coordinator":
+                    from yleum_api.models.project_cell import ProjectCellActivityLease
+                    from yleum_api.services import max_finalization as final
+                    from yleum_api.services.generation.recovery_pipeline import (
+                        reconcile_pending_role,
+                    )
+                    driver = new_driver(initial, {"completed": {}})
+                    coordinator = final.MaxFinalizationCoordinator(
+                        session_factory=factory, generation_run_id=run.id,
+                        project_id=run.project_id,
+                        project_slug="synthetic", executor=harness.handle, continuation=driver,
+                    )
+                    identity = await harness.handle.current_identity()
+                    kwargs = dict(identity=identity, dimension=final.ProofDimension.FAST_CHECK,
+                                  role=project_cell_executor.ProjectCellCommandRole.FAST_CHECK,
+                                  phase=final.GenerationPhase.FAST_CHECK)
+                    with pytest.raises(ex.GenerationYielded):
+                        await coordinator._execute_role(**kwargs)
+                    old_op = sent[0]["operation_id"]
+                    async with factory() as session:
+                        old_lease = await session.get(ProjectCellActivityLease, old_op)
+                        assert old_lease.state == "active", "unknown ACK became failed activity"
+                        current = await session.get(GenerationRun, run.id)
+                        resumed = ex.recovery_state(current).model_copy(
+                            update={"phase": "working", "next_check_at": None})
+                        current.agent_state = {"recovery_v1": resumed.model_dump(mode="json")}
+                        await session.commit()
+                    cold = new_driver(resumed, deepcopy(driver.context))
+                    await reconcile_pending_role(cold, harness.handle)
+                    assert "pending_role" not in cold.context["completed"]
+                    assert len(sent) == 1 and len(reads) >= 2
+                    saved["acknowledge"] = True
+                    command_changes.clear()  # The fresh compiler does not mutate source.
+                    coordinator.continuation = cold
+                    current_identity = await harness.handle.current_identity()
+                    assert current_identity != identity
+                    proof = await coordinator._proof(current_identity)
+                    result = await coordinator._run_role_result(
+                        **{**kwargs, "identity": current_identity}, proof=proof)
+                    assert result.outcome == "green" and result.operation_id != old_op
+                    assert len(sent) == 2 and sent[0]["operation_id"] != sent[1]["operation_id"]
+                    async with factory() as session:
+                        for call in sent:
+                            lease = await session.get(
+                                ProjectCellActivityLease, call["operation_id"],
+                            )
+                            assert lease.state == "completed"
+                    return
+                driver = new_driver(initial, {"schema_version": 1, "entry": "pipeline"})
+                with pytest.raises(ex.GenerationYielded):
+                    await driver.tool(
+                        "command-once", action, lambda: harness.handle.execute(action),
+                    )
+                assert len(harness.exec_calls) == 1 and snapshots == []
+                async with factory() as session:
+                    current = await session.get(GenerationRun, run.id)
+                    resumed = ex.recovery_state(current).model_copy(
+                        update={"phase": "working", "next_check_at": None}
+                    )
+                    current.agent_state = {"recovery_v1": resumed.model_dump(mode="json")}
+                    await session.commit()
+                cold = new_driver(resumed, deepcopy(driver.context))
+                result = await cold.tool(
+                    "command-once", action, lambda: harness.handle.execute(action),
+                )
+                assert result["ok"] is True and len(harness.exec_calls) == 1
+                expected = {".omnia/cell.json": '{"version":1}', "src/a.ts": "completed command"}
+                assert snapshots == [expected]
+                return
+            async def execute():
+                if is_role:
+                    observation = await harness.handle.run_role(
+                        project_cell_executor.ProjectCellCommandRole.FAST_CHECK, role_operation,
+                    )
+                    return {"ok": observation.ok, "detail": observation.redacted_detail}
+                return await harness.handle.execute(action)
+            if damage in {"role_foreign", "role_proof", "role_cancel", "role_expired"}:
+                from yleum_api.services.generation.recovery_contract import RecoveryContractError
+                lease = await db_session.get(ProjectCellActivityLease, role_operation)
+                if damage == "role_foreign":
+                    lease.generation_run_id = None
+                elif damage == "role_proof":
+                    lease.proof_key = "e" * 64
+                elif damage == "role_cancel":
+                    lease.state = "cancelled"
+                else:
+                    lease.deadline_at = datetime.now(UTC) - timedelta(seconds=1)
+                await db_session.commit()
+                with tool_effect_scope(cursor), pytest.raises(RecoveryContractError):
+                    await execute()
+                assert sent == [] and harness.exec_calls == []
+                return
+            with tool_effect_scope(cursor):
+                if is_role:
+                    with pytest.raises(OrchestratorUnavailable):
+                        await execute()
+                    first = {"ok": False}
+                else:
+                    first = await execute()
+            assert not first["ok"] and len(harness.exec_calls) == 1
+            cold = ToolEffectCursor(claim, 0, 0, "command-once", reconcile_only=True)
+            if damage == "role_cold_proof":
+                from yleum_api.services.generation.recovery_contract import RecoveryContractError
+                lease = await db_session.get(ProjectCellActivityLease, role_operation)
+                lease.proof_key = "e" * 64
+                await db_session.commit()
+                with tool_effect_scope(cold), pytest.raises(RecoveryContractError):
+                    await execute()
+                assert len(sent) == 1 and reads == []
+                return
+            with tool_effect_scope(cold):
+                result = await execute()
+            assert result["ok"] is (damage in {None, "role"}), result
+            assert len(harness.exec_calls) == len(sent) == 1
+            if is_role:
+                assert sent[0]["operation_id"] == role_operation
+                assert saved["receipt"].operation_id == role_operation
+            if damage is None:
+                assert saved["tracked"] is True and len(reads) >= 2
+                assert result["detail"] == "cell exec ok"
+                assert result["files"]["src/a.ts"] == "completed command"
+                assert (await harness.handle.snapshot_files())["src/a.ts"] == "completed command"
+        finally:
+            ex._SESSION_OWNER.reset(token)
+            await owner.execute(text("SELECT pg_advisory_unlock_all()"))
+            await owner.commit()

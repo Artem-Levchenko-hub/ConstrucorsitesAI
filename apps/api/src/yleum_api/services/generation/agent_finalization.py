@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Mapping
@@ -164,6 +165,29 @@ async def run_native_source_repair(
     from yleum_api.services.generation.agent_runtime import guard_native_source_contract
     from yleum_api.services.max_generation_contract import max_source_completion_gap
 
+    continuation = getattr(operations, "continuation", None)
+    accounting = getattr(operations, "response_recovery", None)
+    model_baseline = baseline
+    if continuation is not None:
+        from yleum_api.services.generation.recovery_contract import IncompleteResponseBudget
+        from yleum_api.services.generation.recovery_pipeline import (
+            _result_from_data,
+            prepare_source_repair,
+        )
+        entry = await prepare_source_repair(
+            continuation, task=task, baseline=dict(baseline), edit_deadline=edit_deadline,
+            targeted=source_failure is not None,
+            response_budget=(accounting.budget if accounting is not None
+                             else IncompleteResponseBudget()),
+        )
+        if accounting is not None:
+            accounting.budget = entry.response_budget
+        if entry.status == "complete":
+            return _result_from_data(entry.result)
+        task, model_baseline, edit_deadline = entry.task, entry.baseline, entry.edit_deadline
+        if entry.targeted and source_failure is None:
+            # A historical path list is not current source-repair authority.
+            source_failure = SourceFailure()
     execute = operations.execute
     if source_failure is not None:
         allowed = frozenset(source_failure.allowed_paths)
@@ -197,6 +221,7 @@ async def run_native_source_repair(
         )
     try:
         result = await agent_native.run_native_build(
+            continuation=continuation,
             response_recovery=getattr(operations, "response_recovery", None),
             take_verified_progress=getattr(operations, "take_verified_progress", None),
             pure_check=getattr(operations, "pure_check", None),
@@ -214,7 +239,7 @@ async def run_native_source_repair(
             ),
             snapshot_files=snapshot if callable(snapshot) else None,
             source_repair=True,
-            allow_max_bash=shell_enabled, portable_cell=True, initial_files=baseline,
+            allow_max_bash=shell_enabled, portable_cell=True, initial_files=model_baseline,
             edit_deadline=edit_deadline, completion_check=repair_completion,
         )
     except SourceCheckpointError as exc:
@@ -225,6 +250,12 @@ async def run_native_source_repair(
         )
     if result.stop_reason in {"provider_error", "infra_error", "error"}:
         raise RuntimeError(result.summary)
+    if continuation is not None:
+        from yleum_api.services.generation.recovery_pipeline import finish_source_repair
+        await finish_source_repair(
+            continuation, result,
+            accounting.budget if accounting is not None else entry.response_budget,
+        )
     return result
 
 
@@ -267,6 +298,7 @@ async def finalize_max_candidate(
                 return FinalizedAgentSource(None, {}, unchanged.message)
 
         _repair_history: list[str] = []
+        continuation = getattr(operations, "continuation", None)
 
         async def _repair_finalization_source(
             detail: str, source_failure: SourceFailure | None = None,
@@ -274,6 +306,13 @@ async def finalize_max_candidate(
             assert runtime.handle is not None
             assert runtime.coordinator is not None
             baseline = await runtime.handle.snapshot_files()
+            history = _repair_history
+            if continuation is not None:
+                from yleum_api.services.generation.recovery_pipeline import FinalizationProgress
+                progress = FinalizationProgress.model_validate_json(json.dumps(
+                    continuation.context["completed"]["finalization_progress"],
+                ))
+                history = list(progress.feedback[:-1])
             # Each repair opens a fresh transcript, so the agent cannot see what it
             # already changed or what the earlier passes were told. Hand both over.
             _changed = sorted(set(baseline) - set(files)) + sorted(
@@ -281,13 +320,14 @@ async def finalize_max_candidate(
             )
             _carry = "".join(
                 f"\n\nEARLIER CHECK FEEDBACK (pass {index}, already addressed or not):\n{text}"
-                for index, text in enumerate(_repair_history, start=1)
+                for index, text in enumerate(history, start=1)
             ) + (
                 "\n\nFILES YOU ALREADY CHANGED IN THIS RUN: " + ", ".join(_changed[:40])
                 if _changed
                 else ""
             )
-            _repair_history.append(detail)
+            if continuation is None:
+                _repair_history.append(detail)
             await operations.emit(
                 "agent.step",
                 {
@@ -313,10 +353,12 @@ async def finalize_max_candidate(
             )
 
         try:
+            continuation_kw = {"continuation": continuation} if continuation is not None else {}
             _finalization = await runtime.coordinator.finalize_with_repair(
                 prompt=prompt_text,
                 repair=_repair_finalization_source,
                 repair_source=_repair_finalization_source,
+                **continuation_kw,
             )
             if _finalization.status is MaxFinalizationStatus.ACTIVATING:
                 raise AdaptationActivationPending(_finalization.redacted_detail)

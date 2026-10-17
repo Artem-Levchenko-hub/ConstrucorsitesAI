@@ -12,7 +12,12 @@ from typing import Any, Literal
 
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
 
-ResponsePurpose = Literal["generation_response.record", "generation_response.read"]
+ResponsePurpose = Literal[
+    "generation_response.record", "generation_response.read", "generation_response.reconcile",
+]
+_RESPONSE_PURPOSES = frozenset((
+    "generation_response.record", "generation_response.read", "generation_response.reconcile",
+))
 HEADER = "x-generation-response-authorization"
 _DOMAIN = b"yleum:generation-response:v1"
 
@@ -86,7 +91,7 @@ def mint_generation_response_token(
     now: datetime | None = None,
     secret: str | None = None,
 ) -> str:
-    if purpose not in {"generation_response.record", "generation_response.read"}:
+    if purpose not in _RESPONSE_PURPOSES:
         raise ValueError("invalid generation response purpose")
     seconds = int((now or datetime.now(UTC)).timestamp())
     return _signed(
@@ -114,7 +119,7 @@ def verify_generation_response_token(
         set(claims) != {"aud", "purpose", "identity", "iat", "exp"}
         or claims["aud"] != "llm-gateway"
         or claims["purpose"] != purpose
-        or purpose not in {"generation_response.record", "generation_response.read"}
+        or purpose not in _RESPONSE_PURPOSES
     ):
         raise ValueError("invalid generation response assertion")
     return GenerationProviderIdentity.from_wire(claims["identity"])

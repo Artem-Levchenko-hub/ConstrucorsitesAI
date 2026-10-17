@@ -70,6 +70,20 @@ class SourceNoveltyTracker:
     def __init__(self, initial: Mapping[str, str]) -> None:
         self._seen: dict[str, set[str]] = {source_fingerprint(initial): set()}
 
+    def source_history(self) -> tuple[str, ...]:
+        """Arithmetic/history data only; never serialize accepted proof receipts."""
+        return tuple(self._seen)
+
+    @classmethod
+    def from_source_history(cls, history: tuple[str, ...]) -> SourceNoveltyTracker:
+        if (not history or len(set(history)) != len(history)
+            or any(type(value) is not str or len(value) != 64
+                   or any(char not in "0123456789abcdef" for char in value) for value in history)):
+            raise ValueError("invalid source novelty history")
+        restored = cls.__new__(cls)
+        restored._seen = {fingerprint: set() for fingerprint in history}
+        return restored
+
     def observe(
         self,
         files: Mapping[str, str],

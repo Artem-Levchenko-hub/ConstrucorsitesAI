@@ -113,6 +113,10 @@ class MachineAdapter:
         maintenance: bool = False, public_mode: bool = False,
     ) -> None:
         """Short-lived admin process; shares only the exact owned PG network namespace."""
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         client = self.manager.docker._client_obj()
         image = self._core_image(client, public_mode=public_mode)
         postgres = client.containers.get(postgres_name)
@@ -354,6 +358,10 @@ class MachineAdapter:
     async def execute(
         self, state: Any, manifest: MachineManifest, request: Any
     ) -> DockerCommandResult:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         command_grace = int(getattr(self.settings, "cell_machine_command_grace_seconds", 20))
         cleanup_reserve = command_grace + 5
         succeeded = False
@@ -472,6 +480,10 @@ class MachineAdapter:
         self, state: Any, manifest: MachineManifest, request: Any,
     ) -> DockerCommandResult:
         """Caller holds operation lock; inspect physical source even on command failure."""
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
         from yleum_orchestrator.services.applied_migration_sources import (
             protected_sources,
@@ -871,6 +883,12 @@ class MachineAdapter:
         persist: bool = True,
         observer: Any = None,
     ) -> MachineEnvironmentRef | None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(
+            self.manager.state_store.root, state.workspace_id, action="capture"
+        )
         if not self.exists(state.workspace_id):
             return None
         machine, backend = self.parts(state)
@@ -973,6 +991,12 @@ class MachineAdapter:
         await machine_effect(store.validate, reference, manifest_digest=manifest.digest())
 
     async def restore_payload(self, state: Any, payload: bytes | None) -> None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(
+            self.manager.state_store.root, state.workspace_id, action="restore"
+        )
         await self.validate_restore_payload(state, payload)
         machine, backend = self.parts(state)
         if payload is None:
@@ -1009,6 +1033,10 @@ class MachineAdapter:
     async def apply(
         self, state: Any, manifest: MachineManifest, request: Any
     ) -> DockerCommandResult:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         try:
             work_seconds = max(
                 0, MACHINE_APPLY_TIMEOUT_SECONDS - MACHINE_APPLY_CLEANUP_RESERVE_SECONDS
@@ -1090,6 +1118,10 @@ class MachineAdapter:
         *, public_mode: bool = False, runtime_env: dict[str, str] | None = None,
         business_config_override: dict[str, Any] | None = None, observer: Any = None,
     ) -> None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         transition: dict[str, Any] = {}
         try:
             self._start_boundary_impl(
@@ -1510,6 +1542,12 @@ class MachineAdapter:
         self, state: Any, *, remove_network: bool = False, capture: bool = True,
         retain_trusted: bool = False,
     ) -> None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(
+            self.manager.state_store.root, state.workspace_id, action="quiesce"
+        )
         if not self.exists(state.workspace_id):
             return
         machine, backend = self.parts(state)
@@ -1560,6 +1598,10 @@ class MachineAdapter:
     async def apply_owner_business_config(
         self, state: Any, *, version: int, config: dict[str, Any],
     ) -> bool:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         machine, backend = self.parts(state)
         path = machine.path.parent / "business-config.json"
         previous = json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
@@ -1601,6 +1643,10 @@ class MachineAdapter:
         return True
 
     async def resume_preview(self, state: Any, *, epoch: int | None = None) -> None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         machine, backend = self.parts(state)
         saved = machine.state()
         manifest = MachineManifest.model_validate(saved["manifest"])

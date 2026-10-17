@@ -21,6 +21,7 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryContractError,
     RecoveryObservation,
     RecoveryState,
+    RecoveryStateV2,
     decode_recovery,
 )
 from yleum_api.services.generation_runs import load_generation_dispatch, prompt_hash
@@ -54,8 +55,12 @@ async def _validate_binding(
     workspace = await session.get(
         ProjectCellWorkspace, workspace_id, with_for_update=True, populate_existing=True,
     )
-    if (
-        workspace is None or workspace.project_id != run.project_id
+    if workspace is None:
+        from yleum_api.services.generation.recovery_adaptation import validate_candidate_binding
+
+        await validate_candidate_binding(session, run, binding)
+    elif (
+        workspace.project_id != run.project_id
         or workspace.owner_id != run.user_id or workspace.generation_run_id != run.id
         or workspace.fencing_epoch != binding.fencing_epoch
         or workspace.state != "ready" or workspace.deleted_at is not None
@@ -115,7 +120,8 @@ def _validate_revision(
         if expected_attempt != 0 or expected_revision != 0 or state.checkpoint is not None:
             raise RecoveryContractError("recovery initialization requires initial attempt/revision")
     elif (
-        previous.attempt_seq != expected_attempt or previous.state_revision != expected_revision
+        previous.version != state.version
+        or previous.attempt_seq != expected_attempt or previous.state_revision != expected_revision
         or previous.identity != state.identity or previous.requirements != state.requirements
         or previous.checkpoint != state.checkpoint
     ):
@@ -206,7 +212,14 @@ async def save_recovery_checkpoint(
     if validated is None:
         raise RecoveryContractError("missing recovery contract")
     state = validated
-    _require_writer_enabled(state.identity.project_id)
+    if isinstance(state, RecoveryStateV2):
+        from yleum_api.services.generation.recovery_execution import _require_session_owner
+        from yleum_api.services.generation_deployment_drain import require_generation_admission
+
+        await _require_session_owner(run_id)
+        await require_generation_admission(session)
+    else:
+        _require_writer_enabled(state.identity.project_id)
     try:
         with session.no_autoflush:
             identity = state.identity
@@ -216,6 +229,19 @@ async def save_recovery_checkpoint(
                 session, run_id=run_id, project_id=identity.project_id, user_id=identity.user_id,
             )
             previous = _previous_state(run)
+            if isinstance(state, RecoveryStateV2):
+                from yleum_api.services.generation.recovery_execution import execution_enabled
+
+                if previous is None:
+                    if not execution_enabled(run.project_id):
+                        raise RecoveryContractError("new executable recovery writes are disabled")
+                elif (
+                    not isinstance(previous, RecoveryStateV2)
+                    or previous.continuation_claim is None
+                    or previous.continuation_claim != state.continuation_claim
+                    or previous.phase not in {"working", "repairing", "verifying"}
+                ):
+                    raise RecoveryContractError("checkpoint continuation claim conflicts")
             _validate_revision(previous, state, expected_attempt=expected_attempt,
                                expected_revision=expected_revision)
             baseline_sha = await _baseline_sha(session, run=run, project=project, state=state)

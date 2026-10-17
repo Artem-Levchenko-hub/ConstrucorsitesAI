@@ -4,7 +4,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 from uuid import UUID
 
 from yleum_api.models.project import Project
@@ -22,6 +22,10 @@ from yleum_api.services.generation.recovery_contract import (
 )
 from yleum_api.services.max_finalization import MaxFinalizationCoordinator, ProofBundle
 from yleum_api.services.project_cell_executor import ProjectCellExecutorHandle
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
+
 
 """Cohesive input records and invocation-owned runtime resources."""
 
@@ -108,6 +112,7 @@ class AgentOperations:
     response_recovery: ResponseRecovery | None = None
     take_verified_progress: ProgressReader | None = None
     pure_check: PureCheckReader | None = None
+    continuation: ExecutionDriver | None = None
 
 
 class FinalizedAgentSource(NamedTuple):

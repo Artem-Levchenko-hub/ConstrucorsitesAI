@@ -48,11 +48,13 @@ import json
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from itertools import count as segment_numbers
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel, ConfigDict, NonNegativeInt
 
 from yleum_api.services import llm_client
 from yleum_api.services.agent_output_budget import agent_output_tokens
@@ -68,6 +70,64 @@ from yleum_api.services.generation.recovery_actions import (
     ResponseRecovery,
     verified_progress_executor,
 )
+from yleum_api.services.generation.recovery_contract import (
+    IncompleteResponseBudget,
+    RecoveryContractError,
+)
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
+
+
+class _LegacyLoopFrame(BaseModel):
+    """Exact executable data; historical green flags never restore proof authority."""
+
+    model_config = ConfigDict(strict=True, extra="forbid")
+    contract: str
+    step: NonNegativeInt
+    attempt: NonNegativeInt
+    retry_started_at: str
+    call_deadline: str
+    rate_retry_deadline: str | None
+    convo: list[dict[str, Any]]
+    written: dict[str, str]
+    stalls: NonNegativeInt
+    last_sig: str
+    repeat_count: NonNegativeInt
+    no_write_streak: NonNegativeInt
+    infra_dead_streak: NonNegativeInt
+    sig_seen: dict[str, NonNegativeInt]
+    blocked_cycles: dict[str, NonNegativeInt]
+    read_sigs: dict[str, list[str]]
+    content_receipts_seen: bool
+    last_build_ok: bool | None
+    fast_check_fresh: bool
+    pending_source_build: bool
+    red_build_streak: NonNegativeInt
+    writes_since_build: NonNegativeInt
+    paths_since_build: list[str]
+    rewrites_since_build: NonNegativeInt
+    build_pressure_nudged: bool
+    blocked_rewrites: NonNegativeInt
+    last_runtime_ok: bool | None
+    wrote_since_check: bool
+    active_model: str
+    escalated: bool
+    pending_truncation: bool
+    response_budget: IncompleteResponseBudget
+    call_messages: list[dict[str, Any]]
+
+
+class _LegacyOuterFrame(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    contract: str
+    segment: NonNegativeInt
+    total_steps: NonNegativeInt
+    cumulative_files: dict[str, str]
+    transcript: list[dict[str, Any]]
+    task: str
+    source_history: list[str] | None
+
 
 # ── Action protocol ────────────────────────────────────────────────────────
 
@@ -119,7 +179,7 @@ class AgentResult:
     summary: str
     files: dict[str, str]          # path -> final content the agent wrote
     steps: int
-    transcript: list[dict[str, str]] = field(default_factory=list)
+    transcript: list[dict[str, Any]] = field(default_factory=list)
     stop_reason: str = ""          # "done" | "max_steps" | "stalled" | "error" | "infra_error"
     # Native MAX segments carry fact-gate proof forward inside the same
     # GenerationRun. Text/legacy builders leave this empty.
@@ -283,6 +343,7 @@ async def run_agent_build(
     recovery_binding: RecoveryBindingReader | None = None,
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
+    continuation: ExecutionDriver | None = None,
 ) -> AgentResult:
     """Continue a progressing candidate without a new run, cell or blind replay."""
     response_recovery = response_recovery or ResponseRecovery()
@@ -294,8 +355,19 @@ async def run_agent_build(
     ):
         raise ValueError("Progressive continuation requires an aware deadline and source snapshot")
     segment_limit = max(1, min(8, int(max_segments))) if max_segments is not None else None
+    contract = hashlib.sha256(json.dumps({
+        "task": user_prompt, "max_segments": segment_limit,
+        "deadline": edit_deadline.isoformat() if edit_deadline else None,
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
+    raw = continuation.context.get("legacy_outer") if continuation is not None else None
+    restored = _LegacyOuterFrame.model_validate(raw) if raw is not None else None
+    if restored is not None and (
+        restored.contract != contract or restored.segment < 1
+        or (segment_limit is not None and restored.segment > segment_limit)
+    ):
+        raise RecoveryContractError("legacy segment continuation contract changed")
     novelty = None
-    if segment_limit is None:
+    if segment_limit is None and restored is None:
         assert snapshot_files is not None and edit_deadline is not None
         if datetime.now(UTC) < edit_deadline:
             async with asyncio.timeout((edit_deadline - datetime.now(UTC)).total_seconds()):
@@ -304,7 +376,20 @@ async def run_agent_build(
     transcript: list[dict[str, str]] = []
     total_steps = 0
     task = user_prompt
-    for segment in segment_numbers(1):
+    start_segment = 1
+    if restored is not None:
+        start_segment = restored.segment
+        cumulative_files, transcript = restored.cumulative_files, restored.transcript
+        total_steps, task = restored.total_steps, restored.task
+        if restored.source_history is not None:
+            novelty = SourceNoveltyTracker.from_source_history(tuple(restored.source_history))
+
+    def finish(result: AgentResult) -> AgentResult:
+        if continuation is not None:
+            continuation.context.pop("legacy_outer", None)
+        return result
+
+    for segment in segment_numbers(start_segment):
         offset = total_steps
         source_progress = False
 
@@ -330,7 +415,7 @@ async def run_agent_build(
                 await checkpoint(candidate)
 
         if (
-            segment_limit is None and segment > 1 and edit_deadline is not None
+            restored is None and segment_limit is None and segment > 1 and edit_deadline is not None
             and datetime.now(UTC) >= edit_deadline
         ):
             return AgentResult(
@@ -338,6 +423,15 @@ async def run_agent_build(
                 steps=total_steps, transcript=transcript, stop_reason="source_deadline",
                 segments=segment - 1,
             )
+        if continuation is not None:
+            outer = _LegacyOuterFrame(
+                contract=contract, segment=segment, total_steps=total_steps,
+                cumulative_files=cumulative_files, transcript=transcript, task=task,
+                source_history=list(novelty.source_history()) if novelty is not None else None,
+            )
+            continuation.context = {
+                **continuation.context, "legacy_outer": outer.model_dump(mode="json"),
+            }
         result = await _run_agent_segment(
             system_prompt=system_prompt, user_prompt=task, model=model,
             execute=execute, escalate_model=escalate_model, max_steps=max_steps,
@@ -350,8 +444,9 @@ async def run_agent_build(
             initial_written=cumulative_files,
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             on_progress=segment_progress,
-            edit_deadline=edit_deadline,
+            edit_deadline=edit_deadline, continuation=continuation,
         )
+        restored = None
         cumulative_files.update(result.files)
         total_steps += result.steps
         transcript.extend(result.transcript)
@@ -368,27 +463,27 @@ async def run_agent_build(
             result.proof_checkpoint = None
             result.stop_reason = "max_steps"
         if result.done or result.needs_finalization:
-            return result
+            return finish(result)
         if result.stop_reason not in {"max_steps", "looping", "exploring", "stalled"}:
-            return result
+            return finish(result)
         if segment_limit == 1:
-            return result
+            return finish(result)
         if novelty is not None:
             assert snapshot_files is not None and edit_deadline is not None
             remaining = (edit_deadline - datetime.now(UTC)).total_seconds()
             if remaining <= 0:
                 result.stop_reason = "source_deadline"
-                return result
+                return finish(result)
             async with asyncio.timeout(remaining):
                 source_progress = novelty.observe(await snapshot_files())
         if not source_progress:
             result.stop_reason = "no_progress"
             result.summary = "Остановлено: сегмент не изменил исходники приложения."
-            return result
+            return finish(result)
         if segment == segment_limit:
             result.stop_reason = "max_segments"
             result.summary = "Приложение ещё не прошло итоговые проверки; продолжение остановлено."
-            return result
+            return finish(result)
         diagnostics = [
             turn["content"] for turn in result.transcript[-12:]
             if turn.get("role") == "user"
@@ -435,6 +530,7 @@ async def _run_agent_segment(
     take_verified_progress: ProgressReader | None = None,
     on_progress: Callable[[AgentResult], Awaitable[None]] | None = None,
     edit_deadline: datetime | None = None,
+    continuation: ExecutionDriver | None = None,
 ) -> AgentResult:
     """Drive the plan→act→observe loop until the model says done or budget hits.
 
@@ -486,6 +582,48 @@ async def _run_agent_segment(
     response_recovery = response_recovery or ResponseRecovery()
     execute = verified_progress_executor(execute, response_recovery, take_verified_progress)
     pending_truncation = False
+
+    contract = hashlib.sha256(json.dumps({
+        "system": system_prompt, "task": user_prompt, "model": model,
+        "escalate_model": escalate_model, "max_steps": max_steps, "max_tokens": max_tokens,
+        "require_green": require_green_before_done, "handoff": coordinator_handoff,
+        "ship_green": ship_green_on_abort, "edit_mode": edit_mode, "bare_mode": bare_mode,
+        "edit_deadline": edit_deadline.isoformat() if edit_deadline else None,
+    }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
+    restored = continuation.restore_frame("legacy") if continuation is not None else None
+    saved_frame = _LegacyLoopFrame.model_validate(restored) if restored is not None else None
+    start_step = 0
+    if saved_frame is not None:
+        if (saved_frame.contract != contract or saved_frame.step >= max_steps
+                or saved_frame.attempt >= 5):
+            raise RecoveryContractError("legacy continuation inputs or allowance changed")
+        start_step = saved_frame.step
+        convo, written = saved_frame.convo, saved_frame.written
+        stalls, last_sig = saved_frame.stalls, saved_frame.last_sig
+        repeat_count, no_write_streak = saved_frame.repeat_count, saved_frame.no_write_streak
+        infra_dead_streak = saved_frame.infra_dead_streak
+        sig_seen, blocked_cycles = saved_frame.sig_seen, saved_frame.blocked_cycles
+        read_sigs = {path: set(values) for path, values in saved_frame.read_sigs.items()}
+        content_receipts_seen = saved_frame.content_receipts_seen
+        last_build_ok, fast_check_fresh = saved_frame.last_build_ok, saved_frame.fast_check_fresh
+        pending_source_build, red_build_streak = (
+            saved_frame.pending_source_build, saved_frame.red_build_streak,
+        )
+        writes_since_build = saved_frame.writes_since_build
+        paths_since_build = set(saved_frame.paths_since_build)
+        rewrites_since_build = saved_frame.rewrites_since_build
+        build_pressure_nudged, blocked_rewrites = (
+            saved_frame.build_pressure_nudged, saved_frame.blocked_rewrites,
+        )
+        last_runtime_ok, wrote_since_check = saved_frame.last_runtime_ok, saved_frame.wrote_since_check
+        active_model, escalated = saved_frame.active_model, saved_frame.escalated
+        pending_truncation = saved_frame.pending_truncation
+        response_recovery.budget = IncompleteResponseBudget(
+            total=max(response_recovery.budget.total, saved_frame.response_budget.total),
+            since_progress=max(
+                response_recovery.budget.since_progress, saved_frame.response_budget.since_progress,
+            ),
+        )
 
     async def _step_result(
         action: Action,
@@ -602,8 +740,9 @@ async def _run_agent_segment(
             )
         return fallback
 
-    for step in range(max_steps):
-        if edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
+    for step in range(start_step, max_steps):
+        restoring = saved_frame is not None and step == start_step
+        if not restoring and edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
             return _ship_green_or(
                 AgentResult(
                     done=False, summary="Завершаю работу с исходниками; сохраняю время для проверок.",
@@ -642,10 +781,28 @@ async def _run_agent_segment(
         # Preserve the existing five-attempt bound for proven safe failures.
         # Only confirmed refusal/preconnect evidence permits another paid POST.
         retry_started = asyncio.get_running_loop().time()
+        retry_started_at = datetime.now(UTC)
         rate_retry_deadline: float | None = None
+        start_attempt = 0
+        if restoring:
+            assert saved_frame is not None
+            call_msgs = saved_frame.call_messages
+            start_attempt = saved_frame.attempt
+            retry_started_at = datetime.fromisoformat(saved_frame.retry_started_at)
+            if retry_started_at.utcoffset() is None:
+                raise RecoveryContractError("legacy retry clock is not an absolute instant")
+            retry_started -= max(0.0, (datetime.now(UTC) - retry_started_at).total_seconds())
+            if saved_frame.rate_retry_deadline is not None:
+                absolute_rate_deadline = datetime.fromisoformat(saved_frame.rate_retry_deadline)
+                if absolute_rate_deadline.utcoffset() is None:
+                    raise RecoveryContractError("legacy retry deadline has no clock basis")
+                rate_retry_deadline = (
+                    asyncio.get_running_loop().time()
+                    + (absolute_rate_deadline - datetime.now(UTC)).total_seconds()
+                )
         truncated_response = False
-        for attempt in range(5):
-            if (rate_retry_deadline is not None
+        for attempt in range(start_attempt, 5):
+            if (not restoring and rate_retry_deadline is not None
                     and asyncio.get_running_loop().time() >= rate_retry_deadline):
                 return AgentResult(
                     done=False, summary="provider_refusal_rate_limit: safe retry window exhausted",
@@ -655,18 +812,19 @@ async def _run_agent_segment(
                 (edit_deadline - datetime.now(UTC)).total_seconds()
                 if edit_deadline is not None else None
             )
-            if remaining is not None and remaining <= 0:
+            if not restoring and remaining is not None and remaining <= 0:
                 return AgentResult(
                     done=False, summary="Время работы с исходниками завершилось.",
                     files=written, steps=step, transcript=convo, stop_reason="source_deadline",
                 )
+            call_seconds = (
+                remaining if max_tokens is None
+                and agent_output_tokens(active_model, fallback=16384) is None
+                else min(300.0, remaining)
+            ) if uses_gateway and remaining is not None and not restoring else 300.0
             bounded_complete = (
-                partial(llm_client.complete_chat, timeout_seconds=(
-                    remaining if max_tokens is None
-                    and agent_output_tokens(active_model, fallback=16384) is None
-                    else min(300.0, remaining)
-                ))
-                if uses_gateway and remaining is not None else complete
+                partial(llm_client.complete_chat, timeout_seconds=call_seconds)
+                if uses_gateway and remaining is not None and not restoring else complete
             )
             try:
                 rate_remaining = (
@@ -675,18 +833,66 @@ async def _run_agent_segment(
                 )
                 # A retry admitted near the boundary cannot outlive its window.
                 # A timed-out POST has an unknown outcome and is never replayed.
-                async with asyncio.timeout(rate_remaining):
-                    reply = await bounded_complete(
-                        call_msgs,
-                        active_model,
-                        user_id=user_id,
-                        project_id=project_id,
-                        max_tokens=(
-                            agent_output_tokens(active_model, fallback=16384)
-                            if max_tokens is None else max_tokens
-                        ),
+                async def invoke(
+                    call: Callable[..., Awaitable[str]] = bounded_complete,
+                    messages: list[dict[str, Any]] = call_msgs,
+                ) -> str:
+                    return await call(
+                        messages, active_model, user_id=user_id, project_id=project_id,
+                        max_tokens=(agent_output_tokens(active_model, fallback=16384)
+                                    if max_tokens is None else max_tokens),
                         temperature=0.0,
                     )
+
+                async with asyncio.timeout(None if restoring else rate_remaining):
+                    if continuation is None:
+                        reply = await invoke()
+                    else:
+                        frame = saved_frame if restoring else _LegacyLoopFrame(
+                            contract=contract, step=step, attempt=attempt,
+                            retry_started_at=retry_started_at.isoformat(),
+                            call_deadline=min(
+                                datetime.now(UTC) + timedelta(seconds=max(1.0, call_seconds)),
+                                retry_started_at + timedelta(seconds=270)
+                                if rate_retry_deadline is not None else datetime.max.replace(tzinfo=UTC),
+                            ).isoformat(),
+                            rate_retry_deadline=(
+                                (retry_started_at + timedelta(seconds=270)).isoformat()
+                                if rate_retry_deadline is not None else None
+                            ),
+                            convo=convo, written=written, stalls=stalls, last_sig=last_sig,
+                            repeat_count=repeat_count, no_write_streak=no_write_streak,
+                            infra_dead_streak=infra_dead_streak, sig_seen=sig_seen,
+                            blocked_cycles=blocked_cycles,
+                            read_sigs={path: sorted(values) for path, values in read_sigs.items()},
+                            content_receipts_seen=content_receipts_seen,
+                            last_build_ok=last_build_ok, fast_check_fresh=fast_check_fresh,
+                            pending_source_build=pending_source_build,
+                            red_build_streak=red_build_streak, writes_since_build=writes_since_build,
+                            paths_since_build=sorted(paths_since_build),
+                            rewrites_since_build=rewrites_since_build,
+                            build_pressure_nudged=build_pressure_nudged,
+                            blocked_rewrites=blocked_rewrites, last_runtime_ok=last_runtime_ok,
+                            wrote_since_check=wrote_since_check, active_model=active_model,
+                            escalated=escalated, pending_truncation=pending_truncation,
+                            response_budget=response_recovery.budget, call_messages=call_msgs,
+                        )
+                        assert frame is not None
+                        reply = await continuation.provider(
+                            {"version": 1, "kind": "legacy", "value": frame.model_dump(mode="json")},
+                            invoke,
+                        )
+                    if restoring:
+                        saved_frame = None
+                        restoring = False
+                        last_build_ok = last_runtime_ok = None
+                        fast_check_fresh = False
+                        if edit_deadline is not None and datetime.now(UTC) >= edit_deadline:
+                            return AgentResult(
+                                done=False, summary="Saved response reconciled after source deadline",
+                                files=written, steps=step, transcript=convo,
+                                stop_reason="source_deadline",
+                            )
                 break
             except llm_client.LLMOutputTruncated as exc:
                 # A settled truncated response is not a transport retry. Discard every
@@ -780,6 +986,13 @@ async def _run_agent_segment(
                         done=False, summary=f"{classification}: {prefix}{cause}", files=written,
                         steps=step, transcript=convo, stop_reason="provider_error",
                     )
+                if restoring:
+                    # The retained refusal was consumed. The next original outer
+                    # attempt must persist its own index, never the cold frame again.
+                    saved_frame = None
+                    restoring = False
+                    last_build_ok = last_runtime_ok = None
+                    fast_check_fresh = False
                 if emit:
                     await emit("agent.retry", diagnostic)
                 await asyncio.sleep(delay)
@@ -1065,7 +1278,12 @@ async def _run_agent_segment(
         )
         before_content = None
         if snapshot_files is None and write_path in read_sigs and not content_receipts_seen:
-            before = await execute(Action(name="read_file", args={"path": write_path}))
+            before_action = Action(name="read_file", args={"path": write_path})
+            tool = getattr(continuation, "tool", None)
+            before = (
+                await tool("legacy-before", before_action, lambda current=before_action: execute(current))
+                if tool is not None else await execute(before_action)
+            )
             content = before.get("content")
             if before.get("ok") is True and isinstance(content, str) and len(content) <= _MAX_READ_CHARS:
                 before_content = content
@@ -1077,7 +1295,11 @@ async def _run_agent_segment(
             sig_seen[sig] = sig_seen.get(sig, 0) + 1
         repeat_count, last_sig = next_repeat_count, sig
         source_before = dict(await snapshot_files()) if snapshot_files is not None else None
-        obs = await execute(action)
+        tool = getattr(continuation, "tool", None)
+        obs = (
+            await tool("legacy-action", action, lambda current=action: execute(current))
+            if tool is not None else await execute(action)
+        )
         source_after = dict(await snapshot_files()) if snapshot_files is not None else None
         await _step_result(action, step, obs)
         after_content = obs.get("content")

@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import asdict, replace
 from functools import partial
 from typing import Any
 from uuid import UUID
 
+from pydantic import TypeAdapter
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
+from yleum_api.core.db import get_engine
 from yleum_api.core.redis import (
     clear_stream_state,
     publish_event,
@@ -63,8 +66,14 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
 )
 from yleum_api.services.generation.progress import GenerationProgress
+from yleum_api.services.generation.recovery_contract import (
+    ContinuationClaim,
+    RecoveryContractError,
+    RecoveryStateV2,
+)
 from yleum_api.services.generation.runtime import _apply_project_cell_preview_files
 from yleum_api.services.generation.source_checkpoint import (
+    SourceCheckpoint,
     adjacent_checkpoint,
     checkpoint_resume_request,
     persist_checkpoint,
@@ -72,6 +81,110 @@ from yleum_api.services.generation.source_checkpoint import (
 from yleum_api.services.generation_runs import record_generation_product_failure
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def resume_agent_generation(claim: ContinuationClaim) -> None:
+    """Enter the saved logical stage, without admission or original dispatch."""
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.services.generation.lifecycle import cleanup_generation_runtime
+    from yleum_api.services.generation.publication import consume_free_generation
+    from yleum_api.services.generation.recovery_execution import (
+        _require_session_owner,
+        load_execution_context,
+        recovery_state,
+    )
+    from yleum_api.services.generation.recovery_store import _baseline_sha, _locked_owner
+    from yleum_api.services.generation_runs import load_generation_dispatch
+    from yleum_api.services.llm_client import set_free_generation, set_generation_billing_context
+
+    await _require_session_owner(claim.run_id)
+    factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    async with factory() as session:
+        hint = await session.get(GenerationRun, claim.run_id)
+        if hint is None:
+            raise RecoveryContractError("continuation run disappeared")
+        run, project = await _locked_owner(
+            session, run_id=claim.run_id, project_id=hint.project_id, user_id=hint.user_id,
+        )
+        state = recovery_state(run)
+        if (not isinstance(state, RecoveryStateV2) or state.continuation_claim != claim
+            or state.phase != "working" or state.execution.execution_context_ref is None):
+            raise RecoveryContractError("continuation cursor is no longer owned")
+        from yleum_api.services.generation.agent_publication import (
+            has_publication_intent,
+            publication_committed,
+        )
+        if has_publication_intent(state):
+            if not await publication_committed(session, run=run, project=project, state=state):
+                raise RecoveryContractError(
+                    "publication outcome remains unresolved; writer cannot replay"
+                )
+            await _require_session_owner(run.id)
+            return  # Exact SQL terminal receipt; no source preparation or publication replay.
+        baseline_sha = await _baseline_sha(session, run=run, project=project, state=state)
+        dispatch = load_generation_dispatch(run)
+        await session.commit()
+    saved = await load_execution_context(
+        state.identity, state.execution.execution_context_ref, binding=state.binding,
+    )
+    if (set(saved) - {"active_tool", "native_outer", "legacy_outer"}
+        != {"schema_version", "entry", "pipeline", "completed", "active_frame"}):
+        raise RecoveryContractError("unsupported executable pipeline context")
+    data = saved["pipeline"]
+    keys = {"ids", "baseline", "project_info", "prompt_text", "force_model", "is_free",
+            "model_id", "orchestrate", "selected_elements"}
+    if (saved["entry"] != "pipeline" or type(data) is not dict or set(data) != keys
+        or type(saved["completed"]) is not dict):
+        raise RecoveryContractError("invalid executable pipeline shape")
+
+    def record(record_type: Any, raw: Any) -> Any:
+        if type(raw) is not dict or set(raw) != set(record_type.__dataclass_fields__):
+            raise RecoveryContractError("invalid executable pipeline record")
+        return TypeAdapter(record_type).validate_json(json.dumps(raw, allow_nan=False), strict=True)
+
+    ids = record(GenerationIds, data["ids"])
+    baseline = record(SourceBaseline, data["baseline"])
+    project_info = record(ProjectGenerationFacts, data["project_info"])
+    if (ids != GenerationIds(claim.run_id, dispatch.project_id, dispatch.user_id,
+                             dispatch.user_message_id, dispatch.assistant_message_id)
+        or baseline.snapshot_id != dispatch.current_snapshot_id or baseline.sha != baseline_sha
+        or any(data[key] != getattr(dispatch, key) for key in (
+            "prompt_text", "force_model", "is_free", "model_id", "orchestrate", "selected_elements",
+        ))
+        or type(data["is_free"]) is not bool or type(data["orchestrate"]) is not bool):
+        raise RecoveryContractError("executable pipeline conflicts with original admission")
+    if state.execution.stage in {"agent", "finalization"}:
+        from yleum_api.services.generation.recovery_pipeline import (
+            CompletedAgentTurn,
+            PreparedAgentEntry,
+        )
+        PreparedAgentEntry.from_json(saved["completed"].get("agent_entry"))
+        if state.execution.stage == "finalization":
+            CompletedAgentTurn.from_json(saved["completed"].get("agent_turn"))
+    elif (state.execution.stage, state.execution.substep) not in {
+        ("bootstrap", "runtime_prepare"), ("bootstrap", "agent_entry"),
+        ("bootstrap", "stack_prepare"), ("bootstrap", "prompt_prepare"),
+        ("bootstrap", "starter_apply"), ("bootstrap", "proof_wait"),
+    }:
+        raise RecoveryContractError("executable continuation stage is not installed")
+    set_free_generation(data["is_free"])
+    set_generation_billing_context(ids.run_id, ids.user_id, ids.project_id)
+    runtime = GenerationRuntime()
+    try:
+        await run_agent_generation(
+            _consume_free_generation=partial(consume_free_generation, is_free=data["is_free"],
+                                             user_id=ids.user_id),
+            baseline=baseline, capacity_dispatch_token=None, factory=factory,
+            force_model=data["force_model"], ids=ids, is_free=data["is_free"],
+            model_id=data["model_id"], orchestrate=data["orchestrate"],
+            progress=GenerationProgress(
+                factory, ids.run_id, ids.project_id, ids.assistant_message_id,
+            ),
+            project_info=project_info, prompt_text=data["prompt_text"], runtime=runtime,
+            selected_elements=data["selected_elements"], _resume_state=state,
+        )
+    finally:
+        await cleanup_generation_runtime(runtime, ids.project_id, ids.assistant_message_id)
 
 
 async def publish_finalized_candidate_once(
@@ -102,14 +215,86 @@ async def run_agent_generation(
     prompt_text: str,
     runtime: GenerationRuntime,
     selected_elements: list[dict[str, Any]] | None,
+    _resume_state: RecoveryStateV2 | None = None,
 ) -> None:
     from yleum_api.services.generation.recovery_requirements import freeze_for_run
 
-    async with factory() as scope_session:
-        await freeze_for_run(
-            scope_session, run_id=ids.run_id, project_id=ids.project_id,
-            user_id=ids.user_id, prompt=prompt_text, template=project_info.template,
+    if _resume_state is None:
+        async with factory() as scope_session:
+            await freeze_for_run(
+                scope_session, run_id=ids.run_id, project_id=ids.project_id,
+                user_id=ids.user_id, prompt=prompt_text, template=project_info.template,
+            )
+    from yleum_api.services.generation.recovery_execution import initialize_execution
+
+    if _resume_state is None:
+        _resume_state = await initialize_execution(factory, run_id=ids.run_id, context=lambda: {
+        "schema_version": 1, "entry": "pipeline",
+        "pipeline": {
+            "ids": {key: str(value) for key, value in asdict(ids).items()},
+            "baseline": {"snapshot_id": str(baseline.snapshot_id) if baseline.snapshot_id else None,
+                         "sha": baseline.sha, "files": baseline.files},
+            "project_info": asdict(project_info), "prompt_text": prompt_text,
+            "force_model": force_model, "is_free": is_free, "model_id": model_id,
+            "orchestrate": orchestrate, "selected_elements": selected_elements,
+        },
+        "completed": {}, "active_frame": None,
+        })
+    from yleum_api.services.generation.recovery_execution import load_execution_context
+    from yleum_api.services.generation.recovery_pipeline import (
+        BootstrapPreparation,
+        CompletedAgentTurn,
+        FinalizationInputs,
+        PreparedAgentEntry,
+        attach_driver,
+        complete_agent_turn,
+        rebind_continuation,
+        run_bootstrap_stage,
+        save_finalization_inputs,
+    )
+
+    execution_context = None
+    prepared_entry = None
+    bootstrap_preparation = None
+    completed_turn = None
+    finalization_inputs = None
+    continuation = None
+    if _resume_state is not None:
+        if _resume_state.execution.execution_context_ref is None:
+            raise RecoveryContractError("pipeline executable context is missing")
+        execution_context = await load_execution_context(
+            _resume_state.identity, _resume_state.execution.execution_context_ref,
+            binding=_resume_state.binding,
         )
+        completed = execution_context.get("completed")
+        if type(completed) is not dict:
+            raise RecoveryContractError("pipeline preparation inventory is missing")
+        if "bootstrap_preparation" in completed:
+            bootstrap_preparation = BootstrapPreparation.model_validate_json(
+                json.dumps(completed["bootstrap_preparation"], allow_nan=False),
+            )
+        if "agent_entry" in completed:
+            prepared_entry = PreparedAgentEntry.from_json(completed["agent_entry"])
+        if "agent_turn" in completed:
+            if _resume_state.execution.stage != "finalization":
+                raise RecoveryContractError(
+                    "completed agent turn has a conflicting execution cursor"
+                )
+            completed_turn = CompletedAgentTurn.from_json(completed["agent_turn"])
+            runtime.response_recovery.budget = completed_turn.response_budget
+            if "response_budget" in completed:
+                from yleum_api.services.generation.recovery_contract import IncompleteResponseBudget
+                shared_budget = IncompleteResponseBudget.model_validate_json(
+                    json.dumps(completed["response_budget"], allow_nan=False),
+                )
+                if shared_budget.total < completed_turn.response_budget.total:
+                    raise RecoveryContractError("finalization response accounting was refunded")
+                runtime.response_recovery.budget = shared_budget
+        if "finalization_inputs" in completed:
+            if completed_turn is None:
+                raise RecoveryContractError("finalization inputs have no completed main turn")
+            finalization_inputs = FinalizationInputs.from_json(completed["finalization_inputs"])
+
     # Phase 2: container EDITS go through the agent too (read→edit→build→
     # fix), not blind SEARCH/REPLACE — fixes the "точечные правки" pain.
     # First-build/rebuild = full build prompt; a surgical follow-up = a
@@ -122,32 +307,49 @@ async def run_agent_generation(
     # this worker fn — use the in-scope `current_snapshot_id` (None on a
     # brand-new project's first build) so this never NameErrors.
     _agent_res: agent_builder.AgentResult | None = None
-    resumed = None
-    if project_info.template == "max_miniapp" and checkpoint_resume_request(prompt_text):
-        resumed = await adjacent_checkpoint(factory=factory, ids=ids, baseline=baseline)
-        if resumed is not None:
-            prompt_text = resumed[1]
-    (
-        prompt_text,
-        _is_continue,
-        _is_edit,
-        _max_has_generated_snapshot,
-    ) = await classify_agent_turn(
-        baseline=baseline,
-        factory=factory,
-        ids=ids,
-        orchestrate=orchestrate,
-        project_info=project_info,
-        prompt_text=prompt_text,
-    )
+    resumed: tuple[SourceCheckpoint, str] | None = None
+    if prepared_entry is not None:
+        (prompt_text, _is_continue, _is_edit,
+         _max_has_generated_snapshot) = prepared_entry.classification
+    elif bootstrap_preparation is not None:
+        (prompt_text, _is_continue, _is_edit,
+         _max_has_generated_snapshot) = bootstrap_preparation.classification
+        if bootstrap_preparation.adjacent_files is not None:
+            resumed = ({
+                "files": bootstrap_preparation.adjacent_files,
+                "deleted_paths": list(bootstrap_preparation.adjacent_deleted_paths),
+            }, prompt_text)
+    else:
+        if project_info.template == "max_miniapp" and checkpoint_resume_request(prompt_text):
+            resumed = await adjacent_checkpoint(factory=factory, ids=ids, baseline=baseline)
+            if resumed is not None:
+                prompt_text = resumed[1]
+        (
+            prompt_text,
+            _is_continue,
+            _is_edit,
+            _max_has_generated_snapshot,
+        ) = await classify_agent_turn(
+            baseline=baseline,
+            factory=factory,
+            ids=ids,
+            orchestrate=orchestrate,
+            project_info=project_info,
+            prompt_text=prompt_text,
+        )
 
     _agent_emit = progress.emit_agent_event
 
     # Yleum Design Pro: one pure pre-build classification. Its compact
     # contract reaches the coding agent and its persisted design memory;
     # it never creates an extra generation/acceptance phase.
-    _design_contract = None
-    if orchestrate and get_settings().use_design_intelligence_plugin:
+    _design_contract = (
+        prepared_entry.design_contract if prepared_entry is not None
+        else bootstrap_preparation.design_contract if bootstrap_preparation is not None
+        else None
+    )
+    if (prepared_entry is None and bootstrap_preparation is None and orchestrate
+        and get_settings().use_design_intelligence_plugin):
         try:
             from yleum_api.services.design_plugin import build_design_contract
 
@@ -169,6 +371,25 @@ async def run_agent_generation(
         except Exception as _dp_exc:
             print(f"[PP] design_plugin skipped: {_dp_exc!r}", flush=True)
 
+    if _resume_state is not None and bootstrap_preparation is None and prepared_entry is None:
+        from yleum_api.services.generation.recovery_execution import commit_execution_cursor
+
+        assert execution_context is not None
+        bootstrap_preparation = BootstrapPreparation(
+            classification=(prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot),
+            design_contract=_design_contract,
+            adjacent_files=resumed[0]["files"] if resumed is not None else None,
+            adjacent_deleted_paths=tuple(resumed[0]["deleted_paths"]) if resumed else (),
+        )
+        execution_context = {**execution_context, "completed": {
+            **execution_context["completed"],
+            "bootstrap_preparation": bootstrap_preparation.model_dump(mode="json"),
+        }}
+        _resume_state = await commit_execution_cursor(
+            factory, previous=_resume_state, execution=_resume_state.execution,
+            context=execution_context,
+        )
+
     bindings, _agent_res = await prepare_agent_runtime(
         ids=ids,
         project_info=project_info,
@@ -180,39 +401,58 @@ async def run_agent_generation(
         _agent_res=_agent_res,
         capacity_dispatch_token=capacity_dispatch_token,
     )
+    if _resume_state is not None:
+        assert execution_context is not None
+        continuation = attach_driver(factory, _resume_state, execution_context, runtime.handle)
+        assert runtime.handle is not None
+        await rebind_continuation(continuation)
+        if continuation.state.execution.physical_state == "no_effects":
+            await continuation.save(continuation.state.execution.model_copy(update={
+                "physical_state": "active",
+                "control_workspace_id": runtime.handle.control_workspace_id,
+                "control_fencing_epoch": runtime.handle.control_fencing_epoch,
+            }), context=continuation.context)
+        if runtime.coordinator is not None:
+            runtime.coordinator.continuation = continuation
+        if runtime.handle is not None:
+            from yleum_api.services.generation.recovery_pipeline import reconcile_pending_role
+            await reconcile_pending_role(continuation, runtime.handle)
+
     await require_named_behavior_readiness(
         runtime, prompt_text, template=project_info.template, factory=factory, ids=ids,
     )
-    _stack = await prepare_stack_prompt(
-        _design_contract=_design_contract,
-        factory=factory,
-        ids=ids,
-        orchestrate=orchestrate,
-        project_info=project_info,
-        prompt_text=prompt_text,
-        runtime=runtime,
-    )
-    # Build Plan (эскиз перед стройкой, owner 2026-06-30). On a fresh BUILD
-    # run the planner pass → a bounded feature spec (screens/entities/
-    # capabilities), persist it in discovery_spec JSONB, and ride its
-    # checklist into the agent prompt via _seed_block (the agent builds the
-    # WHOLE plan, not a thin green subset). On continue/edit, read the
-    # persisted plan back so the same checklist still guides. Fully fail-soft
-    # (R-10): empty plan or any error → nothing appended (today's behaviour).
-    # Gated by use_build_plan; the coverage gate (P2) verifies it later.
-    _prompt_plan, _build_plan = await prepare_agent_prompt(
-        stack=_stack,
-        factory=factory,
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        orchestrate=orchestrate,
-        prompt_text=prompt_text,
-        selected_elements=selected_elements,
-        _is_edit=_is_edit,
-        _is_continue=_is_continue,
-        force_model=force_model,
-    )
+    if prepared_entry is not None:
+        _stack = prepared_entry.stack
+    else:
+        _stack = await run_bootstrap_stage(
+            continuation, "stack_prepare", lambda: prepare_stack_prompt(
+            _design_contract=_design_contract,
+            factory=factory,
+            ids=ids,
+            orchestrate=orchestrate,
+            project_info=project_info,
+            prompt_text=prompt_text,
+            runtime=runtime,
+        ), handle=runtime.handle)
+    # The prepared prompt is executable data. A cold continuation reuses it
+    # exactly; current runtime/secret/proof authority is rebuilt independently.
+    if prepared_entry is not None:
+        _prompt_plan, _build_plan = prepared_entry.prompt_plan, None
+    else:
+        _prompt_plan, _build_plan = await run_bootstrap_stage(
+            continuation, "prompt_prepare", lambda: prepare_agent_prompt(
+            stack=_stack,
+            factory=factory,
+            ids=ids,
+            project_info=project_info,
+            runtime=runtime,
+            orchestrate=orchestrate,
+            prompt_text=prompt_text,
+            selected_elements=selected_elements,
+            _is_edit=_is_edit,
+            _is_continue=_is_continue,
+            force_model=force_model,
+        ), handle=runtime.handle)
 
     _render_current_max_starter_files = partial(
         render_current_max_starter,
@@ -223,32 +463,61 @@ async def run_agent_generation(
         runtime=runtime,
     )
 
-    _max_seed_files, _agent_res = await stage_max_starter(
-        _agent_emit=_agent_emit,
-        _agent_res=_agent_res,
-        _design_contract=_design_contract,
-        _max_has_generated_snapshot=_max_has_generated_snapshot,
-        _render_current_max_starter_files=_render_current_max_starter_files,
-        bindings=bindings,
-        ids=ids,
-        orchestrate=orchestrate,
-        project_info=project_info,
-        runtime=runtime,
-    )
+    if prepared_entry is not None:
+        _max_seed_files, _agent_res = prepared_entry.seed_files, prepared_entry.initial_result
+    else:
+        _max_seed_files, _agent_res = await run_bootstrap_stage(
+            continuation, "starter_apply", lambda: stage_max_starter(
+            _agent_emit=_agent_emit,
+            _agent_res=_agent_res,
+            _design_contract=_design_contract,
+            _max_has_generated_snapshot=_max_has_generated_snapshot,
+            _render_current_max_starter_files=_render_current_max_starter_files,
+            bindings=bindings,
+            ids=ids,
+            orchestrate=orchestrate,
+            project_info=project_info,
+            runtime=runtime,
+        ), handle=runtime.handle)
 
     runtime.migration_baseline = {**baseline.files, **_max_seed_files}
     if resumed is not None and runtime.handle is not None:
         saved_source = resumed[0]
-        await _apply_project_cell_preview_files(
+        source_handle = runtime.handle
+        await run_bootstrap_stage(
+            continuation, "adjacent_apply", lambda: _apply_project_cell_preview_files(
             files={**saved_source["files"], **dict.fromkeys(saved_source["deleted_paths"], "")},
             empty_files=tuple(
                 path for path, content in saved_source["files"].items() if not content
             ),
-            project_cell_handle=runtime.handle, sync_preview=False,
-        )
+            project_cell_handle=source_handle, sync_preview=False,
+        ), handle=runtime.handle)
         await _agent_emit("agent.continuation", {
             "human": "Восстанавливаю сохранённый черновик и продолжаю проверку", "ok": None,
         })
+    edit_deadline = (
+        prepared_entry.edit_deadline if prepared_entry is not None else
+        (await runtime.coordinator.source_edit_deadline()
+         if runtime.coordinator is not None else None)
+    )
+    if _resume_state is not None:
+        assert execution_context is not None
+        assert continuation is not None
+        if prepared_entry is None:
+            assert runtime.handle is not None
+            if _build_plan is not None:
+                raise RecoveryContractError("unsupported executable build plan version")
+            prepared_entry = PreparedAgentEntry(
+                (prompt_text, _is_continue, _is_edit, _max_has_generated_snapshot),
+                _design_contract, _stack, _prompt_plan, _max_seed_files, _agent_res, edit_deadline,
+            )
+            await continuation.save(continuation.state.execution.model_copy(update={
+                "substep": "agent_entry", "physical_state": "active",
+                "control_workspace_id": runtime.handle.control_workspace_id,
+                "control_fencing_epoch": runtime.handle.control_fencing_epoch,
+            }), context={**continuation.context, "completed": {
+                **continuation.context["completed"], "agent_entry": prepared_entry.to_json(),
+            }})
     progress_collector = getattr(runtime, "verified_progress", None)
     _operations = AgentOperations(
         response_recovery=getattr(runtime, "response_recovery", None),
@@ -256,10 +525,8 @@ async def run_agent_generation(
             progress_collector.take if progress_collector else None
         ),
         snapshot_files=getattr(runtime.handle, "snapshot_files", None),
-        edit_deadline=(
-            await runtime.coordinator.source_edit_deadline()
-            if runtime.coordinator is not None else None
-        ),
+        edit_deadline=edit_deadline,
+        continuation=continuation,
         execute=bindings.execute,
         emit=_agent_emit,
         probe_runtime=bindings.probe_runtime,
@@ -287,50 +554,36 @@ async def run_agent_generation(
             "ok": True,
         })
     _operations = replace(_operations, checkpoint=save_source_checkpoint)
-    (
-        _agent_res,
-        _provider_failure,
-    ) = await execute_agent_turn(
-        _agent_res=_agent_res,
-        _is_edit=_is_edit,
-        _max_has_generated_snapshot=_max_has_generated_snapshot,
-        _max_seed_files=_max_seed_files,
-        _max_shell_enabled=bindings.shell_enabled,
-        baseline=baseline,
-        ids=ids,
-        is_free=is_free,
-        project_info=project_info,
-        prompt_text=prompt_text,
-        runtime=runtime,
-        plan=_prompt_plan,
-        operations=_operations,
-        source_checkpoint=save_source_checkpoint,
-        workspace_context_files=(
-            await _operations.snapshot_files()
-            if resumed is not None and _operations.snapshot_files is not None else None
-        ),
-    )
-    # Rollback is evaluated only after the same-run continuation policy
-    # reaches done, cancellation/infra/no-progress, or its runaway backstop.
-    # A bounded provider segment is not itself grounds to delete progress.
-    (
-        _agent_res,
-        _first_max_without_product,
-        _max_seed_files,
-        _seg,
-    ) = await recover_stopped_candidate(
-        _agent_res=_agent_res,
-        _max_has_generated_snapshot=_max_has_generated_snapshot,
-        _max_seed_files=_max_seed_files,
-        _provider_failure=_provider_failure,
-        _render_current_max_starter_files=_render_current_max_starter_files,
-        baseline=baseline,
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        operations=_operations,
-    )
-
+    if completed_turn is not None:
+        _agent_res, _provider_failure = completed_turn.result, completed_turn.provider_failure
+    else:
+        (
+            _agent_res,
+            _provider_failure,
+        ) = await execute_agent_turn(
+            _agent_res=_agent_res,
+            _is_edit=_is_edit,
+            _max_has_generated_snapshot=_max_has_generated_snapshot,
+            _max_seed_files=_max_seed_files,
+            _max_shell_enabled=bindings.shell_enabled,
+            baseline=baseline,
+            ids=ids,
+            is_free=is_free,
+            project_info=project_info,
+            prompt_text=prompt_text,
+            runtime=runtime,
+            plan=_prompt_plan,
+            operations=_operations,
+            source_checkpoint=save_source_checkpoint,
+            workspace_context_files=(
+                await _operations.snapshot_files()
+                if resumed is not None and _operations.snapshot_files is not None else None
+            ),
+        )
+        if continuation is not None:
+            await complete_agent_turn(
+                continuation, _agent_res, _provider_failure, runtime.response_recovery.budget,
+            )
     async def _legacy_source_operation(operation: Awaitable[Any]) -> Any:
         try:
             return await operation
@@ -356,133 +609,167 @@ async def run_agent_generation(
             )
             raise RuntimeError(exc.candidate.summary) from None
 
-    (
-        _agent_res,
-        files,
-        _total_steps,
-    ) = await _legacy_source_operation(complete_empty_legacy_build(
-        _agent_res=_agent_res,
-        _is_edit=_is_edit,
-        _max_seed_files=_max_seed_files,
-        ids=ids,
-        runtime=runtime,
-        plan=_prompt_plan,
-        operations=_operations,
-    ))
+    if finalization_inputs is None:
+        # Rollback is evaluated only after the same-run continuation policy
+        # reaches done, cancellation/infra/no-progress, or its runaway backstop.
+        # A bounded provider segment is not itself grounds to delete progress.
+        (
+            _agent_res,
+            _first_max_without_product,
+            _max_seed_files,
+            _seg,
+        ) = await recover_stopped_candidate(
+            _agent_res=_agent_res,
+            _max_has_generated_snapshot=_max_has_generated_snapshot,
+            _max_seed_files=_max_seed_files,
+            _provider_failure=_provider_failure,
+            _render_current_max_starter_files=_render_current_max_starter_files,
+            baseline=baseline,
+            ids=ids,
+            project_info=project_info,
+            runtime=runtime,
+            operations=_operations,
+        )
 
-    # Layer C — backend-guardrail self-heal. Custom server logic is allowed,
-    # but raw DB access remains behind the managed boundary until isolation is
-    # enforced by Postgres rather than a forgeable source-code string check.
-    await _legacy_source_operation(check_backend_and_normalize_css(
-        _active_max_locked_files=bindings.locked_files,
-        _agent_res=_agent_res,
-        _is_edit=_is_edit,
-        _max_seed_files=_max_seed_files,
-        baseline=baseline,
-        files=files,
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        plan=_prompt_plan,
-        operations=_operations,
-    ))
 
-    # Honest chat: never surface the raw internal summary on a non-done exit
-    # (the "hit step budget without calling done" leak). See helper.
-    (
-        accumulated,
-        _runtime_ok,
-        _typecheck_ok,
-        _rt_error,
-        _tc_error,
-    ) = await probe_agent_candidate(
-        _agent_res=_agent_res,
-        _is_edit=_is_edit,
-        _seg=_seg,
-        _total_steps=_total_steps,
-        files=files,
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        operations=_operations,
-    )
+        (
+            _agent_res,
+            files,
+            _total_steps,
+        ) = await _legacy_source_operation(complete_empty_legacy_build(
+            _agent_res=_agent_res,
+            _is_edit=_is_edit,
+            _max_seed_files=_max_seed_files,
+            ids=ids,
+            runtime=runtime,
+            plan=_prompt_plan,
+            operations=_operations,
+        ))
 
-    # ── Edit auto-repair «до талого» ──────────────────────────────────
-    # A point-edit that didn't land cleanly — nothing written, a red
-    # typecheck, or a 5xx render — used to surface «Не удалось завершить
-    # правку — нажми Починить». Owner 2026-06-28: just DO the repair. Re-run
-    # the agent on the STRONG model with a forceful «apply the change NOW +
-    # here is the concrete error» edit prompt, then re-probe green — up to
-    # N times. Bounded + fail-soft (a repair-run exception stops the loop,
-    # never breaks the build).
-    (
-        accumulated,
-        _runtime_ok,
-        _typecheck_ok,
-        _rt_error,
-        _tc_error,
-    ) = await _legacy_source_operation(repair_legacy_edit(
-        coordinator_handoff=runtime.legacy_coordinator_handoff(),
-        _is_edit=_is_edit,
-        _rt_error=_rt_error,
-        _runtime_ok=_runtime_ok,
-        _tc_error=_tc_error,
-        _typecheck_ok=_typecheck_ok,
-        accumulated=accumulated,
-        files=files,
-        ids=ids,
-        project_info=project_info,
-        prompt_text=prompt_text,
-        plan=_prompt_plan,
-        operations=_operations,
-    ))
-    # ──────────────────────────────────────────────────────────────────
+        # Layer C — backend-guardrail self-heal. Custom server logic is allowed,
+        # but raw DB access remains behind the managed boundary until isolation is
+        # enforced by Postgres rather than a forgeable source-code string check.
+        await _legacy_source_operation(check_backend_and_normalize_css(
+            _active_max_locked_files=bindings.locked_files,
+            _agent_res=_agent_res,
+            _is_edit=_is_edit,
+            _max_seed_files=_max_seed_files,
+            baseline=baseline,
+            files=files,
+            ids=ids,
+            project_info=project_info,
+            runtime=runtime,
+            plan=_prompt_plan,
+            operations=_operations,
+        ))
 
-    # Keep the failed candidate's outcome even if restoring the old tree
-    # makes the later runtime/typecheck flags green again.
-    (
-        _agent_verification_failed,
-        _agent_res,
-        files,
-        _runtime_ok,
-        _typecheck_ok,
-        accumulated,
-    ) = await recover_rejected_candidate(
-        _agent_res=_agent_res,
-        _first_max_without_product=_first_max_without_product,
-        _render_current_max_starter_files=_render_current_max_starter_files,
-        _rt_error=_rt_error,
-        _runtime_ok=_runtime_ok,
-        _tc_error=_tc_error,
-        _typecheck_ok=_typecheck_ok,
-        accumulated=accumulated,
-        baseline=baseline,
-        files=files,
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        operations=_operations,
-        plan=_prompt_plan, prompt_text=prompt_text, is_free=is_free,
-        _max_shell_enabled=bindings.shell_enabled,
-    )
+        # Honest chat: never surface the raw internal summary on a non-done exit
+        # (the "hit step budget without calling done" leak). See helper.
+        (
+            accumulated,
+            _runtime_ok,
+            _typecheck_ok,
+            _rt_error,
+            _tc_error,
+        ) = await probe_agent_candidate(
+            _agent_res=_agent_res,
+            _is_edit=_is_edit,
+            _seg=_seg,
+            _total_steps=_total_steps,
+            files=files,
+            ids=ids,
+            project_info=project_info,
+            runtime=runtime,
+            operations=_operations,
+        )
 
-    # Design DNA — give this entity/agent app a DISTINCT identity (seeded
-    # accent + font pairing) so it stops looking identical to every other
-    # one ("дизайн одинаковый"). The agent never writes globals.css (it is
-    # baked), so we inject a per-project :root override into the container's
-    # globals.css directly. Reuses the curated, WCAG-checked, per-project
-    # seeded tokens; touches only safe brand knobs (never the canvas
-    # neutrals). Fail-soft: any error leaves the default theme.
-    (accumulated,) = await apply_legacy_design_and_result_text(
-        _agent_res=_agent_res,
-        _is_edit=_is_edit,
-        _runtime_ok=_runtime_ok,
-        _typecheck_ok=_typecheck_ok,
-        accumulated=accumulated,
-        files=files,
-        ids=ids,
-        project_info=project_info,
-    )
+        # ── Edit auto-repair «до талого» ──────────────────────────────────
+        # A point-edit that didn't land cleanly — nothing written, a red
+        # typecheck, or a 5xx render — used to surface «Не удалось завершить
+        # правку — нажми Починить». Owner 2026-06-28: just DO the repair. Re-run
+        # the agent on the STRONG model with a forceful «apply the change NOW +
+        # here is the concrete error» edit prompt, then re-probe green — up to
+        # N times. Bounded + fail-soft (a repair-run exception stops the loop,
+        # never breaks the build).
+        (
+            accumulated,
+            _runtime_ok,
+            _typecheck_ok,
+            _rt_error,
+            _tc_error,
+        ) = await _legacy_source_operation(repair_legacy_edit(
+            coordinator_handoff=runtime.legacy_coordinator_handoff(),
+            _is_edit=_is_edit,
+            _rt_error=_rt_error,
+            _runtime_ok=_runtime_ok,
+            _tc_error=_tc_error,
+            _typecheck_ok=_typecheck_ok,
+            accumulated=accumulated,
+            files=files,
+            ids=ids,
+            project_info=project_info,
+            prompt_text=prompt_text,
+            plan=_prompt_plan,
+            operations=_operations,
+        ))
+        # ──────────────────────────────────────────────────────────────────
+
+        # Keep the failed candidate's outcome even if restoring the old tree
+        # makes the later runtime/typecheck flags green again.
+        (
+            _agent_verification_failed,
+            _agent_res,
+            files,
+            _runtime_ok,
+            _typecheck_ok,
+            accumulated,
+        ) = await recover_rejected_candidate(
+            _agent_res=_agent_res,
+            _first_max_without_product=_first_max_without_product,
+            _render_current_max_starter_files=_render_current_max_starter_files,
+            _rt_error=_rt_error,
+            _runtime_ok=_runtime_ok,
+            _tc_error=_tc_error,
+            _typecheck_ok=_typecheck_ok,
+            accumulated=accumulated,
+            baseline=baseline,
+            files=files,
+            ids=ids,
+            project_info=project_info,
+            runtime=runtime,
+            operations=_operations,
+            plan=_prompt_plan, prompt_text=prompt_text, is_free=is_free,
+            _max_shell_enabled=bindings.shell_enabled,
+        )
+
+        # Design DNA — give this entity/agent app a DISTINCT identity (seeded
+        # accent + font pairing) so it stops looking identical to every other
+        # one ("дизайн одинаковый"). The agent never writes globals.css (it is
+        # baked), so we inject a per-project :root override into the container's
+        # globals.css directly. Reuses the curated, WCAG-checked, per-project
+        # seeded tokens; touches only safe brand knobs (never the canvas
+        # neutrals). Fail-soft: any error leaves the default theme.
+        (accumulated,) = await apply_legacy_design_and_result_text(
+            _agent_res=_agent_res,
+            _is_edit=_is_edit,
+            _runtime_ok=_runtime_ok,
+            _typecheck_ok=_typecheck_ok,
+            accumulated=accumulated,
+            files=files,
+            ids=ids,
+            project_info=project_info,
+        )
+
+
+        if continuation is not None:
+            await save_finalization_inputs(continuation, FinalizationInputs(
+                _agent_res, files, accumulated, _agent_verification_failed,
+            ))
+    else:
+        _agent_res = finalization_inputs.result
+        files = dict(finalization_inputs.files)
+        accumulated = finalization_inputs.accumulated
+        _agent_verification_failed = finalization_inputs.verification_failed
 
     # Runtime functional gate — the behavioural "works + does not leak" proof
     # (research finding: this gate was defined+unit-tested but UNWIRED; only
@@ -650,6 +937,7 @@ async def run_agent_generation(
             _consume_free_generation=_consume_free_generation,
             _max_finalization_proof=_max_finalization_proof,
             _promotion_permit=_promotion_permit,
+            continuation=continuation,
             _orch_name=_stack.orchestrator_template,
             accumulated=accumulated,
             baseline=baseline,

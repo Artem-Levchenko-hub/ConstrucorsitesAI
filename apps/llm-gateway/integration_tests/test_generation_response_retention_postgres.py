@@ -1062,6 +1062,17 @@ async def test_actual_routes_retention_financial_chain_and_one_physical_post(
                 ) is False
         else:
             assert first.status_code == 200, first.text
+            # Task9 restart recovery cannot rely on the vanished capture's
+            # in-process marker. The same financial commit must link its usage.
+            async with pool.acquire() as conn:
+                linked = await conn.fetchrow(
+                    "SELECT c.usage_id,s.status FROM generation_provider_attempts a "
+                    "JOIN provider_calls c ON c.id=a.provider_call_id "
+                    "LEFT JOIN usage_settlements s ON s.usage_id=c.usage_id "
+                    "WHERE a.attempt_id=$1", identity.attempt_id,
+                )
+                assert linked['usage_id'] is not None
+                assert linked['status'] == 'deferred'
             saved = await load_generation_response(identity, objects=objects)
             assert saved
             envelope = json.loads(saved.splitlines()[0])

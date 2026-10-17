@@ -36,6 +36,19 @@ def _model(value: str | None) -> bool:
     )
 
 
+def receipt_digest(
+    status: str, actual_model: str | None, provider_request_id: str | None,
+    counters: tuple[Any, ...], amounts: tuple[Any, ...],
+    provenance: dict[str, Any] | None, safe_error: str | None,
+) -> str:
+    """The immutable journal's existing receipt encoding, shared by readers."""
+    return hashlib.sha256(json.dumps(
+        [status, actual_model, provider_request_id, *counters,
+         *[str(value.normalize()) if value is not None else None for value in amounts],
+         provenance, safe_error], sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+
+
 async def insert_call(
     conn: Any, call_id: UUID, *, route: str, model: str, user_id: UUID | None = None,
     project_id: UUID | None = None, run_id: UUID | None = None,
@@ -120,11 +133,9 @@ async def finish_call(
         provenance = validate_cost_provenance(cost_provenance) if cost_provenance is not None else None
         evidence_json = json.dumps(provenance, sort_keys=True, separators=(",", ":")) if provenance else None
         safe_error = error_type if error_type in _ERRORS else "unknown" if error_type is not None else None
-        receipt_hash = hashlib.sha256(json.dumps(
-            [status, actual_model, provider_request_id, *counters,
-             *[str(v.normalize()) if v is not None else None for v in amounts],
-             provenance, safe_error], sort_keys=True, separators=(",", ":"),
-        ).encode()).hexdigest()
+        receipt_hash = receipt_digest(
+            status, actual_model, provider_request_id, counters, amounts, provenance, safe_error,
+        )
     except Exception:
         raise _error(call_id) from None
 

@@ -274,7 +274,9 @@ async def test_real_repair_entry_enforces_paths_and_server_capability(
         return execute, None
 
     observed = []
+    continuation = None
     async def native(**kwargs):
+        assert kwargs.get("continuation") is continuation
         observed.append(await kwargs["execute"](Action(action, {
             "path": path, "content": "new", "cmd": "unsafe", "source_write_nofollow_v1": True,
         })))
@@ -288,12 +290,100 @@ async def test_real_repair_entry_enforces_paths_and_server_capability(
         runtime=SimpleNamespace(handle=handle, coordinator=None),
         ids=SimpleNamespace(user_id="u", project_id="p", run_id="r", assistant_message_id="m"),
         plan=SimpleNamespace(model="m", stack_guide="", skills=[], steps=4),
-        operations=SimpleNamespace(execute=execute, emit=AsyncMock()),
+        operations=SimpleNamespace(execute=execute, emit=AsyncMock(), continuation=continuation),
         is_free=False, shell_enabled=True, edit_deadline=None,
         source_failure=classify(missing()),
     )
     assert bool(executed) is allowed
     assert observed[0]["ok"] is allowed
+
+
+async def test_repair_restart_keeps_original_inputs_and_consumes_one_allowance(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from yleum_api.services import agent_native
+    from yleum_api.services.agent_builder import AgentResult
+    from yleum_api.services.generation import agent_finalization, agent_runtime
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        ExecutionCursor,
+        IncompleteResponseBudget,
+    )
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+
+    original_deadline = datetime.now(UTC) + timedelta(minutes=20)
+    ref = CheckpointRef(object_key="owned/context", sha256="a" * 64)
+    cursor = ExecutionCursor(
+        stage="finalization",
+        substep="checkpoint_ready",
+        physical_state="active",
+        execution_context_ref=ref,
+    )
+    driver = SimpleNamespace(context={"completed": {}}, state=SimpleNamespace(execution=cursor))
+    saves = []
+
+    async def save(execution, *, context, **kwargs):
+        saves.append(context)
+        driver.state.execution = execution
+        driver.context = context
+
+    driver.save = save
+
+    async def contract(runtime, ids, execute, completion):
+        return execute, completion
+
+    monkeypatch.setattr(agent_runtime, "guard_native_source_contract", contract)
+    native_calls = []
+    accounting = SimpleNamespace(budget=IncompleteResponseBudget(total=1, since_progress=1))
+
+    async def native(**kwargs):
+        native_calls.append(kwargs)
+        assert kwargs["continuation"] is driver
+        assert saves, "repair inputs were not committed before the model boundary"
+        if len(native_calls) == 1:
+            raise GenerationYielded(
+                run_id=uuid4(), checkpoint=None, attempt_seq=0, phase="waiting_dependency"
+            )
+        accounting.budget = IncompleteResponseBudget(total=2, since_progress=2)
+        return AgentResult(False, "finish checks", {"src/я.ts": "изменено"}, 1)
+
+    monkeypatch.setattr(agent_native, "run_native_build", native)
+    kwargs = dict(
+        task="original full repair",
+        prompt_text="original goal",
+        baseline={"src/я.ts": "original"},
+        runtime=SimpleNamespace(handle=None, coordinator=None),
+        ids=SimpleNamespace(user_id="u", project_id="p", run_id="r", assistant_message_id="m"),
+        plan=SimpleNamespace(model="m", stack_guide="", skills=[], steps=4),
+        operations=SimpleNamespace(execute=AsyncMock(), emit=AsyncMock(), continuation=driver,
+                                   response_recovery=accounting),
+        is_free=False,
+        shell_enabled=False,
+        edit_deadline=original_deadline,
+    )
+    with pytest.raises(GenerationYielded):
+        await agent_finalization.run_native_source_repair(**kwargs)
+    result = await agent_finalization.run_native_source_repair(
+        **{
+            **kwargs,
+            "task": "fresh diagnostic must not rewrite original paid request",
+            "baseline": {"src/я.ts": "new observation"},
+            "edit_deadline": original_deadline + timedelta(minutes=5),
+        }
+    )
+    assert result.files == {"src/я.ts": "изменено"}
+    assert native_calls[1]["task"] == native_calls[0]["task"] == kwargs["task"]
+    assert native_calls[1]["initial_files"] == kwargs["baseline"]
+    assert native_calls[1]["edit_deadline"] == original_deadline
+    assert driver.state.execution.budget.repair_calls == 1
+    assert driver.context["completed"]["source_repair"]["status"] == "complete"
+    accounting.budget = IncompleteResponseBudget()
+    restored = await agent_finalization.run_native_source_repair(**kwargs)
+    assert restored == result
+    assert len(native_calls) == 2
+    assert accounting.budget == IncompleteResponseBudget(total=2, since_progress=2)
+    assert driver.context["completed"]["response_budget"] == {"total": 2, "since_progress": 2}
 
 
 @pytest.fixture

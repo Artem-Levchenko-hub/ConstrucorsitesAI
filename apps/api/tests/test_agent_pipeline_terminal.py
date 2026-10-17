@@ -477,3 +477,185 @@ async def test_successful_noop_and_legacy_partial_keep_done_event(pipeline_turn,
     assert saved["tokens_out"] == 0
     assert turn.trace[-2:] == ["llm.done", "clear_stream"]
     assert bool(turn.cards) is (not done)
+
+
+@pytest.mark.parametrize("native", [False, True])
+async def test_actual_agent_turn_forwards_owned_continuation_and_yields(monkeypatch, native):
+    from yleum_api.core.config import get_settings
+    from yleum_api.services import agent_native
+    from yleum_api.services.generation.recovery_execution import GenerationYielded
+
+    settings = get_settings().model_copy(update={"use_native_agent": native})
+    monkeypatch.setattr(agent_generation, "get_settings", lambda: settings)
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    marker = object()
+    seen = []
+    async def run(**kwargs):
+        seen.append(kwargs)
+        assert kwargs.get("continuation") is marker
+        raise GenerationYielded(run_id=ids.run_id, checkpoint=None,
+                               attempt_seq=1, phase="waiting_dependency")
+    monkeypatch.setattr(agent_native, "run_native_build", run)
+    monkeypatch.setattr(agent_generation.agent_builder, "run_agent_build", run)
+    operations = SimpleNamespace(
+        execute=AsyncMock(), emit=AsyncMock(), snapshot_files=None, continuation=marker,
+    )
+    plan = SimpleNamespace(system="s", user="u", model="synthetic", escalate_model=None,
+        steps=3, stack_guide=None, skills=None, bare_stack=False)
+    with pytest.raises(GenerationYielded):
+        await agent_generation.execute_agent_turn(
+            _agent_res=None, _is_edit=False, _max_has_generated_snapshot=False,
+            _max_seed_files={}, _max_shell_enabled=False, baseline=SourceBaseline(None, None, {}),
+            ids=ids, is_free=False, project_info=SimpleNamespace(template="max_miniapp"),
+            prompt_text="synthetic", runtime=GenerationRuntime(), plan=plan, operations=operations,
+        )
+    assert len(seen) == 1
+    operations.execute.assert_not_awaited()
+
+
+@pytest.mark.parametrize("prepared", [False, True])
+async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
+    monkeypatch, prepared
+):
+    from tests.test_generation_recovery_reconciliation import bootstrap
+    from yleum_api.services.generation import recovery_execution as ex
+    from yleum_api.services.generation.contracts import AgentPromptPlan, StackPrompt
+    from yleum_api.services.generation.recovery_contract import (
+        CheckpointRef,
+        ContinuationClaim,
+        decode_recovery,
+    )
+
+    raw = bootstrap()
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    raw["identity"].update(
+        run_id=str(ids.run_id), project_id=str(ids.project_id), user_id=str(ids.user_id)
+    )
+    claim = ContinuationClaim(
+        run_id=ids.run_id,
+        token=uuid4(),
+        attempt_seq=0,
+        worker_id="synthetic",
+        expires_at=datetime.now(UTC) + timedelta(seconds=60),
+    )
+    raw["continuation_claim"] = claim.model_dump(mode="json")
+    ref = CheckpointRef(object_key="synthetic/context", sha256="a" * 64)
+    raw["context_ref"] = ref.model_dump(mode="json")
+    raw["execution"]["execution_context_ref"] = ref.model_dump(mode="json")
+    state = decode_recovery(raw)
+    plan = AgentPromptPlan(
+        "system", "Исходная цель", "synthetic", None, 5, "seed", None, "system", None, False
+    )
+    stack = StackPrompt("seed", None, None, None, "system", False)
+    entry = {
+        "version": 1,
+        "classification": ["Исходная цель", False, False, False],
+        "design_contract": None,
+        "stack": stack._asdict(),
+        "prompt_plan": plan.__dict__,
+        "build_plan": None,
+        "seed_files": {"src/core.ts": "trusted"},
+        "initial_result": None,
+        "edit_deadline": None,
+    }
+    context = {
+        "schema_version": 1,
+        "entry": "pipeline",
+        "pipeline": {"baseline": {"files": {}}},
+        "completed": {"agent_entry": entry} if prepared else {},
+        "active_frame": None,
+    }
+    monkeypatch.setattr(ex, "load_execution_context", AsyncMock(return_value=deepcopy(context)))
+    saves = []
+
+    async def save(self, execution, *, context, phase="working"):
+        saves.append(deepcopy(context))
+        self.context = context
+        self.state = self.state.model_copy(
+            update={"execution": execution, "state_revision": self.state.state_revision + 1}
+        )
+
+    monkeypatch.setattr(ex.ExecutionDriver, "save", save)
+
+    async def commit_prefix(factory, *, previous, execution, context):
+        saves.append(deepcopy(context))
+        return previous.model_copy(
+            update={"execution": execution, "state_revision": previous.state_revision + 1}
+        )
+
+    monkeypatch.setattr(ex, "commit_execution_cursor", commit_prefix)
+    from yleum_api.services.generation import recovery_tool_receipts
+
+    monkeypatch.setattr(recovery_tool_receipts, "require_preparation_receipts", AsyncMock())
+    handle = SimpleNamespace(
+        snapshot_files=AsyncMock(return_value={"src/core.ts": "trusted"}),
+        refresh_snapshot_files=AsyncMock(return_value={"src/core.ts": "trusted"}),
+        current_identity=AsyncMock(),
+        is_portable=lambda: True,
+        control_workspace_id=uuid4(),
+        control_fencing_epoch=1,
+    )
+    runtime = GenerationRuntime(handle=handle)
+    bindings = SimpleNamespace(
+        execute=AsyncMock(),
+        probe_runtime=AsyncMock(),
+        probe_build=AsyncMock(),
+        preview_url=AsyncMock(),
+        shell_enabled=False,
+    )
+    phases = {
+        "classify_agent_turn": ("Исходная цель", False, False, False),
+        "prepare_agent_runtime": (bindings, None),
+        "require_named_behavior_readiness": None,
+        "prepare_stack_prompt": stack,
+        "prepare_agent_prompt": (plan, None),
+        "stage_max_starter": ({"src/core.ts": "trusted"}, None),
+    }
+    for name, value in phases.items():
+        monkeypatch.setattr(agent_pipeline, name, AsyncMock(return_value=value))
+    monkeypatch.setattr(
+        agent_pipeline,
+        "get_settings",
+        lambda: SimpleNamespace(use_design_intelligence_plugin=False),
+    )
+
+    class ObservedTurn(BaseException):
+        pass
+
+    async def turn(**kwargs):
+        assert isinstance(kwargs["operations"].continuation, ex.ExecutionDriver)
+        assert kwargs["plan"] == plan
+        assert kwargs["_max_seed_files"] == {"src/core.ts": "trusted"}
+        raise ObservedTurn()
+
+    monkeypatch.setattr(agent_pipeline, "execute_agent_turn", turn)
+    with pytest.raises(ObservedTurn):
+        await agent_pipeline.run_agent_generation(
+            _consume_free_generation=AsyncMock(),
+            baseline=SourceBaseline(None, None, {}),
+            capacity_dispatch_token=None,
+            factory=None,
+            force_model=None,
+            ids=ids,
+            is_free=False,
+            model_id="synthetic",
+            orchestrate=False,
+            progress=SimpleNamespace(emit_agent_event=AsyncMock()),
+            project_info=ProjectGenerationFacts(
+                "blank", "synthetic", "Synthetic", None, None, False, "ru", False, "", ""
+            ),
+            prompt_text="Исходная цель",
+            runtime=runtime,
+            selected_elements=None,
+            _resume_state=state,
+        )
+    for name in (
+        "classify_agent_turn",
+        "prepare_stack_prompt",
+        "prepare_agent_prompt",
+        "stage_max_starter",
+    ):
+        assert getattr(agent_pipeline, name).await_count == int(not prepared)
+    assert agent_pipeline.prepare_agent_runtime.await_count == 1  # Rebind live owned handle.
+    if not prepared:
+        assert saves[-1]["completed"]["agent_entry"] == entry

@@ -31,6 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
+_RECOVERY_HEAD = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
 # the optional `(?::[^=\n]+)?` swallows a type annotation. A root's
@@ -200,12 +201,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_generation_responses_is_the_only_head() -> None:
+def test_recovery_effects_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0087_generation_responses"]
+    assert heads == [_RECOVERY_HEAD]
+    assert chain[_RECOVERY_HEAD] == "0087_generation_responses"
     assert chain["0087_generation_responses"] == "0086_generation_provider_attempts"
     assert chain["0086_generation_provider_attempts"] == "0085_integration_consent"
     assert chain["0085_integration_consent"] == "0084_billing_catalog_v3"
@@ -238,6 +240,51 @@ def test_generation_responses_is_the_only_head() -> None:
     assert chain["0058_integration_operations"] == "0057_generation_execution_owner"
     assert chain["0057_generation_execution_owner"] == "0056_project_cell_finalization"
     assert chain["0056_project_cell_finalization"] == "0055_project_cell_capacity_queue"
+
+
+@pytest.mark.parametrize("with_effect", [False, True])
+def test_recovery_effect_migration_retains_evidence_on_downgrade(
+    project_cell_migration_database: ProjectCellMigrationDatabase,
+    with_effect: bool,
+) -> None:
+    # The fixture owns a disposable database; never downgrade a configured database.
+    database = project_cell_migration_database
+    parent = "0087_generation_responses"
+    database.upgrade(parent)
+    relation_query = (
+        "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+    )
+    before = {str(row["tablename"]) for row in database.fetch(relation_query)}
+    database.upgrade("head")
+    database.upgrade("head")
+    after = {str(row["tablename"]) for row in database.fetch(relation_query)}
+    assert after == before | {"generation_recovery_effects"}
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+
+    if with_effect:
+        effect, run, project, user, claim = [str(uuid4()) for _ in range(5)]
+        asyncio.run(
+            _execute(
+                database.dsn,
+                "INSERT INTO generation_recovery_effects "
+                "(effect_id, run_id, project_id, user_id, claim_token, "
+                "logical_step_seq, effect_ordinal, kind, input_digest, attempt_seq) "
+                f"VALUES ('{effect}', '{run}', '{project}', '{user}', '{claim}', "
+                "0, 0, 'tool', repeat('a',64), 0)",
+            )
+        )
+        with pytest.raises(RuntimeError, match="generation recovery evidence prevents downgrade"):
+            command.downgrade(database.config, parent)
+        assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+        assert database.fetchval("SELECT count(*) FROM generation_recovery_effects") == 1
+        assert (
+            database.fetchval("SELECT effect_id::text FROM generation_recovery_effects") == effect
+        )
+        assert {str(row["tablename"]) for row in database.fetch(relation_query)} == after
+    else:
+        command.downgrade(database.config, parent)
+        assert database.fetchval("SELECT version_num FROM alembic_version") == parent
+        assert {str(row["tablename"]) for row in database.fetch(relation_query)} == before
 
 
 def test_consent_upgrade_preserves_existing_data_without_enabling_projects(
@@ -390,9 +437,7 @@ def test_email_code_upgrade_preserves_existing_verification_links(
 
     database.upgrade("head")
 
-    assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0087_generation_responses"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
     assert [
         tuple(row)
         for row in database.fetch(
@@ -424,10 +469,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database = project_cell_migration_database
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
-    assert (
-        database.fetchval("SELECT version_num FROM alembic_version")
-        == "0087_generation_responses"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
     assert [
         tuple(row)
         for row in database.fetch(
@@ -583,10 +625,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_installations')") is None
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
-    assert (
-        database.fetchval("SELECT version_num FROM alembic_version")
-        == "0087_generation_responses"
-    )
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
 

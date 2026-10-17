@@ -43,6 +43,7 @@ from yleum_api.services.generation import (
     lightweight_turns,
     onboarding,
     progress,
+    recovery_execution,
     supervisor,
 )
 from yleum_api.services.generation import lifecycle as messages
@@ -221,6 +222,7 @@ async def flow_factory(test_engine, monkeypatch):
         monkeypatch.setattr(db, "get_engine", lambda: test_engine)
         monkeypatch.setattr(messages, "get_engine", lambda: test_engine)
         monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
+        monkeypatch.setattr(recovery_execution, "get_engine", lambda: test_engine)
 
         async def publish(project_id, kind, payload):
             assert project_id == flow.project_id

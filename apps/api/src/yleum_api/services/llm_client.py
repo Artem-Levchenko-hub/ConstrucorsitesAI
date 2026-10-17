@@ -29,13 +29,39 @@ async def recover_generation_response(
         if not settings.generation_response_retention_enabled:
             raise ValueError
         token = mint_generation_response_token(identity, purpose="generation_response.read")
-        async with httpx.AsyncClient(
+        url = (f"{settings.llm_gateway_url.rstrip('/')}"
+               f"/_internal/generation-responses/{identity.attempt_id}")
+        async with asyncio.timeout(30), httpx.AsyncClient(
             timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
         ) as client:
             response = await client.get(
-                f"{settings.llm_gateway_url.rstrip('/')}/_internal/generation-responses/{identity.attempt_id}",
+                url,
                 headers={HEADER: token},
             )
+            if response.status_code == 409:
+                # A complete body may outlive the gateway's accounting marker.
+                # This separate purpose reads committed financial evidence only;
+                # it never dispatches a model or charges to discover an outcome.
+                reconciled = await client.post(url + "/reconcile", headers={
+                    HEADER: mint_generation_response_token(
+                        identity, purpose="generation_response.reconcile",
+                    ),
+                })
+                if reconciled.status_code != 200:
+                    raise ValueError
+                result = reconciled.json()
+                if (
+                    not isinstance(result, dict)
+                    or set(result) != {"version", "identity", "state"}
+                    or type(result["version"]) is not int or result["version"] != 1
+                    or result["identity"] != identity.to_wire() or result["state"] != "confirmed"
+                ):
+                    raise ValueError
+                response = await client.get(url, headers={
+                    HEADER: mint_generation_response_token(
+                        identity, purpose="generation_response.read",
+                    ),
+                })
         if response.status_code != 200:
             raise ValueError
         value = response.json()
@@ -76,6 +102,26 @@ async def recover_generation_response(
             code="generation_response_indeterminate",
             provider_charge_ambiguous=True, retry_safe=False,
         ) from None
+
+
+async def require_recovered_response(
+    identity: GenerationProviderIdentity | None,
+) -> dict[str, object]:
+    """A resumed logical call reads only its original retained response."""
+    if identity is None:
+        raise LLMError(
+            "Generation response has no owning attempt",
+            code="generation_response_indeterminate", retry_safe=False,
+            provider_charge_ambiguous=True,
+        )
+    result = await recover_generation_response(identity)
+    if result is None:
+        raise LLMError(
+            "Generation response is still pending",
+            code="generation_response_pending", retry_safe=False,
+            provider_charge_ambiguous=True,
+        )
+    return result
 
 
 # Free-generation flag for the current generation, set by routers/messages.py
@@ -291,8 +337,9 @@ async def stream_chat_completion(
         },
     }
     from yleum_api.services.generation.provider_attempts import prepare_generation_attempt
-
+    from yleum_api.services.generation.recovery_reconciliation import begin_provider_dispatch
     deadline = asyncio.get_running_loop().time() + 300.0
+    begin_provider_dispatch("sse", allowance=_chat_attempt_allowance(payload), seconds=300.0)
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
     try:
         async for data in _chat_stream_data(payload, url, identity, deadline):
@@ -346,19 +393,65 @@ async def _chat_stream_data(
 ) -> AsyncIterator[dict[str, Any]]:
     from yleum_api.services.generation.provider_attempts import (
         attach_identity,
+        confirm_generation_preconnect,
+        mark_generation_wire_outward,
         prepare_generation_attempt,
+        reserve_generation_wire,
+        resume_generation_wire,
     )
+    from yleum_api.services.generation.recovery_reconciliation import (
+        provider_dispatch_remaining,
+        provider_reconciliation_requested,
+    )
+
+    start_attempt = 0
+    if provider_reconciliation_requested():
+        try:
+            retained = await require_recovered_response(identity)
+        except LLMError as failure:
+            resumed = await resume_generation_wire(identity, allow_provider_refusal=(
+                failure.code == "model_unavailable" and failure.retry_safe is True
+                and failure.provider_charge_ambiguous is False
+                and failure.upstream_http_status is None
+            ))
+            if resumed is None:
+                raise
+            start_attempt, retry_parent = resumed
+            remaining = provider_dispatch_remaining()
+            if remaining is None or remaining <= 0.5:
+                raise
+            deadline = asyncio.get_running_loop().time() + remaining
+            await asyncio.sleep(0.5)
+            if retry_parent:
+                identity = await prepare_generation_attempt(
+                    payload, "/v1/chat/completions", parent=identity,
+                )
+        else:
+            events = retained.get("events")
+            if retained.get("format") != "sse" or not isinstance(events, list):
+                raise LLMError(
+                    "Stored generation response has a conflicting format",
+                    code="generation_response_indeterminate", retry_safe=False,
+                    provider_charge_ambiguous=True,
+                )
+            for event in events[:-1]:
+                yield json.loads(event)
+            return
 
     allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     outward_event = False
     accepted_headers = False
     async with asyncio.timeout_at(deadline if identity is not None else None):
-        for attempt in range(allowance):
+        for attempt in range(start_attempt, allowance):
             remaining = (
                 deadline - asyncio.get_running_loop().time() if identity is not None else 300.0
             )
             if remaining <= 0:
                 raise TimeoutError
+            wire = await reserve_generation_wire(identity, wire_attempt=attempt)
+            durable_remaining = provider_dispatch_remaining()
+            if durable_remaining is not None:
+                remaining = min(remaining, durable_remaining)
             attach_identity(payload, identity)
             retry_parent = False
             try:
@@ -399,11 +492,13 @@ async def _chat_stream_data(
                                 try:
                                     data = json.loads(chunk)
                                 except json.JSONDecodeError:
-                                    outward_event = (
-                                        True  # Unknown partial delivery never buys retry.
-                                    )
+                                    if not outward_event:
+                                        await mark_generation_wire_outward(wire, identity)
+                                    outward_event = True
                                     continue
                                 if not isinstance(data, dict):
+                                    if not outward_event:
+                                        await mark_generation_wire_outward(wire, identity)
                                     outward_event = True
                                     continue
                                 if (
@@ -415,6 +510,8 @@ async def _chat_stream_data(
                                     retry_parent = True
                                     break
                                 # Role/usage events count even if the UI mapper yields no text.
+                                if not outward_event:
+                                    await mark_generation_wire_outward(wire, identity)
                                 outward_event = True
                                 yield data
                                 if data.get("error"):
@@ -424,8 +521,10 @@ async def _chat_stream_data(
             except (httpx.ConnectError, httpx.ConnectTimeout):
                 if (
                     outward_event or (identity is not None and accepted_headers)
-                    or attempt + 1 >= allowance
                 ):
+                    raise
+                await confirm_generation_preconnect(wire, identity)
+                if attempt + 1 >= allowance:
                     raise
             await asyncio.sleep(0.5)
             if retry_parent:
@@ -485,12 +584,54 @@ def _response_preconnect(response: httpx.Response) -> bool:
 async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.Response:
     from yleum_api.services.generation.provider_attempts import (
         attach_identity,
+        confirm_generation_preconnect,
         prepare_generation_attempt,
+        reserve_generation_wire,
+        resume_generation_wire,
     )
 
     loop = asyncio.get_running_loop()
     deadline = loop.time() + budget
+    from yleum_api.services.generation.recovery_reconciliation import (
+        begin_provider_dispatch,
+        provider_dispatch_remaining,
+    )
+    begin_provider_dispatch("chat", allowance=_chat_attempt_allowance(payload), seconds=budget)
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
+    from yleum_api.services.generation.recovery_reconciliation import (
+        provider_reconciliation_requested,
+    )
+
+    start_attempt = 0
+    if provider_reconciliation_requested():
+        try:
+            retained = await require_recovered_response(identity)
+        except LLMError as failure:
+            resumed = await resume_generation_wire(identity, allow_provider_refusal=(
+                failure.code == "model_unavailable" and failure.retry_safe is True
+                and failure.provider_charge_ambiguous is False
+                and failure.upstream_http_status is None
+            ))
+            if resumed is None:
+                raise
+            start_attempt, retry_parent = resumed
+            remaining = provider_dispatch_remaining()
+            if remaining is None or remaining <= 0.5:
+                raise
+            deadline = loop.time() + remaining
+            await asyncio.sleep(0.5)
+            if retry_parent:
+                identity = await prepare_generation_attempt(
+                    payload, "/v1/chat/completions", parent=identity,
+                )
+        else:
+            if not isinstance(retained.get("choices"), list):
+                raise LLMError(
+                    "Stored generation response has a conflicting format",
+                    code="generation_response_indeterminate", retry_safe=False,
+                    provider_charge_ambiguous=True,
+                )
+            return httpx.Response(200, json=retained, request=httpx.Request("GET", url))
     allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     accepted_headers = False
     omitted_default = payload.get("max_tokens") is None and payload["model"] in {
@@ -503,10 +644,14 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         async with asyncio.timeout_at(
             deadline if identity is not None or omitted_default else None
         ):
-            for attempt in range(allowance):
+            for attempt in range(start_attempt, allowance):
                 remaining = deadline - loop.time() if identity is not None else budget
                 if remaining <= 0:
                     raise TimeoutError
+                wire = await reserve_generation_wire(identity, wire_attempt=attempt)
+                durable_remaining = provider_dispatch_remaining()
+                if durable_remaining is not None:
+                    remaining = min(remaining, durable_remaining)
                 attach_identity(payload, identity)
                 timeout = httpx.Timeout(remaining, connect=min(5.0, remaining), read=remaining)
                 try:
@@ -529,7 +674,10 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                                 accepted_headers = True
                                 await response.aread()
                 except (httpx.ConnectError, httpx.ConnectTimeout):
-                    if accepted_headers or attempt + 1 >= allowance:
+                    if accepted_headers:
+                        raise
+                    await confirm_generation_preconnect(wire, identity)
+                    if attempt + 1 >= allowance:
                         raise
                     await asyncio.sleep(0.5)
                     continue  # API-to-gateway transport: SAME committed identity.

@@ -8,6 +8,7 @@ from uuid import uuid4
 import pytest
 from docker.errors import NotFound
 
+from tests._machine_adapter_fakes import legacy_machine_controller  # noqa: F401
 from yleum_orchestrator.core.cell_resources import CellResourceError
 from yleum_orchestrator.services.machine_adapter import MachineAdapter
 from yleum_orchestrator.services.machine_business_config import apply_core_config, config_source
@@ -45,7 +46,9 @@ def test_configuration_is_json_data_and_only_trusted_core_files_are_written(monk
 @pytest.mark.asyncio
 async def test_saved_metadata_replays_without_touching_product_or_generation(tmp_path, monkeypatch):
     path = tmp_path / "machine.json"
-    state = SimpleNamespace(project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5)
+    state = SimpleNamespace(
+        workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5
+    )
     manifest = {"version": 1, "tasks": [], "services": [], "routes": []}
     from yleum_orchestrator.services.machine_defaults import next_machine_manifest
 
@@ -76,7 +79,9 @@ async def test_saved_metadata_replays_without_touching_product_or_generation(tmp
 async def test_sleeping_metadata_is_durable_without_starting_resources(tmp_path, monkeypatch):
     from yleum_orchestrator.services.machine_defaults import next_machine_manifest
 
-    state = SimpleNamespace(project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5)
+    state = SimpleNamespace(
+        workspace_id=uuid4(), project_id=uuid4(), owner_id=uuid4(), fencing_epoch=5
+    )
     machine = SimpleNamespace(
         path=tmp_path / "machine.json",
         state=lambda: {"manifest": next_machine_manifest().model_dump(mode="json"), "epoch": 4},

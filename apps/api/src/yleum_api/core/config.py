@@ -753,6 +753,9 @@ class Settings(BaseSettings):
     use_generation_worker: bool = Field(default=False)
     # Reader/storage rollout only; dispatch and finalization keep their legacy paths.
     generation_recovery_mode: Literal["off", "shadow", "canary", "on"] = "off"
+    # New V2 initialization only; existing V2 readers keep working when disabled.
+    # Task10 reader inventory must pass before enabling new execution records.
+    generation_recovery_execution_enabled: bool = False
     generation_provider_attempts_enabled: bool = False
     # Durable response bodies remain private and OFF until rollout readiness.
     generation_response_retention_enabled: bool = False

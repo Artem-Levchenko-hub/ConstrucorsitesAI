@@ -75,6 +75,12 @@ class FakeDockerBackend:
     async def get_volume(self, name: str) -> DockerVolumeRecord | None:
         return self.volumes.get(name)
 
+    async def source_volume_identity(self, name: str) -> str:
+        import hashlib
+
+        # The fake allocates a new resource_id on physical recreation, unlike Docker's name ID.
+        return hashlib.sha256(self.volumes[name].resource_id.encode()).hexdigest()
+
     async def create_volume(self, name: str, labels: dict[str, str]) -> DockerVolumeRecord:
         await self._before_mutation("volume_create")
         existing = self.volumes.get(name)

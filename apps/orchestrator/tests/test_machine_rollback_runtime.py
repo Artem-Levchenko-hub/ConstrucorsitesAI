@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests._machine_adapter_fakes import legacy_machine_controller  # noqa: F401
 from tests.test_project_machine_manifest import payload
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.schemas.workspace import WorkspaceAgentExecRequest
@@ -108,7 +109,9 @@ async def test_rollback_rebuilds_and_replaces_only_product_verifying_existing_le
         cmd="omnia:restore_runtime",
         task_role="restore_runtime",
     )
-    result = await runtime.execute(NS(), MachineManifest.model_validate(value), request)
+    result = await runtime.execute(
+        NS(workspace_id=uuid4()), MachineManifest.model_validate(value), request
+    )
     assert result.exit_code == (0 if failure is None else 124 if failure == "timeout" else 1)
     assert not running["candidate"]
     assert running["restored"] is (failure is None)
@@ -148,7 +151,9 @@ async def test_rollback_replay_does_not_kill_restored_runtime():
         cmd="omnia:restore_runtime",
         task_role="restore_runtime",
     )
-    result = await runtime.execute(NS(), MachineManifest.model_validate(value), request)
+    result = await runtime.execute(
+        NS(workspace_id=uuid4()), MachineManifest.model_validate(value), request
+    )
     assert result.exit_code == 0
 
 
@@ -179,5 +184,7 @@ async def test_failed_rollback_replay_cannot_stop_successful_successor_same_epoc
         {"name": "build", "role": "full_build", "argv": ["pnpm", "build"]},
         {"name": "test", "role": "full_build", "argv": ["pnpm", "test"]},
     ]
-    result = await runtime.execute(NS(), MachineManifest.model_validate(value), request)
+    result = await runtime.execute(
+        NS(workspace_id=uuid4()), MachineManifest.model_validate(value), request
+    )
     assert result.exit_code == 1

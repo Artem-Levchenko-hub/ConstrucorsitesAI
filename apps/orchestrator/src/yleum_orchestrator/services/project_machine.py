@@ -152,6 +152,10 @@ class ProjectMachine:
         return payload
 
     async def assert_fence(self, mutation: LifecycleMutation) -> dict[str, Any]:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_machine_writers_allowed,
+        )
+        require_machine_writers_allowed(self.path)
         state = self.state()
         current = self.lease_epoch()
         if (

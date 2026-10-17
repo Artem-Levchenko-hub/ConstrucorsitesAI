@@ -150,6 +150,19 @@ async def load_generation_response(
     identity: Any, *, objects: ObjectStore | None = None
 ) -> bytes | None:
     """Only a current owned reserved intent is confirmed absence; never generic 404."""
+    return await _read_generation_response(identity, objects=objects, reconcile=False)
+
+
+async def reconcile_generation_response(
+    identity: Any, *, objects: ObjectStore | None = None
+) -> bool:
+    """Clear only an independently proven financial hold; never dispatch or charge."""
+    return await _read_generation_response(identity, objects=objects, reconcile=True) is not None
+
+
+async def _read_generation_response(
+    identity: Any, *, objects: ObjectStore | None, reconcile: bool,
+) -> bytes | None:
     from yleum_gateway.core.db import get_pool
     from yleum_gateway.services.generation_attempts import _owned
     from yleum_gateway.services.generation_response_ledger import matches
@@ -171,12 +184,17 @@ async def load_generation_response(
             if (
                 body is None
                 or body["state"] != "complete"
-                or body["reconciliation_hold"]
+                or (body["reconciliation_hold"] and not reconcile)
                 or attempt["phase"] != "closed"
                 or attempt["terminal_reason"]
                 not in {"completed", "preconnect", "rate_limit_refused"}
             ):
                 raise ResponseIndeterminate("generation response is not confirmed")
+            if reconcile:
+                from yleum_gateway.services.billing import confirmed_provider_accounting
+
+                if not await confirmed_provider_accounting(conn, attempt):
+                    raise ResponseIndeterminate("generation response accounting is unresolved")
             source = objects or PrivateObjects()
             encoded = await source.get(body["manifest_key"])
             if sha(encoded) != body["manifest_sha256"]:
@@ -202,7 +220,7 @@ async def load_generation_response(
                 or body["manifest_key"] != attempt["response_manifest_key"]
             ):
                 raise ResponseIndeterminate("generation response manifest conflicts")
-            chain, count, data = _EMPTY_CHAIN, 0, bytearray()
+            chain, count, byte_count, data = _EMPTY_CHAIN, 0, 0, bytearray()
             digest = hashlib.sha256()
             async for part in conn.cursor(
                 "SELECT * FROM generation_response_chunks WHERE attempt_id=$1 AND kind='chunks' ORDER BY chunk_index",
@@ -225,15 +243,27 @@ async def load_generation_response(
                 }
                 chain = sha(bytes.fromhex(chain) + canonical(record))
                 digest.update(chunk)
-                data.extend(chunk)
+                byte_count += len(chunk)
+                # A reconciliation request hashes incrementally and never
+                # creates another response-wide RAM copy merely to clear a hold.
+                if not reconcile:
+                    data.extend(chunk)
                 count += 1
             if (
                 manifest["chunks"] != count
-                or manifest["bytes"] != len(data)
+                or manifest["bytes"] != byte_count
                 or manifest["sha256"] != digest.hexdigest()
                 or manifest["chain_sha256"] != chain
             ):
                 raise ResponseIndeterminate("generation response final integrity conflicts")
+            if reconcile:
+                if not await confirmed_provider_accounting(conn, attempt):
+                    raise ResponseIndeterminate("generation response accounting changed")
+                await conn.execute(
+                    "UPDATE generation_responses SET reconciliation_hold=false,reconciled_at=now() "
+                    "WHERE attempt_id=$1 AND reconciliation_hold=true AND state='complete'",
+                    identity.attempt_id,
+                )
             return bytes(data)
     except ResponseIndeterminate:
         raise

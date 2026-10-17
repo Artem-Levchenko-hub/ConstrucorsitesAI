@@ -294,6 +294,7 @@ API tests запускаются из `apps/api`: `uv run --frozen pytest -o add
   ```
 - [ ] Run `uv run --frozen pytest -o addopts='' -q tests/test_generation_recovery_acceptance.py`; RED on technically green but functionally incomplete acceptance.
 - [ ] Execute supported HTTP/browser/DB/named checks against the sealed candidate and bind their receipts. Use separate synthetic fixtures for mutations, disable payments/external sends server-side in QA, test create/edit/restore persistence and trusted A/B identity. Unknown requirements remain explicit incomplete obligations; do not weaken them to make the dashboard green.
+- [ ] Include the 2026-10-17 early-live regression: at the maximum mobile scroll position, fixed navigation must not cover support/legal links or prevent pointer and keyboard access. Test actual hit targets and visible focus at390/768/1440px; document-width checks alone missed this defect. Bind the result to the actual candidate, then repeat after an AI edit while preserving the existing personal record.
 - [ ] Run actual Next behavior fixtures, publication no-op/stale-fence tests and ownership/schema/restore regressions on isolated DB. Test changed-prompt linked runs cannot use the prior run's answer/PASS.
 - [ ] Review/deliver; commit `feat(generation): require functional acceptance before completion`. Gate ships off for legacy; v1 canary enabled only in Task15.
 
@@ -316,6 +317,8 @@ API tests запускаются из `apps/api`: `uv run --frozen pytest -o add
 - [ ] Review/deliver; commit `fix(preview): serve the canonical inspector through a healthy local relay`.
 
 ### Task 15: Fault matrix, controlled activation and the live acceptance campaign
+
+User-approved early live creation/edit baselines may run on the currently deployed release while later recovery work is unfinished. Keep each baseline in an isolated QA app with synthetic data; record its release, literal request, build/functions/data/browser results and unresolved cases. Use observed failures to adjust Tasks13/14 and their acceptance fixtures. These baseline results do not count as acceptance of a future release or enable the new recovery mode; retain the final exact-release campaign below.
 
 **Files:** Create `apps/api/tests/test_generation_recovery_fault_matrix.py`, `apps/api/tests/test_generation_recovery_campaign.py`, `tools/qa/generation_recovery_campaign.py`, `docs/qa/2026-10-16-generation-recovery-checkpoint.md`; modify API `services/llm_client.py`, `core/config.py` only for the scoped diagnostic described below, `.github/workflows/ci.yml` and `ops/production_smoke.py`. Reuse `tools/qa/core_owned_generation_probe.py` and restoration QA safety bindings; do not run legacy release runners as test helpers.
 

@@ -25,6 +25,11 @@ from yleum_api.services.generation.lightweight_turns import (
     _run_clarify,
     _run_text_turn,
 )
+from yleum_api.services.generation.recovery_execution import (
+    GenerationYielded,
+    committed_yield_outcome,
+    recovery_failure_outcome,
+)
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
     GenerationDispatch,
@@ -163,15 +168,35 @@ async def _finalize_cancelled_generation(
     assistant_message_id: UUID,
     run_id: UUID,
 ) -> None:
+    from yleum_api.models.project import Project
+    from yleum_api.services.generation.recovery_adaptation import cleanup_terminal_adaptation
+
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
+        project = await session.scalar(
+            select(Project).where(Project.id == project_id).with_for_update()
+        )
         run = await session.scalar(
             select(GenerationRun).where(GenerationRun.id == run_id).with_for_update()
         )
-        if run is None or run.status not in ACTIVE_GENERATION_STATUSES:
+        if (
+            project is None or run is None or project.owner_id != run.user_id
+            or run.project_id != project_id
+            or run.assistant_message_id != assistant_message_id
+            or run.status not in {*ACTIVE_GENERATION_STATUSES, "cancelled"}
+        ):
             return
-        await apply_cancelled_generation_locked(session, run)
-        await session.commit()
+        if run.status != "cancelled":
+            await apply_cancelled_generation_locked(session, run)
+            await session.commit()
+    # Cleanup cannot precede the terminal commit: runtime cleanup runs while
+    # cancel_requested. A retry after event/ACK loss must revisit this boundary.
+    try:
+        await cleanup_terminal_adaptation(factory, run_id)
+    except Exception as exc:
+        logging.getLogger("yleum_api.routers.messages").warning(
+            "Cancelled adaptation cleanup retained (%s)", type(exc).__name__,
+        )
     await publish_event(
         project_id,
         "generation.cancelled",
@@ -217,6 +242,7 @@ async def _run_tracked_prompt(
         if capacity_dispatch_token is not None
         else None
     )
+    durable_handoff = False
     try:
         while True:
             waiters: set[asyncio.Task[Any]] = {work_task, cancel_task}
@@ -271,12 +297,25 @@ async def _run_tracked_prompt(
             await work_task
         if not (cancellation.args and cancellation.args[0] is _OWNERSHIP_LOST_CANCEL_REASON):
             await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
+    except GenerationYielded as yielded:
+        durable_handoff = True
+        if yielded.run_id == run_id and await committed_yield_outcome(yielded) == "cancelled":
+            await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
+        # Unsupported/conflicting handoffs are preserved for reconciliation,
+        # never converted to terminal failure or proof of physical quiescence.
+        return
     except AdaptationActivationPending:
         # The restoration reconciler owns the durable activation outbox and
         # will settle the run after the controller returns a terminal receipt.
         return
     except Exception as exc:
         logging.getLogger("yleum_api.routers.messages").error("%s failed", label, exc_info=exc)
+        outcome = await recovery_failure_outcome(run_id)
+        if outcome != "legacy":
+            durable_handoff = True
+            if outcome == "cancelled":
+                await _finalize_cancelled_generation(project_id, assistant_message_id, run_id)
+            return
         await set_generation_run_status(
             run_id,
             "failed",
@@ -294,8 +333,9 @@ async def _run_tracked_prompt(
         if admission_task is not None:
             admission_task.cancel()
         clear_capacity_admission_event(run_id)
-        with suppress(Exception):
-            await clear_generation_cancel(run_id)
+        if not durable_handoff:
+            with suppress(Exception):
+                await clear_generation_cancel(run_id)
 
 
 def _spawn_tracked_prompt(

@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests._machine_adapter_fakes import legacy_machine_controller  # noqa: F401
 from yleum_orchestrator.core.cell_resources import CellResourceError
 
 PATH = "drizzle/0002.sql"

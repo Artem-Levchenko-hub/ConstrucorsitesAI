@@ -789,6 +789,8 @@ async def _native_messages_execute(
     if user_id is not None:
         try:
             await billing.charge(
+                provider_binding=(billing.ProviderUsageBinding(identity, provider_call_id)
+                                  if identity is not None else None),
                 user_id=user_id,
                 project_id=project_id,
                 message_id=message_id,

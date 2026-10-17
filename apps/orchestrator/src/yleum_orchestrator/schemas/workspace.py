@@ -101,6 +101,26 @@ class WorkspaceAgentWriteRequest(BaseModel):
     expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
     files: dict[str, str]
     deletes: list[str] = Field(default_factory=list)
+    operation_id: UUID | None = None
+
+
+class WorkspaceAgentWriteReceipt(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    fencing_epoch: int = Field(gt=0)
+    physical_volume: str = Field(min_length=1)
+    physical_volume_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    before_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    after_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    written: int = Field(ge=0)
+    deleted: int = Field(ge=0)
 
 
 class WorkspaceAgentWriteResponse(BaseModel):
@@ -109,6 +129,15 @@ class WorkspaceAgentWriteResponse(BaseModel):
     written: int
     deleted: int
     workspace_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    receipt: WorkspaceAgentWriteReceipt | None = None
+
+
+class WorkspaceAgentWriteStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: UUID
+    state: Literal["pending", "terminal"]
+    receipt: WorkspaceAgentWriteReceipt | None = None
 
 
 class WorkspaceDraftFilesResponse(BaseModel):
@@ -187,6 +216,8 @@ class WorkspaceOwnerBusinessConfigRequest(WorkspaceOwnerPreviewSessionRequest):
 class WorkspaceAgentExecRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    track_receipt: bool = False
+
     generation_run_id: UUID
     fencing_epoch: int = Field(gt=0)
     expected_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -231,6 +262,40 @@ class WorkspaceAgentExecResponse(BaseModel):
     environment_mutated: bool
     project_migration_receipt: dict[str, Any] | None = None
     compiled_asset_receipt: dict[str, Any] | None = None
+
+
+class WorkspaceAgentCommandBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    version: Literal[1] = 1
+    operation_id: UUID
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    generation_run_id: UUID
+    dispatch_fencing_epoch: int = Field(gt=0)
+    request_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    physical_volume: str = Field(min_length=1)
+    physical_volume_identity: str = Field(pattern=r"^[0-9a-f]{64}$")
+    before_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkspaceAgentCommandReceipt(WorkspaceAgentCommandBinding):
+    after_revision: str = Field(pattern=r"^[0-9a-f]{64}$")
+    response_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class WorkspaceAgentTrackedExecResponse(WorkspaceAgentExecResponse):
+    command_receipt: WorkspaceAgentCommandReceipt
+
+
+class WorkspaceAgentCommandStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: UUID
+    state: Literal["unknown", "pending", "terminal"]
+    receipt: WorkspaceAgentCommandReceipt | None = None
+    terminal_response: WorkspaceAgentExecResponse | None = None
 
 
 class WorkspaceAgentOperationStatusResponse(BaseModel):

@@ -6,7 +6,7 @@ import json
 import posixpath
 import re
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -46,10 +46,12 @@ from yleum_api.services.orchestrator_client import (
     project_cell_agent_operation_status,
     project_cell_agent_write_files,
     project_cell_apply_draft,
-    project_cell_cleanup_restoration_adaptation,
     project_cell_create_preview_session,
     project_cell_prepare_restoration_adaptation,
     project_cell_prove_restoration_adaptation,
+)
+from yleum_api.services.orchestrator_client import (
+    project_cell_cleanup_restoration_adaptation as project_cell_cleanup_restoration_adaptation,
 )
 from yleum_api.services.project_cell_capacity import (
     release_one_stale_generation_lease,
@@ -515,56 +517,95 @@ async def _release_generation_lease(
     workspace_id: UUID,
     generation_run_id: UUID,
     profile_version: str,
+    expected_fencing_epoch: int | None = None,
+    adaptation_stopping: bool = False,
 ) -> None:
-    async with session_factory() as session:
-        workspace = await session.scalar(
-            select(ProjectCellWorkspace)
-            .where(ProjectCellWorkspace.id == workspace_id)
-            .with_for_update()
+    from yleum_api.services.generation.recovery_contract import RecoveryStateV2, decode_recovery
+    from yleum_api.services.generation.recovery_execution import recovery_state
+
+    async def locked_run(session: AsyncSession) -> GenerationRun:
+        hint = await session.get(GenerationRun, generation_run_id)
+        if hint is None:
+            raise ProjectCellExecutorUnavailable("Generation disappeared during release")
+        project = await session.get(Project, hint.project_id, with_for_update=True)
+        run = await session.get(
+            GenerationRun, generation_run_id, with_for_update=True, populate_existing=True,
         )
+        if run is None or project is None or project.owner_id != run.user_id:
+            raise ProjectCellExecutorUnavailable("Generation release ownership changed")
+        return run
+
+    def retain_release(run: GenerationRun, operation_id: UUID, fence: int, phase: str) -> None:
+        state = recovery_state(run)
+        if not isinstance(state, RecoveryStateV2):
+            return
+        raw = state.model_dump(mode="json")
+        raw["execution"].update(
+            physical_state=phase, release_operation_id=str(operation_id),
+            control_workspace_id=str(workspace_id), control_fencing_epoch=fence,
+        )
+        raw["state_revision"] += 1
+        updated = decode_recovery(raw)
+        assert updated is not None
+        run.agent_state = {**run.agent_state, "recovery_v1": updated.model_dump(mode="json")}
+
+    async with session_factory() as session:
+        run = await locked_run(session)
+        state = recovery_state(run)
+        workspace = await session.get(ProjectCellWorkspace, workspace_id, with_for_update=True)
         if workspace is None:
             raise ProjectCellExecutorUnavailable("Project Cell workspace disappeared")
+        if expected_fencing_epoch is not None and workspace.fencing_epoch != expected_fencing_epoch:
+            raise ProjectCellExecutorUnavailable("Adaptation control lease changed before release")
+        if expected_fencing_epoch is not None:
+            valid_stop = adaptation_stopping and run.status in {
+                "cancel_requested", "cancelled", "failed",
+            }
+            valid_yield = not adaptation_stopping and run.status == "running" and (
+                isinstance(state, RecoveryStateV2)
+                and state.phase in {"waiting_dependency", "reconciling", "needs_input"}
+            )
+            if not isinstance(state, RecoveryStateV2) or not (valid_stop or valid_yield):
+                raise ProjectCellExecutorUnavailable("Adaptation yield/stop changed before release")
+        if expected_fencing_epoch is not None:
+            from yleum_api.models.project_cell import ProjectCellActivityLease
+
+            if await session.scalar(select(ProjectCellActivityLease.operation_id).where(
+                ProjectCellActivityLease.workspace_id == workspace_id,
+                ProjectCellActivityLease.state == "active",
+            ).limit(1)) is not None:
+                raise ProjectCellExecutorUnavailable("Adaptation activity changed before release")
         if workspace.generation_run_id is None:
-            return
+            return  # Absence never manufactures a release receipt for recovery.
         if workspace.generation_run_id != generation_run_id:
             raise ProjectCellExecutorUnavailable("Project Cell generation lease changed")
+        key = f"generation:{generation_run_id}:release:{profile_version}"
+        if isinstance(state, RecoveryStateV2):
+            key += f":cycle:{state.execution.lease_cycle_seq}"
         operation, _ = await reserve_cell_operation(
-            session,
-            workspace_id=workspace_id,
-            generation_run_id=generation_run_id,
-            kind="release",
-            idempotency_key=(f"generation:{generation_run_id}:release:{profile_version}"),
-            request={},
+            session, workspace_id=workspace_id, generation_run_id=generation_run_id,
+            kind="release", idempotency_key=key, request={},
         )
+        retain_release(run, operation.id, workspace.fencing_epoch, "release_pending")
         await session.commit()
     outcome = await execute_cell_operation(
-        session_factory,
-        operation.id,
-        HttpProjectCellOrchestratorClient(),
+        session_factory, operation.id, HttpProjectCellOrchestratorClient(),
     )
     response = outcome.response
-    if (
-        outcome.status != "completed"
-        or response is None
-        or response.workspace_id != workspace_id
-        or response.fencing_epoch is None
-        or response.state != "resources_ready"
-    ):
+    if (outcome.status != "completed" or response is None
+        or response.workspace_id != workspace_id or response.fencing_epoch is None
+        or response.state != "resources_ready"):
         raise ProjectCellExecutorUnavailable(f"Project Cell release failed: {outcome.status}")
     async with session_factory() as session:
-        workspace = await session.scalar(
-            select(ProjectCellWorkspace)
-            .where(ProjectCellWorkspace.id == workspace_id)
-            .with_for_update()
-        )
+        run = await locked_run(session)
+        workspace = await session.get(ProjectCellWorkspace, workspace_id, with_for_update=True)
         if workspace is None:
             raise ProjectCellExecutorUnavailable("Project Cell workspace disappeared")
-        if (
-            workspace.generation_run_id == generation_run_id
-            and workspace.fencing_epoch == response.fencing_epoch
-        ):
+        if (workspace.generation_run_id == generation_run_id
+            and workspace.fencing_epoch == response.fencing_epoch):
             workspace.generation_run_id = None
             workspace.updated_at = datetime.now(UTC)
+            retain_release(run, operation.id, response.fencing_epoch, "released")
             await session.commit()
 
 
@@ -687,12 +728,19 @@ async def maybe_create_project_cell_executor(
                 raise ProjectCellStateConflict("Generation is no longer active")
             workspace.generation_run_id = run.id
             profile_version = await resolve_workspace_profile(session, workspace, profile_version)
+            from yleum_api.services.generation.recovery_contract import RecoveryStateV2
+            from yleum_api.services.generation.recovery_execution import recovery_state
+
+            recovery = recovery_state(run)
+            ensure_key = f"generation:{run.id}:ensure:{profile_version}"
+            if isinstance(recovery, RecoveryStateV2):
+                ensure_key += f":cycle:{recovery.execution.lease_cycle_seq}"
             operation, _ = await reserve_cell_operation(
                 session,
                 workspace_id=workspace.id,
                 generation_run_id=run.id,
                 kind="ensure",
-                idempotency_key=f"generation:{run.id}:ensure:{profile_version}",
+                idempotency_key=ensure_key,
                 request={"profile_version": profile_version},
             )
             await session.commit()
@@ -777,8 +825,16 @@ async def maybe_create_project_cell_executor(
     signal_capacity_admitted(generation_run_id)
     adaptation_workspace: RestorationAdaptationWorkspace | None = None
     agent_workspace_id = workspace_id
+    from yleum_api.services.generation.recovery_contract import RecoveryStateV2
+    from yleum_api.services.generation.recovery_execution import recovery_state
+
+    durable_adaptation = restoration_adaptation and isinstance(recovery_state(run), RecoveryStateV2)
 
     async def _abort_adaptation_setup() -> None:
+        if durable_adaptation:
+            # An uncertain prepare/restore may still own a physical writer. Only
+            # its durable hold protocol can authorize release or destruction.
+            return
         cleanup_error: BaseException | None = None
         if adaptation_workspace is not None:
             try:
@@ -817,8 +873,7 @@ async def maybe_create_project_cell_executor(
                 (run.agent_state or {}).get("restoration_adaptation"),
                 generation_run_id,
             )
-            adaptation_workspace = await project_cell_prepare_restoration_adaptation(
-                workspace_id,
+            prepare_arguments: dict[str, Any] = dict(
                 operation_id=cast(UUID, binding["operation_id"]),
                 project_id=project_id,
                 owner_id=user_id,
@@ -830,6 +885,21 @@ async def maybe_create_project_cell_executor(
                 source_commit_sha=cast(str, binding["source_commit_sha"]),
                 adaptation_bundle_digest=cast(str, binding["adaptation_bundle_digest"]),
             )
+            if durable_adaptation:
+                from yleum_api.services.generation.recovery_adaptation import (
+                    Prepare,
+                    prepare_or_resume,
+                )
+
+                adaptation_workspace = await prepare_or_resume(
+                    session_factory,
+                    Prepare.model_validate({"workspace_id": workspace_id, **prepare_arguments}),
+                    project_cell_prepare_restoration_adaptation,
+                )
+            else:
+                adaptation_workspace = await project_cell_prepare_restoration_adaptation(
+                    workspace_id, **prepare_arguments,
+                )
             agent_workspace_id = adaptation_workspace.candidate_workspace_id
             snapshot = await project_cell_agent_bootstrap(
                 agent_workspace_id,
@@ -890,11 +960,13 @@ async def maybe_create_project_cell_executor(
     def _is_portable() -> bool:
         return portable_selected(capabilities, workspace_files)
 
-    def _proof_identity(identity: ProjectCellWorkspaceIdentity) -> ProofIdentity:
+    def _proof_identity(
+        identity: ProjectCellWorkspaceIdentity, *, dispatch_fence: int | None = None,
+    ) -> ProofIdentity:
         return ProofIdentity(
             workspace_id=agent_workspace_id,
             generation_run_id=leased_run_id,
-            fencing_epoch=fencing_epoch,
+            fencing_epoch=fencing_epoch if dispatch_fence is None else dispatch_fence,
             workspace_revision=identity.workspace_revision,
             dependency_digest=identity.dependency_digest,
             schema_data_digest=identity.schema_data_digest,
@@ -946,15 +1018,17 @@ async def maybe_create_project_cell_executor(
             raise ProjectCellExecutorUnavailable(
                 "Project Cell orchestrator omitted identity-aware command evidence"
             )
-        before = _proof_identity(result.before_identity)
-        after = _proof_identity(result.after_identity)
+        receipt = getattr(result, "command_receipt", None)
+        dispatch_fence = receipt.dispatch_fencing_epoch if receipt is not None else fencing_epoch
+        before = _proof_identity(result.before_identity, dispatch_fence=dispatch_fence)
+        after = _proof_identity(result.after_identity, dispatch_fence=dispatch_fence)
         migration_ok = (
             role not in {ProjectCellCommandRole.FULL_BUILD, ProjectCellCommandRole.RESTORE_RUNTIME}
             or not result.ok
             or valid_project_migration_receipt(
                 getattr(result, "project_migration_receipt", None),
                 workspace_id=agent_workspace_id, generation_run_id=leased_run_id,
-                fencing_epoch=fencing_epoch, source_revision=before.workspace_revision,
+                fencing_epoch=dispatch_fence, source_revision=before.workspace_revision,
                 adaptation=restoration_adaptation,
             )
         )
@@ -969,7 +1043,7 @@ async def maybe_create_project_cell_executor(
                 and result.compiled_asset_receipt.get("workspace_id") == str(agent_workspace_id)
                 and result.compiled_asset_receipt.get("project_id") == str(project_id)
                 and result.compiled_asset_receipt.get("generation_run_id") == str(leased_run_id)
-                and result.compiled_asset_receipt.get("fencing_epoch") == fencing_epoch
+                and result.compiled_asset_receipt.get("fencing_epoch") == dispatch_fence
                 and result.compiled_asset_receipt.get("operation_id") == str(result.operation_id)
                 and result.compiled_asset_receipt.get("source_revision")
                 == before.workspace_revision
@@ -1009,6 +1083,7 @@ async def maybe_create_project_cell_executor(
     async def _run_role(
         role: ProjectCellCommandRole,
         operation_id: UUID,
+        *, activity_owned: bool = True,
     ) -> ProjectCellCommandObservation:
         timeout = {
             ProjectCellCommandRole.BOOTSTRAP: 900,
@@ -1016,15 +1091,12 @@ async def maybe_create_project_cell_executor(
             ProjectCellCommandRole.FULL_BUILD: 900,
             ProjectCellCommandRole.RESTORE_RUNTIME: 900,
         }[role]
-        result = await project_cell_agent_exec(
-            agent_workspace_id,
+        result, _ = await _execute_command(
             f"omnia:{role.value}",
-            generation_run_id=leased_run_id,
-            fencing_epoch=fencing_epoch,
-            expected_revision=workspace_revision,
             timeout_seconds=timeout,
             task_role=role.value,
             operation_id=operation_id,
+            activity_operation_id=operation_id if activity_owned else None,
         )
         return await _accept_role_response(role, result)
 
@@ -1078,6 +1150,109 @@ async def maybe_create_project_cell_executor(
             proof_key=proof_key,
         )
 
+    from yleum_api.services.generation import recovery_tool_receipts as tool_receipts
+
+    active_write_action: Action | None = None
+
+    def _write_action_digest(action: Action) -> str:
+        return tool_receipts.digest({"name": action.name, "args": action.args})
+
+    async def _source_post_state(
+        operation: tool_receipts.SourceWriteOperation, receipt: Any,
+    ) -> tuple[str, dict[str, str]]:
+        from yleum_api.services import orchestrator_client
+        await _refresh_workspace_from_cell()
+        # Recheck the actual incarnation after the physical read, including the
+        # first POST acknowledgement. Source equality alone is never a receipt.
+        current = await orchestrator_client.project_cell_agent_write_operation(
+            agent_workspace_id, operation_id=operation.operation_id,
+            generation_run_id=leased_run_id,
+        )
+        if current.state != "terminal" or current.receipt != receipt:
+            raise ProjectCellExecutorUnavailable("source write current receipt changed")
+        return workspace_revision, dict(workspace_files)
+
+    async def _recover_source_write(
+        operation: tool_receipts.SourceWriteOperation,
+    ) -> dict[str, Any] | None:
+        from yleum_api.services import orchestrator_client
+        if operation.binding.workspace_id != agent_workspace_id:
+            raise ProjectCellExecutorUnavailable("source write workspace changed")
+        status = await orchestrator_client.project_cell_agent_write_operation(
+            agent_workspace_id, operation_id=operation.operation_id,
+            generation_run_id=leased_run_id,
+        )
+        if status.state != "terminal" or status.operation_id != operation.operation_id:
+            raise ProjectCellExecutorUnavailable("source write outcome remains unknown")
+        return await tool_receipts.accept_source_write(
+            session_factory, operation, status.receipt,
+            lambda: _source_post_state(operation, status.receipt),
+        )
+
+    async def _execute_command(
+        cmd: str, *, timeout_seconds: int, task_role: str | None = None,
+        operation_id: UUID | None = None,
+        activity_operation_id: UUID | None = None,
+    ) -> tuple[ProjectCellAgentExecResponse, dict[str, str]]:
+        from yleum_api.services import orchestrator_client
+        from yleum_api.services.generation.recovery_reconciliation import _TOOL_EFFECT
+        operation = await tool_receipts.prepare_command(
+            session_factory, run_id=leased_run_id, project_id=project_id, user_id=user_id,
+            workspace_id=agent_workspace_id, fencing_epoch=fencing_epoch,
+            revision=workspace_revision, cmd=cmd, timeout_seconds=timeout_seconds,
+            task_role=task_role, before_files=workspace_files,
+            activity_operation_id=activity_operation_id,
+            activity_proof_key=(
+                (await _current_identity()).proof_key
+                if activity_operation_id is not None and _is_portable()
+                and _TOOL_EFFECT.get() is not None
+                else None
+            ),
+        )
+        if operation is not None and not _is_portable():
+            raise ProjectCellExecutorUnavailable("Durable commands require portable receipts")
+        tracked_id = operation.operation_id if operation is not None else operation_id
+        if operation is not None and operation.existing:
+            status = await orchestrator_client.project_cell_agent_command_operation(
+                agent_workspace_id, operation_id=operation.operation_id,
+                generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+            )
+            if status.state != "terminal" or status.terminal_response is None:
+                raise ProjectCellExecutorUnavailable("command outcome remains unknown")
+            result, receipt = status.terminal_response, status.receipt
+        else:
+            result = await project_cell_agent_exec(
+                agent_workspace_id, cmd, generation_run_id=leased_run_id,
+                fencing_epoch=fencing_epoch, expected_revision=workspace_revision,
+                timeout_seconds=timeout_seconds, task_role=task_role, operation_id=tracked_id,
+                **({"track_receipt": True} if operation is not None else {}),
+            )
+            receipt = result.command_receipt
+        if operation is None:
+            return result, {}
+
+        async def current_source() -> tuple[str, dict[str, str]]:
+            await _refresh_workspace_from_cell()
+            physical = await project_cell_agent_identity(
+                agent_workspace_id, generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+            )
+            current = await orchestrator_client.project_cell_agent_command_operation(
+                agent_workspace_id, operation_id=operation.operation_id,
+                generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
+            )
+            if (current.state != "terminal" or current.receipt != receipt
+                or current.terminal_response is None
+                or current.terminal_response.command_wire_json() != result.command_wire_json()):
+                raise ProjectCellExecutorUnavailable("command current receipt changed")
+            if physical != result.after_identity:
+                raise ProjectCellExecutorUnavailable("command current physical identity changed")
+            return workspace_revision, dict(workspace_files)
+
+        changed = await tool_receipts.accept_command(
+            session_factory, operation, receipt, result, current_source,
+        )
+        return replace(result, command_receipt=receipt), changed
+
     async def _persist_files(
         *,
         writes: dict[str, str] | None = None,
@@ -1090,6 +1265,30 @@ async def maybe_create_project_cell_executor(
             raise ValueError("the same path cannot be written and deleted")
         if not normalized_writes and not normalized_deletes:
             return
+        observation = None
+        if active_write_action is not None:
+            path = _normalize_path(active_write_action.path)
+            content = normalized_writes[path]
+            observation = {
+                "ok": True, "content": content,
+                "detail": (f"wrote {path} ({len(content)} bytes)"
+                           if active_write_action.name == "write_file" else f"patched {path}"),
+                "content_change": _content_change_receipt(path, workspace_files.get(path), content),
+            }
+        operation = await tool_receipts.prepare_source_write(
+            session_factory, run_id=leased_run_id, project_id=project_id, user_id=user_id,
+            input_digest=(_write_action_digest(active_write_action) if active_write_action else
+                          tool_receipts.digest({
+                              "files": normalized_writes, "deletes": sorted(normalized_deletes),
+                          })),
+            workspace_id=agent_workspace_id, fencing_epoch=fencing_epoch,
+            revision=workspace_revision, files=normalized_writes, deletes=normalized_deletes,
+            observation=observation, before_files=workspace_files,
+        )
+        if operation is not None and operation.existing:
+            await _recover_source_write(operation)
+            return
+        operation_id = operation.operation_id if operation is not None else None
         response = await project_cell_agent_write_files(
             agent_workspace_id,
             generation_run_id=leased_run_id,
@@ -1097,7 +1296,13 @@ async def maybe_create_project_cell_executor(
             expected_revision=workspace_revision,
             files=normalized_writes,
             deletes=normalized_deletes,
+            **({"operation_id": operation_id} if operation_id is not None else {}),
         )
+        if operation is not None:
+            await tool_receipts.accept_source_write(
+                session_factory, operation, response.receipt,
+                lambda: _source_post_state(operation, response.receipt),
+            )
         workspace_revision = response.workspace_revision
 
     async def _stage_patch(writes: dict[str, str], deletes: tuple[str, ...] = ()) -> None:
@@ -1164,6 +1369,25 @@ async def maybe_create_project_cell_executor(
             retain_activation_lease = await adaptation_activation_holds_generation_lease(
                 session_factory, leased_run_id
             )
+            if durable_adaptation and not retain_activation_lease:
+                from yleum_api.services.generation.recovery_adaptation import release_candidate
+
+                if response.fencing_epoch is None:
+                    raise ProjectCellExecutorUnavailable("Adaptation control fence is unavailable")
+
+                async def release_control(fence: int, stopping: bool) -> None:
+                    await _release_generation_lease(
+                        session_factory=session_factory, workspace_id=workspace_id,
+                        generation_run_id=leased_run_id, profile_version=profile_version,
+                        expected_fencing_epoch=fence,
+                        adaptation_stopping=stopping,
+                    )
+
+                await release_candidate(
+                    session_factory, adaptation_workspace, response.fencing_epoch,
+                    release_control, project_cell_cleanup_restoration_adaptation,
+                )
+                return
             if not adaptation_proof_ready and not retain_activation_lease:
                 try:
                     await project_cell_cleanup_restoration_adaptation(adaptation_workspace)
@@ -1342,7 +1566,9 @@ async def maybe_create_project_cell_executor(
                     }
                 portable = _is_portable()
                 if portable and get_settings().use_max_finalization_coordinator:
-                    observation = await _run_role(ProjectCellCommandRole.FAST_CHECK, uuid4())
+                    observation = await _run_role(
+                        ProjectCellCommandRole.FAST_CHECK, uuid4(), activity_owned=False,
+                    )
                     return {
                         "ok": observation.ok,
                         "deferred_to": "max_finalization",
@@ -1353,12 +1579,8 @@ async def maybe_create_project_cell_executor(
                             item.value for item in observation.invalidated_dimensions
                         ),
                     }
-                result = await project_cell_agent_exec(
-                    agent_workspace_id,
+                result, _ = await _execute_command(
                     "omnia:build" if portable else _PROJECT_CELL_BUILD_CMD,
-                    generation_run_id=leased_run_id,
-                    fencing_epoch=fencing_epoch,
-                    expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_BUILD_TIMEOUT_SECONDS,
                     task_role=_portable_build_role(workspace_files) if portable else None,
                     operation_id=uuid4() if portable else None,
@@ -1374,17 +1596,13 @@ async def maybe_create_project_cell_executor(
                 cmd = str(action.args.get("cmd") or "").strip()
                 if not cmd:
                     return {"ok": False, "error": "bash needs a non-empty cmd string"}
-                result = await project_cell_agent_exec(
-                    agent_workspace_id,
+                result, recovered_changes = await _execute_command(
                     cmd,
-                    generation_run_id=leased_run_id,
-                    fencing_epoch=fencing_epoch,
-                    expected_revision=workspace_revision,
                     timeout_seconds=_PROJECT_CELL_SHELL_TIMEOUT_SECONDS,
                     operation_id=uuid4() if _is_portable() else None,
                 )
                 workspace_revision = result.workspace_revision
-                changed_files = await _refresh_workspace_from_cell()
+                changed_files = {**await _refresh_workspace_from_cell(), **recovered_changes}
                 detail = result.detail or "(no output)"
                 if result.timed_out:
                     detail += "\n\nCommand timed out; partial workspace changes were synced back."
@@ -1511,30 +1729,44 @@ async def maybe_create_project_cell_executor(
             if action.name in {"docs", "provider_docs", "generate_media"}:
                 return await docs_media_execute(action)
             return {"ok": False, "error": f"unknown cell action {action.name}"}
-        except OrchestratorUnavailable as exc:
-            return {
-                "ok": False,
-                "error": f"infra: {exc.message}",
-                "infra_dead": True,
-            }
-        except OrchestratorBadRequest as exc:
-            raise_if_terminal_cell_error(exc)
+        except Exception as exc:
+            return _action_failure(exc)
+
+    def _action_failure(exc: Exception) -> dict[str, Any]:
+        if isinstance(exc, OrchestratorUnavailable):
+            return {"ok": False, "error": f"infra: {exc.message}", "infra_dead": True}
+        raise_if_terminal_cell_error(exc)
+        if isinstance(exc, OrchestratorBadRequest):
             infra_dead = "container_not_running" in str(exc.details or "")
             return {
-                "ok": False,
-                "error": f"{'infra: ' if infra_dead else ''}{exc.message}",
+                "ok": False, "error": f"{'infra: ' if infra_dead else ''}{exc.message}",
                 **({"infra_dead": True} if infra_dead else {}),
             }
-        except Exception as exc:
-            raise_if_terminal_cell_error(exc)
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
     async def _execute(action: Action) -> dict[str, Any]:
-        nonlocal preview_synced
-        result = await _execute_action(action)
-        if result.get("environment_mutated") is True:
-            preview_synced = False
-        return result
+        nonlocal preview_synced, active_write_action, dirty
+        try:
+            if action.name in {"write_file", "edit_file"}:
+                active_write_action = action
+                previous = await tool_receipts.load_source_write(
+                    session_factory, run_id=leased_run_id, project_id=project_id, user_id=user_id,
+                    input_digest=_write_action_digest(action),
+                )
+                if previous is not None:
+                    result = await _recover_source_write(previous)
+                    if result is None:
+                        raise ProjectCellExecutorUnavailable("source write observation is missing")
+                    dirty, preview_synced = True, False
+                    return result
+            result = await _execute_action(action)
+            if result.get("environment_mutated") is True:
+                preview_synced = False
+            return result
+        except Exception as exc:
+            return _action_failure(exc)
+        finally:
+            active_write_action = None
 
     return ProjectCellExecutorHandle(
         execute=_execute,

@@ -10,8 +10,11 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import cast
+from typing import TYPE_CHECKING, cast
 from uuid import UUID, uuid5
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver
 
 from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError
@@ -308,6 +311,7 @@ class MaxFinalizationCoordinator:
         executor: ProjectCellExecutorHandle,
         emit: Callable[[str, Mapping[str, object]], Awaitable[None]] | None = None,
         behavior_driver: ControllerBehaviorDriver | None = None,
+        continuation: ExecutionDriver | None = None,
     ) -> None:
         if executor.current_identity is None or executor.run_role is None:
             raise ValueError("identity-aware Project Cell executor is required")
@@ -321,6 +325,7 @@ class MaxFinalizationCoordinator:
         self.project_slug = project_slug
         self.executor = executor
         self.behavior_driver = behavior_driver
+        self.continuation = continuation
         self.emit = emit or _discard_event
         self._last_files: dict[str, str] | None = None
         self._last_prompt: str | None = None
@@ -404,7 +409,36 @@ class MaxFinalizationCoordinator:
             reserve_seconds=180 if repair else 300,
         ) if deadline is not None else None
 
+    async def _reconcile_tool_commands(self) -> None:
+        from yleum_api.services.generation import recovery_tool_receipts
+        from yleum_api.services.generation.recovery_reconciliation import _TOOL_EFFECT
+
+        driver = getattr(self, "continuation", None)
+        cursor = _TOOL_EFFECT.get()
+        if driver is None or cursor is None or not cursor.reconcile_only:
+            return
+        try:
+            consumed = False
+            while True:
+                target = await recovery_tool_receipts.command_role_target(
+                    self.session_factory, run_id=self.generation_run_id, project_id=self.project_id,
+                    user_id=driver.state.identity.user_id, allow_missing=consumed,
+                )
+                if target is None:
+                    break
+                operation_id, role = target
+                run_role = self.executor.run_role
+                assert run_role is not None
+                # Consume each original receipt before any new current-fence check.
+                # These historical observations never enter the proof ledger.
+                await run_role(ProjectCellCommandRole(role), operation_id)
+                consumed = True
+            cursor.reconcile_only = False
+        except Exception:
+            await driver.wait()
+
     async def fast_check(self) -> ProjectCellProofResult:
+        await self._reconcile_tool_commands()
         await self._raise_persisted_infrastructure_failure()
         if self.executor.prove_restoration_adaptation is not None:
             return await self._adaptation_fast_check()
@@ -643,6 +677,7 @@ class MaxFinalizationCoordinator:
         prompt: str,
         repair: Callable[[str], Awaitable[None]],
         repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None = None,
+        continuation: ExecutionDriver | None = None,
     ) -> MaxFinalizationOutcome:
         """Continue repairs while actual source or verified gate evidence is novel.
 
@@ -659,52 +694,177 @@ class MaxFinalizationCoordinator:
             await session.commit()
         files = await self.executor.snapshot_files()
         progress = SourceNoveltyTracker(files)
+        durable = None
+        if continuation is not None:
+            from yleum_api.services.generation.recovery_pipeline import (
+                FinalizationProgress,
+                pending_source_repair,
+                save_finalization_progress,
+            )
+
+            raw = continuation.context["completed"].get("finalization_progress")
+            durable = (
+                FinalizationProgress.model_validate_json(json.dumps(raw))
+                if raw is not None
+                else FinalizationProgress(source_history=progress.source_history())
+            )
+            progress = SourceNoveltyTracker.from_source_history(durable.source_history)
+            if durable.no_progress:
+                raise MaxFinalizationConflict("source repair made no new progress")
+            if durable.pending_detail is not None:
+                pending = pending_source_repair(continuation)
+                if pending is None or pending.status != "complete":
+                    fresh_failure = await self.revalidate_pending_repair(
+                        targeted=durable.pending_targeted,
+                    )
+                    await self._invoke_source_repair(
+                        detail=durable.pending_detail,
+                        repair=repair,
+                        repair_source=repair_source,
+                        failure=fresh_failure,
+                    )
+                files = await self.executor.snapshot_files()
+                # Serialized proof credit is deliberately absent. Historical
+                # green receipts cannot buy another repair after a restart.
+                novel = progress.observe(files)
+                durable = durable.model_copy(
+                    update={
+                        "source_history": progress.source_history(),
+                        "pending_detail": None,
+                        "pending_targeted": False,
+                        "no_progress": not novel,
+                    }
+                )
+                await save_finalization_progress(continuation, durable, consume_repair=True)
+                if not novel:
+                    raise MaxFinalizationConflict("source repair made no new progress")
         while True:
             outcome = await self.finalize(files=files, prompt=prompt)
             if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT:
                 return outcome
             # Existing proof hits are baseline evidence, not progress from this repair.
             progress.observe(files, verified_receipts=await self._repair_progress_receipts(files))
-            async with self.session_factory() as session:
-                run = await self._locked_run(session)
-                if run.status == "cancel_requested":
-                    raise asyncio.CancelledError
-                deadline = generation_deadline(run).at
-            # NEEDS_EDIT means the last proof, if any, was settled; a run still holding a
-            # durable intent has no business starting another editing pass.
-            if deadline is None:
-                raise MaxFinalizationConflict(
-                    "sealed restoration adaptation cannot enter a source repair"
-                )
-            repair_end = source_edit_deadline(
-                deadline, started_at=run.started_at or run.created_at, reserve_seconds=180,
+            targeted = repair_source is not None and outcome.redacted_detail.startswith(
+                _FULL_BUILD_DETAIL_PREFIX + "\n[source-repair:confirmed]\n"
             )
-            remaining = (repair_end - datetime.now(UTC)).total_seconds()
-            if remaining < _MIN_REPAIR_SECONDS:
-                raise TimeoutError("generation deadline exceeded before source repair")
-            try:
-                async with asyncio.timeout(remaining):
-                    if repair_source is not None and outcome.redacted_detail.startswith(
-                        _FULL_BUILD_DETAIL_PREFIX + "\n[source-repair:confirmed]\n"
-                    ):
-                        receipt = outcome.proof.full_build
-                        if receipt is None:
-                            return outcome
-                        failure = await self.source_failure(receipt)
-                        if failure is None or not failure.allowed_paths:
-                            return outcome
-                        await repair_source(outcome.redacted_detail, failure)
-                    else:
-                        await repair(outcome.redacted_detail)
-            except TimeoutError as exc:
-                # A bare TimeoutError has no text; the run would fail with an empty reason.
-                raise TimeoutError("generation deadline exceeded during source repair") from exc
+            failure = None
+            if targeted:
+                receipt = outcome.proof.full_build
+                if receipt is None:
+                    return outcome
+                failure = await self.source_failure(receipt)
+                if failure is None or not failure.allowed_paths:
+                    return outcome
+            if continuation is not None:
+                assert durable is not None
+                durable = durable.model_copy(
+                    update={
+                        "source_history": progress.source_history(),
+                        "feedback": (*durable.feedback, outcome.redacted_detail),
+                        "pending_detail": outcome.redacted_detail,
+                        "pending_targeted": targeted,
+                    }
+                )
+                await save_finalization_progress(continuation, durable)
+            await self._invoke_source_repair(
+                detail=outcome.redacted_detail,
+                repair=repair,
+                repair_source=repair_source,
+                failure=failure,
+            )
             updated = await self.executor.snapshot_files()
-            if not progress.observe(
-                updated, verified_receipts=await self._repair_progress_receipts(updated),
-            ):
+            novel = progress.observe(
+                updated,
+                verified_receipts=await self._repair_progress_receipts(updated),
+            )
+            if continuation is not None:
+                assert durable is not None
+                durable = durable.model_copy(
+                    update={
+                        "source_history": progress.source_history(),
+                        "pending_detail": None,
+                        "pending_targeted": False,
+                        "no_progress": not novel,
+                    }
+                )
+                await save_finalization_progress(continuation, durable, consume_repair=True)
+            if not novel:
                 return outcome
             files = updated
+
+    async def _invoke_source_repair(
+        self,
+        *,
+        detail: str,
+        repair: Callable[[str], Awaitable[None]],
+        repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None,
+        failure: SourceFailure | None,
+    ) -> None:
+        async with self.session_factory() as session:
+            run = await self._locked_run(session)
+            if run.status == "cancel_requested":
+                raise asyncio.CancelledError
+            deadline = generation_deadline(run).at
+        if deadline is None:
+            raise MaxFinalizationConflict(
+                "sealed restoration adaptation cannot enter a source repair"
+            )
+        repair_end = source_edit_deadline(
+            deadline,
+            started_at=run.started_at or run.created_at,
+            reserve_seconds=180,
+        )
+        remaining = (repair_end - datetime.now(UTC)).total_seconds()
+        if remaining < _MIN_REPAIR_SECONDS:
+            raise TimeoutError("generation deadline exceeded before source repair")
+        try:
+            async with asyncio.timeout(remaining):
+                if failure is not None:
+                    if repair_source is None:
+                        raise MaxFinalizationConflict("fresh source repair guard is unavailable")
+                    await repair_source(detail, failure)
+                else:
+                    await repair(detail)
+        except TimeoutError as exc:
+            raise TimeoutError("generation deadline exceeded during source repair") from exc
+
+    async def revalidate_pending_repair(self, *, targeted: bool) -> SourceFailure | None:
+        """Obtain current compiler authority without acceptance or promotion."""
+        bootstrap = await self.fast_check()
+        if bootstrap.dimension == ProofDimension.BOOTSTRAP.value and bootstrap.outcome != "green":
+            raise MaxFinalizationConflict("pending repair prerequisite is not confirmed")
+        identity = await self._identity()
+        if self.executor.prove_restoration_adaptation is not None:
+            proof = self._transient_proof(identity)
+            result, identity, proof = await self._adaptation_role_result(
+                identity=identity,
+                proof=proof,
+                dimension=ProofDimension.FULL_BUILD,
+                role=ProjectCellCommandRole.FULL_BUILD,
+            )
+        else:
+            proof = await self._proof(identity)
+            found = await self._find(proof, ProofDimension.FULL_BUILD)
+            if found is None:
+                found = await self._run_role_result(
+                    proof=proof,
+                    identity=identity,
+                    dimension=ProofDimension.FULL_BUILD,
+                    role=ProjectCellCommandRole.FULL_BUILD,
+                    phase=GenerationPhase.FINAL_BUILD,
+                )
+            result = found
+        if result.outcome == ProofOutcome.GREEN.value:
+            return SourceFailure()  # Consume retained answer, but grant no source edits.
+        failure = await self.source_failure(result)
+        if failure is None:
+            raise MaxFinalizationConflict("pending repair compiler authority is unavailable")
+        if targeted:
+            return failure
+        outcome = await self._failed(
+            identity, proof, GenerationPhase.FINAL_BUILD, result, result.redacted_detail
+        )
+        return None if outcome.status is MaxFinalizationStatus.NEEDS_EDIT else SourceFailure()
 
     async def _repair_progress_receipts(self, files: Mapping[str, str]) -> frozenset[str]:
         """Count each verified gate once per source, never diagnostic/operation churn."""
@@ -1874,14 +2034,14 @@ class MaxFinalizationCoordinator:
             if final_identity.proof_key == identity.proof_key
             else await self._proof(final_identity)
         )
-        result = await self._record(
+        result = await self._commit_role_result(observation.operation_id, lambda: self._record(
             proof=final_proof,
             dimension=ProofDimension.BOOTSTRAP,
             outcome=ProofOutcome.GREEN if observation.ok else ProofOutcome.RED,
             operation_id=observation.operation_id,
             artifact_ref=None,
             detail=observation.redacted_detail,
-        )
+        ))
         return result, final_identity, final_proof
 
     async def _run_role_result(
@@ -1925,7 +2085,7 @@ class MaxFinalizationCoordinator:
             detail = _versioned_build_detail(
                 detail, source_repair=source_repair,
             )
-        return await self._record(
+        return await self._commit_role_result(observation.operation_id, lambda: self._record(
             proof=proof,
             dimension=dimension,
             outcome=outcome,
@@ -1933,7 +2093,22 @@ class MaxFinalizationCoordinator:
             artifact_ref=artifact_ref,
             detail=detail,
             refresh_incompatible=dimension is ProofDimension.FULL_BUILD,
-        )
+        ))
+
+    async def _commit_role_result(
+        self, operation_id: UUID, store: Callable[[], Awaitable[ProjectCellProofResult]],
+    ) -> ProjectCellProofResult:
+        driver = getattr(self, "continuation", None)
+        try:
+            result = await store()
+            if driver is not None:
+                from yleum_api.services.generation.recovery_pipeline import finish_recorded_role
+                await finish_recorded_role(driver, operation_id)
+            return result
+        except Exception:
+            if driver is not None:
+                await driver.wait()
+            raise
 
     async def _execute_role(
         self,
@@ -1954,6 +2129,23 @@ class MaxFinalizationCoordinator:
             f"{identity.workspace_id}:{identity.fencing_epoch}:{identity.proof_key}:"
             f"{role.value}:{contract_version}",
         )
+        async def invoke() -> ProjectCellCommandObservation:
+            return await self._execute_role_activity(
+                identity=identity, dimension=dimension, role=role, phase=phase,
+                operation_id=operation_id,
+            )
+
+        continuation = getattr(self, "continuation", None)
+        if continuation is None:
+            return await invoke()
+        from yleum_api.services.generation.recovery_pipeline import run_durable_role
+        return await run_durable_role(continuation, role=role.value,
+                                      operation_id=operation_id, invoke=invoke)
+
+    async def _execute_role_activity(
+        self, *, identity: ProofIdentity, dimension: ProofDimension,
+        role: ProjectCellCommandRole, phase: GenerationPhase, operation_id: UUID,
+    ) -> ProjectCellCommandObservation:
         await self._phase_started(phase, self._checkpoint(identity, phase, operation_id))
         run_role = self.executor.run_role
         operation_status = self.executor.operation_status
@@ -1961,7 +2153,14 @@ class MaxFinalizationCoordinator:
         assert operation_status is not None
 
         async def run_command() -> ProjectCellCommandObservation:
-            return await run_role(role, operation_id)
+            try:
+                return await run_role(role, operation_id)
+            except Exception:
+                if (continuation := getattr(self, "continuation", None)) is not None:
+                    # Transfer before the legacy activity wrapper can turn an
+                    # unknown physical ACK into a terminal failed activity.
+                    await continuation.wait()
+                raise
 
         async def replay_command(status: object) -> ProjectCellCommandObservation:
             from yleum_api.services.orchestrator_client import ProjectCellAgentOperationStatus

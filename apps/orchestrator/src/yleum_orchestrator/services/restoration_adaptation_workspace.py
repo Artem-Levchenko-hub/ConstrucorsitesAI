@@ -10,7 +10,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, Protocol
 from uuid import UUID, uuid5
 
 import structlog
@@ -28,6 +28,10 @@ from yleum_orchestrator.schemas.restoration_adaptation import (
     RestorationAdaptationPrepare,
     RestorationAdaptationProof,
     RestorationAdaptationProofRequest,
+    RestorationAdaptationRecoveryHold,
+    RestorationAdaptationRecoveryIdentity,
+    RestorationAdaptationRecoveryRebind,
+    RestorationAdaptationRecoveryReceipt,
     RestorationAdaptationWorkspace,
 )
 from yleum_orchestrator.schemas.restoration_adaptation_activation import (
@@ -56,6 +60,10 @@ from yleum_orchestrator.services.restoration_catalog import catalog_contract
 from yleum_orchestrator.services.restoration_database import admin_sql
 from yleum_orchestrator.services.versioning.contracts import InventoryReport
 from yleum_orchestrator.services.versioning.inventory import quote_ident
+
+if TYPE_CHECKING:
+    from yleum_orchestrator.services.adaptation_recovery_engine import DockerAdaptationRecovery
+
 
 _CAPABILITIES: dict[str, object] = {
     "portable_machine": True,
@@ -239,6 +247,42 @@ class AdaptationWorkspaceEngine(Protocol):
         proof: RestorationAdaptationProofRequest,
     ) -> AdaptationProofMaterialization: ...
 
+    async def recovery_current_control(
+        self, original: RestorationAdaptationPrepare, epoch: int
+    ) -> None: ...
+
+    async def recovery_hold(
+        self,
+        original: RestorationAdaptationPrepare,
+        request: RestorationAdaptationRecoveryHold,
+        pending: RestorationAdaptationRecoveryReceipt,
+    ) -> RestorationAdaptationRecoveryReceipt: ...
+
+    async def recovery_rebind(
+        self,
+        original: RestorationAdaptationPrepare,
+        request: RestorationAdaptationRecoveryRebind,
+        pending: RestorationAdaptationRecoveryReceipt,
+    ) -> RestorationAdaptationRecoveryReceipt: ...
+
+    async def recovery_inspect(
+        self,
+        original: RestorationAdaptationPrepare,
+        receipt: RestorationAdaptationRecoveryReceipt,
+    ) -> RestorationAdaptationRecoveryReceipt: ...
+
+    async def recovery_publish(
+        self,
+        original: RestorationAdaptationPrepare,
+        receipt: RestorationAdaptationRecoveryReceipt,
+    ) -> None: ...
+
+    async def recovery_cleanup(
+        self,
+        original: RestorationAdaptationPrepare,
+        receipt: RestorationAdaptationRecoveryReceipt,
+    ) -> None: ...
+
     async def owner_run_active(self, request: RestorationAdaptationPrepare) -> bool: ...
 
 
@@ -317,6 +361,10 @@ class RestorationAdaptationWorkspaceService:
         value = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(value, dict):
             raise CellIdentityConflict("restoration adaptation receipt is invalid")
+        if "recovery_hold" in value:
+            from yleum_orchestrator.services.source_write_journal import _sync_directory
+            _sync_directory(path.parent)
+            _sync_directory(self.root)
         return value
 
     def _write(self, receipt: dict[str, Any]) -> None:
@@ -324,10 +372,46 @@ class RestorationAdaptationWorkspaceService:
             self._path(UUID(receipt["workspace_id"]), UUID(receipt["generation_run_id"])),
             receipt,
         )
+        if "recovery_hold" in receipt:
+            from yleum_orchestrator.services.source_write_journal import _sync_directory
+
+            _sync_directory(
+                self._path(UUID(receipt["workspace_id"]), UUID(receipt["generation_run_id"])).parent
+            )
+            _sync_directory(self.root)
 
     @staticmethod
     def _response(receipt: dict[str, Any]) -> RestorationAdaptationWorkspace:
-        return RestorationAdaptationWorkspace.model_validate(receipt["response"])
+        return RestorationAdaptationWorkspace.model_validate(
+            {**receipt["response"], "request_digest": receipt["request_digest"]}
+        )
+
+    async def recovery_hold(
+        self, request: RestorationAdaptationRecoveryHold
+    ) -> RestorationAdaptationRecoveryReceipt:
+        from yleum_orchestrator.services.adaptation_recovery_protocol import (
+            AdaptationRecoveryProtocol,
+        )
+
+        return await AdaptationRecoveryProtocol(self).transition(request)
+
+    async def recovery_rebind(
+        self, request: RestorationAdaptationRecoveryRebind
+    ) -> RestorationAdaptationRecoveryReceipt:
+        from yleum_orchestrator.services.adaptation_recovery_protocol import (
+            AdaptationRecoveryProtocol,
+        )
+
+        return await AdaptationRecoveryProtocol(self).transition(request)
+
+    async def recovery_status(
+        self, request: RestorationAdaptationRecoveryIdentity
+    ) -> RestorationAdaptationRecoveryReceipt:
+        from yleum_orchestrator.services.adaptation_recovery_protocol import (
+            AdaptationRecoveryProtocol,
+        )
+
+        return await AdaptationRecoveryProtocol(self).status(request)
 
     async def status(self, workspace_id: UUID, generation_run_id: UUID) -> str | None:
         async with self._lock.hold(workspace_id):
@@ -335,10 +419,30 @@ class RestorationAdaptationWorkspaceService:
             return str(saved["state"]) if saved is not None else None
 
     @staticmethod
+    def _current_recovery(saved: dict[str, Any]) -> RestorationAdaptationRecoveryReceipt | None:
+        if "recovery_hold" not in saved:
+            return None
+        from yleum_orchestrator.services.adaptation_recovery_protocol import (
+            AdaptationRecoveryProtocol,
+        )
+
+        hold = AdaptationRecoveryProtocol._hold(saved)
+        try:
+            receipt = AdaptationRecoveryProtocol._receipt(
+                hold["transitions"][hold["current"]]["receipt"]
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CellIdentityConflict("recovery authority is unknown") from exc
+        if receipt.state != "resumable":
+            raise CellIdentityConflict("recovery candidate is not resumable")
+        return receipt
+
+    @staticmethod
     def _activation_proof(
         saved: dict[str, Any],
         request: RestorationAdaptationActivationOfferRequest,
     ) -> ActivationProofClaim:
+        recovery = RestorationAdaptationWorkspaceService._current_recovery(saved)
         try:
             prepared = RestorationAdaptationPrepare.model_validate(saved["request"])
             proof = RestorationAdaptationProof.model_validate(saved["proof_result"])
@@ -358,7 +462,14 @@ class RestorationAdaptationWorkspaceService:
             or proof.proof_digest != request.proof_digest
         ):
             raise CellIdentityConflict("restoration adaptation proof identity changed")
-        return ActivationProofClaim(proof=proof, source_fencing_epoch=prepared.fencing_epoch)
+        if (recovery is not None
+            and proof.candidate_fencing_epoch != recovery.current_candidate_fencing_epoch):
+            raise CellIdentityConflict("recovery activation proof is historical")
+        return ActivationProofClaim(
+            proof=proof,
+            source_fencing_epoch=(recovery.current_control_fencing_epoch
+                                  if recovery is not None else prepared.fencing_epoch),
+        )
 
     async def claim_activation_offer(
         self,
@@ -568,7 +679,8 @@ class RestorationAdaptationWorkspaceService:
         generation_run_id = UUID(path.stem)
         async with self._lock.hold(workspace_id):
             saved = self._read(workspace_id, generation_run_id)
-            if saved is None or saved.get("state") not in _CANDIDATE_RECEIPT_STATES:
+            if (saved is None or "recovery_hold" in saved
+                    or saved.get("state") not in _CANDIDATE_RECEIPT_STATES):
                 return 0
             request = RestorationAdaptationPrepare.model_validate(saved.get("request"))
             candidate_id = UUID(str(saved.get("candidate_workspace_id")))
@@ -604,6 +716,7 @@ class RestorationAdaptationWorkspaceService:
                 current = self._read(workspace_id, generation_run_id)
                 if (
                     current is None
+                    or "recovery_hold" in current
                     or current.get("state") != mode
                     or (
                         current.get("owner_run_status") != "terminal"
@@ -655,6 +768,9 @@ class RestorationAdaptationWorkspaceService:
             try:
                 async with self._lock.hold(workspace_id):
                     saved = self._read(workspace_id, generation_run_id)
+                    if saved is not None and "recovery_hold" in saved:
+                        registry_complete = False
+                        continue
                     if saved is None or saved.get("state") not in _ACTIVATION_PIN_STATES:
                         continue
                     activation = saved.get("activation")
@@ -780,6 +896,7 @@ class RestorationAdaptationWorkspaceService:
                 source_database_digest=materialized.source_database_digest,
                 proof_digest=proof_digest,
                 capabilities=dict(_CAPABILITIES),
+                request_digest=request.digest(),
             )
         except BaseException as exc:
             cleanup_error: BaseException | None = None
@@ -890,6 +1007,13 @@ class RestorationAdaptationWorkspaceService:
             saved = self._read(request.workspace_id, request.generation_run_id)
             if saved is None:
                 raise CellIdentityConflict("restoration adaptation receipt is missing")
+            if "recovery_hold" in saved or request.recovery_cycle is not None:
+                from yleum_orchestrator.services.adaptation_recovery_protocol import (
+                    AdaptationRecoveryProtocol,
+                )
+
+                await AdaptationRecoveryProtocol(self).cleanup_locked(saved, request)
+                return
             if saved.get("state") in _ACTIVATION_PIN_STATES:
                 raise CellIdentityConflict("restoration activation owns candidate cleanup")
             response = self._response(saved)
@@ -923,6 +1047,17 @@ class RestorationAdaptationWorkspaceService:
             if saved is None or saved.get("response") is None:
                 raise CellIdentityConflict("restoration adaptation receipt is not ready")
             prepared = RestorationAdaptationPrepare.model_validate(saved["request"])
+            recovery = self._current_recovery(saved)
+            if recovery is not None:
+                inspected = await self.engine.recovery_inspect(prepared, recovery)
+                if inspected != recovery:
+                    raise CellIdentityConflict("recovery candidate is not physically resumable")
+            execution_prepare = (
+                prepared.model_copy(
+                    update={"fencing_epoch": recovery.current_control_fencing_epoch}
+                )
+                if recovery is not None else prepared
+            )
             response = self._response(saved)
             if (
                 request.operation_id != prepared.operation_id
@@ -994,7 +1129,7 @@ class RestorationAdaptationWorkspaceService:
                 }
             )
         try:
-            materialized = await self.engine.prove(prepared, request)
+            materialized = await self.engine.prove(execution_prepare, request)
             result = self._proof_result(prepared, request, materialized)
         except BaseException as exc:
             async with self._lock.hold(request.workspace_id):
@@ -1828,6 +1963,47 @@ class DockerAdaptationWorkspaceEngine:
         )
         await machine_effect(backend.ensure, manifest, 1)
         return backend, 1
+
+    def _recovery_engine(self) -> DockerAdaptationRecovery:
+        from yleum_orchestrator.services.adaptation_recovery_engine import DockerAdaptationRecovery
+
+        return DockerAdaptationRecovery(self._manager)
+
+    async def recovery_current_control(
+        self, original: RestorationAdaptationPrepare, epoch: int
+    ) -> None:
+        await self._recovery_engine().current_control(original, epoch)
+
+    async def recovery_hold(
+        self,
+        original: RestorationAdaptationPrepare,
+        request: RestorationAdaptationRecoveryHold,
+        pending: RestorationAdaptationRecoveryReceipt,
+    ) -> RestorationAdaptationRecoveryReceipt:
+        return await self._recovery_engine().hold(original, request, pending)
+
+    async def recovery_rebind(
+        self,
+        original: RestorationAdaptationPrepare,
+        request: RestorationAdaptationRecoveryRebind,
+        pending: RestorationAdaptationRecoveryReceipt,
+    ) -> RestorationAdaptationRecoveryReceipt:
+        return await self._recovery_engine().rebind(original, request, pending)
+
+    async def recovery_inspect(
+        self, original: RestorationAdaptationPrepare, receipt: RestorationAdaptationRecoveryReceipt
+    ) -> RestorationAdaptationRecoveryReceipt:
+        return await self._recovery_engine().inspect(original, receipt)
+
+    async def recovery_publish(
+        self, original: RestorationAdaptationPrepare, receipt: RestorationAdaptationRecoveryReceipt
+    ) -> None:
+        await self._recovery_engine().publish(original, receipt)
+
+    async def recovery_cleanup(
+        self, original: RestorationAdaptationPrepare, receipt: RestorationAdaptationRecoveryReceipt
+    ) -> None:
+        await self._recovery_engine().cleanup(original, receipt, self.cleanup)
 
     async def owner_run_active(self, request: RestorationAdaptationPrepare) -> bool:
         manager = self._manager(request.workspace_id)

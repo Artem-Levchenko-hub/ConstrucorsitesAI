@@ -302,8 +302,9 @@ async def test_project_cell_agent_bootstrap_calls_exact_internal_path(
     }
 
 
+@pytest.mark.parametrize("modern", [False, True])
 async def test_prepare_restoration_adaptation_uses_bound_internal_contract(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, modern,
 ) -> None:
     observed: dict[str, object] = {}
     workspace_id = uuid4()
@@ -319,6 +320,7 @@ async def test_prepare_restoration_adaptation_uses_bound_internal_contract(
         observed.update(method=method, path=path, **kwargs)
         return {
             "state": "ready",
+            **({"request_digest": "c" * 64} if modern else {}),
             "source_workspace_id": str(workspace_id),
             "candidate_workspace_id": str(candidate_id),
             "operation_id": str(operation_id),
@@ -352,6 +354,7 @@ async def test_prepare_restoration_adaptation_uses_bound_internal_contract(
     )
 
     assert isinstance(result, RestorationAdaptationWorkspace)
+    assert result.request_digest == ("c" * 64 if modern else None)
     assert result.candidate_workspace_id == candidate_id
     assert observed["method"] == "POST"
     assert observed["path"] == (
@@ -1420,3 +1423,328 @@ def test_resource_response_accepts_optional_draft_status_but_no_unknown_fields()
         ProjectCellResourceResponse.from_json(payload | {"raw_container": "secret"})
     with pytest.raises(OrchestratorUnavailable):
         ProjectCellResourceResponse.from_json(payload | {"draft_state": "unknown"})
+
+
+async def test_tracked_source_write_returns_exact_receipt_and_reads_without_replay(monkeypatch):
+    workspace, run, operation, project, owner = (uuid4() for _ in range(5))
+    receipt = dict(
+        version=1,
+        operation_id=str(operation),
+        workspace_id=str(workspace),
+        project_id=str(project),
+        owner_id=str(owner),
+        generation_run_id=str(run),
+        fencing_epoch=5,
+        physical_volume="owned-volume",
+        physical_volume_identity="d" * 64,
+        request_sha256="c" * 64,
+        before_revision="a" * 64,
+        after_revision="b" * 64,
+        written=1,
+        deleted=0,
+    )
+    calls = []
+
+    async def request(method, path, **kwargs):
+        calls.append((method, path, kwargs))
+        if method == "POST":
+            return dict(written=1, deleted=0, workspace_revision="b" * 64, receipt=receipt)
+        return dict(operation_id=str(operation), state="terminal", receipt=receipt)
+
+    monkeypatch.setattr(orchestrator_client, "_request", request)
+    result = await orchestrator_client.project_cell_agent_write_files(
+        workspace,
+        generation_run_id=run,
+        fencing_epoch=5,
+        expected_revision="a" * 64,
+        files={"src/a.ts": "ok"},
+        operation_id=operation,
+    )
+    assert result.receipt.operation_id == operation
+    status = await orchestrator_client.project_cell_agent_write_operation(
+        workspace,
+        operation_id=operation,
+        generation_run_id=run,
+    )
+    assert status.receipt == result.receipt
+    assert status.state == "terminal"
+    assert [c[0] for c in calls] == ["POST", "GET"]
+    assert calls[0][2]["json"]["operation_id"] == str(operation)
+    assert calls[1][1] == f"/internal/workspaces/{workspace}/agent/write-operations/{operation}"
+    assert calls[1][2]["params"] == {"generation_run_id": str(run)}
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "foreign",
+        "missing",
+        "pending_receipt",
+        "bool_version",
+        "missing_incarnation",
+        "bad_incarnation",
+    ],
+)
+async def test_source_write_status_rejects_invalid_receipts(monkeypatch, mutation):
+    workspace, run, operation, project, owner = (uuid4() for _ in range(5))
+    receipt = dict(
+        version=1,
+        operation_id=str(operation),
+        workspace_id=str(workspace),
+        project_id=str(project),
+        owner_id=str(owner),
+        generation_run_id=str(run),
+        fencing_epoch=5,
+        physical_volume="owned-volume",
+        physical_volume_identity="d" * 64,
+        request_sha256="c" * 64,
+        before_revision="a" * 64,
+        after_revision="b" * 64,
+        written=1,
+        deleted=0,
+    )
+    payload = dict(operation_id=str(operation), state="terminal", receipt=receipt)
+    if mutation == "foreign":
+        receipt["workspace_id"] = str(uuid4())
+    elif mutation == "missing":
+        payload["receipt"] = None
+    elif mutation == "pending_receipt":
+        payload["state"] = "pending"
+    elif mutation == "missing_incarnation":
+        receipt.pop("physical_volume_identity")
+    elif mutation == "bad_incarnation":
+        receipt["physical_volume_identity"] = "D" * 64
+    else:
+        receipt["version"] = True
+
+    async def request(*args, **kwargs):
+        return payload
+
+    monkeypatch.setattr(orchestrator_client, "_request", request)
+    with pytest.raises(OrchestratorUnavailable):
+        await orchestrator_client.project_cell_agent_write_operation(
+            workspace,
+            operation_id=operation,
+            generation_run_id=run,
+        )
+
+
+@pytest.mark.parametrize("damage", [None, "hash", "version", "extra", "proof", "cycle", "fence"])
+@pytest.mark.parametrize("action", ["hold", "status", "rebind"])
+async def test_adaptation_recovery_client_preserves_exact_transition(monkeypatch, action, damage):
+    identity = {
+        "version": 1,
+        "transition_id": str(uuid4()),
+        "workspace_id": str(uuid4()),
+        "generation_run_id": str(uuid4()),
+        "operation_id": str(uuid4()),
+        "project_id": str(uuid4()),
+        "owner_id": str(uuid4()),
+        "candidate_workspace_id": str(uuid4()),
+        "request_digest": "a" * 64,
+    }
+    command = dict(identity)
+    if action == "hold":
+        command.update(expected_cycle=0, control_fencing_epoch=7, candidate_fencing_epoch=1)
+    elif action == "rebind":
+        command.update(
+            expected_cycle=0, expected_hold_receipt_digest="b" * 64, new_control_fencing_epoch=9
+        )
+    reply = {
+        **identity,
+        "state": "resumable" if action == "rebind" else "held",
+        "cycle": 1 if action == "rebind" else 0,
+        "original_control_fencing_epoch": 7,
+        "current_control_fencing_epoch": 9 if action == "rebind" else 7,
+        "original_candidate_fencing_epoch": 1,
+        "current_candidate_fencing_epoch": 2 if action == "rebind" else 1,
+        "barrier_operation_id": str(uuid4()),
+        "barrier_receipt_digest": "b" * 64,
+        "checkpoint_ref_digest": "c" * 64,
+        "physical_incarnation_digest": "d" * 64,
+        "physical_proof_digest": "e" * 64,
+        "restore_operation_id": str(uuid4()) if action == "rebind" else None,
+        "terminal_receipt_digest": "f" * 64,
+    }
+    import hashlib
+    import json
+
+    reply["terminal_receipt_digest"] = hashlib.sha256(
+        json.dumps(
+            {key: value for key, value in reply.items() if key != "terminal_receipt_digest"},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+    observed = []
+
+    async def request(method, path, **kw):
+        observed.append((method, path, kw))
+        return reply
+
+    monkeypatch.setattr(orchestrator_client, "_request", request)
+    if damage:
+        field, value = {
+            "hash": ("terminal_receipt_digest", "0" * 64),
+            "version": ("version", True),
+            "extra": ("unknown", True),
+            "proof": ("physical_proof_digest", None),
+            "cycle": ("cycle", 90),
+            "fence": ("current_control_fencing_epoch", 99),
+        }[damage]
+        reply[field] = value
+        with pytest.raises(orchestrator_client.OrchestratorUnavailable):
+            await orchestrator_client.project_cell_restoration_recovery(action, command)
+        assert len(observed) == 1
+        return
+    result = await orchestrator_client.project_cell_restoration_recovery(action, command)
+    assert result.model_dump(mode="json") == reply
+    assert observed[0][0] == "POST"
+    assert observed[0][1] == (
+        f"/internal/workspaces/{identity['workspace_id']}/restoration-adaptations/"
+        f"{identity['generation_run_id']}/recovery/{action}"
+    )
+    assert observed[0][2]["json"] == command
+    reply["owner_id"] = str(uuid4())
+    with pytest.raises(orchestrator_client.OrchestratorUnavailable):
+        await orchestrator_client.project_cell_restoration_recovery(action, command)
+
+
+@pytest.mark.parametrize(
+    "pair", [(None, None), (0, "a" * 64), (0, None), (None, "a" * 64), (True, "a" * 64)]
+)
+async def test_adaptation_cleanup_current_cycle_pair_is_explicit(monkeypatch, pair):
+    workspace = orchestrator_client.RestorationAdaptationWorkspace(
+        source_workspace_id=uuid4(),
+        candidate_workspace_id=uuid4(),
+        operation_id=uuid4(),
+        project_id=uuid4(),
+        owner_id=uuid4(),
+        generation_run_id=uuid4(),
+        candidate_fencing_epoch=3,
+        source_database_digest="b" * 64,
+        proof_digest="c" * 64,
+        capabilities={},
+    )
+    observed = []
+
+    async def request(*args, **kw):
+        observed.append(kw["json"])
+        return {"state": "cleaned"}
+
+    monkeypatch.setattr(orchestrator_client, "_request", request)
+    cycle, digest = pair
+    if (cycle is None) != (digest is None) or type(cycle) is bool:
+        with pytest.raises(orchestrator_client.OrchestratorUnavailable):
+            await orchestrator_client.project_cell_cleanup_restoration_adaptation(
+                workspace,
+                recovery_cycle=cycle,
+                recovery_receipt_digest=digest,
+            )
+        assert observed == []
+    else:
+        await orchestrator_client.project_cell_cleanup_restoration_adaptation(
+            workspace,
+            recovery_cycle=cycle,
+            recovery_receipt_digest=digest,
+        )
+        assert len(observed) == 1
+        if cycle is None:
+            assert (
+                "recovery_cycle" not in observed[0] and "recovery_receipt_digest" not in observed[0]
+            )
+        else:
+            assert observed[0]["recovery_cycle"] == cycle
+            assert observed[0]["recovery_receipt_digest"] == digest
+
+
+def _tracked_command_wire(workspace, run, operation):
+    import hashlib
+    import json
+
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"),
+                                         ensure_ascii=True).encode()).hexdigest()
+
+    request = dict(generation_run_id=str(run), fencing_epoch=5, expected_revision="a" * 64,
+                   cmd="omnia:fast_check", timeout_seconds=480, task_role="fast_check",
+                   operation_id=str(operation), track_receipt=True)
+    identity = dict(workspace_revision="a" * 64, dependency_digest="b" * 64,
+                    schema_data_digest="c" * 64, cell_manifest_digest="d" * 64,
+                    environment_digest="e" * 64, build_config_digest="f" * 64)
+    response = dict(ok=True, exit_code=0, detail="Проверено", timed_out=False,
+                    workspace_revision="a" * 64, operation_id=str(operation),
+                    before_identity=identity, after_identity=identity,
+                    environment_mutated=False, project_migration_receipt=None,
+                    compiled_asset_receipt=None)
+    receipt = dict(version=1, operation_id=str(operation), workspace_id=str(workspace),
+                   project_id=str(uuid4()), owner_id=str(uuid4()), generation_run_id=str(run),
+                   dispatch_fencing_epoch=5, physical_volume="owned-volume",
+                   physical_volume_identity="d" * 64, before_revision="a" * 64,
+                   after_revision="a" * 64, response_sha256=digest(response),
+                   request_sha256=digest(dict(protocol="tracked-command/v1",
+                                              workspace_id=str(workspace), request=request)))
+    return request, response, receipt
+
+
+async def test_tracked_command_client_verifies_original_envelope_and_current_status_fence(
+    monkeypatch,
+):
+    workspace, run, operation = uuid4(), uuid4(), uuid4()
+    expected, response, receipt = _tracked_command_wire(workspace, run, operation)
+    calls = []
+
+    async def request(method, path, **kw):
+        calls.append((method, path, kw))
+        if method == "POST":
+            assert kw["json"] == expected
+            return {**response, "command_receipt": receipt}
+        return dict(operation_id=str(operation), state="terminal", receipt=receipt,
+                    terminal_response=response)
+
+    monkeypatch.setattr(orchestrator_client, "_request", request)
+    result = await orchestrator_client.project_cell_agent_exec(
+        workspace, "omnia:fast_check", generation_run_id=run, fencing_epoch=5,
+        expected_revision="a" * 64, timeout_seconds=480, task_role="fast_check",
+        operation_id=operation, track_receipt=True,
+    )
+    status = await orchestrator_client.project_cell_agent_command_operation(
+        workspace, operation_id=operation, generation_run_id=run, fencing_epoch=8,
+    )
+    assert status.receipt == result.command_receipt
+    assert status.terminal_response.detail == "Проверено"
+    assert status.receipt.dispatch_fencing_epoch == 5
+    assert [c[0] for c in calls] == ["POST", "GET"]
+    assert calls[1][1] == f"/internal/workspaces/{workspace}/agent/command-operations/{operation}"
+    assert calls[1][2]["params"] == {"generation_run_id": str(run), "fencing_epoch": 8}
+
+
+@pytest.mark.parametrize("damage", ["foreign", "hash", "body", "bool_version", "no_incarnation",
+                                    "pending_receipt", "missing_body", "unknown_shape"])
+async def test_tracked_command_status_denies_unowned_or_incomplete_receipts(monkeypatch, damage):
+    workspace, run, operation = uuid4(), uuid4(), uuid4()
+    _, response, receipt = _tracked_command_wire(workspace, run, operation)
+    payload = dict(operation_id=str(operation), state="terminal", receipt=receipt,
+                   terminal_response=response)
+    if damage == "foreign":
+        receipt["generation_run_id"] = str(uuid4())
+    elif damage == "hash":
+        receipt["response_sha256"] = "9" * 64
+    elif damage == "body":
+        response["detail"] += " forged"
+    elif damage == "bool_version":
+        receipt["version"] = True
+    elif damage == "no_incarnation":
+        receipt.pop("physical_volume_identity")
+    elif damage == "pending_receipt":
+        payload["state"] = "pending"
+    elif damage == "missing_body":
+        payload["terminal_response"] = None
+    else:
+        payload["latest"] = True
+    from unittest.mock import AsyncMock
+    monkeypatch.setattr(orchestrator_client, "_request", AsyncMock(return_value=payload))
+    with pytest.raises(OrchestratorUnavailable):
+        await orchestrator_client.project_cell_agent_command_operation(
+            workspace, operation_id=operation, generation_run_id=run, fencing_epoch=8,
+        )

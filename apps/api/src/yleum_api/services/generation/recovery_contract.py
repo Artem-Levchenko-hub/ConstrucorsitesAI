@@ -231,15 +231,149 @@ class ReconciliationResult(_Record):
     reason: Nonblank
 
 
+class ExecutionBudget(_Record):
+    """Arithmetic only: never a serialized collector or proof authority."""
+
+    steps: Nonnegative = 0
+    provider_attempts: Nonnegative = 0
+    repair_calls: Nonnegative = 0
+    absolute_deadline: datetime | None = None
+
+    @field_validator("absolute_deadline")
+    @classmethod
+    def require_timezone(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("execution deadline requires timezone")
+        return value
+
+
+class ExecutionCursor(_Record):
+    schema_version: Literal[1] = 1
+    stage: Literal["bootstrap", "agent", "finalization"]
+    substep: Nonblank
+    logical_step_seq: Nonnegative = 0
+    next_tool_index: Nonnegative = 0
+    lease_cycle_seq: Nonnegative = 0
+    execution_context_ref: CheckpointRef | None = None
+    pending_effect_id: UUID | None = None
+    provider_effect_id: UUID | None = None
+    response_sha256: Sha256 | None = None
+    finalization_checkpoint_id: UUID | None = None
+    release_operation_id: UUID | None = None
+    control_workspace_id: UUID | None = None
+    control_fencing_epoch: Annotated[int, Field(gt=0)] | None = None
+    physical_state: Literal["no_effects", "active", "release_pending", "released", "unknown"]
+    budget: ExecutionBudget = Field(default_factory=ExecutionBudget)
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def require_exact_schema(cls, value: object) -> object:
+        if type(value) is not int or value != 1:
+            raise ValueError("unsupported execution cursor schema")
+        return value
+
+    @model_validator(mode="after")
+    def validate_boundary(self) -> Self:
+        steps = {
+            "bootstrap": {
+                "runtime_prepare",
+                "stack_prepare",
+                "prompt_prepare",
+                "starter_apply",
+                "agent_entry",
+                "proof_wait",
+            },
+            "agent": {
+                "request_ready",
+                "proof_wait",
+                "response_wait",
+                "response_validated",
+                "tool_ready",
+                "tool_wait",
+                "response_consumed",
+            },
+            "finalization": {
+                "checkpoint_ready",
+                "proof_wait",
+                "proof_resume",
+                "terminal_gate",
+                "publication_pending",
+                "publication_committed",
+                "response_wait",
+                "response_validated",
+                "tool_ready",
+                "tool_wait",
+                "response_consumed",
+            },
+        }
+        if self.substep not in steps[self.stage]:
+            raise ValueError("execution substep does not belong to its stage")
+        initial = (
+            self.stage == "bootstrap"
+            and self.substep == "runtime_prepare"
+            and self.logical_step_seq == 0
+        )
+        if self.physical_state == "no_effects" and (
+            not initial
+            or self.pending_effect_id
+            or self.provider_effect_id
+            or self.release_operation_id
+        ):
+            raise ValueError("no-effect boundary requires initial bootstrap")
+        if not initial and self.execution_context_ref is None:
+            raise ValueError("continuation requires durable executable context")
+        if (self.control_workspace_id is None) != (self.control_fencing_epoch is None):
+            raise ValueError("control binding requires both workspace and fence")
+        if self.physical_state in {"release_pending", "released"} and (
+            self.release_operation_id is None or self.control_workspace_id is None
+        ):
+            raise ValueError("physical handoff requires its owning operation and control binding")
+        if (self.substep in {"publication_pending", "publication_committed"}
+            and self.pending_effect_id is None):
+            raise ValueError("publication requires its original logical effect")
+        if (
+            self.substep
+            in {
+                "response_wait",
+                "response_validated",
+                "tool_ready",
+                "tool_wait",
+                "response_consumed",
+            }
+            and self.provider_effect_id is None
+        ):
+            raise ValueError("response boundary requires the original provider effect")
+        return self
+
+
+class RecoveryStateV2(RecoveryState):
+    version: Literal[2] = 2  # type: ignore[assignment]
+    execution: ExecutionCursor
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def require_exact_version(cls, value: object) -> object:
+        if type(value) is not int or value != 2:
+            raise ValueError("unsupported execution recovery version")
+        return value
+
+    @model_validator(mode="after")
+    def validate_execution(self) -> Self:
+        if self.execution.stage != self.cursor:
+            raise ValueError("execution and recovery cursors conflict")
+        return self
+
+
 def decode_recovery(raw: object) -> RecoveryState | None:
     """Only an absent value returns None; unknown/corrupt JSON is never replaced."""
     if raw is None:
         return None
-    if type(raw) is not dict or type(raw.get("version")) is not int or raw["version"] != 1:
+    if type(raw) is not dict or type(raw.get("version")) is not int or raw["version"] not in {1, 2}:
         raise RecoveryContractError("unsupported or missing recovery version")
     try:
         # JSON mode accepts UUID/datetime/tuple wire representations while strict
         # fields still refuse coercions such as numeric strings and bool counters.
-        return RecoveryState.model_validate_json(json.dumps(raw, allow_nan=False))
+        model = RecoveryState if raw["version"] == 1 else RecoveryStateV2
+        return model.model_validate_json(json.dumps(raw, allow_nan=False))
     except (ValidationError, TypeError, ValueError, OverflowError) as exc:
         raise RecoveryContractError("corrupt recovery contract") from exc

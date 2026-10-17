@@ -57,11 +57,15 @@ from yleum_orchestrator.routers.runtime import (
 from yleum_orchestrator.schemas.workspace import (
     WorkspaceAgentBootstrapRequest,
     WorkspaceAgentBootstrapResponse,
+    WorkspaceAgentCommandBinding,
+    WorkspaceAgentCommandStatusResponse,
     WorkspaceAgentExecRequest,
     WorkspaceAgentExecResponse,
     WorkspaceAgentOperationStatusResponse,
+    WorkspaceAgentTrackedExecResponse,
     WorkspaceAgentWriteRequest,
     WorkspaceAgentWriteResponse,
+    WorkspaceAgentWriteStatusResponse,
     WorkspaceCapabilityResponse,
     WorkspaceControlRequest,
     WorkspaceDraftApplyRequest,
@@ -78,6 +82,7 @@ from yleum_orchestrator.schemas.workspace import (
     WorkspaceResourceResponse,
 )
 from yleum_orchestrator.services import nginx_writer
+from yleum_orchestrator.services.active_source_volume import source_volume_call
 from yleum_orchestrator.services.cell_draft_support import (
     signed_preview_session_url,
     trusted_template_source,
@@ -413,6 +418,7 @@ async def read_workspace_draft_files(
 @router.post(
     "/workspaces/{workspace_id}/draft/reset",
     response_model=WorkspaceAgentWriteResponse,
+    response_model_exclude_none=True,
 )
 async def reset_workspace_draft(
     workspace_id: UUID,
@@ -460,9 +466,9 @@ async def reset_workspace_draft(
         )
         await _prepare_portable_write(manager, state, desired_files)
         if deletes_to_apply:
-            await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
+            await source_volume_call(manager, volume_name, "delete_volume_paths", deletes_to_apply)
         if writes_to_apply:
-            await manager.docker.write_volume_files(volume_name, writes_to_apply)
+            await source_volume_call(manager, volume_name, "write_volume_files", writes_to_apply)
         updated_files = await _read_agent_workspace_files(manager, volume_name)
         return WorkspaceAgentWriteResponse(
             written=len(writes_to_apply),
@@ -474,6 +480,7 @@ async def reset_workspace_draft(
 @router.post(
     "/workspaces/{workspace_id}/agent/write-files",
     response_model=WorkspaceAgentWriteResponse,
+    response_model_exclude_none=True,
 )
 async def write_workspace_agent_files(
     workspace_id: UUID,
@@ -484,61 +491,169 @@ async def write_workspace_agent_files(
     writes = _normalize_agent_write_files(request.files)
     deletes = _normalize_agent_delete_paths(request.deletes, writes)
     _require_agent_patch_budget(writes, deletes)
-    provider = _workspace_provider(workspace_id)
-    manager = _require_docker_resource_manager(provider)
-    async with manager.operation_lock.hold(workspace_id):
-        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
-        _require_generation_lease_match(
-            state,
-            generation_run_id=request.generation_run_id,
-            fencing_epoch=request.fencing_epoch,
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    try:
+        async with manager.operation_lock.hold(workspace_id):
+            return await _write_agent_files_locked(manager, workspace_id, request, writes, deletes)
+    except (CellResourceError, ValueError) as exc:
+        raise OrchestratorError(
+            code="conflict", message="source operation is unresolved or conflicts", status_code=409,
+        ) from exc
+
+
+async def _write_agent_files_locked(
+    manager: DockerCellResourceManager, workspace_id: UUID, request: WorkspaceAgentWriteRequest,
+    writes: dict[str, str], deletes: tuple[str, ...],
+) -> WorkspaceAgentWriteResponse:
+    from yleum_orchestrator.services.source_write_journal import (
+        SourceWriteJournal,
+        SourceWriteRecord,
+        request_digest,
+        source_write_scope,
+    )
+
+    state, volume_name = await _workspace_volume_identity(manager, workspace_id, source_status=True)
+    _require_generation_lease_match(
+        state, generation_run_id=request.generation_run_id, fencing_epoch=request.fencing_epoch,
+    )
+    journal = SourceWriteJournal(manager.state_store.root, workspace_id)
+    intent = None
+    if request.operation_id is not None:
+        assert state.project_id is not None and state.owner_id is not None
+        intent = SourceWriteRecord(
+            operation_id=request.operation_id, workspace_id=workspace_id,
+            project_id=state.project_id, owner_id=state.owner_id,
+            generation_run_id=request.generation_run_id, fencing_epoch=request.fencing_epoch,
+            physical_volume=volume_name, before_revision=request.expected_revision,
+            physical_volume_identity=await source_volume_call(
+                manager, volume_name, "source_volume_identity",
+            ),
+            request_sha256=request_digest(
+                workspace_id=workspace_id, generation_run_id=request.generation_run_id,
+                fencing_epoch=request.fencing_epoch, expected_revision=request.expected_revision,
+                files=writes, deletes=deletes,
+            ),
         )
-        current_files = await _read_agent_workspace_files(manager, volume_name)
-        current_revision = _workspace_revision(current_files)
-        desired_files = _apply_agent_workspace_patch(current_files, writes, deletes)
-        _require_agent_workspace_budget(desired_files)
-        desired_revision = _workspace_revision(desired_files)
-        if current_revision != request.expected_revision:
-            if current_revision == desired_revision:
-                return WorkspaceAgentWriteResponse(
-                    written=0,
-                    deleted=0,
-                    workspace_revision=current_revision,
-                )
-            _raise_agent_stale_conflict(
-                expected_revision=request.expected_revision,
-                current_revision=current_revision,
+        if journal.load(request.operation_id) is not None:
+            prior = journal.start(intent)  # Existing pending NEVER enters the mutator.
+            assert prior.receipt is not None
+            return WorkspaceAgentWriteResponse(
+                written=prior.receipt.written, deleted=prior.receipt.deleted,
+                workspace_revision=prior.receipt.after_revision, receipt=prior.receipt,
             )
-        writes_to_apply = {
-            path: content.encode("utf-8")
-            for path, content in writes.items()
-            if current_files.get(path) != content
-        }
-        deletes_to_apply = tuple(
-            path for path in deletes if path in current_files and path not in writes
+    journal.require_clear()
+    current_files = await _read_agent_workspace_files(manager, volume_name)
+    current_revision = _workspace_revision(current_files)
+    desired_files = _apply_agent_workspace_patch(current_files, writes, deletes)
+    _require_agent_workspace_budget(desired_files)
+    desired_revision = _workspace_revision(desired_files)
+    if current_revision != request.expected_revision:
+        if intent is None and current_revision == desired_revision:
+            return WorkspaceAgentWriteResponse(
+                written=0, deleted=0, workspace_revision=current_revision,
+            )
+        _raise_agent_stale_conflict(
+            expected_revision=request.expected_revision, current_revision=current_revision,
         )
+    writes_to_apply = {path: content.encode("utf-8") for path, content in writes.items()
+                       if current_files.get(path) != content}
+    deletes_to_apply = tuple(
+        path for path in deletes if path in current_files and path not in writes
+    )
+
+    async def apply() -> str:
         await _prepare_portable_write(manager, state, desired_files)
         if deletes_to_apply:
-            await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
+            await source_volume_call(manager, volume_name, "delete_volume_paths", deletes_to_apply)
         if writes_to_apply:
-            await manager.docker.write_volume_files(volume_name, writes_to_apply)
+            await source_volume_call(manager, volume_name, "write_volume_files", writes_to_apply)
         updated_files = await _read_agent_workspace_files(manager, volume_name)
-        return WorkspaceAgentWriteResponse(
-            written=len(writes_to_apply),
-            deleted=len(deletes_to_apply),
-            workspace_revision=_workspace_revision(updated_files),
+        revision = _workspace_revision(updated_files)
+        if intent is not None:
+            current, current_volume = await _workspace_volume_identity(
+                manager, workspace_id, source_status=True,
+            )
+            if (current.project_id, current.owner_id, current_volume) != (
+                state.project_id, state.owner_id, volume_name,
+            ):
+                raise CellIndeterminateOperation("source physical identity changed")
+            _require_generation_lease_match(
+                current, generation_run_id=request.generation_run_id,
+                fencing_epoch=request.fencing_epoch,
+            )
+            if revision != desired_revision:
+                raise CellIndeterminateOperation("source mutation postcondition failed")
+            if (
+                await source_volume_call(manager, volume_name, "source_volume_identity")
+                != intent.physical_volume_identity
+            ):
+                raise CellIndeterminateOperation("source volume incarnation changed")
+        return revision
+
+    receipt = None
+    if intent is None:
+        revision = await apply()
+    else:
+        journal.start(intent)  # Durably BEFORE preparation, deletion or file helpers.
+        with source_write_scope(journal, intent.operation_id):
+            revision = await apply()
+        terminal = journal.finish(
+            intent, after=revision, written=len(writes_to_apply), deleted=len(deletes_to_apply),
         )
+        receipt = terminal.receipt
+    return WorkspaceAgentWriteResponse(
+        written=len(writes_to_apply), deleted=len(deletes_to_apply),
+        workspace_revision=revision, receipt=receipt,
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent/write-operations/{operation_id}",
+    response_model=WorkspaceAgentWriteStatusResponse,
+)
+async def get_workspace_agent_write_operation(
+    workspace_id: UUID, operation_id: UUID, generation_run_id: UUID,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceAgentWriteStatusResponse:
+    verify_internal_token(x_internal_token)
+    from yleum_orchestrator.services.source_write_journal import SourceWriteJournal
+
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    try:
+        state, volume_name = await _workspace_volume_identity(
+            manager, workspace_id, source_status=True,
+        )
+        record = SourceWriteJournal(manager.state_store.root, workspace_id).load(operation_id)
+        if (record is None or record.generation_run_id != generation_run_id
+                or state.active_generation_run_id not in (None, generation_run_id)
+                or (record.project_id, record.owner_id, record.physical_volume)
+                != (state.project_id, state.owner_id, volume_name)):
+            raise CellIndeterminateOperation("source operation ownership mismatch")
+        if (
+            await source_volume_call(manager, volume_name, "source_volume_identity")
+            != record.physical_volume_identity
+        ):
+            raise CellIndeterminateOperation("source operation physical incarnation changed")
+        return WorkspaceAgentWriteStatusResponse(
+            operation_id=operation_id,
+            state="terminal" if record.receipt is not None else "pending",
+            receipt=record.receipt,
+        )
+    except (CellResourceError, ValueError) as exc:
+        raise OrchestratorError(
+            code="conflict", message="source operation is unknown or conflicts", status_code=409,
+        ) from exc
 
 
 @router.post(
     "/workspaces/{workspace_id}/agent/exec",
-    response_model=WorkspaceAgentExecResponse,
+    response_model=WorkspaceAgentExecResponse | WorkspaceAgentTrackedExecResponse,
 )
 async def exec_workspace_agent_command(
     workspace_id: UUID,
     request: WorkspaceAgentExecRequest,
     x_internal_token: Annotated[str | None, Header()] = None,
-) -> WorkspaceAgentExecResponse:
+) -> WorkspaceAgentExecResponse | WorkspaceAgentTrackedExecResponse:
     verify_internal_token(x_internal_token)
     low = request.cmd.strip()
     if not low:
@@ -549,180 +664,208 @@ async def exec_workspace_agent_command(
         )
     provider = _workspace_provider(workspace_id)
     manager = _require_docker_resource_manager(provider)
-    async with manager.operation_lock.hold(workspace_id):
-        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
-        _require_generation_lease_match(
-            state,
-            generation_run_id=request.generation_run_id,
-            fencing_epoch=request.fencing_epoch,
+    from yleum_orchestrator.services.command_receipts import CommandJournal
+
+    try:
+        async with manager.operation_lock.hold(workspace_id):
+            if request.track_receipt:
+                return await _tracked_agent_command_locked(manager, workspace_id, request)
+            if CommandJournal(manager.state_store.root, workspace_id).load(request.operation_id):
+                raise CellIndeterminateOperation("tracked command cannot downgrade to legacy")
+            return await _execute_agent_command_locked(manager, workspace_id, request)
+    except (CellResourceError, ValueError) as exc:
+        raise OrchestratorError(
+            code="conflict", message="command is unresolved or conflicts", status_code=409,
+        ) from exc
+
+
+async def _execute_agent_command_locked(
+    manager: DockerCellResourceManager, workspace_id: UUID, request: WorkspaceAgentExecRequest,
+) -> WorkspaceAgentExecResponse:
+    """Existing executor; caller owns the workspace lock and optional tracked intent."""
+    low = request.cmd.strip()
+    state, volume_name = await _workspace_volume_identity(manager, workspace_id)
+    _require_generation_lease_match(
+        state,
+        generation_run_id=request.generation_run_id,
+        fencing_epoch=request.fencing_epoch,
+    )
+    current_files = await _read_agent_workspace_files(manager, volume_name)
+    current_revision = _workspace_revision(current_files)
+    if current_revision != request.expected_revision:
+        _raise_agent_stale_conflict(
+            expected_revision=request.expected_revision,
+            current_revision=current_revision,
         )
-        current_files = await _read_agent_workspace_files(manager, volume_name)
-        current_revision = _workspace_revision(current_files)
-        if current_revision != request.expected_revision:
-            _raise_agent_stale_conflict(
-                expected_revision=request.expected_revision,
-                current_revision=current_revision,
-            )
-        manifest = await _prepare_portable_write(manager, state, current_files)
-        if manifest is not None:
-            if manager.machine_runtime is None:
-                raise OrchestratorError(
-                    code="docker_unavailable",
-                    message="portable machine provider is unavailable",
-                    status_code=503,
-                )
-            try:
-                machine, backend = manager.machine_runtime.parts(state)
-                backend.configure_cache_identity(
-                    dependency_digest=_selected_files_digest(
-                        current_files, fixed_paths=_DEPENDENCY_IDENTITY_PATHS
-                    ),
-                    build_config_digest=_selected_files_digest(
-                        current_files, fixed_paths=_BUILD_CONFIG_PATHS
-                    ),
-                    manifest_digest=manifest.digest(),
-                )
-                request_digest = manager.machine_runtime._request_digest(manifest, request)
-                await machine.ensure(
-                    manifest,
-                    LifecycleMutation(
-                        request.operation_id,
-                        request.fencing_epoch,
-                        request_digest,
-                    ),
-                )
-                before_identity = _workspace_identity_digest(
-                    current_files,
-                    manifest=manifest,
-                    environment_digest=await machine_effect(backend.environment_digest),
-                )
-                result = await manager.machine_runtime.guarded_execute(state, manifest, request)
-            except (CellResourceError, ValueError) as exc:
-                raise OrchestratorError(
-                    code="container_failure", message=str(exc), status_code=409
-                ) from exc
-            updated_files = await _read_agent_workspace_files(manager, volume_name)
-            status = await machine.request_status(
-                operation_id=request.operation_id,
-                fencing_epoch=request.fencing_epoch,
-            )
-            if status.transport_response is not None:
-                return WorkspaceAgentExecResponse.model_validate(status.transport_response)
-            if request.task_role == "restore_runtime" and (
-                result.exit_code != 0 or result.timed_out
-            ):
-                # Failed restoration deliberately stops its product. Never exec
-                # it to inventory packages or replace the durable failure with
-                # a transport500. Mark the environment as unavailable/changed,
-                # rather than certifying the earlier inventory as still current.
-                environment_digest = hashlib.sha256(
-                    (
-                        "failed-restoration-environment-unavailable:" + str(request.operation_id)
-                    ).encode()
-                ).hexdigest()
-            else:
-                environment_digest = await machine_effect(backend.environment_digest)
-            after_identity = _workspace_identity_digest(
-                updated_files,
-                manifest=manifest,
-                environment_digest=environment_digest,
-            )
-            response = WorkspaceAgentExecResponse(
-                ok=result.exit_code == 0 and not result.timed_out,
-                exit_code=result.exit_code,
-                detail=_redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT],
-                timed_out=result.timed_out,
-                workspace_revision=_workspace_revision(updated_files),
-                operation_id=request.operation_id,
-                before_identity=before_identity,
-                after_identity=after_identity,
-                environment_mutated=before_identity != after_identity,
-                compiled_asset_receipt=(
-                    manager.machine_runtime.compilation_receipt(state, request.operation_id)
-                    if request.task_role in {"full_build", "restore_runtime"}
-                    and result.exit_code == 0
-                    and not result.timed_out
-                    else None
-                ),
-                project_migration_receipt=(
-                    manager.machine_runtime.migration_receipt(state, request.operation_id)
-                    if request.task_role in {"full_build", "restore_runtime"}
-                    and result.exit_code == 0
-                    and not result.timed_out
-                    else None
-                ),
-            )
-            await machine.store_transport_response(
-                operation_id=request.operation_id,
-                fencing_epoch=request.fencing_epoch,
-                response=response.model_dump(mode="json"),
-            )
-            return response
-        legacy_identity = _workspace_identity_digest(
-            current_files,
-            manifest=None,
-            environment_digest=_digest_json({"legacy_image": _PROJECT_CELL_EXEC_IMAGE}),
-        )
-        if any(bad in low for bad in _EXEC_DENY):
-            return WorkspaceAgentExecResponse(
-                ok=False,
-                exit_code=126,
-                detail="command blocked by safety denylist",
-                workspace_revision=current_revision,
-                operation_id=request.operation_id,
-                before_identity=legacy_identity,
-                after_identity=legacy_identity,
-                environment_mutated=False,
-            )
-        if _command_exposes_environment(low):
-            return WorkspaceAgentExecResponse(
-                ok=False,
-                exit_code=126,
-                detail="command blocked: environment and secret enumeration is not allowed",
-                workspace_revision=current_revision,
-                operation_id=request.operation_id,
-                before_identity=legacy_identity,
-                after_identity=legacy_identity,
-                environment_mutated=False,
-            )
-        exec_spec = _workspace_exec_spec(state, state_path=manager.profile.state_path)
-        names = exec_spec.resource_names
-        credentials = manager.credential_store.load_or_create(workspace_id)
-        had_draft_runtime = await manager.inspect_draft_runtime(workspace_id) is not None
-        restore_failure: CellResourceError | OrchestratorError | None = None
-        try:
-            if had_draft_runtime:
-                await manager.docker.remove_container(names.draft_container_name())
-            try:
-                result = await manager.docker.run_workspace_command(
-                    workspace_volume_name=volume_name,
-                    agent_home_volume_name=names.agent_home_volume,
-                    labels=identity_labels(exec_spec.spec, "agent-exec"),
-                    image=_PROJECT_CELL_EXEC_IMAGE,
-                    command=low,
-                    internal_network_name=names.internal_network,
-                    egress_network_name=names.egress_network,
-                    environment=_workspace_agent_exec_env(
-                        postgres_container=names.postgres_container,
-                        redis_container=names.redis_container,
-                        postgres_password=credentials.postgres_password,
-                    ),
-                    timeout_seconds=request.timeout_seconds,
-                )
-            finally:
-                if had_draft_runtime:
-                    try:
-                        await manager.ensure_draft_runtime(workspace_id)
-                        await _publish_draft_preview(manager, workspace_id)
-                    except (CellResourceError, OrchestratorError) as exc:
-                        restore_failure = exc
-        except CellResourceError as exc:
+    manifest = await _prepare_portable_write(manager, state, current_files)
+    if manifest is not None:
+        if manager.machine_runtime is None:
             raise OrchestratorError(
-                code="container_failure",
-                message=str(exc),
-                status_code=500,
+                code="docker_unavailable",
+                message="portable machine provider is unavailable",
+                status_code=503,
+            )
+        try:
+            machine, backend = manager.machine_runtime.parts(state)
+            backend.configure_cache_identity(
+                dependency_digest=_selected_files_digest(
+                    current_files, fixed_paths=_DEPENDENCY_IDENTITY_PATHS
+                ),
+                build_config_digest=_selected_files_digest(
+                    current_files, fixed_paths=_BUILD_CONFIG_PATHS
+                ),
+                manifest_digest=manifest.digest(),
+            )
+            request_digest = manager.machine_runtime._request_digest(manifest, request)
+            await machine.ensure(
+                manifest,
+                LifecycleMutation(
+                    request.operation_id,
+                    request.fencing_epoch,
+                    request_digest,
+                ),
+            )
+            before_identity = _workspace_identity_digest(
+                current_files,
+                manifest=manifest,
+                environment_digest=await machine_effect(backend.environment_digest),
+            )
+            if request.track_receipt:
+                from yleum_orchestrator.services.command_receipts import CommandJournal
+
+                tracked = CommandJournal(manager.state_store.root, workspace_id).load(
+                    request.operation_id,
+                )
+                if tracked is None:
+                    raise CellIndeterminateOperation("command dispatch intent missing")
+                await _verify_command_binding(manager, tracked.binding, request.fencing_epoch)
+            result = await manager.machine_runtime.guarded_execute(state, manifest, request)
+        except (CellResourceError, ValueError) as exc:
+            raise OrchestratorError(
+                code="container_failure", message=str(exc), status_code=409
             ) from exc
         updated_files = await _read_agent_workspace_files(manager, volume_name)
+        status = await machine.request_status(
+            operation_id=request.operation_id,
+            fencing_epoch=request.fencing_epoch,
+        )
+        if status.transport_response is not None:
+            return WorkspaceAgentExecResponse.model_validate(status.transport_response)
+        if request.task_role == "restore_runtime" and (
+            result.exit_code != 0 or result.timed_out
+        ):
+            # Failed restoration deliberately stops its product. Never exec
+            # it to inventory packages or replace the durable failure with
+            # a transport500. Mark the environment as unavailable/changed,
+            # rather than certifying the earlier inventory as still current.
+            environment_digest = hashlib.sha256(
+                (
+                    "failed-restoration-environment-unavailable:" + str(request.operation_id)
+                ).encode()
+            ).hexdigest()
+        else:
+            environment_digest = await machine_effect(backend.environment_digest)
+        after_identity = _workspace_identity_digest(
+            updated_files,
+            manifest=manifest,
+            environment_digest=environment_digest,
+        )
+        response = WorkspaceAgentExecResponse(
+            ok=result.exit_code == 0 and not result.timed_out,
+            exit_code=result.exit_code,
+            detail=_redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT],
+            timed_out=result.timed_out,
+            workspace_revision=_workspace_revision(updated_files),
+            operation_id=request.operation_id,
+            before_identity=before_identity,
+            after_identity=after_identity,
+            environment_mutated=before_identity != after_identity,
+            compiled_asset_receipt=(
+                manager.machine_runtime.compilation_receipt(state, request.operation_id)
+                if request.task_role in {"full_build", "restore_runtime"}
+                and result.exit_code == 0
+                and not result.timed_out
+                else None
+            ),
+            project_migration_receipt=(
+                manager.machine_runtime.migration_receipt(state, request.operation_id)
+                if request.task_role in {"full_build", "restore_runtime"}
+                and result.exit_code == 0
+                and not result.timed_out
+                else None
+            ),
+        )
+        await machine.store_transport_response(
+            operation_id=request.operation_id,
+            fencing_epoch=request.fencing_epoch,
+            response=response.model_dump(mode="json"),
+        )
+        return response
+    legacy_identity = _workspace_identity_digest(
+        current_files,
+        manifest=None,
+        environment_digest=_digest_json({"legacy_image": _PROJECT_CELL_EXEC_IMAGE}),
+    )
+    if any(bad in low for bad in _EXEC_DENY):
+        return WorkspaceAgentExecResponse(
+            ok=False,
+            exit_code=126,
+            detail="command blocked by safety denylist",
+            workspace_revision=current_revision,
+            operation_id=request.operation_id,
+            before_identity=legacy_identity,
+            after_identity=legacy_identity,
+            environment_mutated=False,
+        )
+    if _command_exposes_environment(low):
+        return WorkspaceAgentExecResponse(
+            ok=False,
+            exit_code=126,
+            detail="command blocked: environment and secret enumeration is not allowed",
+            workspace_revision=current_revision,
+            operation_id=request.operation_id,
+            before_identity=legacy_identity,
+            after_identity=legacy_identity,
+            environment_mutated=False,
+        )
+    exec_spec = _workspace_exec_spec(state, state_path=manager.profile.state_path)
+    names = exec_spec.resource_names
+    credentials = manager.credential_store.load_or_create(workspace_id)
+    had_draft_runtime = await manager.inspect_draft_runtime(workspace_id) is not None
+    restore_failure: CellResourceError | OrchestratorError | None = None
+    try:
+        if had_draft_runtime:
+            await manager.docker.remove_container(names.draft_container_name())
+        try:
+            result = await manager.docker.run_workspace_command(
+                workspace_volume_name=volume_name,
+                agent_home_volume_name=names.agent_home_volume,
+                labels=identity_labels(exec_spec.spec, "agent-exec"),
+                image=_PROJECT_CELL_EXEC_IMAGE,
+                command=low,
+                internal_network_name=names.internal_network,
+                egress_network_name=names.egress_network,
+                environment=_workspace_agent_exec_env(
+                    postgres_container=names.postgres_container,
+                    redis_container=names.redis_container,
+                    postgres_password=credentials.postgres_password,
+                ),
+                timeout_seconds=request.timeout_seconds,
+            )
+        finally:
+            if had_draft_runtime:
+                try:
+                    await manager.ensure_draft_runtime(workspace_id)
+                    await _publish_draft_preview(manager, workspace_id)
+                except (CellResourceError, OrchestratorError) as exc:
+                    restore_failure = exc
+    except CellResourceError as exc:
+        raise OrchestratorError(
+            code="container_failure",
+            message=str(exc),
+            status_code=500,
+        ) from exc
+    updated_files = await _read_agent_workspace_files(manager, volume_name)
     detail = _redact_exec_output(result.output)[:_MAX_AGENT_EXEC_OUTPUT]
     ok = result.exit_code == 0 and result.timed_out is False
     if restore_failure is not None:
@@ -748,6 +891,196 @@ async def exec_workspace_agent_command(
         ),
         environment_mutated=_workspace_revision(updated_files) != current_revision,
     )
+
+
+async def _verify_command_binding(
+    manager: DockerCellResourceManager,
+    binding: WorkspaceAgentCommandBinding,
+    current_fence: int,
+    *,
+    after_revision: str | None = None,
+) -> None:
+    state, volume = await _workspace_volume_identity(
+        manager, binding.workspace_id, source_status=True
+    )
+    _require_generation_lease_match(
+        state,
+        generation_run_id=binding.generation_run_id,
+        fencing_epoch=current_fence,
+    )
+    if (state.project_id, state.owner_id, volume) != (
+        binding.project_id,
+        binding.owner_id,
+        binding.physical_volume,
+    ):
+        raise CellIndeterminateOperation("command ownership changed")
+    if (
+        await source_volume_call(manager, volume, "source_volume_identity")
+        != binding.physical_volume_identity
+    ):
+        raise CellIndeterminateOperation("command physical incarnation changed")
+    if after_revision is not None:
+        files = await _read_agent_workspace_files(manager, volume)
+        if _workspace_revision(files) != after_revision:
+            raise CellIndeterminateOperation("command source poststate changed")
+    # Recheck after physical awaits; the original dispatch fence never authorizes a new cycle.
+    _current, current_volume = await _workspace_volume_identity(
+        manager, binding.workspace_id, source_status=True,
+    )
+    if current_volume != volume or await source_volume_call(
+        manager, current_volume, "source_volume_identity",
+    ) != binding.physical_volume_identity:
+        raise CellIndeterminateOperation("command incarnation changed during proof")
+    latest = manager.state_store.load(binding.workspace_id)
+    if latest is None or (latest.project_id, latest.owner_id) != (
+        binding.project_id,
+        binding.owner_id,
+    ):
+        raise CellIndeterminateOperation("command owner changed during proof")
+    _require_generation_lease_match(
+        latest,
+        generation_run_id=binding.generation_run_id,
+        fencing_epoch=current_fence,
+    )
+
+
+async def _tracked_agent_command_locked(
+    manager: DockerCellResourceManager,
+    workspace_id: UUID,
+    request: WorkspaceAgentExecRequest,
+) -> WorkspaceAgentTrackedExecResponse:
+    from yleum_orchestrator.services.cell_state import (
+        _read_plain_json_file,
+        _require_regular_file_path,
+    )
+    from yleum_orchestrator.services.command_receipts import CommandJournal, command_request_digest
+    from yleum_orchestrator.services.machine_identity import machine_identity_root
+    from yleum_orchestrator.services.source_write_journal import SourceWriteJournal
+
+    state, volume = await _workspace_volume_identity(manager, workspace_id, source_status=True)
+    _require_generation_lease_match(
+        state,
+        generation_run_id=request.generation_run_id,
+        fencing_epoch=request.fencing_epoch,
+    )
+    journal = CommandJournal(manager.state_store.root, workspace_id)
+    existing = journal.load(request.operation_id)
+    digest = command_request_digest(workspace_id, request)
+    if existing is not None:
+        if existing.binding.request_sha256 != digest or existing.receipt is None:
+            raise CellIndeterminateOperation("command already submitted or changed")
+        journal.require_clear()
+        await _verify_command_binding(
+            manager,
+            existing.binding,
+            request.fencing_epoch,
+            after_revision=existing.receipt.after_revision,
+        )
+        assert existing.response is not None
+        return WorkspaceAgentTrackedExecResponse(
+            **existing.response.model_dump(),
+            command_receipt=existing.receipt,
+        )
+    SourceWriteJournal(manager.state_store.root, workspace_id).require_clear()
+    files = await _read_agent_workspace_files(manager, volume)
+    if _workspace_revision(files) != request.expected_revision:
+        raise CellIndeterminateOperation("command source prestate changed")
+    if (
+        manager.machine_runtime is None
+        or _machine_manifest(
+            files,
+            manager=manager,
+            workspace_id=workspace_id,
+        )
+        is None
+    ):
+        raise CellIndeterminateOperation("tracked command requires a portable runtime manifest")
+    machine_path = machine_identity_root(manager.state_store.root, workspace_id) / "machine.json"
+    if _require_regular_file_path(machine_path, missing_ok=True) is not None:
+        machine_state = _read_plain_json_file(machine_path)
+        if str(request.operation_id) in machine_state.get("operations", {}):
+            raise CellIndeterminateOperation("legacy command cannot acquire prospective authority")
+    assert state.project_id is not None and state.owner_id is not None
+    binding = WorkspaceAgentCommandBinding(
+        operation_id=request.operation_id,
+        workspace_id=workspace_id,
+        project_id=state.project_id,
+        owner_id=state.owner_id,
+        generation_run_id=request.generation_run_id,
+        dispatch_fencing_epoch=request.fencing_epoch,
+        request_sha256=digest,
+        physical_volume=volume,
+        physical_volume_identity=await source_volume_call(
+            manager, volume, "source_volume_identity"
+        ),
+        before_revision=request.expected_revision,
+    )
+    journal.start(binding)  # Strict durable intent BEFORE preparation/ensure/command effects.
+    with journal.executing(binding):
+        response = await _execute_agent_command_locked(manager, workspace_id, request)
+        await _verify_command_binding(
+            manager, binding, request.fencing_epoch, after_revision=response.workspace_revision
+        )
+    terminal = journal.finish(binding, response)
+    assert terminal.receipt is not None
+    return WorkspaceAgentTrackedExecResponse(
+        **response.model_dump(), command_receipt=terminal.receipt
+    )
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent/command-operations/{operation_id}",
+    response_model=WorkspaceAgentCommandStatusResponse,
+)
+async def get_workspace_agent_command_operation(
+    workspace_id: UUID,
+    operation_id: UUID,
+    generation_run_id: UUID,
+    fencing_epoch: int,
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceAgentCommandStatusResponse:
+    verify_internal_token(x_internal_token)
+    from yleum_orchestrator.services.command_receipts import CommandJournal
+
+    manager = _require_docker_resource_manager(_workspace_provider(workspace_id))
+    try:
+        async with manager.operation_lock.hold(workspace_id):
+            state, _volume = await _workspace_volume_identity(
+                manager, workspace_id, source_status=True
+            )
+            _require_generation_lease_match(
+                state,
+                generation_run_id=generation_run_id,
+                fencing_epoch=fencing_epoch,
+            )
+            journal = CommandJournal(manager.state_store.root, workspace_id)
+            record = journal.load(operation_id)
+            if record is None:
+                return WorkspaceAgentCommandStatusResponse(
+                    operation_id=operation_id, state="unknown"
+                )
+            if record.binding.generation_run_id != generation_run_id:
+                raise CellIndeterminateOperation("command run mismatch")
+            if record.receipt is not None:
+                journal.require_clear()
+            await _verify_command_binding(
+                manager,
+                record.binding,
+                fencing_epoch,
+                after_revision=record.receipt.after_revision if record.receipt else None,
+            )
+            return WorkspaceAgentCommandStatusResponse(
+                operation_id=operation_id,
+                state="terminal" if record.receipt else "pending",
+                receipt=record.receipt,
+                terminal_response=record.response,
+            )
+    except (CellResourceError, ValueError) as exc:
+        raise OrchestratorError(
+            code="conflict",
+            message="command status is unresolved or conflicts",
+            status_code=409,
+        ) from exc
 
 
 @router.get(
@@ -880,9 +1213,13 @@ async def apply_workspace_draft(
                 if current_files.get(path) != content
             }
             if deletes_to_apply:
-                await manager.docker.delete_volume_paths(volume_name, deletes_to_apply)
+                await source_volume_call(
+                    manager, volume_name, "delete_volume_paths", deletes_to_apply,
+                )
             if writes_to_apply:
-                await manager.docker.write_volume_files(volume_name, writes_to_apply)
+                await source_volume_call(
+                    manager, volume_name, "write_volume_files", writes_to_apply,
+                )
         if manifest is not None:
             if manager.machine_runtime is None:
                 raise OrchestratorError(
@@ -1447,7 +1784,7 @@ async def _ensure_seed_workspace_files(
     files = await _read_agent_workspace_files(manager, volume_name)
     if files:
         return files, False
-    if await manager.docker.read_volume_files(volume_name):
+    if await source_volume_call(manager, volume_name, "read_volume_files"):
         raise OrchestratorError(
             code="validation_failed",
             message="workspace contains unsupported binary or oversized files; refusing to reseed",
@@ -1482,8 +1819,8 @@ async def _ensure_seed_workspace_files(
         await _prepare_portable_write(manager, state, seeded_files)
     await manager.docker.clear_volume(volume_name)
     if seeded_files:
-        await manager.docker.write_volume_files(
-            volume_name,
+        await source_volume_call(
+            manager, volume_name, "write_volume_files",
             {path: content.encode("utf-8") for path, content in seeded_files.items()},
         )
     return seeded_files, seeded_from_project
@@ -1661,8 +1998,23 @@ def _raise_agent_stale_conflict(
 async def _workspace_volume_identity(
     manager: DockerCellResourceManager,
     workspace_id: UUID,
+    *, source_status: bool = False,
 ) -> tuple[CellWorkspaceState, str]:
+    from yleum_orchestrator.services.adaptation_recovery_barrier import (
+        require_candidate_writers_allowed,
+    )
     from yleum_orchestrator.services.cell_deletion import is_workspace_deleted
+
+    try:
+        require_candidate_writers_allowed(manager.state_store.root, workspace_id)
+    except CellIdentityConflict as exc:
+        raise OrchestratorError(
+            code="conflict", message="candidate recovery barrier blocks writer authority",
+            status_code=409,
+        ) from exc
+    if not source_status:
+        from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
+        require_source_writes_clear(manager.state_store.root, workspace_id)
 
     if is_workspace_deleted(manager.profile.state_path, workspace_id):
         raise OrchestratorError(
@@ -1685,7 +2037,35 @@ async def _workspace_volume_identity(
     volume_name = state.resource_names.workspace_volume
     portable = manager.machine_runtime
     active_code = None
-    if portable is not None and portable.exists(workspace_id):
+    source_volume_labels = None
+    if source_status:
+        from yleum_orchestrator.services.cell_state import (
+            _read_plain_json_file,
+            _require_regular_file_path,
+        )
+        from yleum_orchestrator.services.machine_identity import machine_identity_root
+        metadata_path = (
+            machine_identity_root(manager.state_store.root, workspace_id) / "docker.json"
+        )
+        if _require_regular_file_path(metadata_path, missing_ok=True) is not None:
+            metadata = _read_plain_json_file(metadata_path)
+            selected = metadata.get("active_code_volume")
+            if selected and selected != volume_name:
+                prefix = "omnia-machine-test" if manager.namespace == "test" else "omnia-machine"
+                stem = f"{prefix}-{workspace_id.hex}"
+                if not isinstance(selected, str) or re.fullmatch(
+                    re.escape(stem) + r"-code-[0-9a-f]{32}", selected,
+                ) is None:
+                    raise CellIndeterminateOperation("invalid active source volume")
+                volume_name = selected
+                source_volume_labels = {
+                    "omnia.managed": "true", "omnia.project_machine": "true",
+                    "omnia.workspace_id": str(workspace_id),
+                    "omnia.project_id": str(state.project_id),
+                    "omnia.owner_id": str(state.owner_id), "omnia.resource_kind": "project-volume",
+                    "omnia.namespace": manager.namespace,
+                }
+    elif portable is not None and portable.exists(workspace_id):
         _machine, backend = portable.parts(state)
         if backend.workspace_volume != volume_name:
             active_code = backend
@@ -1706,7 +2086,9 @@ async def _workspace_volume_identity(
         ),
         "workspace",
     )
-    if active_code is not None:
+    if source_volume_labels is not None:
+        expected = source_volume_labels
+    elif active_code is not None:
         expected = active_code.labels("project-volume")
     if volume.name != volume_name or any(
         volume.labels.get(key) != value for key, value in expected.items()
@@ -1811,7 +2193,7 @@ async def _read_agent_workspace_files(
     # Portable machines retain package/build caches in the workspace volume.
     # Agent revisions cover source only; archiving node_modules/.next here can
     # exceed the bounded control-plane payload after a successful build.
-    raw_files = await manager.docker.read_workspace_source_files(volume_name)
+    raw_files = await source_volume_call(manager, volume_name, "read_workspace_source_files")
     files: dict[str, str] = {}
     total_bytes = 0
     for raw_path, payload in sorted(raw_files.items()):

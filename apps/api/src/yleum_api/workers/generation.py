@@ -52,12 +52,15 @@ def _lock_key(run_id: UUID) -> int:
 
 
 async def _ownership_monitor(connection: AsyncConnection, run_id: UUID) -> None:
+    from yleum_api.services.generation.recovery_execution import session_connection_access
+
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     while True:
         # A failed ownership connection stops execution; it must not reconnect
         # and assume the advisory lock survived.
-        await connection.execute(text("SELECT 1"))
-        await connection.commit()
+        async with session_connection_access(connection):
+            await connection.execute(text("SELECT 1"))
+            await connection.commit()
         async with factory() as session:
             row = (
                 await session.execute(
@@ -91,6 +94,7 @@ async def _abandon_operations(session: AsyncSession, run_id: UUID) -> None:
 
 
 async def _fail_orphan(run_id: UUID, message: str) -> None:
+    from yleum_api.services.generation.recovery_execution import has_recovery_state
     from yleum_api.services.generation.supervisor import _emergency_error
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
@@ -101,6 +105,10 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
         # A durable Stop request wins a race with ownership loss. Other active
         # runs are infrastructure failures, never a fabricated user cancellation.
         cancelled = run.status == "cancel_requested"
+        if not cancelled and has_recovery_state(run):
+            # Unknown/new recovery contracts own durable effects. A legacy
+            # orphan finalizer must not destroy their state or seal billing.
+            return
         if cancelled:
             await apply_cancelled_generation_locked(session, run)
         else:
@@ -123,7 +131,12 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
 
 
 async def execute_dispatch(run_id: UUID) -> bool:
+    from yleum_api.services.generation import recovery_execution
     from yleum_api.services.generation.lifecycle import _process_prompt
+    from yleum_api.services.generation.recovery_contract import (
+        RecoveryContractError,
+        RecoveryStateV2,
+    )
     from yleum_api.services.generation.supervisor import (
         _OWNERSHIP_LOST_CANCEL_REASON,
         _run_tracked_prompt,
@@ -142,6 +155,10 @@ async def execute_dispatch(run_id: UUID) -> bool:
         work: asyncio.Task[None] | None = None
         monitor: asyncio.Task[None] | None = None
         context_token = execution_run_id.set(run_id)
+        recovery_owner = recovery_execution._SESSION_OWNER.set(
+            recovery_execution.SessionOwnership(run_id, ownership)
+        )
+        claim = None
         try:
             async with factory() as session:
                 run = await session.get(GenerationRun, run_id, with_for_update=True)
@@ -180,18 +197,35 @@ async def execute_dispatch(run_id: UUID) -> bool:
                     run.execution_started_at = datetime.now(UTC)
                 await session.commit()
             if orphan:
-                from yleum_api.services.restorations import (
-                    adaptation_activation_handoff_pending,
-                )
+                if recovery_execution.has_recovery_state(run):
+                    try:
+                        state = recovery_execution.recovery_state(run)
+                    except RecoveryContractError:
+                        return False
+                    if not isinstance(state, RecoveryStateV2):
+                        return False
+                    async with factory() as session:
+                        claim = await recovery_execution.claim_continuation(
+                            session, run_id=run_id, expected_attempt=state.attempt_seq,
+                            worker_id="generation-worker", now=datetime.now(UTC),
+                        )
+                        await session.commit()
+                    if claim is None:
+                        return False
+                    dispatch = load_generation_dispatch(run)
+                else:
+                    from yleum_api.services.restorations import (
+                        adaptation_activation_handoff_pending,
+                    )
 
-                if await adaptation_activation_handoff_pending(factory, run_id):
+                    if await adaptation_activation_handoff_pending(factory, run_id):
+                        return False
+                    await _fail_orphan(
+                        run_id,
+                        "Generation executor stopped before completion; "
+                        "unknown effects were not replayed",
+                    )
                     return False
-                await _fail_orphan(
-                    run_id,
-                    "Generation executor stopped before completion; "
-                    "unknown effects were not replayed",
-                )
-                return False
             assert dispatch is not None
             kwargs = dict(
                 run_id=run_id,
@@ -210,6 +244,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
             capacity_token = uuid4()
             work = asyncio.create_task(
                 _run_tracked_prompt(
+                    recovery_execution.resume_generation(claim) if claim is not None else
                     _process_prompt(**kwargs, capacity_dispatch_token=capacity_token),  # type: ignore[arg-type]
                     run_id=run_id,
                     project_id=dispatch.project_id,
@@ -247,6 +282,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
                     with suppress(asyncio.CancelledError, Exception):
                         await task
             execution_run_id.reset(context_token)
+            recovery_execution._SESSION_OWNER.reset(recovery_owner)
             with suppress(Exception):
                 await ownership.execute(
                     text("SELECT pg_advisory_unlock(:ns, :key)"),

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from tests._machine_adapter_fakes import legacy_machine_controller  # noqa: F401
 from yleum_orchestrator.services import machine_adapter
 
 TS = Path(
@@ -180,7 +181,7 @@ async def test_controller_guard_is_scoped_and_finishes_failed_command(role, exec
         task_role=role,
     )
     result = await runtime.execute(
-        SimpleNamespace(), MachineManifest.model_validate(value), request
+        SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request
     )
     assert result.exit_code == 1
     if executable == "pnpm":
@@ -299,7 +300,7 @@ async def test_outer_timeout_terminates_controller_child_before_finishing_reques
     value = payload()
     value["tasks"].append({"name": "types", "role": "fast_check", "argv": ["pnpm", "typecheck"]})
     result = await runtime.execute(
-        SimpleNamespace(), MachineManifest.model_validate(value), request
+        SimpleNamespace(workspace_id=uuid4()), MachineManifest.model_validate(value), request
     )
     assert phase[0] == timeout_phase
     starts = 1 if timeout_phase == "install" else 2

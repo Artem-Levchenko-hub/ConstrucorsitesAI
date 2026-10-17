@@ -8,9 +8,37 @@ from fastapi import APIRouter, HTTPException, Request
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.generation_response_auth import HEADER, verify_generation_response_token
-from yleum_gateway.services.generation_response_store import load_generation_response
+from yleum_gateway.services.generation_response_store import (
+    load_generation_response,
+    reconcile_generation_response,
+)
 
 router = APIRouter(prefix="/_internal/generation-responses", tags=["internal"])
+
+
+@router.post("/{attempt_id}/reconcile")
+async def reconcile_response(attempt_id: UUID, request: Request) -> dict[str, Any]:
+    if not get_settings().generation_response_retention_enabled:
+        raise HTTPException(503, "generation response retention is disabled")
+    headers = request.headers.getlist(HEADER)
+    if len(headers) != 1:
+        raise HTTPException(403, "generation response authentication required")
+    try:
+        identity = verify_generation_response_token(
+            headers[0], purpose="generation_response.reconcile",
+        )
+        if identity.attempt_id != attempt_id:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(403, "generation response authentication denied") from None
+    try:
+        confirmed = await reconcile_generation_response(identity)
+    except Exception:
+        raise HTTPException(409, "generation response reconciliation is indeterminate") from None
+    return {
+        "version": 1, "identity": identity.to_wire(),
+        "state": "confirmed" if confirmed else "pending",
+    }
 
 
 @router.get("/{attempt_id}")

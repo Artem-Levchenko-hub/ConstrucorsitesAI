@@ -2364,7 +2364,20 @@ async def test_native_build_allows_injected_messages_url_and_headers(
     )
 
 
+@pytest.fixture
+def _legacy_runner_generation(monkeypatch: pytest.MonkeyPatch):
+    # These transport/JTI tests own synthetic identities, not SQL runs. Current
+    # run/V2/dependency/DB-failure gates are exercised by the real PG suite.
+    from yleum_api.services.generation import provider_attempts
+
+    boundary = AsyncMock(return_value=None)
+    monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", boundary)
+    yield
+    assert boundary.await_count >= 1
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_legacy_runner_generation")
 async def test_call_messages_auth_factory_wires_exact_runner_metadata_and_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2446,6 +2459,7 @@ async def test_call_messages_auth_factory_wires_exact_runner_metadata_and_header
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_legacy_runner_generation")
 async def test_call_messages_retry_gets_fresh_token_from_auth_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2570,6 +2584,7 @@ async def test_native_build_forwards_messages_auth_factory(
 
 
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("_legacy_runner_generation")
 async def test_runner_attempt_auth_contract_matches_gateway_validation_and_replay() -> None:
     (
         hs256_jwt_signer,

@@ -236,6 +236,8 @@ class CellDockerBackend(Protocol):
 
     async def get_volume(self, name: str) -> DockerVolumeRecord | None: ...
 
+    async def source_volume_identity(self, name: str) -> str: ...
+
     async def create_volume(self, name: str, labels: dict[str, str]) -> DockerVolumeRecord: ...
 
     async def remove_volume(self, name: str) -> None: ...
@@ -425,6 +427,12 @@ class DockerCellResourceManager:
         generation_run_id: UUID,
     ) -> CellBundleHandle:
         async with self.operation_lock.hold(workspace_id):
+            from yleum_orchestrator.services.adaptation_recovery_barrier import (
+                require_candidate_writers_allowed,
+            )
+            require_candidate_writers_allowed(self.state_store.root, workspace_id, action="release")
+            from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
+            require_source_writes_clear(self.state_store.root, workspace_id)
             state = self._require_state(workspace_id)
             if state.project_id is None or state.owner_id is None:
                 raise CellResourceError("workspace state missing immutable identity")
@@ -451,7 +459,9 @@ class DockerCellResourceManager:
                 profile_version=state.profile_version,
                 generation_run_id=generation_run_id,
             )
-            self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+            self._reject_unless_allowed(
+                state, mutation, allow_reconcile=False, recovery_action="release",
+            )
             names = state.resource_names
             if names is None:
                 raise CellResourceError("resource names missing")
@@ -717,6 +727,12 @@ class DockerCellResourceManager:
         wake_only: bool,
     ) -> CellBundleHandle:
         async with self.operation_lock.hold(spec.workspace_id):
+            from yleum_orchestrator.services.adaptation_recovery_barrier import (
+                require_candidate_writers_allowed,
+            )
+            require_candidate_writers_allowed(self.state_store.root, spec.workspace_id)
+            from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
+            require_source_writes_clear(self.state_store.root, spec.workspace_id)
             capacity_lock = self.capacity_lock or self.operation_lock
             async with capacity_lock.hold_named("host-capacity-admission"):
                 return await self._upsert_bundle_locked(spec, mutation, wake_only=wake_only)
@@ -1523,7 +1539,14 @@ class DockerCellResourceManager:
         mutation: LifecycleMutation,
         *,
         allow_reconcile: bool,
+        recovery_action: str | None = None,
     ) -> None:
+        from yleum_orchestrator.services.adaptation_recovery_barrier import (
+            require_candidate_writers_allowed,
+        )
+        require_candidate_writers_allowed(
+            self.state_store.root, state.workspace_id, action=recovery_action,
+        )
         from yleum_orchestrator.services.machine_identity import is_portable_workspace
 
         if self.machine_runtime is None and is_portable_workspace(
@@ -1858,7 +1881,9 @@ class DockerCellResourceManager:
             return
         spec = self._spec_from_state(state)
         self._assert_profile_version(spec.profile_version)
-        self._reject_unless_allowed(state, mutation, allow_reconcile=False)
+        self._reject_unless_allowed(
+            state, mutation, allow_reconcile=False, recovery_action="destroy",
+        )
         names = state.resource_names
         assert names is not None
         await self._preflight_named_resources(spec, names)
