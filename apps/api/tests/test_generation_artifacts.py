@@ -29,6 +29,7 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.publication import consume_free_generation
+from yleum_api.services.generation.recovery_contract import RecoveryContractError
 from yleum_api.services.generation_billing import admit_policy
 
 
@@ -331,6 +332,7 @@ async def test_caller_publication_rows_order_and_real_git(path, monkeypatch):
     assert (message.tokens_in, message.tokens_out) == (7, 0)
     assert message.agent_steps == env["_agent_step_log"]
     assert trace == [
+        "get:GenerationRun",
         "git",
         "add",
         "flush",
@@ -384,7 +386,7 @@ async def test_caller_failure_does_not_publish_durable_rows(path, fault, monkeyp
 
 
 @pytest.mark.parametrize("path", ["agent"])
-@pytest.mark.parametrize("missing", [Project, GenerationRun, Message])
+@pytest.mark.parametrize("missing", [Project, Message])
 async def test_caller_preserves_optional_row_behavior(path, missing, monkeypatch):
     rows, trace = records(), []
     session = OfflineSession(rows, trace)
@@ -393,6 +395,25 @@ async def test_caller_preserves_optional_row_behavior(path, missing, monkeypatch
     result = await execute(path, env)
     assert result["project"] is (None if missing is Project else rows[1])
     assert trace[-2:] == ["commit", "refresh"]
+
+
+async def test_caller_requires_current_run_before_git_or_publication(monkeypatch):
+    rows, trace = records(), []
+    session = OfflineSession(rows, trace)
+    env, calls, original = context(rows, lambda: session, trace, monkeypatch)
+    session.rows = [row for row in rows if not isinstance(row, GenerationRun)]
+    session.durable = copy.deepcopy(session.rows)
+
+    with pytest.raises(RecoveryContractError, match=r"^publication run missing$"):
+        await execute("agent", env)
+
+    assert calls == [] and trace == ["get:GenerationRun"]
+    assert len(session.rows) == len(session.durable) == 4
+    assert rows[0].free_generations_used == session.durable[0].free_generations_used == 3
+    assert rows[1].current_snapshot_id == session.durable[1].current_snapshot_id == rows[2].id
+    assert rows[3].snapshot_id is session.durable[3].snapshot_id is None
+    assert rows[3].content == session.durable[3].content == "before"
+    assert repo.read_files(rows[1].id, env["current_sha"]) == original
 
 
 @pytest.mark.parametrize("path", ["agent"])
@@ -572,7 +593,7 @@ async def test_max_publication_requires_green_promotion_permit_before_git(monkey
         await execute("agent", env)
 
     assert raised.value.code == "PROMOTION_PERMIT_MISSING"
-    assert calls == [] and trace == []
+    assert calls == [] and trace == ["get:GenerationRun"]
     assert session.durable[0].free_generations_used == 3
     assert session.durable[1].current_snapshot_id == rows[2].id
     assert session.durable[3].content == "before"
@@ -653,7 +674,7 @@ async def test_tampered_promotion_permit_fails_before_git(monkeypatch):
         await execute("agent", env)
 
     assert raised.value.code == "PROMOTION_PERMIT_TAMPERED"
-    assert calls == [] and trace == []
+    assert calls == [] and trace == ["get:GenerationRun"]
     assert session.durable[0].free_generations_used == 3
     assert session.durable[1].current_snapshot_id == rows[2].id
 
@@ -792,7 +813,7 @@ async def test_max_publication_rejects_foreign_run_changed_tree_and_stale_fence_
             await execute("agent", env)
 
         assert raised.value.code == "PROMOTION_PERMIT_STALE"
-        assert calls == [] and trace == []
+        assert calls == [] and trace == ["get:GenerationRun"]
         assert session.durable[0].free_generations_used == 3
         assert session.durable[1].current_snapshot_id == rows[2].id
         assert repo.read_files(rows[1].id, env["current_sha"]) == original
