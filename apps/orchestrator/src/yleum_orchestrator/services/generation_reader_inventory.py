@@ -38,6 +38,7 @@ API_CAPABILITIES = (
     "effect:1",
     "provider-identity:1",
     "publication:1",
+    "publication:2",
     "reader-standby:1",
     "recovery-state:1",
     "recovery-state:2",
