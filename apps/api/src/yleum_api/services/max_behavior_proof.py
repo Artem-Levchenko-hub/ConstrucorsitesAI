@@ -851,10 +851,12 @@ def candidate_binding(
         "BEHAVIOR_CANDIDATE_BINDING_INVALID",
     )
     return CandidateBehaviorBinding(
-        candidate.id,
-        coordinator.project_id,
-        identity.workspace_id,
-        identity.generation_run_id,
+        # PostgreSQL's driver may return UUID subclasses. Normalize only these
+        # already-owned ORM identities; the raw receipt validator stays strict.
+        UUID(str(candidate.id)),
+        UUID(str(coordinator.project_id)),
+        UUID(str(identity.workspace_id)),
+        UUID(str(identity.generation_run_id)),
         identity.fencing_epoch,
         identity.proof_key,
         identity.workspace_revision,

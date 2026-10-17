@@ -264,7 +264,15 @@ async def terminalize_generation_run_locked(
     error: str | None = None,
     finished_at: datetime | None = None,
 ) -> None:
-    """Write a terminal run and its bound adaptation in the same transaction."""
+    """Write a terminal run and its bound adaptation in the same transaction.
+
+    Completed callers lock Project before GenerationRun, matching admission.
+    The acceptance guard then revalidates the fresh owning rows under those locks.
+    """
+    if status == "completed":
+        from yleum_api.services.generation.recovery_acceptance import require_terminal_acceptance
+
+        await require_terminal_acceptance(session, run)
     run.status = status
     run.finished_at = finished_at or datetime.now(UTC)
     if error is not None:
@@ -863,8 +871,12 @@ async def set_generation_run_status(
 
     factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with factory() as session:
-        run = await session.get(
-            GenerationRun, run_id, with_for_update=True, populate_existing=True
+        run = (
+            await _lock_generation_for_completion(session, run_id)
+            if new_status == "completed"
+            else await session.get(
+                GenerationRun, run_id, with_for_update=True, populate_existing=True
+            )
         )
         if run is None:
             return
@@ -896,13 +908,35 @@ async def set_generation_run_status(
         await session.commit()
 
 
-async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
-    run = await session.scalar(
-        select(GenerationRun)
-        .where(GenerationRun.id == run_id)
-        .execution_options(populate_existing=True)
-        .with_for_update()
+async def _lock_generation_for_completion(
+    session: AsyncSession, run_id: UUID,
+) -> GenerationRun | None:
+    """Project→Run, like admission; an unlocked hint is never owner authority."""
+    project_id = await session.scalar(
+        select(GenerationRun.project_id).where(GenerationRun.id == run_id)
     )
+    if project_id is None:
+        return None
+    locked_project = await session.scalar(
+        select(Project.id).where(Project.id == project_id).with_for_update()
+    )
+    if locked_project is None:
+        return None
+    # Re-read after the await and reject a changed project binding. The terminal
+    # acceptance gate checks current project.owner_id against this fresh run.user_id.
+    return cast(
+        GenerationRun | None,
+        await session.scalar(
+            select(GenerationRun)
+            .where(GenerationRun.id == run_id, GenerationRun.project_id == project_id)
+            .execution_options(populate_existing=True)
+            .with_for_update()
+        ),
+    )
+
+
+async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
+    run = await _lock_generation_for_completion(session, run_id)
     if run is None:
         return "failed"
     if run.status in {"completed", "failed", "cancelled"}:

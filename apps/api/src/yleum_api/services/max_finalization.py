@@ -36,6 +36,7 @@ from yleum_api.services import repo
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from yleum_api.services.generation.continuation import SourceNoveltyTracker
+from yleum_api.services.generation.recovery_acceptance import require_coordinator_acceptance
 from yleum_api.services.generation.recovery_actions import recovery_binding
 from yleum_api.services.generation.recovery_contract import RecoveryContractError
 from yleum_api.services.generation.recovery_requirements import load_compiler_witness
@@ -1742,6 +1743,7 @@ class MaxFinalizationCoordinator:
             )
             await self._log_terminal(outcome)
             return outcome
+        await require_coordinator_acceptance(self, identity)
         from yleum_api.services.restorations import activate_restoration_adaptation
 
         try:
@@ -1847,6 +1849,7 @@ class MaxFinalizationCoordinator:
                 await require_saved_candidate_behavior(
                     self, candidate, identity, build.artifact_ref
                 )
+                await require_coordinator_acceptance(self, identity)
                 return await self._outcome(
                     MaxFinalizationStatus.COMPLETE,
                     checkpoint,
@@ -2453,6 +2456,7 @@ class MaxFinalizationCoordinator:
         # Generic/API-only requests have no contract and keep their existing path.
         require_promotion_permit(permit, current_identity=await self._identity())
         await require_candidate_behavior(self, candidate, identity, build_ref)
+        await require_coordinator_acceptance(self, identity)
         require_promotion_permit(permit, current_identity=await self._identity())
 
         promotion_operation = uuid5(
