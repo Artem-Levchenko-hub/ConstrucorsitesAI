@@ -21,11 +21,14 @@ translation live entirely inside.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextvars
 import json
 import re
 import threading
 import time
 from collections.abc import AsyncGenerator, Mapping
+from contextlib import suppress
 from typing import Any
 from uuid import uuid4
 
@@ -313,12 +316,33 @@ async def astream(
     }
 
     loop = asyncio.get_running_loop()
-    queue: asyncio.Queue[Any] = asyncio.Queue()
+    from yleum_gateway.services import generation_response_capture as response_capture
+
+    retained = response_capture.retention_active()
+    queue: asyncio.Queue[Any] = asyncio.Queue(maxsize=16 if retained else 0)
     _DONE = object()
     stopped = threading.Event()
     receipt = receipt if receipt is not None else {}
+    await response_capture.begin_stream_capture()
+
+    def enqueue(value: Any) -> None:
+        if not retained:
+            loop.call_soon_threadsafe(queue.put_nowait, value)
+            return
+        if stopped.is_set():
+            return
+        pending = asyncio.run_coroutine_threadsafe(queue.put(value), loop)
+        while not stopped.is_set():
+            try:
+                pending.result(timeout=0.25)
+                return
+            except concurrent.futures.TimeoutError:
+                continue
+        pending.cancel()
 
     def _produce() -> None:
+        from yleum_gateway.services.generation_response_capture import dispatch_capacity_guard
+
         for attempt in range(2 if retry_preconnect else 1):
             if stopped.is_set():
                 return
@@ -330,17 +354,15 @@ async def astream(
                         trust_env=False,
                         mounts={"all://": httpx.HTTPTransport()},
                     ) as client,
+                    dispatch_capacity_guard(),
                     client.stream("POST", url, json=payload, headers=headers) as r,
                 ):
                     accepted_headers = True
                     if r.status_code >= 400:
-                        loop.call_soon_threadsafe(
-                            queue.put_nowait,
-                            ("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}")),
-                        )
-                        loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                        enqueue(("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}")))
+                        enqueue(_DONE)
                         return
-                    loop.call_soon_threadsafe(queue.put_nowait, ("receipt", {
+                    enqueue(("receipt", {
                         "headers": _receipt_headers(r.headers),
                         "provider_request_id": r.headers.get("x-llmgw-request-id"),
                     }))
@@ -350,9 +372,11 @@ async def astream(
                         if not raw or not raw.startswith("data:"):
                             continue
                         data = raw[5:].strip()
+                        if retained:
+                            enqueue(("raw", data))
                         if data == "[DONE]":
-                            loop.call_soon_threadsafe(queue.put_nowait, ("receipt", {"complete": True}))
-                            loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                            enqueue(("receipt", {"complete": True}))
+                            enqueue(_DONE)
                             return
                         try:
                             obj = json.loads(data)
@@ -362,7 +386,7 @@ async def astream(
                             continue
                         if obj.get("error"):
                             raise UpstreamProviderError("llmgw stream returned an error")
-                        loop.call_soon_threadsafe(queue.put_nowait, ("receipt", {
+                        enqueue(("receipt", {
                             key: obj[key] for key in ("usage", "model", "id", "metadata")
                             if obj.get(key) is not None
                         }))
@@ -370,13 +394,13 @@ async def astream(
                         if isinstance(choices, list) and choices and isinstance(choices[0], dict):
                             reason = choices[0].get("finish_reason")
                             if reason is not None:
-                                loop.call_soon_threadsafe(queue.put_nowait, ("finish", reason))
+                                enqueue(("finish", reason))
                         try:
                             delta = obj["choices"][0].get("delta", {}).get("content", "")
                         except (KeyError, IndexError, TypeError):
                             delta = ""
                         if delta:
-                            loop.call_soon_threadsafe(queue.put_nowait, ("delta", delta))
+                            enqueue(("delta", delta))
                 raise UpstreamProviderError(
                     "llmgw stream ended without completion",
                     details={"provider_charge_ambiguous": True},
@@ -386,26 +410,22 @@ async def astream(
                 if retry_preconnect and isinstance(exc, _SAFE_TO_RETRY) and attempt == 0:
                     time.sleep(0.5)
                     continue
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("err", UpstreamProviderError(
+                enqueue(("err", UpstreamProviderError(
                         f"llmgw stream transport: {type(exc).__name__}",
                         details={"provider_charge_ambiguous": not safe,
                                  "provider_failure_kind": "preconnect" if safe else "transport"},
-                    )),
-                )
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                    )))
+                enqueue(_DONE)
                 return
             except Exception as exc:  # noqa: BLE001 — surface as a clean error event
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    ("err", exc if isinstance(exc, UpstreamProviderError) else
-                     UpstreamProviderError(f"llmgw stream error: {type(exc).__name__}")),
-                )
-                loop.call_soon_threadsafe(queue.put_nowait, _DONE)
+                enqueue(("err", exc if isinstance(exc, UpstreamProviderError) else
+                     UpstreamProviderError(f"llmgw stream error: {type(exc).__name__}")))
+                enqueue(_DONE)
                 return
 
-    threading.Thread(target=_produce, daemon=True).start()
+    context = contextvars.copy_context()
+    producer = threading.Thread(target=context.run, args=(_produce,), daemon=True)
+    producer.start()
 
     try:
         while True:
@@ -413,6 +433,9 @@ async def astream(
             if item is _DONE:
                 break
             kind, val = item
+            if kind == "raw":
+                await response_capture.receive_stream_event(val)
+                continue
             if kind == "err":
                 if receipt.get("provider_request_id") or receipt.get("id"):
                     val.details["provider_request_id"] = receipt.get("provider_request_id") or receipt["id"]
@@ -430,8 +453,16 @@ async def astream(
                 receipt["finish_reason"] = val
                 continue
             yield val, slug_to_omnia(receipt.get("model", "")) or model
+        await response_capture.finish_stream_capture()
     finally:
         stopped.set()
+        if retained:
+            with suppress(Exception):
+                await response_capture.finish_stream_capture()
+            # Flush a cancelled bounded handoff before its event loop can close.
+            # A provider socket still blocked on I/O keeps the existing timeout;
+            # stopped prevents it from scheduling further queue work afterward.
+            await asyncio.to_thread(producer.join, 1.0)
 
 
 async def acompletion(
@@ -473,6 +504,8 @@ async def acompletion(
     evidence = evidence if evidence is not None else {}
 
     def _completion_sync() -> dict[str, Any]:
+        from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
+
         # trust_env=False + no-op mounts: ignore the container's HTTPS_PROXY so the
         # provider endpoint is hit DIRECT. Retry connection establishment only.
         last: Exception | None = None
@@ -483,6 +516,7 @@ async def acompletion(
                     trust_env=False,
                     mounts={"all://": httpx.HTTPTransport()},
                 ) as client:
+                    verify_dispatch_capacity()
                     if retry_preconnect:
                         r = client.post(url, json=payload, headers=headers)
                     else:

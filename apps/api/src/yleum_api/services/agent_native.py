@@ -989,6 +989,8 @@ async def _call_messages(
     Anthropic response dict, or raises the last error."""
     import asyncio
 
+    from yleum_api.services.generation.response_auth import record_headers
+
     output_tokens = agent_output_tokens(model, fallback=_MAX_TOKENS)
     payload: dict[str, Any] = {
         "model": model,
@@ -1055,6 +1057,7 @@ async def _call_messages(
         )
         retry_parent = None
         attach_identity(payload, generation_attempt)
+        request_headers = record_headers(generation_attempt, request_headers)
         # Exponential with a cap: back off harder from a provider that is already
         # struggling, but never spend a whole minute inside one pause.
         delay = min(45.0, 4.0 * (2**attempt))

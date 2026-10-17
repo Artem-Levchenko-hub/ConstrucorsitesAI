@@ -8,17 +8,30 @@ docker-compose for the shared infra.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
 
 import structlog
 from fastapi import FastAPI
 
+from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import close_pool, init_pool
 from yleum_gateway.core.http import close_http, init_http
 from yleum_gateway.core.logging import configure_logging
 from yleum_gateway.core.redis import close_redis, init_redis
-from yleum_gateway.routers import audio, chat, health, images, messages_native, models, videos
+from yleum_gateway.routers import (
+    audio,
+    chat,
+    generation_responses,
+    health,
+    images,
+    messages_native,
+    models,
+    videos,
+)
+from yleum_gateway.services.generation_response_capture import drain_captures
+from yleum_gateway.services.generation_response_cleanup import cleanup_loop
 
 
 @asynccontextmanager
@@ -38,9 +51,21 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     await init_http()  # local resource, never fails
 
+    settings = get_settings()
+    cleaner = (
+        asyncio.create_task(cleanup_loop())
+        if settings.generation_response_cleanup_enabled
+        and settings.generation_response_retention_enabled
+        else None
+    )
     try:
         yield
     finally:
+        if cleaner is not None:
+            cleaner.cancel()
+            with suppress(asyncio.CancelledError):
+                await cleaner
+        await drain_captures()
         with suppress(Exception):
             await close_http()
         with suppress(Exception):
@@ -56,6 +81,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(health.router)
+    app.include_router(generation_responses.router)
     app.include_router(models.router)
     app.include_router(chat.router)
     app.include_router(messages_native.router)  # native Anthropic /v1/messages (tool-use agent)

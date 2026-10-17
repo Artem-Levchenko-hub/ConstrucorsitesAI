@@ -48,15 +48,19 @@ def _contains_identity(raw: bytes) -> bool:
     )
 
 
-def parse_attempt(raw: bytes, route: str) -> GenerationProviderIdentity | None:
+def parse_attempt(
+    raw: bytes, route: str, *, require_identity: bool = False,
+) -> GenerationProviderIdentity | None:
     try:
-        if not _contains_identity(raw):
+        if not require_identity and not _contains_identity(raw):
             return None  # Preserve ordinary identity-absent JSON semantics.
         body = decode_request(raw)
     except (ValueError, UnicodeError, RecursionError):
         raise AttemptConflict("generation request is not canonical") from None
     metadata = body.get("metadata")
     if not isinstance(metadata, dict) or "generation_provider_identity" not in metadata:
+        if require_identity:
+            raise AttemptConflict("authenticated generation identity is required")
         return None
     if not get_settings().generation_provider_attempts_enabled:
         raise AttemptConflict("generation attempt protocol is disabled")
@@ -76,7 +80,7 @@ def parse_attempt(raw: bytes, route: str) -> GenerationProviderIdentity | None:
         raise AttemptConflict("generation attempt binding conflicts") from None
 
 
-async def _owned(conn: Any, attempt_id: UUID) -> Any:
+async def _owned(conn: Any, attempt_id: UUID, *, nowait: bool = False) -> Any:
     # Lock only dispatch control. API callers can hold project/run row locks while
     # awaiting HTTP; MVCC current committed owner checks must not deadlock them.
     return await conn.fetchrow(
@@ -85,7 +89,7 @@ async def _owned(conn: Any, attempt_id: UUID) -> Any:
         "JOIN projects p ON p.id=a.project_id "
         "WHERE a.attempt_id=$1 AND r.project_id=a.project_id AND r.user_id=a.user_id "
         "AND p.owner_id=a.user_id AND r.prompt_hash=a.prompt_hash AND r.status='running' "
-        "AND a.version=1 FOR UPDATE OF a",
+        "AND a.version=1 FOR UPDATE OF a" + (" NOWAIT" if nowait else ""),
         attempt_id,
     )
 
@@ -176,6 +180,9 @@ async def mark_attempt_dispatching(
 
 
 async def dispatch(identity: GenerationProviderIdentity | None, **kwargs: Any) -> UUID:
+    from yleum_gateway.services.generation_response_capture import before_dispatch
+
+    await before_dispatch(identity)
     if identity is None:
         return await provider_calls.start_call(**kwargs)
     admitted = await reserve_generation_attempt(identity)

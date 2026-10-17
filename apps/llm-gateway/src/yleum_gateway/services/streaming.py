@@ -191,6 +191,11 @@ async def stream_completion(
         known_receipt = receipt_evidence(receipt)
         try:
             await settle_receipt()
+            from yleum_gateway.services.generation_response_capture import (
+                confirm_response_accounting,
+            )
+
+            confirm_response_accounting()
         except Exception as exc:
             if not receipt_finished:
                 receipt_finished = True

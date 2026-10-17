@@ -239,6 +239,13 @@ async def test_accepted_paid_aggregate_exactly_once_two_terminal_workers(pool, d
         "completed",
         "completed",
     ]
+    # Exercise concurrent settlement of a due item, independently of skew
+    # between the application's wall clock and PostgreSQL's scheduling clock.
+    async with pool.acquire() as conn:
+        assert await conn.execute(
+            "UPDATE generation_billing_outbox SET next_attempt_at=clock_timestamp()-interval '1 minute' "
+            "WHERE run_id=$1 AND settled_at IS NULL", r
+        ) == "UPDATE 1"
     await asyncio.gather(_reconcile(database_url), _reconcile(database_url))
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT balance_rub FROM wallets WHERE user_id=$1", u) == 95

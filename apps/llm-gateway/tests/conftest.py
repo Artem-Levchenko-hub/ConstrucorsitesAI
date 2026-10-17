@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
@@ -82,6 +83,12 @@ def neutralize_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("yleum_gateway.main.init_http", AsyncMock(return_value=None))
     monkeypatch.setattr("yleum_gateway.main.close_http", AsyncMock(return_value=None))
     monkeypatch.setattr("yleum_gateway.main.configure_logging", lambda: None)
+    # Route fixtures configure auth after TestClient starts. Like the other
+    # neutralized startup resources, the background cleanup switch must not
+    # populate the real settings cache before those per-test credentials exist.
+    monkeypatch.setattr("yleum_gateway.main.get_settings", lambda: SimpleNamespace(
+        generation_response_cleanup_enabled=False, generation_response_retention_enabled=False,
+    ))
 
 
 @pytest.fixture

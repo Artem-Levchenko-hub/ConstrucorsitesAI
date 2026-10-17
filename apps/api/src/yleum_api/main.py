@@ -28,6 +28,7 @@ from yleum_api.routers import auth_oauth as auth_oauth_router
 from yleum_api.routers import backups as backups_router
 from yleum_api.routers import billing as billing_router
 from yleum_api.routers import draft_changes as draft_changes_router
+from yleum_api.routers import generation_response_capacity as generation_response_capacity_router
 from yleum_api.routers import integration_orders as integration_orders_router
 from yleum_api.routers import integration_runtime as integration_runtime_router
 from yleum_api.routers import max_accounts as max_accounts_router
@@ -193,6 +194,7 @@ def create_app() -> FastAPI:
     app.include_router(runtime_router.router)
     app.include_router(wallet_router.router)
     app.include_router(models_router.router)
+    app.include_router(generation_response_capacity_router.router)
     app.include_router(payments_router.router)
     app.include_router(public_router.kit_router)
     app.include_router(ws_router.router)

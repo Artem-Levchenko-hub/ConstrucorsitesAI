@@ -43,6 +43,14 @@ def anonymous_read_allowed(policy, bucket, key):
     )
 
 
+@pytest.mark.parametrize("alias", ["previews", "omnia-images", "omnia-photos", "omnia-videos",
+                                  "projects", "backups", "task-board"])
+def test_response_bucket_cannot_alias_any_existing_storage_role(configured, alias):
+    configured.generation_response_s3_bucket = alias
+    with pytest.raises(ValueError, match="response bucket"):
+        storage.public_media_bucket_policy("previews")
+
+
 @pytest.mark.parametrize("bucket", ["previews", "omnia-images", "omnia-photos", "omnia-videos"])
 @pytest.mark.parametrize(
     "key",

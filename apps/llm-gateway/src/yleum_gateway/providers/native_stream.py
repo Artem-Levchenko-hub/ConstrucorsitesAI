@@ -206,56 +206,60 @@ async def collect_response(
     async with asyncio.timeout(budget_seconds), httpx.AsyncClient(
         timeout=httpx.Timeout(IDLE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
         trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
-    ) as client, client.stream("POST", url, json={**payload, "stream": True,
+    ) as client:
+        from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
+
+        verify_dispatch_capacity()
+        async with client.stream("POST", url, json={**payload, "stream": True,
             "stream_options": {"include_usage": True}},
             headers=request_headers) as response:
-        evidence["transport_stage"] = "headers"
-        provider_header_id = response.headers.get("x-llmgw-request-id")
-        collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None
-        raw_id = collector.provider_header_id or response.headers.get("x-request-id")
-        if raw_id:
-            # Generic x-request-id can identify a proxy hop. Keep it only until
-            # the completion supplies its canonical body ID; LLMGW's own header
-            # retains the existing chat receipt precedence.
-            evidence["provider_request_id"] = _identity(raw_id)
-        reported = read_reported_cost({}, response.headers)
-        evidence.update(provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd)
-        raw = bytearray()
-        wire_bytes = 0
-        event_lines: list[bytes] = []
-        event_bytes = 0
-        async for part in response.aiter_bytes():
-            evidence["transport_stage"] = "body"
-            wire_bytes += len(part)
-            if wire_bytes > (16_384 if response.status_code >= 400 else MAX_WIRE_BYTES):
-                raise StreamReceiptError("Response exceeds byte limit")
-            raw.extend(part)
-            if response.status_code >= 400:
-                continue
-            while b"\n" in raw:
-                line, _, rest = raw.partition(b"\n")
-                raw = bytearray(rest)
-                line = line.rstrip(b"\r")
-                event_bytes += len(line)
-                if event_bytes > MAX_EVENT_BYTES:
+            evidence["transport_stage"] = "headers"
+            provider_header_id = response.headers.get("x-llmgw-request-id")
+            collector.provider_header_id = _identity(provider_header_id) if provider_header_id else None
+            raw_id = collector.provider_header_id or response.headers.get("x-request-id")
+            if raw_id:
+                # Generic x-request-id can identify a proxy hop. Keep it only until
+                # the completion supplies its canonical body ID; LLMGW's own header
+                # retains the existing chat receipt precedence.
+                evidence["provider_request_id"] = _identity(raw_id)
+            reported = read_reported_cost({}, response.headers)
+            evidence.update(provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd)
+            raw = bytearray()
+            wire_bytes = 0
+            event_lines: list[bytes] = []
+            event_bytes = 0
+            async for part in response.aiter_bytes():
+                evidence["transport_stage"] = "body"
+                wire_bytes += len(part)
+                if wire_bytes > (16_384 if response.status_code >= 400 else MAX_WIRE_BYTES):
+                    raise StreamReceiptError("Response exceeds byte limit")
+                raw.extend(part)
+                if response.status_code >= 400:
+                    continue
+                while b"\n" in raw:
+                    line, _, rest = raw.partition(b"\n")
+                    raw = bytearray(rest)
+                    line = line.rstrip(b"\r")
+                    event_bytes += len(line)
+                    if event_bytes > MAX_EVENT_BYTES:
+                        raise StreamReceiptError("Response event exceeds byte limit")
+                    if not line:
+                        if event_lines:
+                            try:
+                                collector.feed(b"\n".join(event_lines).decode("utf-8"))
+                            except UnicodeError as exc:
+                                raise StreamReceiptError("Invalid response encoding") from exc
+                        event_lines, event_bytes = [], 0
+                        if collector.done:
+                            result = collector.result()
+                            evidence["transport_stage"] = "complete"
+                            return httpx.Response(response.status_code, headers=response.headers,
+                                                  json=result, request=response.request)
+                    elif line.startswith(b"data:"):
+                        event_lines.append(bytes(line[5:].lstrip(b" ")))
+                if len(raw) + event_bytes > MAX_EVENT_BYTES:
                     raise StreamReceiptError("Response event exceeds byte limit")
-                if not line:
-                    if event_lines:
-                        try:
-                            collector.feed(b"\n".join(event_lines).decode("utf-8"))
-                        except UnicodeError as exc:
-                            raise StreamReceiptError("Invalid response encoding") from exc
-                    event_lines, event_bytes = [], 0
-                    if collector.done:
-                        result = collector.result()
-                        evidence["transport_stage"] = "complete"
-                        return httpx.Response(response.status_code, headers=response.headers,
-                                              json=result, request=response.request)
-                elif line.startswith(b"data:"):
-                    event_lines.append(bytes(line[5:].lstrip(b" ")))
-            if len(raw) + event_bytes > MAX_EVENT_BYTES:
-                raise StreamReceiptError("Response event exceeds byte limit")
-        if response.status_code >= 400:
-            return httpx.Response(response.status_code, headers=response.headers,
-                                  content=bytes(raw), request=response.request)
-        raise StreamReceiptError("Response ended without completion receipt")
+            if response.status_code >= 400:
+                return httpx.Response(response.status_code, headers=response.headers,
+                                      content=bytes(raw), request=response.request)
+            raise StreamReceiptError("Response ended without completion receipt")

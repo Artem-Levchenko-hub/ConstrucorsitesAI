@@ -147,8 +147,7 @@ def _remaining_provider_budget(request: Request, received_at: float, *, reserve:
     return remaining
 
 
-@router.post("/chat/completions")
-async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
+async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -> Any:
     received_at = asyncio.get_running_loop().time()
     try:
         identity = generation_attempts.parse_attempt(await request.body(), "/v1/chat/completions")
@@ -334,6 +333,12 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                     if receipt_task.cancelled():
                         raise
         if isinstance(exc, GatewayError):
+            if status == "failed" and (isinstance(retry_candidate, dict) or details.get("provider_failure_kind") == "preconnect"):
+                from yleum_gateway.services.generation_response_capture import (
+                    confirm_response_accounting,
+                )
+
+                confirm_response_accounting()
             if status == "failed" and isinstance(retry_candidate, dict):
                 exc.details.update(retry_candidate)
             if identity is not None and status == "failed" and details.get("provider_failure_kind") == "preconnect":
@@ -348,6 +353,12 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
         )) from None
 
     async def settle_response() -> dict[str, Any]:
+        from yleum_gateway.services.generation_response_capture import (
+            confirm_response_accounting,
+            remember_json_response,
+        )
+
+        remember_json_response(response)
         known_receipt = receipt_evidence(response)
         try:
             usage = response.get("usage") or {}
@@ -427,6 +438,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                     # Never expose or cache an answer whose wallet debit failed.
                     raise _billing_unavailable() from exc
 
+        confirm_response_accounting()
         # Paid output may be unusable. Settlement errors remain authoritative;
         # rejected output must never reach consumers or the response cache.
         output_error = output_stop_error(completion_finish_reason(response))
@@ -486,3 +498,18 @@ async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
                     log.error("chat.settlement_failed_after_cancel", error_type=type(exc).__name__)
                     break
         raise
+
+
+@router.post("/chat/completions")
+async def chat_completions(req: ChatCompletionRequest, request: Request) -> Any:
+    from yleum_gateway.services.generation_response_capture import authenticate_record, run_retained
+
+    try:
+        identity = await authenticate_record(request, "/v1/chat/completions")
+        if identity is not None:
+            return await run_retained(
+                identity, "/v1/chat/completions", lambda: _chat_completions_impl(req, request),
+            )
+        return await _chat_completions_impl(req, request)
+    except GatewayError as exc:
+        raise _gateway_error_to_http(exc) from exc

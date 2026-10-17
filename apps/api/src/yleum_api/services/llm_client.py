@@ -13,8 +13,69 @@ import httpx
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
+from yleum_api.services.generation.response_auth import record_headers
 
 log = logging.getLogger(__name__)
+
+
+async def recover_generation_response(
+    identity: GenerationProviderIdentity,
+) -> dict[str, object] | None:
+    """Read a bound durable body; absence is never inferred from transport/404."""
+    from yleum_api.services.generation.response_auth import HEADER, mint_generation_response_token
+
+    settings = get_settings()
+    try:
+        if not settings.generation_response_retention_enabled:
+            raise ValueError
+        token = mint_generation_response_token(identity, purpose="generation_response.read")
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(30, connect=5), follow_redirects=False,
+        ) as client:
+            response = await client.get(
+                f"{settings.llm_gateway_url.rstrip('/')}/_internal/generation-responses/{identity.attempt_id}",
+                headers={HEADER: token},
+            )
+        if response.status_code != 200:
+            raise ValueError
+        value = response.json()
+        if (
+            not isinstance(value, dict) or value.get("version") != 1
+            or value.get("identity") != identity.to_wire()
+        ):
+            raise ValueError
+        if value.get("state") == "pending" and set(value) == {"version", "identity", "state"}:
+            return None
+        result = value.get("response")
+        if value.get("state") != "stored" or not isinstance(result, dict):
+            raise ValueError
+        if result.get("format") == "json":
+            status, body = result.get("status"), result.get("body")
+            if type(status) is not int or not isinstance(body, dict):
+                raise ValueError
+            if status >= 400:
+                raise _gateway_failure(httpx.Response(status, json=body))
+            return body
+        if result.get("format") == "sse" and isinstance(result.get("events"), list):
+            events = result["events"]
+            if not events or events[-1] != "[DONE]":
+                raise ValueError
+            for event in events[:-1]:
+                if not isinstance(event, str):
+                    raise ValueError
+                document = json.loads(event)
+                if not isinstance(document, dict) or "error" in document:
+                    raise ValueError
+            return result
+        raise ValueError
+    except LLMError:
+        raise
+    except Exception:
+        raise LLMError(
+            "Generation response recovery is indeterminate",
+            code="generation_response_indeterminate",
+            provider_charge_ambiguous=True, retry_safe=False,
+        ) from None
 
 
 # Free-generation flag for the current generation, set by routers/messages.py
@@ -307,11 +368,11 @@ async def _chat_stream_data(
                         "POST",
                         url,
                         json=payload,
-                        headers=(
+                        headers=record_headers(identity, (
                             {"x-yleum-provider-timeout-seconds": str(remaining)}
                             if identity is not None
                             else None
-                        ),
+                        )),
                     ) as response:
                         accepted_headers = True
                         if response.status_code >= 400:
@@ -455,6 +516,7 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                             if omitted_default or identity is not None
                             else None
                         )
+                        headers = record_headers(identity, headers)
                         if identity is None:
                             response = await client.post(url, json=payload, headers=headers)
                         else:

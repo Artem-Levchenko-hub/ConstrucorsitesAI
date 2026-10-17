@@ -17,6 +17,8 @@ services:
   postgres:
     profiles: ["compose-postgres"]
 
+  # Response retention/auth/S3 values inherit the base service environment;
+  # host-db changes only the connection string, never body authority or flags.
   gateway:
     depends_on: !override
       redis:

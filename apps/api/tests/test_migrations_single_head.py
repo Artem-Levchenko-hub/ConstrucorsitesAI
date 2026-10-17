@@ -200,12 +200,13 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_generation_provider_attempts_is_the_only_head() -> None:
+def test_generation_responses_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == ["0086_generation_provider_attempts"]
+    assert heads == ["0087_generation_responses"]
+    assert chain["0087_generation_responses"] == "0086_generation_provider_attempts"
     assert chain["0086_generation_provider_attempts"] == "0085_integration_consent"
     assert chain["0085_integration_consent"] == "0084_billing_catalog_v3"
     assert chain["0084_billing_catalog_v3"] == "0083_email_verification_codes"
@@ -390,7 +391,7 @@ def test_email_code_upgrade_preserves_existing_verification_links(
     database.upgrade("head")
 
     assert database.fetchval("SELECT version_num FROM alembic_version") == (
-        "0086_generation_provider_attempts"
+        "0087_generation_responses"
     )
     assert [
         tuple(row)
@@ -425,7 +426,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("head")
     assert (
         database.fetchval("SELECT version_num FROM alembic_version")
-        == "0086_generation_provider_attempts"
+        == "0087_generation_responses"
     )
     assert [
         tuple(row)
@@ -584,7 +585,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database.upgrade("head")
     assert (
         database.fetchval("SELECT version_num FROM alembic_version")
-        == "0086_generation_provider_attempts"
+        == "0087_generation_responses"
     )
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 

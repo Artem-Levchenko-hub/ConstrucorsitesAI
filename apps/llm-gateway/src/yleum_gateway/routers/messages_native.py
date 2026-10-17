@@ -18,13 +18,13 @@ import asyncio
 import json
 from collections.abc import Coroutine
 from decimal import Decimal, InvalidOperation
-from typing import Any, Literal
+from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 import anyio
 import httpx
 import structlog
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 
 from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
 from yleum_gateway.core.runner_auth import (
@@ -434,11 +434,14 @@ def _post_llmgw(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
     evidence: dict[str, Any] | None = None,
 ) -> httpx.Response:
+    from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
+
     with httpx.Client(
         timeout=httpx.Timeout(_TIMEOUT_S, connect=30.0),
         trust_env=False,
         mounts={"all://": httpx.HTTPTransport()},
     ) as client:
+        verify_dispatch_capacity()
         if evidence is None:
             return client.post(url, json=payload, headers=headers)
         with client.stream("POST", url, json=payload, headers=headers) as response:
@@ -529,7 +532,7 @@ async def _settle_native_cost(
     return cost_rub, provenance
 
 
-async def _native_messages_impl(
+async def _native_messages_execute(
     request: Request,
     *,
     runner_claims: RunnerClaims | None = None,
@@ -671,6 +674,11 @@ async def _native_messages_impl(
         if safe_to_retry and recorded:
             # These failures occur before the request reaches the provider.
             # Publish permission only after the failed attempt receipt commits.
+            from yleum_gateway.services.generation_response_capture import (
+                confirm_response_accounting,
+            )
+
+            confirm_response_accounting()
             return _err(502, "api_error", "Provider connection could not be established", details={
                 "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
                 "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
@@ -690,6 +698,12 @@ async def _native_messages_impl(
         )
         if upstream.status_code >= 500 or not recorded:
             return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
+        if not ambiguous and retry_candidate is not None:
+            from yleum_gateway.services.generation_response_capture import (
+                confirm_response_accounting,
+            )
+
+            confirm_response_accounting()
         category = llmgw._refusal_category(upstream)
         details: dict[str, Any] = {
             "upstream_http_status": upstream.status_code,
@@ -747,6 +761,12 @@ async def _native_messages_impl(
         log.warning("native_messages.malformed_response", error_type=type(exc).__name__)
         # A successful but unreadable provider response may already be charged.
         return _err(503, "billing_unavailable", "Provider response could not be confirmed")
+    from yleum_gateway.services.generation_response_capture import (
+        confirm_response_accounting,
+        remember_json_response,
+    )
+
+    remember_json_response(adapted)
     usage = adapted["usage"]
     tokens_in = int(usage.get("input_tokens") or 0)
     tokens_out = int(usage.get("output_tokens") or 0)
@@ -818,6 +838,7 @@ async def _native_messages_impl(
             )
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
+    confirm_response_accounting()
     # Deny output only after the actual receipt and wallet have been settled.
     output_error = output_stop_error(adapted["provider_finish_reason"])
     if output_error is not None:
@@ -893,6 +914,28 @@ async def _native_messages_impl(
 @router.post("/v1/messages")
 async def native_messages(request: Request) -> Response:
     return await _native_messages_impl(request)
+
+
+async def _native_messages_impl(
+    request: Request, *, runner_claims: RunnerClaims | None = None,
+) -> Response:
+    from yleum_gateway.services.generation_response_capture import authenticate_record, run_retained
+
+    route = "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages"
+    try:
+        identity = await authenticate_record(request, route)
+        if identity is not None:
+            return cast(Response, await run_retained(
+                identity, route,
+                lambda: _native_messages_execute(request, runner_claims=runner_claims),
+            ))
+        return await _native_messages_execute(request, runner_claims=runner_claims)
+    except generation_attempts.AttemptConflict:
+        return _err(409, "generation_attempt_unconfirmed", "Generation request binding is unconfirmed")
+    except HTTPException as exc:
+        if exc.status_code >= 500 or exc.status_code == 409:
+            return _err(503, "billing_unavailable", "Generation response outcome is unconfirmed")
+        raise
 
 
 @router.post("/v1/project-cell/messages")

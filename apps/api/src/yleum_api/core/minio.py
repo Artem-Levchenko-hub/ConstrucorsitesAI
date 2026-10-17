@@ -139,6 +139,10 @@ def _public_media_keys() -> dict[str, set[str]]:
         settings.minio_bucket_backups,
         settings.minio_bucket_task_board,
     }
+    response_bucket = getattr(settings, "generation_response_s3_bucket", "generation-responses")
+    if response_bucket in private | {bucket for bucket, _ in roles}:
+        raise ValueError("response bucket aliases existing storage")
+    private.add(response_bucket)
     result: dict[str, set[str]] = {}
     for bucket, keys in roles:
         if bucket in private:

@@ -754,6 +754,30 @@ class Settings(BaseSettings):
     # Reader/storage rollout only; dispatch and finalization keep their legacy paths.
     generation_recovery_mode: Literal["off", "shadow", "canary", "on"] = "off"
     generation_provider_attempts_enabled: bool = False
+    # Durable response bodies remain private and OFF until rollout readiness.
+    generation_response_retention_enabled: bool = False
+    generation_response_cleanup_enabled: bool = False
+    generation_response_signing_secret: SecretStr | None = None
+    generation_response_capacity_signing_secret: SecretStr | None = None
+    generation_response_capacity_url: str = "http://api:8000/api/_internal/generation-response-capacity"
+    generation_response_s3_endpoint: str = "minio:9000"
+    generation_response_s3_access_key: SecretStr | None = None
+    generation_response_s3_secret_key: SecretStr | None = None
+    generation_response_s3_secure: bool = False
+    generation_response_s3_bucket: str = "generation-responses"
+    generation_response_retention_seconds: int = 604800
+    generation_response_storage_epoch: str | None = None
+    generation_response_storage_budget_bytes: int | None = None
+    generation_response_capacity_min_free_bytes: int | None = None
+
+    @field_validator(
+        "generation_response_storage_budget_bytes", "generation_response_capacity_min_free_bytes",
+        mode="before",
+    )
+    @classmethod
+    def empty_response_capacity_is_unconfigured(cls, value: object) -> object:
+        return None if value == "" else value
+
     generation_recovery_canary_project_ids: str = ""
     # Сколько сборок воркер ведёт одновременно. Это ГЛАВНЫЙ предел числа
     # пользователей, которые могут запустить генерацию в одну минуту: мощности
