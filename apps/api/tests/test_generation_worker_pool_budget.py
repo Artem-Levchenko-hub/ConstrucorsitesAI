@@ -79,6 +79,7 @@ async def test_dispatch_loop_overlaps_runs_reuses_slots_and_reports_waiters(
     heartbeat = asyncio.Queue()
     real_sleep = asyncio.sleep
     pool = asyncio.BoundedSemaphore(db.DATABASE_POOL_CAPACITY)
+    polled = []
 
     class Session:
         async def __aenter__(self):
@@ -86,6 +87,13 @@ async def test_dispatch_loop_overlaps_runs_reuses_slots_and_reports_waiters(
 
         async def __aexit__(self, *_args):
             pass
+
+        async def get(self, model, run_id):
+            from yleum_api.models.generation_run import GenerationRun
+
+            assert model is GenerationRun
+            polled.append(run_id)
+            return GenerationRun(id=run_id, status=statuses[run_id], agent_state={})
 
     async def scan(_session, active):
         # Distinct real hosts isolate the global connection-budget invariant
@@ -101,6 +109,7 @@ async def test_dispatch_loop_overlaps_runs_reuses_slots_and_reports_waiters(
         )
 
     async def execute(run_id):
+        assert run_id in polled, "dependency preflight must precede execution-slot work"
         tasks.append(asyncio.current_task())
         calls.append(run_id)
         # Hold BOTH ownership and work connections, rather than assuming work
@@ -124,7 +133,9 @@ async def test_dispatch_loop_overlaps_runs_reuses_slots_and_reports_waiters(
     monkeypatch.setattr(generation, "get_redis", lambda: SimpleNamespace(set=redis_set))
     monkeypatch.setattr(generation, "execute_dispatch", execute)
     monkeypatch.setattr(
-        generation, "asyncio", SimpleNamespace(create_task=asyncio.create_task, sleep=scan_sleep)
+        generation, "asyncio", SimpleNamespace(
+            create_task=asyncio.create_task, sleep=scan_sleep, gather=asyncio.gather,
+        )
     )
     monkeypatch.setattr(
         generation,

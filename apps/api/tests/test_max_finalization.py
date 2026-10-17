@@ -1579,7 +1579,7 @@ async def test_cold_finalization_consumes_pending_repair_before_any_promotion(
     from unittest.mock import AsyncMock
 
     from yleum_api.services.generation.continuation import SourceNoveltyTracker
-    from yleum_api.services.generation.recovery_execution import GenerationYielded
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver, GenerationYielded
     from yleum_api.services.generation.source_error_classification import SourceFailure
     from yleum_api.services.max_finalization import MaxFinalizationConflict
 
@@ -1630,10 +1630,13 @@ async def test_cold_finalization_consumes_pending_repair_before_any_promotion(
         driver.context = context
 
     driver.save = save
+    driver.account_work = AsyncMock(wraps=ExecutionDriver.account_work.__get__(driver))
     coordinator = object.__new__(MaxFinalizationCoordinator)
     coordinator.session_factory = sessions
     coordinator._locked_run = AsyncMock(return_value=run)
-    coordinator._raise_persisted_infrastructure_failure = AsyncMock()
+    coordinator._raise_persisted_infrastructure_failure = AsyncMock(
+        side_effect=lambda: driver.account_work.assert_awaited_once()
+    )
     coordinator.executor = SimpleNamespace(snapshot_files=AsyncMock(return_value=files))
     coordinator.finalize = AsyncMock(side_effect=AssertionError("promotion before pending repair"))
     coordinator._repair_progress_receipts = AsyncMock(return_value=frozenset({"old-green"}))
@@ -1653,6 +1656,7 @@ async def test_cold_finalization_consumes_pending_repair_before_any_promotion(
             prompt="original", repair=repair, repair_source=repair, continuation=driver
         )
     coordinator.finalize.assert_not_awaited()
+    driver.account_work.assert_awaited_once_with()
     if repair_complete:
         coordinator.revalidate_pending_repair.assert_not_awaited()
         assert driver.context["completed"]["finalization_progress"]["no_progress"] is True
