@@ -6,6 +6,7 @@ from uuid import UUID, uuid4
 import pytest
 from docker.errors import APIError
 
+from tests._generation_reader_settings import legacy_reader_process_settings  # noqa: F401
 from tests.test_docker_py_cell_backend import (
     _backend,
     _docker_api_error,

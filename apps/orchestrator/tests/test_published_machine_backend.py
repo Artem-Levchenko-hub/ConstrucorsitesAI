@@ -4,6 +4,8 @@ from uuid import UUID
 
 import pytest
 
+from tests._generation_reader_settings import legacy_reader_process_settings  # noqa: F401
+
 
 def published_backend(tmp_path, release_id=None):
     from tests.test_docker_machine_backend import backend

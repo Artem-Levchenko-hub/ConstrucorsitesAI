@@ -9,6 +9,7 @@ from uuid import UUID
 
 import pytest
 
+from tests._generation_reader_settings import legacy_reader_process_settings  # noqa: F401
 from tests.test_docker_machine_backend import backend
 from tests.test_published_machine_backend import published_backend
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict

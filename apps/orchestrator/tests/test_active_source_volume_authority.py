@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests._generation_reader_settings import legacy_reader_process_settings  # noqa: F401
 from tests.test_docker_py_cell_backend import _backend, _FakeClient, _FakeVolume
 from tests.test_workspace_router import _ready_provider
 from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError

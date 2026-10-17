@@ -15,6 +15,49 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 
+@pytest.mark.parametrize("dotenv_only", [False, True])
+@pytest.mark.parametrize("registered", [False, True])
+def test_valid_process_settings_never_use_local_legacy_config_to_bypass_readers(
+    tmp_path, monkeypatch, dotenv_only, registered,
+):
+    from yleum_orchestrator.core import config
+    from yleum_orchestrator.services import generation_reader_inventory as readers
+
+    missing = tmp_path / "missing-inventory"
+    for name in ("DATABASE_URL", "INTERNAL_TOKEN", "GENERATION_RECOVERY_INVENTORY_DIR"):
+        monkeypatch.delenv(name, raising=False)
+    if dotenv_only:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text(
+            "DATABASE_URL=postgresql://synthetic:synthetic@127.0.0.1/synthetic\n"
+            "INTERNAL_TOKEN=synthetic-controller-unit-token\n"
+            f"GENERATION_RECOVERY_INVENTORY_DIR={missing}\n"
+        )
+        # Actual process Settings loader, bypassing only its inter-test LRU cache.
+        getter = config.get_settings.__wrapped__
+    else:
+        settings = config.Settings(
+            _env_file=None,
+            database_url="postgresql://synthetic:synthetic@127.0.0.1/synthetic",
+            internal_token="synthetic-controller-unit-token",
+            generation_recovery_inventory_dir=str(missing),
+        )
+        def getter():
+            return settings
+    monkeypatch.setattr(readers, "get_settings", getter)
+    monkeypatch.setattr(readers, "_REVOKED", False)
+    fixture = ControllerReaderTests()
+    fixture.module = readers
+    _, _, own = fixture.snapshot()
+    monkeypatch.setattr(readers, "_OWN", own if registered else None)
+    calls = []
+    local_legacy = SimpleNamespace(generation_recovery_inventory_dir="")
+    with pytest.raises(readers.ReaderInventoryUnavailable):
+        readers.reader_dispatch(lambda local: calls.append(local), local_legacy)
+    assert calls == []
+    assert getter().generation_recovery_inventory_dir == str(missing)
+
+
 @pytest.mark.parametrize("kind", ["volume", "network", "container"])
 async def test_destructive_dispatch_rechecks_after_lookup(kind, monkeypatch):
     from yleum_orchestrator.services import docker_py_cell_backend as module
