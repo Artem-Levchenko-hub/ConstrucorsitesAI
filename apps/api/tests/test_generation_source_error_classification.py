@@ -300,6 +300,7 @@ async def test_real_repair_entry_enforces_paths_and_server_capability(
 
 async def test_repair_restart_keeps_original_inputs_and_consumes_one_allowance(monkeypatch):
     from datetime import UTC, datetime, timedelta
+    from unittest.mock import Mock, call
     from uuid import uuid4
 
     from yleum_api.services import agent_native
@@ -310,7 +311,7 @@ async def test_repair_restart_keeps_original_inputs_and_consumes_one_allowance(m
         ExecutionCursor,
         IncompleteResponseBudget,
     )
-    from yleum_api.services.generation.recovery_execution import GenerationYielded
+    from yleum_api.services.generation.recovery_execution import ExecutionDriver, GenerationYielded
 
     original_deadline = datetime.now(UTC) + timedelta(minutes=20)
     ref = CheckpointRef(object_key="owned/context", sha256="a" * 64)
@@ -321,6 +322,7 @@ async def test_repair_restart_keeps_original_inputs_and_consumes_one_allowance(m
         execution_context_ref=ref,
     )
     driver = SimpleNamespace(context={"completed": {}}, state=SimpleNamespace(execution=cursor))
+    driver.soft_edit_deadline = Mock(wraps=ExecutionDriver.soft_edit_deadline.__get__(driver))
     saves = []
 
     async def save(execution, *, context, **kwargs):
@@ -382,6 +384,9 @@ async def test_repair_restart_keeps_original_inputs_and_consumes_one_allowance(m
     restored = await agent_finalization.run_native_source_repair(**kwargs)
     assert restored == result
     assert len(native_calls) == 2
+    assert driver.soft_edit_deadline.call_args_list == [
+        call(original_deadline), call(original_deadline),
+    ]
     assert accounting.budget == IncompleteResponseBudget(total=2, since_progress=2)
     assert driver.context["completed"]["response_budget"] == {"total": 2, "since_progress": 2}
 
