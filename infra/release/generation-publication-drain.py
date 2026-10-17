@@ -28,7 +28,10 @@ _MACHINE_HELPERS = frozenset(
     }
 )
 _MACHINE_SERVICES = frozenset(
-    {"development", "project-postgres", "namespace-guard", "egress-proxy"}
+    {
+        "development", "project-postgres", "namespace-guard", "egress-proxy",
+        "managed-max-core", "max-gateway",
+    }
 )
 
 
@@ -181,10 +184,15 @@ def require_physical_writers_drained(
         container.reload()
         attrs = container.attrs
         labels = attrs.get("Config", {}).get("Labels") or {}
+        kind = labels.get("omnia.resource_kind")
         affected = (
             labels.get("omnia.helper") == "true"
             or labels.get("omnia.project_machine") == "true"
             or "omnia.source_operation_id" in labels
+            # The trusted core bootstrap inherits project-cell identity labels,
+            # unlike helpers created by DockerMachineBackend.
+            or labels.get("omnia.project_cell") == "true"
+            and kind == "core-database-bootstrap"
         )
         if not affected:
             continue
@@ -196,10 +204,10 @@ def require_physical_writers_drained(
         by_id[container.id] = (attrs, labels)
         helper = (
             labels.get("omnia.helper") == "true"
-            or labels.get("omnia.resource_kind") in _MACHINE_HELPERS
+            or kind in _MACHINE_HELPERS
             or "omnia.source_operation_id" in labels
         )
-        if not helper and labels.get("omnia.resource_kind") not in _MACHINE_SERVICES:
+        if not helper and kind not in _MACHINE_SERVICES:
             raise PhysicalDrainError("affected physical resource kind is unknown")
         state = attrs.get("State", {})
         if helper and not (

@@ -151,6 +151,58 @@ class PhysicalContractTests(unittest.TestCase):
             )
         )
 
+    def test_managed_serving_processes_allow_only_confirmed_finished_execs(self):
+        for kind in ("managed-max-core", "max-gateway"):
+            for outcome in ("none", "finished", "running", "unknown", "foreign"):
+                container = self.container(kind, "a" * 64)
+                container.attrs["ExecIDs"] = [] if outcome == "none" else ["b" * 64]
+                execution = {
+                    "ContainerID": "c" * 64 if outcome == "foreign" else container.id,
+                    "Running": outcome == "running",
+                    "ExitCode": 0 if outcome in {"finished", "foreign"} else None,
+                }
+                client = SimpleNamespace(
+                    containers=SimpleNamespace(list=lambda **kwargs: [container]),
+                    api=SimpleNamespace(exec_inspect=lambda _: execution),
+                )
+                with self.subTest(kind=kind, outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                    if outcome in {"none", "finished"}:
+                        self.module.require_physical_writers_drained(Path(tmp), client)
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(Path(tmp), client)
+
+    def test_cell_bootstrap_helper_requires_strict_physical_stop(self):
+        for damage in (None, "running", "paused", "dead", "pid", "restart", "owner"):
+            container = self.container("core-database-bootstrap", "a" * 64)
+            labels = container.attrs["Config"]["Labels"]
+            labels.pop("omnia.project_machine")
+            labels.update({"omnia.managed": "true", "omnia.project_cell": "true"})
+            container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+            if damage == "running":
+                container.attrs["State"].update(Status="running", Running=True, Pid=5)
+            elif damage in {"paused", "dead", "pid"}:
+                field = {"paused": "Paused", "dead": "Dead", "pid": "Pid"}[damage]
+                container.attrs["State"][field] = 5 if damage == "pid" else True
+            elif damage == "restart":
+                container.attrs["HostConfig"]["RestartPolicy"]["Name"] = "always"
+            elif damage == "owner":
+                labels.pop("omnia.owner_id")
+            client = SimpleNamespace(containers=SimpleNamespace(list=lambda **kwargs: [container]))
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                if damage is None:
+                    self.module.require_physical_writers_drained(Path(tmp), client)
+                else:
+                    with self.assertRaises(self.module.PhysicalDrainError):
+                        self.module.require_physical_writers_drained(Path(tmp), client)
+
+    def test_unknown_machine_kind_remains_denied(self):
+        container = self.container("unknown-writer", "a" * 64)
+        client = SimpleNamespace(containers=SimpleNamespace(list=lambda **kwargs: [container]))
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(self.module.PhysicalDrainError, "resource kind is unknown"):
+                self.module.require_physical_writers_drained(Path(tmp), client)
+
     def test_typed_terminal_positive_and_missing_or_mismatched_identity_denied(self):
         client = SimpleNamespace(containers=SimpleNamespace(list=lambda **kwargs: []))
         for family in ("source-write-operations", "command-operations"):
