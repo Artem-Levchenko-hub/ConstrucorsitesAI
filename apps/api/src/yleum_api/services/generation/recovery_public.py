@@ -223,7 +223,9 @@ async def project_generation_public(
             and_(
                 GenerationRecoveryEffect.run_id == GenerationRun.id,
                 GenerationRecoveryEffect.kind == "proof",
-                GenerationRecoveryEffect.pre_binding["kind"].astext == "publication_v1",
+                GenerationRecoveryEffect.pre_binding["kind"].astext.in_(
+                    ("publication_v1", "publication_v2")
+                ),
             ),
         )
         .where(Project.id == project_id, Project.owner_id == user_id)

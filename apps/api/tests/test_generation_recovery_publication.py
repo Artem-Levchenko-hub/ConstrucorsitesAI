@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -12,23 +11,18 @@ import pytest
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from tests.test_generation_recovery_execution import _bootstrap_wait
+from tests.test_generation_recovery_acceptance import _canonical
 from tests.test_generation_recovery_readers import install_healthy_reader_inventory
-from tests.test_max_finalization import _install_exact_release_probe, _new_harness
+from tests.test_max_finalization import _install_exact_release_probe
 from yleum_api.models.generation_run import GenerationRun
-from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services.generation import agent_publication
 from yleum_api.services.generation import recovery_execution as ex
 from yleum_api.services.generation.contracts import GenerationIds, GenerationRuntime, SourceBaseline
 from yleum_api.services.generation.recovery_contract import (
-    CheckpointRef,
-    ContinuationClaim,
     RecoveryContractError,
-    decode_recovery,
 )
-from yleum_api.services.generation.recovery_pipeline import recovery_binding
 
 
 @pytest.mark.parametrize("lost_ack,damage", [
@@ -47,44 +41,14 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
 ):
     install_healthy_reader_inventory(monkeypatch, refresh=True)
     cleanup = _install_exact_release_probe(monkeypatch)
-    harness = await _new_harness(db_session, test_engine, toolchain_digest="5" * 64)
+    harness, run, message, state, _observations = await _canonical(
+        db_session, test_engine, monkeypatch,
+    )
     coordinator = harness.coordinator
-    proof = await coordinator.finalize(files=harness.files, prompt="Build tracker")
-    run = await db_session.get(GenerationRun, coordinator.generation_run_id)
-    message = Message(project_id=run.project_id, role="assistant", content="")
-    db_session.add(message)
-    await db_session.flush()
-    run.assistant_message_id = message.id
-    claim = ContinuationClaim(
-        run_id=run.id,
-        token=uuid4(),
-        attempt_seq=1,
-        worker_id="publication-test",
-        expires_at=datetime.now(UTC) + timedelta(minutes=1),
-    )
-    ref = CheckpointRef(object_key="synthetic/complete-context", sha256="c" * 64)
-    raw = _bootstrap_wait(run)
-    raw.update(
-        phase="working",
-        next_check_at=None,
-        cursor="finalization",
-        attempt_seq=1,
-        continuation_claim=claim.model_dump(mode="json"),
-        context_ref=ref.model_dump(mode="json"),
-        checkpoint=ref.model_dump(mode="json"),
-        binding=recovery_binding(await coordinator.executor.current_identity()).model_dump(
-            mode="json"
-        ),
-    )
-    raw["execution"].update(
-        stage="finalization",
-        substep="terminal_gate",
-        physical_state="active",
-        execution_context_ref=ref.model_dump(mode="json"),
-    )
-    state = decode_recovery(raw)
-    run.agent_state = {**(run.agent_state or {}), "recovery_v1": raw}
-    await db_session.commit()
+    proof = await coordinator.finalize(files=harness.files, prompt="task_density_v1")
+    claim = state.continuation_claim
+    assert claim is not None
+    await db_session.refresh(run)
     from yleum_api.services.generation import recovery_store
     from yleum_api.services.orchestrator_client import ProjectCellWorkspaceIdentity
 
@@ -166,7 +130,7 @@ async def test_owned_publication_ack_loss_never_repeats_git_snapshot_or_quota(
         model_id="synthetic",
         progress=SimpleNamespace(steps=2),
         project_info=SimpleNamespace(template="max_miniapp"),
-        prompt_text="Build tracker",
+        prompt_text="task_density_v1",
         runtime=GenerationRuntime(handle=coordinator.executor, coordinator=coordinator),
         continuation=driver,
     )

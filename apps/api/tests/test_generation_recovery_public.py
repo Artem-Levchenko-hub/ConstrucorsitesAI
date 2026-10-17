@@ -242,7 +242,7 @@ def publication(data, *, no_snapshot=False):
 @pytest.mark.parametrize(
     "edge", ["valid", "copied", "digest", "running", "unfinished", "old_pointer", "no_snapshot"]
 )
-async def test_existing_publication_validator_and_terminal_gate(edge):
+async def test_historical_v1_receipt_cannot_satisfy_saved_execution_acceptance(edge):
     data = records()
     publication(data, no_snapshot=edge == "no_snapshot")
     if edge == "copied":
@@ -256,10 +256,11 @@ async def test_existing_publication_validator_and_terminal_gate(edge):
     if edge == "old_pointer":
         data["project"].current_snapshot_id = uuid4()
     view = await public.project_loaded(**data)
-    assert view.acceptance.current_request_complete is (edge in {"valid", "no_snapshot"})
-    assert view.acceptance.snapshot_id == (data["snapshot"].id if edge == "valid" else None)
-    if edge in {"valid", "no_snapshot", "running", "unfinished"}:
-        assert view.recovery.last_verified_action == "publication_confirmed"
+    # Saved V2/V3 requires the functional seal introduced by publication_v2.
+    # A technically valid historical receipt cannot acquire that authority.
+    assert view.acceptance.current_request_complete is False
+    assert view.acceptance.snapshot_id is None
+    assert view.recovery.last_verified_action is None
 
 
 async def test_one_sql_read_refreshes_current_rows_without_financial_mutations(db_session):
@@ -342,7 +343,10 @@ async def test_progress_canonical_message_survives_payload_override_after_commit
     assert seen[0][2]["data"]["message_id"] == str(recorder.assistant_message_id)
 
 
-async def test_latest_rest_projects_wait_and_denies_owner_transfer(client, db_session):
+@pytest.mark.parametrize("version,corrupt", [(1, False), (3, False), (3, True)])
+async def test_latest_rest_projects_wait_and_denies_owner_transfer(
+    client, db_session, version, corrupt
+):
     from tests.test_generation_runs import _owner_and_project
     from yleum_api.core.deps import get_current_user
     from yleum_api.main import app
@@ -368,7 +372,14 @@ async def test_latest_rest_projects_wait_and_denies_owner_transfer(client, db_se
         ),
         phase="waiting_dependency",
     )
-    run.agent_state = {"recovery_v1": state.model_dump(mode="json")}
+    raw = state.model_dump(mode="json")
+    if version == 3:
+        from tests.test_generation_recovery_deadlines import _clock
+        from tests.test_generation_recovery_execution import _bootstrap_wait
+        raw = _bootstrap_wait(run) | {"version": 3, "clock": _clock(datetime.now(UTC))}
+        if corrupt:
+            raw["clock"]["window_ms"] = -1
+    run.agent_state = {"recovery_v1": raw}
     await db_session.commit()
 
     async def current_user():
@@ -380,7 +391,11 @@ async def test_latest_rest_projects_wait_and_denies_owner_transfer(client, db_se
         assert response.status_code == 200
         body = response.json()
         assert body["id"] == str(run.id)
-        assert body["recovery"]["phase"] == "waiting_dependency"
+        if corrupt:
+            assert body["recovery"] is None and body["recovery_unavailable"] is True
+        else:
+            assert body["recovery"]["phase"] == "waiting_dependency"
+        assert "interval_id" not in response.text and "clock" not in response.text
         assert body["acceptance"]["current_request_complete"] is False
         # A fresh legitimate user cannot read the former owner's current run.
         other, _ = await _owner_and_project(db_session)

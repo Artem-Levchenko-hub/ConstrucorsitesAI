@@ -27,6 +27,12 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.progress import GenerationProgress
 from yleum_api.services.generation.publication import _snapshot_payload
+from yleum_api.services.generation.recovery_acceptance import (
+    AcceptanceSeal,
+    acceptance_required,
+    require_current_acceptance,
+    validate_acceptance_seal,
+)
 from yleum_api.services.generation.recovery_contract import (
     RecoveryBinding,
     RecoveryContractError,
@@ -62,6 +68,22 @@ class PublicationBinding(BaseModel):
     assistant_message_id: UUID
     model_id: str
     prompt_sha256: Sha256
+
+
+class PublicationBindingV2(PublicationBinding):
+    kind: Literal["publication_v2"] = "publication_v2"  # type: ignore[assignment]
+    acceptance: AcceptanceSeal
+    acceptance_sha256: Sha256
+
+
+def decode_publication_binding(raw: object) -> PublicationBinding | PublicationBindingV2:
+    if not isinstance(raw, dict):
+        raise RecoveryContractError("publication binding is corrupt")
+    model = PublicationBindingV2 if raw.get("kind") == "publication_v2" else PublicationBinding
+    try:
+        return model.model_validate_json(json.dumps(raw), strict=True)
+    except ValueError as exc:
+        raise RecoveryContractError("publication binding is corrupt") from exc
 
 
 class PublicationReceipt(BaseModel):
@@ -119,16 +141,13 @@ async def publication_committed(
         or row.payload_version != 1
         or row.logical_step_seq != state.execution.logical_step_seq
         or type(row.pre_binding) is not dict
-        or row.pre_binding.get("kind") != "publication_v1"
+        or row.pre_binding.get("kind") not in {"publication_v1", "publication_v2"}
         or row.input_digest != _digest(row.pre_binding)
         or row.pre_binding.get("identity") != state.identity.model_dump(mode="json")
         or run.prompt_hash != state.identity.prompt_hash
     ):
         raise RecoveryContractError("publication intent binding changed")
-    try:
-        bound = PublicationBinding.model_validate_json(json.dumps(row.pre_binding), strict=True)
-    except ValueError as exc:
-        raise RecoveryContractError("publication binding is corrupt") from exc
+    bound = decode_publication_binding(row.pre_binding)
     if bound.identity != state.identity or bound.source != state.binding:
         raise RecoveryContractError("publication retained source changed")
     if (
@@ -176,6 +195,12 @@ async def publication_committed(
             or (run.agent_state or {}).get("commit_sha") != snapshot.commit_sha
         ):
             raise RecoveryContractError("publication snapshot ownership changed")
+    if acceptance_required(run):
+        if (not isinstance(bound, PublicationBindingV2)
+            or bound.prompt_sha256 != state.identity.prompt_hash
+            or bound.acceptance_sha256 != _digest(bound.acceptance.model_dump(mode="json"))):
+            raise RecoveryContractError("functional publication acceptance missing")
+        validate_acceptance_seal(run, binding=bound.source, seal=bound.acceptance)
     return True
 
 
@@ -251,20 +276,28 @@ async def _begin_publication(
         or state.identity.project_id != ids.project_id
         or state.identity.user_id != ids.user_id
         or baseline.snapshot_id != state.identity.accepted_snapshot_id
+        or hashlib.sha256(prompt_text.encode()).hexdigest() != state.identity.prompt_hash
     ):
         raise RecoveryContractError("publication source or original scope changed")
-    binding = PublicationBinding(
-        identity=state.identity,
-        source=state.binding,
-        baseline_sha=baseline.sha,
-        assistant_message_id=ids.assistant_message_id,
-        model_id=model_id,
-        prompt_sha256=hashlib.sha256(prompt_text.encode()).hexdigest(),
-    ).model_dump(mode="json")
     effect_id = _publication_id(ids.run_id)
     seq = state.execution.logical_step_seq + 1
     async with driver.factory() as session:
         run, _ = await _publication_owner(session, driver)
+        seal = await require_current_acceptance(session, run_id=run.id,
+            project_id=run.project_id, binding=state.binding)
+        if seal is None:
+            raise RecoveryContractError("executable publication acceptance missing")
+        typed_seal = AcceptanceSeal.model_validate_json(json.dumps(seal), strict=True)
+        binding = PublicationBindingV2(
+            identity=state.identity,
+            source=state.binding,
+            baseline_sha=baseline.sha,
+            assistant_message_id=ids.assistant_message_id,
+            model_id=model_id,
+            prompt_sha256=state.identity.prompt_hash,
+            acceptance=typed_seal,
+            acceptance_sha256=_digest(typed_seal.model_dump(mode="json")),
+        ).model_dump(mode="json")
         parent = await session.get(Snapshot, baseline.snapshot_id) if baseline.snapshot_id else None
         if (
             (baseline.snapshot_id is None and baseline.sha is not None)
@@ -340,6 +373,15 @@ async def _confirm_publication(
         or row.input_digest != _digest(row.pre_binding)
     ):
         raise RecoveryContractError("publication reservation changed")
+    bound = decode_publication_binding(row.pre_binding)
+    if not isinstance(bound, PublicationBindingV2):
+        raise RecoveryContractError("executable publication lacks functional acceptance")
+    assert state.binding is not None
+    fresh = await require_current_acceptance(session, run_id=state.identity.run_id,
+        project_id=state.identity.project_id, binding=state.binding)
+    if (fresh != bound.acceptance.model_dump(mode="json")
+            or bound.acceptance_sha256 != _digest(fresh)):
+        raise RecoveryContractError("functional acceptance changed before publication commit")
     receipt = PublicationReceipt(
         input_digest=row.input_digest,
         snapshot_id=snapshot.id if snapshot is not None else None,
@@ -381,6 +423,12 @@ async def publish_agent_candidate(
     _promotion_permit: PromotionPermit | None = None,
     continuation: ExecutionDriver | None = None,
 ) -> None:
+    async with factory() as session:
+        run = await session.get(GenerationRun, ids.run_id)
+        if run is None:
+            raise RecoveryContractError("publication run missing")
+        if acceptance_required(run) and continuation is None:
+            raise RecoveryContractError("functional publication requires durable continuation")
     if files:
         permit = require_promotion_permit(
             _promotion_permit,
