@@ -104,6 +104,14 @@ def has_provider_effect_context() -> bool:
     return _PROVIDER_EFFECT.get() is not None
 
 
+def prospective_provider_attempt() -> tuple[UUID, int] | None:
+    """Identity only; prepare_provider_effect still validates current SQL ownership."""
+    cursor = _PROVIDER_EFFECT.get()
+    if cursor is None:
+        return None
+    return uuid5(cursor.root_effect_id, "provider-attempt-v1"), cursor.outer_attempt
+
+
 def provider_reconciliation_requested() -> bool:
     cursor = _PROVIDER_EFFECT.get()
     return cursor is not None and cursor.reconcile_only and not cursor.dispatch.resume_authorized
@@ -680,6 +688,10 @@ async def reserve_provider_wire(
         )
         if provider is None or attempt is None:
             raise RecoveryContractError("wire owning journal disappeared")
+        from yleum_api.services.generation.recovery_diagnostic import require_diagnostic_wire
+
+        require_diagnostic_wire(run.agent_state, identity,
+                                outer_attempt=plan.outer_attempt, wire_attempt=wire_attempt)
         effect_id = uuid5(cursor.root_effect_id, f"wire-v1:{plan.outer_attempt}:{wire_attempt}")
         if await session.get(GenerationRecoveryEffect, effect_id) is not None:
             raise RecoveryContractError("wire reservation already consumed; reconcile first")

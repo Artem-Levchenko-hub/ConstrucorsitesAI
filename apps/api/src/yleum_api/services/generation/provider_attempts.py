@@ -38,6 +38,14 @@ async def prepare_generation_attempt(
         settings = get_settings()
         run_id, project_id = UUID(str(metadata["run_id"])), UUID(str(metadata["project_id"]))
         async with async_sessionmaker(get_engine(), expire_on_commit=False)() as session:
+            from yleum_api.services.generation.recovery_diagnostic import (
+                KEY,
+                apply_diagnostic_budget,
+                lock_diagnostic_namespace,
+            )
+
+            if settings.generation_provider_attempts_enabled:
+                await lock_diagnostic_namespace(session, run_id)
             # No FK/row lock against the caller's project/run transaction. The
             # gateway rechecks current committed ownership when granting dispatch.
             row = (
@@ -71,9 +79,15 @@ async def prepare_generation_attempt(
             ):
                 raise ValueError
             if not settings.generation_provider_attempts_enabled:
-                if existing is not None or parent is not None or has_provider_effect_context():
+                if (existing is not None or parent is not None or has_provider_effect_context()
+                        or KEY in (row["agent_state"] or {})):
                     raise ValueError
                 return None
+            diagnostic_attempt = await apply_diagnostic_budget(
+                session, body, agent_state=row["agent_state"], run_id=run_id,
+                project_id=project_id, user_id=row["user_id"], prompt_hash=row["prompt_hash"],
+                parent_attempt_id=parent.attempt_id if parent else None,
+            )
             digest = request_digest(route, body)
             if existing is not None and (
                 existing.run_id, existing.project_id, existing.request_sha256
@@ -90,6 +104,8 @@ async def prepare_generation_attempt(
                 digest=digest, parent=parent, existing=existing,
             )
             if existing is not None:
+                if diagnostic_attempt is not None and existing.attempt_id != diagnostic_attempt:
+                    raise ValueError
                 if effect is not None or (
                     prior_identity is not None and prior_identity != existing
                 ):
@@ -97,6 +113,9 @@ async def prepare_generation_attempt(
                 await session.commit()
                 return existing
             if prior_identity is not None:
+                if (diagnostic_attempt is not None
+                        and prior_identity.attempt_id != diagnostic_attempt):
+                    raise ValueError
                 await session.commit()
                 return prior_identity
             if effect is not None and effect.parent_effect_id is not None and parent is None:
@@ -120,6 +139,8 @@ async def prepare_generation_attempt(
             attempt_id = uuid5(effect.effect_id, "provider-attempt-v1") if effect else uuid4()
             if parent is not None:
                 attempt_id = uuid5(parent.attempt_id, "definitive-refusal-retry-v1")
+            if diagnostic_attempt is not None and attempt_id != diagnostic_attempt:
+                raise ValueError
             identity = GenerationProviderIdentity(
                 run_id,
                 project_id,

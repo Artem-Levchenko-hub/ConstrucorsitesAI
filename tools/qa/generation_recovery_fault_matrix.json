@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "scope": "Unpaid existing owning-boundary tests; not a live cohort receipt",
+  "live_acceptance": "NOT_RUN",
+  "second_max_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+  "cases": [
+    {
+      "scenario": 1,
+      "nodes": [
+        "tests/test_generation_recovery_actions.py::test_three_truncations_with_verified_progress_continue"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 2,
+      "nodes": [
+        "tests/test_generation_recovery_policy.py::test_comments_aba_green_builds_and_counters_are_not_progress"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 3,
+      "nodes": [
+        "tests/test_generation_recovery_actions.py::test_duplicate_pure_build_same_batch_executes_once",
+        "tests/test_generation_recovery_actions.py::test_native_unknown_or_mutating_action_invalidates_batch"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 4,
+      "nodes": [
+        "tests/test_generation_recovery_deadlines.py::test_first_repair_window_requires_live_owned_terminal_red"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 5,
+      "nodes": [
+        "tests/test_generation_recovery_fault_matrix.py::test_diagnostic_commit_failure_never_reaches_transport",
+        "tests/test_generation_recovery_execution.py::test_physical_tool_intent_commit_precedes_dispatch_and_restart_cannot_repeat",
+        "tests/test_generation_recovery_execution.py::test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_fence",
+        "tests/test_generation_recovery_deadlines.py::test_v3_cold_public_xml_pipeline_preserves_original_contract"
+      ],
+      "live": "NOT_RUN",
+      "limit": "Process replacement/ACK loss is synthetic here; actual worker kill requires separate root evidence"
+    },
+    {
+      "scenario": 6,
+      "nodes": [
+        "tests/test_generation_recovery_store.py::test_postgres_recovery_ownership_concurrent_cas_and_json_preservation",
+        "tests/test_generation_recovery_execution.py::test_provider_effect_denies_stale_owner_or_drain_without_either_row"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 7,
+      "nodes": [
+        "tests/test_generation_recovery_adaptation_cycle.py::test_confirmed_hold_cold_pipeline_reuses_candidate_and_terminal_cleanup_once",
+        "tests/test_generation_recovery_public.py::test_strict_saved_phase_survives_with_no_raw_observations"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 8,
+      "nodes": [
+        "tests/test_max_finalization_missing_import.py::test_missing_import_does_not_bypass_observation_guards",
+        "tests/test_generation_source_error_classification.py::test_missing_css_permits_importer_and_exact_target",
+        "tests/test_generation_source_error_classification.py::test_known_frozen_alias_resolves_one_local_target",
+        "tests/test_generation_source_error_classification.py::test_external_package_never_authorizes_install_or_source_write",
+        "tests/test_generation_source_error_classification.py::test_infrastructure_takes_priority_over_source_diagnostic"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 9,
+      "nodes": [
+        "tests/test_generation_recovery_acceptance.py::test_green_build_with_missing_action_cannot_promote",
+        "tests/test_generation_recovery_acceptance.py::test_saved_v2_obligations_survive_off_and_summary_fallback"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 10,
+      "nodes": [
+        "tests/test_generation_recovery_adaptation_cycle.py::test_candidate_checkpoint_still_requires_fresh_source_schema_and_environment",
+        "tests/test_generation_recovery_campaign.py::test_actual_campaign_only_normal_owner_api_and_durable_intents"
+      ],
+      "live": "NOT_RUN",
+      "limit": "Actual app data/foreign CRUD/browser and one MAX identity are root-only; second identity unavailable"
+    },
+    {
+      "scenario": 11,
+      "nodes": [
+        "tests/test_generation_recovery_adaptation_cycle.py::test_normal_cancel_before_first_hold_stops_releases_and_cleans_after_terminal_commit",
+        "tests/test_generation_recovery_execution.py::test_cancel_while_waiting_for_session_mutex_never_reserves_provider_effect"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 12,
+      "nodes": [
+        "tests/test_generation_recovery_trace.py::test_console_error_keeps_source_stack_and_url_safely"
+      ],
+      "live": "NOT_RUN",
+      "limit": "Exact NGINX asset/TLS and independent browser network receipt remain Task14/root gates"
+    },
+    {
+      "scenario": 13,
+      "nodes": [
+        "tests/test_generation_recovery_execution.py::test_committed_wait_exits_real_lifecycle_tracker_without_terminalizing",
+        "tests/test_generation_recovery_execution.py::test_unknown_recovery_shape_is_preserved_not_failed_as_orphan"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 14,
+      "nodes": [
+        "tests/test_generation_recovery_quiescence.py::test_actual_continuation_claim_serializes_before_deploy_fence",
+        "tests/test_generation_recovery_quiescence.py::test_reader_target_gate_preserves_unsupported_wait_and_drain",
+        "tests/test_generation_recovery_quiescence.py::test_finished_financial_journal_does_not_prove_receiver_stopped"
+      ],
+      "live": "NOT_RUN"
+    },
+    {
+      "scenario": 15,
+      "nodes": [
+        "tests/test_generation_recovery_requirements.py::test_parent_link_is_immutable_and_separate_from_original_prompt_hash",
+        "tests/test_generation_recovery_requirements.py::test_link_rejects_unsettled_or_foreign_predecessor",
+        "tests/test_generation_recovery_acceptance.py::test_admitted_scope_cannot_be_removed_or_borrowed"
+      ],
+      "live": "NOT_RUN"
+    }
+  ]
+}

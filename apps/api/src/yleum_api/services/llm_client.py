@@ -13,6 +13,9 @@ import httpx
 
 from yleum_api.core.config import get_settings
 from yleum_api.services.generation.provider_identity import GenerationProviderIdentity
+from yleum_api.services.generation.recovery_diagnostic import (
+    diagnostic_output_budget as diagnostic_output_budget,
+)
 from yleum_api.services.generation.response_auth import record_headers
 
 log = logging.getLogger(__name__)
@@ -756,6 +759,7 @@ async def complete_chat(
         payload["temperature"] = temperature
     request_timeout = 90.0 if timeout_seconds is None else max(1.0, float(timeout_seconds))
     resp = await _chat_post(payload, url, request_timeout)
+    effective_max_tokens = payload.get("max_tokens")
     try:
         data = resp.json()
     except ValueError:
@@ -775,7 +779,7 @@ async def complete_chat(
         and not choice["message"].get("refusal") and not data.get("error")
     ):
         raise LLMOutputTruncated(
-            requested_max_tokens=max_tokens, completion_tokens=completion_tokens,
+            requested_max_tokens=effective_max_tokens, completion_tokens=completion_tokens,
         )
     if not isinstance(reason, str) or reason not in {"stop", "tool_calls"}:
         raise LLMError(
@@ -785,7 +789,7 @@ async def complete_chat(
                 if reason == "content_filter" else "provider_output_invalid"
             ),
             retry_safe=False,
-            finish_reason=reason, requested_max_tokens=max_tokens,
+            finish_reason=reason, requested_max_tokens=effective_max_tokens,
             completion_tokens=completion_tokens,
         )
     assert isinstance(choice, dict)

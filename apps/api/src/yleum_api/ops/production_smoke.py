@@ -41,6 +41,16 @@ READINESS_CHECKS = (
 )
 
 
+def validate_recovery_campaign_identity(expected_release: str,
+                                        observed: Mapping[str, object]) -> bool:
+    """A cohort cannot borrow a healthy worker/controller from another revision."""
+    required = {"api", "web", "gateway", "worker", "generation_worker",
+                "orchestrator_core", "orchestrator_commerce"}
+    return (re.fullmatch(r"[a-f0-9]{40}", expected_release) is not None
+            and set(observed) == required
+            and all(value == expected_release for value in observed.values()))
+
+
 @dataclass(frozen=True)
 class Configuration:
     platform_url: str

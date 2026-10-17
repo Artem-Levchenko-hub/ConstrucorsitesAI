@@ -238,6 +238,9 @@ jobs:
       - name: Run API suite shard ${{ matrix.shard }} of 3 on disposable services
         working-directory: apps/api
         run: |
+          # Task15 remains in the ordinary disposable-service gate, not a paid canary job.
+          test -f tests/test_generation_recovery_campaign.py
+          test -f tests/test_generation_recovery_fault_matrix.py
           mapfile -t files < <(find tests -maxdepth 1 -name 'test_*.py' | sort | awk -v k=$(( ${{ matrix.shard }} - 1 )) 'NR % 3 == k')
           echo "files in shard: ${#files[@]}"
           # A test that hangs longer than four minutes dumps every thread's stack into the log.
