@@ -1,4 +1,5 @@
 import type { GenerationRunStatus } from "@/lib/api/types";
+import { generationRecoveryLabel } from "@/lib/generation-recovery";
 
 export const CAPACITY_WAITING_COPY = {
   title: "Ожидаю ресурсы сервера",
@@ -10,14 +11,19 @@ export function agentTranscriptTitle(
   streaming: boolean,
   generationStatus?: GenerationRunStatus | null,
   lastStepFailed = false,
+  recovery?: unknown,
+  currentRequestComplete?: boolean,
 ): string {
   if (generationStatus === "queued_for_capacity") {
     return CAPACITY_WAITING_COPY.title;
   }
   if (generationStatus === "failed") return "Сборка не завершена";
   if (generationStatus === "cancelled") return "Сборка отменена";
-  if (generationStatus === "completed") return "Изменения готовы";
-  if (streaming || generationStatus === "pending" || generationStatus === "running" || generationStatus === "cancel_requested") return "Собираю приложение";
+  if (generationStatus === "completed") return currentRequestComplete === false
+    ? "Проверка результата не подтверждена" : "Изменения готовы";
+  if (generationStatus === "cancel_requested") return "Останавливаю работу";
+  if (recovery !== null && recovery !== undefined) return generationRecoveryLabel(recovery);
+  if (streaming || generationStatus === "pending" || generationStatus === "running") return "Собираю приложение";
   if (lastStepFailed) return "Сборка не завершена";
   return "Изменения готовы";
 }

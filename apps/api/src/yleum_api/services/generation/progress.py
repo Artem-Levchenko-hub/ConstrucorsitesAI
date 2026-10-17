@@ -58,7 +58,7 @@ class GenerationProgress:
                 project_id=self.project_id,
                 message_id=self.assistant_message_id,
                 event_type=event_type,
-                payload={"message_id": str(self.assistant_message_id), **dict(payload)},
+                payload={**dict(payload), "message_id": str(self.assistant_message_id)},
             )
             if transcript_step is not None and len(self.steps) < 200:
                 self.steps.append(transcript_step)

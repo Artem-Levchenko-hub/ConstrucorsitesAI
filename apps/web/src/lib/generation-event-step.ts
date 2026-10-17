@@ -39,7 +39,7 @@ export function generationEventStep(envelope: GenerationEventEnvelope): AgentSte
     : envelope.type === "tool.finished" ? "finished" : undefined;
   if (!lifecycle && envelope.type !== "generation.phase") return null;
   const phase = typeof data.phase === "string" && data.phase.trim() ? data.phase : "tool";
-  const title = PHASE_TITLE[phase] ?? `Проверяю этап: ${phase}`;
+  const title = PHASE_TITLE[phase] ?? "Проверяю сохранённую работу";
   const operationId = typeof data.operation_id === "string" && data.operation_id
     ? data.operation_id
     : typeof data.call_id === "string" && data.call_id ? data.call_id : undefined;

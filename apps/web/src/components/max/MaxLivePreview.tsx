@@ -32,7 +32,9 @@ import {
   createMaxPreviewSession,
   syncMaxManagedKit,
 } from "@/lib/api/max-studio";
-import { listMessages } from "@/lib/api/messages";
+import { getLatestGeneration, listMessages } from "@/lib/api/messages";
+import { isGenerationActive } from "@/lib/generation-lifecycle";
+import { acceptedPreviewState } from "@/lib/generation-recovery";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project, ProjectVersion } from "@/lib/api/types";
@@ -160,6 +162,32 @@ export function MaxLivePreview({
     enabled: !viewingHistorical,
   });
   const lastMessage = messages.data?.[messages.data.length - 1];
+  const latestGeneration = useQuery({
+    queryKey: ["generation", project.id],
+    queryFn: () => getLatestGeneration(project.id),
+    enabled: !viewingHistorical,
+    retry: false,
+    refetchInterval: query => query.state.data?.project_id === project.id
+      && isGenerationActive(query.state.data) ? 5_000 : false,
+  });
+  const currentRun = latestGeneration.data?.project_id === project.id ? latestGeneration.data : null;
+  const lastAcceptedVersion = historyCurrent ? versions.find(version => version.is_current
+    && version.snapshot_id === currentSnapshotId && ["ready", "unchanged"].includes(version.status)) : null;
+  const currentAcceptance = acceptedPreviewState({
+    acceptedSnapshotId: currentSnapshotId,
+    acceptedAt: currentRun?.acceptance?.accepted_at ?? null,
+    currentRun,
+  });
+  const acceptedSnapshotId = lastAcceptedVersion?.snapshot_id ?? (
+    currentAcceptance.isCurrentRequestComplete && currentRun?.acceptance?.snapshot_id
+      ? currentSnapshotId : null);
+  const acceptedPreview = acceptedPreviewState({
+    acceptedSnapshotId, acceptedAt: currentRun?.acceptance?.accepted_at ?? null, currentRun,
+  });
+  const acceptanceLabel = acceptedPreview.kind === "accepted"
+    ? acceptedPreview.isCurrentRequestComplete ? "Показана сохранённая версия. Текущий запрос завершён."
+      : "Показана последняя сохранённая версия. Текущий запрос ещё не завершён."
+    : "Готовая версия приложения пока не подтверждена.";
   // A seed snapshot is not proof of a successful build. Incomplete history is
   // likewise not proof that no working version exists. iframe load can also
   // come from an HTTP error page, so a remembered URL is not build evidence.
@@ -599,6 +627,15 @@ export function MaxLivePreview({
           restorationBusy={restorationBusy}
         />}
         <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center">
+        <p
+          className="mb-2 w-full max-w-md px-2 text-center text-xs text-fg-secondary"
+          data-testid="max-accepted-preview-status"
+          role="status"
+          aria-live="polite"
+          hidden={viewingHistorical || currentRun === null}
+        >
+          {acceptanceLabel}
+        </p>
         <div
           ref={deviceStage}
           className="flex min-h-[340px] w-full flex-1 items-center justify-center overflow-hidden px-1.5 sm:px-2"

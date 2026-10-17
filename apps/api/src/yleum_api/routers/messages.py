@@ -33,6 +33,7 @@ from yleum_api.services import (
     app_errors,
 )
 from yleum_api.services.generation.acceptance import PromptAcceptance
+from yleum_api.services.generation.recovery_public import project_generation_public
 from yleum_api.services.generation.supervisor import (
     _generation_cancel_protocol,
 )
@@ -140,21 +141,10 @@ async def get_latest_generation(
     project_id: UUID,
     session: SessionDep,
     current_user: CurrentUserDep,
-) -> GenerationRun | None:
-    """Return the durable latest run so reloads restore real lifecycle state."""
-
+) -> GenerationRunPublic | None:
+    """Restore owner-only durable state from one coherent publication snapshot."""
     await _ensure_owner(session, project_id, current_user.id)
-    return (
-        await session.execute(
-            select(GenerationRun)
-            .where(
-                GenerationRun.project_id == project_id,
-                GenerationRun.user_id == current_user.id,
-            )
-            .order_by(GenerationRun.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
+    return await project_generation_public(session, project_id=project_id, user_id=current_user.id)
 
 
 @router.post(
@@ -166,7 +156,7 @@ async def cancel_active_generation(
     project_id: UUID,
     session: SessionDep,
     current_user: CurrentUserDep,
-) -> GenerationRun:
+) -> GenerationRunPublic:
     """Request cancellation of the project's one durable active run."""
 
     await _ensure_owner(session, project_id, current_user.id)
@@ -211,7 +201,7 @@ async def cancel_active_generation(
             )
         except Exception:
             pass
-        return run
+        return await _cancel_projection(session, project_id, current_user.id, run.id)
     if cancel_protocol == "signal_running":
         # Publish the process-independent signal before committing the status:
         # if Redis is unavailable, the request fails and the DB does not get
@@ -231,7 +221,18 @@ async def cancel_active_generation(
         )
     except Exception:
         pass
-    return run
+    return await _cancel_projection(session, project_id, current_user.id, run.id)
+
+
+async def _cancel_projection(
+    session: SessionDep, project_id: UUID, user_id: UUID, run_id: UUID,
+) -> GenerationRunPublic:
+    value = await project_generation_public(
+        session, project_id=project_id, user_id=user_id, run_id=run_id,
+    )
+    if value is None:
+        raise ApiError("not_found", "generation not found", status.HTTP_404_NOT_FOUND)
+    return value
 
 
 @router.get("/{project_id}/messages", response_model=list[MessagePublic])
