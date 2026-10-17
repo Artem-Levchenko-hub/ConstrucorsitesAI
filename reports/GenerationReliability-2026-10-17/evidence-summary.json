@@ -19,7 +19,7 @@
     "Реальный клиент MAX, полная проверка БД и всех строк, вычисленные браузером шрифты не подтверждены. Изоляция данных между разными пользователями отдельно не проверена.",
     "Снимки показывают наблюдавшееся состояние браузера; не доказывают работу всех сценариев. На части мобильных кадров фиксированная навигация перекрывает карточки; доступность этих элементов прокруткой по снимкам не измерена."
   ],
-  "current_diagnosis": "Этап 9 доставлен на 67c27258 с recovery OFF; повторная ограниченная UI-проверка прогона 24: 23/23. Этапы 10-15 ожидают выполнения. Полная V2/live/A-B/финансовая приёмка не заявлена.",
+  "current_diagnosis": "Этап 15: доставка и ограниченная baseline-проверка подтверждены на 5d7f281f, recovery OFF. Полная приёмка не заявлена. OFF-доставка не равна завершению canary. Полная canary-кампания NOT_RUN_OFF.",
   "runs": [
     {
       "number": 1,
@@ -25744,6 +25744,177 @@
             "Эта UI-проверка не доказывает production DB row hashes, финансовую сверку, полную приёмку или 99% надёжности."
           ],
           "live_evidence_sha256": "7d4ab66d32d01fa5832b4554e8de330530738195925fdeb12c81b583445c0371"
+        },
+        {
+          "stage": 10,
+          "production_revision": "d676544d6ec53c9e4dfe569334aba4e5d525f372",
+          "recovery_activation": "OFF",
+          "new_generation": false,
+          "checked_at_utc": "2026-10-17T19:42:49.373Z",
+          "scope": "owner_preview_new_tab_after_normal_preview_refresh",
+          "title_preserved": true,
+          "description_preserved": true,
+          "record_count_one": true,
+          "actual_MAX": false,
+          "console_warn": 0,
+          "console_error": 0,
+          "screenshots": [
+            "screenshots/stage10-postdeploy-record.png"
+          ],
+          "limits": [
+            "Проверен owner preview существующего приложения прогона 24; actual MAX = false.",
+            "После истечения старого preview открыта новая прямая вкладка через обычное обновление редактора.",
+            "Одна существующая запись: заголовок и описание сохранены. Это не повтор полной приёмки приложения.",
+            "Новых генераций и дополнительных платных проверок модели нет; исторические 24 запуска и финансы сохранены.",
+            "Вторая identity не проверена. Полный MAX canary заблокирован входными данными.",
+            "Нет production DB row-hash, полной когорты, финансовой сверки или доказательства 99% надёжности.",
+            "Recovery и новые writers OFF; включённый production crash/resume не проверен."
+          ],
+          "evidence_sha256": {
+            "task10-note-after-deploy.json": "d9e34f715662957dfd9d03b3aac5afd03dbb09de9a6f59650ebdab39c4ec4040",
+            "task10-browser-console.json": "da1240921cf6ffe9640c85d944be01cef8bfaea284a22c6aa38dc5b542da3092",
+            "task10-note-after-deploy.png": "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874"
+          }
+        },
+        {
+          "stage": 11,
+          "production_revision": "dd474b4023220f320fb1f0e659d338e8a85474fb",
+          "new_generation": false,
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "proof": {
+            "soft_window_live": "NOT_RUN_OFF"
+          },
+          "limits": [
+            "Soft windows OFF: включённый production watchdog/resume не запускался.",
+            "Нет полного MAX/A-B, SQL row-hash, финансовой сверки или99% доказательства."
+          ],
+          "evidence_sha256": [
+            "9cc9e30ad2328ea4aa7892acccb7664485fc4b69497a7d362a89d3edccd12f7a",
+            "238276a1aa5878b6a51ad8cf19f737c70aa48f52e236f815d6fe892f4a10bee2",
+            "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874"
+          ]
+        },
+        {
+          "stage": 12,
+          "production_revision": "bd1df3a337bc1b7c091dd88e7cad460ebf03e69b",
+          "new_generation": false,
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "proof": {
+            "reload": true,
+            "reconnect": true,
+            "viewports": [
+              390,
+              768,
+              1440
+            ]
+          },
+          "limits": [
+            "Подтверждены только перечисленные UI reload/reconnect и размеры; это не полная функциональная приёмка.",
+            "Нет полного MAX/A-B, SQL row-hash, финансовой сверки или99% доказательства."
+          ],
+          "evidence_sha256": [
+            "467595bde6f7c2f99080116513eb78d4e32fd0371cec51773e6244dd179f3426",
+            "2e988f35a4a4f6fb50198b8ab594df4e1b4d8d2f12d8e913ac309bbcef518976",
+            "a08fa279698fd2fec0d36c443965bd6e49f737592fd1ed7b12d06ba0be0cedc2",
+            "2fdc56cac18b72f025c73788e8ad6a145822bff8e5bd3e77fcd288df832f7091",
+            "a273b318ca9a849e6a6eeb9e5d7695d58bdff84c8be300a3d91ccac0ce830a4f",
+            "da28c81f7df156c706015fa434fd1fb2661a67ee44d9f356ca7a6c3e62ead0d4",
+            "609c9b22f2459f9933c27acc2c9b478d3d85803c07e3c3f75f7d0a86faeb37a5",
+            "3cf93cc7c11d846b5141db3a0d24397baae95559798ea7f4fda7242e69b80001"
+          ]
+        },
+        {
+          "stage": 13,
+          "production_revision": "adbf20feca5f611ab6acc5d5afba3877da526808",
+          "new_generation": false,
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "proof": {
+            "functional_publication_live": "NOT_RUN_OFF",
+            "offline_sql_evidence_sha256": "fa53351435a77f689cb178986d30f9f89d58b427047d034fc0061dc6bfd9afb3"
+          },
+          "limits": [
+            "Live functional publication NOT_RUN_OFF. Offline SQL-доказательства учитываются отдельно и не заменяют live.",
+            "Нет полного MAX/A-B, SQL row-hash, финансовой сверки или99% доказательства."
+          ],
+          "evidence_sha256": [
+            "238276a1aa5878b6a51ad8cf19f737c70aa48f52e236f815d6fe892f4a10bee2",
+            "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874",
+            "c0d4508c6f852ccb451201914319e1164e7e0dac8e94f5252a12fe3cc16e4f75",
+            "b9493f9f5ca5b9596b3b39d384fff05406371325a99d09c27fd6128ebdb82675"
+          ]
+        },
+        {
+          "stage": 14,
+          "production_revision": "e021b0084279f326db52955e24a55e9a7f573fe5",
+          "new_generation": false,
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "proof": {
+            "inspector_contract": "v4",
+            "ui_error_evidence_sha256": "488bf34523832df942fc215a15f61506747df1ce96dbce19791346fc1e3c361e"
+          },
+          "limits": [
+            "Проверены текущие inspector relay и указанные UI-ошибки; неизвестные ошибки других приложений не исключены.",
+            "Нет полного MAX/A-B, SQL row-hash, финансовой сверки или99% доказательства."
+          ],
+          "evidence_sha256": [
+            "f314b37d8918cda6e814457e342dd3afd8cb17bdba7177968af4309394a1c042",
+            "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874",
+            "38423ffe4cc52160a53088c80ea096fcf45360c2118915ced766725ff1105f93"
+          ]
+        },
+        {
+          "stage": 15,
+          "production_revision": "5d7f281f3534f7218ca292cea029cd1eeeda4b4e",
+          "new_generation": false,
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "proof": {
+            "canary": "NOT_RUN_OFF",
+            "new_mode_activation": "OFF"
+          },
+          "limits": [
+            "OFF-доставка не равна завершению canary. Полная canary-кампания NOT_RUN_OFF.",
+            "Нет полного MAX/A-B, SQL row-hash, финансовой сверки или99% доказательства."
+          ],
+          "evidence_sha256": [
+            "f314b37d8918cda6e814457e342dd3afd8cb17bdba7177968af4309394a1c042",
+            "9bf1060d74d21b5336ef0e8f395082001f2ab787139c2643db62dbc546c37503",
+            "2f0eedca23f137c3816f93e21fee38ac93ba73bbba98751d7e21345ddd5b470a"
+          ]
         }
       ]
     }
@@ -25873,32 +26044,624 @@
     {
       "number": 10,
       "title": "Безопасное обновление серверов и совместимость читателей",
-      "status": "planned"
+      "status": "delivered_baseline_verified",
+      "evidence": {
+        "production_revision": "d676544d6ec53c9e4dfe569334aba4e5d525f372",
+        "activation": "OFF",
+        "new_generation_count": 0,
+        "ci": {
+          "run": 39061143229,
+          "successful_jobs": 10,
+          "exact_revision": true
+        },
+        "delivery": "Canonical deploy exit0; owned MUX closed; source/reader/component/public health postflight confirmed.",
+        "live_source": {
+          "git_lf_files_each_host": 53,
+          "readers": 5,
+          "api_roles_readonly": 3,
+          "api_source_files_each": 9,
+          "controllers_nonroot_readonly": 2,
+          "inhibits_absent": true,
+          "repair_seconds": 3600
+        },
+        "preserved_components": [
+          "web",
+          "gateway"
+        ],
+        "checks": {
+          "kernel_suite": 54,
+          "systemd_suite": 64,
+          "overlapping_do_not_sum": true,
+          "independent_review": "Astra No findings"
+        },
+        "private_postflight_correction": "Repeated TimersMonotonic metadata preserved; seven pure cases and independent review. Operator-only parser, not application behavior.",
+        "limits": [
+          "Проверен owner preview существующего приложения прогона 24; actual MAX = false.",
+          "После истечения старого preview открыта новая прямая вкладка через обычное обновление редактора.",
+          "Одна существующая запись: заголовок и описание сохранены. Это не повтор полной приёмки приложения.",
+          "Новых генераций и дополнительных платных проверок модели нет; исторические 24 запуска и финансы сохранены.",
+          "Вторая identity не проверена. Полный MAX canary заблокирован входными данными.",
+          "Нет production DB row-hash, полной когорты, финансовой сверки или доказательства 99% надёжности.",
+          "Recovery и новые writers OFF; включённый production crash/resume не проверен."
+        ],
+        "evidence_sha256": {
+          "task10-pr-ci-v6-receipt.json": "570df8ffa786a671add1ce84a96873bc898d3567435a1dff222acab252868bdd",
+          "task10-v6-main-promotion.json": "31e84c842950f50000a3fee54ada12bb2337dd77302997d96de30edca52720fc",
+          "task10-canonical-deploy-v6-execution.json": "707f5f281ce3a97996365dfdff571fba5684cf30e4248992dfce92622d329679",
+          "task10-postflight-v7-result.json": "89060541d2eda149a1601aa6de8c2543b8ac89ad96262ee2b13bc52c8625dcba",
+          "task10-readers-after-v7.json": "8632b94995c7d7785ff8d09bdaed5725aa64b7f56998072184a68ed620ddc3d6",
+          "task10-components-after-v7.json": "51fd0aeaf38b3e4944fd131be28f6ca292aff7508621f7070511bc60c7cd4481",
+          "task10-public-health-v7.json": "62bd9dd90534d09ea775c02ad04506de4a73d974af4f34b8bae175e4d5a033df",
+          "task10-note-after-deploy.json": "d9e34f715662957dfd9d03b3aac5afd03dbb09de9a6f59650ebdab39c4ec4040",
+          "task10-browser-console.json": "da1240921cf6ffe9640c85d944be01cef8bfaea284a22c6aa38dc5b542da3092",
+          "task11-15-ci-final-runs.json": "865a5f02754625347a341b6904bb809b84116a616eb7a5606119f968ed9ea88e",
+          "task10-whole-final-review.md": "c2451793484ff1bc12c630772f971728fae5766a5443cfd36db86156699fe750",
+          "task10-kernel-final-review.json": "741c6514772cee1cd90139ca6399670319691e578d40c5374485f2fefa6f99b1",
+          "task10-systemd-typed-manifest.json": "8af14791edbb8ad0860244cfc0a3b35d82fc780214a39e492960b44baa5a8074",
+          "task10-systemd-typed-release-green.log": "4f4aade00c5613c2da25c51b43c0db244cd5b0dcfb2e63d6932becc2f971cef2",
+          "task10-timer-properties-v7-checks.json": "90576e5afd823f2af327b32b123cb083118eb61da07caaba7552ee1616d026bd",
+          "task10-note-after-deploy.png": "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874"
+        }
+      }
     },
     {
       "number": 11,
       "title": "Рабочие окна, отдельный ремонт и интервалы ожидания",
-      "status": "planned"
+      "status": "delivered_baseline_verified",
+      "evidence": {
+        "production_revision": "dd474b4023220f320fb1f0e659d338e8a85474fb",
+        "activation": "OFF",
+        "checked_at_utc": "2026-10-17T20:15:05.756Z",
+        "ci_run": 39062849980,
+        "successful_jobs": 10,
+        "full_acceptance_claim": false,
+        "stage_specific_limit": "Soft windows OFF: включённый production watchdog/resume не запускался.",
+        "live_proof": {
+          "version": 1,
+          "stage": 11,
+          "revision": "dd474b4023220f320fb1f0e659d338e8a85474fb",
+          "confirmed": true,
+          "checked_at_utc": "2026-10-17T20:15:05.756Z",
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "new_generation_count": 0,
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "console_warn": 0,
+          "console_error": 0,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "full_cohort": false,
+          "proof": {
+            "soft_window_live": "NOT_RUN_OFF"
+          },
+          "evidence_sha256": [
+            "9cc9e30ad2328ea4aa7892acccb7664485fc4b69497a7d362a89d3edccd12f7a",
+            "238276a1aa5878b6a51ad8cf19f737c70aa48f52e236f815d6fe892f4a10bee2",
+            "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874"
+          ]
+        },
+        "evidence_sha256": {
+          "ci": "0c9018e0472586e0890d8dbb770069fc6db676369876139d5448d5ef31825837",
+          "deploy": "2e05e00932626c328e13863ff6fdb5fec57974b29b1a1e42f4f83b430dc0ed60",
+          "readers": "5a55866644c684adba4b23cf86a7723dee01a27dab3da2fc81cf5edcba34c41d",
+          "source_manifest": "1ad6c9e58336d9f0b887abdb51e49f8b728b25b0470ea2a0f07ac43fc2d1cc4b",
+          "health": "4da5646873dbfea7457fc505ddd356a97b72fbee559d269618474735a3bf9587",
+          "live": "f9a4cc4f0d296f23eb5a15f9c25f872113c9d3e6f58dffe26795f2f19d6160ff"
+        },
+        "component_evidence_sha256": [
+          {
+            "before": "0925089cc857c8bbf283055a55bcfedfa61980e81c5f9e4395e5f7a43c89a8a7",
+            "after": "e6a9df349852c36723e6c6a3e7af250dbb7e11a55986ba1c090be656d9f291f0"
+          }
+        ],
+        "delivery_reconciliation": {
+          "basis": "root_reconciled_delivery",
+          "original_execution_confirmed": false,
+          "original_execution_sha256": "318373e4b4d5349be203036a1b11f79d52e0ce85a4407c53d5b2903c9169ca50",
+          "canonical_controlflow_sha256": "92ce9ed60cbfbb4e331894f2ae1ec850d31b5a6cd2be6df33352cfebf8fa2afc"
+        }
+      }
     },
     {
       "number": 12,
       "title": "Правдивый статус, прогресс и предпросмотр",
-      "status": "planned"
+      "status": "delivered_baseline_verified",
+      "evidence": {
+        "production_revision": "bd1df3a337bc1b7c091dd88e7cad460ebf03e69b",
+        "activation": "OFF",
+        "checked_at_utc": "2026-10-17T20:33:47.228Z",
+        "ci_run": 39062856476,
+        "successful_jobs": 10,
+        "full_acceptance_claim": false,
+        "stage_specific_limit": "Подтверждены только перечисленные UI reload/reconnect и размеры; это не полная функциональная приёмка.",
+        "live_proof": {
+          "version": 1,
+          "stage": 12,
+          "revision": "bd1df3a337bc1b7c091dd88e7cad460ebf03e69b",
+          "confirmed": true,
+          "checked_at_utc": "2026-10-17T20:33:47.228Z",
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "new_generation_count": 0,
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "console_warn": 0,
+          "console_error": 0,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "full_cohort": false,
+          "proof": {
+            "reload": true,
+            "reconnect": true,
+            "viewports": [
+              390,
+              768,
+              1440
+            ]
+          },
+          "evidence_sha256": [
+            "467595bde6f7c2f99080116513eb78d4e32fd0371cec51773e6244dd179f3426",
+            "2e988f35a4a4f6fb50198b8ab594df4e1b4d8d2f12d8e913ac309bbcef518976",
+            "a08fa279698fd2fec0d36c443965bd6e49f737592fd1ed7b12d06ba0be0cedc2",
+            "2fdc56cac18b72f025c73788e8ad6a145822bff8e5bd3e77fcd288df832f7091",
+            "a273b318ca9a849e6a6eeb9e5d7695d58bdff84c8be300a3d91ccac0ce830a4f",
+            "da28c81f7df156c706015fa434fd1fb2661a67ee44d9f356ca7a6c3e62ead0d4",
+            "609c9b22f2459f9933c27acc2c9b478d3d85803c07e3c3f75f7d0a86faeb37a5",
+            "3cf93cc7c11d846b5141db3a0d24397baae95559798ea7f4fda7242e69b80001"
+          ]
+        },
+        "evidence_sha256": {
+          "ci": "906cb7b61531986484e8ab7b4364c99b22a317c2ccb0a84a766a2595d18c38f2",
+          "deploy": "de8f814d4b8b29011feb345cdf252dda82f31b379d72b1d984e65592541f3557",
+          "readers": "921efd48aae346f5a64687068a56f8eba867b2f397537ec606f30478bc5228c7",
+          "source_manifest": "f53bfc92ec71e1283ebdb5430ccf41c2a7301e47432e797ef41652d057c62a14",
+          "health": "3fbdf7b24f031de60bbe8e7530bf57c1abceaf0162bfef557eae86fb40c133cb",
+          "live": "df1c0d9031b73b9cfbe9eaa8ff60d21f4c1491e854a7e00d6b91082d26805709"
+        },
+        "component_evidence_sha256": [
+          {
+            "before": "7f7d36c8dc0e3457a28465762f0f5b824eb552538cf58926bd7eb7ded942a68e",
+            "after": "e5cb4f919a3efd6c38b53c9ae90b5bd9e7a6058aa7dc63470b17fde53b1a89fe"
+          }
+        ]
+      }
     },
     {
       "number": 13,
       "title": "Приёмка обязательных функций точной версии приложения",
-      "status": "planned"
+      "status": "delivered_baseline_verified",
+      "evidence": {
+        "production_revision": "adbf20feca5f611ab6acc5d5afba3877da526808",
+        "activation": "OFF",
+        "checked_at_utc": "2026-10-17T22:00:37.180Z",
+        "ci_run": 39069023305,
+        "successful_jobs": 10,
+        "full_acceptance_claim": false,
+        "stage_specific_limit": "Live functional publication NOT_RUN_OFF. Offline SQL-доказательства учитываются отдельно и не заменяют live.",
+        "live_proof": {
+          "version": 1,
+          "stage": 13,
+          "revision": "adbf20feca5f611ab6acc5d5afba3877da526808",
+          "confirmed": true,
+          "checked_at_utc": "2026-10-17T22:00:37.180Z",
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "new_generation_count": 0,
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "console_warn": 0,
+          "console_error": 0,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "full_cohort": false,
+          "proof": {
+            "functional_publication_live": "NOT_RUN_OFF",
+            "offline_sql_evidence_sha256": "fa53351435a77f689cb178986d30f9f89d58b427047d034fc0061dc6bfd9afb3"
+          },
+          "evidence_sha256": [
+            "238276a1aa5878b6a51ad8cf19f737c70aa48f52e236f815d6fe892f4a10bee2",
+            "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874",
+            "c0d4508c6f852ccb451201914319e1164e7e0dac8e94f5252a12fe3cc16e4f75",
+            "b9493f9f5ca5b9596b3b39d384fff05406371325a99d09c27fd6128ebdb82675"
+          ]
+        },
+        "evidence_sha256": {
+          "ci": "4bb60643ec334145a9fe591e159ed01f6e6b2036e453576b7f7b4d06bc9e21ed",
+          "deploy": "6f260c482b7790c6f8534a1c6b9428fd05856af97faac5bf16bb2edb51a8eeb0",
+          "readers": "aecb3a6a109c57091206293e565aac1cfe150f2fcf52924f681ac003f8389509",
+          "source_manifest": "88f4162c7362894e7d64126664b1835ddacfe9ab858c7128f3f9dc543419a9f0",
+          "health": "21d0f3e00618e54323c806fb9bd3ad2d11902b392df4220b513a216737fa08b8",
+          "live": "c2055b9c9c46c2f92a3da293c655597d16447782c0593ed5f55107146060a791"
+        },
+        "component_evidence_sha256": [
+          {
+            "before": "e17480da9d3717cd0f79780bc9abdec6b498c9dd86f8fdeb0eecdeae89b3cc38",
+            "after": "5c0398378e0c14db716ad8c1093d664b9e77477f0f7c5d403f318d85a57092c5"
+          }
+        ],
+        "delivery_reconciliation": {
+          "basis": "root_reconciled_delivery",
+          "original_execution_confirmed": false,
+          "original_execution_sha256": "506e25e674101dbfecb42932943f39d25c8504fa5bd13c5a3450fa20e93cb2d4",
+          "canonical_controlflow_sha256": "0223414248a9c19217b358f08b8cda6bb41ce60a1595162314ce015e9aae8119"
+        }
+      }
     },
     {
       "number": 14,
       "title": "Работа браузерного инспектора и сохранение ошибок",
-      "status": "planned"
+      "status": "delivered_baseline_verified",
+      "evidence": {
+        "production_revision": "e021b0084279f326db52955e24a55e9a7f573fe5",
+        "activation": "OFF",
+        "checked_at_utc": "2026-10-17T22:12:43.229Z",
+        "ci_run": 39068963760,
+        "successful_jobs": 10,
+        "full_acceptance_claim": false,
+        "stage_specific_limit": "Проверены текущие inspector relay и указанные UI-ошибки; неизвестные ошибки других приложений не исключены.",
+        "live_proof": {
+          "version": 1,
+          "stage": 14,
+          "revision": "e021b0084279f326db52955e24a55e9a7f573fe5",
+          "confirmed": true,
+          "checked_at_utc": "2026-10-17T22:12:43.229Z",
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "new_generation_count": 0,
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "console_warn": 0,
+          "console_error": 0,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "full_cohort": false,
+          "proof": {
+            "inspector_contract": "v4",
+            "ui_error_evidence_sha256": "488bf34523832df942fc215a15f61506747df1ce96dbce19791346fc1e3c361e"
+          },
+          "evidence_sha256": [
+            "f314b37d8918cda6e814457e342dd3afd8cb17bdba7177968af4309394a1c042",
+            "2ee693356f43fe2bca62ff972d1772b6fd5042b526eb28ded5bef23c6ec51874",
+            "38423ffe4cc52160a53088c80ea096fcf45360c2118915ced766725ff1105f93"
+          ]
+        },
+        "evidence_sha256": {
+          "ci": "cfe042cd28000c9406f973fb47a6ef86434bd07cf550279394ad49be9714ee1d",
+          "deploy": "7cc2f22c58948c9a201dfb846e08caa903b32defe650765f46988eb3a188750b",
+          "readers": "c5e13a06e3e08fd4bdf9e90ee6caa3979530f59ece222cddb803a77f6a0fb6db",
+          "source_manifest": "c274be607c2fbe0e3ecfd6d8db36f05d7b767102e951b3349467540092b3b885",
+          "health": "103b91f51d1a69203c9fac5f497e2efeb3a7a28f632fec4c5ee49636ca24feb3",
+          "live": "55eb2b08a5956eccfd514533ee581360a1ce650fa11ead88354e66920bda1f99"
+        },
+        "component_evidence_sha256": [
+          {
+            "before": "b094b78105f3f032107c5da04bb31800b7b600a251a264266e61b531aa31517e",
+            "after": "7760c27a860ecdb444df4c38cfb0e9c0e46fab642b68f7ca3a46eed5b6e1cb62"
+          }
+        ]
+      }
     },
     {
       "number": 15,
       "title": "Матрица сбоев, постепенное включение и живые испытания",
-      "status": "planned"
+      "status": "delivered_baseline_verified",
+      "evidence": {
+        "production_revision": "5d7f281f3534f7218ca292cea029cd1eeeda4b4e",
+        "activation": "OFF",
+        "checked_at_utc": "2026-10-17T22:22:26.322Z",
+        "ci_run": 39068968450,
+        "successful_jobs": 10,
+        "full_acceptance_claim": false,
+        "stage_specific_limit": "OFF-доставка не равна завершению canary. Полная canary-кампания NOT_RUN_OFF.",
+        "live_proof": {
+          "version": 1,
+          "stage": 15,
+          "revision": "5d7f281f3534f7218ca292cea029cd1eeeda4b4e",
+          "confirmed": true,
+          "checked_at_utc": "2026-10-17T22:22:26.322Z",
+          "scope": "owner_preview",
+          "actual_MAX": false,
+          "new_generation_count": 0,
+          "checks": {
+            "title_preserved": true,
+            "description_preserved": true,
+            "record_count_one": true
+          },
+          "console_warn": 0,
+          "console_error": 0,
+          "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+          "full_cohort": false,
+          "proof": {
+            "canary": "NOT_RUN_OFF",
+            "new_mode_activation": "OFF"
+          },
+          "evidence_sha256": [
+            "f314b37d8918cda6e814457e342dd3afd8cb17bdba7177968af4309394a1c042",
+            "9bf1060d74d21b5336ef0e8f395082001f2ab787139c2643db62dbc546c37503",
+            "2f0eedca23f137c3816f93e21fee38ac93ba73bbba98751d7e21345ddd5b470a"
+          ]
+        },
+        "evidence_sha256": {
+          "ci": "bf0d23df1b6cbe46e1ca21cca2f365ca8fb2828218a3a9037ba7bdaf512fe3fd",
+          "deploy": "8ec11c229575fc44d04f3cdb9e288eb0ea53efbda6e2fa09a12d6a42a0a17d98",
+          "readers": "641367cf4461885324a770ae6cce976fb8944d6592dfdeee5b9bc392292be129",
+          "source_manifest": "59b80f9cdf3cbf98967df0075e1747747d3a83c4a9b4a802df5eabe190522a1e",
+          "health": "8eb682c7784c1d18ed75842b6feaf5ba8254d3df9e731afc9670642c07e2c17a",
+          "live": "939555e6c65ac7bcee3a96348f1052fbef2ca6129a6a3c20ff59baa2c7530a7e"
+        },
+        "component_evidence_sha256": []
+      }
     }
-  ]
+  ],
+  "stage10_update": {
+    "checked_at_utc": "2026-10-17T19:42:49.373Z",
+    "previous_current_diagnosis": "Этап 9 доставлен на 67c27258 с recovery OFF; повторная ограниченная UI-проверка прогона 24: 23/23. Этапы 10-15 ожидают выполнения. Полная V2/live/A-B/финансовая приёмка не заявлена.",
+    "previous_stage10": {
+      "number": 10,
+      "title": "Безопасное обновление серверов и совместимость читателей",
+      "status": "planned"
+    },
+    "remaining_delivery": [
+      {
+        "stage": 11,
+        "source_sha": "dd474b4023220f320fb1f0e659d338e8a85474fb",
+        "ci_run": 39062849980,
+        "ci_status_at_snapshot": "in_progress",
+        "ci_conclusion_at_snapshot": "",
+        "deployed_claim": false
+      },
+      {
+        "stage": 12,
+        "source_sha": "bd1df3a337bc1b7c091dd88e7cad460ebf03e69b",
+        "ci_run": 39062856476,
+        "ci_status_at_snapshot": "queued",
+        "ci_conclusion_at_snapshot": "",
+        "deployed_claim": false
+      },
+      {
+        "stage": 13,
+        "source_sha": "34b12de91b3b6a6a0a422ee96af61d3571d8498e",
+        "ci_run": 39062872129,
+        "ci_status_at_snapshot": "queued",
+        "ci_conclusion_at_snapshot": "",
+        "deployed_claim": false
+      },
+      {
+        "stage": 14,
+        "source_sha": "d0eb0ac6768bb4035640ac47aac8c747f72b823b",
+        "ci_run": 39062878632,
+        "ci_status_at_snapshot": "queued",
+        "ci_conclusion_at_snapshot": "",
+        "deployed_claim": false
+      },
+      {
+        "stage": 15,
+        "source_sha": "7cb5fb3c53a40e8a585a106d15a323b35deea0c8",
+        "ci_run": 39062884229,
+        "ci_status_at_snapshot": "queued",
+        "ci_conclusion_at_snapshot": "",
+        "deployed_claim": false
+      }
+    ],
+    "campaign_scope": {
+      "existing_owned_qa": 7,
+      "bots": 0,
+      "bindings": 0,
+      "account_providers_active_only": true,
+      "basis": "Root operator readiness statement; no new account/provider probe by report author",
+      "second_identity": "NOT_RUN",
+      "full_MAX_canary": "BLOCKED_INPUT"
+    }
+  },
+  "stage11_report_update": {
+    "previous_stage": {
+      "number": 11,
+      "title": "Рабочие окна, отдельный ремонт и интервалы ожидания",
+      "status": "planned"
+    },
+    "previous_current_diagnosis": "Этап 10 доставлен на d676544d с recovery OFF; ограниченная повторная проверка записи прогона 24 пройдена. Этапы 11-15: исходники подготовлены, CI ещё не завершён в зафиксированном срезе; production-доставка не заявлена. Полная MAX/A-B/финансовая приёмка и 99% не доказаны."
+  },
+  "stage12_report_update": {
+    "previous_stage": {
+      "number": 12,
+      "title": "Правдивый статус, прогресс и предпросмотр",
+      "status": "planned"
+    },
+    "previous_current_diagnosis": "Этап 11: доставка и ограниченная baseline-проверка подтверждены на dd474b40, recovery OFF. Полная приёмка не заявлена. Soft windows OFF: включённый production watchdog/resume не запускался."
+  },
+  "additional_generation_attempts": [
+    {
+      "reference": "CI-39066698236",
+      "source": "production_generation_canary",
+      "revision": "bd1df3a337bc1b7c091dd88e7cad460ebf03e69b",
+      "admission": "CONFIRMED",
+      "workflow_status": "cancelled",
+      "workflow_window": {
+        "started_at_utc": "2026-10-17T20:26:12Z",
+        "finished_at_utc": "2026-10-17T20:34:08Z",
+        "build_start_at_utc": "2026-10-17T20:26:33Z"
+      },
+      "confirmed_steps": [
+        "release_health",
+        "login",
+        "project_create",
+        "build_start"
+      ],
+      "build_start_elapsed_seconds": 2.911,
+      "build_prompt": "Создай компактное MAX Mini App для списка ежедневных дел: заголовок «Мой день», три демонстрационные задачи и заметная кнопка «Добавить задачу».",
+      "edit": "NOT_STARTED",
+      "generation_terminal": "UNKNOWN",
+      "provider_outcome": "UNKNOWN",
+      "billing_outcome": "UNKNOWN",
+      "screenshot": "NOT_RUN_HEADLESS_WORKFLOW",
+      "actual_MAX": false,
+      "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+      "acceptance": "NOT_CONFIRMED",
+      "evidence_sha256": {
+        "events": "7acbb6b49410ac2700065b8157189106cbcd14f3b11600cb3732913684609f17",
+        "prompt_source": "2fb25bef38bba3f735d29f3159149d42dcfa06b7b1bfd2adb56af9b47cf8df5b",
+        "prompt_git_blob_oid": "e192dd37c702db71a103efe72cc2a991fbe309d8",
+        "db_receipt": null
+      },
+      "limits": [
+        "Workflow cancellation is not proof that generation failed or stopped.",
+        "Provider calls and financial outcome are unknown; no zero-call or zero-cost inference.",
+        "Historical completion/failure and financial totals are unchanged."
+      ]
+    }
+  ],
+  "observed_attempts_total": 25,
+  "historical_scope": {
+    "attempts": 24,
+    "runs": 24,
+    "new_attempts": [
+      23,
+      24
+    ]
+  },
+  "stage13_report_update": {
+    "previous_stage": {
+      "number": 13,
+      "title": "Приёмка обязательных функций точной версии приложения",
+      "status": "planned"
+    },
+    "previous_current_diagnosis": "Этап 12: доставка и ограниченная baseline-проверка подтверждены на bd1df3a3, recovery OFF. Полная приёмка не заявлена. Подтверждены только перечисленные UI reload/reconnect и размеры; это не полная функциональная приёмка."
+  },
+  "stage14_report_update": {
+    "previous_stage": {
+      "number": 14,
+      "title": "Работа браузерного инспектора и сохранение ошибок",
+      "status": "planned"
+    },
+    "previous_current_diagnosis": "Этап 13: доставка и ограниченная baseline-проверка подтверждены на adbf20fe, recovery OFF. Полная приёмка не заявлена. Live functional publication NOT_RUN_OFF. Offline SQL-доказательства учитываются отдельно и не заменяют live."
+  },
+  "stage15_report_update": {
+    "previous_stage": {
+      "number": 15,
+      "title": "Матрица сбоев, постепенное включение и живые испытания",
+      "status": "planned"
+    },
+    "previous_current_diagnosis": "Этап 14: доставка и ограниченная baseline-проверка подтверждены на e021b008, recovery OFF. Полная приёмка не заявлена. Проверены текущие inspector relay и указанные UI-ошибки; неизвестные ошибки других приложений не исключены."
+  },
+  "readiness_hold_addendum_v1": {
+    "revision": "5d7f281f3534f7218ca292cea029cd1eeeda4b4e",
+    "status": "HOLD_ACCEPTANCE_GAP",
+    "baseline_delivery_preserved": true,
+    "full_acceptance": false,
+    "activation": "OFF",
+    "observed_attempts_total": 25,
+    "new_observed_admissions_since25": 0,
+    "new_admission_statement_basis": "Root supplied current readiness plus pinned local receipts; not a new live measurement.",
+    "provider_calls_total": null,
+    "qa_business": {
+      "note": "MEASURED",
+      "unbuilt": "NOT_MEASURED"
+    },
+    "second_MAX_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+    "ordinary_prompt_gap": {
+      "required_kind": "manual",
+      "required_obligation": "unresolved_whole_request",
+      "supported_receipt_kind": "named_behavior",
+      "missing": "whole-request coverage plus supported exact-candidate HTTP/browser/DB receipt bridge"
+    },
+    "remaining": [
+      "Implement and verify complete coverage/receipt bridge without dropping manual/unknown requirements",
+      "Independent review, full release gates, deploy and live proof",
+      "Normal admitted canary and remaining full-scope input-dependent campaign"
+    ],
+    "evidence_sha256": {
+      "task15-owned-data-baseline-at15-v5.json": "996e70a6c570091e938755b9c134314f8c7a77cc2f8b98502c2c681ad244e071",
+      "task15-readers-after-v8.json": "641367cf4461885324a770ae6cce976fb8944d6592dfdeee5b9bc392292be129",
+      "task15-live-report-v8.json": "939555e6c65ac7bcee3a96348f1052fbef2ca6129a6a3c20ff59baa2c7530a7e",
+      "task15-pr-ci-v5-receipt.json": "bf0d23df1b6cbe46e1ca21cca2f365ca8fb2828218a3a9037ba7bdaf512fe3fd"
+    },
+    "source_sha256": {
+      "apps/api/src/yleum_api/services/generation/recovery_requirements.py": "e8b74e91babc6319bca026c8460ac05428179e16524fa6372da5ea36266b0426",
+      "apps/api/src/yleum_api/services/generation/recovery_acceptance.py": "48fa3b9a469d23fdcd66742f061c908b4c63fb1ef66f4838cb2b79c78cbd97c7"
+    }
+  },
+  "keyboard_live_addendum_v1": {
+    "revision": "5d7f281f3534f7218ca292cea029cd1eeeda4b4e",
+    "activation": "OFF",
+    "keyboard": {
+      "widths": [
+        390,
+        768,
+        1440
+      ],
+      "links": [
+        "support",
+        "privacy",
+        "terms"
+      ],
+      "enter_destination_cases_passed": 9,
+      "focus_visible_hit_above_fixed_nav_at_max_scroll": true,
+      "explicit_control_end_cases": {
+        "390": 0,
+        "768": 2,
+        "1440": 3
+      },
+      "automatic_tab_scroll": "OPEN_INVESTIGATION",
+      "reload": {
+        "note_count": 1,
+        "title_and_description_equal": true
+      },
+      "console_messages": 0,
+      "actual_MAX": false,
+      "new_generation_admissions_from_check": 0,
+      "full_acceptance": false
+    },
+    "database_comparison": {
+      "scope": "note: measured public-table snapshots only",
+      "table_count": 2,
+      "row_count": 2,
+      "sequence_count": 0,
+      "per_table_counts_and_rows_sha256_equal": true,
+      "schema_sha256_and_bytes_equal": true,
+      "table_inventory_equal": true,
+      "sequence_evidence_equal": true,
+      "physical_identity_topology_equal": true,
+      "platform_counts_equal_both_projects": true,
+      "comparison_window_utc": [
+        "2026-10-17T22:23:11.554373+00:00",
+        "2026-10-17T22:32:58.978559+00:00"
+      ],
+      "unbuilt": "NOT_MEASURED",
+      "full_database_acceptance": false
+    },
+    "evidence_sha256": {
+      "keyboard": "abde25be0ab715c27d82975af9984c09cd3de0dd2764c4142af5901bf19824e0",
+      "databases": {
+        "task15-owned-data-baseline-at15-v5.json": "996e70a6c570091e938755b9c134314f8c7a77cc2f8b98502c2c681ad244e071",
+        "task15-owned-data-baseline-note-shadow-v5.json": "dbaf6c6ec429a54922f7dd990f0ba2cfa4d386fa972e4eb42d980057057befe9"
+      },
+      "destinations": [
+        "2a4314508b673a1ba3c237875222b190ea731690f0aabd2b755cbbddf72b2f94",
+        "d3492f03679989072cd255b3b59ca19d623aa8ccaa3f3d94d75083237592cd45",
+        "69235714e3ef6746df3e2d68f0be78190cb73dbc45747a53f6ee4e6e43f4da21",
+        "2a4314508b673a1ba3c237875222b190ea731690f0aabd2b755cbbddf72b2f94",
+        "d3492f03679989072cd255b3b59ca19d623aa8ccaa3f3d94d75083237592cd45",
+        "69235714e3ef6746df3e2d68f0be78190cb73dbc45747a53f6ee4e6e43f4da21",
+        "2a4314508b673a1ba3c237875222b190ea731690f0aabd2b755cbbddf72b2f94",
+        "d3492f03679989072cd255b3b59ca19d623aa8ccaa3f3d94d75083237592cd45",
+        "69235714e3ef6746df3e2d68f0be78190cb73dbc45747a53f6ee4e6e43f4da21"
+      ],
+      "private_images": [
+        "a5ea181d59f319c17fc391c2a6a967c60ff657bd472b76ea7c3abc414811ef9c",
+        "b1f2757596403c082bb6fd6e555f67bee780cacee8627b21bd4e8e2f4763ef55",
+        "eb70e021e285f2bc280677037c25f8a434680e0c1f7390e70353b925ec3d1057"
+      ]
+    },
+    "full_acceptance": false,
+    "existing_hold_preserved": true
+  }
 }

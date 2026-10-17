@@ -235,6 +235,9 @@ jobs:
       - name: Install the locked Playwright Chromium runtime
         working-directory: apps/api
         run: uv run --frozen playwright install --with-deps chromium
+      - name: Install frozen managed-footer browser fixture dependencies
+        working-directory: apps/orchestrator/templates/max-miniapp-nextjs
+        run: pnpm install --frozen-lockfile --ignore-scripts
       - name: Run API suite shard ${{ matrix.shard }} of 3 on disposable services
         working-directory: apps/api
         run: |

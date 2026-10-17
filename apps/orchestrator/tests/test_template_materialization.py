@@ -49,6 +49,12 @@ SUPPORT_OVERRIDES = json.loads(
     )
 )
 assert set(SUPPORT_OVERRIDES) == {"src/app/support/page.tsx"}
+COMPLIANCE_OVERRIDES = json.loads(
+    (Path(__file__).parent / "fixtures/max_template_compliance_overrides.json").read_text(
+        encoding="utf-8"
+    )
+)
+assert set(COMPLIANCE_OVERRIDES) == {"src/components/YleumCompliance.tsx"}
 PREVIEW_RENEWAL_OVERRIDES = json.loads(
     (Path(__file__).parent / "fixtures/max_template_preview_renewal_overrides.json").read_text(
         encoding="utf-8"
@@ -118,6 +124,7 @@ def assert_golden(name: str, root: Path) -> None:
         if name == "max-miniapp-nextjs":
             entry = ACTION_WRITE_OVERRIDES.get(relative, entry)
             entry = SUPPORT_OVERRIDES.get(relative, entry)
+            entry = COMPLIANCE_OVERRIDES.get(relative, entry)
             entry = ANALYTICS_OVERRIDES.get(relative, entry)
             entry = CONSENT_OVERRIDES.get(relative, entry)
         data = actual[relative].read_bytes()

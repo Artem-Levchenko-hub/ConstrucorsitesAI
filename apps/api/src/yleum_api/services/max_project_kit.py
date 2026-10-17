@@ -15,7 +15,8 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 29
+MAX_MANAGED_KIT_VERSION = 30
+# v30: keep legal footer links and keyboard focus clear of fixed bottom navigation.
 # v29 adds authenticated exact lead receipt lookup for safe legacy adoption.
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
 # platform-owned paths. v20 materializes trusted gateway subjects in the
