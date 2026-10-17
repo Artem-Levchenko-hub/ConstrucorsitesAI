@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.db import get_engine
+from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
 from yleum_api.services.generation.provider_identity import (
     GenerationProviderIdentity,
     request_digest,
@@ -83,21 +84,24 @@ async def prepare_generation_attempt(
                         or KEY in (row["agent_state"] or {})):
                     raise ValueError
                 return None
+            if not retained and existing is None and parent is None:
+                if has_provider_effect_context() or KEY in (row["agent_state"] or {}):
+                    raise ValueError
+                # A global transport switch is not admission into recovery.
+                # Legacy and shadow runs retain their original uncaptured wire.
+                return None
             diagnostic_attempt = await apply_diagnostic_budget(
                 session, body, agent_state=row["agent_state"], run_id=run_id,
                 project_id=project_id, user_id=row["user_id"], prompt_hash=row["prompt_hash"],
                 parent_attempt_id=parent.attempt_id if parent else None,
             )
             digest = request_digest(route, body)
-            if existing is not None and (
-                existing.run_id, existing.project_id, existing.request_sha256
-            ) != (run_id, project_id, digest):
-                raise ValueError
-            if existing is not None and (
-                existing.user_id != row["user_id"]
-                or existing.prompt_hash != row["prompt_hash"]
-            ):
-                raise ValueError
+            for continuation in (existing, parent):
+                if continuation is not None:
+                    await _require_committed_identity(
+                        session, continuation, run_id=run_id, project_id=project_id,
+                        user_id=row["user_id"], prompt_hash=row["prompt_hash"], digest=digest,
+                    )
             effect, prior_identity = await prepare_provider_effect(
                 session, run_id=run_id, project_id=project_id, user_id=row["user_id"],
                 prompt_hash=row["prompt_hash"], agent_state=row["agent_state"],
@@ -119,7 +123,6 @@ async def prepare_generation_attempt(
                 await session.commit()
                 return prior_identity
             if effect is not None and effect.parent_effect_id is not None and parent is None:
-                from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
                 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
                 previous_effect = await session.get(
                     GenerationRecoveryEffect, effect.parent_effect_id,
@@ -179,6 +182,23 @@ async def prepare_generation_attempt(
         raise RuntimeError("GENERATION_ATTEMPT_UNCONFIRMED: provider dispatch stopped") from None
 
 
+async def _require_committed_identity(
+    session: AsyncSession, identity: GenerationProviderIdentity, *,
+    run_id: UUID, project_id: UUID, user_id: UUID, prompt_hash: str, digest: str,
+) -> None:
+    """Task7 continuation carries SQL authority, never just a supplied UUID."""
+    expected = {
+        "run_id": run_id, "project_id": project_id, "user_id": user_id,
+        "prompt_hash": prompt_hash, "request_sha256": digest, "version": 1,
+    }
+    saved = await session.get(GenerationProviderAttempt, identity.attempt_id)
+    if saved is None or any(
+        getattr(identity, key) != value or getattr(saved, key) != value
+        for key, value in expected.items()
+    ):
+        raise ValueError("provider continuation has no exact committed identity")
+
+
 async def require_closed_provider_parent(
     session: AsyncSession, parent: GenerationProviderIdentity, identity: GenerationProviderIdentity,
 ) -> None:
@@ -200,7 +220,6 @@ async def require_closed_provider_parent(
         for key in ("run_id", "project_id", "user_id", "prompt_hash", "request_sha256")
     ):
         raise ValueError("provider parent has no affirmative committed receipt")
-
 
 
 def attach_identity(body: dict[str, Any], identity: GenerationProviderIdentity | None) -> None:
