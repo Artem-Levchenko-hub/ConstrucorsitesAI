@@ -11,6 +11,7 @@ from uuid import uuid4
 import docker  # type: ignore[import-untyped]
 import pytest
 
+from tests._generation_reader_settings import legacy_reader_process_settings  # noqa: F401
 from yleum_orchestrator.core.cell_resources import CellResourceError
 from yleum_orchestrator.services.docker_py_cell_backend import DockerPyCellBackend
 
