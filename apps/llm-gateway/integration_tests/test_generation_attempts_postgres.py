@@ -2,6 +2,9 @@
 
 import asyncio
 import importlib
+import json
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
 
@@ -328,7 +331,10 @@ async def api_writer(pool, database_url, monkeypatch):
     monkeypatch.setattr(
         provider_attempts,
         "get_settings",
-        lambda: SimpleNamespace(generation_provider_attempts_enabled=True),
+        lambda: SimpleNamespace(
+            generation_provider_attempts_enabled=True,
+            generation_response_retention_enabled=True,
+        ),
     )
     monkeypatch.setattr(service(), "get_pool", lambda: pool)
     try:
@@ -349,11 +355,71 @@ def request_body(identity):
     }
 
 
-async def test_api_intent_and_gateway_dispatch_do_not_wait_on_callers_project_run_locks(
-    pool, api_writer
-):
+@asynccontextmanager
+async def executable_intent(pool, api_writer, monkeypatch):
+    """Persist V2 ownership; keep real SQL/session/reader admission checks live."""
+    from sqlalchemy import text
+    from tests.test_generation_recovery_readers import install_healthy_reader_inventory
+    from yleum_api.services.generation import recovery_execution
+    from yleum_api.services.generation.recovery_contract import (
+        ContinuationClaim,
+        ExecutionCursor,
+        RecoveryIdentity,
+        RecoveryStateV2,
+    )
+    from yleum_api.services.generation.recovery_reconciliation import (
+        ProviderEffectCursor,
+        provider_effect_scope,
+    )
+
     prior = await intent(pool)
-    async with pool.acquire() as conn, conn.transaction():
+    claim = ContinuationClaim(
+        run_id=prior.run_id, token=uuid4(), attempt_seq=1,
+        worker_id="synthetic", expires_at=datetime.now(UTC) + timedelta(seconds=60),
+    )
+    cursor = ProviderEffectCursor(claim, 1, 0)
+    state = RecoveryStateV2(
+        identity=RecoveryIdentity(
+            run_id=prior.run_id, project_id=prior.project_id, user_id=prior.user_id,
+            prompt_hash=prior.prompt_hash, accepted_snapshot_id=None, supersedes_run_id=None,
+        ),
+        phase="working", attempt_seq=1, state_revision=1, continuation_claim=claim,
+        execution=ExecutionCursor(
+            stage="bootstrap", substep="runtime_prepare", physical_state="active",
+            pending_effect_id=cursor.root_effect_id,
+        ),
+    )
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE generation_runs SET agent_state=$2::jsonb WHERE id=$1",
+            prior.run_id, json.dumps({"recovery_v1": state.model_dump(mode="json")}),
+        )
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
+    async with api_writer.get_engine().connect() as owner:
+        await owner.execute(text("SELECT pg_advisory_lock(1195724366,:key)"), {
+            "key": int.from_bytes(prior.run_id.bytes[-4:], "big", signed=True),
+        })
+        await owner.commit()
+        token = recovery_execution._SESSION_OWNER.set(
+            recovery_execution.SessionOwnership(prior.run_id, owner)
+        )
+        try:
+            with provider_effect_scope(cursor):
+                yield prior, cursor
+        finally:
+            recovery_execution._SESSION_OWNER.reset(token)
+            await owner.execute(text("SELECT pg_advisory_unlock_all()"))
+            await owner.commit()
+
+
+async def test_api_intent_and_gateway_dispatch_do_not_wait_on_callers_project_run_locks(
+    pool, api_writer, monkeypatch
+):
+    async with (
+        executable_intent(pool, api_writer, monkeypatch) as (prior, cursor),
+        pool.acquire() as conn,
+        conn.transaction(),
+    ):
         await conn.fetchrow("SELECT id FROM projects WHERE id=$1 FOR UPDATE", prior.project_id)
         await conn.fetchrow("SELECT id FROM generation_runs WHERE id=$1 FOR UPDATE", prior.run_id)
         async with asyncio.timeout(3):
@@ -377,6 +443,11 @@ async def test_api_intent_and_gateway_dispatch_do_not_wait_on_callers_project_ru
             == call
         )
 
+        assert await conn.fetchval(
+            "SELECT provider_attempt_id FROM generation_recovery_effects WHERE effect_id=$1",
+            cursor.root_effect_id,
+        ) == identity.attempt_id
+
 
 @pytest.mark.parametrize("reason", ["preconnect", "rate_limit_refused", None])
 async def test_new_attempt_requires_affirmative_committed_parent_and_prevents_fanout(
@@ -384,7 +455,21 @@ async def test_new_attempt_requires_affirmative_committed_parent_and_prevents_fa
 ):
     prior = await intent(pool)
     body = request_body(prior)
-    identity = await api_writer.prepare_generation_attempt(body, "/v1/messages")
+    # This case resumes a committed Task7 chain, not a new legacy enrollment.
+    from yleum_api.services.generation.provider_identity import (
+        GenerationProviderIdentity,
+        request_digest,
+    )
+
+    digest = request_digest("/v1/messages", body)
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE generation_provider_attempts SET request_sha256=$2 WHERE attempt_id=$1",
+            prior.attempt_id, digest,
+        )
+    prior = GenerationProviderIdentity.from_wire({**prior.to_wire(), "request_sha256": digest})
+    identity = await api_writer.prepare_generation_attempt(body, "/v1/messages", existing=prior)
+    assert identity == prior
     s = service()
     call = await s.dispatch(
         identity,
@@ -438,7 +523,6 @@ async def test_api_unknown_intent_commit_stops_before_http(
 ):
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-    prior = await intent(pool)
     engine = api_writer.get_engine()
 
     class BrokenCommit(AsyncSession):
@@ -452,19 +536,26 @@ async def test_api_unknown_intent_commit_stops_before_http(
         "async_sessionmaker",
         lambda *args, **kw: async_sessionmaker(engine, class_=BrokenCommit, **kw),
     )
-    sent = []
-    with pytest.raises(RuntimeError, match="GENERATION_ATTEMPT_UNCONFIRMED"):
-        identity = await api_writer.prepare_generation_attempt(request_body(prior), "/v1/messages")
-        sent.append(identity)
-    assert sent == []
-    async with pool.acquire() as conn:
-        assert await conn.fetchval(
-            "SELECT count(*) FROM generation_provider_attempts WHERE run_id=$1", prior.run_id
-        ) == 1 + int(committed)
-        assert (
-            await conn.fetchval("SELECT count(*) FROM provider_calls WHERE run_id=$1", prior.run_id)
-            == 0
-        )
+    async with executable_intent(pool, api_writer, monkeypatch) as (prior, cursor):
+        sent = []
+        with pytest.raises(RuntimeError, match="GENERATION_ATTEMPT_UNCONFIRMED"):
+            identity = await api_writer.prepare_generation_attempt(request_body(prior), "/v1/messages")
+            sent.append(identity)
+        assert sent == []
+        async with pool.acquire() as conn:
+            assert await conn.fetchval(
+                "SELECT count(*) FROM generation_provider_attempts WHERE run_id=$1", prior.run_id
+            ) == 1 + int(committed)
+            assert (
+                await conn.fetchval("SELECT count(*) FROM provider_calls WHERE run_id=$1", prior.run_id)
+                == 0
+            )
+
+            assert await conn.fetchval(
+                "SELECT count(*) FROM generation_recovery_effects "
+                "WHERE effect_id=$1 AND provider_attempt_id IS NOT NULL",
+                cursor.root_effect_id,
+            ) == int(committed)
 
 
 @pytest.mark.parametrize(
