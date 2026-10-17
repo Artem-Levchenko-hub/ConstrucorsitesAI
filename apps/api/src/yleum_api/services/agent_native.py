@@ -48,6 +48,7 @@ from yleum_api.services.generation.recovery_actions import (
     ResponseRecovery,
     verified_progress_executor,
 )
+from yleum_api.services.generation.recovery_clock import contract_deadline
 from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
@@ -1376,7 +1377,7 @@ async def _run_native_segment(
         "model": model, "system": system, "task": task, "max_steps": effective_max_steps,
         "source_repair": source_repair, "portable_cell": portable_cell,
         "allow_max_bash": allow_max_bash,
-        "edit_deadline": edit_deadline.isoformat() if edit_deadline else None,
+        "edit_deadline": contract_deadline(continuation, edit_deadline),
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
     restored = continuation.restore_frame("native") if continuation is not None else None
     saved_frame = _NativeLoopFrame.model_validate(restored) if restored is not None else None
@@ -2433,7 +2434,7 @@ async def _run_native_segments(
     segment_limit = max(1, int(max_segments)) if max_segments is not None else None
     contract = hashlib.sha256(json.dumps({
         "task": task, "max_segments": max_segments,
-        "edit_deadline": edit_deadline.isoformat() if edit_deadline else None,
+        "edit_deadline": contract_deadline(continuation, edit_deadline),
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
     raw = continuation.context.get("native_outer") if continuation is not None else None
     restored = _NativeOuterFrame.model_validate(raw) if raw is not None else None

@@ -402,6 +402,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
     test_engine,
     monkeypatch,
     resume_existing,
+    soft_windows=False,
 ):
     install_healthy_reader_inventory(monkeypatch, refresh=True)
     import hashlib
@@ -430,6 +431,8 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
         generation_provider_attempts_enabled=True,
         generation_response_retention_enabled=True,
         use_design_intelligence_plugin=False,
+        generation_recovery_soft_windows_enabled=soft_windows,
+        max_generation_deadline_seconds=1500,
     )
     monkeypatch.setattr(recovery_execution, "get_settings", lambda: settings)
     monkeypatch.setattr(agent_pipeline, "get_settings", lambda: settings)
@@ -464,7 +467,8 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
             current = await check.get(GenerationRun, run.id)
             state = recovery_execution.recovery_state(current)
             assert state is not None, "physical runtime entered before durable bootstrap context"
-            assert state.version == 2 and state.continuation_claim is not None
+            assert state.version == (3 if soft_windows else 2)
+            assert state.continuation_claim is not None
             assert state.execution.physical_state == "no_effects"
             context = await recovery_execution.load_execution_context(
                 state.identity,
@@ -2281,9 +2285,12 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     damage,
     finalization_stage,
     initially_prepared,
+    soft_windows=False,
+    native=True,
 ):
     """Actual worker/pipeline/loop/SQL; physical controller and gateway are fixed transports."""
     import hashlib
+    import json
     from dataclasses import asdict, replace
 
     import httpx
@@ -2345,7 +2352,8 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     settings = get_settings().model_copy(
         update={
-            "use_native_agent": True,
+            "use_native_agent": native,
+            "mock_llm": False,
             "agent_max_segments": 1,
             "generation_recovery_execution_enabled": False,
             "generation_recovery_mode": "on",
@@ -2358,7 +2366,10 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     )
     for module in (db, generation, supervisor, lifecycle, recovery_execution, agent_pipeline):
         monkeypatch.setattr(module, "get_engine", lambda: test_engine)
-    for module in (agent_pipeline, agent_generation, agent_native, llm_client, recovery_execution):
+    for module in (
+        agent_pipeline, agent_generation, agent_native,
+        llm_client, recovery_execution,
+    ):
         monkeypatch.setattr(module, "get_settings", lambda: settings)
     monkeypatch.setattr(lifecycle, "clear_stream_state", AsyncMock())
     monkeypatch.setattr(supervisor, "publish_event", AsyncMock())
@@ -2629,19 +2640,65 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
             })
         return response
 
+    async def receiver_completed(request):
+        if not soft_windows:
+            return
+        # Synthetic gateway transport writes the same terminal journal/body
+        # shape consumed by the real API physical-quiescence loader.
+        from uuid import UUID
+
+        from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
+        from yleum_api.models.provider_call import ProviderCall
+        identity_payload = json.loads(request.content)["metadata"]["generation_provider_identity"]
+        attempt_id = UUID(identity_payload["attempt_id"])
+        async with factory() as session:
+            attempt = await session.get(GenerationProviderAttempt, attempt_id)
+            call = ProviderCall(
+                id=uuid4(), provider_scope="llmgw", route="/synthetic", requested_model="synthetic",
+                expense_owner="user", user_id=run.user_id, project_id=run.project_id,
+                run_id=run.id, stage="generation", free=False, status="completed",
+                finished_at=datetime.now(UTC),
+            )
+            session.add(call)
+            await session.flush()
+            attempt.provider_call_id = call.id
+            attempt.phase = "closed"
+            await session.execute(text(
+                "INSERT INTO generation_response_budgets "
+                "(bucket,storage_epoch,quota_bytes,observation_nonce) "
+                "VALUES ('clock-fixture',:epoch,1048576,:nonce) ON CONFLICT DO NOTHING"
+            ), {"epoch": uuid4(), "nonce": uuid4()})
+            await session.flush()
+            await session.execute(text(
+                "INSERT INTO generation_responses "
+                "(attempt_id,bucket,writer_token,state,allocated_bytes,manifest_key,"
+                "manifest_sha256,response_sha256) "
+                "VALUES (:attempt,'clock-fixture',:token,'complete',0,'synthetic',:digest,:digest)"
+            ), {"attempt": attempt_id, "token": uuid4(), "digest": "a" * 64})
+            await session.commit()
+
+    def wire_answer(index):
+        if native:
+            return answer(index)
+        path = first_path if index == 1 else "src/second.ts"
+        content = '<omnia:action name="read_file">' + json.dumps({"path": path}) + '</omnia:action>'
+        return {"choices": [{"finish_reason": "stop", "message": {"content": content}}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+
     async def transport(request):
         assert request.method == "POST"
         posts.append(request)
+        await receiver_completed(request)
         if not partial_tool and not early_check and len(posts) == expected_posts:
             raise httpx.ReadError("synthetic accepted-response ACK lost", request=request)
         assert len(posts) <= (2 if early_check else 1)
-        return httpx.Response(200, json=answer(len(posts)))
+        return httpx.Response(200, json=wire_answer(len(posts)))
 
     async def recover(attempt):
         recovered.append(attempt)
         entered.set()
         await unblock.wait()
-        return answer(1 if partial_tool or early_check else 2)
+        return wire_answer(1 if partial_tool or early_check else 2)
 
     client = httpx.AsyncClient
     monkeypatch.setattr(
@@ -2650,6 +2707,11 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         lambda **kw: client(transport=httpx.MockTransport(transport), **kw),
     )
     monkeypatch.setattr(llm_client, "require_recovered_response", recover)
+    if not native:
+        from contextvars import ContextVar
+        monkeypatch.setattr(llm_client, "_generation_billing_context", ContextVar(
+            "clock_xml_context", default=(str(run.id), str(run.user_id), str(run.project_id)),
+        ))
 
     ids = GenerationIds(
         run.id, run.project_id, run.user_id, run.user_message_id, run.assistant_message_id
@@ -2696,6 +2758,13 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     from yleum_api.services.generation.recovery_contract import decode_recovery
 
     state = decode_recovery(run.agent_state["recovery_v1"])
+    if soft_windows:
+        from yleum_api.services.generation.recovery_clock import initial_clock, start_interval
+        clock = initial_clock(1500)
+        state = decode_recovery(state.model_dump(mode="json") | {
+            "version": 3, "clock": clock.model_dump(mode="json"),
+        })
+        start_interval(clock)
     state = state.model_copy(
         update={"identity": state.identity.model_copy(update={"prompt_hash": run.prompt_hash})}
     )
@@ -2764,6 +2833,14 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
     await db_session.refresh(run)
     before = recovery_execution.recovery_state(run)
     assert before.phase == "waiting_dependency" and before.execution.physical_state == "released"
+    if soft_windows:
+        assert before.clock.interval_open is False
+        assert before.clock.dependency_failures == 1
+        # Advance only the dependency scheduler edge; active time/window/spend
+        # remain the exact values emitted by the real release path.
+        due = before.model_copy(update={"next_check_at": datetime.now(UTC)})
+        run.agent_state = {**run.agent_state, "recovery_v1": due.model_dump(mode="json")}
+        await db_session.commit()
     if damage:
         if damage == "source":
             files[first_path] = "unrelated source change"
@@ -2818,6 +2895,12 @@ async def test_noninitial_worker_reenters_real_pipeline_native_loop_with_fresh_f
         op.kind == "release" and op.status == "completed" for op in operations
     )
     assert after.execution.stage == "finalization", "completed main turn has no durable entry"
+    if soft_windows:
+        assert after.active_work_ms >= before.active_work_ms
+        assert after.clock.segment_seq == before.clock.segment_seq == 0
+        due = after.model_copy(update={"next_check_at": datetime.now(UTC)})
+        run.agent_state = {**run.agent_state, "recovery_v1": due.model_dump(mode="json")}
+        await db_session.commit()
     assert await generation.execute_dispatch(run.id)
     assert effects == [first_path, "src/second.ts"]
     assert len(posts) == expected_posts and len(recovered) == 1 and len(finalization) == 2

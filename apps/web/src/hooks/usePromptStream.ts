@@ -18,6 +18,7 @@ import type {
 } from "@/lib/api/types";
 import { mergeAgentStepsBySequence } from "@/lib/agent-steps";
 import { generationEventStep } from "@/lib/generation-event-step";
+import { generationEventBelongsToRun } from "@/lib/generation-recovery";
 import {
   cancelGeneration,
   getLatestGeneration,
@@ -114,6 +115,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     Record<string, { lastSeq: number; resyncing: boolean }>
   >({});
   const activeGenerationRunRef = useRef<string | null>(null);
+  const activeGenerationMessageRef = useRef<{ projectId: string; messageId: string } | null>(null);
   const lastGenerationSeqRef = useRef<Record<string, number>>({});
   // The silence watchdog must hear every meaningful server event, not only
   // updates to the assistant's text. Agentic builds can legitimately spend
@@ -169,6 +171,9 @@ export function usePromptStream(projectId: string, projectSlug: string) {
   const apply = useCallback(
     (event: WsEvent) => {
       if (event.type === "generation.replay.complete") {
+        if (activeGenerationMessageRef.current?.projectId !== projectId
+          || event.data.run_id !== activeGenerationRunRef.current
+          || !Number.isSafeInteger(event.data.high_water) || event.data.high_water < 0) return;
         lastGenerationSeqRef.current[event.data.run_id] = Math.max(
           lastGenerationSeqRef.current[event.data.run_id] ?? 0,
           event.data.high_water,
@@ -177,6 +182,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
       if (event.type === "generation.event") {
         const envelope: GenerationEventEnvelope = event.data;
+        const message = activeGenerationMessageRef.current;
+        const latest = qc.getQueryData<GenerationRun | null>(["generation", projectId]);
+        const runId = activeGenerationRunRef.current ?? (
+          latest?.project_id === projectId && latest.assistant_message_id === message?.messageId
+            ? latest.id : null);
+        if (!generationEventBelongsToRun(envelope, message?.projectId === projectId && runId
+          ? { projectId, runId, messageId: message.messageId } : null)) return;
         const lastSeq = lastGenerationSeqRef.current[envelope.run_id] ?? 0;
         if (envelope.seq <= lastSeq) return;
         if (envelope.seq > lastSeq + 1) {
@@ -187,11 +199,15 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           });
           return;
         }
-        activeGenerationRunRef.current = envelope.run_id;
+        activeGenerationRunRef.current = runId;
         lastGenerationSeqRef.current[envelope.run_id] = envelope.seq;
         const data = envelope.data;
         if (envelope.type === "generation.phase") {
           void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
+        }
+        if (envelope.type === "generation.phase" || envelope.type.startsWith("recovery.")
+          || envelope.type === "generation.recovery") {
+          void qc.invalidateQueries({ queryKey: ["generation", projectId] });
         }
         const mid = typeof data.message_id === "string" ? data.message_id : null;
         if (mid) watchdogHeartbeatRef.current[mid]?.();
@@ -600,6 +616,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       messageId: string,
       onSilence: () => boolean | Promise<boolean>,
     ): (() => void) => {
+      activeGenerationMessageRef.current = { projectId, messageId };
       watchdogCleanupRef.current[messageId]?.();
       const WATCHDOG_MS = 180_000;
       let timer = 0;
@@ -723,6 +740,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           // second prompt or a fake terminal error.
           streamingRef.current = true;
           activeGenerationRunRef.current = generation?.id ?? null;
+          activeGenerationMessageRef.current = { projectId, messageId };
           terminalGenerationMessagesRef.current.delete(messageId);
           reconnectAttemptsRef.current = 0;
           cancelRef.current?.();
@@ -888,6 +906,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         message_id = resp.message_id;
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
         activeGenerationRunRef.current = resp.run_id;
+        activeGenerationMessageRef.current = { projectId, messageId: resp.message_id };
         lastGenerationSeqRef.current[resp.run_id] ??= 0;
         if (!USE_MOCKS) {
           cancelRef.current?.();
@@ -1127,6 +1146,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             terminalGenerationMessagesRef.current.delete(last.id);
             streamingRef.current = true;
             activeGenerationRunRef.current = generation?.id ?? null;
+            activeGenerationMessageRef.current = { projectId, messageId: last.id };
             reconnectAttemptsRef.current = 0;
             connect();
             watchMessage(last.id, () => recoverSilentStream(last.id));

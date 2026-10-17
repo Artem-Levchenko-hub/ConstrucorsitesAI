@@ -429,6 +429,23 @@ export type GenerationRunStatus =
   | "completed"
   | "failed";
 
+export type GenerationRecoveryView = {
+  version: 1;
+  phase: "working" | "repairing" | "waiting_dependency" | "reconciling" | "verifying" | "needs_input";
+  last_verified_action: string | null;
+  reason: string | null;
+  next_check_at: IsoDateTime | null;
+  attempt_seq: number;
+};
+
+export type GenerationAcceptanceView = {
+  run_id: Uuid;
+  assistant_message_id: Uuid | null;
+  snapshot_id: Uuid | null;
+  accepted_at: IsoDateTime | null;
+  current_request_complete: boolean;
+};
+
 export type GenerationRun = {
   id: Uuid;
   project_id: Uuid;
@@ -438,6 +455,9 @@ export type GenerationRun = {
   created_at: IsoDateTime;
   started_at: IsoDateTime | null;
   finished_at: IsoDateTime | null;
+  recovery?: GenerationRecoveryView | null;
+  recovery_unavailable?: boolean;
+  acceptance?: GenerationAcceptanceView | null;
 };
 
 // One question in the upfront onboarding survey popup (owner 2026-06-19).

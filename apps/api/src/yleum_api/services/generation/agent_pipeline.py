@@ -404,6 +404,7 @@ async def run_agent_generation(
     if _resume_state is not None:
         assert execution_context is not None
         continuation = attach_driver(factory, _resume_state, execution_context, runtime.handle)
+        runtime.continuation = continuation
         assert runtime.handle is not None
         await rebind_continuation(continuation)
         if continuation.state.execution.physical_state == "no_effects":
@@ -500,6 +501,8 @@ async def run_agent_generation(
         (await runtime.coordinator.source_edit_deadline()
          if runtime.coordinator is not None else None)
     )
+    if continuation is not None:
+        edit_deadline = continuation.soft_edit_deadline(edit_deadline)
     if _resume_state is not None:
         assert execution_context is not None
         assert continuation is not None

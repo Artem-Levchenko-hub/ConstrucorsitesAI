@@ -40,6 +40,7 @@ API_CAPABILITIES = (
     "reader-standby:1",
     "recovery-state:1",
     "recovery-state:2",
+    "recovery-state:3",
     "response-manifest:1",
     "source-checkpoint:1",
     "tracked-command:1",

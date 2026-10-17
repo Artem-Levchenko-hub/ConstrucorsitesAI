@@ -32,6 +32,7 @@ import { agentElapsedSeconds } from "@/lib/agent-elapsed";
 import { collapseAgentSteps } from "@/lib/agent-steps";
 import { humanPath, stepCopy, type StepIconName, type StepTone } from "@/lib/agent-step-copy";
 import { CAPACITY_WAITING_COPY, agentTranscriptTitle } from "@/lib/agent-transcript";
+import { generationVerifiedActionLabel, parseGenerationRecovery } from "@/lib/generation-recovery";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -140,6 +141,15 @@ export function AgentTranscript({
   const startedAt = boundRun?.started_at ?? messageStartedAt;
   const finishedAt = boundRun?.finished_at ?? messageFinishedAt;
   const streaming = generationStatus ? isGenerationActive({ status: generationStatus }) : Boolean(messageStreaming);
+  const recovery = parseGenerationRecovery(boundRun?.recovery);
+  const recoveryUnconfirmed = boundRun?.recovery_unavailable === true
+    || (boundRun?.recovery != null && recovery === null);
+  const hasRecovery = recovery !== null || recoveryUnconfirmed;
+  const recoveryIdle = generationStatus !== "cancel_requested" && (
+    recoveryUnconfirmed || recovery?.phase === "waiting_dependency"
+    || recovery?.phase === "reconciling" || recovery?.phase === "needs_input");
+  const verifiedAction = generationVerifiedActionLabel(recovery);
+  const showElapsed = !hasRecovery;
   const [detailsOpen, setDetailsOpen] = useState(false);
   const capacityWaiting = generationStatus === "queued_for_capacity";
   const open = Boolean(streaming) || capacityWaiting || detailsOpen;
@@ -157,7 +167,7 @@ export function AgentTranscript({
       : liveElapsed;
   const transientStartRef = useRef<number | null>(null);
   useEffect(() => {
-    if (!streaming) {
+    if (!streaming || !showElapsed) {
       transientStartRef.current = null;
       return;
     }
@@ -174,7 +184,7 @@ export function AgentTranscript({
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [finishedAt, startedAt, streaming]);
+  }, [finishedAt, showElapsed, startedAt, streaming]);
   const { data: steps } = useQuery<AgentStep[]>({
     queryKey: ["agent-steps", projectId, messageId],
     // Data is pushed via setQueryData from usePromptStream's `agent.step`
@@ -197,7 +207,7 @@ export function AgentTranscript({
     row.step.kind === "step" && row.step.action !== CAPACITY_WAITING_COPY.title
       ? row.repeats : 0
   ), 0);
-  if (!projectId || (visibleSteps.length === 0 && !capacityWaiting)) return null;
+  if (!projectId || (visibleSteps.length === 0 && !capacityWaiting && !hasRecovery)) return null;
   const incomplete =
     !streaming &&
     (generationStatus === "failed" ||
@@ -219,7 +229,9 @@ export function AgentTranscript({
             open && "rotate-90",
           )}
         />
-        {streaming ? (
+        {recoveryIdle && streaming ? (
+          <Hourglass className="h-3.5 w-3.5 shrink-0 text-fg-tertiary" />
+        ) : streaming ? (
           <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
         ) : incomplete ? (
           <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />
@@ -231,10 +243,12 @@ export function AgentTranscript({
             Boolean(streaming),
             generationStatus,
             visibleSteps.at(-1)?.ok === false,
+            recoveryUnconfirmed ? {} : recovery,
+            recoveryUnconfirmed ? false : boundRun?.acceptance?.current_request_complete,
           )}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
-          {(streaming || elapsed > 0) && (
+          {showElapsed && (streaming || elapsed > 0) && (
             <span className={cn(streaming && "text-accent")}>
               {streaming ? "" : "за "}
               {formatElapsed(elapsed)} ·
@@ -261,6 +275,20 @@ export function AgentTranscript({
                 {CAPACITY_WAITING_COPY.detail}
               </p>
             )}
+            {hasRecovery && (
+              <div className="space-y-1 px-3 py-2 text-xs text-fg-secondary" role="status">
+                {verifiedAction && <p>Последнее подтверждённое действие: {verifiedAction.toLowerCase()}.</p>}
+                {recoveryIdle && recovery?.next_check_at && (
+                  <p>Следующая проверка: {new Date(recovery.next_check_at).toLocaleTimeString("ru-RU", {
+                    hour: "2-digit", minute: "2-digit",
+                  })}.</p>
+                )}
+                {recovery?.phase === "needs_input" && (
+                  <p>Можно остановить работу и отправить уточнённый запрос.</p>
+                )}
+                {recoveryUnconfirmed && <p>Уточняю состояние работы. Повторный запрос не запускается.</p>}
+              </div>
+            )}
             <ol className="space-y-0.5 p-1.5">
               {rows.map((row, i) => {
                 const s = row.step;
@@ -268,7 +296,7 @@ export function AgentTranscript({
                 const Icon = STEP_ICON[copy.icon] ?? stepIcon(s);
                 const last = i === rows.length - 1;
                 const live =
-                  streaming &&
+                  streaming && !recoveryIdle &&
                   (last || s.toolLifecycle === "started" || s.toolLifecycle === "heartbeat") &&
                   (s.kind === "step" || s.kind === "heartbeat") &&
                   s.toolLifecycle !== "finished" &&

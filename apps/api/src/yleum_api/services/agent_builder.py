@@ -70,6 +70,7 @@ from yleum_api.services.generation.recovery_actions import (
     ResponseRecovery,
     verified_progress_executor,
 )
+from yleum_api.services.generation.recovery_clock import contract_deadline
 from yleum_api.services.generation.recovery_contract import (
     IncompleteResponseBudget,
     RecoveryContractError,
@@ -357,7 +358,7 @@ async def run_agent_build(
     segment_limit = max(1, min(8, int(max_segments))) if max_segments is not None else None
     contract = hashlib.sha256(json.dumps({
         "task": user_prompt, "max_segments": segment_limit,
-        "deadline": edit_deadline.isoformat() if edit_deadline else None,
+        "deadline": contract_deadline(continuation, edit_deadline),
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
     raw = continuation.context.get("legacy_outer") if continuation is not None else None
     restored = _LegacyOuterFrame.model_validate(raw) if raw is not None else None
@@ -588,7 +589,7 @@ async def _run_agent_segment(
         "escalate_model": escalate_model, "max_steps": max_steps, "max_tokens": max_tokens,
         "require_green": require_green_before_done, "handoff": coordinator_handoff,
         "ship_green": ship_green_on_abort, "edit_mode": edit_mode, "bare_mode": bare_mode,
-        "edit_deadline": edit_deadline.isoformat() if edit_deadline else None,
+        "edit_deadline": contract_deadline(continuation, edit_deadline),
     }, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest() if continuation else ""
     restored = continuation.restore_frame("legacy") if continuation is not None else None
     saved_frame = _LegacyLoopFrame.model_validate(restored) if restored is not None else None

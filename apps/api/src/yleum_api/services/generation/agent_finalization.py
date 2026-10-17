@@ -185,6 +185,7 @@ async def run_native_source_repair(
         if entry.status == "complete":
             return _result_from_data(entry.result)
         task, model_baseline, edit_deadline = entry.task, entry.baseline, entry.edit_deadline
+        edit_deadline = continuation.soft_edit_deadline(edit_deadline)
         if entry.targeted and source_failure is None:
             # A historical path list is not current source-repair authority.
             source_failure = SourceFailure()

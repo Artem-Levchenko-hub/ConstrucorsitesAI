@@ -70,6 +70,7 @@ class GenerationRuntime:
     migration_baseline: dict[str, str] | None = None
     response_recovery: ResponseRecovery = field(default_factory=ResponseRecovery)
     verified_progress: VerifiedProgressCollector | None = None
+    continuation: ExecutionDriver | None = None
 
     def legacy_coordinator_handoff(self) -> bool:
         """Only this invocation's portable coordinator owns deferred runtime proof."""

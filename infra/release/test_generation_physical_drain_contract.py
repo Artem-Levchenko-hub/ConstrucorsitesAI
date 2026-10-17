@@ -4,10 +4,12 @@ import copy
 import hashlib
 import importlib.util
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 AVAILABLE = importlib.util.find_spec("yleum_orchestrator") is not None
 WORKSPACE = "11111111-1111-4111-8111-111111111111"
@@ -150,6 +152,478 @@ class PhysicalContractTests(unittest.TestCase):
                 }
             )
         )
+
+    def test_managed_serving_processes_allow_only_confirmed_finished_execs(self):
+        for kind in ("managed-max-core", "max-gateway"):
+            for outcome in ("none", "finished", "running", "unknown", "foreign"):
+                container = self.container(kind, "a" * 64)
+                container.attrs["ExecIDs"] = [] if outcome == "none" else ["b" * 64]
+                execution = {
+                    "ContainerID": "c" * 64 if outcome == "foreign" else container.id,
+                    "Running": outcome == "running",
+                    "ExitCode": 0 if outcome in {"finished", "foreign"} else None,
+                }
+                client = SimpleNamespace(
+                    containers=SimpleNamespace(list=lambda **kwargs: [container]),
+                    api=SimpleNamespace(exec_inspect=lambda _: execution),
+                )
+                with (
+                    self.subTest(kind=kind, outcome=outcome),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    if outcome in {"none", "finished"}:
+                        self.module.require_physical_writers_drained(Path(tmp), client)
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(
+                                Path(tmp), client
+                            )
+
+    def test_cell_bootstrap_helper_requires_strict_physical_stop(self):
+        for damage in (None, "running", "paused", "dead", "pid", "restart", "owner"):
+            container = self.container("core-database-bootstrap", "a" * 64)
+            labels = container.attrs["Config"]["Labels"]
+            labels.pop("omnia.project_machine")
+            labels.update({"omnia.managed": "true", "omnia.project_cell": "true"})
+            container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+            if damage == "running":
+                container.attrs["State"].update(Status="running", Running=True, Pid=5)
+            elif damage in {"paused", "dead", "pid"}:
+                field = {"paused": "Paused", "dead": "Dead", "pid": "Pid"}[damage]
+                container.attrs["State"][field] = 5 if damage == "pid" else True
+            elif damage == "restart":
+                container.attrs["HostConfig"]["RestartPolicy"]["Name"] = "always"
+            elif damage == "owner":
+                labels.pop("omnia.owner_id")
+            client = SimpleNamespace(
+                containers=SimpleNamespace(list=lambda **kwargs: [container])
+            )
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                if damage is None:
+                    self.module.require_physical_writers_drained(Path(tmp), client)
+                else:
+                    with self.assertRaises(self.module.PhysicalDrainError):
+                        self.module.require_physical_writers_drained(Path(tmp), client)
+
+    def test_unknown_machine_kind_remains_denied(self):
+        container = self.container("unknown-writer", "a" * 64)
+        client = SimpleNamespace(
+            containers=SimpleNamespace(list=lambda **kwargs: [container])
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(
+                self.module.PhysicalDrainError, "resource kind is unknown"
+            ):
+                self.module.require_physical_writers_drained(Path(tmp), client)
+
+    def kernel_fixture(self, root, *, service=True, extra_parent=None, group=None):
+        group = group or "a" * 64
+        from docker.errors import NotFound
+        from requests import Response
+        from yleum_orchestrator.services.docker_machine_backend import (
+            _SERVICE_WRAPPER,
+            _USERLAND_CAPS,
+        )
+
+        state, proc, groups = root / "state", root / "proc", root / "groups"
+        self.machine(state)
+        (proc / "1/ns").mkdir(parents=True)
+        (proc / "1/ns/pid").write_text("host namespace")
+        (proc / "1/task/1").mkdir(parents=True)
+        (proc / "1/cgroup").write_text("0::/init.scope\n")
+        (proc / "1/task/1/cgroup").write_text("0::/init.scope\n")
+        (proc / "sys/kernel/random").mkdir(parents=True)
+        (proc / "sys/kernel/random/boot_id").write_text(WORKSPACE)
+        (proc / "container-namespace").write_text("container namespace")
+        (groups / group).mkdir(parents=True)
+        container = self.container("development", "a" * 64)
+        labels = container.attrs["Config"]["Labels"]
+        labels.update({"omnia.managed": "true", "omnia.fencing_epoch": "7"})
+        idle = "import signal,sys; signal.signal(signal.SIGTERM, lambda *_: sys.exit(0)); signal.pause()"
+        container.attrs["State"].update(
+            Pid=100, StartedAt="fixed-start", Restarting=False
+        )
+        container.attrs["Config"].update(
+            Entrypoint=["python3", "-c"], Cmd=[idle], User="0:0"
+        )
+        container.attrs["HostConfig"].update(
+            Privileged=False,
+            PidMode="",
+            UsernsMode="",
+            CgroupnsMode="private",
+            CapDrop=["ALL"],
+            CapAdd=_USERLAND_CAPS,
+            SecurityOpt=["no-new-privileges:true"],
+        )
+        service_args = [
+            ["node", "server.js"],
+            "/workspace/.",
+            "/run/service.log",
+            "never",
+        ]
+        service_exec = {
+            "ContainerID": container.id,
+            "Running": True,
+            "ExitCode": None,
+            "Pid": 101,
+            "ProcessConfig": {
+                "entrypoint": "python3",
+                "arguments": [
+                    "-c",
+                    _SERVICE_WRAPPER,
+                    json.dumps(service_args),
+                ],
+            },
+        }
+        container.attrs["ExecIDs"] = ["b" * 64] if service else []
+        metadata = {
+            "epoch": 7,
+            "manifest": {
+                "services": [
+                    {
+                        "name": "web",
+                        "argv": service_args[0],
+                        "cwd": ".",
+                        "restart": "never",
+                    }
+                ]
+                if service
+                else []
+            },
+            "services": {
+                "web": {"exec_id": "b" * 64, "log": service_args[2], "epoch": 7}
+            }
+            if service
+            else {},
+            "exec_logs": {},
+            "exec_pids": {},
+        }
+        (state / "project-machines" / WORKSPACE / "docker.json").write_text(
+            json.dumps(metadata)
+        )
+        commands = {100: (99, ["python3", "-c", idle])}
+        if service:
+            commands.update(
+                {
+                    101: (
+                        99,
+                        ["python3", "-c", _SERVICE_WRAPPER, json.dumps(service_args)],
+                    ),
+                    102: (101, ["node", "server.js"]),
+                }
+            )
+        if extra_parent is not None:
+            commands[103] = (extra_parent, ["unconfirmed-command"])
+        caps = sum(1 << bit for bit in (0, 1, 3, 4, 6, 7, 31, 5, 10, 18))
+        for pid, (parent, argv) in commands.items():
+            directory = proc / str(pid)
+            (directory / "task" / str(pid)).mkdir(parents=True)
+            (directory / "ns").mkdir()
+            os.link(proc / "container-namespace", directory / "ns/pid")
+            fields = ["S", str(parent), *(["0"] * 17), str(1000 + pid)]
+            (directory / "stat").write_text(f"{pid} (fixture) " + " ".join(fields))
+            (directory / "status").write_text(
+                f"Pid:\t{pid}\nTgid:\t{pid}\nNSpid:\t{pid}\t{pid - 99}\nNoNewPrivs:\t1\n"
+                + "".join(
+                    f"{key}:\t{caps:x}\n"
+                    for key in ("CapInh", "CapPrm", "CapEff", "CapBnd", "CapAmb")
+                )
+            )
+            (directory / "cgroup").write_text("0::/" + group + "\n")
+            (directory / "task" / str(pid) / "cgroup").write_text("0::/" + group + "\n")
+            (directory / "cmdline").write_bytes(
+                b"\0".join(v.encode() for v in argv) + b"\0"
+            )
+            (directory / "exe").symlink_to("/usr/bin/python3")
+        for name in ("cgroup.procs", "cgroup.threads"):
+            (groups / group / name).write_text("\n".join(map(str, commands)) + "\n")
+        missing = Response()
+        missing.status_code = 404
+
+        def inspect(exec_id):
+            if exec_id == "b" * 64 and service:
+                return copy.deepcopy(service_exec)
+            raise NotFound("synthetic terminal exec forgotten", response=missing)
+
+        client = SimpleNamespace(
+            containers=SimpleNamespace(list=lambda **kwargs: [container]),
+            api=SimpleNamespace(exec_inspect=inspect),
+        )
+        return state, proc, groups, client, container, service_exec
+
+    def test_forgotten_terminal_exec_requires_independent_current_process_absence(self):
+        for service in (False, True):
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, _container, _exec = self.kernel_fixture(
+                    Path(tmp),
+                    service=service,
+                )
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc, create=True),
+                    patch.object(
+                        self.module,
+                        "_CGROUP_ROOT",
+                        groups,
+                        create=True,
+                    ),
+                ):
+                    self.module.require_physical_writers_drained(state, client)
+
+    def test_forgotten_terminal_exec_never_hides_unknown_or_reparented_process(self):
+        for parent in (100, 999):
+            with self.subTest(parent=parent), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, _container, _exec = self.kernel_fixture(
+                    Path(tmp),
+                    extra_parent=parent,
+                )
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc, create=True),
+                    patch.object(
+                        self.module,
+                        "_CGROUP_ROOT",
+                        groups,
+                        create=True,
+                    ),
+                    self.assertRaises(self.module.PhysicalDrainError),
+                ):
+                    self.module.require_physical_writers_drained(state, client)
+
+    def test_stopped_development_requires_kernel_absence(self):
+        for damage in (
+            None,
+            "group",
+            "nested_group",
+            "process",
+            "task",
+            "restart",
+            "pid",
+            "state",
+            "parent",
+        ):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, container, _exec = self.kernel_fixture(
+                    Path(tmp), service=False, group="owned"
+                )
+                container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+                container.attrs["HostConfig"]["CgroupParent"] = ""
+                (proc / "1/cgroup").write_text("0::/init.scope\n")
+                if damage in {"group", "nested_group"}:
+                    path = groups / (
+                        "nested" if damage == "nested_group" else "system.slice"
+                    )
+                    (path / ("docker-" + container.id + ".scope")).mkdir(parents=True)
+                elif damage == "process":
+                    (proc / "100/cgroup").write_text(
+                        "0::/docker/" + container.id + "\n"
+                    )
+                elif damage == "task":
+                    (proc / "100/task/100/cgroup").write_text(
+                        "0::/docker/" + container.id + "\n"
+                    )
+                elif damage == "restart":
+                    container.attrs["HostConfig"]["RestartPolicy"]["Name"] = "always"
+                elif damage == "pid":
+                    container.attrs["State"]["Pid"] = 100
+                elif damage == "state":
+                    container.attrs["State"]["Restarting"] = True
+                elif damage == "parent":
+                    container.attrs["HostConfig"]["CgroupParent"] = "unproven"
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                ):
+                    if damage is None:
+                        self.module.require_physical_writers_drained(state, client)
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(state, client)
+
+    def test_fresh_exec_inventory_is_revalidated_after_outer_scan(self):
+        for outcome in (
+            "created",
+            "running",
+            "foreign",
+            "missing",
+            "terminal",
+            "null_inventory",
+        ):
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, container, _execution = (
+                    self.kernel_fixture(Path(tmp))
+                )
+                previous = client.api.exec_inspect
+                inspected = []
+                reloads = 0
+
+                def reload():
+                    nonlocal reloads
+                    reloads += 1
+                    if reloads == 2:
+                        container.attrs["ExecIDs"] = (
+                            None
+                            if outcome == "null_inventory"
+                            else ["b" * 64, "d" * 64]
+                        )
+
+                def inspect(exec_id):
+                    inspected.append(exec_id)
+                    if exec_id == "d" * 64 and outcome != "missing":
+                        return {
+                            "ContainerID": "f" * 64
+                            if outcome == "foreign"
+                            else container.id,
+                            "Running": outcome == "running",
+                            "ExitCode": 0
+                            if outcome in {"terminal", "foreign"}
+                            else None,
+                        }
+                    return previous(exec_id)
+
+                container.reload = reload
+                client.api.exec_inspect = inspect
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                ):
+                    if outcome == "terminal":
+                        self.module.require_physical_writers_drained(state, client)
+                        self.assertGreaterEqual(inspected.count("d" * 64), 2)
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(state, client)
+
+    def test_kernel_cgroup_requires_exact_docker_identity_component(self):
+        for group in (
+            "foreign",
+            "a" * 63,
+            "a" * 64 + "suffix",
+            "docker-" + "a" * 64 + ".scope.extra",
+        ):
+            with self.subTest(group=group), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, _container, _execution = (
+                    self.kernel_fixture(Path(tmp), group=group)
+                )
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                ):
+                    with self.assertRaises(self.module.PhysicalDrainError):
+                        self.module.require_physical_writers_drained(state, client)
+
+    def test_kernel_proof_security_and_service_binding_fail_closed(self):
+        damages = (
+            "privileged",
+            "host_pid",
+            "userns",
+            "cgroupns",
+            "caps",
+            "no_new_privs",
+            "idle_config",
+            "idle_process",
+            "boot",
+            "thread",
+            "nested",
+            "service_pid",
+            "service_container",
+            "service_args",
+            "service_missing",
+            "namespace",
+            "process_caps",
+            "read",
+        )
+        for damage in damages:
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, container, execution = self.kernel_fixture(
+                    Path(tmp)
+                )
+                host = container.attrs["HostConfig"]
+                host_changes = {
+                    "privileged": ("Privileged", True),
+                    "host_pid": ("PidMode", "host"),
+                    "userns": ("UsernsMode", "host"),
+                    "cgroupns": ("CgroupnsMode", "host"),
+                    "caps": ("CapAdd", ["SYS_ADMIN"]),
+                    "no_new_privs": ("SecurityOpt", []),
+                }
+                if damage in host_changes:
+                    key, value = host_changes[damage]
+                    host[key] = value
+                elif damage == "idle_config":
+                    container.attrs["Config"]["Cmd"] = ["unconfirmed"]
+                elif damage == "idle_process":
+                    (proc / "100/cmdline").write_bytes(b"writer\0")
+                elif damage == "boot":
+                    (proc / "sys/kernel/random/boot_id").write_text("unknown")
+                elif damage == "thread":
+                    (groups / container.id / "cgroup.threads").write_text(
+                        "100\n101\n102\n999\n"
+                    )
+                elif damage == "nested":
+                    (groups / container.id / "delegated").mkdir()
+                elif damage == "service_pid":
+                    execution["Pid"] = 999
+                elif damage == "service_container":
+                    execution["ContainerID"] = "f" * 64
+                elif damage == "service_args":
+                    execution["ProcessConfig"]["arguments"][-1] = "[]"
+                elif damage == "service_missing":
+                    execution["Running"] = False
+                elif damage == "namespace":
+                    (proc / "102/ns/pid").unlink()
+                    os.link(proc / "1/ns/pid", proc / "102/ns/pid")
+                elif damage == "process_caps":
+                    path = proc / "102/status"
+                    path.write_text(
+                        path.read_text().replace("CapEff:", "OldCapEff:")
+                        + "CapEff:\tffffffff\n"
+                    )
+                elif damage == "read":
+                    (proc / "102/stat").unlink()
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                ):
+                    with self.assertRaises(self.module.PhysicalDrainError):
+                        self.module.require_physical_writers_drained(state, client)
+
+    def test_kernel_proof_rejects_identity_drift_between_samples(self):
+        for damage in ("pid_reuse", "boot", "started", "exec_ids", "service_pid"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, container, execution = self.kernel_fixture(
+                    Path(tmp)
+                )
+                sample = self.module._command_absence_sample
+                count = 0
+
+                def changed(*args):
+                    nonlocal count
+                    result = sample(*args)
+                    count += 1
+                    if count == 1:
+                        if damage == "pid_reuse":
+                            path = proc / "102/stat"
+                            path.write_text(path.read_text().replace("1102", "2102"))
+                        elif damage == "boot":
+                            (proc / "sys/kernel/random/boot_id").write_text(OPERATION)
+                        elif damage == "started":
+                            container.attrs["State"]["StartedAt"] = "new-start"
+                        elif damage == "exec_ids":
+                            container.attrs["ExecIDs"].append("f" * 64)
+                        else:
+                            execution["Pid"] = 102
+                    return result
+
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    patch.object(
+                        self.module,
+                        "_command_absence_sample",
+                        side_effect=changed,
+                    ),
+                    self.assertRaises(self.module.PhysicalDrainError),
+                ):
+                    self.module.require_physical_writers_drained(state, client)
 
     def test_typed_terminal_positive_and_missing_or_mismatched_identity_denied(self):
         client = SimpleNamespace(containers=SimpleNamespace(list=lambda **kwargs: []))
