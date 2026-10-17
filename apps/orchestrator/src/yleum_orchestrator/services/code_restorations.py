@@ -26,6 +26,7 @@ from yleum_orchestrator.schemas.code_restoration import (
     RestorationSourceBindingV2,
     RestorationSourceBindingV3,
 )
+from yleum_orchestrator.services import generation_reader_inventory as readers
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.project_machine import write_controller_json
 
@@ -708,6 +709,7 @@ def start_restoration_recovery() -> asyncio.Task[None]:
     async def run() -> None:
         while True:
             try:
+                await asyncio.to_thread(readers.require_if_configured)
                 await get_code_restoration_service().recover()
             except Exception as exc:
                 _log.warning("recovery_failed", error_type=type(exc).__name__)

@@ -10,6 +10,7 @@ durable one when a dispatch was lost. Public GETs remain pure SQL projections.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -126,9 +127,12 @@ async def reconcile_due_restorations(
     lease_seconds: int = 60,
     limit: int = 20,
     concurrency: int = 4,
+    before_tick: Callable[[], Awaitable[None]] | None = None,
 ) -> int:
     """One worker cycle. Returns how many operations were observed."""
     moment = now or datetime.now(UTC)
+    if before_tick is not None:
+        await before_tick()
     async with factory() as session:
         claimed = await claim_due_restorations(
             session, now=moment, lease_seconds=lease_seconds, limit=limit
@@ -137,6 +141,8 @@ async def reconcile_due_restorations(
 
     async def guarded(claim: tuple[UUID, UUID, UUID]) -> None:
         async with gate:
+            if before_tick is not None:
+                await before_tick()
             await _observe(factory, runtime, claim, moment=moment, lease_seconds=lease_seconds)
 
     await asyncio.gather(*(guarded(claim) for claim in claimed))
@@ -165,7 +171,9 @@ async def oldest_pending_age_seconds(
     return max(0.0, (now - oldest).total_seconds())
 
 
-async def run_restoration_reconciliation_forever() -> None:
+async def run_restoration_reconciliation_forever(
+    *, before_tick: Callable[[], Awaitable[None]] | None = None,
+) -> None:
     from yleum_api.services.restoration_runtime import HttpRestorationRuntime
 
     settings = get_settings()
@@ -184,6 +192,7 @@ async def run_restoration_reconciliation_forever() -> None:
                     factory,
                     runtime,
                     lease_seconds=settings.restoration_reconcile_lease_seconds,
+                    before_tick=before_tick,
                 )
                 if processed:
                     log.info("restoration.reconcile_cycle", processed=processed)

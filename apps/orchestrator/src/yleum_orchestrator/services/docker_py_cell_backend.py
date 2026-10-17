@@ -28,6 +28,10 @@ from yleum_orchestrator.services.docker_cell_resources import (
     DockerNetworkRecord,
     DockerVolumeRecord,
 )
+from yleum_orchestrator.services.generation_reader_inventory import (
+    reader_dispatch,
+    require_if_configured,
+)
 from yleum_orchestrator.services.project_machine import machine_budget, machine_effect
 from yleum_orchestrator.services.source_write_journal import (
     expected_source_volume_identity,
@@ -231,7 +235,9 @@ class DockerPyCellBackend:
         written = with_both(labels)
 
         def _create() -> Any:
-            return self._client_obj().volumes.create(name=name, driver="local", labels=written)
+            return reader_dispatch(
+                self._client_obj().volumes.create, name=name, driver="local", labels=written
+            )
 
         volume = await asyncio.to_thread(_create)
         return DockerVolumeRecord(
@@ -278,7 +284,7 @@ class DockerPyCellBackend:
         client = self._client_obj()
         volume = client.volumes.get(name)
         before = dict(volume.attrs)
-        result = container.exec_run(
+        result = reader_dispatch(container.exec_run,
             ["python3", "-I", "-S", "-c", VOLUME_STATX_SCRIPT, _VOLUME_ROOT],
             demux=False, user="0:0",
         )
@@ -310,12 +316,13 @@ class DockerPyCellBackend:
             raise CellResourceError("source volume incarnation changed")
 
     async def remove_volume(self, name: str) -> None:
+        require_if_configured()
         volume = await self._get_volume_obj(name)
         if volume is None:
             return
 
         def _remove() -> None:
-            volume.remove(force=True)
+            reader_dispatch(volume.remove, force=True)
 
         await asyncio.to_thread(_remove)
 
@@ -555,7 +562,7 @@ printf '%s\n' 'empty'
                 return
 
             def _put() -> bool:
-                return bool(container.put_archive(path=_VOLUME_ROOT, data=archive))
+                return bool(reader_dispatch(container.put_archive, path=_VOLUME_ROOT, data=archive))
 
             ok = await self._run_source_helper(container, _put)
             if ok is False:
@@ -590,13 +597,13 @@ printf '%s\n' 'empty'
             raise CellResourceError("source write archive exceeds budget")
         api = self._client_obj().api
         try:
-            execution = api.exec_create(
+            execution = reader_dispatch(api.exec_create,
                 container.id,
                 ["python3", "-I", "-S", "-c", SOURCE_WRITE_SCRIPT, _VOLUME_ROOT,
                  "/tmp/source-" + uuid4().hex + ".tar", str(len(archive))],
                 stdin=True, stdout=True, stderr=True, user="0:0",
             )
-            stream = api.exec_start(execution["Id"], socket=True)
+            stream = reader_dispatch(api.exec_start, execution["Id"], socket=True)
             try:
                 # docker-py7 exposes a SocketIO wrapper; the raw socket supports sendall.
                 channel = getattr(stream, "_sock", stream)
@@ -740,7 +747,7 @@ printf '%s\n' 'empty'
                     internal=internal,
                     labels=labels,
                 )
-            return self._client_obj().networks.create(
+            return reader_dispatch(self._client_obj().networks.create,
                 name,
                 driver="bridge",
                 check_duplicate=True,
@@ -757,10 +764,11 @@ printf '%s\n' 'empty'
         )
 
     async def remove_network(self, name: str) -> None:
+        require_if_configured()
         network = await self._get_network_obj(name)
         if network is None:
             return
-        await asyncio.to_thread(network.remove)
+        await asyncio.to_thread(reader_dispatch, network.remove)
 
     async def list_workspace_networks(self, workspace_id: UUID) -> list[DockerNetworkRecord]:
         networks = await asyncio.to_thread(
@@ -832,7 +840,9 @@ printf '%s\n' 'empty'
             kwargs["network"] = "none"
 
         def _create() -> Any:
-            return self._client_obj().containers.create(spec.image, command=command, **kwargs)
+            return reader_dispatch(
+                self._client_obj().containers.create, spec.image, command=command, **kwargs
+            )
 
         container = await asyncio.to_thread(_create)
         for network_name in spec.network_names[1:]:
@@ -855,10 +865,10 @@ printf '%s\n' 'empty'
         def _start() -> None:
             current = str(getattr(container, "status", ""))
             if current == "paused" and hasattr(container, "unpause"):
-                container.unpause()
+                reader_dispatch(container.unpause)
                 return
             if current != "running":
-                container.start()
+                reader_dispatch(container.start)
             if hasattr(container, "reload"):
                 container.reload()
 
@@ -872,10 +882,11 @@ printf '%s\n' 'empty'
         await asyncio.to_thread(lambda: container.stop(timeout=10))
 
     async def remove_container(self, name: str) -> None:
+        require_if_configured()
         container = await self._get_container_obj(name)
         if container is None:
             return
-        await self._remove_container_object(container)
+        await self._remove_container_object(container, require_readiness=True)
 
     async def list_workspace_containers(self, workspace_id: UUID) -> list[DockerContainerRecord]:
         containers = await asyncio.to_thread(
@@ -947,7 +958,7 @@ printf '%s\n' 'empty'
         archive = _files_to_archive({dump_name: dump})
         try:
             ok = await asyncio.to_thread(
-                lambda: bool(container.put_archive(path="/", data=archive))
+                lambda: bool(reader_dispatch(container.put_archive, path="/", data=archive))
             )
             if ok is False:
                 raise CellResourceError("postgres restore archive upload failed")
@@ -980,7 +991,7 @@ printf '%s\n' 'empty'
         if container is None:
             return False
         result = await asyncio.to_thread(
-            lambda: container.exec_run(
+            lambda: reader_dispatch(container.exec_run,
                 ["psql", "-U", "postgres", "-d", "postgres", "-tAc", "select 1"],
                 environment={"PGPASSWORD": password},
                 demux=False,
@@ -1069,7 +1080,7 @@ printf '%s\n' 'empty'
             ]
         )
         container = await asyncio.to_thread(
-            self._client_obj().containers.create,
+            reader_dispatch, self._client_obj().containers.create,
             image,
             ["sh", "-eu", "-c", script],
             name=container_name,
@@ -1105,7 +1116,7 @@ printf '%s\n' 'empty'
                 self._client_obj().networks.get(egress_network_name).connect,
                 container,
             )
-            await asyncio.to_thread(container.start)
+            await asyncio.to_thread(reader_dispatch, container.start)
             if hasattr(container, "reload"):
                 await asyncio.to_thread(container.reload)
             try:
@@ -1569,7 +1580,7 @@ printf '%s\n' 'empty'
         self._require_identity_labels(labels)
 
         def _create() -> Any:
-            return self._client_obj().containers.create(
+            return reader_dispatch(self._client_obj().containers.create,
                 self.helper_image if image is None else image,
                 command=_HELPER_SLEEP,
                 # Helpers belong to a single call, not to the shared volume.
@@ -1611,7 +1622,7 @@ printf '%s\n' 'empty'
                     # Creation was rejected, so retry only allocation under a
                     # fresh name. Never replay a file write or shell command.
             try:
-                container.start()
+                reader_dispatch(container.start)
                 if hasattr(container, "reload"):
                     container.reload()
                 return container
@@ -1637,10 +1648,20 @@ printf '%s\n' 'empty'
                 await self._remove_container_object(startup.result())
             raise
 
-    async def _remove_container_object(self, container: Any) -> None:
+    async def _remove_container_object(
+        self, container: Any, *, require_readiness: bool = False,
+    ) -> None:
+        # Private default callers drain their own already-dispatched helper on
+        # cancellation. Public deletion must recheck after lookup/queue waits.
+        def remove() -> None:
+            if require_readiness:
+                reader_dispatch(container.remove, force=True)
+            else:
+                container.remove(force=True)
+
         try:
             with machine_budget(None):
-                await machine_effect(lambda: container.remove(force=True))
+                await machine_effect(remove)
         except docker.errors.NotFound:
             return
         except docker.errors.APIError as exc:
@@ -1672,7 +1693,7 @@ printf '%s\n' 'empty'
         kwargs: dict[str, object] = {"environment": environment, "demux": False}
         if user is not None:
             kwargs["user"] = user
-        result = container.exec_run(command, **kwargs)
+        result = reader_dispatch(container.exec_run, command, **kwargs)
         exit_code, output = self._exec_result_parts(result)
         if exit_code != 0:
             detail = output.decode("utf-8", "ignore")
@@ -1686,7 +1707,7 @@ printf '%s\n' 'empty'
         environment: dict[str, str] | None = None,
     ) -> None:
         try:
-            container.exec_run(command, environment=environment, demux=False)
+            reader_dispatch(container.exec_run, command, environment=environment, demux=False)
         except Exception:
             return
 

@@ -31,6 +31,7 @@ from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
 from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
 from yleum_orchestrator.schemas.runtime import ActivePublication, DeployResponse
+from yleum_orchestrator.services import generation_reader_inventory as readers
 from yleum_orchestrator.services import nginx_writer
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
@@ -2113,6 +2114,7 @@ def start_publication_recovery() -> asyncio.Task[None]:
         service = get_cell_publication_service()
         while True:
             try:
+                await asyncio.to_thread(readers.require_if_configured)
                 outcomes = await service.reconcile()
                 for outcome in outcomes:
                     if outcome["state"] != "ready":

@@ -73,7 +73,9 @@ quiescence_gate() {
     && publication_drain core && publication_drain commerce
 }
 database_quiescence() {
-  if [ "$BOOTSTRAP" = 1 ]; then
+  if [ "${READER_RETRY:-0}" = 1 ]; then
+    reader_resume_check
+  elif [ "$BOOTSTRAP" = 1 ]; then
     # Read-only target helper runs against legacy models without importing the
     # new fence model/table. Only the verified ingress barrier supplies exclusion.
     ingress_drain check || return
@@ -82,6 +84,108 @@ database_quiescence() {
   else
     ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain check $SHA"
   fi
+}
+
+reader_control() {
+  local host="$1" action="$2"; shift 2
+  local command="sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python - $action --host $host $*"
+  if [ "$host" = core ]; then
+    git -C "$REPO" show "$SHA:infra/release/generation-reader-inventory.py" | ssh max-core "$command"
+  else
+    git -C "$REPO" show "$SHA:infra/release/generation-reader-inventory.py" \
+      | ssh max-core "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes commerce '$command'"
+  fi
+}
+
+reader_prepare_retry() {
+  local core_owner commerce_owner
+  core_owner=$(reader_control core prepare-owner --release "$SHA") || return
+  commerce_owner=$(reader_control commerce prepare-owner --release "$SHA") || return
+  READER_NONCE=$(python3 - "$SHA" "$core_owner" "$commerce_owner" <<'READER_OWNER'
+import json, re, sys
+from uuid import UUID
+target = sys.argv[1]
+owners = []
+for raw in sys.argv[2:]:
+    value = json.loads(raw)
+    assert set(value) == {"owner"}
+    owner = value["owner"]
+    if owner is not None:
+        assert set(owner) == {"version", "release_sha", "owner_nonce"}
+        assert type(owner["version"]) is int and owner["version"] == 1
+        assert owner["release_sha"] == target and re.fullmatch("[0-9a-f]{40}", target)
+        assert str(UUID(owner["owner_nonce"])) == owner["owner_nonce"]
+        owners.append(owner)
+assert not owners or all(value == owners[0] for value in owners)
+print(owners[0]["owner_nonce"] if owners else "")
+READER_OWNER
+  ) || return
+  READER_RETRY=0
+  if [ -n "$READER_NONCE" ]; then
+    # An interrupted first capture may lack its peer; never overwrite an
+    # existing capture with partially replaced processes.
+    reader_control core capture --release "$SHA" --owner-nonce "$READER_NONCE" || return
+    reader_control commerce capture --release "$SHA" --owner-nonce "$READER_NONCE" || return
+    READER_RETRY=1
+  fi
+}
+
+reader_resume_check() {
+  local core_context commerce_context context loader
+  core_context=$(reader_control core capture-context --release "$SHA" --owner-nonce "$READER_NONCE") || return
+  commerce_context=$(reader_control commerce capture-context --release "$SHA" --owner-nonce "$READER_NONCE") || return
+  context=$(python3 - "$SHA" "$READER_NONCE" "$core_context" "$commerce_context" <<'READER_CONTEXT'
+import base64, json, re, sys
+owner = {"version": 1, "release_sha": sys.argv[1], "owner_nonce": sys.argv[2]}
+result = dict(owner)
+for host, raw in zip(("core", "commerce"), sys.argv[3:], strict=True):
+    value = json.loads(raw)
+    assert set(value) == {"owner", "capture_sha256"} and value["owner"] == owner
+    assert re.fullmatch("[0-9a-f]{64}", value["capture_sha256"])
+    result[host + "_capture_sha256"] = value["capture_sha256"]
+print(base64.b64encode(json.dumps(result).encode()).decode())
+READER_CONTEXT
+  ) || return
+  loader=$(git -C "$REPO" show "$SHA:infra/release/generation-reader-resume.py" | base64 -w0) || return
+  # New process + exact committed package before any app imports. Installed
+  # image contributes dependencies only; import/schema incompatibility denies.
+  git -C "$REPO" archive --format=tar "$SHA" apps/api/src \
+    | ssh max-core "docker exec -i yleum-prod-api python -c 'import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-reader-resume\", \"exec\"))' '$SHA' '$context'"
+}
+
+reader_before() {
+  [ "${READER_RETRY:-0}" != 1 ] || return 0
+  local configured
+  configured=$(ssh max-core "python3 -c 'import os; print(int(os.path.lexists(\"/var/lib/yleum-generation-readers/config.json\")))'")
+  if [ "$configured" = 1 ]; then
+    local current
+    current=$(ssh max-core "curl -fsS http://127.0.0.1:8200/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"release_sha\"])'")
+    [[ "$current" =~ ^[0-9a-f]{40}$ ]] || return 1
+    reader_control core verify-current --release "$current"
+  elif [ "$configured" = 0 ]; then
+    # First reader-only rollout: no saved shape may rely on a reader which
+    # cannot stand by. Neither a TTL nor a waiting status is quiescence.
+    git -C "$REPO" show "$SHA:infra/release/check-active-generations.sh" \
+      | ssh max-core 'sudo -n bash -s -- --require-no-recovery-state'
+  else
+    return 1
+  fi
+  READER_NONCE=$(python3 -c 'from uuid import uuid4; print(uuid4())')
+  [[ "$READER_NONCE" =~ ^[0-9a-f-]{36}$ ]] || return 1
+  reader_control core capture --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce capture --release "$SHA" --owner-nonce "$READER_NONCE"
+}
+
+reader_target() {
+  local core_result commerce_result
+  core_result=$(reader_control core verify-target --release "$SHA" --owner-nonce "$READER_NONCE") || return
+  commerce_result=$(reader_control commerce verify-target --release "$SHA" --owner-nonce "$READER_NONCE") || return
+  python3 - "$core_result" "$commerce_result" <<'READER_MATCH'
+import json, sys
+left, right = (json.loads(value) for value in sys.argv[1:])
+assert left == right and left.get("verified") is True, "reader host snapshots differ"
+print("both reader inventories and retirement verified")
+READER_MATCH
 }
 
 gateway_capture_identity() {
@@ -217,6 +321,9 @@ trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 if [ "$API" = 1 ]; then
   say "scoped ingress barrier: новые изменения проектов временно закрыты"
   ingress_drain begin
+  # Recover only this persisted release owner, before asking old/mixed readers
+  # for quiescence. This never fabricates a CURRENT compatibility inventory.
+  reader_prepare_retry
   say "закрываю новый admission; существующие запуски продолжают работу"
   # First installation needs the ingress bootstrap documented alongside this
   # script. Never silently bypass this when the old API lacks the drain module.
@@ -239,6 +346,7 @@ if [ "$API" = 1 ]; then
     echo "Есть незавершённые операции. Drain оставлен закрытым; не перезапускайте сервисы." >&2
     exit 75
   }
+  reader_before
 fi
 
 say "core: ff-merge + идентичность релиза в compose .env"
@@ -308,12 +416,13 @@ say "core: образ api читаем для uid 10001 (воркер билли
 ssh max-core "docker run --rm --user 10001:10001 --entrypoint sh omnia-api:$SHA -c 'n=\$(find /app/src /app/migrations /orchestrator/templates -type f ! -perm -o=r 2>/dev/null | wc -l); echo \"нечитаемых файлов: \$n\"; [ \"\$n\" = 0 ]'"
 
 say "core: api worker generation-worker (api раньше оркестраторов)"
-ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build api worker generation-worker 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -5; for i in \$(seq 1 40); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8200/api/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"api health 200 с попытки \$i\"; break; }; sleep 3; done; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml logs --since 3m api 2>&1 | grep -i -E 'running upgrade|RuntimeError|Traceback' | tail -3; docker tag omnia-api:$SHA omnia-api:prod"
+reader_control core install --release "$SHA" --ssh-user root
+ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --force-recreate api worker generation-worker 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -5; for i in \$(seq 1 40); do s=\$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8200/api/health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"api health 200 с попытки \$i\"; break; }; sleep 3; done; docker compose -f docker-compose.yml -f docker-compose.hostdb.yml logs --since 3m api 2>&1 | grep -i -E 'running upgrade|RuntimeError|Traceback' | tail -3; docker tag omnia-api:$SHA omnia-api:prod"
 
 say "оркестраторы: core, затем commerce (одна ревизия)"
 BOOTSTRAP=0  # API now runs the target image and must enforce the persisted fence.
 # У commerce есть собственные служебные файлы и Git objects: --delete удалял их при выпуске.
-ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --exclude '/.deploy.lock*' --exclude .venv --exclude .env --exclude '.env.before-*' --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
+ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --exclude '/.deploy.lock*' --exclude .venv --exclude .env --exclude '.env.before-*' --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python /opt/omnia/infra/release/generation-reader-inventory.py install --host commerce --release $SHA; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
 
 fi
 
@@ -416,11 +525,26 @@ for url in urls:
     assert body.get("status") in ("ok", "healthy"), "runtime health is not green"
 print("API and both controller runtime identities confirmed")
 PY
-  quiescence_gate
   if [ "$GW" = 1 ]; then
     gateway_cutover_gate
   fi
+  readers_ready=0
+  for i in $(seq 1 18); do
+    if reader_target; then readers_ready=1; break; fi
+    sleep 5
+  done
+  [ "$readers_ready" = 1 ] || {
+    echo "Reader inventory/retirement unconfirmed; drain and rollout inhibit retained." >&2
+    exit 75
+  }
+  # Recheck quiescence and the exact owning barriers immediately before opening.
+  quiescence_gate
+  reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_target
   ingress_drain end
   ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain end $SHA"
+  reader_control core clear --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce clear --release "$SHA" --owner-nonce "$READER_NONCE"
 fi
 say "готово: прод на $SHORT"

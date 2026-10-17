@@ -212,6 +212,12 @@ services:
       # application validates the timestamp, fixed filename and SHA-256 before
       # returning a file; the mount stays read-only.
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
+      - type: bind
+        source: /run/yleum-generation-readers
+        target: /run/yleum-generation-readers
+        read_only: true
+        bind:
+          create_host_path: false
     # Apply schema changes before accepting traffic.  This is deliberately part
     # of the API readiness barrier: the worker must never start against an older
     # schema (generation_runs is required by the single-flight generation path).
@@ -229,6 +235,8 @@ services:
       minio-init:
         condition: service_completed_successfully
     environment: &api_environment
+      GENERATION_RECOVERY_INVENTORY_DIR: /run/yleum-generation-readers
+      GENERATION_RECOVERY_READER_ROLE: api
       USE_GENERATION_WORKER: ${USE_GENERATION_WORKER:-true}
       GENERATION_WORKER_MAX_CONCURRENT: ${GENERATION_WORKER_MAX_CONCURRENT:-8}
       MAX_BEHAVIOR_BROWSER_EXECUTABLE: ${MAX_BEHAVIOR_BROWSER_EXECUTABLE:-}
@@ -457,8 +465,15 @@ services:
     command: ["/app/.venv/bin/python", "-m", "yleum_api.workers.generation"]
     volumes:
       - /opt/omnia-runtime/backups:/opt/omnia-runtime/backups:ro
+      - type: bind
+        source: /run/yleum-generation-readers
+        target: /run/yleum-generation-readers
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
       <<: *api_environment
+      GENERATION_RECOVERY_READER_ROLE: generation-worker
       # Capacity admin assertions belong to API and gateway only.
       GENERATION_RESPONSE_CAPACITY_SIGNING_SECRET: ""
       # Only the HTTP API serves encrypted off-host backup reads.
@@ -496,7 +511,16 @@ services:
         condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    volumes:
+      - type: bind
+        source: /run/yleum-generation-readers
+        target: /run/yleum-generation-readers
+        read_only: true
+        bind:
+          create_host_path: false
     environment:
+      GENERATION_RECOVERY_INVENTORY_DIR: /run/yleum-generation-readers
+      GENERATION_RECOVERY_READER_ROLE: worker
       ENV: prod
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       OMNIA_RELEASE_SHA: ${OMNIA_RELEASE_SHA:-unknown}

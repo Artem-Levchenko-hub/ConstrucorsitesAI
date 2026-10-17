@@ -30,6 +30,7 @@ from yleum_orchestrator.services import nginx_writer
 from yleum_orchestrator.services.cell_state import CellCredentialStore, CoreRuntimeCredentialStore
 from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
+from yleum_orchestrator.services.generation_reader_inventory import reader_dispatch
 from yleum_orchestrator.services.machine_environment import (
     MachineEnvironmentRef,
     MachineEnvironmentStore,
@@ -132,7 +133,7 @@ class MachineAdapter:
         helper_labels = {**expected, "omnia.resource_kind": "core-database-bootstrap"}
         helper = None
         try:
-            helper = client.containers.create(
+            helper = reader_dispatch(client.containers.create,
                 image, ["timeout", "70", "node", "scripts/bootstrap-database.mjs",
                         *(["--role-only"] if role_only else [])],
                 name=helper_name, labels=helper_labels, detach=True,
@@ -147,7 +148,7 @@ class MachineAdapter:
                     "CORE_RUNTIME_PASSWORD": credential.runtime_password,
                 },
             )
-            helper.start()
+            reader_dispatch(helper.start)
             if helper.wait(timeout=80).get("StatusCode") != 0:
                 raise CellResourceError("trusted core database bootstrap failed")
         except Exception:
@@ -1227,7 +1228,7 @@ class MachineAdapter:
             stale = backend._lookup(client.containers, candidate_name, "managed-max-core")
             if stale is not None:
                 stale.remove(force=True)
-            core = client.containers.create(
+            core = reader_dispatch(client.containers.create,
                 image_tag,
                 **({"command": list(_PUBLIC_CORE_COMMAND)} if compiled_core else {}),
                 name=candidate_name,
@@ -1265,7 +1266,7 @@ class MachineAdapter:
             backend._network(backend.stem + "-public", internal=False).connect(core)
         core.reload()
         if core.status != "running":
-            core.start()
+            reader_dispatch(core.start)
         core.reload()
         core_ip = core.attrs["NetworkSettings"]["Networks"][names.internal_network]["IPAddress"]
         from yleum_orchestrator.services.machine_business_config import (
@@ -1374,7 +1375,7 @@ class MachineAdapter:
         transition["switch_started"] = True
         if old is not None:
             old.remove(force=True)
-        gateway = client.containers.create(
+        gateway = reader_dispatch(client.containers.create,
             backend.guard_image,
             ["python3", "-c", "import os,time,runpy; "
              "p='/run/omnia-boundary/server.py'; "
@@ -1402,7 +1403,7 @@ class MachineAdapter:
             cpu_quota=_GATEWAY_BOOST_QUOTA,
             pids_limit=32,
         )
-        gateway.start()
+        reader_dispatch(gateway.start)
         # Runtime tmpfs is invisible to Docker29/containerd archive APIs. Send
         # secrets through exec stdin and atomically publish inside the tmpfs;
         # neither image/rootfs nor Docker command arguments contain this config.
@@ -1414,8 +1415,10 @@ class MachineAdapter:
             "p='/run/omnia-boundary/.server'; open(p,'w').write(v['server']); "
             "os.replace(p,'/run/omnia-boundary/server.py')"
         )
-        execution = client.api.exec_create(gateway.id, ["python3", "-c", script], stdin=True)
-        connection = client.api.exec_start(execution["Id"], socket=True)
+        execution = reader_dispatch(
+            client.api.exec_create, gateway.id, ["python3", "-c", script], stdin=True
+        )
+        connection = reader_dispatch(client.api.exec_start, execution["Id"], socket=True)
         try:
             connection._sock.settimeout(machine_remaining_seconds(15))
             connection._sock.sendall(json.dumps(wire_config).encode())

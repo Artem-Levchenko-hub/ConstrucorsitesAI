@@ -249,6 +249,9 @@ class Controller:
 
 
 async def _setup(monkeypatch, session, engine, *, create=True):
+    from tests.test_generation_recovery_readers import install_healthy_reader_inventory
+
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     run = await _queued_dispatch(session)
     run.status = "running"
     run.prompt_hash = prompt_hash("Собери приложение")

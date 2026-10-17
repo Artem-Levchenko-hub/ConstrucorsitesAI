@@ -60,6 +60,9 @@ class Settings(BaseSettings):
 
     env: str = Field(default="dev")
     log_level: str = Field(default="INFO")
+    # Root observer owns a DIRECTORY; a single-file bind would pin stale JSON.
+    generation_recovery_inventory_dir: str = ""
+    generation_recovery_reader_host: Literal["", "core", "commerce"] = ""
     # Ревизия релиза приходит из .env хоста. На время ребрендинга имя переменной
     # меняется с OMNIA_RELEASE_SHA на YLEUM_RELEASE_SHA, и поле читает оба:
     # новое имя в приоритете, старое остаётся страховкой от отката на прежний

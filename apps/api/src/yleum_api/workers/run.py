@@ -32,19 +32,12 @@ def _run_attachment_cleanup() -> None:
 
 
 def _run_restoration_reconciliation() -> None:
-    asyncio.run(run_restoration_reconciliation_forever())
+    from yleum_api.services.generation.recovery_readers import wait_for_readers
+
+    asyncio.run(run_restoration_reconciliation_forever(before_tick=wait_for_readers))
 
 
-def main() -> None:
-    # The worker heartbeat (`/api/health` → checks.worker) no longer depends on
-    # the billing thread: the billing tick may live in the commerce cluster
-    # instead (BILLING_LIFECYCLE_ENABLED=false here), and the RQ worker must
-    # still report itself alive.
-    threading.Thread(
-        target=_run_worker_heartbeat,
-        name="worker-heartbeat",
-        daemon=True,
-    ).start()
+def _start_workers() -> None:
     if get_settings().billing_lifecycle_enabled:
         threading.Thread(
             target=_run_billing_lifecycle,
@@ -62,9 +55,20 @@ def main() -> None:
         name="restoration-reconciliation",
         daemon=True,
     ).start()
-    # Потоки — демоны, поэтому процесс держит вот это ожидание: он живёт, пока
-    # его не остановят (docker stop / systemd), как и раньше с циклом очереди.
-    threading.Event().wait()
+
+
+async def _run() -> None:
+    from yleum_api.services.generation.recovery_readers import reader_lifecycle
+
+    # Existing aggregate heartbeat is liveness only, never reader authority.
+    threading.Thread(target=_run_worker_heartbeat, name="worker-heartbeat", daemon=True).start()
+    async with reader_lifecycle("worker"):
+        _start_workers()
+        await asyncio.Event().wait()
+
+
+def main() -> None:
+    asyncio.run(_run())
 
 
 if __name__ == "__main__":

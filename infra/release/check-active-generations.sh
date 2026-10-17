@@ -4,6 +4,19 @@
 # host PostgreSQL of core over PLATFORM_DSN — the same switch as infra/backup.
 set -euo pipefail
 
+if [ "${1:-}" = --compatible-target ]; then
+  [[ "${2:-}" =~ ^[0-9a-f]{40}$ ]] || exit 2
+  # The same owned drain classification used by admission and the worker.
+  # An unavailable/incompatible target never falls back to a permissive query.
+  exec docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain check "$2"
+fi
+strict_readers=0
+if [ "${1:-}" = --require-no-recovery-state ]; then
+  strict_readers=1
+elif [ "$#" != 0 ]; then
+  exit 2
+fi
+
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 PLATFORM_CREDS="${PLATFORM_CREDS:-/etc/max-studio/platform-postgres.env}"
 PLATFORM_CTR="${PLATFORM_CTR:-yleum-prod-postgres}"
@@ -12,6 +25,11 @@ query='select status,count(*) from generation_runs
      where finished_at is null
      group by status
      order by status;'
+if [ "$strict_readers" = 1 ]; then
+  query="select status,count(*) from generation_runs
+       where finished_at is null or agent_state ? 'recovery_v1'
+       group by status order by status;"
+fi
 
 if [ -z "$PLATFORM_DSN" ] && { [ -z "$PLATFORM_CTR" ] || { [ -r "$FULLSTACK_ENV" ] && grep -q '^PLATFORM_DATABASE_URL=' "$FULLSTACK_ENV"; }; }; then
   if [ -r "$PLATFORM_CREDS" ]; then
@@ -27,10 +45,7 @@ if [ -n "$PLATFORM_DSN" ]; then
 else
   active_generations="$({
     docker exec "$PLATFORM_CTR" sh -lc \
-      'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "select status,count(*) from generation_runs
-       where finished_at is null
-       group by status
-       order by status;"'
+      'psql -X -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Atc "$1"' _ "$query"
   })"
 fi
 

@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 
+from tests._generation_reader_settings import legacy_reader_process_settings  # noqa: F401
 from yleum_orchestrator.services import machine_business_config
 from yleum_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, MachineAdapter
 

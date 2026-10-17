@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from tests.test_generation_recovery_readers import install_healthy_reader_inventory
 from tests.test_generation_worker import _queued_dispatch
 from yleum_api.core import db
 from yleum_api.models.generation_run import GenerationRun
@@ -167,6 +168,7 @@ async def test_committed_wait_exits_real_lifecycle_tracker_without_terminalizing
     new_writers_enabled_on_restart,
     commit_ack_lost,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
     run.prompt_hash = prompt_hash("Собери приложение")
@@ -278,6 +280,7 @@ async def test_unknown_recovery_shape_is_preserved_not_failed_as_orphan(
     test_engine,
     monkeypatch,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     run = await _queued_dispatch(db_session)
     run.execution_backend = "worker"
     run.execution_started_at = datetime.now(UTC)
@@ -336,6 +339,7 @@ async def test_executable_run_cannot_mint_unlinked_provider_intent(
 
 
 async def _provider_context(db_session, test_engine, monkeypatch):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     from yleum_api.services.generation import provider_attempts
     from yleum_api.services.generation.recovery_contract import ContinuationClaim
     from yleum_api.services.generation.recovery_reconciliation import (
@@ -399,6 +403,7 @@ async def test_pipeline_commits_bootstrap_context_before_first_runtime_effect(
     monkeypatch,
     resume_existing,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     import hashlib
 
     from sqlalchemy import text
@@ -790,6 +795,7 @@ async def test_monitor_tick_and_effect_session_check_share_one_owned_connection_
     test_engine,
     monkeypatch,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     from sqlalchemy import event, text
 
     run = await _queued_dispatch(db_session)

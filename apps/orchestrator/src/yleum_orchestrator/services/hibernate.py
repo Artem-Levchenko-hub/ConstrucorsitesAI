@@ -52,6 +52,7 @@ import structlog
 from yleum_orchestrator.core import docker_client
 from yleum_orchestrator.core.config import get_settings
 from yleum_orchestrator.core.errors import OrchestratorError
+from yleum_orchestrator.services import generation_reader_inventory as readers
 
 log = structlog.get_logger("yleum_orchestrator.hibernate")
 
@@ -312,6 +313,7 @@ async def _sweep_loop() -> None:
     """Run `_sweep_once` every `_SWEEP_INTERVAL_SECONDS` forever."""
     while True:
         try:
+            await asyncio.to_thread(readers.require_if_configured)
             await _sweep_once()
         except asyncio.CancelledError:
             raise
