@@ -438,6 +438,87 @@ class PhysicalContractTests(unittest.TestCase):
                         with self.assertRaises(self.module.PhysicalDrainError):
                             self.module.require_physical_writers_drained(state, client)
 
+    def test_stopped_null_exec_inventory_requires_complete_repeated_absence(self):
+        for damage in (
+            None,
+            "missing",
+            "wrong_type",
+            "running",
+            "process",
+            "task",
+            "restart",
+            "late_created",
+            "representation_drift",
+        ):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, container, _exec = self.kernel_fixture(
+                    Path(tmp), service=False, group="owned"
+                )
+                container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+                container.attrs["HostConfig"]["CgroupParent"] = ""
+                container.attrs["ExecIDs"] = None
+                (proc / "1/cgroup").write_text("0::/init.scope\n")
+                if damage == "missing":
+                    del container.attrs["ExecIDs"]
+                elif damage == "wrong_type":
+                    container.attrs["ExecIDs"] = {}
+                elif damage == "running":
+                    container.attrs["State"].update(
+                        Status="running", Running=True, Pid=100
+                    )
+                elif damage in {"process", "task"}:
+                    path = proc / (
+                        "100/cgroup" if damage == "process" else "100/task/100/cgroup"
+                    )
+                    path.write_text("0::/docker/" + container.id + "\n")
+                elif damage == "restart":
+                    container.attrs["HostConfig"]["RestartPolicy"]["Name"] = "always"
+
+                sample = self.module._command_absence_sample
+                calls = 0
+                inspected = []
+                previous = client.api.exec_inspect
+
+                def inspect(exec_id):
+                    inspected.append(exec_id)
+                    if exec_id == "d" * 64:
+                        return {
+                            "ContainerID": container.id,
+                            "Running": False,
+                            "ExitCode": None,
+                        }
+                    return previous(exec_id)
+
+                def sampled(*args):
+                    nonlocal calls
+                    result = sample(*args)
+                    calls += 1
+                    if calls == 1 and damage in {
+                        "late_created",
+                        "representation_drift",
+                    }:
+                        container.attrs["ExecIDs"] = (
+                            ["d" * 64] if damage == "late_created" else []
+                        )
+                    return result
+
+                client.api.exec_inspect = inspect
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    patch.object(
+                        self.module, "_command_absence_sample", side_effect=sampled
+                    ),
+                ):
+                    if damage is None:
+                        self.module.require_physical_writers_drained(state, client)
+                        self.assertEqual(calls, 2)
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(state, client)
+                        if damage == "late_created":
+                            self.assertIn("d" * 64, inspected)
+
     def test_fresh_exec_inventory_is_revalidated_after_outer_scan(self):
         for outcome in (
             "created",
