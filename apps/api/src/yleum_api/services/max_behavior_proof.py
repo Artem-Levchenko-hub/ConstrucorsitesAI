@@ -19,8 +19,8 @@ from uuid import UUID
 from yleum_api.services.behavior_platform_assets import PLATFORM_ASSET_LOCATIONS
 
 CONTRACT_VERSION = "max-named-behavior-v2"
-PROBE_VERSION = "ac-coffee-process-browser-v3"
-PROBE_SHA256 = "919427c0c28f42a418dfae768c540a3a99bdc3800b665f692ff035c703616d28"
+PROBE_VERSION = "ac-coffee-process-browser-v4"
+PROBE_SHA256 = "248ddebd7d8624c63501d5b61bd574edbc003947d55de3ea09f81cf6d2cebc24"
 STATE_KEY = "max_named_behavior_contract"
 RECEIPT_KEY = "max_named_behavior_receipt"
 _HEX = re.compile("[0-9a-f]{64}")

@@ -41,7 +41,7 @@ from yleum_orchestrator.core.shell import CmdResult, run
 log = structlog.get_logger("yleum_orchestrator.nginx")
 
 _HOST_RE = re.compile(r"^[a-z0-9]([a-z0-9.-]{0,253}[a-z0-9])?$")
-_ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/[A-Za-z0-9_./-]+$")
+_ASSET_TARGET_RE = re.compile(r"^127\.0\.0\.1:\d{1,5}/api/kit/omnia-inspector\.js$")
 _VHOST_TEMPLATE_MARKER = "# omnia vhost template: html-no-store-v3"
 # Only a successful reload in this process confirms a file was applied. Recheck
 # periodically because wildcard certificate files may be unreadable to this user.
@@ -163,6 +163,32 @@ def _inspector_asset_target() -> str:
             status_code=500,
         )
     return target
+
+
+def _render_inspector_relay(origin: str) -> str:
+    """Render the fixed Commerce public asset; never accept a caller upstream."""
+    # Restrict the authority before interpolation; _workspace_origin is a
+    # postMessage allowlist, not an NGINX configuration security boundary.
+    if not re.fullmatch(r"https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?", origin):
+        raise ValueError("inspector relay requires a canonical HTTPS DNS origin")
+    host = origin.removeprefix("https://")
+    if len(host) > 253 or "." not in host or any(
+        not re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", part)
+        for part in host.split(".")
+    ):
+        raise ValueError("invalid inspector relay hostname")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("inspector relay does not accept IP origins")
+    if host.endswith((".localhost", ".local", ".internal")):
+        raise ValueError("inspector relay requires a public canonical origin")
+    template = (
+        Path(__file__).resolve().parents[5] / "infra/security/nginx/inspector-relay.conf.template"
+    )
+    return template.read_text(encoding="utf-8").replace("@CANONICAL_HOST@", host)
 
 
 def _inspector_location() -> str:

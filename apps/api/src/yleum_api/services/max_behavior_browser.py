@@ -11,15 +11,17 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from yleum_api.services import max_behavior_browser_core as core
 from yleum_api.services.max_behavior_proof import (
@@ -37,6 +39,90 @@ from yleum_api.services.max_behavior_proof import (
 from yleum_api.services.orchestrator_client import ProjectCellPreviewSession
 
 _API_SOURCE_ROOT = str(Path(__file__).resolve().parents[2])
+
+
+class BrowserFailureCollector:
+    """Independent bounded diagnostics, never a behavior/acceptance witness.
+
+    Reuse the collector across reloads. The caller owns private persistence;
+    these events are not emitted to logs or the browser worker protocol.
+    No response bodies, headers, console arguments or form values are read.
+    """
+
+    def __init__(self, *, secret_values: tuple[str, ...] = ()) -> None:
+        self.events: list[dict[str, object]] = []
+        self.overflow = False
+        self._secrets = tuple(value for value in secret_values if value)
+
+    def _text(self, value: object) -> str:
+        text = str(value or "")
+        for secret in self._secrets:
+            text = text.replace(secret, "[redacted]")
+        text = re.sub(r"https?://[^\s<>\"']+", lambda match: self._url(match[0]), text,
+                      flags=re.IGNORECASE)
+        # Headers may contain spaces, schemes and multiple semicolon-separated
+        # secrets. Redact their whole value rather than just the first token.
+        text = re.sub(
+            r"(?i)\b(authorization|proxy-authorization|cookie|set-cookie)\b[\"']?\s*[:=]"
+            r"\s*(?:\"[^\"]*\"|'[^']*'|[^\r\n]+)",
+            r"\1=[redacted]", text,
+        )
+        text = re.sub(r"(?i)\bBearer\s+[^\s,;]+", "Bearer [redacted]", text)
+        text = re.sub(
+            r"(?i)\b(password|passwd|secret|token|(?:access|refresh|id)[_-]?token|"
+            r"api[_-]?key|access[_-]?key)"
+            r"\b[\"']?\s*[:=]\s*(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)",
+            r"\1=[redacted]", text,
+        )
+        return text[:2048]
+
+    def _url(self, value: object) -> str:
+        try:
+            raw = str(value or "")
+            for secret in self._secrets:
+                raw = raw.replace(secret, "[redacted]")
+            parsed = urlsplit(raw)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                return "[redacted-url]"
+            return urlunsplit((parsed.scheme, parsed.hostname, parsed.path, "", ""))[:1024]
+        except ValueError:
+            return "[redacted-url]"
+
+    def record(
+        self, kind: str, *, text: object = "", url: object = "",
+        stack: object = "", status: int | None = None,
+    ) -> None:
+        if len(self.events) >= 128:
+            self.overflow = True
+            return
+        self.events.append({
+            "kind": kind, "observed_at": datetime.now(UTC).isoformat(),
+            "text": self._text(text), "url": self._url(url) if url else None,
+            "stack": self._text(stack), "status": status,
+        })
+
+    def attach(self, page: Any) -> None:
+        def console(message: Any) -> None:
+            if message.type in {"error", "warning"}:
+                self.record(
+                    "console_" + message.type, text=message.text,
+                    url=message.location.get("url", ""),
+                )
+
+        def page_error(error: Any) -> None:
+            self.record("pageerror", text=error.message, stack=error.stack)
+
+        def failed(request: Any) -> None:
+            self.record("requestfailed", text=request.failure, url=request.url)
+
+        def response(value: Any) -> None:
+            if value.status >= 400:
+                self.record("failed_response", url=value.url, status=value.status)
+
+        page.on("console", console)
+        page.on("pageerror", page_error)
+        page.on("requestfailed", failed)
+        page.on("response", response)
 
 
 class _PrivatePipe:
@@ -587,10 +673,14 @@ def _execute_browser(
     adapter: PlatformBrowserAdapter,
     executable_path: str,
     launch_args: tuple[str, ...],
+    failures_collector: BrowserFailureCollector | None = None,
 ) -> CompiledAssetWitness | BrowserBehaviorObservation:
     from playwright.sync_api import ViewportSize, sync_playwright
 
     deadline = time.monotonic() + 30
+    diagnostics = (
+        failures_collector if failures_collector is not None else BrowserFailureCollector()
+    )
     need(executed_probe_digest() == PROBE_SHA256, "BEHAVIOR_OBSERVATION_BINDING_INVALID")
     _compiled(witness, request.binding)
     with sync_playwright() as playwright:
@@ -670,6 +760,10 @@ def _execute_browser(
                             return
                         try:
                             response = route.fetch(timeout=5000, max_redirects=0)
+                            if response.status >= 400:
+                                diagnostics.record(
+                                    "failed_response", url=incoming.url, status=response.status,
+                                )
                             body = response.body()
                             budget["bytes"] += len(body)
                             need(
@@ -698,6 +792,7 @@ def _execute_browser(
                     context.route("**/*", route_request)
                     context.route_web_socket("**/*", websocket)
                     page: Any = context.new_page()
+                    diagnostics.attach(page)
                     page._behavior_deadline = deadline
                     page.set_default_timeout(2000)
 

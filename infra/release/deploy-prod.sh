@@ -426,6 +426,13 @@ ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_R
 
 fi
 
+if [ $API = 1 ]; then
+  say "commerce: canonical inspector relay (owned loopback only)"
+  INSPECTOR_ASSET_SHA=$(ssh max-core "git -C /opt/omnia show $SHA:apps/api/src/yleum_api/static/omnia-inspector.js | sha256sum | cut -d' ' -f1")
+  [[ "$INSPECTOR_ASSET_SHA" =~ ^[0-9a-f]{64}$ ]] || { echo "invalid canonical inspector digest"; exit 1; }
+  ssh max-core "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes commerce 'cd /opt/omnia/apps/orchestrator && sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python /opt/omnia/infra/release/verify-inspector-relay.py --install --expected-sha $SHA --asset-sha256 $INSPECTOR_ASSET_SHA'"
+fi
+
 if [ $WEB = 1 ]; then
   say "core: web"
   ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps web 2>&1 | grep -E 'Started|Recreated|Error|error' | tail -2; docker tag omnia-web:$SHA omnia-web:prod; for i in \$(seq 1 30); do s=\$(curl -s -o /dev/null -w '%{http_code}' https://yleum.ru/web-health 2>/dev/null || true); [ \"\$s\" = 200 ] && { echo \"web-health 200 с попытки \$i\"; break; }; sleep 3; done"
