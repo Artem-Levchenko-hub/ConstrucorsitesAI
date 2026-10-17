@@ -477,6 +477,7 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
                 and_(
                     GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
                     GenerationRun.execution_started_at.is_not(None),
+                    _recovery_due_clause(),
                 ),
                 and_(
                     GenerationRun.status.not_in(ACTIVE_GENERATION_STATUSES),
@@ -489,6 +490,27 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
         )
         .order_by(GenerationRun.created_at, GenerationRun.id)
         .limit(100)
+    )
+
+
+def _recovery_due_clause() -> Any:
+    """Filter the persisted UTC schedule before the bounded worker window.
+
+    No cast of untrusted JSON dates: strict decoding and an exact due check run
+    again under claim ownership. This predicate cannot authorize execution.
+    """
+    raw = GenerationRun.agent_state["recovery_v1"]
+    phase = raw["phase"].as_string()
+    due = func.replace(raw["next_check_at"].as_string(), "Z", "+00:00")
+    return or_(
+        func.coalesce(raw["version"].as_string(), "") != "3",
+        and_(
+            phase != "needs_input",
+            or_(
+                phase.not_in(("waiting_dependency", "reconciling")),
+                due <= datetime.now(UTC).isoformat(),
+            ),
+        ),
     )
 
 
@@ -575,13 +597,26 @@ async def _run_dispatch_forever() -> None:
                 # One persistently lock-busy cleanup must not starve fresh work
                 # when only one connection-budget slot is available.
                 prefer_maintenance = not starting[0].maintenance
+            # Rotate every considered candidate, including unresolved/free-health
+            # failures. Admission remains below; a denied head must not starve
+            # another due cleanup or host without occupying an execution slot.
             for item in starting:
-                active_info[item.run_id] = item
-                active[item.run_id] = asyncio.create_task(execute_dispatch(item.run_id))
                 if item.maintenance:
                     after_maintenance = item.run_id
                 else:
                     after_host = _host_key(item.host)
+            from yleum_api.services.generation.recovery_dependencies import poll_due_dependency
+
+            # Free health work holds no execution slot. Bound its parallelism
+            # by the existing selection budget rather than the full scan size.
+            ready = await asyncio.gather(*(
+                poll_due_dependency(factory, item.run_id) for item in starting
+            ), return_exceptions=True)
+            starting = [item for item, result in zip(starting, ready, strict=True)
+                        if result is True]
+            for item in starting:
+                active_info[item.run_id] = item
+                active[item.run_id] = asyncio.create_task(execute_dispatch(item.run_id))
             running = sum(info.status == "running" for info in active_info.values())
             waiting = sum(info.status == "queued_for_capacity" for info in active_info.values())
             await get_redis().set(

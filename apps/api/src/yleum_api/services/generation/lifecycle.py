@@ -269,6 +269,9 @@ async def cleanup_generation_runtime(
                     )
                     try:
                         await asyncio.shield(release_task)
+                        continuation = getattr(runtime, "continuation", None)
+                        if continuation is not None:
+                            await continuation.account_work(stopped=True)
                     except asyncio.CancelledError:
                         # Keep the executor ownership lock until cleanup finishes;
                         # shield alone leaves an untracked release running behind us.

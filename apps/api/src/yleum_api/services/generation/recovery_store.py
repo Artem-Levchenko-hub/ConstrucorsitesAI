@@ -22,6 +22,7 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryObservation,
     RecoveryState,
     RecoveryStateV2,
+    RecoveryStateV3,
     decode_recovery,
 )
 from yleum_api.services.generation_runs import load_generation_dispatch, prompt_hash
@@ -126,6 +127,12 @@ def _validate_revision(
         or previous.checkpoint != state.checkpoint
     ):
         raise RecoveryContractError("recovery revision or immutable scope conflict")
+    if isinstance(previous, RecoveryStateV3) and (
+        not isinstance(state, RecoveryStateV3) or state.clock != previous.clock
+        or state.active_work_ms != previous.active_work_ms
+        or state.stage_active_work_ms != previous.stage_active_work_ms
+    ):
+        raise RecoveryContractError("checkpoint cannot grant or refund work time")
 
 
 def _require_writer_enabled(project_id: UUID) -> None:

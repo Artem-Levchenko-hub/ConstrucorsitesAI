@@ -35,6 +35,7 @@ from yleum_api.services.generation.recovery_contract import (
     RecoveryIdentity,
     RecoveryState,
     RecoveryStateV2,
+    RecoveryStateV3,
     decode_recovery,
 )
 from yleum_api.services.generation_deployment_drain import require_generation_admission
@@ -205,6 +206,7 @@ async def claim_continuation(
     if (
         not isinstance(state, RecoveryStateV2)
         or state.attempt_seq != expected_attempt
+        or (isinstance(state, RecoveryStateV3) and state.clock.wait_dependency is not None)
         or state.phase not in {
             "waiting_dependency", "reconciling", "working", "repairing", "verifying",
         }
@@ -227,6 +229,10 @@ async def claim_continuation(
     )
     if not quiescent:
         return None
+    if isinstance(state, RecoveryStateV3):
+        from yleum_api.services.generation.recovery_clock import resume_clock, start_interval
+        state = resume_clock(state, now=now)
+        start_interval(state.clock)
     await _require_session_owner(run_id)
     execution = (
         state.execution
@@ -335,7 +341,7 @@ async def initialize_execution(
 ) -> RecoveryStateV2 | None:
     """Persist the original executable entry before runtime preparation.
 
-    This creates a new V2 record only. An existing record must enter through
+    This creates V2, or explicit opt-in V3. An existing record must enter through
     its committed continuation cursor, never through the original pipeline.
     """
     from yleum_api.services.generation.recovery_requirements import frozen_requirements
@@ -385,13 +391,25 @@ async def initialize_execution(
             worker_id="initial",
             expires_at=datetime.now(UTC) + timedelta(seconds=60),
         )
-        state = RecoveryStateV2(
+        clock_fields: dict[str, Any] = {}
+        state_type: type[RecoveryStateV2] = RecoveryStateV2
+        from yleum_api.services.generation_deadline import is_restoration_adaptation
+        if (
+            getattr(settings, "generation_recovery_soft_windows_enabled", False)
+            and not is_restoration_adaptation(run)
+        ):
+            from yleum_api.services.generation.recovery_clock import initial_clock, start_interval
+            state_type = RecoveryStateV3
+            clock_fields["clock"] = initial_clock(settings.max_generation_deadline_seconds)
+            start_interval(clock_fields["clock"])
+        state = state_type(
             identity=identity,
             continuation_claim=claim,
             requirements=frozen_requirements(run),
             execution=ExecutionCursor(
                 stage="bootstrap", substep="runtime_prepare", physical_state="no_effects"
             ),
+            **clock_fields,
         )
         await _baseline_sha(session, run=run, project=project, state=state)
         ref = await store_execution_context(identity, context())
@@ -558,9 +576,19 @@ async def commit_current_wait(
         await _require_session_owner(run.id, compatibility=False)
         if current.phase == "waiting_dependency" and execution == current.execution:
             return current  # Confirmed SQL read, not an inferred commit acknowledgement.
+        wait_at = datetime.now(UTC)
+        clock_fields = {}
+        if isinstance(current, RecoveryStateV3):
+            from yleum_api.services.generation.recovery_clock import next_dependency_check
+            failures = current.clock.dependency_failures + 1
+            wait_at = next_dependency_check(run.id, failures=failures, now=wait_at)
+            clock_fields["clock"] = current.clock.model_copy(
+                update={"dependency_failures": failures},
+            )
         updated = current.model_copy(update={
-            "phase": "waiting_dependency", "next_check_at": datetime.now(UTC),
+            "phase": "waiting_dependency", "next_check_at": wait_at,
             "state_revision": current.state_revision + 1, "execution": execution,
+            **clock_fields,
         })
         run.agent_state = {**run.agent_state, RECOVERY_KEY: updated.model_dump(mode="json")}
         await session.commit()
@@ -620,6 +648,67 @@ class ExecutionDriver:
             "tool_ready",
             "tool_wait",
         }
+
+    async def account_work(self, *, stopped: bool = False) -> None:
+        if not isinstance(self.state, RecoveryStateV3):
+            return
+        from yleum_api.services.generation.recovery_clock import (
+            charge_interval,
+            interval_elapsed,
+            update_owned_clock,
+        )
+        elapsed = interval_elapsed(self.state.clock)
+
+        interval_id = self.state.clock.interval_id
+
+        async def charge(session: AsyncSession, state: RecoveryStateV3) -> RecoveryStateV3:
+            updated = charge_interval(state, interval_id=interval_id, elapsed_ms=elapsed)
+            if stopped:
+                run = await session.get(GenerationRun, state.identity.run_id)
+                if run is None:
+                    raise RecoveryContractError("clock owner disappeared")
+                quiescent = (await _initial_quiescent(session, run.id)
+                    if state.execution.physical_state == "no_effects"
+                    else await _released_quiescent(session, run, state))
+                from yleum_api.services.generation.recovery_quiescence import _provider_stopped
+                if not quiescent or not await _provider_stopped(session, run):
+                    raise RecoveryContractError("clock cannot pause an active physical writer")
+                updated = updated.model_copy(update={
+                    "clock": updated.clock.model_copy(update={"interval_open": False}),
+                })
+            return updated
+
+        await update_owned_clock(self, charge, stopped=stopped)
+
+    def soft_edit_deadline(self, fallback: datetime | None) -> datetime | None:
+        if not isinstance(self.state, RecoveryStateV3):
+            return fallback
+        clock = self.state.clock
+        if clock.stage == "proof":
+            return datetime.now(UTC)
+        from yleum_api.services.generation_deadline import source_edit_deadline
+        return source_edit_deadline(
+            clock.segment_deadline,
+            started_at=clock.segment_deadline - timedelta(milliseconds=clock.window_ms),
+        )
+
+    async def soft_boundary(self, *, exhausted: bool = False) -> None:
+        if not isinstance(self.state, RecoveryStateV3):
+            return
+        from yleum_api.services.generation.recovery_clock import grant_window, update_owned_clock
+        await self.account_work()
+        if not exhausted and datetime.now(UTC) < self.state.clock.segment_deadline:
+            return
+        try:
+            if await grant_window(self):
+                await self.wait()
+        except RecoveryContractError:
+            await self.wait()
+        async def blocked(_session: AsyncSession, state: RecoveryStateV3) -> RecoveryStateV3:
+            return state.model_copy(update={"phase": "needs_input", "next_check_at": None})
+        await update_owned_clock(self, blocked)
+        raise GenerationYielded(run_id=self.state.identity.run_id, checkpoint=self.state.checkpoint,
+            attempt_seq=self.state.attempt_seq, phase="needs_input")
 
     def restore_frame(self, kind: str) -> dict[str, Any] | None:
         if not self._reconcile_response:
@@ -701,6 +790,7 @@ class ExecutionDriver:
     async def wait(self) -> None:
         # The dependency itself may be unavailable. Retain the last confirmed
         # source/context and active/unknown physical status; no stopped inference.
+        await self.account_work()
         self.state = await commit_current_wait(
             self.factory, self.state, runtime_control=self.runtime_control,
         )
@@ -729,6 +819,7 @@ class ExecutionDriver:
             tool_effect_scope,
         )
 
+        await self.account_work()
         claim = self.state.continuation_claim
         if claim is None or not isinstance(key, str) or not key:
             raise RecoveryContractError("tool continuation identity is missing")
@@ -855,6 +946,8 @@ class ExecutionDriver:
         if claim is None:
             raise RecoveryContractError("provider continuation has no current claim")
         reconcile = self._reconcile_response
+        if not reconcile:
+            await self.soft_boundary()
         outer_attempt, outer_allowance = _frame_retry(
             frame,
             self.context.get("active_frame"),
@@ -917,6 +1010,22 @@ class ExecutionDriver:
             self._reconcile_response = False
             raise
         except LLMError as exc:
+            if (
+                isinstance(self.state, RecoveryStateV3)
+                and exc.provider_refusal_category in {"access", "funds"}
+            ):
+                from yleum_api.services.generation.recovery_clock import update_owned_clock
+
+                reason = "credentials" if exc.provider_refusal_category == "access" else "funds"
+
+                async def dependency(
+                    _session: AsyncSession, state: RecoveryStateV3,
+                ) -> RecoveryStateV3:
+                    return state.model_copy(update={"clock": state.clock.model_copy(update={
+                        "wait_dependency": reason,
+                    })})
+                await update_owned_clock(self, dependency)
+                await self.wait()
             if exc.provider_charge_ambiguous is False:
                 self._reconcile_response = False
                 raise

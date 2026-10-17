@@ -401,6 +401,10 @@ class MaxFinalizationCoordinator:
             )
 
     async def source_edit_deadline(self, *, repair: bool = False) -> datetime | None:
+        continuation: ExecutionDriver | None = getattr(self, "continuation", None)
+        from yleum_api.services.generation.recovery_contract import RecoveryStateV3
+        if continuation is not None and isinstance(continuation.state, RecoveryStateV3):
+            return continuation.soft_edit_deadline(None)
         async with self.session_factory() as session:
             run = await self._locked_run(session)
             deadline = generation_deadline(run).at
@@ -685,6 +689,8 @@ class MaxFinalizationCoordinator:
         cancellation and promotion checks remain authoritative. Repeated source
         states cannot buy another pass without a newly verified gate dimension.
         """
+        if continuation is not None:
+            await continuation.account_work()
         await self._raise_persisted_infrastructure_failure()
         async with self.session_factory() as session:
             run = await self._locked_run(session)
@@ -741,6 +747,8 @@ class MaxFinalizationCoordinator:
         while True:
             outcome = await self.finalize(files=files, prompt=prompt)
             if outcome.status is not MaxFinalizationStatus.NEEDS_EDIT:
+                if continuation is not None:
+                    await continuation.account_work()
                 return outcome
             # Existing proof hits are baseline evidence, not progress from this repair.
             progress.observe(files, verified_receipts=await self._repair_progress_receipts(files))
@@ -766,6 +774,9 @@ class MaxFinalizationCoordinator:
                     }
                 )
                 await save_finalization_progress(continuation, durable)
+                await self._grant_initial_repair_window(
+                    continuation, outcome.proof.full_build or outcome.proof.fast_check,
+                )
             await self._invoke_source_repair(
                 detail=outcome.redacted_detail,
                 repair=repair,
@@ -792,6 +803,20 @@ class MaxFinalizationCoordinator:
                 return outcome
             files = updated
 
+    async def _grant_initial_repair_window(
+        self, continuation: ExecutionDriver | None, receipt: ProjectCellProofResult | None,
+    ) -> None:
+        from yleum_api.services.generation.recovery_clock import grant_window
+        from yleum_api.services.generation.recovery_contract import RecoveryStateV3
+
+        if continuation is None or not isinstance(continuation.state, RecoveryStateV3):
+            return
+        if receipt is None or receipt.outcome != ProofOutcome.RED.value:
+            return
+        await continuation.account_work()
+        if await grant_window(continuation, repair_receipt_id=receipt.id):
+            await continuation.wait()
+
     async def _invoke_source_repair(
         self,
         *,
@@ -800,6 +825,7 @@ class MaxFinalizationCoordinator:
         repair_source: Callable[[str, SourceFailure], Awaitable[None]] | None,
         failure: SourceFailure | None,
     ) -> None:
+        continuation: ExecutionDriver | None = getattr(self, "continuation", None)
         async with self.session_factory() as session:
             run = await self._locked_run(session)
             if run.status == "cancel_requested":
@@ -816,6 +842,8 @@ class MaxFinalizationCoordinator:
         )
         remaining = (repair_end - datetime.now(UTC)).total_seconds()
         if remaining < _MIN_REPAIR_SECONDS:
+            if continuation is not None:
+                await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded before source repair")
         try:
             async with asyncio.timeout(remaining):
@@ -826,6 +854,8 @@ class MaxFinalizationCoordinator:
                 else:
                     await repair(detail)
         except TimeoutError as exc:
+            if continuation is not None:
+                await continuation.soft_boundary(exhausted=True)
             raise TimeoutError("generation deadline exceeded during source repair") from exc
 
     async def revalidate_pending_repair(self, *, targeted: bool) -> SourceFailure | None:
@@ -859,6 +889,7 @@ class MaxFinalizationCoordinator:
         failure = await self.source_failure(result)
         if failure is None:
             raise MaxFinalizationConflict("pending repair compiler authority is unavailable")
+        await self._grant_initial_repair_window(self.continuation, result)
         if targeted:
             return failure
         outcome = await self._failed(
@@ -2822,6 +2853,9 @@ async def generation_deadline_wait(
         run = await session.get(GenerationRun, generation_run_id)
         if run is None or run.status not in _ACTIVE_RUN_STATUSES:
             return None
+        from yleum_api.services.generation_deadline import soft_recovery_state
+        if soft_recovery_state(run) is not None:
+            return None  # Invocation-owned boundaries checkpoint; watchdog cannot fail V3 work.
         deadline = generation_deadline(run)
     assert deadline.at is not None
     wait = max(0.0, (deadline.at - (now or datetime.now(UTC))).total_seconds())
@@ -2899,6 +2933,9 @@ async def watch_generation_deadline(
             select(GenerationRun).where(GenerationRun.id == generation_run_id).with_for_update()
         )
         if run is None or run.status not in _ACTIVE_RUN_STATUSES:
+            return False
+        from yleum_api.services.generation_deadline import soft_recovery_state
+        if soft_recovery_state(run) is not None:
             return False
         deadline = generation_deadline(run)
         if deadline.at is None or current < deadline.at:

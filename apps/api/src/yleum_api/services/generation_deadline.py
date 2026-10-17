@@ -11,11 +11,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from yleum_api.core.config import get_settings
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.services.generation_runs import has_sealed_adaptation_proof
+
+if TYPE_CHECKING:
+    from yleum_api.services.generation.recovery_contract import RecoveryStateV3
 
 DeadlineStage = Literal["edit", "repair", "proof"]
 
@@ -77,6 +80,9 @@ def generation_deadline(run: GenerationRun) -> GenerationDeadline:
     settings = get_settings()
     started = run.started_at or run.created_at
     if not is_restoration_adaptation(run):
+        soft = soft_recovery_state(run)
+        if soft is not None:
+            return GenerationDeadline(soft.clock.stage, soft.clock.segment_deadline)
         return GenerationDeadline(
             "edit", started + timedelta(seconds=settings.max_generation_deadline_seconds)
         )
@@ -112,6 +118,24 @@ def generation_deadline(run: GenerationRun) -> GenerationDeadline:
     if repair_started_ms is None:
         return GenerationDeadline("edit", editing_end)
     return GenerationDeadline("repair", editing_end)
+
+
+def soft_recovery_state(run: GenerationRun) -> RecoveryStateV3 | None:
+    """Only current V3 owns soft clocks; old/adaptation/cancel clocks stay intact."""
+    from yleum_api.services.generation.recovery_contract import RecoveryStateV3, decode_recovery
+
+    if run.status == "cancel_requested" or is_restoration_adaptation(run):
+        return None
+    raw = (run.agent_state or {}).get("recovery_v1")
+    if not isinstance(raw, dict) or raw.get("version") != 3:
+        return None
+    state = decode_recovery(raw)
+    if not isinstance(state, RecoveryStateV3) or (
+        state.identity.run_id, state.identity.project_id,
+        state.identity.user_id, state.identity.prompt_hash,
+    ) != (run.id, run.project_id, run.user_id, run.prompt_hash):
+        raise ValueError("soft work clock owner changed")
+    return state
 
 
 def note_repair_stage_started(run: GenerationRun, now: datetime | None = None) -> None:

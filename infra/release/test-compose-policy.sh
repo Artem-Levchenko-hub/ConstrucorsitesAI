@@ -55,6 +55,9 @@ services = document["services"]
 api = services["api"]["environment"]
 worker = services["worker"]["environment"]
 
+for role in ("api", "worker", "generation-worker"):
+    assert services[role]["environment"]["GENERATION_RECOVERY_SOFT_WINDOWS_ENABLED"] == "false"
+
 assert api["USE_PROJECT_MEMORY"] == "true"
 assert worker["USE_PROJECT_MEMORY"] == "true"
 expected_finalization = {
