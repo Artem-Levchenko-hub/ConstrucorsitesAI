@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from tests.test_generation_recovery_readers import install_healthy_reader_inventory
 from yleum_api.core.config import get_settings
 from yleum_api.models.base import Base
 from yleum_api.models.generation_run import GenerationRun
@@ -2717,6 +2718,7 @@ async def test_v2_write_ack_loss_reconciles_receipt_before_checkpoint_without_re
     action_name,
     damage,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     from datetime import timedelta
 
     from tests.test_generation_recovery_execution import _bootstrap_wait
@@ -3054,6 +3056,7 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
     test_engine,
     damage,
 ):
+    install_healthy_reader_inventory(monkeypatch, refresh=True)
     from datetime import timedelta
 
     from tests.test_generation_recovery_execution import _bootstrap_wait
