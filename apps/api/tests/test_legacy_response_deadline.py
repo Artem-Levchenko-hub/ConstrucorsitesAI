@@ -53,7 +53,8 @@ async def test_client_total_deadline_is_terminal_no_replay(monkeypatch):
     # factory, leaving the HTTP client's asyncio runtime untouched.
     from types import SimpleNamespace
     monkeypatch.setattr(llm_client, "asyncio", SimpleNamespace(
-        timeout=lambda value: asyncio.timeout(0.01),
+        get_running_loop=asyncio.get_running_loop,
+        timeout_at=lambda value: asyncio.timeout_at(asyncio.get_running_loop().time() + 0.01),
     ))
     with pytest.raises(llm_client.LLMError) as caught:
         await llm_client.complete_chat(
