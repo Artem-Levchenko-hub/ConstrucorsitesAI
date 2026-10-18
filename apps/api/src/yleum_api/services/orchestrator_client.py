@@ -11,9 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from asyncio import sleep
 from collections.abc import Sequence
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
+from time import monotonic
 from typing import Any, Literal, Protocol, cast
 from urllib.parse import parse_qsl, urlsplit
 from uuid import UUID
@@ -1606,6 +1609,99 @@ async def _base_url(path: str, host: str | None) -> str:
         raise OrchestratorUnavailable(str(exc)) from exc
 
 
+_READER_RETRY_SECONDS = 30.0
+_READER_RETRY_ATTEMPTS = 31
+_READER_RETRY_MESSAGES = frozenset({
+    "reader inventory is incompatible or stale",
+    "reader epoch changed",
+    "inventory changed during validation",
+})
+
+
+def _replayable_reader_request(
+    method: str, path: str, payload: dict[str, Any] | None,
+    params: dict[str, Any] | None,
+) -> bool:
+    """Only fenced identity reads and revision-CAS source writes are replayable.
+
+    A fresh HTTP request reacquires the controller lock and checks the current
+    generation lease, epoch and revision. Commands and lifecycle effects must
+    keep their own reconciliation protocol; a 503 is not proof of no effects.
+    """
+    route = re.fullmatch(r"/internal/workspaces/([^/]+)/agent/(identity|write-files)", path)
+    if route is None:
+        return False
+    if route[2] == "identity":
+        envelope = params if method == "GET" else None
+    else:
+        envelope = payload if method == "POST" else None
+        if envelope is None or not _REQUEST_DIGEST_RE.fullmatch(
+            str(envelope.get("expected_revision", ""))
+        ):
+            return False
+    if envelope is None or type(envelope.get("fencing_epoch")) is not int:
+        return False
+    run_id = envelope.get("generation_run_id")
+    if not isinstance(run_id, str):
+        return False
+    try:
+        return bool(
+            str(UUID(route[1])) == route[1]
+            and envelope["fencing_epoch"] > 0
+            and str(UUID(run_id)) == run_id
+        )
+    except ValueError:
+        return False
+
+
+def _reader_inventory_denied(response: httpx.Response) -> bool:
+    if response.status_code != 503:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return False
+    error = payload.get("error") if isinstance(payload, dict) else None
+    return (
+        isinstance(error, dict)
+        and error.get("code") == "workspace_busy"
+        and isinstance(error.get("message"), str)
+        and error["message"] in _READER_RETRY_MESSAGES
+    )
+
+
+async def _request_with_reader_retries(
+    client: httpx.AsyncClient, method: str, url: str, *, path: str,
+    payload: dict[str, Any] | None, params: dict[str, Any] | None,
+    headers: dict[str, str], request_timeout: float,
+) -> httpx.Response:
+    replayable = _replayable_reader_request(method, path, payload, params)
+    # Preserve the exact CAS/lease envelope even if a caller changes its objects
+    # while the first request or the readiness wait is suspended.
+    if replayable:
+        payload, params = deepcopy(payload), deepcopy(params)
+    deadline = monotonic() + request_timeout
+    retry_deadline: float | None = None
+    for attempt in range(_READER_RETRY_ATTEMPTS):
+        options: dict[str, Any] = {}
+        if attempt:
+            options["timeout"] = max(0.001, deadline - monotonic())
+        response = await client.request(
+            method, url, json=payload, params=params, headers=headers, **options,
+        )
+        if not replayable or not _reader_inventory_denied(response):
+            return response
+        now = monotonic()
+        if retry_deadline is None:
+            retry_deadline = min(deadline, now + _READER_RETRY_SECONDS)
+        if attempt == _READER_RETRY_ATTEMPTS - 1 or now + 1 >= retry_deadline:
+            return response
+        await sleep(1)
+        if monotonic() >= retry_deadline:
+            return response
+    raise AssertionError("bounded reader retry did not return a response")
+
+
 async def _request_raw(
     method: str,
     path: str,
@@ -1642,7 +1738,10 @@ async def _request_raw(
 
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            resp = await client.request(method, url, json=json, params=params, headers=headers)
+            resp = await _request_with_reader_retries(
+                client, method, url, path=path, payload=json, params=params,
+                headers=headers, request_timeout=timeout,
+            )
     except httpx.RequestError as exc:
         log.exception("orchestrator.network_error", path=path, err=str(exc))
         raise OrchestratorUnavailable(f"Cannot reach orchestrator at {url}") from exc
