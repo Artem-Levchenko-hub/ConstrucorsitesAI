@@ -1266,6 +1266,7 @@ if __name__ == "__main__":
         root = live_publication_root()
         count = require_publications_drained(root)
         import docker
+
         from yleum_orchestrator.core.config import get_settings
 
         client = docker.DockerClient(base_url=get_settings().docker_host, timeout=10)
