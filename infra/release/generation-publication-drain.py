@@ -404,6 +404,32 @@ def _quiescence_receipt_path(binding):
     return _QUIESCENCE_ROOT / binding["workspace_id"] / (_digest(binding) + ".json")
 
 
+def _ensure_root_quiescence_directory(path: Path) -> None:
+    """Initialize missing storage without chmod/chown of existing paths."""
+    for directory in reversed([path, *path.parents]):
+        try:
+            info = directory.lstat()
+        except FileNotFoundError:
+            directory.mkdir(mode=0o700)
+            fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            info = directory.lstat()
+        private = directory in {path, _QUIESCENCE_ROOT}
+        _kernel_need(
+            stat.S_ISDIR(info.st_mode)
+            and info.st_uid == 0
+            and (
+                stat.S_IMODE(info.st_mode) == 0o700
+                if private
+                else not info.st_mode & 0o022 or bool(info.st_mode & stat.S_ISVTX)
+            ),
+            "quiescence_receipt_directory",
+        )
+
+
 def machine_quiescence(state_parent, client, workspace_id, *, record=False):
     """A separate root attestation of current retirement, never a command result.
 
@@ -433,27 +459,7 @@ def machine_quiescence(state_parent, client, workspace_id, *, record=False):
             state_parent, workspace_id, uid, client, binding, cell
         )
         if record:
-            # Parent directories must be exclusively root-owned and non-symlink.
-            for directory in (_QUIESCENCE_ROOT, path.parent):
-                for parent in directory.parents:
-                    info = parent.lstat()
-                    _kernel_need(
-                        stat.S_ISDIR(info.st_mode)
-                        and info.st_uid == 0
-                        and (
-                            not info.st_mode & 0o022
-                            or bool(info.st_mode & stat.S_ISVTX)
-                        ),
-                        "quiescence_receipt_parent",
-                    )
-                directory.mkdir(mode=0o700, exist_ok=True)
-                info = directory.lstat()
-                _kernel_need(
-                    stat.S_ISDIR(info.st_mode)
-                    and info.st_uid == 0
-                    and stat.S_IMODE(info.st_mode) == 0o700,
-                    "quiescence_receipt_directory",
-                )
+            _ensure_root_quiescence_directory(path.parent)
             payload = {
                 "binding": binding,
                 "observed_at": datetime.now(UTC).isoformat(),
@@ -1241,6 +1247,7 @@ if __name__ == "__main__":
         root = live_publication_root()
         count = require_publications_drained(root)
         import docker
+
         from yleum_orchestrator.core.config import get_settings
 
         client = docker.DockerClient(base_url=get_settings().docker_host, timeout=10)

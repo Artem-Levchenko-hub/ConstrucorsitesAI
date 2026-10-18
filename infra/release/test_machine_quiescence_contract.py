@@ -171,6 +171,16 @@ class MachineQuiescenceTests(unittest.TestCase):
         self.record()
         self.assertEqual(len(list(self.receipts.glob("*/*.json"))), 1)
 
+    def test_missing_receipt_namespace_is_created_private_without_reowning_parents(
+        self,
+    ):
+        self.receipts = self.receipts / "not-yet-installed" / "quiescence"
+        with patch.object(self.checker, "_QUIESCENCE_ROOT", self.receipts):
+            self.record()
+            self.validate()
+        self.assertEqual(self.receipts.parent.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(self.receipts.stat().st_mode & 0o777, 0o700)
+
     def test_pause_without_empty_generation_authority_or_higher_fence_is_denied(self):
         original = copy.deepcopy(self.cell)
         for field, value in (
