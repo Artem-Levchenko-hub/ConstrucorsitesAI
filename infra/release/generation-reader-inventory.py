@@ -17,6 +17,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
+from typing import TypedDict
 from uuid import UUID, uuid4
 
 SLOTS = frozenset(
@@ -151,21 +152,25 @@ def retired_dormant(row: dict) -> bool:
     )
 
 
+def _reader_container_name(name: str) -> bool:
+    return any(
+        name.startswith(prefix)
+        for prefix in (
+            "yleum-prod-api",
+            "omnia-prod-api",
+            "yleum-prod-worker",
+            "omnia-prod-worker",
+            "yleum-prod-generation-worker",
+            "omnia-prod-generation-worker",
+        )
+    )
+
+
 def is_reader_container(row: dict) -> bool:
     return (
         process_role(row["command"]) is not None
         or row["configured_image"].split(":", 1)[0] == "omnia-api"
-        or any(
-            row["name"].startswith(prefix)
-            for prefix in (
-                "yleum-prod-api",
-                "omnia-prod-api",
-                "yleum-prod-worker",
-                "omnia-prod-worker",
-                "yleum-prod-generation-worker",
-                "omnia-prod-generation-worker",
-            )
-        )
+        or _reader_container_name(row["name"])
     )
 
 
@@ -204,26 +209,71 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
     return result.stdout.strip()
 
 
-def _docker_container_roster() -> dict[str, str]:
-    """Read every current container identity and name, including stopped ones."""
-    template = '{"id":{{json .ID}},"name":{{json .Names}}}'
+class DockerCensusSummary(TypedDict):
+    id: str
+    name: str
+    image_reference: str
+    rendered_command: str
+
+
+def _docker_container_census() -> dict[str, DockerCensusSummary]:
+    """One complete Engine list response, with untruncated classification evidence."""
+    template = (
+        '{"id":{{json .ID}},"name":{{json .Names}},'
+        '"image_reference":{{json .Image}},"rendered_command":{{json .Command}}}'
+    )
     raw = command(["docker", "ps", "-a", "--no-trunc", "--format", template])
     rows = [json.loads(line) for line in raw.splitlines()]
     need(
         len(rows) <= 10000
         and all(
             type(row) is dict
-            and set(row) == {"id", "name"}
+            and set(row) == {"id", "name", "image_reference", "rendered_command"}
             and type(row["id"]) is str
             and re.fullmatch(r"[0-9a-f]{64}", row["id"])
             and type(row["name"]) is str
             and bool(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", row["name"]))
+            and type(row["image_reference"]) is str
+            and type(row["rendered_command"]) is str
             for row in rows
         )
     )
-    result = {row["id"]: row["name"] for row in rows}
-    need(len(result) == len(rows) and len(set(result.values())) == len(rows))
+    result = {row["id"]: row for row in rows}
+    need(len(result) == len(rows) and len({row["name"] for row in rows}) == len(rows))
     return result
+
+
+_IMAGE_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+_NAMED_IMAGE_REFERENCE = re.compile(
+    r"(?:[a-z0-9][a-z0-9.-]*(?::[0-9]+)?/)?"
+    + _IMAGE_COMPONENT + r"(?:/" + _IMAGE_COMPONENT + r")*"
+    + r"(?::[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(?:@sha256:[0-9a-f]{64})?"
+)
+
+
+def _possible_reader(summary: DockerCensusSummary) -> bool:
+    """Conservative superset; list Command is formatted text, never real argv.
+
+    Engine 8af9fe3 preserves Entrypoint+Cmd in Path+Args. CLI 29.8.2 --no-trunc
+    quotes that full text without removing the literal namespace required by
+    process_role. List Image may fall back to a bare ID; that is not Config.Image.
+    """
+    image = summary["image_reference"]
+    opaque_image = (
+        len(image) > 1024
+        or image.startswith("sha256:")
+        or bool(re.fullmatch(r"[0-9a-f]+", image))
+        or bool(re.fullmatch(r"[A-Za-z][A-Za-z0-9_+.-]*:[0-9a-f]{32,}", image))
+        or _NAMED_IMAGE_REFERENCE.fullmatch(image) is None
+    )
+    repository = image.split("@", 1)[0].rsplit("/", 1)[-1].split(":", 1)[0]
+    return (
+        opaque_image
+        or repository == "omnia-api"
+        or _reader_container_name(summary["name"])
+        or not summary["rendered_command"].strip(' "')
+        or "yleum_" in summary["rendered_command"]
+    )
 
 
 def _inspect_docker_containers(ids: list[str]) -> dict[str, dict]:
@@ -247,60 +297,58 @@ def _inspect_docker_containers(ids: list[str]) -> dict[str, dict]:
     return {row["id"]: row for row in rows}
 
 
-def _reader_cohort(roster: dict[str, str], observed: dict[str, dict]) -> set[str]:
-    """Names are live roster data; only Config/image evidence is reusable by ID."""
-    need(set(roster) <= set(observed))
+def _reader_cohort(
+    census: dict[str, DockerCensusSummary], observed: dict[str, dict]
+) -> set[str]:
+    """Every ambiguous summary needs inspect; names always come from this census."""
+    need({key for key, row in census.items() if _possible_reader(row)} <= set(observed))
     return {
         container_id
-        for container_id, name in roster.items()
-        if is_reader_container({**observed[container_id], "name": name})
+        for container_id, summary in census.items()
+        if container_id in observed
+        and is_reader_container({**observed[container_id], "name": summary["name"]})
     }
 
 
 def docker_inventory() -> list[dict]:
     """Prove a complete census and stable readers while project helpers churn.
 
-    Every new ID is fully inspected. Only positively classified non-readers may
-    appear or disappear; the reader cohort, including dormant restart targets,
-    must retain fresh metadata. The enclosing timestamp and TTL are unchanged.
+    Atomic list metadata positively classifies ordinary helpers before they can
+    disappear. Every possible reader still needs full inspect. Only inspected
+    reader rows are returned; formatted summaries never masquerade as argv or
+    Config.Image. Timestamp, TTL and subsequent kernel checks are unchanged.
     """
-    current = _docker_container_roster()
-    observed = _inspect_docker_containers(list(current))
-    need(all(observed[key]["name"] == name for key, name in current.items()))
+    current = _docker_container_census()
+    observed = _inspect_docker_containers(sorted(
+        key for key, summary in current.items() if _possible_reader(summary)
+    ))
+    need(all(row["name"] == current[key]["name"] for key, row in observed.items()))
     readers = _reader_cohort(current, observed)
     for _attempt in range(3):
         # Inspect IDs from the preceding complete census even if they have
         # already disappeared: absence cannot classify an unknown container.
-        unseen = sorted(set(current) - set(observed))
+        unseen = sorted(
+            key for key, summary in current.items()
+            if _possible_reader(summary) and key not in observed
+        )
         added = _inspect_docker_containers(unseen)
         need(all(not is_reader_container(row) for row in added.values()))
-        need(all(row["name"] == current[key] for key, row in added.items()))
+        need(all(row["name"] == current[key]["name"] for key, row in added.items()))
         observed.update(added)
         need(_reader_cohort(current, observed) == readers)
         fresh = _inspect_docker_containers(sorted(readers))
-        need(all(fresh[key]["name"] == current[key] for key in readers))
+        need(all(fresh[key]["name"] == current[key]["name"] for key in readers))
         need(all(is_reader_container(row) for row in fresh.values()))
         observed.update(fresh)
-        final = _docker_container_roster()
+        final = _docker_container_census()
         need(readers <= set(final))
-        if set(final) - set(observed):
+        if any(_possible_reader(row) and key not in observed for key, row in final.items()):
             current = final
             continue
         need(_reader_cohort(final, observed) == readers)
-        need(all(observed[key]["name"] == final[key] for key in readers))
-        # Callers need mutable State/PID/RestartPolicy only for reader candidates.
-        # Do not expose cached non-reader state as current physical evidence.
-        result = []
-        for key, name in final.items():
-            row = observed[key]
-            if key not in readers:
-                row = {field: row[field] for field in (
-                    "id", "image", "configured_image", "command"
-                )}
-                row["name"] = name
-            result.append(row)
-        return result
-    raise ValueError("Docker census contains unclassified containers throughout observation")
+        need(all(observed[key]["name"] == final[key]["name"] for key in readers))
+        return [fresh[key] for key in sorted(readers)]
+    raise ValueError("Docker census contains unclassified possible readers throughout observation")
 
 
 def process_inventory(proc_root: Path = Path("/proc")) -> dict[int, dict]:

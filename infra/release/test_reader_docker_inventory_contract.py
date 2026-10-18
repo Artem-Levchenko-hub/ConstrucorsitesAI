@@ -1,10 +1,11 @@
-"""Complete census tolerates helper churn without hiding reader authority changes."""
+"""Atomic metadata classifies short helpers without hiding reader authority."""
 
 from __future__ import annotations
 
 import copy
 import importlib.util
 import json
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -15,7 +16,8 @@ class DockerInventoryTests(unittest.TestCase):
         source = Path(__file__).with_name("generation-reader-inventory.py")
         spec = importlib.util.spec_from_file_location("docker_inventory_contract", source)
         self.observer = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.observer)
+        with patch.dict(sys.modules, {spec.name: self.observer}):
+            spec.loader.exec_module(self.observer)
         self.a, self.b, self.c, self.d = (value * 64 for value in "abcd")
         self.calls = []
 
@@ -36,6 +38,13 @@ class DockerInventoryTests(unittest.TestCase):
         }
         return {**row, **changes}
 
+    def opaque_dev(self, identity, **changes):
+        return self.helper(identity, **{
+            "configured_image": "sha256:" + "5" * 64,
+            "command": ["node", "server.js"],
+            **changes,
+        })
+
     def reader(self, identity, role="worker", name=None, **changes):
         commands = {
             "api": ["python", "-m", "uvicorn", "yleum_api.main:app"],
@@ -43,20 +52,34 @@ class DockerInventoryTests(unittest.TestCase):
             "generation-worker": ["python", "-m", "yleum_api.workers.generation"],
             "orchestrator": ["uvicorn", "yleum_orchestrator.main:app"],
         }
-        return self.helper(
-            identity,
-            name or "yleum-prod-" + role,
-            image="sha256:" + "3" * 64,
-            configured_image="omnia-api:" + "4" * 40,
-            service=role,
-            command=commands[role],
+        return self.helper(identity, name or "yleum-prod-" + role, **{
+            "image": "sha256:" + "3" * 64,
+            "configured_image": "omnia-api:" + "4" * 40,
+            "service": role,
+            "command": commands[role],
             **changes,
-        )
+        })
 
-    def roster(self, *rows):
-        return "\n".join(
-            json.dumps({"id": row["id"], "name": row["name"]}) for row in rows
+    def summary(self, row, **changes):
+        # Moby joins Path+Args, quoting arguments containing spaces. CLI --no-trunc
+        # Go-quotes the full text. ASCII fixtures have the same outer quoting
+        # with json.dumps. Never reconstruct inspect argv from this summary.
+        command = " ".join(
+            "'" + value + "'" if " " in value else value for value in row["command"]
         )
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "image_reference": row["configured_image"],
+            "rendered_command": json.dumps(command),
+            **changes,
+        }
+
+    def raw_census(self, *summaries):
+        return "\n".join(json.dumps(row) for row in summaries)
+
+    def census(self, *rows):
+        return self.raw_census(*(self.summary(row) for row in rows))
 
     def inspection(self, *rows):
         output = []
@@ -81,254 +104,346 @@ class DockerInventoryTests(unittest.TestCase):
                 )
                 or (argv[:3] == ["docker", "inspect", "--format"] and len(argv) > 4)
             )
+            if argv[1] == "ps":
+                self.assertEqual(argv[5], (
+                    '{"id":{{json .ID}},"name":{{json .Names}},'
+                    '"image_reference":{{json .Image}},"rendered_command":{{json .Command}}}'
+                ))
             value = next(outputs)
             if isinstance(value, Exception):
                 raise value
             return value
 
         with patch.object(self.observer, "command", side_effect=read_only):
-            return self.observer.docker_inventory()
+            result = self.observer.docker_inventory()
+        self.assertEqual(list(outputs), [], "An accepted census must consume its full fixture")
+        return result
 
     def inspected_ids(self):
         return [call[4:] for call in self.calls if call[1] == "inspect"]
 
+    def possible(self, summary):
+        with patch.object(self.observer, "command", return_value=self.raw_census(summary)):
+            parsed = self.observer._docker_container_census()[summary["id"]]
+        return self.observer._possible_reader(parsed)
+
     def test_stable_complete_readers_are_freshly_reinspected(self):
-        rows = [
-            self.reader(self.a, "api"),
-            self.reader(self.b, "worker"),
-            self.reader(self.c, "generation-worker"),
-        ]
+        rows = [self.reader(self.a, "api"), self.reader(self.b, "worker"),
+                self.reader(self.c, "generation-worker")]
         result = self.collect([
-            self.roster(*rows),
-            self.inspection(*rows),
-            self.inspection(*rows),
-            self.roster(*reversed(rows)),
+            self.census(*rows), self.inspection(*rows), self.inspection(*rows),
+            self.census(*reversed(rows)),
         ])
         self.assertEqual(set(self.observer.classify_containers(result, "core")),
                          {"api", "worker", "generation-worker"})
         self.assertEqual(self.inspected_ids(),
                          [[self.a, self.b, self.c], [self.a, self.b, self.c]])
 
-    def test_helper_creation_is_fully_classified_before_acceptance(self):
+    def test_named_helpers_are_classified_from_complete_atomic_metadata(self):
         a, b = self.helper(self.a), self.helper(self.b)
-        result = self.collect([
-            self.roster(a), self.inspection(a), self.roster(a, b),
-            self.inspection(b), self.roster(a, b),
-        ])
-        self.assertEqual({row["id"] for row in result}, {self.a, self.b})
-        self.assertEqual(self.inspected_ids(), [[self.a], [self.b]])
+        self.assertEqual(self.collect([self.census(a), self.census(a, b)]), [])
+        self.assertEqual(self.inspected_ids(), [])
 
-    def test_observed_nonreader_removal_returns_only_current_ids(self):
+    def test_short_helper_seen_in_closing_census_never_requires_later_inspect(self):
+        reader, helper = self.reader(self.a), self.helper(self.b)
+        # Helper disappears immediately after closing list: no helper inspect
+        # output is supplied, so attempting the old detail read fails this test.
+        result = self.collect([
+            self.census(reader), self.inspection(reader), self.inspection(reader),
+            self.census(reader, helper),
+        ])
+        self.assertEqual(result, [reader])
+        self.assertEqual(self.inspected_ids(), [[self.a], [self.a]])
+
+    def test_observed_named_nonreader_can_disappear_before_detail_read(self):
         a, b = self.helper(self.a), self.helper(self.b)
-        result = self.collect([
-            self.roster(a, b), self.inspection(a, b), self.roster(b),
-        ])
-        self.assertEqual([row["id"] for row in result], [self.b])
+        self.assertEqual(self.collect([self.census(a, b), self.census(b)]), [])
+        self.assertEqual(self.inspected_ids(), [])
 
-    def test_helper_churn_keeps_reader_metadata_fresh_each_cycle(self):
-        reader, a, b = self.reader(self.a), self.helper(self.b), self.helper(self.c)
-        fresh = {**reader, "pid": 200}
-        newer = {**reader, "pid": 300}
-        result = self.collect([
-            self.roster(reader, a), self.inspection(reader, a),
-            self.inspection(fresh), self.roster(reader, b),
-            self.inspection(b), self.inspection(newer), self.roster(reader, b),
-        ])
-        self.assertEqual({row["id"] for row in result}, {self.a, self.c})
-        actual_reader = next(row for row in result if row["id"] == self.a)
-        self.assertEqual(actual_reader["pid"], 300)
-        self.assertEqual(self.inspected_ids(),
-                         [[self.a, self.b], [self.a], [self.c], [self.a]])
+    def test_obvious_named_helper_churn_does_not_require_stable_whole_roster(self):
+        a, b = self.helper(self.a), self.helper(self.b)
+        self.assertEqual(self.collect([self.census(a), self.census(b)]), [])
+        self.assertEqual(len(self.calls), 2)
 
-    def test_nonreader_rename_uses_current_name_without_stale_mutable_fields(self):
-        old = self.helper(self.a, name="source-read-before")
+    def test_inspected_opaque_dev_nonreader_can_disappear_during_pause(self):
+        reader, dev = self.reader(self.a), self.opaque_dev(self.b)
+        result = self.collect([
+            self.census(reader, dev), self.inspection(reader, dev),
+            self.inspection(reader), self.census(reader),
+        ])
+        self.assertEqual(result, [reader])
+        self.assertEqual(self.inspected_ids(), [[self.a, self.b], [self.a]])
+
+    def test_known_opaque_nonreader_can_rename_between_two_benign_names(self):
+        old = self.opaque_dev(self.a, name="project-dev-before")
+        renamed = {**old, "name": "project-dev-after"}
+        self.assertEqual(self.collect([
+            self.census(old), self.inspection(old), self.census(renamed),
+        ]), [])
+        self.assertEqual(self.inspected_ids(), [[self.a]])
+
+    def test_new_opaque_nonreader_is_inspected_before_its_later_removal_is_accepted(self):
+        reader, dev = self.reader(self.a), self.opaque_dev(self.b)
+        result = self.collect([
+            self.census(reader), self.inspection(reader), self.inspection(reader),
+            self.census(reader, dev), self.inspection(dev), self.inspection(reader),
+            self.census(reader),
+        ])
+        self.assertEqual(result, [reader])
+        self.assertEqual(self.inspected_ids(), [[self.a], [self.a], [self.b], [self.a]])
+
+    def test_opaque_churn_keeps_actual_reader_metadata_fresh_each_cycle(self):
+        reader, dev = self.reader(self.a), self.opaque_dev(self.b)
+        fresh, newer = {**reader, "pid": 200}, {**reader, "pid": 300}
+        result = self.collect([
+            self.census(reader), self.inspection(reader), self.inspection(fresh),
+            self.census(reader, dev), self.inspection(dev), self.inspection(newer),
+            self.census(reader, dev, self.helper(self.c)),
+        ])
+        self.assertEqual(result, [newer])
+        self.assertEqual(self.inspected_ids(), [[self.a], [self.a], [self.b], [self.a]])
+
+    def test_nonreader_rename_does_not_publish_fake_argv_or_stale_state(self):
+        reader, old = self.reader(self.a), self.helper(self.b, name="source-read-before")
         renamed = {**old, "name": "source-read-after"}
         result = self.collect([
-            self.roster(old), self.inspection(old), self.roster(renamed),
+            self.census(reader, old), self.inspection(reader), self.inspection(reader),
+            self.census(reader, renamed),
         ])
-        self.assertEqual(result, [{
-            key: renamed[key] for key in
-            ("id", "image", "configured_image", "command", "name")
-        }])
-        for field in ("status", "running", "pid", "restart", "paused", "dead", "service"):
-            self.assertNotIn(field, result[0])
+        self.assertEqual(result, [reader], "Only actual fresh reader details are returned")
+        self.assertNotIn("rendered_command", result[0])
+        self.assertNotIn("image_reference", result[0])
 
-    def test_same_id_nonreader_rename_into_protected_prefix_denies(self):
+    def test_known_nonreader_rename_into_protected_prefix_denies(self):
+        old = self.opaque_dev(self.a)
+        renamed = {**old, "name": "yleum-prod-api-shadow"}
+        with self.assertRaises(ValueError):
+            self.collect([self.census(old), self.inspection(old), self.census(renamed)])
+
+    def test_new_named_helper_rename_into_protected_prefix_requires_inspect_then_denies(self):
         old = self.helper(self.a)
         renamed = {**old, "name": "yleum-prod-api-shadow"}
         with self.assertRaises(ValueError):
-            self.collect([self.roster(old), self.inspection(old), self.roster(renamed)])
+            self.collect([self.census(old), self.census(renamed), self.inspection(renamed)])
+        self.assertEqual(self.inspected_ids(), [[self.a]])
 
     def test_reader_rename_during_fresh_inspection_denies(self):
         old = self.reader(self.a)
-        renamed = {**old, "name": "renamed-reader"}
         with self.assertRaises(ValueError):
-            self.collect([
-                self.roster(old), self.inspection(old), self.inspection(renamed),
-            ])
+            self.collect([self.census(old), self.inspection(old),
+                          self.inspection({**old, "name": "renamed-reader"})])
 
     def test_reader_rename_after_fresh_inspection_denies(self):
         old = self.reader(self.a)
-        renamed = {**old, "name": "renamed-reader"}
         with self.assertRaises(ValueError):
             self.collect([
-                self.roster(old), self.inspection(old), self.inspection(old),
-                self.roster(renamed),
+                self.census(old), self.inspection(old), self.inspection(old),
+                self.census({**old, "name": "renamed-reader"}),
             ])
 
-    def test_initial_inspection_must_match_initial_names(self):
-        old = self.helper(self.a)
-        renamed = {**old, "name": "different-at-inspection"}
+    def test_initial_candidate_inspection_must_match_initial_names(self):
+        old = self.reader(self.a)
         with self.assertRaises(ValueError):
-            self.collect([self.roster(old), self.inspection(renamed)])
+            self.collect([self.census(old), self.inspection({**old, "name": "different"})])
         self.assertEqual(len(self.calls), 2)
 
     def test_dormant_restart_policy_is_fresh_and_still_rejected_by_classifier(self):
-        old = self.reader(
-            self.a, name="retired-worker", running=False, status="exited", pid=0
-        )
+        old = self.reader(self.a, name="retired-worker", running=False, status="exited", pid=0)
         fresh = {**old, "restart": "always"}
         result = self.collect([
-            self.roster(old), self.inspection(old), self.inspection(fresh),
-            self.roster(old),
+            self.census(old), self.inspection(old), self.inspection(fresh), self.census(old),
         ])
-        self.assertEqual(result[0]["restart"], "always")
+        self.assertEqual(result, [fresh])
         self.assertFalse(self.observer.retired_dormant(result[0]))
         self.assertEqual(self.observer.classify_containers([old], "commerce"), {})
         with self.assertRaises(ValueError):
             self.observer.classify_containers(result, "commerce")
 
     def test_unchanged_dormant_reader_remains_fully_observed(self):
-        old = self.reader(
-            self.a, name="retired-worker", running=False, status="exited", pid=0
-        )
+        old = self.reader(self.a, name="retired-worker", running=False, status="exited", pid=0)
         result = self.collect([
-            self.roster(old), self.inspection(old), self.inspection(old),
-            self.roster(old),
+            self.census(old), self.inspection(old), self.inspection(old), self.census(old),
         ])
         self.assertEqual(result, [old])
         self.assertEqual(self.inspected_ids(), [[self.a], [self.a]])
 
     def test_removing_an_initial_reader_denies_even_if_it_was_dormant(self):
-        old = self.reader(
-            self.a, name="retired-worker", running=False, status="exited", pid=0
-        )
+        old = self.reader(self.a, name="retired-worker", running=False, status="exited", pid=0)
         with self.assertRaises(ValueError):
             self.collect([
-                self.roster(old), self.inspection(old), self.inspection(old),
-                self.roster(),
+                self.census(old), self.inspection(old), self.inspection(old), self.census(),
             ])
 
     def test_new_reader_of_each_role_denies_without_filtering(self):
-        a = self.helper(self.a)
         for role in ("api", "worker", "generation-worker", "orchestrator"):
             with self.subTest(role=role):
-                added = self.reader(self.b, role, name="unexpected-" + role)
-                if role == "orchestrator":
-                    # Exercise role recognition independently of API image/name heuristics.
-                    added["configured_image"] = "controller-fixture:local"
+                added = self.reader(self.b, role, name="unexpected-" + role,
+                                    configured_image="controller-fixture:local")
                 with self.assertRaises(ValueError):
-                    self.collect([
-                        self.roster(a), self.inspection(a), self.roster(a, added),
-                        self.inspection(added),
-                    ])
-                self.assertEqual(self.inspected_ids(), [[self.a], [self.b]])
+                    self.collect([self.census(), self.census(added), self.inspection(added)])
+                self.assertEqual(self.inspected_ids(), [[self.b]])
 
     def test_new_dormant_candidate_is_not_silently_accepted(self):
-        a = self.helper(self.a)
-        added = self.reader(
-            self.b, name="new-retired-worker", running=False, status="exited", pid=0
-        )
+        added = self.reader(self.b, name="new-retired-worker", running=False,
+                            status="exited", pid=0)
         with self.assertRaises(ValueError):
-            self.collect([
-                self.roster(a), self.inspection(a), self.roster(a, added),
-                self.inspection(added),
-            ])
+            self.collect([self.census(), self.census(added), self.inspection(added)])
 
-    def test_new_api_image_alias_is_a_candidate_without_standard_entrypoint(self):
-        a = self.helper(self.a)
+    def test_new_api_image_alias_is_candidate_without_standard_entrypoint(self):
         added = self.helper(self.b, configured_image="omnia-api:" + "f" * 40)
         with self.assertRaises(ValueError):
-            self.collect([
-                self.roster(a), self.inspection(a), self.roster(a, added),
-                self.inspection(added),
-            ])
+            self.collect([self.census(), self.census(added), self.inspection(added)])
 
-    def test_fresh_new_protected_name_cannot_be_hidden_by_earlier_roster_name(self):
-        a, b = self.helper(self.a), self.helper(self.b)
-        protected = {**b, "name": "yleum-prod-api-shadow"}
+    def test_fresh_protected_name_cannot_be_hidden_by_preceding_census_name(self):
+        old = self.opaque_dev(self.a)
+        protected = {**old, "name": "yleum-prod-api-shadow"}
         with self.assertRaises(ValueError):
-            self.collect([
-                self.roster(a), self.inspection(a), self.roster(a, b),
-                self.inspection(protected), self.roster(a, b),
-            ])
-        self.assertEqual(len(self.calls), 4, "A newly inspected candidate must deny immediately")
+            self.collect([self.census(), self.census(old), self.inspection(protected)])
+        self.assertEqual(len(self.calls), 3, "Fresh actual readers deny before another census")
 
-    def test_unclassified_id_disappearing_before_inspect_is_unknown(self):
-        a, b = self.helper(self.a), self.helper(self.b)
+    def test_unknown_opaque_id_disappearing_before_inspect_remains_unknown(self):
+        dev = self.opaque_dev(self.a)
         with self.assertRaisesRegex(ValueError, "inspect vanished"):
-            self.collect([
-                self.roster(a), self.inspection(a), self.roster(a, b),
-                ValueError("inspect vanished"),
-            ])
-        self.assertEqual(self.inspected_ids(), [[self.a], [self.b]])
-        self.assertEqual(len(self.calls), 4)
+            self.collect([self.census(), self.census(dev), ValueError("inspect vanished")])
+        self.assertEqual(self.inspected_ids(), [[self.a]])
+        self.assertEqual(len(self.calls), 3)
 
     def test_continuous_unclassified_growth_denies_after_three_cycles(self):
-        a, b, c, d = (self.helper(identity) for identity in
+        a, b, c, d = (self.opaque_dev(identity) for identity in
                       (self.a, self.b, self.c, self.d))
         with self.assertRaisesRegex(ValueError, "unclassified"):
             self.collect([
-                self.roster(a), self.inspection(a), self.roster(a, b),
-                self.inspection(b), self.roster(a, b, c),
-                self.inspection(c), self.roster(a, b, c, d),
+                self.census(a), self.inspection(a), self.census(a, b),
+                self.inspection(b), self.census(a, b, c),
+                self.inspection(c), self.census(a, b, c, d),
             ])
         self.assertEqual(self.inspected_ids(), [[self.a], [self.b], [self.c]])
         self.assertEqual(len(self.calls), 7)
 
-    def test_empty_roster_skips_inspection(self):
-        self.assertEqual(self.collect([self.roster(), self.roster()]), [])
+    def test_empty_census_skips_inspection(self):
+        self.assertEqual(self.collect([self.census(), self.census()]), [])
         self.assertEqual(self.inspected_ids(), [])
         self.assertEqual(len(self.calls), 2)
 
-    def test_malformed_duplicate_or_incomplete_initial_roster_denies(self):
-        a, b = self.helper(self.a), self.helper(self.b)
-        same_name = {**b, "name": a["name"]}
+    def test_malformed_duplicate_or_incomplete_initial_census_denies(self):
+        a, b = self.summary(self.helper(self.a)), self.summary(self.helper(self.b))
         invalid = [
-            "{invalid",
-            self.roster(a, a),
-            self.roster(a, same_name),
-            json.dumps({"id": "invalid", "name": "helper"}),
-            json.dumps({"id": self.a, "name": ""}),
-            json.dumps({"id": self.a, "name": "helper", "extra": True}),
+            "{invalid", self.raw_census(a, a), self.raw_census(a, {**b, "name": a["name"]}),
+            self.raw_census({**a, "id": "invalid"}), self.raw_census({**a, "name": ""}),
+            self.raw_census({**a, "extra": True}),
+            self.raw_census({key: value for key, value in a.items() if key != "rendered_command"}),
+            self.raw_census({**a, "rendered_command": ["sh"]}),
+            self.raw_census({**a, "image_reference": None}), "[]", "null",
         ]
         for raw in invalid:
             with self.subTest(raw=raw), self.assertRaises(ValueError):
                 self.collect([raw])
             self.assertEqual(len(self.calls), 1)
 
-    def test_final_roster_is_strictly_validated(self):
+    def test_closing_census_is_strictly_validated(self):
         a = self.helper(self.a)
-        for raw in ("{invalid", self.roster(a, a)):
+        for raw in ("{invalid", self.census(a, a)):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
-                self.collect([self.roster(a), self.inspection(a), raw])
-            self.assertEqual(len(self.calls), 3)
+                self.collect([self.census(a), raw])
+            self.assertEqual(len(self.calls), 2)
+
+    def test_complete_census_above_container_limit_denies_before_inspection(self):
+        base = self.summary(self.helper(self.a))
+        raw = self.raw_census(*(
+            {**base, "id": f"{index:064x}", "name": f"fixture-{index}"}
+            for index in range(10001)
+        ))
+        with self.assertRaises(ValueError):
+            self.collect([raw])
+        self.assertEqual(len(self.calls), 1)
 
     def test_incomplete_duplicate_or_foreign_inspection_denies_immediately(self):
-        a, b = self.helper(self.a), self.helper(self.b)
+        a, b = self.reader(self.a), self.reader(self.b)
         for raw in ("", self.inspection(a, a), self.inspection(b)):
             with self.subTest(raw=raw), self.assertRaises(ValueError):
-                self.collect([self.roster(a), raw])
+                self.collect([self.census(a), raw])
             self.assertEqual(len(self.calls), 2)
 
     def test_command_failure_or_malformed_inspection_is_not_retried(self):
-        a = self.helper(self.a)
+        a = self.reader(self.a)
         for failure in (ValueError("docker failed"), "{invalid"):
             with self.subTest(failure=failure), self.assertRaises(ValueError):
-                self.collect([self.roster(a), failure])
+                self.collect([self.census(a), failure])
             self.assertEqual(len(self.calls), 2)
+
+    def test_census_command_failure_is_not_retried(self):
+        with self.assertRaisesRegex(ValueError, "list failed"):
+            self.collect([ValueError("list failed")])
+        self.assertEqual(len(self.calls), 1)
+
+    def test_image_only_api_candidate_survives_list_image_fallback_to_bare_digest(self):
+        row = self.helper(self.a, configured_image="omnia-api:" + "f" * 40)
+        fallback = self.raw_census(self.summary(row, image_reference=row["image"]))
+        result = self.collect([
+            fallback, self.inspection(row), self.inspection(row), fallback,
+        ])
+        self.assertEqual(result, [row])
+        self.assertTrue(self.observer.is_reader_container(result[0]))
+
+    def test_possible_reader_covers_all_roles_without_name_or_image_heuristics(self):
+        for role in ("api", "worker", "generation-worker", "orchestrator"):
+            row = self.reader(self.a, role, name="unrelated-name",
+                              configured_image="controller-fixture:local")
+            with self.subTest(role=role):
+                self.assertTrue(self.observer.is_reader_container(row))
+                self.assertTrue(self.possible(self.summary(row)))
+
+    def test_possible_reader_uses_untruncated_namespace_even_far_after_twenty_characters(self):
+        row = self.helper(self.a, command=["python", "-c", "x" * 100 + " yleum_api.main:app"])
+        summary = self.summary(row)
+        self.assertGreater(summary["rendered_command"].index("yleum_"), 100)
+        self.assertTrue(self.observer.is_reader_container(row))
+        self.assertTrue(self.possible(summary))
+
+    def test_possible_predicate_never_shell_parses_formatted_python_c(self):
+        rendered = "\"python -c 'unterminated yleum_unrelated\""
+        self.assertTrue(self.possible(self.summary(self.helper(self.a),
+                                                   rendered_command=rendered)))
+
+    def test_namespace_false_positive_is_inspected_but_not_a_stable_actual_reader(self):
+        row = self.helper(self.a, command=["echo", "yleum_unrelated"])
+        self.assertFalse(self.observer.is_reader_container(row))
+        self.assertTrue(self.possible(self.summary(row)))
+        self.assertEqual(self.collect([
+            self.census(row), self.inspection(row), self.census(),
+        ]), [])
+
+    def test_named_pinned_references_are_not_opaque_ids(self):
+        images = [
+            "alpine@sha256:" + "a" * 64,
+            "registry/project-machine@sha256:" + "b" * 64,
+            "registry.example:5000/team/project-machine:stable@sha256:" + "c" * 64,
+        ]
+        for image in images:
+            with self.subTest(image=image):
+                self.assertFalse(self.possible(self.summary(self.helper(self.a),
+                                                            image_reference=image)))
+
+    def test_bare_ids_unknown_image_and_empty_command_require_inspection(self):
+        for image in ("sha256:" + "a" * 64, "a" * 64, "a" * 12,
+                      "", "<no image>", "unknown image format", "sha512:" + "b" * 128):
+            with self.subTest(image=image):
+                self.assertTrue(self.possible(self.summary(self.helper(self.a),
+                                                           image_reference=image)))
+        for rendered in ("", '""', " "):
+            with self.subTest(rendered=rendered):
+                self.assertTrue(self.possible(self.summary(self.helper(self.a),
+                                                           rendered_command=rendered)))
+
+    def test_protected_names_and_api_image_are_possible_without_namespace_command(self):
+        for name in ("yleum-prod-api-shadow", "omnia-prod-api-shadow", "yleum-prod-worker-old",
+                     "omnia-prod-worker-old", "yleum-prod-generation-worker-old",
+                     "omnia-prod-generation-worker-old"):
+            with self.subTest(name=name):
+                self.assertTrue(self.possible(self.summary(self.helper(self.a, name=name))))
+        self.assertTrue(self.possible(self.summary(self.helper(self.a),
+                                                   image_reference="omnia-api:fixture")))
 
 
 if __name__ == "__main__":
     unittest.main()
-
