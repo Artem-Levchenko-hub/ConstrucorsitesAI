@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, replace
 from functools import partial
@@ -184,7 +185,9 @@ async def resume_agent_generation(claim: ContinuationClaim) -> None:
             selected_elements=data["selected_elements"], _resume_state=state,
         )
     finally:
-        await cleanup_generation_runtime(runtime, ids.project_id, ids.assistant_message_id)
+        await cleanup_generation_runtime(
+            runtime, ids.project_id, ids.assistant_message_id, primary_error=sys.exception(),
+        )
 
 
 async def publish_finalized_candidate_once(

@@ -236,20 +236,16 @@ async def _process_prompt(
             {"message_id": str(assistant_message_id), "error": failure_for_error(e).message},
         )
     finally:
-        primary_error = sys.exception()
-        try:
-            await cleanup_generation_runtime(runtime, project_id, assistant_message_id)
-        except Exception:
-            # Preserve a pending durable handoff or primary failure. A normal
-            # successful turn, however, cannot complete with an unproven release.
-            if primary_error is None:
-                raise
+        await cleanup_generation_runtime(
+            runtime, project_id, assistant_message_id, primary_error=sys.exception(),
+        )
 
 
 async def cleanup_generation_runtime(
     runtime: GenerationRuntime, project_id: UUID, assistant_message_id: UUID,
+    *, primary_error: BaseException | None = None,
 ) -> None:
-    """Keep physical ownership until release completes, including cancellation."""
+    """Confirm release before success while preserving a primary durable handoff."""
     import logging
 
     _log = logging.getLogger("yleum_api.routers.messages")
@@ -291,7 +287,11 @@ async def cleanup_generation_runtime(
                         "Project Cell generation lease release failed",
                         exc_info=release_exc,
                     )
-                    raise
+                    # Both original dispatch and cold continuation retain their
+                    # primary yield/cancel/failure. An otherwise successful turn
+                    # must expose an unconfirmed physical release to its tracker.
+                    if primary_error is None:
+                        raise
         finally:
             # A watchdog/release failure or cancellation still clears the
             # finished stream; Redis failures remain best-effort.

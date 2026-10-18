@@ -1,19 +1,36 @@
 """Exercise the real cleanup/tracker handoff without models, Docker or a database."""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
+from pydantic import TypeAdapter
 
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.services import generation_runs
 from yleum_api.services import project_cell_executor as executor
 from yleum_api.services import project_cell_lifecycle as cell_lifecycle
-from yleum_api.services.generation import lifecycle, supervisor
-from yleum_api.services.generation.contracts import GenerationRuntime
+from yleum_api.services.generation import agent_pipeline, lifecycle, recovery_execution, supervisor
+from yleum_api.services.generation.agent_finalization import AdaptationActivationPending
+from yleum_api.services.generation.contracts import (
+    GenerationIds,
+    GenerationRuntime,
+    ProjectGenerationFacts,
+    SourceBaseline,
+)
+from yleum_api.services.generation.recovery_contract import (
+    CheckpointRef,
+    ContinuationClaim,
+    ExecutionCursor,
+    RecoveryIdentity,
+    RecoveryStateV2,
+)
+from yleum_api.services.generation.recovery_execution import GenerationYielded
 from yleum_api.services.orchestrator_client import (
     OrchestratorReaderInventoryUnavailable,
     OrchestratorUnavailable,
@@ -463,3 +480,160 @@ async def test_reader_retry_attempt_cap_survives_nonadvancing_clock(
     assert 0 < replay.await_count <= 30
     assert len(release_clock.waits) == replay.await_count
     assert release_io.workspace.generation_run_id == release_io.run.id
+
+
+@pytest.fixture
+def cold_resume(monkeypatch):
+    """Use a real decoded cold entry and cleanup, doubling persistence and agent I/O."""
+    from yleum_api.services.generation import recovery_store
+
+    ids = GenerationIds(*(uuid4() for _ in range(5)))
+    baseline = SourceBaseline(snapshot_id=uuid4(), sha="b" * 40, files={"src/kept.ts": "kept"})
+    project_info = ProjectGenerationFacts(
+        template="max_miniapp", slug="synthetic", name="Synthetic", design_preset_id=None,
+        discovery_spec=None, image_gen_enabled=False, language="ru", is_imported=False,
+        memory_context="", restoration_context="",
+    )
+    dispatch = generation_runs.GenerationDispatch(
+        schema_version=1, project_id=ids.project_id, user_id=ids.user_id,
+        user_message_id=ids.user_message_id, assistant_message_id=ids.assistant_message_id,
+        current_snapshot_id=baseline.snapshot_id, prompt_text="synthetic", model_id="synthetic",
+        force_model=None, is_free=False, orchestrate=True, selected_elements=None,
+    )
+    claim = ContinuationClaim(
+        run_id=ids.run_id, token=uuid4(), attempt_seq=0, worker_id="synthetic-cold",
+        expires_at=datetime.now(UTC) + timedelta(minutes=1),
+    )
+    state = RecoveryStateV2(
+        identity=RecoveryIdentity(
+            run_id=ids.run_id, project_id=ids.project_id, user_id=ids.user_id,
+            prompt_hash="a" * 64, accepted_snapshot_id=baseline.snapshot_id, supersedes_run_id=None,
+        ),
+        continuation_claim=claim,
+        execution=ExecutionCursor(
+            stage="bootstrap", substep="runtime_prepare", physical_state="active",
+            execution_context_ref=CheckpointRef(object_key="synthetic-context", sha256="c" * 64),
+        ),
+    )
+    run = SimpleNamespace(
+        id=ids.run_id, project_id=ids.project_id, user_id=ids.user_id,
+        prompt_hash="a" * 64, user_message_id=ids.user_message_id,
+        assistant_message_id=ids.assistant_message_id,
+        agent_state={"dispatch": dispatch.to_json(), "recovery_v1": state.model_dump(mode="json")},
+    )
+    project = SimpleNamespace(id=ids.project_id, owner_id=ids.user_id)
+    payload = {
+        "ids": TypeAdapter(GenerationIds).dump_python(ids, mode="json"),
+        "baseline": TypeAdapter(SourceBaseline).dump_python(baseline, mode="json"),
+        "project_info": TypeAdapter(ProjectGenerationFacts).dump_python(project_info, mode="json"),
+        **{key: getattr(dispatch, key) for key in (
+            "prompt_text", "force_model", "is_free", "model_id", "orchestrate", "selected_elements",
+        )},
+    }
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            return None
+
+        async def get(self, model, key, **_):
+            assert model is GenerationRun and key == ids.run_id
+            return run
+
+        async def commit(self):
+            pass
+
+    monkeypatch.setattr(agent_pipeline, "get_engine", lambda: object())
+    monkeypatch.setattr(agent_pipeline, "async_sessionmaker", lambda *_a, **_k: Session)
+    monkeypatch.setattr(recovery_execution, "_require_session_owner", AsyncMock())
+    monkeypatch.setattr(recovery_store, "_locked_owner", AsyncMock(return_value=(run, project)))
+    monkeypatch.setattr(recovery_store, "_baseline_sha", AsyncMock(return_value=baseline.sha))
+    monkeypatch.setattr(recovery_execution, "load_execution_context", AsyncMock(return_value={
+        "schema_version": 1, "entry": "pipeline", "pipeline": payload,
+        "completed": {}, "active_frame": None,
+    }))
+    trace = []
+    control = SimpleNamespace(
+        primary=None, release_error=RuntimeError("synthetic cold release failed"),
+        stream_failure=False,
+    )
+
+    async def release():
+        trace.append("release_attempted")
+        if control.release_error is not None:
+            raise control.release_error
+
+    async def agent(**kwargs):
+        assert kwargs["ids"] == ids
+        assert kwargs["baseline"] == baseline
+        assert kwargs["project_info"] == project_info
+        assert kwargs["_resume_state"] == state
+        trace.append("cold_stage")
+        kwargs["runtime"].handle = SimpleNamespace(release=release)
+        if control.primary is not None:
+            raise control.primary
+
+    async def clear(*_):
+        trace.append("stream_cleanup")
+        if control.stream_failure:
+            raise RuntimeError("synthetic cold Redis unavailable")
+
+    monkeypatch.setattr(agent_pipeline, "run_agent_generation", AsyncMock(side_effect=agent))
+    monkeypatch.setattr(lifecycle, "clear_stream_state", AsyncMock(side_effect=clear))
+    return SimpleNamespace(
+        ids=ids, control=control, trace=trace, claim=claim,
+        run=lambda: agent_pipeline.resume_agent_generation(claim),
+    )
+
+
+@pytest.mark.parametrize("stream_failure", [False, True])
+@pytest.mark.parametrize("primary", ["normal", "activation_pending", "yielded", "cancelled"])
+async def test_real_cold_resume_preserves_primary_but_never_hides_normal_release_failure(
+    cold_resume, stream_failure, primary,
+):
+    cold_resume.control.stream_failure = stream_failure
+    errors = {
+        "normal": None,
+        "activation_pending": AdaptationActivationPending("synthetic cold pending activation"),
+        "yielded": GenerationYielded(
+            run_id=cold_resume.ids.run_id, checkpoint=None, attempt_seq=0, phase="reconciling",
+        ),
+        "cancelled": asyncio.CancelledError("synthetic cold primary cancellation"),
+    }
+    cold_resume.control.primary = errors[primary]
+    expected = errors[primary] if primary != "normal" else cold_resume.control.release_error
+
+    with pytest.raises(type(expected)) as caught:
+        await cold_resume.run()
+
+    assert caught.value is expected
+    assert cold_resume.trace == ["cold_stage", "release_attempted", "stream_cleanup"]
+    agent_pipeline.run_agent_generation.assert_awaited_once()
+    lifecycle.clear_stream_state.assert_awaited_once_with(
+        cold_resume.ids.project_id, cold_resume.ids.assistant_message_id,
+    )
+
+
+async def test_real_cold_resume_release_failure_blocks_tracker_completion(cold_resume, tracker):
+    supervisor.recovery_failure_outcome.return_value = "preserve"
+
+    await supervisor._run_tracked_prompt(
+        cold_resume.run(), run_id=cold_resume.ids.run_id, project_id=cold_resume.ids.project_id,
+        assistant_message_id=cold_resume.ids.assistant_message_id, label="synthetic-cold-handoff",
+    )
+
+    supervisor.finalize_generation_run.assert_not_awaited()
+    supervisor._finalize_cancelled_generation.assert_not_awaited()
+    supervisor._emergency_error.assert_not_awaited()
+    assert tracker.trace == ["running"]
+    assert cold_resume.trace == ["cold_stage", "release_attempted", "stream_cleanup"]
+
+
+async def test_real_cold_resume_success_still_releases_and_clears_stream(cold_resume):
+    cold_resume.control.release_error = None
+
+    await cold_resume.run()
+
+    assert cold_resume.trace == ["cold_stage", "release_attempted", "stream_cleanup"]

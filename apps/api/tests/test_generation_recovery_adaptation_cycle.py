@@ -685,13 +685,21 @@ async def test_normal_cancel_before_first_hold_stops_releases_and_cleans_after_t
         assert [x[0] for x in controller.calls].count("cleanup") == 1
 
 
-@pytest.mark.parametrize("mode", ["pending", "unknown", "foreign", "drift", "activity"])
+@pytest.mark.parametrize("mode,error,message", [
+    ("pending", RecoveryContractError, "adaptation hold remains uncertain"),
+    ("unknown", client.OrchestratorUnavailable, "synthetic halt acknowledgement lost"),
+    ("foreign", client.OrchestratorUnavailable, "Invalid adaptation recovery receipt"),
+    ("drift", RecoveryContractError, "adaptation SQL control lease conflicts"),
+    ("activity", RecoveryContractError, "adaptation still has an active physical operation"),
+])
 async def test_normal_cancellation_retains_unconfirmed_physical_writer(
-    monkeypatch, db_session, test_engine, mode,
+    monkeypatch, db_session, test_engine, mode, error, message,
 ):
     run, project, factory, controller, handle = await _setup(monkeypatch, db_session, test_engine)
     monkeypatch.setattr(supervisor, "get_engine", lambda: test_engine)
     monkeypatch.setattr(supervisor, "publish_event", AsyncMock())
+    clear_stream = AsyncMock()
+    monkeypatch.setattr(lifecycle, "clear_stream_state", clear_stream)
     async with _session_owner(test_engine, run.id):
         await _save_wait(run, project, factory, handle, phase="working")
         async with factory() as session:
@@ -706,9 +714,13 @@ async def test_normal_cancellation_retains_unconfirmed_physical_writer(
                 ))
             await session.commit()
         controller.mode = mode
-        await lifecycle.cleanup_generation_runtime(
-            GenerationRuntime(handle=handle), run.project_id, run.assistant_message_id,
-        )
+        # The direct cleanup caller must observe uncertainty. Cancellation may
+        # still terminalize logically, but cannot manufacture a release receipt.
+        with pytest.raises(error, match=message):
+            await lifecycle.cleanup_generation_runtime(
+                GenerationRuntime(handle=handle), run.project_id, run.assistant_message_id,
+            )
+        clear_stream.assert_awaited_once_with(run.project_id, run.assistant_message_id)
         await supervisor._finalize_cancelled_generation(
             run.project_id, run.assistant_message_id, run.id,
         )
