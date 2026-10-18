@@ -6,20 +6,54 @@ import hashlib
 import json
 import re
 from decimal import Decimal
+from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
 from yleum_gateway.core.config import get_settings
 from yleum_gateway.core.db import get_pool
-from yleum_gateway.core.errors import BillingReconciliationRequiredError
+from yleum_gateway.core.errors import BillingReconciliationRequiredError, GatewayError
 from yleum_gateway.services.pricing import validate_cost_provenance
 
 _ROUTES = {"/v1/chat/completions", "/v1/messages", "/v1/project-cell/messages"}
 _STAGES = {"build_plan", "native_agent", "verification", "source_repair", "runtime_ai",
            "product_advisor", "unknown"}
+
+
+class ReceiptFailure(StrEnum):
+    """Fixed local protocol facts; never provider text or proof of non-payment."""
+
+    INVALID_IDENTITY = "receipt_invalid_identity"
+    EVENT_LIMIT = "receipt_event_limit"
+    INVALID_EVENT = "receipt_invalid_event"
+    UPSTREAM_ERROR = "receipt_upstream_error"
+    CONFLICTING_IDENTITY = "receipt_conflicting_identity"
+    CONFLICTING_USAGE = "receipt_conflicting_usage"
+    INVALID_RESPONSE = "receipt_invalid_response"
+    INVALID_TOOL = "receipt_invalid_tool"
+    CONFLICTING_FINISH = "receipt_conflicting_finish"
+    INCOMPLETE = "receipt_incomplete"
+    INVALID_USAGE = "receipt_invalid_usage"
+    INVALID_TOOL_ARGUMENTS = "receipt_invalid_tool_arguments"
+    DUPLICATE_TOOL = "receipt_duplicate_tool"
+    SIZE_LIMIT = "receipt_size_limit"
+    INVALID_ENCODING = "receipt_invalid_encoding"
+    MISSING_COMPLETION = "receipt_missing_completion"
+
+
 _ERRORS = {"ReadTimeout", "ConnectTimeout", "ConnectError", "RemoteProtocolError",
            "HTTPStatusError", "CancelledError", "TimeoutError", "UpstreamProviderError",
-           "ValidationFailedError", "BillingReconciliationRequiredError", "unknown"}
+           "ValidationFailedError", "BillingReconciliationRequiredError", "unknown", *ReceiptFailure}
+
+
+def classify_failure(error: BaseException) -> str:
+    """Both chat routes retain a bounded receipt reason before legacy class names."""
+    if isinstance(error, GatewayError):
+        reason = error.details.get("provider_receipt_failure")
+        if isinstance(reason, str) and reason in ReceiptFailure:
+            return reason
+    name = type(error.__cause__ or error).__name__
+    return name if name in _ERRORS else "unknown"
 
 
 def _error(call_id: UUID, *, started: bool = True) -> BillingReconciliationRequiredError:

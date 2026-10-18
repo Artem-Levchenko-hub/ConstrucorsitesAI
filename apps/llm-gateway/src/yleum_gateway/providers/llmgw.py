@@ -39,6 +39,7 @@ from yleum_gateway.core.errors import UpstreamProviderError, ValidationFailedErr
 from yleum_gateway.providers import native_stream
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
 from yleum_gateway.services.output_budget import output_tokens, uses_provider_output_default
+from yleum_gateway.services.provider_calls import ReceiptFailure
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
 # Retry only failures before the POST can be accepted. A missing response can
@@ -214,14 +215,25 @@ def _receipt_headers(headers: Mapping[str, str]) -> dict[str, str]:
     ) if key in headers}
 
 
-def _failure_details(data: object, headers: object = None) -> dict[str, Any]:
+def _failure_details(
+    data: object, headers: object = None, *, receipt_failure: ReceiptFailure | None = None,
+    transport_stage: str | None = None, upstream_http_status: int | None = None,
+) -> dict[str, Any]:
     # Error details cross the HTTP boundary. Keep only validated identity and
     # decimal text; the journal revalidates these scalars before persistence.
     evidence = receipt_evidence(data, headers)
-    return {"provider_charge_ambiguous": True, **{
+    details = {"provider_charge_ambiguous": True, **{
         key: str(value) if key.startswith("provider_cost_") and value is not None else value
         for key, value in evidence.items()
     }}
+    if receipt_failure is not None:
+        details["provider_receipt_failure"] = receipt_failure.value
+    # Only the local transport supplies this argument; never accept a body field.
+    if isinstance(transport_stage, str) and transport_stage in {"connect", "headers", "body", "complete"}:
+        details["provider_transport_stage"] = transport_stage
+    if type(upstream_http_status) is int and 400 <= upstream_http_status <= 599:
+        details["upstream_http_status"] = upstream_http_status
+    return details
 
 
 def _refusal_category(response: httpx.Response) -> str | None:
@@ -347,6 +359,7 @@ async def astream(
             if stopped.is_set():
                 return
             accepted_headers = False
+            transport_stage = "connect"
             try:
                 with (
                     httpx.Client(
@@ -358,8 +371,11 @@ async def astream(
                     client.stream("POST", url, json=payload, headers=headers) as r,
                 ):
                     accepted_headers = True
+                    transport_stage = "headers"
                     if r.status_code >= 400:
-                        enqueue(("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}")))
+                        enqueue(("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}",
+                            details=_failure_details({}, r.headers, transport_stage=transport_stage,
+                                upstream_http_status=r.status_code))))
                         enqueue(_DONE)
                         return
                     enqueue(("receipt", {
@@ -367,6 +383,7 @@ async def astream(
                         "provider_request_id": r.headers.get("x-llmgw-request-id"),
                     }))
                     for raw in r.iter_lines():
+                        transport_stage = "body"
                         if stopped.is_set():
                             return
                         if not raw or not raw.startswith("data:"):
@@ -385,7 +402,9 @@ async def astream(
                         if not isinstance(obj, dict):
                             continue
                         if obj.get("error"):
-                            raise UpstreamProviderError("llmgw stream returned an error")
+                            raise UpstreamProviderError("llmgw stream returned an error", details=
+                                _failure_details({}, receipt_failure=ReceiptFailure.UPSTREAM_ERROR,
+                                    transport_stage=transport_stage))
                         enqueue(("receipt", {
                             key: obj[key] for key in ("usage", "model", "id", "metadata")
                             if obj.get(key) is not None
@@ -403,7 +422,8 @@ async def astream(
                             enqueue(("delta", delta))
                 raise UpstreamProviderError(
                     "llmgw stream ended without completion",
-                    details={"provider_charge_ambiguous": True},
+                    details=_failure_details({}, receipt_failure=ReceiptFailure.MISSING_COMPLETION,
+                        transport_stage=transport_stage),
                 )
             except httpx.HTTPError as exc:
                 safe = isinstance(exc, _SAFE_TO_RETRY) and (retry_preconnect or not accepted_headers)
@@ -413,7 +433,8 @@ async def astream(
                 enqueue(("err", UpstreamProviderError(
                         f"llmgw stream transport: {type(exc).__name__}",
                         details={"provider_charge_ambiguous": not safe,
-                                 "provider_failure_kind": "preconnect" if safe else "transport"},
+                                 "provider_failure_kind": "preconnect" if safe else "transport",
+                                 "provider_transport_stage": transport_stage},
                     )))
                 enqueue(_DONE)
                 return
@@ -502,6 +523,7 @@ async def acompletion(
     }
 
     evidence = evidence if evidence is not None else {}
+    evidence.pop("upstream_http_status", None)
 
     def _completion_sync() -> dict[str, Any]:
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
@@ -525,9 +547,12 @@ async def acompletion(
                         # exception cannot be mistaken for zero-send preconnect.
                         with client.stream("POST", url, json=payload, headers=headers) as r:
                             evidence["transport_stage"] = "headers"
+                            if type(r.status_code) is int and 400 <= r.status_code <= 599:
+                                evidence["upstream_http_status"] = r.status_code
                             evidence.update(receipt_evidence({}, _receipt_headers(r.headers)))
                             r.read()
                     provider_headers = _receipt_headers(r.headers)
+                    evidence["transport_stage"] = "body"
                     r.raise_for_status()
                     try:
                         result = r.json()
@@ -536,7 +561,9 @@ async def acompletion(
                     except (TypeError, ValueError):
                         raise UpstreamProviderError(
                             "llmgw: malformed response",
-                            details=_failure_details({}, provider_headers),
+                            details=_failure_details(evidence, provider_headers,
+                                receipt_failure=ReceiptFailure.INVALID_RESPONSE,
+                                transport_stage=evidence.get("transport_stage")),
                         ) from None
                     result["_provider_headers"] = provider_headers
                     return result
@@ -559,10 +586,8 @@ async def acompletion(
         else:
             data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
-        details = _failure_details(bounded_error_body(exc.response) or {}, _receipt_headers(exc.response.headers))
-        status = exc.response.status_code
-        if type(status) is int and 400 <= status <= 599:
-            details["upstream_http_status"] = status
+        details = _failure_details(bounded_error_body(exc.response) or {},
+            _receipt_headers(exc.response.headers), upstream_http_status=exc.response.status_code)
         category = _refusal_category(exc.response)
         if category is not None:
             details["provider_refusal_category"] = category
@@ -579,7 +604,8 @@ async def acompletion(
         raise UpstreamProviderError(
             f"llmgw transport error: {type(exc).__name__}",
             details={
-                **_failure_details(evidence),
+                **_failure_details(evidence, transport_stage=evidence.get("transport_stage"),
+                    upstream_http_status=evidence.get("upstream_http_status")),
                 "provider_charge_ambiguous": not safe,
                 "provider_failure_kind": "preconnect" if safe
                 else "transport",
@@ -588,11 +614,14 @@ async def acompletion(
     except (TimeoutError, native_stream.StreamReceiptError) as exc:
         raise UpstreamProviderError(
             "llmgw response receipt incomplete",
-            details=_failure_details(evidence),
+            details=_failure_details(evidence,
+                receipt_failure=exc.reason if isinstance(exc, native_stream.StreamReceiptError) else None,
+                transport_stage=evidence.get("transport_stage"),
+                upstream_http_status=evidence.get("upstream_http_status")),
         ) from exc
 
     safe_receipt = receipt_evidence(data)
-    error_receipt = _failure_details(data)
+    error_receipt = _failure_details(data, transport_stage=evidence.get("transport_stage"))
     try:
         choice = (data.get("choices") or [])[0]
         content = (choice.get("message") or {}).get("content")
@@ -639,4 +668,6 @@ async def acompletion(
         exc.details.update(error_receipt)
         raise
     except (TypeError, ValueError, AttributeError, KeyError, IndexError, OverflowError):
-        raise UpstreamProviderError("llmgw: malformed response", details=error_receipt) from None
+        raise UpstreamProviderError("llmgw: malformed response", details={
+            **error_receipt, "provider_receipt_failure": ReceiptFailure.INVALID_RESPONSE.value,
+        }) from None

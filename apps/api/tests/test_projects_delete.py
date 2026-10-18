@@ -26,6 +26,7 @@ from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.models.usage import Usage
 from yleum_api.models.user import User
+from yleum_api.services.project_deletion import advance_project_deletions
 
 pytestmark = pytest.mark.asyncio
 
@@ -310,7 +311,8 @@ async def test_delete_cell_confirms_teardown_before_removing_project(
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", destroy)
     response = await client.delete(f"/api/projects/{project_id}")
 
-    assert response.status_code == 204, response.text
+    assert response.status_code == 202, response.text
+    assert await advance_project_deletions(db_session.bind) == 1
     assert physical == {"running": False, "reserved_cpu": 0}
     db_session.expire_all()
     assert await db_session.get(Project, project_id) is None
@@ -340,7 +342,8 @@ async def test_delete_cell_failure_preserves_project_and_retries_same_operation(
 
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", destroy)
     response = await client.delete(f"/api/projects/{project_id}")
-    assert response.status_code == 503, response.text
+    assert response.status_code == 202, response.text
+    assert await advance_project_deletions(db_session.bind) == 0
     assert await db_session.get(Project, project_id) is not None
     assert fake_teardown["repo"] == []
     db_session.expire_all()
@@ -349,11 +352,11 @@ async def test_delete_cell_failure_preserves_project_and_retries_same_operation(
     ))
     assert pending.status == "indeterminate"
     assert (await db_session.get(ProjectCellWorkspace, workspace_id)).state == "deleting"
-    await db_session.refresh(owner)
+    await db_session.commit()
 
-    response = await client.delete(f"/api/projects/{project_id}")
-    assert response.status_code == 204, response.text
+    assert await advance_project_deletions(db_session.bind) == 1
     assert len(envelopes) == 2 and envelopes[0] == envelopes[1]
+    db_session.expunge_all()
     assert await db_session.get(Project, project_id) is None
 
 
@@ -386,15 +389,16 @@ async def test_delete_rechecks_stale_completed_destroy_without_replaying_it(
     monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", inspect)
 
     first = await client.delete(f"/api/projects/{project_id}")
-    assert first.status_code == 503
+    assert first.status_code == 202
+    assert await advance_project_deletions(db_session.bind) == 0
     assert await db_session.get(Project, project_id) is not None
     assert fake_teardown["repo"] == []
-    second = await client.delete(f"/api/projects/{project_id}")
-
-    assert second.status_code == 204, second.text
+    await db_session.commit()
+    assert await advance_project_deletions(db_session.bind) == 1
     assert len(controls) == 1
     assert len(inspections) == 2
     assert cached.has_draft_runtime is True
+    db_session.expunge_all()
     assert await db_session.get(Project, project_id) is None
 
 
@@ -527,19 +531,21 @@ async def test_delete_recovers_partial_docker_failure_with_fenced_observation(
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", destroy)
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "observe_resources", observe)
     first = await client.delete(f"/api/projects/{project_id}")
-    assert first.status_code == 503, first.text
+    assert first.status_code == 202, first.text
+    assert await advance_project_deletions(db_session.bind) == 0
     assert physical["containers"] == 1 and fake_teardown["repo"] == []
-    second = await client.delete(f"/api/projects/{project_id}")
+    second = await advance_project_deletions(db_session.bind)
     if lost_observation:
-        assert second.status_code == 503, second.text
+        assert second == 0
         assert physical["containers"] == 1 and fake_teardown["repo"] == []
-        second = await client.delete(f"/api/projects/{project_id}")
+        second = await advance_project_deletions(db_session.bind)
         assert len(observations) == 2
         assert observations[1].fencing_epoch > observations[0].fencing_epoch
-    assert second.status_code == 204, second.text
+    assert second == 1
     assert physical["containers"] == 0
     assert destroys[0].operation_id == destroys[1].operation_id
     assert destroys[-1].operation_id != destroys[0].operation_id
+    db_session.expunge_all()
     assert await db_session.get(Project, project_id) is None
 
 
@@ -567,7 +573,8 @@ async def test_delete_cancels_undispatched_owner_wake_without_allocating_cpu(
 
     monkeypatch.setattr(HttpProjectCellOrchestratorClient, "control", control)
     response = await client.delete(f"/api/projects/{project.id}")
-    assert response.status_code == 204, response.text
+    assert response.status_code == 202, response.text
+    assert await advance_project_deletions(db_session.bind) == 1
     assert calls == ["destroy"]
 
 
@@ -672,7 +679,8 @@ async def test_delete_removes_cell_release_evidence_before_runs(
     as_user(owner)
     response = await client.delete(f"/api/projects/{project.id}")
 
-    assert response.status_code == 204, response.text
+    assert response.status_code == 202, response.text
+    assert await advance_project_deletions(db_session.bind) == 1
     db_session.expire_all()
     assert await db_session.get(Project, project.id) is None
     assert await db_session.get(GenerationRun, ids["run"]) is None

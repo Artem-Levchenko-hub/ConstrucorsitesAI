@@ -4,6 +4,7 @@
 превью конструктора сайтов. Остались долгоживущие циклы, которым нужен процесс
 рядом с API: сердцебиение воркера (его видит `/api/health`), тик подписок,
 уборка вложений доски задач и досведение незавершённых восстановлений версий.
+Удаление приложений также завершается здесь после закрытия браузера.
 Процесс держится на этих потоках и завершается только по сигналу.
 """
 
@@ -13,6 +14,7 @@ import asyncio
 import threading
 
 from yleum_api.core.config import get_settings
+from yleum_api.services.project_deletion import run_project_deletion_forever
 from yleum_api.services.readiness import run_worker_heartbeat_forever
 from yleum_api.services.restoration_reconciliation import run_restoration_reconciliation_forever
 from yleum_api.services.subscription_lifecycle import run_subscription_lifecycle_forever
@@ -37,6 +39,12 @@ def _run_restoration_reconciliation() -> None:
     asyncio.run(run_restoration_reconciliation_forever(before_tick=wait_for_readers))
 
 
+def _run_project_deletion() -> None:
+    from yleum_api.services.generation.recovery_readers import wait_for_readers
+
+    asyncio.run(run_project_deletion_forever(before_tick=wait_for_readers))
+
+
 def _start_workers() -> None:
     if get_settings().billing_lifecycle_enabled:
         threading.Thread(
@@ -53,6 +61,11 @@ def _start_workers() -> None:
     threading.Thread(
         target=_run_restoration_reconciliation,
         name="restoration-reconciliation",
+        daemon=True,
+    ).start()
+    threading.Thread(
+        target=_run_project_deletion,
+        name="project-deletion",
         daemon=True,
     ).start()
 

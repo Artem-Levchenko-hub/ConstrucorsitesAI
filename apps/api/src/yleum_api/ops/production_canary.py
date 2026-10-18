@@ -565,7 +565,7 @@ class ProductionCanary:
         return response.status_code
 
     def _delete_project_with_retry(self, project_id: str) -> bool:
-        """AV23.1: retry the exact same DELETE while the API says "busy".
+        """Retry pre-admission refusals; observe accepted deletion without replay.
 
         409 (a release/restoration of this very project is still finishing) and
         503 ("удаление ещё не подтверждено, повторите") are retried with jittered
@@ -580,13 +580,19 @@ class ProductionCanary:
             return False
         deadline = self._clock() + _CLEANUP_RETRY_DEADLINE_SECONDS
         attempt = 0
+        accepted = False
         while True:
             attempt += 1
-            status = self._request_status("DELETE", f"/api/projects/{project_id}")
-            if status in {204, 404}:
+            method = "GET" if accepted else "DELETE"
+            status = self._request_status(method, f"/api/projects/{project_id}")
+            if status == 404 or (method == "DELETE" and status == 204):
                 self._event("project_delete", "ok", project_id=project_id, attempts=attempt)
                 return True
-            retryable = status is None or status in _CLEANUP_RETRYABLE_STATUSES
+            accepted = accepted or status == 202
+            retryable = (
+                status is None or status in _CLEANUP_RETRYABLE_STATUSES
+                or status == 202 or (accepted and status == 200)
+            )
             exhausted = self._clock() >= deadline or attempt >= _CLEANUP_RETRY_MAX_ATTEMPTS
             if not retryable or exhausted:
                 self._event(
@@ -595,7 +601,7 @@ class ProductionCanary:
                     attempts=attempt, http_status=status,
                 )
                 return False
-            if status == 409:
+            if status == 409 and not accepted:
                 # Our own unfinished work: stop it, then retry the same delete.
                 self._cancel_active_generation(project_id)
                 self._cancel_active_restoration(project_id)

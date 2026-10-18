@@ -1,4 +1,4 @@
-import { apiFetch, apiUrl } from "./client";
+import { ApiError, apiFetch, apiUrl } from "./client";
 import { mockApi, USE_MOCKS } from "./mocks";
 import type { Project, ProjectTemplate } from "./types";
 
@@ -20,9 +20,41 @@ export async function createProject(input: {
   return apiFetch<Project>("/api/projects", { method: "POST", json: input });
 }
 
-export async function deleteProject(id: string): Promise<void> {
-  if (USE_MOCKS) return mockApi.deleteProject(id);
-  return apiFetch<void>(`/api/projects/${id}`, { method: "DELETE" });
+export type ProjectDeletionResult = { state: "deleted" | "deleting" };
+
+export async function deleteProject(id: string): Promise<ProjectDeletionResult> {
+  if (USE_MOCKS) {
+    await mockApi.deleteProject(id);
+    return { state: "deleted" };
+  }
+  const result = await apiFetch<{ state: "deleting"; project_id: string } | undefined>(
+    `/api/projects/${id}`, { method: "DELETE", timeoutMs: 15_000 },
+  );
+  if (result === undefined) return { state: "deleted" };
+  if (result.state !== "deleting" || result.project_id !== id) {
+    throw new Error("Не удалось подтвердить запрос на удаление проекта.");
+  }
+  return { state: "deleting" };
+}
+
+/** The server owns deletion. Observation never sends another DELETE or claims
+ * success from 202/200, a lost connection, or an expired browser deadline. */
+export async function waitForProjectDeletion(id: string): Promise<ProjectDeletionResult> {
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    try {
+      await apiFetch<Project>(`/api/projects/${id}`, {
+        cache: "no-store", timeoutMs: Math.min(10_000, deadline - Date.now()),
+      });
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return { state: "deleted" };
+      // The durable intent remains active even if observation is unavailable.
+      return { state: "deleting" };
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, Math.min(2_000, remaining)));
+  }
+  return { state: "deleting" };
 }
 
 /**

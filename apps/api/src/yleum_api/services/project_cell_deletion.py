@@ -27,20 +27,15 @@ from yleum_api.services.project_cells import (
 )
 
 
-async def teardown_project_cell(session: AsyncSession, project: Project) -> None:
-    """Keep the project/tombstone on failure; retry the exact uncertain operation.
+async def request_project_cell_deletion(
+    session: AsyncSession, project: Project, *, commit_without_cell: bool = True,
+) -> bool:
+    """Admit deletion and commit its durable intent before any external effect.
 
-    Provider cleanup retains verified archives separately from compute. It also
-    seals a controller tombstone, so in-flight requests cannot resurrect a Cell
-    after PostgreSQL cascades the workspace row.
+    Both admission and generation/restoration use the project lock. Committing
+    the Cell tombstone prevents a preview or a new generation from waking it,
+    even after the browser closes. No HTTP request owns the physical teardown.
     """
-    workspace = await session.scalar(select(ProjectCellWorkspace).where(
-        ProjectCellWorkspace.project_id == project.id,
-    ))
-    if workspace is None:
-        return
-    if workspace.owner_id != project.owner_id or workspace.provider != "docker_owner_canary":
-        raise ApiError("conflict", "Не удалось подтвердить владельца среды проекта", 409)
     expected_owner = project.owner_id
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
@@ -62,6 +57,15 @@ async def teardown_project_cell(session: AsyncSession, project: Project) -> None
     if active is not None:
         raise ApiError("conflict", "Перед удалением проекта остановите активную сборку", 409)
 
+    workspace = await session.scalar(select(ProjectCellWorkspace).where(
+        ProjectCellWorkspace.project_id == project.id,
+    ))
+    if workspace is None:
+        if commit_without_cell:
+            await session.commit()
+        return False
+    if workspace.owner_id != expected_owner or workspace.provider != "docker_owner_canary":
+        raise ApiError("conflict", "Не удалось подтвердить владельца среды проекта", 409)
     workspace_id = workspace.id
     await session.execute(
         text("SELECT pg_advisory_xact_lock(hashtext(:workspace_id))"),
@@ -84,9 +88,31 @@ async def teardown_project_cell(session: AsyncSession, project: Project) -> None
         status="cancelled", finished_at=datetime.now(UTC),
         capacity_reason=None, next_attempt_at=None,
     ).execution_options(synchronize_session=False))
-    factory = async_sessionmaker(session.bind, expire_on_commit=False)
     # The intent survives browser disconnect/API restart and denies preview wake.
     await session.commit()
+    return True
+
+
+async def teardown_project_cell(session: AsyncSession, project: Project) -> None:
+    """Advance the committed intent; keep data when its effects remain uncertain.
+
+    The project deletion executor serializes this work across its commits.
+    Controller operation IDs, fencing and replay receipts remain authoritative.
+    """
+    if not await request_project_cell_deletion(session, project):
+        return
+    workspace = await session.scalar(select(ProjectCellWorkspace).where(
+        ProjectCellWorkspace.project_id == project.id,
+    ))
+    assert workspace is not None
+    workspace_id = workspace.id
+    # Worker engines belong to their own event loop. Prime the sticky binding
+    # from the row we just validated, avoiding a global API-engine lookup.
+    from yleum_api.services.orchestrator_hosts import remember_workspace_host
+
+    remember_workspace_host(workspace_id, project.id, workspace.orchestrator)
+    await session.commit()
+    factory = async_sessionmaker(session.bind, expire_on_commit=False)
 
     try:
         outcome = await _advance_deletion(session, factory, workspace_id)
@@ -118,7 +144,8 @@ async def teardown_project_cell(session: AsyncSession, project: Project) -> None
     ):
         raise ApiError(
             "orchestrator_unavailable",
-            "Удаление среды проекта ещё не подтверждено. Данные сохранены; повторите удаление.",
+            "Удаление среды проекта ещё не подтверждено. "
+            "Данные сохранены; сервер повторит проверку.",
             503,
         )
 

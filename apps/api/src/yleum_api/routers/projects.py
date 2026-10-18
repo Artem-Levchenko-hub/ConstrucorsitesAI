@@ -3,12 +3,11 @@ from pathlib import Path
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from slugify import slugify
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from yleum_api.core.crypto import decrypt_strong
 from yleum_api.core.deps import (
     CurrentUserDep,
     OptionalUserDep,
@@ -17,32 +16,20 @@ from yleum_api.core.deps import (
 from yleum_api.core.errors import ApiError
 from yleum_api.core.minio import preview_public_url
 from yleum_api.core.redis import publish_event
-from yleum_api.models.generation_run import GenerationRun
-from yleum_api.models.max_integration import MaxIntegration
-from yleum_api.models.message import Message
 from yleum_api.models.project import Project
-from yleum_api.models.project_cell import (
-    ProjectCellCandidate,
-    ProjectCellProof,
-    ProjectCellWorkspace,
-)
 from yleum_api.models.snapshot import Snapshot
-from yleum_api.models.usage import Usage
-from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.schemas.project import (
     ProjectCreate,
     ProjectPublic,
     ProjectUpdate,
-    is_fullstack,
 )
 from yleum_api.schemas.snapshot import snapshot_event_dict
-from yleum_api.services import max_client, orchestrator_client
 from yleum_api.services import repo as repo_svc
 from yleum_api.services.entitlements import assert_can_create_project
 from yleum_api.services.max_access import require_max_studio_access
 from yleum_api.services.preset_classifier import classify_preset_sync
 from yleum_api.services.project_cell_access import admit_new_project_cell
-from yleum_api.services.project_cell_deletion import teardown_project_cell
+from yleum_api.services.project_deletion import request_project_deletion
 
 _UNTITLED_NAMES = frozenset({"untitled", "новый проект", "проект", "new project"})
 
@@ -224,122 +211,20 @@ async def update_project(
     return project
 
 
-@router.delete("/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{project_id}", status_code=status.HTTP_204_NO_CONTENT,
+    responses={202: {
+        "description": "Deletion accepted; the server continues until GET returns 404",
+    }},
+)
 async def delete_project(
     project_id: UUID, session: SessionDep, current_user: CurrentUserDep
-) -> None:
-    """Delete a project the caller owns: tear down its runtime, drop its git
-    repo, then cascade-delete its rows.
-
-    Owner-scoping: a missing project is 404; someone else's project is 403 (the
-    caller is authenticated, so we can tell them it's simply not theirs).
-
-    Order is teardown-first and fail-closed (R-10): for a container-backed
-    project we ask the orchestrator to remove the container + archive the schema
-    *before* deleting the DB row. If the orchestrator is unreachable we raise
-    rather than delete — better a retryable error than an orphaned container
-    still serving the user's data. The orchestrator side is idempotent, so the
-    retry is safe.
-    """
-    project = await session.get(Project, project_id)
-    if project is None:
-        raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
-    if project.owner_id != current_user.id:
-        raise ApiError("forbidden", "not your project", status.HTTP_403_FORBIDDEN)
-
-    await teardown_project_cell(session, project)
-
-    max_integration = (
-        await session.execute(
-            select(MaxIntegration).where(MaxIntegration.project_id == project.id)
+) -> Response:
+    """Accept durable Cell deletion; report completion only after full cleanup."""
+    if await request_project_deletion(session, project_id, current_user.id):
+        return JSONResponse(
+            {"state": "deleting", "project_id": str(project_id)},
+            status_code=status.HTTP_202_ACCEPTED,
+            headers={"Retry-After": "2", "Cache-Control": "no-store"},
         )
-    ).scalar_one_or_none()
-    if max_integration is not None and max_integration.webhook_url:
-        try:
-            await max_client.unsubscribe(
-                decrypt_strong(max_integration.bot_token_enc),
-                max_integration.webhook_url,
-            )
-        except max_client.MaxClientError as exc:
-            raise ApiError(
-                "max_webhook_failed",
-                f"Не удалось отключить webhook MAX: {exc}",
-                status.HTTP_502_BAD_GATEWAY,
-            ) from exc
-
-    if is_fullstack(project.template):
-        # Containers/schema/nginx — idempotent teardown. Errors propagate
-        # (503/4xx) so the project row survives for a retry, no orphans.
-        await orchestrator_client.destroy(project.id, project.slug)
-
-    # Bare-repo tarball in MinIO (idempotent). Snapshots + messages cascade at
-    # the ORM layer when the project row goes.
-    await asyncio.to_thread(repo_svc.delete_repo, project.id)
-
-    # Keep the immutable billing ledger while breaking every project-owned FK
-    # path before PostgreSQL cascades messages and generation runs. Production
-    # migrations can order the SET NULL/CASCADE triggers differently from a
-    # fresh metadata schema; without this explicit update, deleting a project
-    # may try to null one usage reference after another target row is gone.
-    project_run_ids = select(GenerationRun.id).where(
-        GenerationRun.project_id == project.id
-    )
-    project_message_ids = select(Message.id).where(Message.project_id == project.id)
-    # Cell release evidence (proofs, their results, candidates) references the
-    # project's generation runs with ON DELETE RESTRICT on purpose: evidence must
-    # never vanish because a run was dropped. Deleting the whole project is the
-    # one legitimate case where the evidence goes too, so remove it explicitly
-    # here — otherwise PostgreSQL may cascade projects → generation_runs before
-    # the workspace cascade has reached the proofs and refuse the delete
-    # (seen live 2026-09-22: DELETE /api/projects/{id} → 500 IntegrityError).
-    project_workspace_ids = select(ProjectCellWorkspace.id).where(
-        ProjectCellWorkspace.project_id == project.id
-    )
-    evidence_scope = or_(
-        ProjectCellCandidate.generation_run_id.in_(project_run_ids),
-        ProjectCellCandidate.workspace_id.in_(project_workspace_ids),
-    )
-    # Candidates may point at each other (expected_accepted_candidate_id, also
-    # RESTRICT); break those links before removing the rows.
-    await session.execute(
-        update(ProjectCellCandidate)
-        .where(evidence_scope)
-        .values(expected_accepted_candidate_id=None)
-        .execution_options(synchronize_session=False)
-    )
-    await session.execute(
-        delete(ProjectCellCandidate)
-        .where(evidence_scope)
-        .execution_options(synchronize_session=False)
-    )
-    await session.execute(
-        delete(ProjectCellProof)
-        .where(
-            or_(
-                ProjectCellProof.generation_run_id.in_(project_run_ids),
-                ProjectCellProof.workspace_id.in_(project_workspace_ids),
-            )
-        )
-        .execution_options(synchronize_session=False)
-    )
-    await session.execute(
-        update(WalletCharge)
-        .where(WalletCharge.message_id.in_(project_message_ids))
-        .values(message_id=None)
-        .execution_options(synchronize_session=False)
-    )
-    await session.execute(
-        update(Usage)
-        .where(
-            or_(
-                Usage.project_id == project.id,
-                Usage.run_id.in_(project_run_ids),
-                Usage.message_id.in_(project_message_ids),
-            )
-        )
-        .values(project_id=None, run_id=None, message_id=None)
-        .execution_options(synchronize_session=False)
-    )
-
-    await session.delete(project)
-    await session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

@@ -311,7 +311,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         details = exc.details if isinstance(exc, GatewayError) else {}
         retry_candidate = details.pop("_rate_limit_retry_candidate", None)
         status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
-        failure_type = type(exc.__cause__ or exc).__name__
+        failure_type = provider_calls.classify_failure(exc)
         async def finish_failed() -> None:
             try:
                 await generation_attempts.finish(

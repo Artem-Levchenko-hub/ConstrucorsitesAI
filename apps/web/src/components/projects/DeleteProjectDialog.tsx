@@ -1,8 +1,9 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
 import { toast } from "sonner";
-import { deleteProject } from "@/lib/api/projects";
+import { deleteProject, waitForProjectDeletion } from "@/lib/api/projects";
 import type { Project } from "@/lib/api/types";
 import { Button } from "@/components/ui/button";
 import {
@@ -35,16 +36,24 @@ export function DeleteProjectDialog({
   maxStudio?: boolean;
 }) {
   const qc = useQueryClient();
+  const [acceptedProjectId, setAcceptedProjectId] = useState<string | null>(null);
+  const deletionAccepted = acceptedProjectId === project.id;
 
   const mutation = useMutation({
-    mutationFn: () => deleteProject(project.id),
-    onSuccess: () => {
+    mutationFn: async () => {
+      const result = deletionAccepted ? { state: "deleting" } : await deleteProject(project.id);
+      if (result.state === "deleted") return result;
+      setAcceptedProjectId(project.id);
+      return waitForProjectDeletion(project.id);
+    },
+    onSuccess: (result) => {
+      if (result.state !== "deleted") return;
       toast.success(`Проект «${project.name}» удалён`);
       qc.invalidateQueries({ queryKey: ["projects"] });
       onOpenChange(false);
     },
-    onError: () => {
-      toast.error("Не удалось удалить проект. Попробуйте ещё раз.");
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Не удалось удалить проект. Попробуйте ещё раз.");
     },
   });
 
@@ -52,16 +61,16 @@ export function DeleteProjectDialog({
     <Dialog
       open={open}
       onOpenChange={(next) => {
-        if (!mutation.isPending) onOpenChange(next);
+        if (!mutation.isPending || deletionAccepted) onOpenChange(next);
       }}
     >
       <DialogContent data-max-studio={maxStudio || undefined}>
         <DialogHeader>
-          <DialogTitle>Удалить проект?</DialogTitle>
+          <DialogTitle>{deletionAccepted ? "Удаляем проект" : "Удалить проект?"}</DialogTitle>
           <DialogDescription>
-            Это безвозвратно удалит проект «{project.name}», все его снапшоты,
+            {deletionAccepted ? "Сервер завершает удаление. Можно закрыть окно: процесс продолжится. Проект исчезнет из списка после завершения." : <>Это безвозвратно удалит проект «{project.name}», все его снапшоты,
             файлы и — для приложений — рабочий контейнер с данными. Действие
-            нельзя отменить.
+            нельзя отменить.</>}
           </DialogDescription>
         </DialogHeader>
 
@@ -70,9 +79,9 @@ export function DeleteProjectDialog({
             type="button"
             variant="ghost"
             onClick={() => onOpenChange(false)}
-            disabled={mutation.isPending}
+            disabled={mutation.isPending && !deletionAccepted}
           >
-            Отмена
+            {deletionAccepted ? "Закрыть" : "Отмена"}
           </Button>
           <Button
             type="button"
@@ -81,7 +90,7 @@ export function DeleteProjectDialog({
             disabled={mutation.isPending}
             autoFocus
           >
-            {mutation.isPending ? "Удаление…" : "Удалить навсегда"}
+            {mutation.isPending ? "Удаление…" : deletionAccepted ? "Проверить удаление" : "Удалить навсегда"}
           </Button>
         </DialogFooter>
       </DialogContent>

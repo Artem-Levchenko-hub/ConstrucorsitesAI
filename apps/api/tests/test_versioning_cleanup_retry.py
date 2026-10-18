@@ -23,13 +23,25 @@ class BusyProduction(FakeProduction):
     restoration_cancel_status: int = 200
     deletes: int = 0
     restoration_cancels: int = 0
+    pending_get_statuses: list[int] = field(default_factory=list)
+    deletion_accepted: bool = False
+    pending_gets: int = 0
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path
         if path == f"/api/projects/{PROJECT_ID}" and request.method == "DELETE":
             self.deletes += 1
             status = self.delete_statuses[min(self.deletes, len(self.delete_statuses)) - 1]
+            self.deletion_accepted = self.deletion_accepted or status == 202
             return httpx.Response(status)
+        if (
+            path == f"/api/projects/{PROJECT_ID}" and request.method == "GET"
+            and self.deletion_accepted and self.pending_get_statuses
+        ):
+            self.pending_gets += 1
+            return httpx.Response(self.pending_get_statuses[
+                min(self.pending_gets, len(self.pending_get_statuses)) - 1
+            ])
         if path == f"/api/projects/{PROJECT_ID}/restorations" and request.method == "GET":
             items = [{"id": "op-qa", "state": "ready", "can_cancel": True}] if (
                 self.restoration_cancellable
@@ -89,6 +101,22 @@ def test_busy_delete_is_retried_until_it_succeeds():  # FV017
     # On 409 the canary cancelled its own QA restoration before retrying.
     assert scenario.restoration_cancels == 1
     assert any(e["step"] == "restoration_cancel" for e in events)
+
+
+def test_accepted_delete_is_observed_to_404_without_a_second_delete():
+    scenario = BusyProduction(delete_statuses=[202], pending_get_statuses=[200, 404])
+    result = _run(scenario, Clock(), [])
+    assert result.cleanup_complete is True
+    assert scenario.deletes == 1 and scenario.pending_gets == 2
+
+
+def test_accepted_but_unfinished_delete_is_never_reported_as_cleanup_success():
+    scenario = BusyProduction(delete_statuses=[202], pending_get_statuses=[200])
+    events = []
+    with pytest.raises(canary_module.CanaryCleanupFailure):
+        _run(scenario, Clock(), events)
+    assert scenario.deletes == 1
+    assert _delete_events(events)[-1]["error_code"] == "cleanup_deadline"
 
 
 def test_endless_busy_stops_at_the_cleanup_deadline_with_the_primary_outcome_intact():  # FV022

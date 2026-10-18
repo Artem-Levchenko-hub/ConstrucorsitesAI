@@ -17,6 +17,51 @@ from yleum_gateway.providers import llmgw
 _MODEL = "gemini-3.1-pro-preview-customtools"
 
 
+@pytest.mark.parametrize("failure", ["timeout", "oversize"])
+@pytest.mark.parametrize("reported_cost", [None, "1.23"])
+async def test_error_headers_status_survives_durable_json_body_failure(
+    monkeypatch, failure, reported_cost,
+):
+    from yleum_gateway.core.config import reset_settings_cache
+
+    monkeypatch.setenv("LLMGW_API_KEY", "test-only-provider-key")
+    reset_settings_cache()
+    requests = []
+
+    class Body(httpx.SyncByteStream):
+        closed = False
+
+        def __iter__(self):
+            if failure == "timeout":
+                raise httpx.ReadTimeout("private-timeout")
+            yield b"private-oversize" * 1200
+
+        def close(self):
+            self.closed = True
+
+    stream = Body()
+    headers = {"x-llmgw-request-id": "json-502-id"}
+    if reported_cost is not None:
+        headers["x-llmgw-cost-rub"] = reported_cost
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(502, stream=stream, headers=headers)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    with pytest.raises(UpstreamProviderError) as raised:
+        await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "synthetic"}],
+                               retry_preconnect=False)
+
+    details = raised.value.details
+    assert details.get("upstream_http_status") == 502
+    assert details["provider_request_id"] == "json-502-id"
+    assert details["provider_cost_rub"] == reported_cost
+    assert details["provider_cost_usd"] is None
+    assert details["provider_charge_ambiguous"] is True and "retry_safe" not in details
+    assert len(requests) == 1 and stream.closed and "private" not in str(details)
+
+
 def test_is_llmgw_model() -> None:
     assert llmgw.is_llmgw_model(_MODEL) is True
     assert llmgw.is_llmgw_model("claude-sonnet-5") is True

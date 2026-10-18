@@ -169,6 +169,90 @@ def test_ambiguous_accepted_post_is_not_retried(client, monkeypatch, streaming):
     assert chat.billing.charge.await_count == 0
 
 
+@pytest.mark.parametrize("content,reason,phase", [
+    (b"", "receipt_missing_completion", "headers"),
+    (b'data: {"error":{"message":"private-provider-message"}}\n\n',
+     "receipt_upstream_error", "body"),
+])
+def test_real_streaming_route_retains_receipt_reason_and_never_reports_success(
+    client, monkeypatch, content, reason, phase,
+):
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(200, content=content, headers={
+            "x-llmgw-request-id": "stable-stream-id",
+        })
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    response = post(client, True)
+    payloads = events(response)
+    error = json.loads(payloads[-1])["error"]
+    assert response.status_code == 200 and len(requests) == 1
+    assert "[DONE]" not in payloads
+    assert not any(json.loads(payload).get("usage") for payload in payloads)
+    assert error["details"]["provider_receipt_failure"] == reason
+    assert error["details"]["provider_transport_stage"] == phase
+    assert error["details"]["provider_charge_ambiguous"] is True
+    assert "upstream_http_status" not in error["details"]
+    assert "retry_safe" not in error["details"] and "private" not in response.text
+    chat.provider_calls.finish_call.assert_awaited_once()
+    journal = chat.provider_calls.finish_call.await_args.kwargs
+    assert journal["error_type"] == reason and journal["status"] == "ambiguous"
+    assert journal["provider_request_id"] == "stable-stream-id"
+    assert journal["provider_cost_rub"] is None and journal["provider_cost_usd"] is None
+    chat.billing.charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("malformed", [b"private-invalid-json", b'{"choices":null}'])
+def test_real_json_route_retains_invalid_receipt_reason_without_replay(client, monkeypatch, malformed):
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(200, content=malformed, headers={
+            "x-llmgw-request-id": "stable-json-id",
+        })
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    response = post(client, False)
+    assert response.status_code == 502 and len(requests) == 1
+    details = response.json()["detail"]["error"]["details"]
+    assert details["provider_receipt_failure"] == "receipt_invalid_response"
+    assert details["provider_transport_stage"] == "body"
+    assert "upstream_http_status" not in details and "retry_safe" not in details
+    assert "private" not in response.text
+    chat.provider_calls.finish_call.assert_awaited_once()
+    receipt = chat.provider_calls.finish_call.await_args.kwargs
+    assert receipt["error_type"] == "receipt_invalid_response"
+    assert receipt["provider_request_id"] == "stable-json-id"
+    assert receipt["provider_cost_rub"] is None and receipt["provider_cost_usd"] is None
+    chat.billing.charge.assert_not_awaited()
+
+
+def test_streaming_http_failure_keeps_actual_status_and_receipt_without_wallet_debit(client, monkeypatch):
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(502, json={"error": {"message": "private-upstream-error"}}, headers={
+            "x-llmgw-request-id": "actual-502-id", "x-llmgw-cost-rub": "2.50",
+        })
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    response = post(client, True)
+    details = json.loads(events(response)[-1])["error"]["details"]
+    assert len(requests) == 1 and "[DONE]" not in events(response)
+    assert details["upstream_http_status"] == 502
+    assert "provider_receipt_failure" not in details and "private" not in response.text
+    journal = chat.provider_calls.finish_call.await_args.kwargs
+    assert journal["status"] == "ambiguous" and journal["error_type"] == "UpstreamProviderError"
+    assert journal["provider_request_id"] == "actual-502-id"
+    assert journal["provider_cost_rub"] == Decimal("2.50")
+    chat.billing.charge.assert_not_awaited()
+
+
 @pytest.mark.parametrize("status", [401, 403, 429, 500, 502])
 def test_upstream_http_rejection_keeps_safe_status_and_unknown_cost(
     client, monkeypatch, status,
@@ -179,6 +263,8 @@ def test_upstream_http_rejection_keeps_safe_status_and_unknown_cost(
         calls.append(request)
         return httpx.Response(status, json={
             "error": {"message": "synthetic-private-key https://private.test/path"},
+            "transport_stage": "complete", "provider_receipt_failure": "receipt_missing_completion",
+            "upstream_http_status": 599,
         })
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reject))
@@ -187,6 +273,8 @@ def test_upstream_http_rejection_keeps_safe_status_and_unknown_cost(
     error = response.json()["detail"]["error"]
     assert error["details"]["upstream_http_status"] == status
     assert error["details"]["provider_charge_ambiguous"] is True
+    assert "provider_receipt_failure" not in error["details"]
+    assert "provider_transport_stage" not in error["details"]
     assert "synthetic-private-key" not in response.text and "private.test" not in response.text
     assert len(calls) == 1
     assert chat.provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"

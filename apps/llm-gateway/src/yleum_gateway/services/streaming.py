@@ -115,6 +115,9 @@ async def stream_completion(
     async def settle_receipt() -> None:
         nonlocal usage, cost_rub, provenance, actual_model, provider_request_id, receipt_finished
         reported = read_reported_cost(receipt, receipt.get("headers", {}))
+        failure_type = provider_calls.classify_failure(upstream_error) if upstream_error else (
+            "CancelledError" if cancelled else None
+        )
         if (not accumulated and not receipt.get("usage")
                 and reported.cost_rub is None and reported.cost_usd is None):
             receipt_finished = True
@@ -123,9 +126,8 @@ async def stream_completion(
                 reason="preconnect" if upstream_error and upstream_error.details.get("provider_failure_kind") == "preconnect" else None,
                 status="failed" if upstream_error and upstream_error.details.get(
                     "provider_charge_ambiguous") is False else "ambiguous",
-                **receipt_evidence(receipt),
-                error_type=type(upstream_error).__name__ if upstream_error else
-                           "CancelledError" if cancelled else None,
+                **receipt_evidence({**receipt, **(upstream_error.details if upstream_error else {})}),
+                error_type=failure_type,
             )
             if generation_identity is not None and upstream_error and upstream_error.details.get("provider_failure_kind") == "preconnect":
                 upstream_error.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
@@ -164,8 +166,7 @@ async def stream_completion(
             calculated_cost_rub=Decimal(provenance["calculated_cost_rub"]),
             provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd,
             cost_provenance=provenance,
-            error_type=type(upstream_error).__name__ if upstream_error else
-                       "CancelledError" if cancelled else None,
+            error_type=failure_type,
         )
         if user_id is not None and (output_text or receipt):
             try:
@@ -204,7 +205,8 @@ async def stream_completion(
             if not receipt_finished:
                 receipt_finished = True
                 await generation_attempts.finish(
-                    generation_identity, provider_call_id, status="ambiguous", error_type=type(exc).__name__,
+                    generation_identity, provider_call_id, status="ambiguous",
+                    error_type=provider_calls.classify_failure(exc),
                     **known_receipt,
                 )
             if isinstance(exc, GatewayError):

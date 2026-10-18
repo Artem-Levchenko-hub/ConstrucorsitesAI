@@ -770,26 +770,29 @@ def test_project_cell_endpoint_requires_message_id_equal_to_jti(
 
 
 @pytest.mark.parametrize(
-    ("overrides", "expected_message"),
+    ("offsets", "expected_message"),
     [
-        ({"exp": int(time.time()) - 5, "nbf": int(time.time()) - 10}, "expired"),
-        ({"nbf": int(time.time()) + 30, "exp": int(time.time()) + 60}, "not active"),
-        ({"exp": int(time.time()) + 900, "nbf": int(time.time()) - 1}, "ttl exceeds"),
+        ({"exp": -5, "nbf": -10}, "expired"),
+        ({"nbf": 30, "exp": 60}, "not active"),
+        ({"exp": 900, "nbf": -1}, "ttl exceeds"),
     ],
 )
 def test_project_cell_endpoint_rejects_invalid_token_lifetime(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
-    overrides: dict[str, Any],
+    offsets: dict[str, int],
     expected_message: str,
 ) -> None:
     _install_runner_auth(monkeypatch)
     monkeypatch.setenv("RUNNER_AUTH_MAX_TTL_SECONDS", "120")
     monkeypatch.setattr(messages_native, "_post_llmgw", pytest.fail)
+    # Collection may precede execution by more than the token's entire lifetime.
+    now = int(time.time())
+    overrides = {claim: now + offset for claim, offset in offsets.items()}
 
     response = client.post(
         "/v1/project-cell/messages",
-        headers={"Authorization": f"Bearer {_runner_token(overrides=overrides)}"},
+        headers={"Authorization": f"Bearer {_runner_token(now=now, overrides=overrides)}"},
         json={
             "model": "claude-sonnet-5",
             "metadata": {

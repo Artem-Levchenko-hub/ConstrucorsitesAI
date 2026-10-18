@@ -221,6 +221,86 @@ def test_paid_partial_receipt_returns_serializable_http_error(
     chat.provider_calls.finish_call.assert_awaited_once()
 
 
+@pytest.mark.parametrize("events,reason", [
+    (completed()[:1], "receipt_missing_completion"),
+    ([chunk(), {"error": {"message": "private-provider-detail"}, "upstream_http_status": 502}],
+     "receipt_upstream_error"),
+    (["private-invalid-json"], "receipt_invalid_event"),
+    ([chunk(), chunk(id="conflicting-private-id")], "receipt_conflicting_identity"),
+    ([chunk(), "[DONE]"], "receipt_incomplete"),
+])
+def test_route_retains_bounded_receipt_failure_without_replay_or_billing(
+    monkeypatch, neutralize_lifespan, neutralize_side_effects, events, reason,
+):
+    setup_route(monkeypatch)
+    requests = []
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(200, content=encode(events), headers={
+            "x-llmgw-request-id": "stable-provider-id",
+        })
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kw: httpx.MockTransport(reply))
+    with TestClient(create_app()) as client:
+        result = client.post("/v1/chat/completions", json={"model": "claude-sonnet-5.5",
+            "messages": [{"role": "user", "content": "synthetic"}]})
+
+    assert result.status_code == 502 and len(requests) == 1
+    chat.provider_calls.finish_call.assert_awaited_once()
+    receipt = chat.provider_calls.finish_call.await_args.kwargs
+    assert receipt["error_type"] == reason
+    assert receipt["status"] == "ambiguous"
+    assert receipt["provider_request_id"] == "stable-provider-id"
+    assert receipt["provider_cost_rub"] is None and receipt["provider_cost_usd"] is None
+    chat.billing.charge.assert_not_awaited()
+    details = result.json()["detail"]["error"]["details"]
+    assert details["provider_receipt_failure"] == reason
+    assert details["provider_transport_stage"] == "body"
+    assert details["provider_charge_ambiguous"] is True
+    assert "upstream_http_status" not in details and "retry_safe" not in details
+    assert "private" not in result.text and "private" not in str(receipt)
+
+
+@pytest.mark.parametrize("failure", ["timeout", "oversize"])
+@pytest.mark.parametrize("reported_cost", [None, "1.23"])
+def test_error_headers_status_survives_native_body_failure(
+    monkeypatch, neutralize_lifespan, neutralize_side_effects, failure, reported_cost,
+):
+    setup_route(monkeypatch)
+    requests = []
+    stream = Chunks([b"private-oversize" * 1200] if failure == "oversize" else [],
+                    httpx.ReadTimeout("private-timeout") if failure == "timeout" else None)
+    headers = {"x-llmgw-request-id": "native-502-id"}
+    if reported_cost is not None:
+        headers["x-llmgw-cost-rub"] = reported_cost
+
+    def reply(request):
+        requests.append(request)
+        return httpx.Response(502, stream=stream, headers=headers)
+
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **kw: httpx.MockTransport(reply))
+    with TestClient(create_app()) as client:
+        response = client.post("/v1/chat/completions", json={"model": "claude-sonnet-5.5",
+            "messages": [{"role": "user", "content": "synthetic"}]})
+
+    assert response.status_code == 502 and len(requests) == 1 and stream.closed
+    details = response.json()["detail"]["error"]["details"]
+    assert details.get("upstream_http_status") == 502
+    assert details["provider_request_id"] == "native-502-id"
+    assert details["provider_cost_rub"] == reported_cost
+    assert details["provider_charge_ambiguous"] is True and "retry_safe" not in details
+    chat.provider_calls.finish_call.assert_awaited_once()
+    journal = chat.provider_calls.finish_call.await_args.kwargs
+    assert journal["status"] == "ambiguous"
+    assert journal["error_type"] == ("ReadTimeout" if failure == "timeout" else "receipt_size_limit")
+    assert journal["provider_request_id"] == "native-502-id"
+    assert journal["provider_cost_rub"] == (Decimal(reported_cost) if reported_cost else None)
+    assert journal["provider_cost_usd"] is None
+    chat.billing.charge.assert_not_awaited()
+    assert "private" not in response.text and "private" not in str(journal)
+
+
 def test_exhausted_receipt_reserve_never_dispatches_or_creates_ambiguous_charge(
     monkeypatch, neutralize_lifespan, neutralize_side_effects,
 ):

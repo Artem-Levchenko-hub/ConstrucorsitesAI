@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from yleum_gateway.core.errors import BillingReconciliationRequiredError
+from yleum_gateway.core.errors import BillingReconciliationRequiredError, UpstreamProviderError
 from yleum_gateway.services import provider_calls
 
 
@@ -118,6 +118,45 @@ async def finish(call_id, **kwargs):
     }
     values.update(kwargs)
     await provider_calls.finish_call(call_id, **values)
+
+
+@pytest.mark.parametrize("reason", list(provider_calls.ReceiptFailure))
+async def test_bounded_receipt_reasons_survive_journal_without_invented_expense(connection, reason):
+    call_id = await start()
+    error = UpstreamProviderError("safe message", details={
+        "provider_receipt_failure": reason.value, "provider_charge_ambiguous": True,
+    })
+    failure_type = provider_calls.classify_failure(error)
+    await provider_calls.finish_call(call_id, status="ambiguous", error_type=failure_type,
+                                    provider_request_id="receipt-reason-id")
+    row = connection.rows[call_id]
+    assert row["error_type"] == reason.value and row["status"] == "ambiguous"
+    assert row["tokens_in"] is None and row["tokens_out"] is None
+    assert all(row[key] is None for key in (
+        "calculated_cost_rub", "provider_cost_rub", "provider_cost_usd", "usage_id",
+    ))
+
+
+@pytest.mark.parametrize("reason", ["private-provider-message", {}, [], None, 1])
+def test_failure_classifier_never_promotes_free_form_provider_details(reason):
+    error = UpstreamProviderError("private-provider-message", details={
+        "provider_receipt_failure": reason,
+    })
+    assert provider_calls.classify_failure(error) == "UpstreamProviderError"
+
+
+async def test_new_receipt_reason_does_not_rewrite_historical_unknown(connection):
+    call_id = await start()
+    original = {"status": "ambiguous", "error_type": "unknown",
+                "provider_request_id": "historical-receipt-id"}
+    await provider_calls.finish_call(call_id, **original)
+    before = deepcopy(connection.rows[call_id])
+    await provider_calls.finish_call(call_id, **original)
+    with pytest.raises(BillingReconciliationRequiredError):
+        await provider_calls.finish_call(call_id, **{
+            **original, "error_type": provider_calls.ReceiptFailure.MISSING_COMPLETION.value,
+        })
+    assert connection.rows[call_id] == before
 
 
 @pytest.mark.parametrize("route", ["/v1/messages", "/v1/chat/completions", "/v1/project-cell/messages"])
