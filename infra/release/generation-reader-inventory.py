@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -126,14 +127,85 @@ def identity_of(row: dict) -> dict:
     return identity
 
 
-def process_role(argv: list[str]) -> str | None:
-    """Recognize actual Python/uvicorn entrypoints, not aggregate heartbeat names."""
-    need(type(argv) is list and all(type(v) is str for v in argv))
+def _possible_entrypoints(text: str) -> set[str]:
+    return {entry for entry in ENTRYPOINTS
+            if re.search(r"(?<![\w.])" + re.escape(entry) + r"(?![\w.])", text)}
+
+
+def _python_entrypoints(code: str) -> set[str]:
+    """Inspect Python syntax without executing it or treating comments as shell."""
+    if "yleum_" not in code:
+        return set()
+    need(len(code) <= 131072)
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        # Invalid code is not evidence of a harmless helper. Preserve positive
+        # classification of known namespaces, otherwise leave it unconfirmed.
+        found = _possible_entrypoints(code)
+        need(bool(found))
+        return found
+    references = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            references.add(node.value)
+        elif isinstance(node, ast.alias):
+            references.add(node.name)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            references.add(node.module)
+            references.update(node.module + "." + item.name for item in node.names)
+        elif isinstance(node, ast.Attribute):
+            references.add(ast.unparse(node))
+    return {entry for entry in ENTRYPOINTS
+            if entry in references or entry.partition(":")[0] in references}
+
+
+def _code_operand(argv: list[str], executable: int, *, python: bool) -> int | None:
+    """Options stop at the program/module boundary; following argv remains data."""
+    value_options = ({"-W", "-X", "--check-hash-based-pycs"} if python
+                     else {"-o", "-O", "--rcfile", "--init-file"})
+    index = executable + 1
+    while index < len(argv):
+        option = argv[index]
+        if option == "-c" or (not python and option == "-lc"):
+            need(index + 1 < len(argv))
+            return index + 1
+        if option in {"--", "-"} or (python and option == "-m") or not option.startswith("-"):
+            return None
+        index += 2 if option in value_options else 1
+    return None
+
+
+def _command_entrypoints(argv: list[str], depth: int = 0) -> set[str]:
+    need(depth <= 4)
+    # Exact argv atoms remain conservative reader signals, including a module
+    # supplied to a dynamic launcher as data. Never shell-parse that data.
     tokens = set(argv)
-    if "-c" in argv or "-lc" in argv:
-        for item in argv:
-            if "yleum_" in item:
-                tokens.update(shlex.split(item))
+    code_index = next((i for i, value in enumerate(argv) if value in {"-c", "-lc"}), None)
+    if code_index is None:
+        return tokens
+    executable = 1 if argv and Path(argv[0]).name in {"exec", "busybox"} else 0
+    program = Path(argv[executable]).name if executable < len(argv) else ""
+    if program.startswith("python"):
+        index = _code_operand(argv, executable, python=True)
+        return tokens if index is None else tokens | _python_entrypoints(argv[index])
+    shells = {"sh", "bash", "dash", "ash", "zsh", "ksh"}
+    if program not in shells:
+        # An unknown launcher is not proof that embedded known reader names
+        # are harmless, but its -c operand is not necessarily shell syntax.
+        return tokens | set().union(*(_possible_entrypoints(value) for value in argv))
+    index = _code_operand(argv, executable, python=False)
+    if index is None:
+        return tokens
+    return tokens | _command_entrypoints(
+        shlex.split(argv[index], comments=True), depth + 1
+    )
+
+
+def process_role(argv: list[str]) -> str | None:
+    """Recognize Python/uvicorn entrypoints and the language of inline commands."""
+    need(type(argv) is list and all(type(v) is str for v in argv))
+    tokens = _command_entrypoints(argv)
     roles = {role for token, role in ENTRYPOINTS.items() if token in tokens}
     need(len(roles) <= 1)
     return next(iter(roles), None)
@@ -205,8 +277,36 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
     result = subprocess.run(
         argv, input=stdin, capture_output=True, text=True, timeout=timeout
     )
+    if result.returncode != 0 and Path(argv[0]).name == "ssh":
+        # The remote root collector's structured locations would otherwise be
+        # lost here. Forward only validated metadata, never its error body.
+        context = remote_failure_context(result.stderr)
+        if context:
+            print(canonical({"host": "commerce", "failure_context": context}), file=sys.stderr)
     need(result.returncode == 0 and len(result.stdout) <= 2_000_000)
     return result.stdout.strip()
+
+
+def remote_failure_context(stderr: str) -> list[dict]:
+    for line in stderr.splitlines():
+        try:
+            value = json.loads(line)
+        except ValueError:
+            continue
+        context = value.get("failure_context") if isinstance(value, dict) else None
+        if not isinstance(context, list) or not 0 < len(context) <= 24:
+            continue
+        if all(
+            isinstance(frame, dict) and set(frame) == {"file", "function", "line"}
+            and isinstance(frame["file"], str)
+            and re.fullmatch(r"[\w.-]{1,128}", frame["file"])
+            and isinstance(frame["function"], str)
+            and re.fullmatch(r"(?:\w{1,128}|<(?:module|genexpr|listcomp|dictcomp|setcomp)>)", frame["function"])
+            and type(frame["line"]) is int and 0 < frame["line"] < 1_000_000
+            for frame in context
+        ):
+            return context
+    return []
 
 
 class DockerCensusSummary(TypedDict):
@@ -1546,13 +1646,26 @@ def run_action(args: argparse.Namespace) -> None:
         )
 
 
+def failure_context(exc: Exception) -> list[dict]:
+    """Keep escaping assertion locations without messages, locals or host paths."""
+    frames = []
+    trace = exc.__traceback__
+    while trace is not None:
+        frame = trace.tb_frame
+        frames.append({"file": Path(frame.f_code.co_filename).name,
+                       "function": frame.f_code.co_name, "line": trace.tb_lineno})
+        trace = trace.tb_next
+    return frames[-24:]
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
         # Never emit command/env/Redis exception bodies or private host data.
         print(
-            canonical({"ready": False, "error_class": type(exc).__name__}),
+            canonical({"ready": False, "error_class": type(exc).__name__,
+                       "failure_context": failure_context(exc)}),
             file=sys.stderr,
         )
         raise SystemExit(1) from None
