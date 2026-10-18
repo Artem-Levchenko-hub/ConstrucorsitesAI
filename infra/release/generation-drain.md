@@ -155,7 +155,8 @@ A `ProjectMachine` command can persist `starting` before Docker acknowledges
 `exec_create`. A later canonical pause does not manufacture its lost exec ID or
 exit code. The original command must remain unknown. An operator may instead
 record a separate **current writer-quiescence attestation**, after an authorized
-normal pause of that exact workspace, using the CI-verified pushed release:
+normal pause or completed destroy of that exact workspace, using the CI-verified
+pushed release:
 
 ```sh
 git show "$FIX_SHA:infra/release/generation-publication-drain.py" \
@@ -169,7 +170,8 @@ closed unless all of these conditions hold:
 
 - Root acquires the **existing** canonical workspace `flock`, without creating
   or replacing a lock file. The typed controller state has its latest completed
-  higher-fence `pause`, every lifecycle operation is terminal, and both generation
+  higher-fence `pause/resources_paused` or `destroy/retained` pair, every lifecycle
+  operation is terminal, and both generation
   authority fields are empty. The exact cell, machine and Docker metadata bytes
   are bound to the attestation.
 - Coverage is limited to the original portable `command/starting` intent with
@@ -180,7 +182,8 @@ closed unless all of these conditions hold:
   source hashes are explicitly pinned. Changes require a protocol review and
   manifest update; newly observed source is not automatically trusted.
 - No portable workspace container/helper remains. Only the exact owned
-  auxiliary cell PostgreSQL/Redis services may remain, with no unresolved exec.
+  auxiliary cell PostgreSQL/Redis services may remain after pause, with no
+  unresolved exec. After destroy, no workspace container may remain.
   Two complete root scans enumerate all cgroup directories and every process's
   task membership. Any Docker cgroup or process outside the full current Docker
   roster, unsupported cgroup format, unreadable path or racing read denies.
@@ -191,11 +194,11 @@ closed unless all of these conditions hold:
   history under `/var/lib/yleum/machine-quiescence/<workspace>/<binding-sha>.json`,
   with file and directory fsync. Every gate use reacquires the lock and repeats
   authority and physical checks. Wake, state/metadata/source changes, reboot or
-  daemon identity change invalidate this **current paused-state** attestation.
+  daemon identity change invalidate this **current retired-state** attestation.
 
 This is evidence of current writer retirement, not the missing command outcome.
 It intentionally cannot certify a running workspace or unknown container create.
-An invalidated receipt must never be edited: a newly authorized pause and fresh
+An invalidated receipt must never be edited: a newly authorized retirement and fresh
 positive checks are needed to record a new content-addressed receipt.
 
 ### Replacing a blocked candidate before runtime replacement

@@ -181,6 +181,116 @@ class MachineQuiescenceTests(unittest.TestCase):
         self.assertEqual(self.receipts.parent.stat().st_mode & 0o777, 0o700)
         self.assertEqual(self.receipts.stat().st_mode & 0o777, 0o700)
 
+    def set_destroyed(self):
+        self.cell["bundle_state"] = "retained"
+        self.cell["operations"][-1].update(kind="destroy", bundle_state="retained")
+        self.save_cell()
+
+    def test_completed_destroy_attests_current_retirement_without_rewriting_command(self):
+        self.set_destroyed()
+        before = self.machine_path.read_bytes()
+        self.assertEqual(set(self.record()), {COMMAND})
+        self.validate()
+        result = self.checker.require_physical_writers_drained(self.state, self.client)
+        self.assertEqual(result["physical_journals"], 1)
+        self.assertEqual(self.machine_path.read_bytes(), before)
+        receipt = json.loads(next(self.receipts.glob("*/*.json")).read_bytes())
+        self.assertEqual(receipt["binding"]["destroy_operation_id"], PAUSE)
+        self.assertNotIn("pause_operation_id", receipt["binding"])
+
+    def test_retirement_kind_and_bundle_must_be_an_exact_pair(self):
+        for kind, bundle in (
+            ("destroy", "resources_paused"),
+            ("pause", "retained"),
+            ("ensure", "retained"),
+            ("release", "retained"),
+        ):
+            with self.subTest(kind=kind, bundle=bundle):
+                self.cell["bundle_state"] = bundle
+                self.cell["operations"][-1].update(kind=kind, bundle_state=bundle)
+                self.save_cell()
+                with self.assertRaises(self.checker.PhysicalDrainError):
+                    self.record()
+
+    def test_destroy_does_not_allow_auxiliary_containers_or_fresh_wake(self):
+        self.set_destroyed()
+        self.record()
+        self.cell["bundle_state"] = "resources_ready"
+        self.save_cell()
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.validate()
+        self.set_destroyed()
+        labels = {
+            "omnia.project_cell": "true",
+            "omnia.resource_kind": "postgres",
+            **{
+                "omnia." + key: WORKSPACE
+                for key in ("workspace_id", "project_id", "owner_id")
+            },
+        }
+        self.containers.append(
+            SimpleNamespace(
+                id="d" * 64,
+                name=self.names.postgres_container,
+                reload=lambda: None,
+                attrs={"Id": "d" * 64, "Config": {"Labels": labels}, "ExecIDs": []},
+            )
+        )
+        with self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "workspace_writer_present"
+        ):
+            self.validate()
+
+    def test_destroy_still_requires_generation_absence_and_higher_terminal_fence(self):
+        self.set_destroyed()
+        original = copy.deepcopy(self.cell)
+        for field, value in (
+            ("active_generation_run_id", COMMAND),
+            ("active_generation_fencing_epoch", 7),
+            ("fencing_epoch", 7),
+            ("phase", "planned"),
+        ):
+            with self.subTest(field=field):
+                self.cell = {**original, field: value}
+                self.save_cell()
+                with self.assertRaises(self.checker.PhysicalDrainError):
+                    self.record()
+        self.cell = copy.deepcopy(original)
+        self.cell["operations"][0]["status"] = "indeterminate"
+        self.save_cell()
+        with self.assertRaises(self.checker.PhysicalDrainError):
+            self.record()
+        self.cell = copy.deepcopy(original)
+        self.cell["fencing_epoch"] = 7
+        self.cell["operations"][0]["fencing_epoch"] = 7
+        self.save_cell()
+        with self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "quiescence_retirement_fence"
+        ):
+            self.record()
+        self.assertFalse(self.receipts.exists())
+
+    def test_destroy_rejects_canonical_cell_names_with_missing_or_wrong_labels(self):
+        self.set_destroyed()
+        for name in (
+            self.names.postgres_container,
+            self.names.redis_container,
+            self.names.draft_container_name(),
+        ):
+            for labels in ({}, {"omnia.workspace_id": COMMAND}):
+                with self.subTest(name=name, labels=labels):
+                    self.containers[:] = [SimpleNamespace(
+                        id="d" * 64,
+                        name=name,
+                        reload=lambda: None,
+                        attrs={"Id": "d" * 64, "Config": {"Labels": labels}},
+                    )]
+                    with self.assertRaisesRegex(
+                        self.checker.PhysicalDrainError, "workspace_writer_present"
+                    ):
+                        self.record()
+        self.assertFalse(self.receipts.exists())
+
     def test_pause_without_empty_generation_authority_or_higher_fence_is_denied(self):
         original = copy.deepcopy(self.cell)
         for field, value in (

@@ -180,6 +180,36 @@ def _daemon_identity(client) -> dict:
     return {key: info[key] for key in ("ID", "CgroupDriver", "CgroupVersion")}
 
 
+def _retirement_operation(cell, workspace_id: str):
+    """Only canonical completed pause/destroy may establish current retirement."""
+    operation = cell.operation(cell.last_operation_id)
+    _kernel_need(
+        str(cell.workspace_id) == workspace_id
+        and cell.project_id is not None
+        and cell.owner_id is not None
+        and cell.phase == "completed"
+        and cell.active_generation_run_id is None
+        and cell.active_generation_fencing_epoch is None
+        and operation is not None
+        and (operation.kind, cell.bundle_state)
+        in {("pause", "resources_paused"), ("destroy", "retained")}
+        and operation.status == "completed"
+        and operation.phase == "completed"
+        and operation.bundle_state == cell.bundle_state
+        and operation.fencing_epoch == cell.fencing_epoch
+        and operation.generation_run_id is None
+        and cell.operations[-1] == operation
+        and all(
+            item.status in {"completed", "failed", "cancelled"}
+            and item.fencing_epoch <= cell.fencing_epoch
+            for item in cell.operations
+        )
+        and re.fullmatch(r"[0-9a-f]{64}", operation.request_digest),
+        "quiescence_retirement_authority",
+    )
+    return operation
+
+
 def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client):
     from yleum_orchestrator.services.cell_state import CellWorkspaceState
 
@@ -194,31 +224,7 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
         "quiescence_cell_schema",
     )
     cell = CellWorkspaceState.from_dict(envelope["workspace"])
-    operation = cell.operation(cell.last_operation_id)
-    _kernel_need(
-        str(cell.workspace_id) == workspace_id
-        and cell.project_id is not None
-        and cell.owner_id is not None
-        and cell.phase == "completed"
-        and cell.bundle_state == "resources_paused"
-        and cell.active_generation_run_id is None
-        and cell.active_generation_fencing_epoch is None
-        and operation is not None
-        and operation.kind == "pause"
-        and operation.status == "completed"
-        and operation.phase == "completed"
-        and operation.bundle_state == "resources_paused"
-        and operation.fencing_epoch == cell.fencing_epoch
-        and operation.generation_run_id is None
-        and cell.operations[-1] == operation
-        and all(
-            item.status in {"completed", "failed", "cancelled"}
-            and item.fencing_epoch <= cell.fencing_epoch
-            for item in cell.operations
-        )
-        and re.fullmatch(r"[0-9a-f]{64}", operation.request_digest),
-        "quiescence_pause_authority",
-    )
+    operation = _retirement_operation(cell, workspace_id)
     directory = state_parent / "project-machines" / workspace_id
     machine_raw = _secure_bytes(directory / "machine.json", uid, 0o600)
     backend_raw = _secure_bytes(directory / "docker.json", uid, 0o600)
@@ -249,7 +255,7 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
         "workspace_id": workspace_id,
         "project_id": str(cell.project_id),
         "owner_id": str(cell.owner_id),
-        "pause_operation_id": str(operation.operation_id),
+        operation.kind + "_operation_id": str(operation.operation_id),
         "request_digest": operation.request_digest,
         "fencing_epoch": cell.fencing_epoch,
         "cell_sha256": hashlib.sha256(cell_raw).hexdigest(),
@@ -332,8 +338,17 @@ def _quiescent_roster(client, binding, cell) -> dict:
             cell.resource_names.postgres_container: "postgres",
             cell.resource_names.redis_container: "redis",
         }
-        if cell.resource_names is not None
+        if cell.resource_names is not None and cell.bundle_state == "resources_paused"
         else {}
+    )
+    destroyed_names = (
+        {
+            cell.resource_names.postgres_container,
+            cell.resource_names.redis_container,
+            cell.resource_names.draft_container_name(),
+        }
+        if cell.resource_names is not None and cell.bundle_state == "retained"
+        else set()
     )
     for container in containers:
         container.reload()
@@ -344,6 +359,10 @@ def _quiescent_roster(client, binding, cell) -> dict:
             "quiescence_container_id",
         )
         labels = attrs.get("Config", {}).get("Labels") or {}
+        _kernel_need(
+            container.name not in destroyed_names,
+            "quiescence_workspace_writer_present",
+        )
         # A corrupt/missing identity must not hide a machine with its canonical name.
         target = labels.get("omnia.workspace_id") == binding["workspace_id"]
         named = (
@@ -434,7 +453,7 @@ def machine_quiescence(state_parent, client, workspace_id, *, record=False):
     """A separate root attestation of current retirement, never a command result.
 
     Admission closure must span this operation and reader capture. The exact
-    paused state is mandatory on EVERY use; wake/ensure invalidates this proof.
+    retired state is mandatory on EVERY use; wake/ensure invalidates this proof.
     """
     _kernel_need(os.geteuid() == 0, "quiescence_requires_root")
     _kernel_need(str(UUID(workspace_id)) == workspace_id, "quiescence_workspace_id")
@@ -1247,7 +1266,6 @@ if __name__ == "__main__":
         root = live_publication_root()
         count = require_publications_drained(root)
         import docker
-
         from yleum_orchestrator.core.config import get_settings
 
         client = docker.DockerClient(base_url=get_settings().docker_host, timeout=10)
