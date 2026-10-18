@@ -26604,9 +26604,146 @@
           "a7bbead3d6c4fde07892afb413015316af2672ad0906666a0262c8dbb75bea7e"
         ]
       }
+    },
+    {
+      "version": 1,
+      "reference": "OWNERWEB-FOOTER-02",
+      "source": "owner_web_canary",
+      "revision": "a85a44364b212622d3af32e7a4b5b015be0cd40b",
+      "stage": 15,
+      "admission": "CONFIRMED",
+      "prompt": "Исправь работу нижних ссылок «Поддержка», «Конфиденциальность» и «Условия» с клавиатурой. При переходах Tab и Shift+Tab фокус каждой ссылки должен оставаться видимым над фиксированной нижней навигацией на телефоне, планшете и компьютере, включая safe area; Enter должен открывать соответствующую страницу. Сохрани весь функционал первого запроса: точные шесть товаров, цены, категории, поиск, сортировки, авторизацию, названия кнопок и полей. Существующая единственная личная запись «QA17.10 — БД β» и её описание должны сохраниться в PostgreSQL и отображаться после обновления и повторного открытия приложения. Для этой правки переиспользуй существующую базу и записи. Не удаляй и не пересоздавай базу данных, не добавляй интеграции и внешние отправки. Сделай минимальную правку, проверь тесты, сборку и реальный runtime. Публикация не нужна. Начинай исправление сейчас.",
+      "scope": "owner_preview",
+      "actual_MAX": false,
+      "second_identity": "NOT_RUN_INPUT_UNAVAILABLE",
+      "acceptance": "NOT_CLAIMED",
+      "recorded_at_utc": "2026-10-18T04:03:55.663209+00:00",
+      "evidence_sha256": [
+        "29b470635d25cdc96419e01df44a8db029aef6d05ca566d480d53ab4705ff72b",
+        "87d044b699913a69b52d6146b6e572ac6725518c07ad2c3260c3be3ba115814b",
+        "59b3576f6607e42719136a0eeada56a7c6188f517eeeabac7bc3f3fb016fa207",
+        "0b1af20d0aa86aeff5a22666539e00a3f305f3ed2a8e3c401c340c8001cd958c",
+        "897ce27eb2e8623ae2c1e6dc2504854e75432ce710c9927a311fc2abd2e78e32",
+        "bed924d33463f5db59f402861afcbd2989c8f098f421fbebe1e4e567de99ccdf",
+        "a9e8fbd00c7e90328efe669aebb9065e4c2fb6ed4ff493e304a605bf51d6afd2",
+        "7a642e8187e718ee8cb573a57f39409286e3975b6c3369ff5d46a785ca69bee7",
+        "f3c9aab6ccc657d44c5e31482fc4511d1d706b696e399e8f3f9c62121c260f01",
+        "ca0de5239f4655fcfbc8634e739e649bec86b5a787124f7b1fbfae7ca83a9a3d",
+        "cf1d1a36396631cb3bcc7a3168628041eb7c8d0063b70ff183c19c4a3699d880",
+        "7ee5bdb3a6d3a31546ba5ba8ad55f603a00ff0a3cc0eb7ae476beaeb629bc1e0"
+      ],
+      "functional_checks": [
+        {
+          "name": "До попытки: независимый аудит подтвердил удаление двух остановленных контейнеров, две проверенные резервные копии и семь сохранённых томов; исходный сбой оболочки не переобозначен как успех.",
+          "status": "PASS",
+          "evidence_sha256": [
+            "29b470635d25cdc96419e01df44a8db029aef6d05ca566d480d53ab4705ff72b"
+          ]
+        },
+        {
+          "name": "До попытки: обе измеренные выборки бизнес-данных совпали — две таблицы, две строки, схема и последовательности.",
+          "status": "PASS",
+          "evidence_sha256": [
+            "87d044b699913a69b52d6146b6e572ac6725518c07ad2c3260c3be3ba115814b",
+            "59b3576f6607e42719136a0eeada56a7c6188f517eeeabac7bc3f3fb016fa207",
+            "0b1af20d0aa86aeff5a22666539e00a3f305f3ed2a8e3c401c340c8001cd958c"
+          ]
+        },
+        {
+          "name": "До попытки: существующая заметка и её описание были видны в приложении.",
+          "status": "PASS",
+          "evidence_sha256": [
+            "7a642e8187e718ee8cb573a57f39409286e3975b6c3369ff5d46a785ca69bee7"
+          ]
+        },
+        {
+          "name": "Терминальный запуск: FAILED в 03:15:30 UTC после примерно 23 секунд bootstrap; подтверждённого кандидата и функционального доказательства нет. Причина завершения UNKNOWN.",
+          "status": "FAIL",
+          "evidence_sha256": [
+            "bed924d33463f5db59f402861afcbd2989c8f098f421fbebe1e4e567de99ccdf"
+          ]
+        },
+        {
+          "name": "История ожидания: 129 ensure с неопределённым исходом OrchestratorUnavailable; 129 завершённых reconcile и девять неопределённых reconcile. Это не установленная причина terminal FAILED.",
+          "status": "UNKNOWN",
+          "evidence_sha256": [
+            "bed924d33463f5db59f402861afcbd2989c8f098f421fbebe1e4e567de99ccdf"
+          ]
+        },
+        {
+          "name": "Окончательный ensure с fence 568 завершён; release с fence 569 завершён, SQL-привязка аренды отсутствует. Это не функциональная приёмка.",
+          "status": "PASS",
+          "evidence_sha256": [
+            "897ce27eb2e8623ae2c1e6dc2504854e75432ce710c9927a311fc2abd2e78e32"
+          ]
+        },
+        {
+          "name": "Первый замер после попытки: бизнес-данные NOT_MEASURED; на тот момент сохранность не была подтверждена. Исторический результат сохранён.",
+          "status": "UNKNOWN",
+          "evidence_sha256": [
+            "a9e8fbd00c7e90328efe669aebb9065e4c2fb6ed4ff493e304a605bf51d6afd2"
+          ]
+        },
+        {
+          "name": "Исправление footer, клавиатурные переходы и видимость целей на трёх размерах: проверка результата этой генерации не выполнена.",
+          "status": "NOT_RUN",
+          "evidence_sha256": []
+        },
+        {
+          "name": "Скриншот зафиксировал отображённый сбой; он не устанавливает техническую причину.",
+          "status": "UNKNOWN",
+          "evidence_sha256": [
+            "f3c9aab6ccc657d44c5e31482fc4511d1d706b696e399e8f3f9c62121c260f01"
+          ]
+        },
+        {
+          "name": "Поздний замер после штатного запуска preview: MEASURED — две таблицы и две строки; все семь сравнений с данными до попытки совпали, включая полную схему, строки и последовательности. Это не приёмка UI.",
+          "status": "PASS",
+          "evidence_sha256": [
+            "ca0de5239f4655fcfbc8634e739e649bec86b5a787124f7b1fbfae7ca83a9a3d",
+            "cf1d1a36396631cb3bcc7a3168628041eb7c8d0063b70ff183c19c4a3699d880"
+          ]
+        },
+        {
+          "name": "Поздний отдельный owner-bound GET исходников: HTTP 200, 51 файл, SQL и controller bindings стабильны. Это подтверждает чтение текущих файлов, но не работоспособность приложения и не причину FAILED27.",
+          "status": "PASS",
+          "evidence_sha256": [
+            "7ee5bdb3a6d3a31546ba5ba8ad55f603a00ff0a3cc0eb7ae476beaeb629bc1e0"
+          ]
+        },
+        {
+          "name": "UI по-прежнему не принят; экран «Приложение не найдено» не устанавливает причину FAILED27. Возможное влияние диагностического Python внутри API на reader inventory также не доказано как историческая причина.",
+          "status": "UNKNOWN",
+          "evidence_sha256": []
+        }
+      ],
+      "generation": {
+        "status": "FAILED",
+        "terminal_cause": "UNKNOWN",
+        "evidence_sha256": [
+          "bed924d33463f5db59f402861afcbd2989c8f098f421fbebe1e4e567de99ccdf"
+        ]
+      },
+      "provider": {
+        "status": "UNKNOWN",
+        "calls": null,
+        "evidence_sha256": []
+      },
+      "finance": {
+        "status": "UNKNOWN",
+        "amount_rub": null,
+        "settlement": "UNKNOWN",
+        "evidence_sha256": []
+      },
+      "screenshot": {
+        "status": "CAPTURED",
+        "evidence_sha256": [
+          "f3c9aab6ccc657d44c5e31482fc4511d1d706b696e399e8f3f9c62121c260f01"
+        ]
+      }
     }
   ],
-  "observed_attempts_total": 26,
+  "observed_attempts_total": 27,
   "historical_scope": {
     "attempts": 24,
     "runs": 24,
