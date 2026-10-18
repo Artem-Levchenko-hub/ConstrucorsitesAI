@@ -94,6 +94,53 @@ class CommandRoleTests(unittest.TestCase):
             with self.subTest(argv=argv):
                 self.assertEqual(self.observer.process_role(argv), expected)
 
+    def test_production_browser_installation_entrypoint_forwards_its_exec_command(self):
+        prefix = [
+            "/app/.venv/bin/python", "-m",
+            "yleum_api.services.behavior_browser_installation", "--exec",
+        ]
+        cases = (
+            (["sh", "-c", "/app/.venv/bin/alembic upgrade head && exec "
+              "/app/.venv/bin/uvicorn yleum_api.main:app --host 0.0.0.0 --port 8000"], "api"),
+            (["uv", "run", "uvicorn", "yleum_api.main:app"], "api"),
+            (["python", "-m", "yleum_api.workers.generation"], "generation-worker"),
+            (["python", "-c", "pass # yleum_api.workers.run's comment"], None),
+        )
+        for command, role in cases:
+            with self.subTest(command=command):
+                self.assertEqual(self.observer.process_role(prefix + command), role)
+
+    def test_exec_forwarding_requires_the_actual_known_module_and_exact_prefix(self):
+        code = "exec uvicorn yleum_api.main:app"
+        for prefix in (
+            ["python", "-m", "unrelated_module", "--exec"],
+            ["python", "script.py", "--exec"],
+            ["python", "-c", "pass", "--exec"],
+            ["python", "-m", "yleum_api.services.behavior_browser_installation", "--other"],
+        ):
+            with self.subTest(prefix=prefix):
+                self.assertIsNone(self.observer.process_role(prefix + ["sh", "-c", code]))
+
+    def test_known_exec_wrapper_keeps_operand_and_nesting_boundaries(self):
+        module = "yleum_api.services.behavior_browser_installation"
+        wrapper = ["python", "-m", module, "--exec"]
+        with self.assertRaises(ValueError):
+            self.observer.process_role(wrapper)
+        nested = ["uvicorn", "yleum_api.main:app"]
+        for _ in range(6):
+            nested = wrapper + nested
+        with self.assertRaises(ValueError):
+            self.observer.process_role(nested)
+        for flag in ("-W", "-X"):
+            self.assertIsNone(self.observer.process_role([
+                "python", flag, module, "-m", "unrelated", "--exec",
+                "sh", "-c", "exec uvicorn yleum_api.main:app",
+            ]))
+        self.assertEqual(self.observer.process_role([
+            "python", "-X", "utf8", "-W", "ignore", *wrapper[1:],
+            "sh", "-c", "exec uvicorn yleum_api.main:app",
+        ]), "api")
+
     def test_ambiguous_or_malformed_possible_readers_fail_closed(self):
         for code in (
             "import yleum_api.workers.generation, yleum_api.workers.run",

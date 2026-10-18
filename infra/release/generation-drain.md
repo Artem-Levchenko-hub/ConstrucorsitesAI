@@ -203,12 +203,16 @@ positive checks are needed to record a new content-addressed receipt.
 
 ### Replacing a blocked candidate before runtime replacement
 
-If a prior owned deployment stopped **before** `reader_before`, ff-merge,
-environment changes, image build or service replacement, its candidate can be
+If a prior owned deployment stopped **before its first persisted reader capture
+or rollout inhibit**, ff-merge, environment changes, image build or service
+replacement, its candidate can be
 rolled back explicitly after the new protocol positively establishes composite
 quiescence. Preserve its result/log and verify that no deployment process/lock
 remains, the served revision and production configuration are unchanged, no
-rollout inhibits were installed, and every relevant health/identity check passes.
+reader capture or durable/runtime rollout inhibits were installed on either
+controller, and every relevant health/identity check passes. An inhibit-free
+state alone is insufficient: capture publication precedes inhibit installation.
+Hold the canonical deployment mutex across these checks and both owner-end calls.
 Check ownership of both prior barriers; run the old SQL check and the CI-verified
 new publication/physical gate on **both** controllers. Then use the documented
 ingress `end <old-owner-sha>` and SQL `end <old-owner-sha>` commands, in that order.

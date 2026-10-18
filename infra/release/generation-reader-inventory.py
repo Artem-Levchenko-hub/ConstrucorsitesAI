@@ -160,7 +160,9 @@ def _python_entrypoints(code: str) -> set[str]:
             if entry in references or entry.partition(":")[0] in references}
 
 
-def _code_operand(argv: list[str], executable: int, *, python: bool) -> int | None:
+def _interpreter_operand(
+    argv: list[str], executable: int, *, python: bool
+) -> tuple[str, int] | None:
     """Options stop at the program/module boundary; following argv remains data."""
     value_options = ({"-W", "-X", "--check-hash-based-pycs"} if python
                      else {"-o", "-O", "--rcfile", "--init-file"})
@@ -169,8 +171,11 @@ def _code_operand(argv: list[str], executable: int, *, python: bool) -> int | No
         option = argv[index]
         if option == "-c" or (not python and option == "-lc"):
             need(index + 1 < len(argv))
-            return index + 1
-        if option in {"--", "-"} or (python and option == "-m") or not option.startswith("-"):
+            return "code", index + 1
+        if python and option == "-m":
+            need(index + 1 < len(argv))
+            return "module", index + 1
+        if option in {"--", "-"} or not option.startswith("-"):
             return None
         index += 2 if option in value_options else 1
     return None
@@ -181,24 +186,36 @@ def _command_entrypoints(argv: list[str], depth: int = 0) -> set[str]:
     # Exact argv atoms remain conservative reader signals, including a module
     # supplied to a dynamic launcher as data. Never shell-parse that data.
     tokens = set(argv)
-    code_index = next((i for i, value in enumerate(argv) if value in {"-c", "-lc"}), None)
-    if code_index is None:
-        return tokens
     executable = 1 if argv and Path(argv[0]).name in {"exec", "busybox"} else 0
     program = Path(argv[executable]).name if executable < len(argv) else ""
     if program.startswith("python"):
-        index = _code_operand(argv, executable, python=True)
-        return tokens if index is None else tokens | _python_entrypoints(argv[index])
+        operand = _interpreter_operand(argv, executable, python=True)
+        if operand is None:
+            return tokens
+        kind, index = operand
+        if kind == "code":
+            return tokens | _python_entrypoints(argv[index])
+        # This production image entrypoint validates its browser installation,
+        # then execvp's exactly the argv after --exec. Other module argv is data.
+        if (
+            argv[index] == "yleum_api.services.behavior_browser_installation"
+            and argv[index + 1:index + 2] == ["--exec"]
+        ):
+            need(len(argv) > index + 2)
+            return tokens | _command_entrypoints(argv[index + 2:], depth + 1)
+        return tokens
     shells = {"sh", "bash", "dash", "ash", "zsh", "ksh"}
     if program not in shells:
         # An unknown launcher is not proof that embedded known reader names
         # are harmless, but its -c operand is not necessarily shell syntax.
+        if not any(value in {"-c", "-lc"} for value in argv):
+            return tokens
         return tokens | set().union(*(_possible_entrypoints(value) for value in argv))
-    index = _code_operand(argv, executable, python=False)
-    if index is None:
+    operand = _interpreter_operand(argv, executable, python=False)
+    if operand is None:
         return tokens
     return tokens | _command_entrypoints(
-        shlex.split(argv[index], comments=True), depth + 1
+        shlex.split(argv[operand[1]], comments=True), depth + 1
     )
 
 
