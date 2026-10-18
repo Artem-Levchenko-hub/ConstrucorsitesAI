@@ -3,21 +3,21 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
-import shlex
-import subprocess
-import stat
 import secrets
-import time
-import argparse
-from contextlib import contextmanager
+import shlex
+import stat
+import subprocess
 import sys
-from uuid import uuid4
-from uuid import UUID
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextlib import contextmanager
+from pathlib import Path, PurePosixPath
+from uuid import UUID, uuid4
 
 SLOTS = frozenset(
     {
@@ -1111,6 +1111,7 @@ def install_host(host: str, release_sha: str, ssh_user: str) -> None:
 def scan(config: dict) -> dict:
     need(config["host"] == "core")
     redis = None
+    collectors = None
     try:
         redis = redis_connection()
         # Timestamp starts BEFORE the complete two-host observation.
@@ -1120,17 +1121,31 @@ def scan(config: dict) -> dict:
         run_id = redis.info("server").get("run_id")
         sha(run_id, 40)
         registrations = registrations_now(redis)
-        local = collect_host(
-            host="core",
-            release_sha=config["release_sha"],
-            api_image=config["api_image"],
-            registrations=registrations,
-        )
         payload = {"release_sha": config["release_sha"], "registrations": registrations}
-        other = remote("collect", payload, config["ssh_user"])
-        need(set(other) == {"observed"})
+        # Independent full observations share the original deadline. Neither
+        # host may publish readiness; both results must pass the same final
+        # registration, epoch and expiry checks below.
+        collectors = ThreadPoolExecutor(max_workers=2)
+        futures = {
+            collectors.submit(
+                collect_host,
+                host="core",
+                release_sha=config["release_sha"],
+                api_image=config["api_image"],
+                registrations=registrations,
+            ): "core",
+            collectors.submit(remote, "collect", payload, config["ssh_user"]): "commerce",
+        }
+        observations = {}
+        for future in as_completed(futures):
+            host = futures[future]
+            value = future.result()
+            if host == "commerce":
+                need(set(value) == {"observed"})
+                value = value["observed"]
+            observations[host] = value
         snapshot = build_snapshot(
-            observations=local + other["observed"],
+            observations=observations["core"] + observations["commerce"],
             registrations=registrations,
             release_sha=config["release_sha"],
             epoch=epoch,
@@ -1146,8 +1161,13 @@ def scan(config: dict) -> dict:
         )
         return snapshot
     except Exception:
+        # Revoke immediately, before waiting for any still-running read-only
+        # collection. A late result can never publish a partial snapshot.
         deny_snapshot(config, redis)
         raise
+    finally:
+        if collectors is not None:
+            collectors.shutdown(wait=True, cancel_futures=True)
 
 
 def deny_snapshot(config: dict, redis: object) -> None:
