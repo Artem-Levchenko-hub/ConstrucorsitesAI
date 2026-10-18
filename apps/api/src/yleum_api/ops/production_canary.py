@@ -797,6 +797,11 @@ class ProductionCanary:
         return observed
 
     def _assert_new_snapshot(self, project_id: str, previous_snapshot_id: str) -> str:
+        """Validate a committed version through the source-free public contract.
+
+        Source files are intentionally private. Runtime startup and the signed
+        preview exercise the generated artifact after this metadata check.
+        """
         project = self._request_json("GET", f"/api/projects/{project_id}")
         snapshot_id = self._required_uuid(
             project,
@@ -814,9 +819,9 @@ class ProductionCanary:
         )
         if snapshot.get("id") != snapshot_id or snapshot.get("project_id") != project_id:
             raise self._fail("snapshot identity mismatch", code="snapshot_failed")
-        files = snapshot.get("files")
-        if not isinstance(files, dict) or not files:
-            raise self._fail("generated snapshot has no files", code="snapshot_failed")
+        commit_sha = snapshot.get("commit_sha")
+        if not isinstance(commit_sha, str) or re.fullmatch(r"[0-9a-f]{40}", commit_sha) is None:
+            raise self._fail("snapshot commit is invalid", code="snapshot_failed")
         self._event(
             "snapshot",
             "ok",

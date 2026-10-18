@@ -39,7 +39,7 @@ _FAILURE_REPORTS = {
         "Тестовая генерация не создала новый результат."
     ),
     "snapshot identity mismatch": "Результат тестовой генерации не прошёл проверку.",
-    "generated snapshot has no files": "Тестовая генерация не создала файлы.",
+    "snapshot commit is invalid": "Версия тестовой генерации вернула неверный commit.",
     "id is not a valid identifier": "Тестовый проект вернул неверный идентификатор.",
     "run_id is not a valid identifier": "Тестовая генерация вернула неверный идентификатор.",
     "current_snapshot_id is not a valid identifier": (

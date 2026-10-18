@@ -5,8 +5,10 @@ from pathlib import Path
 import httpx
 import pytest
 
+from tests.production_canary_fakes import FakeProduction, snapshot_payload
 from yleum_api.ops import production_canary as canary_module
 from yleum_api.ops.production_canary import CanaryConfig, CanaryConfigurationError
+from yleum_api.schemas.snapshot import SnapshotPublic
 
 RELEASE_SHA = "a7c4fc22"
 PROJECT_ID = "10000000-0000-4000-8000-000000000001"
@@ -216,11 +218,7 @@ def test_canary_completes_build_preview_edit_and_mandatory_cleanup() -> None:
             snapshot_id = path.rsplit("/", 1)[-1]
             return httpx.Response(
                 200,
-                json={
-                    "id": snapshot_id,
-                    "project_id": PROJECT_ID,
-                    "files": {"src/app/page.tsx": "export default function Page() {}"},
-                },
+                json=snapshot_payload(snapshot_id),
             )
         if path == f"/api/projects/{PROJECT_ID}/runtime/start":
             return httpx.Response(
@@ -373,11 +371,7 @@ class _FailureScenario:
             snapshot_id = path.rsplit("/", 1)[-1]
             return httpx.Response(
                 200,
-                json={
-                    "id": snapshot_id,
-                    "project_id": PROJECT_ID,
-                    "files": {"src/app/page.tsx": "export default function Page() {}"},
-                },
+                json=snapshot_payload(snapshot_id),
             )
         if path == f"/api/projects/{PROJECT_ID}/runtime/start":
             return httpx.Response(200, json={"state": "running"})
@@ -415,6 +409,136 @@ def _test_config() -> CanaryConfig:
         overall_timeout_seconds=300,
         poll_seconds=30,
     )
+
+
+def _run_public_snapshot_contract(
+    production: FakeProduction,
+    replacements: dict[str, dict[str, object]] | None = None,
+) -> canary_module.CanaryResult:
+    overrides = replacements or {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        response = production.handle(request)
+        if request.method == "GET" and request.url.path in overrides:
+            return httpx.Response(200, json=overrides[request.url.path])
+        return response
+
+    return canary_module.ProductionCanary(
+        _test_config(),
+        transport=httpx.MockTransport(handler),
+        sleep=lambda _seconds: None,
+    ).run()
+
+
+def test_snapshot_fake_uses_the_real_source_free_public_schema() -> None:
+    payload = snapshot_payload(BUILD_SNAPSHOT_ID)
+
+    assert "files" not in payload
+    assert set(payload) == set(SnapshotPublic.model_fields)
+    assert SnapshotPublic.model_validate(payload).model_dump(mode="json") == payload
+    assert re.fullmatch(r"[0-9a-f]{40}", str(payload["commit_sha"]))
+
+
+def test_source_free_snapshots_complete_runtime_preview_edit_and_cleanup() -> None:
+    production = FakeProduction()
+
+    result = _run_public_snapshot_contract(production)
+
+    assert result.build_snapshot_id == BUILD_SNAPSHOT_ID
+    assert result.edit_snapshot_id == EDIT_SNAPSHOT_ID
+    assert result.cleanup_complete is True
+    assert f"/api/projects/{PROJECT_ID}/runtime/start" in production.paths("POST")
+    assert f"/api/projects/{PROJECT_ID}/max/preview-session" in production.paths("POST")
+    assert "/api/omnia/preview-session" in production.paths("GET")
+    assert "/" in production.paths("GET")
+
+
+@pytest.mark.parametrize("snapshot_id", [BUILD_SNAPSHOT_ID, EDIT_SNAPSHOT_ID])
+@pytest.mark.parametrize(
+    ("present", "commit_sha"),
+    [
+        pytest.param(False, None, id="missing"),
+        pytest.param(True, None, id="null"),
+        pytest.param(True, 123, id="non-string"),
+        pytest.param(True, "", id="empty"),
+        pytest.param(True, "a" * 39, id="short"),
+        pytest.param(True, "a" * 41, id="long"),
+        pytest.param(True, "A" * 40, id="uppercase"),
+        pytest.param(True, "g" * 40, id="non-hex"),
+        pytest.param(True, "a" * 40 + "\n", id="trailing-newline"),
+    ],
+)
+def test_snapshot_commit_must_be_present_and_valid_before_success(
+    snapshot_id: str,
+    present: bool,
+    commit_sha: object,
+) -> None:
+    production = FakeProduction()
+    payload = snapshot_payload(snapshot_id)
+    if present:
+        payload["commit_sha"] = commit_sha
+    else:
+        payload.pop("commit_sha")
+
+    with pytest.raises(canary_module.CanaryFailure, match="snapshot commit") as caught:
+        _run_public_snapshot_contract(
+            production, {f"/api/projects/{PROJECT_ID}/snapshots/{snapshot_id}": payload},
+        )
+
+    assert caught.value.code == "snapshot_failed"
+    assert caught.value.stage == ("build" if snapshot_id == BUILD_SNAPSHOT_ID else "edit")
+    assert caught.value.cleanup == "ok"
+    assert production.calls[-2:] == [
+        ("DELETE", f"/api/projects/{PROJECT_ID}"), ("POST", "/api/auth/logout"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("id", EDIT_SNAPSHOT_ID), ("id", None),
+     ("project_id", "10000000-0000-4000-8000-000000000002"), ("project_id", None)],
+)
+def test_source_free_snapshot_still_requires_exact_snapshot_and_project_identity(
+    field: str,
+    value: object,
+) -> None:
+    production = FakeProduction()
+    payload = snapshot_payload(BUILD_SNAPSHOT_ID)
+    payload[field] = value
+
+    with pytest.raises(canary_module.CanaryFailure, match="snapshot identity") as caught:
+        _run_public_snapshot_contract(
+            production, {f"/api/projects/{PROJECT_ID}/snapshots/{BUILD_SNAPSHOT_ID}": payload},
+        )
+
+    assert caught.value.code == "snapshot_failed"
+    assert caught.value.cleanup == "ok"
+
+
+@pytest.mark.parametrize(
+    "current_snapshot_id", [SEED_SNAPSHOT_ID, BUILD_SNAPSHOT_ID, None, "invalid-uuid"],
+)
+def test_source_free_snapshot_contract_still_requires_a_new_valid_snapshot_id(
+    current_snapshot_id: object,
+) -> None:
+    production = FakeProduction()
+
+    with pytest.raises(canary_module.CanaryFailure) as caught:
+        _run_public_snapshot_contract(production, {
+            f"/api/projects/{PROJECT_ID}": {
+                "id": PROJECT_ID, "current_snapshot_id": current_snapshot_id,
+            },
+        })
+
+    assert caught.value.code == "snapshot_failed"
+    assert caught.value.cleanup == "ok"
+    snapshot_reads = [path for path in production.paths("GET") if "/snapshots/" in path]
+    if current_snapshot_id == BUILD_SNAPSHOT_ID:
+        assert caught.value.stage == "edit"
+        assert snapshot_reads == [f"/api/projects/{PROJECT_ID}/snapshots/{BUILD_SNAPSHOT_ID}"]
+    else:
+        assert caught.value.stage == "build"
+        assert snapshot_reads == []
 
 
 def _assert_delete_attempted(scenario: _FailureScenario) -> None:

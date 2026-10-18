@@ -10,8 +10,12 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from uuid import UUID
 
 import httpx
+
+from yleum_api.schemas.snapshot import SnapshotPublic
 
 COMPONENTS = ("web", "api", "worker", "generation_worker", "orchestrator")
 RELEASE_SHA = "a7c4fc22"
@@ -31,6 +35,17 @@ SIGNED_PREVIEW_URL = (
 
 def matrix(**overrides: str) -> dict[str, str]:
     return {component: RELEASE_SHA for component in COMPONENTS} | overrides
+
+
+def snapshot_payload(snapshot_id: str) -> dict[str, object]:
+    """Return the real source-free public snapshot representation."""
+    return SnapshotPublic(
+        id=UUID(snapshot_id),
+        project_id=UUID(PROJECT_ID),
+        commit_sha="c" * 40,
+        is_rollback_target=False,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    ).model_dump(mode="json")
 
 
 @dataclass
@@ -160,11 +175,7 @@ class FakeProduction:
         }:
             return httpx.Response(
                 200,
-                json={
-                    "id": path.rsplit("/", 1)[-1],
-                    "project_id": PROJECT_ID,
-                    "files": {"src/app/page.tsx": "export default function Page() {}"},
-                },
+                json=snapshot_payload(path.rsplit("/", 1)[-1]),
             )
         if path == f"{project_path}/runtime/start":
             return httpx.Response(200, json={"state": self.runtime_state})
