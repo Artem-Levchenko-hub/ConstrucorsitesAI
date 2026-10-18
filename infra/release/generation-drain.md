@@ -148,3 +148,69 @@ python -m yleum_api.services.generation_deployment_drain end <owning-full-sha>
 `end` must only follow successful health/identity checks or the explicit rollback
 procedure above. The helper does not cancel work, mutate project data, steal a
 lock, or clear an unknown outcome.
+
+## Quiescence of a lost portable child-command start
+
+A `ProjectMachine` command can persist `starting` before Docker acknowledges
+`exec_create`. A later canonical pause does not manufacture its lost exec ID or
+exit code. The original command must remain unknown. An operator may instead
+record a separate **current writer-quiescence attestation**, after an authorized
+normal pause of that exact workspace, using the CI-verified pushed release:
+
+```sh
+git show "$FIX_SHA:infra/release/generation-publication-drain.py" \
+  | ssh max-commerce 'sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python - --record-machine-quiescence <workspace-uuid>'
+```
+
+Use the actual controller host, and replace the UUID placeholder. Keep ingress
+and durable admission closed throughout recording, both controller gates and
+reader capture. The command never stops a workspace or deletes data. It fails
+closed unless all of these conditions hold:
+
+- Root acquires the **existing** canonical workspace `flock`, without creating
+  or replacing a lock file. The typed controller state has its latest completed
+  higher-fence `pause`, every lifecycle operation is terminal, and both generation
+  authority fields are empty. The exact cell, machine and Docker metadata bytes
+  are bound to the attestation.
+- Coverage is limited to the original portable `command/starting` intent with
+  no exec ID/result or progress. Its producer only creates/starts a child exec
+  on an existing immutable development-container ID; it cannot create a
+  container. Request/adaptation/lifecycle/source-write/command-receipt unknowns
+  retain their existing denial. The reviewed producer, routing, lock and state
+  source hashes are explicitly pinned. Changes require a protocol review and
+  manifest update; newly observed source is not automatically trusted.
+- No portable workspace container/helper remains. Only the exact owned
+  auxiliary cell PostgreSQL/Redis services may remain, with no unresolved exec.
+  Two complete root scans enumerate all cgroup directories and every process's
+  task membership. Any Docker cgroup or process outside the full current Docker
+  roster, unsupported cgroup format, unreadable path or racing read denies.
+  This requires systemd/cgroup v2. The Docker roster and daemon/boot/bindings are
+  checked again. These are two affirmative absence checks, not an assertion that
+  unrelated host process topology is unchanged.
+- The root-only, versioned receipt is atomically published without overwriting
+  history under `/var/lib/yleum/machine-quiescence/<workspace>/<binding-sha>.json`,
+  with file and directory fsync. Every gate use reacquires the lock and repeats
+  authority and physical checks. Wake, state/metadata/source changes, reboot or
+  daemon identity change invalidate this **current paused-state** attestation.
+
+This is evidence of current writer retirement, not the missing command outcome.
+It intentionally cannot certify a running workspace or unknown container create.
+An invalidated receipt must never be edited: a newly authorized pause and fresh
+positive checks are needed to record a new content-addressed receipt.
+
+### Replacing a blocked candidate before runtime replacement
+
+If a prior owned deployment stopped **before** `reader_before`, ff-merge,
+environment changes, image build or service replacement, its candidate can be
+rolled back explicitly after the new protocol positively establishes composite
+quiescence. Preserve its result/log and verify that no deployment process/lock
+remains, the served revision and production configuration are unchanged, no
+rollout inhibits were installed, and every relevant health/identity check passes.
+Check ownership of both prior barriers; run the old SQL check and the CI-verified
+new publication/physical gate on **both** controllers. Then use the documented
+ingress `end <old-owner-sha>` and SQL `end <old-owner-sha>` commands, in that order.
+Immediately run the canonical `deploy-prod.sh <new-pushed-sha>` normally; it
+recloses admission and repeats every gate. Any new admitted work is drained by
+that normal protocol. Never remove a foreign marker/row, skip a failing gate,
+apply this procedure after runtime replacement, or infer rollback readiness from
+health or an empty SQL count alone.

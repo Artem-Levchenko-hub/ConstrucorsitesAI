@@ -3,13 +3,19 @@
 
 from __future__ import annotations
 
+import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
 
@@ -43,6 +49,442 @@ _MACHINE_SERVICES = frozenset(
 
 _PROC_ROOT = Path("/proc")
 _CGROUP_ROOT = Path("/sys/fs/cgroup")
+_QUIESCENCE_ROOT = Path("/var/lib/yleum/machine-quiescence")
+# Reviewed portable-child producer/lock contract, as shipped in 8e8f7d94.
+# New source must be reviewed and explicitly added; a hash in a receipt alone
+# cannot establish that an unknown implementation never creates containers.
+_PORTABLE_QUIESCENCE_SOURCES = {
+    "services.project_machine": "c265481789481f8b4f3f486f4f44345cdf835759204f44b1c7d5667373f171b3",
+    "services.docker_machine_backend": "8c963461e50b3bc3aa29d564a711ee5a656356d7f6fd65c739d9ae74288aa10a",
+    "services.machine_adapter": "7a8fee13333fee8a79478bc9f64b895a67b1deed284335355158b8a95103d426",
+    "routers.workspace": "4ad3af972da6e73af3e15eb407cff041f15321cf9af83466502c14c2f6dd0dc6",
+    "services.cell_state": "c506c7071f9b067f7819745c104d207dc496209c576bce3179f505516f2a1d42",
+    "services.cell_lock": "1bf272c831eec8446270adf098de101db2aac6e02b5f18ea86ff43c81bfb39b3",
+    "services.workspace_provider_factory": "5fc8c2f122c00f9da29439467849b94bcf4eaf3dad11a7d7f04111cc592b7a9d",
+    "services.generation_reader_inventory": "119a83b06d26c2936d1fdf6140c824cb53fee761d7f0d4fe5b8465f34ed04a6e",
+    "services.docker_cell_resources": "6a7f931d4a17bc4517137de069186eb6bb4434e65ce32429de3ac46b3ff52710",
+}
+
+
+def _digest(value) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _secure_bytes(path: Path, uid: int, mode: int) -> bytes:
+    """Root reads controller-owned state without changing its ownership."""
+    _kernel_need(path.is_absolute(), "quiescence_path")
+    for parent in [path.parent, *path.parents]:
+        info = parent.lstat()
+        _kernel_need(stat.S_ISDIR(info.st_mode), "quiescence_path")
+        _kernel_need(info.st_uid in {0, uid}, "quiescence_owner")
+        _kernel_need(
+            not info.st_mode & 0o022
+            or info.st_uid == 0
+            and bool(info.st_mode & stat.S_ISVTX),
+            "quiescence_path_mode",
+        )
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        _kernel_need(
+            stat.S_ISREG(info.st_mode)
+            and info.st_nlink == 1
+            and info.st_uid == uid
+            and stat.S_IMODE(info.st_mode) == mode,
+            "quiescence_file_authority",
+        )
+        value = stream.read(8 * 1024 * 1024 + 1)
+    _kernel_need(len(value) <= 8 * 1024 * 1024, "quiescence_file_bound")
+    return value
+
+
+@contextmanager
+def _quiescence_lock(state_parent: Path, workspace_id: str):
+    """The existing controller lock; never create/replace it as root."""
+    import fcntl
+
+    path = state_parent / "locks" / ("workspace-" + workspace_id + ".lock")
+    owner = (state_parent / "project-cells" / (workspace_id + ".json")).lstat().st_uid
+    _secure_bytes(path, owner, 0o600)
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        expected = path.lstat()
+        actual = os.fstat(fd)
+        _kernel_need(
+            (expected.st_dev, expected.st_ino) == (actual.st_dev, actual.st_ino)
+            and actual.st_uid == owner
+            and stat.S_ISREG(actual.st_mode)
+            and actual.st_nlink == 1
+            and stat.S_IMODE(actual.st_mode) == 0o600,
+            "quiescence_lock_authority",
+        )
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        yield owner
+    finally:
+        os.close(fd)
+
+
+def _pending_portable_commands(machine: dict) -> dict[str, str]:
+    """Only an exec intent on an existing development, never container creation."""
+    operations = machine.get("operations")
+    _kernel_need(type(operations) is dict, "quiescence_command_journal")
+    pending = {}
+    for operation_id, record in operations.items():
+        _kernel_need(type(record) is dict, "quiescence_command_journal")
+        if record.get("state") in {"completed", "failed", "timed_out"}:
+            continue
+        _kernel_need(
+            set(record)
+            == {
+                "digest",
+                "state",
+                "epoch",
+                "kind",
+                "started_at",
+                "heartbeat_at",
+                "log_bytes",
+            }
+            and record["kind"] == "command"
+            and record["state"] == "starting"
+            and str(UUID(operation_id)) == operation_id
+            and type(record["epoch"]) is int
+            and record["epoch"] > 0
+            and type(record["log_bytes"]) is int
+            and record["log_bytes"] == 0
+            and type(record["digest"]) is str
+            and re.fullmatch(r"[0-9a-f]{64}", record["digest"]),
+            "quiescence_command_scope",
+        )
+        start = datetime.fromisoformat(record["started_at"])
+        heartbeat = datetime.fromisoformat(record["heartbeat_at"])
+        _kernel_need(
+            start.utcoffset() is not None and heartbeat == start,
+            "quiescence_command_scope",
+        )
+        pending[operation_id] = _digest(record)
+    _kernel_need(bool(pending), "quiescence_command_scope")
+    return pending
+
+
+def _daemon_identity(client) -> dict:
+    info = client.info()
+    _kernel_need(
+        type(info.get("ID")) is str
+        and bool(info["ID"])
+        and info.get("CgroupDriver") == "systemd"
+        and info.get("CgroupVersion") == "2",
+        "quiescence_daemon_contract",
+    )
+    return {key: info[key] for key in ("ID", "CgroupDriver", "CgroupVersion")}
+
+
+def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client):
+    from yleum_orchestrator.services.cell_state import CellWorkspaceState
+
+    cell_raw = _secure_bytes(
+        state_parent / "project-cells" / (workspace_id + ".json"), uid, 0o600
+    )
+    envelope = json.loads(cell_raw)
+    _kernel_need(
+        set(envelope) == {"version", "workspace"}
+        and type(envelope["version"]) is int
+        and envelope["version"] == 1,
+        "quiescence_cell_schema",
+    )
+    cell = CellWorkspaceState.from_dict(envelope["workspace"])
+    operation = cell.operation(cell.last_operation_id)
+    _kernel_need(
+        str(cell.workspace_id) == workspace_id
+        and cell.project_id is not None
+        and cell.owner_id is not None
+        and cell.phase == "completed"
+        and cell.bundle_state == "resources_paused"
+        and cell.active_generation_run_id is None
+        and cell.active_generation_fencing_epoch is None
+        and operation is not None
+        and operation.kind == "pause"
+        and operation.status == "completed"
+        and operation.phase == "completed"
+        and operation.bundle_state == "resources_paused"
+        and operation.fencing_epoch == cell.fencing_epoch
+        and operation.generation_run_id is None
+        and cell.operations[-1] == operation
+        and all(
+            item.status in {"completed", "failed", "cancelled"}
+            and item.fencing_epoch <= cell.fencing_epoch
+            for item in cell.operations
+        )
+        and re.fullmatch(r"[0-9a-f]{64}", operation.request_digest),
+        "quiescence_pause_authority",
+    )
+    directory = state_parent / "project-machines" / workspace_id
+    machine_raw = _secure_bytes(directory / "machine.json", uid, 0o600)
+    backend_raw = _secure_bytes(directory / "docker.json", uid, 0o600)
+    machine = json.loads(machine_raw)
+    backend = json.loads(backend_raw)
+    pending = _pending_portable_commands(machine)
+    _kernel_need(
+        machine.get("workspace_id") == workspace_id
+        and type(machine.get("epoch")) is int
+        and 0 < machine["epoch"] < cell.fencing_epoch
+        and type(backend.get("epoch")) is int
+        and backend["epoch"] == machine["epoch"]
+        and all(
+            machine["operations"][key]["epoch"] <= machine["epoch"] for key in pending
+        ),
+        "quiescence_retirement_fence",
+    )
+    sources = {}
+    for name, supported in _PORTABLE_QUIESCENCE_SOURCES.items():
+        spec = importlib.util.find_spec("yleum_orchestrator." + name)
+        _kernel_need(spec is not None and spec.origin is not None, "quiescence_source")
+        sources[name] = hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
+        _kernel_need(sources[name] == supported, "quiescence_unsupported_source")
+    binding = {
+        "protocol": "portable-child-command-quiescence",
+        "version": 1,
+        "state_parent": str(state_parent.resolve()),
+        "workspace_id": workspace_id,
+        "project_id": str(cell.project_id),
+        "owner_id": str(cell.owner_id),
+        "pause_operation_id": str(operation.operation_id),
+        "request_digest": operation.request_digest,
+        "fencing_epoch": cell.fencing_epoch,
+        "cell_sha256": hashlib.sha256(cell_raw).hexdigest(),
+        "machine_sha256": hashlib.sha256(machine_raw).hexdigest(),
+        "backend_sha256": hashlib.sha256(backend_raw).hexdigest(),
+        "commands": pending,
+        "boot_id": _kernel_boot_id(),
+        "daemon": _daemon_identity(client),
+        "sources_sha256": sources,
+    }
+    return binding, cell
+
+
+def _docker_cgroup_id(parts) -> str | None:
+    found = []
+    for part in parts:
+        match = re.fullmatch(r"docker-([0-9a-f]{64})\.scope", part)
+        if match:
+            found.append(match[1])
+        elif (
+            part.startswith("docker-")
+            or part == "docker"
+            or re.fullmatch(r"[0-9a-f]{64}", part)
+        ):
+            raise PhysicalDrainError("quiescence_cgroup_contract")
+    _kernel_need(len(found) <= 1, "quiescence_nested_container")
+    return found[0] if found else None
+
+
+def _require_no_orphan_docker_processes(known_ids: set[str]) -> dict:
+    """Complete host scope, including tasks and nested membership; root only."""
+    boot = _kernel_boot_id()
+    _kernel_need(_CGROUP_ROOT.is_dir() and not _CGROUP_ROOT.is_symlink(), "cgroup_root")
+    pending = [_CGROUP_ROOT]
+    while pending:
+        directory = pending.pop()
+        identity = _docker_cgroup_id(directory.relative_to(_CGROUP_ROOT).parts)
+        _kernel_need(
+            identity is None or identity in known_ids, "quiescence_orphan_cgroup"
+        )
+        # Read all membership, including empty/non-Docker groups: unreadable or
+        # disappearing paths cannot establish a complete host observation.
+        _kernel_ids(directory / "cgroup.procs")
+        _kernel_ids(directory / "cgroup.threads")
+        for entry in directory.iterdir():
+            _kernel_need(not entry.is_symlink(), "cgroup_symlink")
+            if entry.is_dir():
+                pending.append(entry)
+    for process in _PROC_ROOT.iterdir():
+        if not process.name.isdecimal():
+            continue
+        _kernel_need(not process.is_symlink(), "process_path")
+        tasks = list((process / "task").iterdir())
+        _kernel_need(
+            any(task.name == process.name for task in tasks),
+            "quiescence_task_inventory",
+        )
+        for member in [process, *tasks]:
+            _kernel_need(
+                member.name.isdecimal() and not member.is_symlink(), "process_path"
+            )
+            membership = _kernel_read(member / "cgroup").decode("ascii").strip()
+            _kernel_need(
+                membership.startswith("0::/") and "\n" not in membership,
+                "cgroup_v2_required",
+            )
+            identity = _docker_cgroup_id(Path(membership[3:]).parts)
+            _kernel_need(
+                identity is None or identity in known_ids, "quiescence_orphan_process"
+            )
+    _kernel_need(_kernel_boot_id() == boot, "host_boot_changed")
+    return {"boot_id": boot, "no_orphan_docker_membership": True}
+
+
+def _quiescent_roster(client, binding, cell) -> dict:
+    containers = client.containers.list(all=True)
+    roster = {}
+    auxiliary = (
+        {
+            cell.resource_names.postgres_container: "postgres",
+            cell.resource_names.redis_container: "redis",
+        }
+        if cell.resource_names is not None
+        else {}
+    )
+    for container in containers:
+        container.reload()
+        attrs = container.attrs
+        _kernel_need(
+            re.fullmatch(r"[0-9a-f]{64}", container.id)
+            and attrs.get("Id") == container.id,
+            "quiescence_container_id",
+        )
+        labels = attrs.get("Config", {}).get("Labels") or {}
+        # A corrupt/missing identity must not hide a machine with its canonical name.
+        target = labels.get("omnia.workspace_id") == binding["workspace_id"]
+        named = (
+            "omnia-machine-" + binding["workspace_id"].replace("-", "")
+        ) in container.name
+        _kernel_need(not named, "quiescence_machine_present")
+        if target:
+            _kernel_need(
+                container.name in auxiliary
+                and labels.get("omnia.project_cell") == "true"
+                and labels.get("omnia.resource_kind") == auxiliary[container.name]
+                and labels.get("omnia.project_machine") != "true"
+                and labels.get("omnia.helper") != "true"
+                and all(
+                    labels.get("omnia." + key) == binding[key]
+                    for key in ("workspace_id", "project_id", "owner_id")
+                ),
+                "quiescence_workspace_writer_present",
+            )
+            exec_ids = attrs.get("ExecIDs")
+            _kernel_need(
+                exec_ids is None or type(exec_ids) is list,
+                "quiescence_auxiliary_exec_inventory",
+            )
+            for exec_id in exec_ids or []:
+                _kernel_need(
+                    type(exec_id) is str and re.fullmatch(r"[0-9a-f]{64}", exec_id),
+                    "quiescence_auxiliary_exec_identity",
+                )
+                execution = client.api.exec_inspect(exec_id)
+                _kernel_need(
+                    execution.get("ContainerID") == container.id
+                    and execution.get("Running") is False
+                    and type(execution.get("ExitCode")) is int,
+                    "quiescence_auxiliary_exec",
+                )
+        roster[container.id] = {"name": container.name, "labels": labels}
+    return roster
+
+
+def _quiescence_physical(state_parent, workspace_id, uid, client, binding, cell):
+    roster = _quiescent_roster(client, binding, cell)
+    # Two affirmative complete scans, not equality of unrelated host process
+    # topology. Both independently reject every orphan Docker membership.
+    first = _require_no_orphan_docker_processes(set(roster))
+    second = _require_no_orphan_docker_processes(set(roster))
+    _kernel_need(
+        first["boot_id"] == second["boot_id"]
+        and roster == _quiescent_roster(client, binding, cell),
+        "quiescence_inventory_changed",
+    )
+    current, _ = _quiescence_binding(state_parent, workspace_id, uid, client)
+    _kernel_need(current == binding, "quiescence_binding_changed")
+    return {**first, "roster_sha256": _digest(roster)}
+
+
+def _quiescence_receipt_path(binding):
+    return _QUIESCENCE_ROOT / binding["workspace_id"] / (_digest(binding) + ".json")
+
+
+def machine_quiescence(state_parent, client, workspace_id, *, record=False):
+    """A separate root attestation of current retirement, never a command result.
+
+    Admission closure must span this operation and reader capture. The exact
+    paused state is mandatory on EVERY use; wake/ensure invalidates this proof.
+    """
+    _kernel_need(os.geteuid() == 0, "quiescence_requires_root")
+    _kernel_need(str(UUID(workspace_id)) == workspace_id, "quiescence_workspace_id")
+    with _quiescence_lock(state_parent, workspace_id) as uid:
+        binding, cell = _quiescence_binding(state_parent, workspace_id, uid, client)
+        path = _quiescence_receipt_path(binding)
+        if not record:
+            payload = json.loads(_secure_bytes(path, 0, 0o600))
+            _kernel_need(
+                set(payload) == {"binding", "observed_at", "physical"}
+                and payload["binding"] == binding
+                and set(payload["physical"])
+                == {"boot_id", "no_orphan_docker_membership", "roster_sha256"}
+                and payload["physical"]["boot_id"] == binding["boot_id"]
+                and payload["physical"]["no_orphan_docker_membership"] is True
+                and re.fullmatch(r"[0-9a-f]{64}", payload["physical"]["roster_sha256"])
+                and datetime.fromisoformat(payload["observed_at"]).utcoffset()
+                is not None,
+                "quiescence_receipt_invalid",
+            )
+        physical = _quiescence_physical(
+            state_parent, workspace_id, uid, client, binding, cell
+        )
+        if record:
+            # Parent directories must be exclusively root-owned and non-symlink.
+            for directory in (_QUIESCENCE_ROOT, path.parent):
+                for parent in directory.parents:
+                    info = parent.lstat()
+                    _kernel_need(
+                        stat.S_ISDIR(info.st_mode)
+                        and info.st_uid == 0
+                        and (
+                            not info.st_mode & 0o022
+                            or bool(info.st_mode & stat.S_ISVTX)
+                        ),
+                        "quiescence_receipt_parent",
+                    )
+                directory.mkdir(mode=0o700, exist_ok=True)
+                info = directory.lstat()
+                _kernel_need(
+                    stat.S_ISDIR(info.st_mode)
+                    and info.st_uid == 0
+                    and stat.S_IMODE(info.st_mode) == 0o700,
+                    "quiescence_receipt_directory",
+                )
+            payload = {
+                "binding": binding,
+                "observed_at": datetime.now(UTC).isoformat(),
+                "physical": physical,
+            }
+            if path.exists():
+                existing = json.loads(_secure_bytes(path, 0, 0o600))
+                _kernel_need(
+                    existing.get("binding") == binding, "quiescence_receipt_collision"
+                )
+            else:
+                fd, temporary = tempfile.mkstemp(prefix=".quiescence-", dir=path.parent)
+                try:
+                    with os.fdopen(fd, "w") as stream:
+                        json.dump(
+                            payload, stream, sort_keys=True, separators=(",", ":")
+                        )
+                        stream.flush()
+                        os.fsync(stream.fileno())
+                    # Publish once, without replacing a prior attestation. A
+                    # crash before this point leaves no partial final receipt.
+                    os.link(temporary, path, follow_symlinks=False)
+                finally:
+                    os.unlink(temporary)
+                for directory in (path.parent, _QUIESCENCE_ROOT):
+                    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(fd)
+                    finally:
+                        os.close(fd)
+        return binding["commands"]
 
 
 def _kernel_need(condition, reason):
@@ -529,6 +971,40 @@ def _command_terminal(record: dict, operation_id: str) -> str:
         ) from exc
 
 
+def _machine_command_exec_ids(value, path, state_parent, client):
+    """Classify journal authority separately from physical exec inspection."""
+    operations = value.get("operations")
+    if not isinstance(operations, dict):
+        raise PhysicalDrainError("physical command journal is unknown")
+    quiesced = None
+    commands = []
+    for operation_id, record in operations.items():
+        terminal = (
+            isinstance(record, dict)
+            and record.get("kind")
+            in {"request", "command", "adaptation_recovery", "adaptation_cleanup"}
+            and record.get("state") in {"completed", "failed", "timed_out"}
+        )
+        if not terminal:
+            if quiesced is None:
+                try:
+                    quiesced = machine_quiescence(
+                        state_parent, client, path.parent.name
+                    )
+                except Exception as exc:
+                    raise PhysicalDrainError(
+                        "physical command outcome is unresolved"
+                    ) from exc
+            if quiesced.get(operation_id) != _digest(record):
+                raise PhysicalDrainError("physical command outcome is unresolved")
+            # Attested current retirement is distinct from a command result.
+            # No exec ID/exit code is invented and no journal record is changed.
+            continue
+        if record["kind"] == "command":
+            commands.append(_command_terminal(record, operation_id))
+    return commands
+
+
 def require_physical_writers_drained(
     state_parent: Path, client: object
 ) -> dict[str, int]:
@@ -656,43 +1132,25 @@ def require_physical_writers_drained(
                                 "source helper receipt binding changed"
                             )
             else:
-                operations = value.get("operations")
-                if not isinstance(operations, dict):
-                    raise PhysicalDrainError("physical command journal is unknown")
-                for operation_id, record in operations.items():
-                    if (
-                        not isinstance(record, dict)
-                        or record.get("kind")
-                        not in {
-                            "request",
-                            "command",
-                            "adaptation_recovery",
-                            "adaptation_cleanup",
-                        }
-                        or record.get("state")
-                        not in {"completed", "failed", "timed_out"}
-                    ):
-                        raise PhysicalDrainError(
-                            "physical command outcome is unresolved"
-                        )
-                    if record["kind"] == "command":
-                        exec_id = _command_terminal(record, operation_id)
-                        execution = inspect(exec_id)
-                        if execution is None:
-                            missing_exec_workspaces.add(path.parent.name)
-                            missing_exec_ids.add(exec_id)
-                        else:
-                            owner = by_id.get(execution.get("ContainerID"))
-                            if (
-                                owner is None
-                                or owner[1]["omnia.workspace_id"] != path.parent.name
-                                or owner[1].get("omnia.resource_kind") != "development"
-                                or execution.get("Running") is not False
-                                or type(execution.get("ExitCode")) is not int
-                            ):
-                                raise PhysicalDrainError(
-                                    "command physical owner or outcome is unknown"
-                                )
+                for exec_id in _machine_command_exec_ids(
+                    value, path, state_parent, client
+                ):
+                    execution = inspect(exec_id)
+                    if execution is None:
+                        missing_exec_workspaces.add(path.parent.name)
+                        missing_exec_ids.add(exec_id)
+                    else:
+                        owner = by_id.get(execution.get("ContainerID"))
+                        if (
+                            owner is None
+                            or owner[1]["omnia.workspace_id"] != path.parent.name
+                            or owner[1].get("omnia.resource_kind") != "development"
+                            or execution.get("Running") is not False
+                            or type(execution.get("ExitCode")) is not int
+                        ):
+                            raise PhysicalDrainError(
+                                "command physical owner or outcome is unknown"
+                            )
             journals += 1
     # One complete repeated sample per workspace, not per historical command.
     for workspace_id in sorted(missing_exec_workspaces):
@@ -776,6 +1234,9 @@ def live_publication_root() -> Path:
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--record-machine-quiescence", metavar="WORKSPACE_UUID")
+    args = parser.parse_args()
     try:
         root = live_publication_root()
         count = require_publications_drained(root)
@@ -784,6 +1245,15 @@ if __name__ == "__main__":
 
         client = docker.DockerClient(base_url=get_settings().docker_host, timeout=10)
         try:
+            if args.record_machine_quiescence:
+                covered = machine_quiescence(
+                    root.parent, client, args.record_machine_quiescence, record=True
+                )
+                print(
+                    json.dumps(
+                        {"machine_quiescence_recorded": True, "commands": len(covered)}
+                    )
+                )
             physical = require_physical_writers_drained(root.parent, client)
         finally:
             client.close()

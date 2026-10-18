@@ -320,6 +320,11 @@ jobs:
           export QA_TYPESCRIPT_PATH="$parser_root/node_modules/typescript"
           node -e 'const ts = require(process.env.QA_TYPESCRIPT_PATH); console.log("React effect parser:", ts.version)'
           echo "QA_TYPESCRIPT_PATH=$QA_TYPESCRIPT_PATH" >> "$GITHUB_ENV"
+      - name: Verify root quiescence and physical drain contracts on fixture files
+        working-directory: apps/orchestrator
+        run: |
+          uv run ruff check ../../infra/release/generation-publication-drain.py ../../infra/release/test_machine_quiescence_contract.py --select E4,E7,E9,F,I
+          sudo env PYTHONPATH="$PWD/src" "$PWD/.venv/bin/python" -m unittest discover -s ../../infra/release -p 'test_*contract.py' -v
       - name: Run orchestrator tests
         working-directory: apps/orchestrator
         # A test that hangs longer than four minutes dumps every thread's stack into the
