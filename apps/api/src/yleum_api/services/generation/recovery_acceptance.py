@@ -54,6 +54,19 @@ class AcceptanceSeal(BaseModel):
         return value
 
 
+class AcceptanceSealV2(AcceptanceSeal):
+    version: Literal[2] = 2  # type: ignore[assignment]
+    profile: Literal["notes_acceptance_v1"] = "notes_acceptance_v1"
+    contract_digest: Sha256
+
+    @field_validator("version", mode="before")
+    @classmethod
+    def exact_version(cls, value: object) -> object:
+        if type(value) is not int or value != 2:
+            raise ValueError("unsupported acceptance seal version")
+        return value
+
+
 @dataclass(frozen=True)
 class AcceptanceVerdict:
     ready: bool
@@ -73,7 +86,11 @@ def check_requirement_acceptance(
     required = [r for r in requirements if r.required]
     for requirement in required:
         matching = [w for w in witnesses if w.requirement_id == requirement.id]
-        if requirement.check_kind != "named_behavior" or not matching:
+        supported_kind = requirement.check_kind == "named_behavior" or (
+            requirement.check_kind == "manual"
+            and any(w.receipt_id.startswith("notes_acceptance:") for w in matching)
+        )
+        if not matching or not supported_kind:
             missing.append(requirement.id)
         elif not any(
             requirement_witness_is_trusted(
@@ -137,12 +154,25 @@ async def require_current_acceptance(
         state.requirements != requirements or state.binding != binding
     ):
         raise RecoveryContractError("acceptance original scope or current source changed")
-    receipt = (run.agent_state or {}).get(behavior.RECEIPT_KEY)
+    from yleum_api.services.generation.notes_acceptance import reviewed_contract
+    from yleum_api.services.generation.notes_acceptance_receipts import saved_receipt
+
+    receipt: Any
+    notes = reviewed_contract(run, project.template)
+    if notes is not None:
+        try:
+            receipt = saved_receipt(run, notes)
+        except RecoveryContractError:
+            raise RequirementAcceptanceIncomplete(AcceptanceVerdict(
+                False, tuple(r.id for r in requirements if r.required), ())) from None
+    else:
+        receipt = (run.agent_state or {}).get(behavior.RECEIPT_KEY)
+    prefix = "notes_acceptance:" if notes is not None else "named_behavior:"
     witnesses = []
     for requirement in requirements:
         if (
             requirement.required
-            and requirement.check_kind == "named_behavior"
+            and (requirement.check_kind == "named_behavior" or notes is not None)
             and isinstance(receipt, dict)
         ):
             ref = receipt.get("receipt_digest")
@@ -152,7 +182,7 @@ async def require_current_acceptance(
                         session,
                         run_id=run.id,
                         requirement_id=requirement.id,
-                        receipt_id="named_behavior:" + ref,
+                        receipt_id=prefix + ref,
                         binding=binding,
                     )
                 )
@@ -173,7 +203,7 @@ def acceptance_seal(
     requirements = frozen_requirements(run)
     manifest = run.agent_state[STATE_KEY]
     assert isinstance(manifest, dict)
-    return {
+    result = {
         "version": 1,
         "run_id": str(run.id),
         "project_id": str(run.project_id),
@@ -187,6 +217,10 @@ def acceptance_seal(
         "build_ref": receipt["binding"]["build_ref"],
         "receipt_digest": receipt["receipt_digest"],
     }
+    if receipt.get("profile") == "notes_acceptance_v1":
+        result.update(version=2, profile="notes_acceptance_v1",
+                      contract_digest=behavior.digest(receipt["contract"]))
+    return result
 
 
 async def require_coordinator_acceptance(coordinator: Any, identity: Any) -> None:
@@ -212,7 +246,7 @@ def validate_acceptance_seal(
     run: GenerationRun,
     *,
     binding: RecoveryBinding,
-    seal: AcceptanceSeal,
+    seal: AcceptanceSeal | AcceptanceSealV2,
 ) -> dict[str, Any]:
     """Pure check of already-sealed publication data; never grants execution."""
     import json
@@ -221,19 +255,41 @@ def validate_acceptance_seal(
     state = recovery_state(run)
     if not isinstance(state, RecoveryStateV2) or state.requirements != requirements:
         raise RecoveryContractError("functional publication frozen scope changed")
+    if isinstance(seal, AcceptanceSealV2):
+        from yleum_api.services.generation.notes_acceptance import reviewed_contract
+        from yleum_api.services.generation.notes_acceptance_receipts import saved_receipt
+
+        # Template is sealed in the reviewed contract; no current execution or
+        # discovery inference occurs while checking an immutable publication.
+        record = run.agent_state.get("notes_acceptance_v1")
+        if not isinstance(record, dict) or not isinstance(record.get("receipt"), dict):
+            raise RecoveryContractError("publication notes receipt missing")
+        raw = record["receipt"]
+        if not isinstance(raw.get("contract"), dict):
+            raise RecoveryContractError("publication notes contract missing")
+        template = raw["contract"].get("template")
+        contract = reviewed_contract(run, template)
+        if contract is None:
+            raise RecoveryContractError("publication retains unsupported notes obligations")
+        receipt = saved_receipt(run, contract)
+        expected_notes = AcceptanceSealV2.model_validate_json(
+            json.dumps(acceptance_seal(run, binding=binding, receipt=receipt)), strict=True)
+        if seal != expected_notes:
+            raise RecoveryContractError("functional publication scope changed")
+        return receipt
     if not any(r.required for r in requirements) or any(
         r.required and r.check_kind != "named_behavior" for r in requirements
     ):
         raise RecoveryContractError("publication retains unsupported obligations")
-    receipt = (run.agent_state or {}).get(behavior.RECEIPT_KEY)
-    if not isinstance(receipt, dict):
+    named_receipt = (run.agent_state or {}).get(behavior.RECEIPT_KEY)
+    if not isinstance(named_receipt, dict):
         raise RecoveryContractError("functional publication receipt missing")
     expected = AcceptanceSeal.model_validate_json(
-        json.dumps(acceptance_seal(run, binding=binding, receipt=receipt)), strict=True
+        json.dumps(acceptance_seal(run, binding=binding, receipt=named_receipt)), strict=True
     )
     if seal != expected:
         raise RecoveryContractError("functional publication scope changed")
-    return receipt
+    return named_receipt
 
 
 async def validate_historical_acceptance(
@@ -241,7 +297,7 @@ async def validate_historical_acceptance(
     *,
     run: GenerationRun,
     binding: RecoveryBinding,
-    seal: AcceptanceSeal,
+    seal: AcceptanceSeal | AcceptanceSealV2,
 ) -> None:
     """Validate the gated publication's sealed evidence after physical lease release.
 
@@ -256,6 +312,11 @@ async def validate_historical_acceptance(
     from yleum_api.services.project_cell_proofs import proof_identity_from_model
 
     receipt = validate_acceptance_seal(run, binding=binding, seal=seal)
+    if isinstance(seal, AcceptanceSealV2):
+        from yleum_api.services.generation.notes_acceptance_receipts import validate_owned_notes
+
+        await validate_owned_notes(session, run=run, binding=binding, historical=True)
+        return
     candidate = await session.get(
         ProjectCellCandidate,
         seal.candidate_id,

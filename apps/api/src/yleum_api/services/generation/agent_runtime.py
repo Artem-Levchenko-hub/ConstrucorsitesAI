@@ -29,6 +29,7 @@ from yleum_api.services.generation.runtime import (
 )
 from yleum_api.services.max_behavior_proof import ControllerBehaviorDriver
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+from yleum_api.services.notes_acceptance_browser import NotesDriver
 
 _log = logging.getLogger("yleum_api.routers.messages")
 
@@ -158,7 +159,7 @@ async def prepare_agent_runtime(
     _design_contract: Any,
     _agent_res: agent_builder.AgentResult | None,
     capacity_dispatch_token: UUID | None,
-    behavior_driver: ControllerBehaviorDriver | None = None,
+    behavior_driver: ControllerBehaviorDriver | NotesDriver | None = None,
 ) -> tuple[AgentRuntimeBindings, agent_builder.AgentResult | None]:
     _agent_emit = progress.emit_agent_event
     _vision_context = _design_contract.vision_context if _design_contract else prompt_text
