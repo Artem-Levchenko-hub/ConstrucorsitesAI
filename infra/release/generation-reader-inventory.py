@@ -153,7 +153,7 @@ def retired_dormant(row: dict) -> bool:
 
 def is_reader_container(row: dict) -> bool:
     return (
-        process_role(row["command"]) in CONTAINERS
+        process_role(row["command"]) is not None
         or row["configured_image"].split(":", 1)[0] == "omnia-api"
         or any(
             row["name"].startswith(prefix)
@@ -204,23 +204,30 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
     return result.stdout.strip()
 
 
-def _docker_container_ids() -> list[str]:
-    ids = command(["docker", "ps", "-aq", "--no-trunc"]).splitlines()
+def _docker_container_roster() -> dict[str, str]:
+    """Read every current container identity and name, including stopped ones."""
+    template = '{"id":{{json .ID}},"name":{{json .Names}}}'
+    raw = command(["docker", "ps", "-a", "--no-trunc", "--format", template])
+    rows = [json.loads(line) for line in raw.splitlines()]
     need(
-        len(ids) <= 10000
-        and len(set(ids)) == len(ids)
-        and all(re.fullmatch(r"[0-9a-f]{64}", v) for v in ids)
+        len(rows) <= 10000
+        and all(
+            type(row) is dict
+            and set(row) == {"id", "name"}
+            and type(row["id"]) is str
+            and re.fullmatch(r"[0-9a-f]{64}", row["id"])
+            and type(row["name"]) is str
+            and bool(re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]*", row["name"]))
+            for row in rows
+        )
     )
-    return ids
+    result = {row["id"]: row["name"] for row in rows}
+    need(len(result) == len(rows) and len(set(result.values())) == len(rows))
+    return result
 
 
-def docker_inventory() -> list[dict]:
-    """Require a complete stable roster; retry only a changed read-only sample.
-
-    Normal project helpers may be created while collecting. Every attempt starts
-    again from all containers; no row from an invalidated sample is reused. The
-    enclosing observation timestamp/TTL and every reader check remain unchanged.
-    """
+def _inspect_docker_containers(ids: list[str]) -> dict[str, dict]:
+    """Inspect every requested ID; a disappearing or unobserved ID is unknown."""
     template = (
         '{"id":{{json .Id}},"image":{{json .Image}},"name":{{json .Name}},'
         '"configured_image":{{json .Config.Image}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
@@ -229,19 +236,71 @@ def docker_inventory() -> list[dict]:
         '"dead":{{json .State.Dead}},"restart":{{json .HostConfig.RestartPolicy.Name}},'
         '"entrypoint":{{json .Config.Entrypoint}},"cmd":{{json .Config.Cmd}}}'
     )
+    rows = []
+    raw = command(["docker", "inspect", "--format", template, *ids]) if ids else ""
+    for line in raw.splitlines():
+        row = json.loads(line)
+        row["name"] = row["name"].removeprefix("/")
+        row["command"] = (row.pop("entrypoint") or []) + (row.pop("cmd") or [])
+        rows.append(row)
+    need(len(rows) == len(ids) and {row["id"] for row in rows} == set(ids))
+    return {row["id"]: row for row in rows}
+
+
+def _reader_cohort(roster: dict[str, str], observed: dict[str, dict]) -> set[str]:
+    """Names are live roster data; only Config/image evidence is reusable by ID."""
+    need(set(roster) <= set(observed))
+    return {
+        container_id
+        for container_id, name in roster.items()
+        if is_reader_container({**observed[container_id], "name": name})
+    }
+
+
+def docker_inventory() -> list[dict]:
+    """Prove a complete census and stable readers while project helpers churn.
+
+    Every new ID is fully inspected. Only positively classified non-readers may
+    appear or disappear; the reader cohort, including dormant restart targets,
+    must retain fresh metadata. The enclosing timestamp and TTL are unchanged.
+    """
+    current = _docker_container_roster()
+    observed = _inspect_docker_containers(list(current))
+    need(all(observed[key]["name"] == name for key, name in current.items()))
+    readers = _reader_cohort(current, observed)
     for _attempt in range(3):
-        ids = _docker_container_ids()
-        rows = []
-        raw = command(["docker", "inspect", "--format", template, *ids]) if ids else ""
-        for line in raw.splitlines():
-            row = json.loads(line)
-            row["name"] = row["name"].removeprefix("/")
-            row["command"] = (row.pop("entrypoint") or []) + (row.pop("cmd") or [])
-            rows.append(row)
-        need(len(rows) == len(ids) and {row["id"] for row in rows} == set(ids))
-        if set(_docker_container_ids()) == set(ids):
-            return rows
-    raise ValueError("Docker container roster changed throughout observation")
+        # Inspect IDs from the preceding complete census even if they have
+        # already disappeared: absence cannot classify an unknown container.
+        unseen = sorted(set(current) - set(observed))
+        added = _inspect_docker_containers(unseen)
+        need(all(not is_reader_container(row) for row in added.values()))
+        need(all(row["name"] == current[key] for key, row in added.items()))
+        observed.update(added)
+        need(_reader_cohort(current, observed) == readers)
+        fresh = _inspect_docker_containers(sorted(readers))
+        need(all(fresh[key]["name"] == current[key] for key in readers))
+        need(all(is_reader_container(row) for row in fresh.values()))
+        observed.update(fresh)
+        final = _docker_container_roster()
+        need(readers <= set(final))
+        if set(final) - set(observed):
+            current = final
+            continue
+        need(_reader_cohort(final, observed) == readers)
+        need(all(observed[key]["name"] == final[key] for key in readers))
+        # Callers need mutable State/PID/RestartPolicy only for reader candidates.
+        # Do not expose cached non-reader state as current physical evidence.
+        result = []
+        for key, name in final.items():
+            row = observed[key]
+            if key not in readers:
+                row = {field: row[field] for field in (
+                    "id", "image", "configured_image", "command"
+                )}
+                row["name"] = name
+            result.append(row)
+        return result
+    raise ValueError("Docker census contains unclassified containers throughout observation")
 
 
 def process_inventory(proc_root: Path = Path("/proc")) -> dict[int, dict]:
