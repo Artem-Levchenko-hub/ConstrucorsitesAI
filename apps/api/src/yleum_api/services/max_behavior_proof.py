@@ -13,7 +13,7 @@ import math
 import re
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, SupportsIndex, cast
+from typing import Any, Protocol, SupportsIndex, cast
 from uuid import UUID
 
 from yleum_api.services.behavior_platform_assets import PLATFORM_ASSET_LOCATIONS
@@ -839,8 +839,16 @@ async def freeze_for_finalization(coordinator: Any, prompt: str) -> NamedBehavio
     return await freeze_for_turn(coordinator, prompt, template=template)
 
 
+class CandidateContract(Protocol):
+    @property
+    def request_sha256(self) -> str: ...
+
+    @property
+    def contract_digest(self) -> str: ...
+
+
 def candidate_binding(
-    coordinator: Any, candidate: Any, identity: Any, build_ref: str, contract: NamedBehaviorContract
+    coordinator: Any, candidate: Any, identity: Any, build_ref: str, contract: CandidateContract
 ) -> CandidateBehaviorBinding:
     need(
         candidate.workspace_id == identity.workspace_id

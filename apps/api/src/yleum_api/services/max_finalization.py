@@ -36,6 +36,7 @@ from yleum_api.services import repo
 from yleum_api.services.agent_progress import bounded_redacted_diagnostic
 from yleum_api.services.functional_gate import Check, FunctionalVerdict, summarize
 from yleum_api.services.generation.continuation import SourceNoveltyTracker
+from yleum_api.services.generation.notes_acceptance_receipts import require_notes_observation
 from yleum_api.services.generation.recovery_acceptance import require_coordinator_acceptance
 from yleum_api.services.generation.recovery_actions import recovery_binding
 from yleum_api.services.generation.recovery_contract import RecoveryContractError
@@ -69,6 +70,7 @@ from yleum_api.services.max_behavior_proof import (
 )
 from yleum_api.services.max_generation_contract import max_source_completion_gap
 from yleum_api.services.max_runtime_probe import MaxRuntimeProbe
+from yleum_api.services.notes_acceptance_browser import NotesDriver
 from yleum_api.services.orchestrator_client import (
     ProjectCellAgentOperationStatus,
     RestorationAdaptationProof,
@@ -311,7 +313,7 @@ class MaxFinalizationCoordinator:
         project_slug: str,
         executor: ProjectCellExecutorHandle,
         emit: Callable[[str, Mapping[str, object]], Awaitable[None]] | None = None,
-        behavior_driver: ControllerBehaviorDriver | None = None,
+        behavior_driver: ControllerBehaviorDriver | NotesDriver | None = None,
         continuation: ExecutionDriver | None = None,
     ) -> None:
         if executor.current_identity is None or executor.run_role is None:
@@ -2487,6 +2489,7 @@ class MaxFinalizationCoordinator:
         # Generic/API-only requests have no contract and keep their existing path.
         require_promotion_permit(permit, current_identity=await self._identity())
         await require_candidate_behavior(self, candidate, identity, build_ref)
+        await require_notes_observation(self, candidate, identity, build_ref)
         await require_coordinator_acceptance(self, identity)
         require_promotion_permit(permit, current_identity=await self._identity())
 

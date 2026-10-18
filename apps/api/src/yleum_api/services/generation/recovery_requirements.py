@@ -196,9 +196,19 @@ async def load_requirement_witness(
     assert run is not None and project is not None
     manifest = frozen_requirements(run)
     requirement = next((r for r in manifest if r.id == requirement_id), None)
-    _need(requirement is not None and requirement.check_kind == "named_behavior",
-          "requirement has no supported functional receipt")
+    _need(requirement is not None, "requirement missing")
     assert requirement is not None
+    if requirement.check_kind != "named_behavior":
+        from yleum_api.services.generation.notes_acceptance import reviewed_contract
+        from yleum_api.services.generation.notes_acceptance_receipts import validate_owned_notes
+
+        contract = reviewed_contract(run, project.template)
+        _need(contract is not None and requirement.id in contract.requirements,
+              "requirement has no supported functional receipt")
+        notes_receipt = await validate_owned_notes(session, run=run, binding=binding)
+        _need(receipt_id == "notes_acceptance:" + notes_receipt["receipt_digest"],
+              "notes receipt reference changed")
+        return _trusted_witness(run, requirement, binding, manifest, receipt_id)
     try:
         workspace_id = UUID(binding.workspace_id)
         _need(str(workspace_id) == binding.workspace_id, "invalid workspace identity")
@@ -261,6 +271,13 @@ async def load_requirement_witness(
         behavior.validate_saved_receipt(receipt, bound, named)
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         raise RecoveryContractError("functional receipt unavailable or invalid") from exc
+    return _trusted_witness(run, requirement, binding, manifest, receipt_id)
+
+
+def _trusted_witness(
+    run: GenerationRun, requirement: RecoveryRequirement, binding: RecoveryBinding,
+    manifest: tuple[RecoveryRequirement, ...], receipt_id: str,
+) -> RequirementWitness:
     witness = RequirementWitness(requirement_id=requirement.id, receipt_id=receipt_id,
         source_sha256=binding.source_sha256, schema_sha256=binding.schema_sha256,
         environment_sha256=binding.environment_sha256, passed=True)

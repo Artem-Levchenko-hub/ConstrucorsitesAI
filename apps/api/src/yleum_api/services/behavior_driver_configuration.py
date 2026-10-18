@@ -28,6 +28,7 @@ from yleum_api.services.max_behavior_proof import (
     ControllerBehaviorDriver,
     ObservedAsset,
 )
+from yleum_api.services.notes_acceptance_browser import NotesDriver
 
 
 def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -153,7 +154,9 @@ def vars_for_view(value: DensityView) -> tuple[str, ...]:
     return tuple(getattr(value, f.name) for f in fields(value))
 
 
-def configured_behavior_driver(handle: Any, settings: Any) -> ControllerBehaviorDriver | None:
+def configured_behavior_driver(
+    handle: Any, settings: Any,
+) -> ControllerBehaviorDriver | NotesDriver | None:
     if not settings.max_behavior_browser_executable:
         return None
     try:
@@ -166,6 +169,19 @@ def configured_behavior_driver(handle: Any, settings: Any) -> ControllerBehavior
         raw = _json(settings.max_behavior_adapter_registry)
         if type(raw) is not dict or not raw or set(raw) - {"max-miniapp-nextjs"}:
             raise ValueError
+        if raw == {"max-miniapp-nextjs": {"preset": "notes_acceptance_v1"}}:
+            if settings.max_behavior_vendor_asset_registry:
+                raise ValueError
+
+            async def notes_compiled(request: Any) -> CompiledAssetWitness:
+                # A new notes profile never widens the existing GET-only
+                # adapter. Operator installation and compilation stay trusted.
+                if getattr(settings, "env", "dev") == "prod":
+                    validate_installation(path, pin)
+                _pin(path, pin)
+                return await resolve_retained_compilation(handle, request)
+
+            return NotesDriver(notes_compiled, path)
         adapters = {key: _adapter(value) for key, value in raw.items()}
         vendors = (
             _json(settings.max_behavior_vendor_asset_registry)
