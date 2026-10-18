@@ -629,6 +629,31 @@ async def release_one_stale_generation_lease(
             )
             .limit(1)
         )
+        latest_ensure_fence = (
+            await session.scalar(
+                select(ProjectCellOperation.fencing_epoch)
+                .where(
+                    ProjectCellOperation.workspace_id == workspace.id,
+                    ProjectCellOperation.kind == "ensure",
+                    ProjectCellOperation.status.not_in(("failed", "cancelled")),
+                )
+                .order_by(ProjectCellOperation.fencing_epoch.desc())
+                .limit(1)
+            )
+            or 0
+        )
+        completed_release = await session.scalar(
+            select(ProjectCellOperation)
+            .where(
+                ProjectCellOperation.workspace_id == workspace.id,
+                ProjectCellOperation.generation_run_id == stale_run_id,
+                ProjectCellOperation.kind == "release",
+                ProjectCellOperation.status == "completed",
+                ProjectCellOperation.fencing_epoch > latest_ensure_fence,
+            )
+            .order_by(ProjectCellOperation.fencing_epoch.desc())
+            .limit(1)
+        )
         needs_repair = (
             recovery_tail is not None
             and ensure_anchor is not None
@@ -646,7 +671,9 @@ async def release_one_stale_generation_lease(
                 )
             )
         )
-        if unknown is not None or needs_repair:
+        # A confirmed release survives resource-only observations. Unknown effects
+        # still reconcile first, and the final CAS rejects later lease mutations.
+        if unknown is not None or (completed_release is None and needs_repair):
             reconciliation = None
             if ensure_anchor is None or (unknown is not None and unknown.kind == "status"):
                 assert unknown is not None
@@ -758,7 +785,7 @@ async def release_one_stale_generation_lease(
         observed_active_run = (
             tail_lease.get("active_generation_run_id") if type(tail_lease) is dict else None
         )
-        if unresolved_release is None and (
+        if completed_release is None and unresolved_release is None and (
             failed_release is not None
             or (
                 recovery_tail is not None
@@ -811,19 +838,6 @@ async def release_one_stale_generation_lease(
                     stale_run_id=stale_run_id,
                     outcome=observed,
                 )
-        latest_ensure_fence = (
-            await session.scalar(
-                select(ProjectCellOperation.fencing_epoch)
-                .where(
-                    ProjectCellOperation.workspace_id == workspace.id,
-                    ProjectCellOperation.kind == "ensure",
-                    ProjectCellOperation.status.not_in(("failed", "cancelled")),
-                )
-                .order_by(ProjectCellOperation.fencing_epoch.desc())
-                .limit(1)
-            )
-            or 0
-        )
         operation = await session.scalar(
             select(ProjectCellOperation)
             .where(
@@ -837,6 +851,8 @@ async def release_one_stale_generation_lease(
             .limit(1)
         )
         replay_indeterminate = operation is not None
+        if operation is None:
+            operation = completed_release
         if operation is None:
             base_key = f"capacity:release:{workspace.id}:{stale_run_id}"
             prior = list(

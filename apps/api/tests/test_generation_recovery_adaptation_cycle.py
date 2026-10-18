@@ -113,7 +113,7 @@ class Controller:
             operation = await session.get(ProjectCellOperation, operation_id)
             if operation.status == "completed":
                 return SimpleNamespace(
-                    status="completed", operation_id=operation_id,
+                    status="completed", operation_id=operation_id, kind=operation.kind,
                     response=client.ProjectCellResourceResponse.from_json(operation.result_payload),
                 )
         if self.original_control_fence is None:
@@ -135,7 +135,9 @@ class Controller:
         async with factory() as session:
             await complete_cell_operation(session, operation_id, response.to_wire_json())
             await session.commit()
-        return SimpleNamespace(status="completed", response=response, operation_id=operation_id)
+        return SimpleNamespace(
+            status="completed", response=response, operation_id=operation_id, kind=claimed.kind,
+        )
 
     async def prepare(self, workspace_id, **request):
         self.calls.append(("prepare", workspace_id))

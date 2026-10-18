@@ -16,8 +16,6 @@ from yleum_api.models.user import User
 from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
-    ProjectCellCapacityRejection,
-    ProjectCellCapacityWait,
     ProjectCellResourceResponse,
 )
 from yleum_api.services.project_cell_capacity import (
@@ -340,10 +338,20 @@ async def test_pending_capacity_pause_is_adopted_by_next_requester(
         assert pause_count == 1
 
 
-@pytest.mark.parametrize("later_kind", ["status", "reconcile"])
+@pytest.mark.parametrize(
+    ("later_kind", "later_state", "prior_ensure"),
+    [
+        ("status", "resources_ready", False),
+        ("reconcile", "resources_ready", False),
+        ("reconcile", "resources_ready", True),
+        ("reconcile", "partial", True),
+    ],
+)
 async def test_completed_release_remains_authoritative_after_completed_observations(
     test_engine: AsyncEngine,
     later_kind: str,
+    later_state: str,
+    prior_ensure: bool,
 ) -> None:
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
     async with factory() as session:
@@ -368,6 +376,18 @@ async def test_completed_release_remains_authoritative_after_completed_observati
             owner,
             generation_run_id=stale_run.id,
         )
+        if prior_ensure:
+            ensure, _ = await reserve_cell_operation(
+                session,
+                workspace_id=workspace.id,
+                generation_run_id=stale_run.id,
+                kind="ensure",
+                idempotency_key=f"capacity:original-ensure:{workspace.id}",
+                request={"profile_version": "docker-owner-cell-resources-v1"},
+            )
+            await session.commit()
+            await _complete_operation(factory, ensure.id)
+            await session.refresh(workspace)
         release, _ = await reserve_cell_operation(
             session,
             workspace_id=workspace.id,
@@ -391,7 +411,7 @@ async def test_completed_release_remains_authoritative_after_completed_observati
             ),
         )
         await session.commit()
-    completed_observation = await _complete_operation(factory, observation.id)
+    completed_observation = await _complete_operation(factory, observation.id, state=later_state)
     assert completed_observation.fencing_epoch > completed_release.fencing_epoch
 
     async def forbidden(_request: object) -> ProjectCellResourceResponse:
@@ -597,7 +617,7 @@ async def test_release_cooldown_is_shared_across_requesters(
         assert recovered is not None and recovered.generation_run_id is None
 
 
-async def test_zero_effect_repair_capacity_wait_cools_old_victim_and_reclaims_next(
+async def test_terminal_partial_observation_cools_old_victim_without_repair_and_reclaims_next(
     test_engine: AsyncEngine,
 ) -> None:
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
@@ -677,16 +697,7 @@ async def test_zero_effect_repair_capacity_wait_cools_old_victim_and_reclaims_ne
 
     async def ensure(request: object) -> ProjectCellResourceResponse:
         ensured.append(request.workspace_id)  # type: ignore[attr-defined]
-        raise ProjectCellCapacityWait(
-            ProjectCellCapacityRejection(
-                operation_id=request.operation_id,  # type: ignore[attr-defined]
-                fencing_epoch=request.fencing_epoch,  # type: ignore[attr-defined]
-                request_digest=request.request_digest,  # type: ignore[attr-defined]
-                effect_applied=False,
-                reason="insufficient_memory",
-                retry_after_seconds=2,
-            )
-        )
+        pytest.fail("a terminal run must never acquire a new generation lease")
 
     async def control(request: object) -> ProjectCellResourceResponse:
         released.append(request.workspace_id)  # type: ignore[attr-defined]
@@ -707,13 +718,13 @@ async def test_zero_effect_repair_capacity_wait_cools_old_victim_and_reclaims_ne
             select(ProjectCellOperation)
             .where(
                 ProjectCellOperation.workspace_id == older.id,
-                ProjectCellOperation.idempotency_key.startswith("cell-recovery:repair:"),
+                ProjectCellOperation.kind == "reconcile",
             )
             .order_by(ProjectCellOperation.created_at.desc())
             .limit(1)
         )
         assert deferred is not None
-        assert deferred.status == "cancelled"
+        assert deferred.status == "completed"
         assert deferred.next_attempt_at is not None
         assert deferred.next_attempt_at > datetime.now(UTC) + timedelta(seconds=20)
 
@@ -723,10 +734,19 @@ async def test_zero_effect_repair_capacity_wait_cools_old_victim_and_reclaims_ne
         client=client,
     )
     assert observed == [older.id]
-    assert ensured == [older.id]
+    assert ensured == []
     assert released == [newer.id]
     async with factory() as session:
         retained = await session.get(ProjectCellWorkspace, older.id)
         reclaimed = await session.get(ProjectCellWorkspace, newer.id)
         assert retained is not None and retained.generation_run_id == older_run.id
         assert reclaimed is not None and reclaimed.generation_run_id is None
+        original = await session.get(ProjectCellOperation, unknown_ensure.id)
+        assert original is not None and original.status == "indeterminate"
+        ensure_count = await session.scalar(
+            select(func.count(ProjectCellOperation.id)).where(
+                ProjectCellOperation.workspace_id == older.id,
+                ProjectCellOperation.kind == "ensure",
+            )
+        )
+        assert ensure_count == 1
