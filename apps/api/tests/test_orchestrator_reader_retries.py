@@ -63,6 +63,30 @@ def envelope():
     return {"generation_run_id": str(uuid4()), "fencing_epoch": 7}
 
 
+@pytest.mark.parametrize("classification", ["reader", "generic", "other_busy", "bad_json"])
+async def test_lifecycle_denial_is_classified_without_transport_replay(transport, classification):
+    async def respond(_request):
+        if classification == "reader":
+            return denied()
+        if classification == "other_busy":
+            return denied("unknown controller state")
+        if classification == "bad_json":
+            return httpx.Response(503, text="private provider body")
+        return httpx.Response(502, json={"error": {"code": "workspace_busy",
+                                                   "message": "upstream unavailable"}})
+
+    transport.install(respond)
+    with pytest.raises(client.OrchestratorUnavailable) as caught:
+        await client._request(
+            "POST", f"/internal/workspaces/{uuid4()}/control", json=envelope(),
+        )
+    expected = (client.OrchestratorReaderInventoryUnavailable if classification == "reader"
+                else client.OrchestratorUnavailable)
+    assert type(caught.value) is expected
+    assert len(transport.requests) == 1
+    assert transport.pauses == []
+
+
 @pytest.mark.parametrize("operation", ["identity", "write-files"])
 async def test_transient_denial_preserves_fenced_request_and_host(transport, operation):
     binding = envelope()

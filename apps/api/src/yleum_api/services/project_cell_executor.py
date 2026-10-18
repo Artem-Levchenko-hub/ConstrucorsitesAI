@@ -11,6 +11,7 @@ from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import PurePosixPath
+from time import monotonic
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -60,7 +61,11 @@ from yleum_api.services.project_cell_capacity import (
 )
 from yleum_api.services.project_cell_control import inspect_project_cell_control
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
-from yleum_api.services.project_cell_lifecycle import execute_cell_operation
+from yleum_api.services.project_cell_lifecycle import (
+    execute_cell_operation,
+    reader_inventory_denied,
+    replay_indeterminate_cell_operation,
+)
 from yleum_api.services.project_cell_proofs import ProofDimension, ProofIdentity
 from yleum_api.services.project_cells import (
     ProjectCellBusy,
@@ -78,6 +83,8 @@ _PROJECT_CELL_PROFILE_V1 = "docker-owner-cell-resources-v1"
 _PROJECT_CELL_PROFILE_V2 = "docker-owner-cell-resources-v2"
 _PROJECT_CELL_BUILD_TIMEOUT_SECONDS = 600
 _PROJECT_CELL_SHELL_TIMEOUT_SECONDS = 300
+_PROJECT_CELL_RELEASE_RETRY_SECONDS = 30.0
+_PROJECT_CELL_RELEASE_RETRY_ATTEMPTS = 31
 _PROJECT_CELL_DEPENDENCY_METADATA_STRING_FIELDS = ("packageManager",)
 _PROJECT_CELL_DEPENDENCY_METADATA_OBJECT_FIELDS = (
     "dependencies",
@@ -590,9 +597,20 @@ async def _release_generation_lease(
         )
         retain_release(run, operation.id, workspace.fencing_epoch, "release_pending")
         await session.commit()
-    outcome = await execute_cell_operation(
-        session_factory, operation.id, HttpProjectCellOrchestratorClient(),
-    )
+    client = HttpProjectCellOrchestratorClient()
+    deadline = monotonic() + _PROJECT_CELL_RELEASE_RETRY_SECONDS
+    outcome = await execute_cell_operation(session_factory, operation.id, client)
+    for _attempt in range(_PROJECT_CELL_RELEASE_RETRY_ATTEMPTS - 1):
+        if not reader_inventory_denied(outcome) or monotonic() + 1 >= deadline:
+            break
+        await asyncio.sleep(1)
+        if monotonic() >= deadline:
+            break
+        # A reader denial can occur after checkpoint/halt. Only the existing
+        # durable operation's identity, digest and fence authorize its replay.
+        outcome = await replay_indeterminate_cell_operation(
+            session_factory, operation.id, client,
+        )
     response = outcome.response
     if (outcome.status != "completed" or response is None
         or response.workspace_id != workspace_id or response.fencing_epoch is None
@@ -603,12 +621,15 @@ async def _release_generation_lease(
         workspace = await session.get(ProjectCellWorkspace, workspace_id, with_for_update=True)
         if workspace is None:
             raise ProjectCellExecutorUnavailable("Project Cell workspace disappeared")
-        if (workspace.generation_run_id == generation_run_id
-            and workspace.fencing_epoch == response.fencing_epoch):
-            workspace.generation_run_id = None
-            workspace.updated_at = datetime.now(UTC)
-            retain_release(run, operation.id, response.fencing_epoch, "released")
-            await session.commit()
+        if (workspace.generation_run_id != generation_run_id
+            or workspace.fencing_epoch != response.fencing_epoch):
+            raise ProjectCellExecutorUnavailable(
+                "Project Cell generation lease changed during release confirmation"
+            )
+        workspace.generation_run_id = None
+        workspace.updated_at = datetime.now(UTC)
+        retain_release(run, operation.id, response.fencing_epoch, "released")
+        await session.commit()
 
 
 async def maybe_create_project_cell_executor(

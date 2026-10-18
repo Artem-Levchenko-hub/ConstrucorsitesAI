@@ -145,6 +145,9 @@ _PREVIEW_SIGNATURE_PATTERN = re.compile(r"[A-Za-z0-9_-]{43}")
 _DNS_LABEL_PATTERN = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
 _DNS_TLD_PATTERN = re.compile(r"[a-z]{2,63}")
 _REQUEST_TIMEOUT_SECONDS = 30.0
+# The public start can await the controller's 300-second owner-start budget.
+# Provisioning is an accepted asynchronous handoff; GET observes its completion.
+_RUNTIME_START_TIMEOUT_SECONDS = 330.0
 _CLEANUP_TIMEOUT_SECONDS = 10.0
 _CANCEL_WAIT_SECONDS = 120.0
 # AV23.1: a 409/503 on DELETE means "something of ours is still finishing";
@@ -396,12 +399,7 @@ class ProductionCanary:
             build_snapshot_id = self._assert_new_snapshot(project_id, seed_snapshot_id)
 
             self._stage = "runtime_start"
-            runtime = self._request_json(
-                "POST",
-                f"/api/projects/{project_id}/runtime/start",
-            )
-            if runtime.get("state") != "running":
-                raise self._fail("runtime did not start", code="runtime_failed")
+            self._start_runtime(project_id)
             self._event("runtime_start", "ok", project_id=project_id)
 
             self._stage = "preview"
@@ -505,13 +503,14 @@ class ProductionCanary:
         path: str,
         *,
         json: object | None = None,
+        timeout_seconds: float = _REQUEST_TIMEOUT_SECONDS,
     ) -> dict[str, object]:
         try:
             response = self._client.request(
                 method,
                 path,
                 json=json,
-                timeout=self._request_timeout(),
+                timeout=self._request_timeout(timeout_seconds),
             )
         except httpx.HTTPError as exc:
             raise self._fail("public API request failed", code=self._request_code()) from exc
@@ -722,6 +721,32 @@ class ProductionCanary:
                 raise self._fail("generation deadline exceeded", code="timeout")
             self._sleep(min(self.config.poll_seconds, remaining))
 
+    def _start_runtime(self, project_id: str) -> None:
+        """Start once, then observe the durable wake without replaying effects."""
+        deadline = min(self._deadline, self._clock() + _RUNTIME_START_TIMEOUT_SECONDS)
+        runtime = self._request_json(
+            "POST", f"/api/projects/{project_id}/runtime/start",
+            timeout_seconds=_RUNTIME_START_TIMEOUT_SECONDS,
+        )
+        # A second bound also prevents a stalled injected clock from spinning.
+        for _attempt in range(331):
+            if runtime.get("state") == "running":
+                return
+            if runtime.get("state") != "provisioning":
+                raise self._fail("runtime did not start", code="runtime_failed")
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                break
+            self._sleep(min(self.config.poll_seconds, remaining))
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                break
+            runtime = self._request_json(
+                "GET", f"/api/projects/{project_id}/runtime",
+                timeout_seconds=min(_REQUEST_TIMEOUT_SECONDS, remaining),
+            )
+        raise self._fail("runtime start deadline exceeded", code="timeout")
+
     def _observe_releases(self) -> dict[str, str]:
         """Read the running revision of every checked component."""
 
@@ -887,11 +912,11 @@ class ProductionCanary:
     def _remaining_seconds(self) -> float:
         return self._deadline - self._clock()
 
-    def _request_timeout(self) -> float:
+    def _request_timeout(self, limit_seconds: float = _REQUEST_TIMEOUT_SECONDS) -> float:
         remaining = self._remaining_seconds()
         if remaining <= 0:
             raise self._fail("canary deadline exceeded", code="timeout")
-        return min(_REQUEST_TIMEOUT_SECONDS, remaining)
+        return min(limit_seconds, remaining)
 
     def _event(
         self,

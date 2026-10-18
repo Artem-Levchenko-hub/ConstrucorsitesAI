@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from contextlib import suppress
 from functools import partial
 from typing import Any
@@ -235,7 +236,14 @@ async def _process_prompt(
             {"message_id": str(assistant_message_id), "error": failure_for_error(e).message},
         )
     finally:
-        await cleanup_generation_runtime(runtime, project_id, assistant_message_id)
+        primary_error = sys.exception()
+        try:
+            await cleanup_generation_runtime(runtime, project_id, assistant_message_id)
+        except Exception:
+            # Preserve a pending durable handoff or primary failure. A normal
+            # successful turn, however, cannot complete with an unproven release.
+            if primary_error is None:
+                raise
 
 
 async def cleanup_generation_runtime(
@@ -283,6 +291,7 @@ async def cleanup_generation_runtime(
                         "Project Cell generation lease release failed",
                         exc_info=release_exc,
                     )
+                    raise
         finally:
             # A watchdog/release failure or cancellation still clears the
             # finished stream; Redis failures remain best-effort.

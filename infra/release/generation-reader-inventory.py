@@ -311,6 +311,23 @@ def _reader_cohort(
 
 
 def docker_inventory() -> list[dict]:
+    """Restart a torn Docker observation; never reuse an unknown candidate.
+
+    An opaque-image helper can disappear before inspect classifies it. Restart
+    the entire census rather than dropping that ID from the previous evidence.
+    Only a complete fresh observation can pass. The enclosing scan retains its
+    original timestamp and expiry, including all retries and kernel checks.
+    """
+    for attempt in range(3):
+        try:
+            return _observe_docker_readers()
+        except ValueError:
+            if attempt == 2:
+                raise
+    raise AssertionError("bounded Docker observation did not return")
+
+
+def _observe_docker_readers() -> list[dict]:
     """Prove a complete census and stable readers while project helpers churn.
 
     Atomic list metadata positively classifies ordinary helpers before they can

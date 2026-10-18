@@ -91,7 +91,7 @@ class DockerInventoryTests(unittest.TestCase):
             output.append(json.dumps(row))
         return "\n".join(output)
 
-    def collect(self, outputs):
+    def collect(self, outputs, *, restart=False):
         self.calls = []
         outputs = iter(outputs)
 
@@ -115,7 +115,11 @@ class DockerInventoryTests(unittest.TestCase):
             return value
 
         with patch.object(self.observer, "command", side_effect=read_only):
-            result = self.observer.docker_inventory()
+            # Existing fixtures falsify one complete observation. The public
+            # retry boundary has separate fixtures with multiple full censuses.
+            observe = (self.observer.docker_inventory if restart
+                       else self.observer._observe_docker_readers)
+            result = observe()
         self.assertEqual(list(outputs), [], "An accepted census must consume its full fixture")
         return result
 
@@ -138,6 +142,54 @@ class DockerInventoryTests(unittest.TestCase):
                          {"api", "worker", "generation-worker"})
         self.assertEqual(self.inspected_ids(),
                          [[self.a, self.b, self.c], [self.a, self.b, self.c]])
+
+    def test_torn_opaque_inspect_restarts_from_complete_fresh_census(self):
+        reader, helper = self.reader(self.a), self.opaque_dev(self.b)
+        fresh = {**reader, "pid": 200}
+        result = self.collect([
+            self.census(reader, helper), ValueError("unknown candidate disappeared"),
+            self.census(fresh), self.inspection(fresh), self.inspection(fresh),
+            self.census(fresh),
+        ], restart=True)
+        self.assertEqual(result, [fresh])
+        self.assertEqual(self.inspected_ids(), [[self.a, self.b], [self.a], [self.a]])
+
+    def test_restart_discards_partial_inspection_and_checks_new_reader(self):
+        reader, helper = self.reader(self.a), self.opaque_dev(self.b)
+        foreign = self.reader(self.c, name="foreign-worker")
+        result = self.collect([
+            self.census(reader, helper), self.inspection(reader),
+            self.census(reader, foreign), self.inspection(reader, foreign),
+            self.inspection(reader, foreign), self.census(reader, foreign),
+        ], restart=True)
+        self.assertEqual({row["id"] for row in result}, {self.a, self.c})
+        with self.assertRaises(ValueError):
+            self.observer.classify_containers(result, "core")
+
+    def test_continuously_unclassified_candidate_denies_after_bounded_full_attempts(self):
+        helper = self.opaque_dev(self.a)
+        with self.assertRaisesRegex(ValueError, "candidate disappeared"):
+            self.collect([
+                self.census(helper), ValueError("candidate disappeared"),
+                self.census(helper), ValueError("candidate disappeared"),
+                self.census(helper), ValueError("candidate disappeared"),
+            ], restart=True)
+        self.assertEqual([call[1] for call in self.calls], ["ps", "inspect"] * 3)
+
+    def test_restart_cannot_certify_a_missing_required_reader(self):
+        reader = self.reader(self.a)
+        result = self.collect([
+            self.census(reader), ValueError("reader disappeared"),
+            self.census(), self.census(),
+        ], restart=True)
+        with self.assertRaises(ValueError):
+            self.observer.classify_containers(result, "core")
+
+    def test_restart_never_retries_permission_or_transport_exceptions(self):
+        for error in (PermissionError("denied"), TimeoutError("unobserved")):
+            with self.subTest(error=type(error).__name__), self.assertRaises(type(error)):
+                self.collect([error], restart=True)
+            self.assertEqual(len(self.calls), 1)
 
     def test_named_helpers_are_classified_from_complete_atomic_metadata(self):
         a, b = self.helper(self.a), self.helper(self.b)

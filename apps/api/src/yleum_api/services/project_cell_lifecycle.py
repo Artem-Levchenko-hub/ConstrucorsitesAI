@@ -16,6 +16,7 @@ from yleum_api.services.orchestrator_client import (
     EnsureProjectCellResourcesRequest,
     ObserveProjectCellResourcesRequest,
     OrchestratorBadRequest,
+    OrchestratorReaderInventoryUnavailable,
     OrchestratorUnavailable,
     ProjectCellCapacityWait,
     ProjectCellOrchestratorClient,
@@ -29,6 +30,7 @@ from yleum_api.services.project_cells import (
     ProjectCellNotFound,
     ProjectCellStateConflict,
     ProjectCellValidationError,
+    _hashed_error,
     claim_cell_operation_committed,
     complete_cell_operation,
     fail_cell_operation,
@@ -61,6 +63,14 @@ class _OperationSnapshot:
     kind: str
     status: str
     fencing_epoch: int | None
+
+
+def reader_inventory_denied(outcome: ProjectCellOperationOutcome) -> bool:
+    """Recognize only our fixed classification after normal error redaction."""
+    return (
+        outcome.status == "indeterminate"
+        and outcome.error == _hashed_error("reader_inventory_unavailable")
+    )
 
 
 async def execute_cell_operation(
@@ -159,6 +169,12 @@ async def _dispatch_claimed_cell_operation(
             "cancelled_after_dispatch",
         )
         raise
+    except OrchestratorReaderInventoryUnavailable:
+        # This is not a pre-effect receipt. Preserve uncertainty while letting
+        # the release owner redrive the exact durable envelope after readiness.
+        return await _persist_indeterminate_outcome(
+            session_factory, claimed.operation_id, "reader_inventory_unavailable",
+        )
     except (OrchestratorUnavailable, httpx.RequestError) as exc:
         return await _persist_indeterminate_outcome(
             session_factory,

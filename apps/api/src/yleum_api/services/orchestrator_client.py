@@ -67,6 +67,10 @@ class OrchestratorUnavailable(ApiError):
         )
 
 
+class OrchestratorReaderInventoryUnavailable(OrchestratorUnavailable):
+    """A confirmed reader guard denial; earlier lifecycle effects may exist."""
+
+
 class OrchestratorBadRequest(ApiError):
     """Orchestrator rejected the request (4xx) — pass the reason through."""
 
@@ -1753,7 +1757,12 @@ async def _request_raw(
             status=resp.status_code,
             body=resp.text[:300],
         )
-        raise OrchestratorUnavailable(
+        unavailable = (
+            OrchestratorReaderInventoryUnavailable
+            if _reader_inventory_denied(resp)
+            else OrchestratorUnavailable
+        )
+        raise unavailable(
             f"Orchestrator returned {resp.status_code}",
             details={"upstream_body": resp.text[:300]},
         )

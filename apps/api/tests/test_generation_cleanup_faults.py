@@ -11,6 +11,7 @@ from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.services.generation import lifecycle, supervisor
 from yleum_api.services.generation.agent_finalization import AdaptationActivationPending
+from yleum_api.services.generation.recovery_execution import GenerationYielded
 from yleum_api.workers import generation
 
 pytestmark = pytest.mark.asyncio
@@ -115,7 +116,11 @@ async def test_ownership_fault_drains_work_before_blocked_orphan_write(monkeypat
 
 @pytest.mark.parametrize(
     "primary",
-    ["cancelled", "activation_pending", "completed", "cancel_during_release", "release_failed"],
+    [
+        "cancelled", "activation_pending", "completed", "cancel_during_release", "release_failed",
+        "normal_success_then_release_failed", "yielded_then_release_failed",
+        "cancelled_then_release_failed",
+    ],
 )
 async def test_failed_deadline_still_releases_cell_and_clears_stream(monkeypatch, primary):
     from yleum_api.services import restoration_adaptation
@@ -136,13 +141,19 @@ async def test_failed_deadline_still_releases_cell_and_clears_stream(monkeypatch
     trace = []
     release_started, finish_release = asyncio.Event(), asyncio.Event()
     original = AdaptationActivationPending("synthetic sealed activation")
+    yielded = GenerationYielded(run_id=run_id, checkpoint=None, attempt_seq=0, phase="reconciling")
+    cancelled = asyncio.CancelledError("synthetic primary cancellation")
+    release_failed = primary in {
+        "release_failed", "normal_success_then_release_failed", "yielded_then_release_failed",
+        "cancelled_then_release_failed",
+    }
 
     class Handle:
         async def release(self):
             if primary == "cancel_during_release":
                 release_started.set()
                 await finish_release.wait()
-            if primary == "release_failed":
+            if release_failed:
                 trace.append("release_attempted")
                 raise RuntimeError("synthetic release failure")
             trace.append("released")
@@ -152,8 +163,10 @@ async def test_failed_deadline_still_releases_cell_and_clears_stream(monkeypatch
         runtime.handle = Handle()
         runtime.deadline_task = asyncio.get_running_loop().create_future()
         runtime.deadline_task.set_exception(RuntimeError("synthetic watchdog database error"))
-        if primary == "cancelled":
-            raise asyncio.CancelledError("synthetic primary cancellation")
+        if primary in {"cancelled", "cancelled_then_release_failed"}:
+            raise cancelled
+        if primary == "yielded_then_release_failed":
+            raise yielded
         if primary in {"activation_pending", "release_failed"}:
             raise original
 
@@ -164,8 +177,18 @@ async def test_failed_deadline_still_releases_cell_and_clears_stream(monkeypatch
     monkeypatch.setattr(lifecycle, "clear_stream_state", clear)
     coro = lifecycle._process_prompt(run_id, project_id, user_id, user_message_id,
                                     assistant_id, None, "synthetic", "synthetic")
-    if primary == "cancelled":
-        with pytest.raises(asyncio.CancelledError, match="synthetic primary cancellation"):
+    if primary in {"cancelled", "cancelled_then_release_failed"}:
+        with pytest.raises(
+            asyncio.CancelledError, match="synthetic primary cancellation",
+        ) as caught:
+            await coro
+        assert caught.value is cancelled
+    elif primary == "yielded_then_release_failed":
+        with pytest.raises(GenerationYielded) as caught:
+            await coro
+        assert caught.value is yielded
+    elif primary == "normal_success_then_release_failed":
+        with pytest.raises(RuntimeError, match="synthetic release failure"):
             await coro
     elif primary in {"activation_pending", "release_failed"}:
         with pytest.raises(AdaptationActivationPending) as caught:
@@ -186,5 +209,5 @@ async def test_failed_deadline_still_releases_cell_and_clears_stream(monkeypatch
             await asyncio.gather(task, return_exceptions=True)
     else:
         await coro
-    assert trace == (["release_attempted", "cleared"] if primary == "release_failed"
+    assert trace == (["release_attempted", "cleared"] if release_failed
                      else ["released", "cleared"])
