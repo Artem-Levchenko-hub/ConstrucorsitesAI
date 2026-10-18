@@ -270,8 +270,11 @@ def test_preview_recovers_missing_stopped_or_outdated_core(
     image_id = "sha256:" + "a" * 64
     image_ref = "registry.example/core@sha256:" + "b" * 64 if digest_reference else image_id
     adapter = MachineAdapter(SimpleNamespace(), SimpleNamespace(cell_preview_core_image=image_ref))
-    gateway = SimpleNamespace(status="running", reload=lambda: None, attrs={
+    gateway = SimpleNamespace(id="owned-gateway", status="running", reload=lambda: None, attrs={
         "NetworkSettings": {"Networks": {"internal": {"IPAddress": "10.253.0.3"}}},
+        "State": {"StartedAt": "2026-10-18T01:00:00Z"}, "Image": image_id,
+        "Config": {"Labels": {"kind": "max-gateway"}},
+        "HostConfig": {"Privileged": False}, "Mounts": [],
     })
     core = None if core_state == "absent" else SimpleNamespace(
         status="exited" if core_state == "exited" else "running", reload=lambda: None,
@@ -281,12 +284,23 @@ def test_preview_recovers_missing_stopped_or_outdated_core(
     backend = SimpleNamespace(
         client=SimpleNamespace(containers=None, images=SimpleNamespace(
             get=lambda _: SimpleNamespace(id=image_id),
-        )), stem="qa", internal_network="internal",
+        )), stem="qa", internal_network="internal", labels=lambda kind: {"kind": kind},
         _lookup=lambda _, _name, kind: gateway if kind == "max-gateway" else core,
+    )
+    from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    backend.trusted_container_identity = lambda item, kind: (
+        DockerMachineBackend.trusted_container_identity(backend, item, kind)
+    )
+    state = SimpleNamespace(workspace_id=uuid4())
+    write_controller_json(
+        adapter.root / "owner-boundary-runtime" / f"{state.workspace_id}.json",
+        {"digest": "c" * 64, "gateway": backend.trusted_container_identity(gateway, "max-gateway")},
     )
     monkeypatch.setattr(adapter, "exists", lambda _: True)
     monkeypatch.setattr(adapter, "parts", lambda _: (None, backend))
-    result = adapter.preview(SimpleNamespace(workspace_id=uuid4()))
+    result = adapter.preview(state)
     assert result == ("running" if core_state == "running" else "stopped", "10.253.0.3")
 
 

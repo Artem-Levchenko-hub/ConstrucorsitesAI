@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 import secrets
 import socket
 import time
@@ -27,7 +28,13 @@ from yleum_orchestrator.core.cell_resources import (
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.stack_registry import get_stack
 from yleum_orchestrator.services import nginx_writer
-from yleum_orchestrator.services.cell_state import CellCredentialStore, CoreRuntimeCredentialStore
+from yleum_orchestrator.services.cell_state import (
+    CellCredentialStore,
+    CoreRuntimeCredentialStore,
+    _ensure_secure_parent,
+    _require_regular_file_path,
+    _validate_regular_fd,
+)
 from yleum_orchestrator.services.docker_cell_resources import DockerCommandResult
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from yleum_orchestrator.services.generation_reader_inventory import reader_dispatch
@@ -1130,6 +1137,36 @@ class MachineAdapter:
             write_controller_json(path, {"digest": digest})
         return secret
 
+    def _boundary_runtime_path(self, workspace_id: UUID, *, public_mode: bool = False) -> Path:
+        name = "public-boundary-runtime" if public_mode else "owner-boundary-runtime"
+        return self.root / name / f"{workspace_id}.json"
+
+    @staticmethod
+    def _read_boundary_runtime(path: Path) -> dict[str, Any] | None:
+        # Missing/corrupt receipts require reinjection; unsafe filesystem state
+        # must still stop the mutating caller. Use the controller store's guards
+        # and distinguish JSON corruption from descriptor ownership/mode failures.
+        if not path.parent.exists() and not path.parent.is_symlink():
+            return None
+        _ensure_secure_parent(path)
+        if _require_regular_file_path(path, missing_ok=True) is None:
+            return None
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(path, flags), "r", encoding="utf-8") as handle:
+            _validate_regular_fd(handle.fileno(), expected_mode=0o600)
+            try:
+                stamp = json.load(handle)
+            except (json.JSONDecodeError, UnicodeError):
+                return None
+        if not isinstance(stamp, dict):
+            return None
+        digest = stamp.get("digest")
+        if (set(stamp) != {"digest", "gateway"} or not isinstance(digest, str)
+                or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest)
+                or not isinstance(stamp.get("gateway"), dict)):
+            return None
+        return stamp
+
     def _start_boundary(
         self, state: Any, manifest: MachineManifest, backend: DockerMachineBackend, epoch: int,
         *, public_mode: bool = False, runtime_env: dict[str, str] | None = None,
@@ -1352,9 +1389,7 @@ class MachineAdapter:
                 ),
             }),
         }
-        runtime_stamp = self.root / (
-            "public-boundary-runtime" if public_mode else "owner-boundary-runtime"
-        ) / f"{state.workspace_id}.json"
+        runtime_stamp = self._boundary_runtime_path(state.workspace_id, public_mode=public_mode)
         # The guard image is only a pinned bootstrap. Always run the current
         # controller-owned boundary source so owner previews receive the same
         # framing/auth policy as public and configured gateways.
@@ -1369,10 +1404,8 @@ class MachineAdapter:
             }, sort_keys=True).encode(),
         ).hexdigest()
         old = backend._lookup(client.containers, gateway_name, "max-gateway")
-        if runtime_stamp.is_symlink():
-            raise CellResourceError("unsafe boundary state")
-        if old is not None and runtime_stamp.is_file():
-            stamp = json.loads(runtime_stamp.read_text(encoding="utf-8"))
+        stamp = self._read_boundary_runtime(runtime_stamp)
+        if old is not None and stamp is not None:
             identity = backend.trusted_container_identity(old, "max-gateway")
             if (identity is not None and stamp.get("digest") == runtime_digest
                     and stamp.get("gateway") == identity):
@@ -1544,6 +1577,15 @@ class MachineAdapter:
                     or env.get("OMNIA_OWNER_PREVIEW") != "1"
                     or env.get("OMNIA_PUBLIC_APP_ORIGIN")
                     or (preview_image and core.attrs.get("Image") != preview_image)):
+                return "stopped", address
+            identity = backend.trusted_container_identity(gateway, "max-gateway")
+            try:
+                stamp = self._read_boundary_runtime(self._boundary_runtime_path(state.workspace_id))
+            except (OSError, RuntimeError):
+                return "stopped", address
+            # Running PID1 does not mean its tmpfs was seeded after a restart.
+            # The durable receipt binds StartedAt as well as Docker ID/config.
+            if identity is None or stamp is None or stamp["gateway"] != identity:
                 return "stopped", address
         return gateway.status, address
 

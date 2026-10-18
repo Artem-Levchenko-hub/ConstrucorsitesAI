@@ -13,7 +13,9 @@ from yleum_orchestrator.services.machine_adapter import _PUBLIC_CORE_COMMAND, Ma
 @pytest.mark.parametrize("configured", [True, False])
 @pytest.mark.parametrize("public_mode", [True, False])
 @pytest.mark.parametrize("fault", ["restart", "replacement", "epoch", "machine_ip", "routes",
-                                 "stamp_missing", "stamp_digest", "host_config", "health",
+                                 "stamp_missing", "stamp_digest", "stamp_corrupt", "stamp_array",
+                                 "stamp_null", "stamp_symlink", "stamp_mode", "stamp_parent_mode",
+                                 "host_config", "health",
                                  "budget", "cancelled"])
 def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
     tmp_path, monkeypatch, configured, public_mode, fault,
@@ -227,10 +229,29 @@ def test_public_gateway_reuses_current_code_and_replaces_outdated_code(
         stamp = adapter.root / (
             "public-boundary-runtime" if public_mode else "owner-boundary-runtime"
         ) / f"{state.workspace_id}.json"
+        if fault in {"stamp_symlink", "stamp_mode", "stamp_parent_mode"}:
+            if fault == "stamp_symlink":
+                target = tmp_path / "foreign-stamp.json"
+                stamp.rename(target)
+                stamp.symlink_to(target)
+            elif fault == "stamp_mode":
+                stamp.chmod(0o666)
+            else:
+                stamp.parent.chmod(0o777)
+            delivered_before = len(delivered)
+            with pytest.raises(RuntimeError):
+                adapter._start_boundary(state, manifest, backend, epoch, public_mode=public_mode,
+                                        runtime_env=runtime_env if public_mode else None)
+            assert containers["public-test-gateway"] is restarted
+            assert containers["public-test-max-core"] is core
+            assert len(delivered) == delivered_before and removed == [first]
+            return
         if fault == "stamp_missing":
             stamp.unlink()
         else:
-            stamp.write_text('{"digest":"stale"}', encoding="utf-8")
+            stamp.write_text({
+                "stamp_corrupt": "{", "stamp_array": "[]", "stamp_null": "null",
+            }.get(fault, '{"digest":"stale"}'), encoding="utf-8")
     adapter._start_boundary(state, manifest, backend, epoch, public_mode=public_mode,
                             runtime_env=runtime_env if public_mode else None)
     assert containers["public-test-gateway"] is not restarted

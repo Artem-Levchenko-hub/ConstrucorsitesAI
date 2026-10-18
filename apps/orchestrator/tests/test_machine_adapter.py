@@ -94,6 +94,66 @@ def test_retained_gateway_without_product_cannot_report_ready(missing):
     assert runtime.preview(SimpleNamespace(workspace_id=uuid4())) == ("stopped", "10.0.0.1")
 
 
+@pytest.mark.parametrize("fault", [
+    "healthy", "restart", "missing", "corrupt", "array", "null", "incomplete",
+    "symlink", "unsafe_mode", "foreign_gateway", "unverified_identity",
+])
+def test_preview_requires_current_owner_boundary_incarnation(tmp_path, fault):
+    from yleum_orchestrator.core.cell_resources import CellIdentityConflict
+    from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    runtime = module().MachineAdapter(SimpleNamespace(), SimpleNamespace())
+    state = SimpleNamespace(workspace_id=uuid4())
+    runtime.exists = lambda _: True
+    gateway = SimpleNamespace(id="same-gateway", status="running", reload=lambda: None, attrs={
+        "State": {"StartedAt": "2026-10-18T01:00:00Z"}, "Image": "sha256:" + "a" * 64,
+        "Config": {"Labels": {"kind": "max-gateway"}}, "HostConfig": {"Privileged": False},
+        "Mounts": [], "NetworkSettings": {"Networks": {"internal": {"IPAddress": "10.0.0.1"}}},
+    })
+    core = SimpleNamespace(status="running", reload=lambda: None, attrs={
+        "Config": {"Env": ["OMNIA_OWNER_PREVIEW=1"]},
+    })
+    backend = SimpleNamespace(
+        client=SimpleNamespace(containers=None), stem="owned", internal_network="internal",
+        labels=lambda kind: {"kind": kind},
+        _lookup=lambda _, _name, kind: gateway if kind == "max-gateway" else core,
+    )
+    backend.trusted_container_identity = lambda item, kind: (
+        DockerMachineBackend.trusted_container_identity(backend, item, kind)
+    )
+    runtime.parts = lambda _: (None, backend)
+    stamp = runtime.root / "owner-boundary-runtime" / f"{state.workspace_id}.json"
+    write_controller_json(stamp, {
+        "digest": "b" * 64, "gateway": backend.trusted_container_identity(gateway, "max-gateway"),
+    })
+    if fault == "restart":
+        # Docker ID survives restart, while its injected runtime tmpfs does not.
+        gateway.attrs["State"]["StartedAt"] = "2026-10-18T02:00:00Z"
+    elif fault == "missing":
+        stamp.unlink()
+    elif fault in {"corrupt", "array", "null", "incomplete"}:
+        stamp.write_text({"corrupt": "{", "array": "[]", "null": "null",
+                          "incomplete": '{"gateway":{}}'}[fault], encoding="utf-8")
+    elif fault == "symlink":
+        target = tmp_path / "foreign-stamp.json"
+        stamp.rename(target)
+        stamp.symlink_to(target)
+    elif fault == "unsafe_mode":
+        stamp.chmod(0o666)
+    elif fault == "foreign_gateway":
+        gateway.attrs["Config"]["Labels"]["kind"] = "foreign"
+    elif fault == "unverified_identity":
+        gateway.attrs["State"]["StartedAt"] = ""
+    if fault == "foreign_gateway":
+        with pytest.raises(CellIdentityConflict):
+            runtime.preview(state)
+    else:
+        assert runtime.preview(state) == (
+            "running" if fault == "healthy" else "stopped", "10.0.0.1",
+        )
+
+
 async def test_build_executes_manifest_bootstrap_build_and_test_argv_in_order(tmp_path):
     api = module()
     commands = []
