@@ -204,9 +204,23 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
     return result.stdout.strip()
 
 
-def docker_inventory() -> list[dict]:
+def _docker_container_ids() -> list[str]:
     ids = command(["docker", "ps", "-aq", "--no-trunc"]).splitlines()
-    need(len(ids) <= 10000 and all(re.fullmatch(r"[0-9a-f]{64}", v) for v in ids))
+    need(
+        len(ids) <= 10000
+        and len(set(ids)) == len(ids)
+        and all(re.fullmatch(r"[0-9a-f]{64}", v) for v in ids)
+    )
+    return ids
+
+
+def docker_inventory() -> list[dict]:
+    """Require a complete stable roster; retry only a changed read-only sample.
+
+    Normal project helpers may be created while collecting. Every attempt starts
+    again from all containers; no row from an invalidated sample is reused. The
+    enclosing observation timestamp/TTL and every reader check remain unchanged.
+    """
     template = (
         '{"id":{{json .Id}},"image":{{json .Image}},"name":{{json .Name}},'
         '"configured_image":{{json .Config.Image}},"service":{{json (index .Config.Labels "com.docker.compose.service")}},'
@@ -215,16 +229,19 @@ def docker_inventory() -> list[dict]:
         '"dead":{{json .State.Dead}},"restart":{{json .HostConfig.RestartPolicy.Name}},'
         '"entrypoint":{{json .Config.Entrypoint}},"cmd":{{json .Config.Cmd}}}'
     )
-    rows = []
-    raw = command(["docker", "inspect", "--format", template, *ids]) if ids else ""
-    for line in raw.splitlines():
-        row = json.loads(line)
-        row["name"] = row["name"].removeprefix("/")
-        row["command"] = (row.pop("entrypoint") or []) + (row.pop("cmd") or [])
-        rows.append(row)
-    # A disappearing or newly created container invalidates this complete scan.
-    need(set(command(["docker", "ps", "-aq", "--no-trunc"]).splitlines()) == set(ids))
-    return rows
+    for _attempt in range(3):
+        ids = _docker_container_ids()
+        rows = []
+        raw = command(["docker", "inspect", "--format", template, *ids]) if ids else ""
+        for line in raw.splitlines():
+            row = json.loads(line)
+            row["name"] = row["name"].removeprefix("/")
+            row["command"] = (row.pop("entrypoint") or []) + (row.pop("cmd") or [])
+            rows.append(row)
+        need(len(rows) == len(ids) and {row["id"] for row in rows} == set(ids))
+        if set(_docker_container_ids()) == set(ids):
+            return rows
+    raise ValueError("Docker container roster changed throughout observation")
 
 
 def process_inventory(proc_root: Path = Path("/proc")) -> dict[int, dict]:
