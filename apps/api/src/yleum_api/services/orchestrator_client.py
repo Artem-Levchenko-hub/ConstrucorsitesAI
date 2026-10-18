@@ -217,6 +217,30 @@ class ObserveProjectCellResourcesRequest:
         }
 
 
+class ProjectCellLeaseObservation(BaseModel):
+    """Authenticated, fenced observation; missing evidence never means idle."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    version: Literal[1]
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    operation_id: UUID
+    request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fencing_epoch: int = Field(gt=0)
+    active_generation_run_id: UUID | None
+    active_generation_fencing_epoch: int | None = Field(gt=0)
+    quiescent: bool
+
+    @model_validator(mode="after")
+    def coherent_lease(self) -> ProjectCellLeaseObservation:
+        if (self.active_generation_run_id is None) != (
+            self.active_generation_fencing_epoch is None
+        ) or (self.quiescent and self.active_generation_run_id is not None):
+            raise ValueError("incoherent lease observation")
+        return self
+
+
 @dataclass(frozen=True, slots=True)
 class ProjectCellResourceResponse:
     workspace_id: UUID
@@ -231,6 +255,7 @@ class ProjectCellResourceResponse:
     has_draft_runtime: bool = False
     draft_state: str | None = None
     preview_url: str | None = None
+    lease_observation: ProjectCellLeaseObservation | None = None
 
     def __post_init__(self) -> None:
         if not self.state:
@@ -255,6 +280,11 @@ class ProjectCellResourceResponse:
             "has_draft_runtime": self.has_draft_runtime,
             "draft_state": self.draft_state,
             "preview_url": self.preview_url,
+            **(
+                {"lease_observation": self.lease_observation.model_dump(mode="json")}
+                if self.lease_observation is not None
+                else {}
+            ),
         }
 
     @classmethod
@@ -277,6 +307,7 @@ class ProjectCellResourceResponse:
             "has_draft_runtime",
             "draft_state",
             "preview_url",
+            "lease_observation",
         }
         if not allow_extra:
             unexpected = set(payload) - expected
@@ -345,6 +376,13 @@ class ProjectCellResourceResponse:
                 has_draft_runtime=cast(bool, has_draft_runtime),
                 draft_state=cast(str | None, draft_state),
                 preview_url=cast(str | None, preview_url),
+                lease_observation=(
+                    ProjectCellLeaseObservation.model_validate_json(
+                        json.dumps(payload["lease_observation"])
+                    )
+                    if payload.get("lease_observation") is not None
+                    else None
+                ),
             )
         except ValueError as exc:
             raise OrchestratorUnavailable(

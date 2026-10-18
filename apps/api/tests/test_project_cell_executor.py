@@ -558,6 +558,8 @@ async def _prepare_executor(
     capacity_dispatch_token: UUID | None = None,
     capabilities: dict[str, object] | None = None,
     restoration_adaptation: bool = False,
+    lifecycle_client: object | None = None,
+    expected_bootstrap_fence: int = 1,
 ) -> _ExecutorHarness:
     owner = await _new_user(db_session, "owner")
     project = await _new_project(db_session, owner)
@@ -633,6 +635,7 @@ async def _prepare_executor(
             await session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
+            kind=claimed.kind,
             status="completed",
             response=response,
         )
@@ -644,12 +647,12 @@ async def _prepare_executor(
         fencing_epoch: int,
     ) -> ProjectCellAgentWorkspaceSnapshot:
         assert generation_run_id == expected_run_id
-        assert fencing_epoch == 1
+        assert fencing_epoch == expected_bootstrap_fence
         return ProjectCellAgentWorkspaceSnapshot(
             files=dict(cell_files),
             seeded_from_project=not bool(cell_files),
             generation_run_id=expected_run_id,
-            fencing_epoch=1,
+            fencing_epoch=expected_bootstrap_fence,
             workspace_revision=_current_revision(),
             capabilities=capabilities or {},
         )
@@ -689,9 +692,7 @@ async def _prepare_executor(
             generation_run_id=receipt.generation_run_id,
             candidate_fencing_epoch=receipt.candidate_fencing_epoch,
             proof_attempt=kwargs["proof_attempt"],
-            source_workspace_revision=adaptation_prepare_calls[0][
-                "source_workspace_revision"
-            ],
+            source_workspace_revision=adaptation_prepare_calls[0]["source_workspace_revision"],
             candidate_workspace_revision=kwargs["candidate_workspace_revision"],
             candidate_proof_key=kwargs["candidate_proof_key"],
             candidate_artifact_digest=kwargs["candidate_artifact_digest"],
@@ -886,11 +887,14 @@ async def _prepare_executor(
         legacy_actions.append(action.name)
         return {"ok": True, "detail": f"legacy:{action.name}"}
 
-    monkeypatch.setattr(
-        project_cell_executor,
-        "execute_cell_operation",
-        fake_execute_cell_operation,
-    )
+    if lifecycle_client is None:
+        monkeypatch.setattr(
+            project_cell_executor, "execute_cell_operation", fake_execute_cell_operation
+        )
+    else:
+        monkeypatch.setattr(
+            project_cell_executor, "HttpProjectCellOrchestratorClient", lambda: lifecycle_client
+        )
     monkeypatch.setattr(
         project_cell_executor,
         "project_cell_agent_bootstrap",
@@ -1078,7 +1082,20 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
                 has_postgres=False,
                 has_redis=False,
             )
-        return response(request)
+        payload = response(request).to_wire_json()
+        payload["lease_observation"] = {
+            "version": 1,
+            "workspace_id": str(workspace.id),
+            "project_id": str(project.id),
+            "owner_id": str(owner.id),
+            "operation_id": str(request.operation_id),
+            "request_digest": request.request_digest,
+            "fencing_epoch": request.fencing_epoch,
+            "active_generation_run_id": None,
+            "active_generation_fencing_epoch": None,
+            "quiescent": True,
+        }
+        return ProjectCellResourceResponse.from_json(payload)
 
     async def hibernate(_factory, *, requesting_run_id, client):
         nonlocal capacity_available
@@ -1114,7 +1131,7 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
                 )
             return response(request)
         assert request.generation_run_id == new_run.id
-        assert calls[-1] == "release"
+        assert calls[-1] == ("release" if old_ensure_status == "completed" else "reconcile")
         calls.append("ensure")
         return response(request)
 
@@ -1128,7 +1145,7 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
 
     async def bootstrap(_workspace_id, *, generation_run_id, fencing_epoch):
         assert generation_run_id == new_run.id
-        assert fencing_epoch == {"completed": 3, "indeterminate": 4, "absent": 6}[old_ensure_status]
+        assert fencing_epoch == {"completed": 3, "indeterminate": 3}[old_ensure_status]
         raise RuntimeError("test reached new bootstrap")
 
     monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
@@ -1144,6 +1161,24 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         "hibernate_one_idle_workspace",
         hibernate,
     )
+    if old_ensure_status == "absent":
+        with pytest.raises(
+            project_cell_executor.ProjectCellExecutorUnavailable, match="needs reconciliation"
+        ):
+            await project_cell_executor.maybe_create_project_cell_executor(
+                project_id=project.id,
+                project_slug=project.slug,
+                project_template="max_miniapp",
+                user_id=owner.id,
+                generation_run_id=new_run.id,
+                docs_media_execute=ensure,
+            )
+        assert calls == ["reconcile"], "a terminal run must never acquire a fake repair lease"
+        async with factory() as session:
+            assert (
+                await session.get(ProjectCellWorkspace, workspace.id)
+            ).generation_run_id == old_run.id
+        return
     with pytest.raises(RuntimeError, match="test reached new bootstrap"):
         await project_cell_executor.maybe_create_project_cell_executor(
             project_id=project.id,
@@ -1155,13 +1190,10 @@ async def test_same_project_recovers_terminal_binding_before_new_ensure(
         )
     assert calls == (
         (
-            ["reconcile", "repair", "hibernate", "repair"]
-            if old_ensure_status == "absent"
-            else ["reconcile"]
+            ["reconcile"]
             if old_ensure_status == "indeterminate"
-            else []
+            else ["release"] * (2 if release_response_lost else 1)
         )
-        + ["release"] * (2 if release_response_lost else 1)
         + ["ensure"]
     )
 
@@ -2276,6 +2308,7 @@ async def test_bootstrap_rejects_mismatched_active_lease_before_agent_activation
         await db_session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
+            kind="ensure",
             status="completed",
             response=ProjectCellResourceResponse(
                 workspace_id=workspace.id,
@@ -2363,6 +2396,7 @@ async def test_bootstrap_wraps_orchestrator_bad_request_as_unavailable(
         await db_session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
+            kind="ensure",
             status="completed",
             response=ProjectCellResourceResponse(
                 workspace_id=workspace.id,
@@ -2470,6 +2504,7 @@ async def test_queued_cancel_survives_outer_flow_finalize_and_releases_lease(
             await session.commit()
         return SimpleNamespace(
             operation_id=operation_id,
+            kind=claimed.kind,
             status="completed",
             response=response,
         )
@@ -3425,3 +3460,144 @@ async def test_v2_command_ack_loss_reads_terminal_receipt_without_dispatch(
             ex._SESSION_OWNER.reset(token)
             await owner.execute(text("SELECT pg_advisory_unlock_all()"))
             await owner.commit()
+
+
+async def test_executor_acquires_real_sql_repair_lease_after_resource_only_reconcile(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import project_cell_capacity
+    from yleum_api.services.orchestrator_client import OrchestratorUnavailable
+
+    calls = []
+
+    async def ensure(request):
+        calls.append(("ensure", request))
+        if len(calls) == 1:
+            raise OrchestratorUnavailable("fixture lost ACK")
+        return response(request)
+
+    async def observe(request):
+        calls.append(("observe", request))
+        return response(request)
+
+    def response(request):
+        return ProjectCellResourceResponse(
+            workspace_id=request.workspace_id,
+            state="resources_ready",
+            provider_ref="fixture",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+
+    async def no_delay(*_):
+        return None
+
+    monkeypatch.setattr(project_cell_capacity.asyncio, "sleep", no_delay)
+    client = SimpleNamespace(ensure=ensure, observe_resources=observe, control=AsyncMock())
+    harness = await asyncio.wait_for(
+        _prepare_executor(
+            monkeypatch,
+            db_session,
+            test_engine,
+            lifecycle_client=client,
+            capacity_dispatch_token=uuid4(),
+            expected_bootstrap_fence=3,
+        ),
+        20,
+    )
+    assert [kind for kind, _ in calls] == ["ensure", "observe", "ensure"]
+    assert calls[0][1].operation_id != calls[2][1].operation_id
+    assert calls[0][1].generation_run_id == calls[2][1].generation_run_id == harness.run_id
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    async with factory() as session:
+        operations = list(
+            await session.scalars(
+                select(ProjectCellOperation)
+                .where(
+                    ProjectCellOperation.workspace_id == harness.workspace_id,
+                )
+                .order_by(ProjectCellOperation.fencing_epoch)
+            )
+        )
+        assert [op.status for op in operations] == ["indeterminate", "completed", "completed"]
+        assert (await session.get(GenerationRun, harness.run_id)).status == "running"
+    assert not harness.write_calls and not harness.exec_calls
+
+
+async def test_existing_workspace_bootstrap_waits_namespace_before_locking_run(
+    monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
+    test_engine: AsyncEngine,
+) -> None:
+    from yleum_api.services.project_cells import lock_workspace_operations
+
+    owner = await _new_user(db_session, "bootstrap-lock")
+    project = await _new_project(db_session, owner)
+    run = await _new_run(db_session, project, owner)
+    workspace = ProjectCellWorkspace(
+        project_id=project.id,
+        owner_id=owner.id,
+        provider="docker_owner_canary",
+        state="ready",
+        generation_run_id=run.id,
+    )
+    db_session.add(workspace)
+    await db_session.commit()
+    monkeypatch.setattr(project_cell_executor, "get_engine", lambda: test_engine)
+
+    async def ready(*_, **__):
+        return ProjectCellControlReadiness(
+            selected=True, ready=True, provider="docker_owner_canary", reason="ready"
+        )
+
+    monkeypatch.setattr(project_cell_executor, "inspect_project_cell_control", ready)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    bootstrap = None
+    try:
+        async with factory() as repair:
+            await lock_workspace_operations(repair, workspace.id)
+            bootstrap = asyncio.create_task(
+                project_cell_executor.maybe_create_project_cell_executor(
+                    project_id=project.id,
+                    project_slug=project.slug,
+                    project_template="max_miniapp",
+                    user_id=owner.id,
+                    generation_run_id=run.id,
+                    docs_media_execute=lambda _: None,
+                )
+            )
+
+            async def wait_for_namespace():
+                while not await repair.scalar(
+                    text(
+                        "SELECT EXISTS(SELECT 1 FROM pg_locks WHERE locktype='advisory' "
+                        "AND objid=(hashtext(:key)::bigint & 4294967295)::oid AND NOT granted)"
+                    ),
+                    {"key": str(workspace.id)},
+                ):
+                    if bootstrap.done():
+                        await bootstrap
+                        pytest.fail("bootstrap did not reach owning namespace")
+                    await asyncio.sleep(0.01)
+
+            await asyncio.wait_for(wait_for_namespace(), 3)
+            await repair.execute(text("SET LOCAL lock_timeout = '500ms'"))
+            await repair.get(Project, project.id, with_for_update=True)
+            await repair.get(GenerationRun, run.id, with_for_update=True)
+            # No runtime/provider effect is allowed until the owning namespace is released.
+            assert not bootstrap.done()
+            bootstrap.cancel()
+            await asyncio.gather(bootstrap, return_exceptions=True)
+            await repair.rollback()
+    finally:
+        if bootstrap is not None and not bootstrap.done():
+            bootstrap.cancel()
+            await asyncio.gather(bootstrap, return_exceptions=True)

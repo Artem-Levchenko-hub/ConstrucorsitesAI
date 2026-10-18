@@ -26,7 +26,7 @@ from yleum_orchestrator.core.cell_resources import (
     identity_labels,
 )
 from yleum_orchestrator.core.config import get_settings
-from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
+from yleum_orchestrator.core.workspace_provider import ProjectCellLeaseObservation, WorkspaceSpec
 from yleum_orchestrator.services.cell_admission import CellAdmissionGate, DockerHostCapacityReader
 from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
 from yleum_orchestrator.services.cell_reservations import CellCapacityReservationStore
@@ -221,6 +221,7 @@ class CellBundleObservation:
     networks: dict[str, bool]
     volumes: dict[str, bool]
     detail: str
+    lease_observation: ProjectCellLeaseObservation | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -675,6 +676,9 @@ class DockerCellResourceManager:
             observation = await self._observe_state(state)
             if observation.identity_valid is False:
                 raise CellIdentityConflict(observation.detail)
+            helpers_observed = any(
+                item.helper for item in await self.docker.list_workspace_containers(workspace_id)
+            )
             leaked_resources = await self._remove_leaked_ephemera(
                 workspace_id, state.resource_names
             )
@@ -717,7 +721,59 @@ class DockerCellResourceManager:
                     self._confirm_or_restore_capacity(workspace_id, mutation)
                 else:
                     self._release_capacity(workspace_id, mutation)
-            return observation
+            from dataclasses import replace
+
+            return replace(
+                observation,
+                lease_observation=await self._lease_observation_locked(
+                    workspace_id, mutation, helpers_observed=helpers_observed
+                ),
+            )
+
+    async def _lease_observation_locked(
+        self,
+        workspace_id: UUID,
+        mutation: LifecycleMutation,
+        *,
+        helpers_observed: bool,
+    ) -> ProjectCellLeaseObservation | None:
+        from yleum_orchestrator.services.source_write_journal import require_source_writes_clear
+
+        state = self.state_store.load(workspace_id)
+        if (
+            state is None
+            or state.project_id is None
+            or state.owner_id is None
+            or state.fencing_epoch != mutation.fencing_epoch
+            or state.last_operation_id != mutation.operation_id
+        ):
+            return None
+        quiescent = False
+        if (
+            not helpers_observed
+            and state.active_generation_run_id is None
+            and self.machine_runtime is not None
+            and all(item.status in {"completed", "failed"} for item in state.operations)
+        ):
+            try:
+                require_source_writes_clear(self.state_store.root, workspace_id)
+                quiescent = await self.machine_runtime.lease_quiescent(state)
+            except (CellResourceError, ValueError, OSError):
+                quiescent = False
+        if self.state_store.load(workspace_id) != state:
+            raise CellIdentityConflict("lease observation changed")
+        return ProjectCellLeaseObservation(
+            version=1,
+            workspace_id=workspace_id,
+            project_id=state.project_id,
+            owner_id=state.owner_id,
+            operation_id=mutation.operation_id,
+            request_digest=mutation.request_digest,
+            fencing_epoch=mutation.fencing_epoch,
+            active_generation_run_id=state.active_generation_run_id,
+            active_generation_fencing_epoch=state.active_generation_fencing_epoch,
+            quiescent=quiescent,
+        )
 
     async def _upsert_bundle(
         self,

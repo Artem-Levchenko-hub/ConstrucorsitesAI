@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SerializerFunctionWrapHandler, model_serializer
+
+from yleum_orchestrator.core.workspace_provider import ProjectCellLeaseObservation
 
 
 class WorkspaceEnsureRequest(BaseModel):
@@ -73,6 +75,14 @@ class WorkspaceResourceResponse(BaseModel):
     has_draft_runtime: bool = False
     draft_state: Literal["running", "stopped", "failed"] | None = None
     preview_url: str | None = None
+    lease_observation: ProjectCellLeaseObservation | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize_resource(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        payload: dict[str, Any] = handler(self)
+        if self.lease_observation is None:
+            payload.pop("lease_observation", None)
+        return payload
 
 
 class WorkspaceAgentBootstrapResponse(BaseModel):

@@ -417,6 +417,16 @@ def _validate_response_identity(
         raise ProjectCellValidationError("response workspace_id does not match claimed workspace")
     if response.fencing_epoch != claimed.fencing_epoch:
         raise ProjectCellValidationError("response fencing_epoch does not match claimed fence")
+    observation = response.lease_observation
+    if observation is not None and (
+        observation.workspace_id != claimed.workspace_id
+        or observation.project_id != claimed.project_id
+        or observation.owner_id != claimed.owner_id
+        or observation.operation_id != claimed.operation_id
+        or observation.fencing_epoch != claimed.fencing_epoch
+        or observation.request_digest != claimed.request_digest
+    ):
+        raise ProjectCellValidationError("lease observation identity mismatch")
     if claimed.kind in _CHECKPOINT_KINDS:
         expected_checkpoint_ref = claimed.request.get("checkpoint_ref")
         if (

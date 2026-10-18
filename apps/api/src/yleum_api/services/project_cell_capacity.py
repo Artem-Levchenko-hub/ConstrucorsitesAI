@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from yleum_api.core.config import get_settings
 from yleum_api.core.db import get_engine
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
     ProjectCellOperation,
@@ -323,19 +324,9 @@ async def claim_stale_generation_lease(
                 ~exists(
                     select(ProjectCellOperation.id).where(
                         ProjectCellOperation.workspace_id == ProjectCellWorkspace.id,
-                        ProjectCellOperation.kind == "release",
-                        ProjectCellOperation.idempotency_key.like(
-                            f"capacity:release:%:{requesting_run_id.hex[:12]}:3"
-                        ),
-                        ProjectCellOperation.status.in_(("failed", "cancelled")),
-                    )
-                ),
-                ~exists(
-                    select(ProjectCellOperation.id).where(
-                        ProjectCellOperation.workspace_id == ProjectCellWorkspace.id,
                         ProjectCellOperation.status.in_(ACTIVE_OPERATION_STATUSES),
                         ~and_(
-                            ProjectCellOperation.kind.in_(("release", "reconcile")),
+                            ProjectCellOperation.kind.in_(("release", "reconcile", "status")),
                             ProjectCellOperation.generation_run_id
                             == ProjectCellWorkspace.generation_run_id,
                             ProjectCellOperation.status.in_(("pending", "waiting_capacity")),
@@ -346,6 +337,7 @@ async def claim_stale_generation_lease(
                                 ProjectCellOperation.idempotency_key.startswith(
                                     "capacity:reconcile:"
                                 ),
+                                ProjectCellOperation.idempotency_key.startswith("capacity:lease-observe:"),
                                 ProjectCellOperation.idempotency_key.startswith("cell-recovery:"),
                             ),
                         ),
@@ -690,6 +682,14 @@ async def release_one_stale_generation_lease(
                         requesting_run_id=requesting_run_id,
                         client=client,
                     )
+            if await _clear_observed_terminal_lease(
+                session_factory,
+                requesting_run_id=requesting_run_id,
+                workspace_id=workspace.id,
+                stale_run_id=stale_run_id,
+                outcome=outcome,
+            ):
+                return True
             response = outcome.response
             if (
                 outcome.status == "completed"
@@ -728,6 +728,89 @@ async def release_one_stale_generation_lease(
                         await cooldown_session.commit()
             # Recheck activity and terminal status on the next scheduler pass.
             return False
+        # A resource-only reconciliation can leave no physical lease at all.
+        # Observe at a fresh fence rather than endlessly issuing rejected releases.
+        failed_release = await session.scalar(
+            select(ProjectCellOperation.id)
+            .where(
+                ProjectCellOperation.workspace_id == workspace.id,
+                ProjectCellOperation.generation_run_id == stale_run_id,
+                ProjectCellOperation.kind == "release",
+                ProjectCellOperation.status.in_(("failed", "cancelled")),
+            )
+            .limit(1)
+        )
+        unresolved_release = await session.scalar(
+            select(ProjectCellOperation.id)
+            .where(
+                ProjectCellOperation.workspace_id == workspace.id,
+                ProjectCellOperation.generation_run_id == stale_run_id,
+                ProjectCellOperation.kind == "release",
+                ProjectCellOperation.status.in_(
+                    ("pending", "running", "waiting_capacity", "indeterminate")
+                ),
+            )
+            .limit(1)
+        )
+        tail_lease = (
+            (recovery_tail.result_payload or {}).get("lease_observation") if recovery_tail else None
+        )
+        observed_active_run = (
+            tail_lease.get("active_generation_run_id") if type(tail_lease) is dict else None
+        )
+        if unresolved_release is None and (
+            failed_release is not None
+            or (
+                recovery_tail is not None
+                and recovery_tail.kind == "reconcile"
+                and recovery_tail.status == "completed"
+                and observed_active_run != str(stale_run_id)
+            )
+        ):
+            last_observation = await session.scalar(
+                select(ProjectCellOperation)
+                .where(
+                    ProjectCellOperation.workspace_id == workspace.id,
+                    ProjectCellOperation.generation_run_id == stale_run_id,
+                    ProjectCellOperation.kind == "status",
+                    ProjectCellOperation.fencing_epoch == workspace.fencing_epoch,
+                    ProjectCellOperation.idempotency_key.startswith("capacity:lease-observe:"),
+                )
+                .limit(1)
+            )
+            observed_payload = (last_observation.result_payload or {}) if last_observation else {}
+            observed_lease = observed_payload.get("lease_observation")
+            active_observed = (
+                type(observed_lease) is dict
+                and observed_lease.get("active_generation_run_id") == str(stale_run_id)
+                and last_observation is not None
+                and last_observation.status == "completed"
+            )
+            if not active_observed:
+                if last_observation is None or last_observation.status in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                }:
+                    last_observation, _ = await reserve_cell_operation(
+                        session,
+                        workspace_id=workspace.id,
+                        generation_run_id=stale_run_id,
+                        kind="status",
+                        idempotency_key=f"capacity:lease-observe:{workspace.id}:{stale_run_id}:{workspace.fencing_epoch}",
+                        request={},
+                    )
+                await session.commit()
+                observed = await execute_cell_operation(
+                    session_factory, last_observation.id, client
+                )
+                return await _clear_observed_terminal_lease(
+                    session_factory,
+                    requesting_run_id=requesting_run_id,
+                    workspace_id=workspace.id,
+                    stale_run_id=stale_run_id,
+                    outcome=observed,
+                )
         latest_ensure_fence = (
             await session.scalar(
                 select(ProjectCellOperation.fencing_epoch)
@@ -856,6 +939,71 @@ async def release_one_stale_generation_lease(
         locked_workspace.updated_at = datetime.now(UTC)
         await session.commit()
     return True
+
+
+async def _clear_observed_terminal_lease(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    requesting_run_id: UUID,
+    workspace_id: UUID,
+    stale_run_id: UUID,
+    outcome: ProjectCellOperationOutcome,
+) -> bool:
+    response = outcome.response
+    proof = response.lease_observation if response is not None else None
+    if (
+        outcome.status != "completed"
+        or outcome.kind not in {"status", "reconcile"}
+        or response is None
+        or response.state != "resources_ready"
+        or proof is None
+        or not proof.quiescent
+        or proof.active_generation_run_id is not None
+        or proof.workspace_id != workspace_id
+        or proof.operation_id != outcome.operation_id
+        or proof.fencing_epoch != response.fencing_epoch
+    ):
+        return False
+    async with session_factory() as session:
+        project = await session.scalar(
+            select(Project).where(Project.id == proof.project_id).with_for_update()
+        )
+        if project is None or project.owner_id != proof.owner_id:
+            return False
+        claimed = await claim_stale_generation_lease(
+            session,
+            requesting_run_id=requesting_run_id,
+            workspace_id=workspace_id,
+            expected_generation_run_id=stale_run_id,
+        )
+        if claimed is None:
+            return False
+        workspace, _ = claimed
+        operation = await session.get(ProjectCellOperation, outcome.operation_id)
+        run = await session.get(GenerationRun, stale_run_id)
+        if (
+            workspace.project_id != proof.project_id
+            or workspace.owner_id != proof.owner_id
+            or workspace.fencing_epoch != proof.fencing_epoch
+            or run is None
+            or run.project_id != proof.project_id
+            or run.user_id != proof.owner_id
+            or run.status in ACTIVE_GENERATION_STATUSES
+            or operation is None
+            or operation.status != "completed"
+            or operation.workspace_id != workspace_id
+            or operation.kind != outcome.kind
+            or operation.fencing_epoch != proof.fencing_epoch
+            or operation.generation_run_id != stale_run_id
+            or operation.request_digest != proof.request_digest
+        ):
+            return False
+        workspace.generation_run_id = None
+        workspace.state = "ready"
+        workspace.provider_ref = response.provider_ref
+        workspace.updated_at = datetime.now(UTC)
+        await session.commit()
+        return True
 
 
 async def hibernate_one_idle_workspace(

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -19,6 +19,7 @@ from yleum_api.models.user import User
 from yleum_api.services.orchestrator_client import (
     OrchestratorBadRequest,
     OrchestratorUnavailable,
+    ProjectCellLeaseObservation,
     ProjectCellResourceResponse,
 )
 from yleum_api.services.project_cell_capacity import (
@@ -329,14 +330,54 @@ async def test_completed_ensure_makes_bootstrap_orphan_reclaimable(
             has_redis=True,
         )
 
+    observations = []
+
+    async def observe(request):
+        from dataclasses import replace
+
+        observations.append(request)
+        response = ProjectCellResourceResponse(
+            workspace_id=workspace.id,
+            state="resources_ready",
+            provider_ref="cell-orphan",
+            fencing_epoch=request.fencing_epoch,
+            checkpoint_ref=None,
+            has_workspace=True,
+            has_agent_home=True,
+            has_postgres=True,
+            has_redis=True,
+        )
+        return replace(
+            response,
+            lease_observation=ProjectCellLeaseObservation(
+                version=1,
+                workspace_id=UUID(str(workspace.id)),
+                project_id=UUID(str(workspace.project_id)),
+                owner_id=UUID(str(owner.id)),
+                operation_id=request.operation_id,
+                request_digest=request.request_digest,
+                fencing_epoch=request.fencing_epoch,
+                active_generation_run_id=UUID(str(terminal.id)),
+                active_generation_fencing_epoch=1,
+                quiescent=False,
+            ),
+        )
+
+    client = SimpleNamespace(control=control, observe_resources=observe)
+    assert not await release_one_stale_generation_lease(
+        factory,
+        requesting_run_id=requesting.id,
+        client=client,
+    )
+    assert len(observations) == 1 and not calls
     assert await release_one_stale_generation_lease(
         factory,
         requesting_run_id=requesting.id,
-        client=SimpleNamespace(control=control),
+        client=client,
     )
     assert len(calls) == 1
     assert calls[0].operation_id != failed.id
-    assert calls[0].fencing_epoch == 3
+    assert calls[0].fencing_epoch == 4
     async with factory() as session:
         recovered = await session.get(ProjectCellWorkspace, workspace.id)
         assert recovered.state == "ready"
@@ -560,7 +601,23 @@ async def test_unknown_ensure_reconciles_at_higher_fence_then_releases(
         calls.append(("observe", request))
         if len(calls) == 1:
             raise OrchestratorUnavailable("observation response lost")
-        return response(request)
+        from dataclasses import replace
+
+        return replace(
+            response(request),
+            lease_observation=ProjectCellLeaseObservation(
+                version=1,
+                workspace_id=UUID(str(workspace.id)),
+                project_id=UUID(str(workspace.project_id)),
+                owner_id=UUID(str(workspace.owner_id)),
+                operation_id=request.operation_id,
+                request_digest=request.request_digest,
+                fencing_epoch=request.fencing_epoch,
+                active_generation_run_id=UUID(str(terminal.id)),
+                active_generation_fencing_epoch=1,
+                quiescent=False,
+            ),
+        )
 
     async def control(request):
         calls.append((request.kind, request))
@@ -824,11 +881,16 @@ async def test_capacity_wait_reconciles_ensure_after_orchestrator_restart(
 
     async def ensure(request: object) -> ProjectCellResourceResponse:
         requests.append(request)
-        assert len(requests) == 1, "unknown ensure must not be blindly replayed"
-        raise OrchestratorUnavailable("orchestrator restarted during dispatch")
+        if len(requests) == 1:
+            raise OrchestratorUnavailable("orchestrator restarted during dispatch")
+        assert len(requests) == 2
+        assert request.operation_id != operation.id, "unknown original ensure must not be replayed"
+        assert request.fencing_epoch > observations[0].fencing_epoch
+        return await observe(request)
 
     async def observe(request: object) -> ProjectCellResourceResponse:
-        observations.append(request)
+        if request.operation_id != requests[-1].operation_id:
+            observations.append(request)
         return ProjectCellResourceResponse(
             workspace_id=workspace.id,
             state="resources_ready",
@@ -854,7 +916,8 @@ async def test_capacity_wait_reconciles_ensure_after_orchestrator_restart(
     )
 
     assert outcome.status == "completed"
-    assert len(requests) == len(observations) == 1
+    assert len(requests) == 2 and len(observations) == 1
+    assert outcome.kind == "ensure"
     assert requests[0].operation_id == operation.id
     assert observations[0].operation_id != operation.id
     assert observations[0].fencing_epoch > requests[0].fencing_epoch

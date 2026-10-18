@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 from uuid import UUID
 
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
 from yleum_orchestrator.core.cell_resources import LifecycleMutation, validate_checkpoint_ref
 
 
@@ -64,6 +66,30 @@ class ControlAction:
             raise ValueError(f"checkpoint_ref is forbidden for {self.kind!r}")
 
 
+class ProjectCellLeaseObservation(BaseModel):
+    """Authenticated, fenced observation; missing evidence never means idle."""
+
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    version: Literal[1]
+    workspace_id: UUID
+    project_id: UUID
+    owner_id: UUID
+    operation_id: UUID
+    request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fencing_epoch: int = Field(gt=0)
+    active_generation_run_id: UUID | None
+    active_generation_fencing_epoch: int | None = Field(gt=0)
+    quiescent: bool
+
+    @model_validator(mode="after")
+    def coherent_lease(self) -> ProjectCellLeaseObservation:
+        if (self.active_generation_run_id is None) != (
+            self.active_generation_fencing_epoch is None
+        ) or (self.quiescent and self.active_generation_run_id is not None):
+            raise ValueError("incoherent lease observation")
+        return self
+
+
 @dataclass(frozen=True, slots=True)
 class WorkspaceResourceStatus:
     workspace_id: UUID
@@ -75,6 +101,7 @@ class WorkspaceResourceStatus:
     has_agent_home: bool
     has_postgres: bool
     has_redis: bool
+    lease_observation: ProjectCellLeaseObservation | None = None
 
     def __post_init__(self) -> None:
         if self.provider_ref == "":

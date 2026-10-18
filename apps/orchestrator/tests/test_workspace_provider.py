@@ -573,6 +573,7 @@ def test_provider_dtos_are_immutable_and_control_dtos_are_minimal() -> None:
         "has_agent_home",
         "has_postgres",
         "has_redis",
+        "lease_observation",
     ]
 
 

@@ -69,6 +69,7 @@ from yleum_api.services.project_cells import (
     ProjectCellStateConflict,
     ProjectCellValidationError,
     get_or_create_workspace,
+    lock_workspace_operations,
     reserve_cell_operation,
     resolve_workspace_profile,
 )
@@ -524,6 +525,7 @@ async def _release_generation_lease(
     from yleum_api.services.generation.recovery_execution import recovery_state
 
     async def locked_run(session: AsyncSession) -> GenerationRun:
+        await lock_workspace_operations(session, workspace_id)
         hint = await session.get(GenerationRun, generation_run_id)
         if hint is None:
             raise ProjectCellExecutorUnavailable("Generation disappeared during release")
@@ -631,7 +633,14 @@ async def maybe_create_project_cell_executor(
     )
     session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
     async with session_factory() as session:
-        project = await session.get(Project, project_id)
+        # Serialize workspace creation, then match recovery/release namespace order.
+        await lock_workspace_operations(session, project_id)
+        existing_cell_id = await session.scalar(
+            select(ProjectCellWorkspace.id).where(ProjectCellWorkspace.project_id == project_id)
+        )
+        if existing_cell_id is not None:
+            await lock_workspace_operations(session, existing_cell_id)
+        project = await session.get(Project, project_id, with_for_update=True)
         user = await session.get(User, user_id)
         run = await session.scalar(
             select(GenerationRun)
@@ -650,9 +659,6 @@ async def maybe_create_project_cell_executor(
             if restoration_adaptation:
                 raise ProjectCellExecutorUnavailable("Адаптация требует среду Project Cell.")
             return None
-        existing_cell_id = await session.scalar(
-            select(ProjectCellWorkspace.id).where(ProjectCellWorkspace.project_id == project_id)
-        )
         readiness = await inspect_project_cell_control(
             user,
             project_id,
@@ -707,6 +713,25 @@ async def maybe_create_project_cell_executor(
                             reclaim_for_repair=_attempt < 3,
                         ):
                             break
+                    await lock_workspace_operations(session, project_id)
+                    await lock_workspace_operations(session, workspace.id)
+                    project = await session.get(
+                        Project, project_id, with_for_update=True, populate_existing=True
+                    )
+                    run = await session.get(
+                        GenerationRun,
+                        generation_run_id,
+                        with_for_update=True,
+                        populate_existing=True,
+                    )
+                    if (
+                        project is None
+                        or run is None
+                        or project.owner_id != user_id
+                        or run.user_id != user_id
+                        or run.project_id != project_id
+                    ):
+                        raise ProjectCellOwnershipError("Project Cell admission ownership changed")
                     await session.refresh(workspace)
                     if workspace.generation_run_id is not None:
                         remaining_effect = await session.scalar(
@@ -773,6 +798,7 @@ async def maybe_create_project_cell_executor(
     response = outcome.response
     if (
         outcome.status != "completed"
+        or outcome.kind != "ensure"
         or response is None
         or response.workspace_id != workspace_id
         or response.state != "resources_ready"
@@ -1161,6 +1187,7 @@ async def maybe_create_project_cell_executor(
         operation: tool_receipts.SourceWriteOperation, receipt: Any,
     ) -> tuple[str, dict[str, str]]:
         from yleum_api.services import orchestrator_client
+
         await _refresh_workspace_from_cell()
         # Recheck the actual incarnation after the physical read, including the
         # first POST acknowledgement. Source equality alone is never a receipt.
@@ -1176,6 +1203,7 @@ async def maybe_create_project_cell_executor(
         operation: tool_receipts.SourceWriteOperation,
     ) -> dict[str, Any] | None:
         from yleum_api.services import orchestrator_client
+
         if operation.binding.workspace_id != agent_workspace_id:
             raise ProjectCellExecutorUnavailable("source write workspace changed")
         status = await orchestrator_client.project_cell_agent_write_operation(
@@ -1196,6 +1224,7 @@ async def maybe_create_project_cell_executor(
     ) -> tuple[ProjectCellAgentExecResponse, dict[str, str]]:
         from yleum_api.services import orchestrator_client
         from yleum_api.services.generation.recovery_reconciliation import _TOOL_EFFECT
+
         operation = await tool_receipts.prepare_command(
             session_factory, run_id=leased_run_id, project_id=project_id, user_id=user_id,
             workspace_id=agent_workspace_id, fencing_epoch=fencing_epoch,
@@ -1240,9 +1269,12 @@ async def maybe_create_project_cell_executor(
                 agent_workspace_id, operation_id=operation.operation_id,
                 generation_run_id=leased_run_id, fencing_epoch=fencing_epoch,
             )
-            if (current.state != "terminal" or current.receipt != receipt
+            if (
+                current.state != "terminal"
+                or current.receipt != receipt
                 or current.terminal_response is None
-                or current.terminal_response.command_wire_json() != result.command_wire_json()):
+                or current.terminal_response.command_wire_json() != result.command_wire_json()
+            ):
                 raise ProjectCellExecutorUnavailable("command current receipt changed")
             if physical != result.after_identity:
                 raise ProjectCellExecutorUnavailable("command current physical identity changed")

@@ -234,7 +234,9 @@ class MachineAdapter:
             or metadata.get("quiesce_state") in {"pending", "failed"}
         )
 
-    def parts(self, state: Any) -> tuple[ProjectMachine, DockerMachineBackend]:
+    def parts(
+        self, state: Any, *, readonly: bool = False
+    ) -> tuple[ProjectMachine, DockerMachineBackend]:
         names = state.resource_names
         if names is None or state.project_id is None or state.owner_id is None:
             raise CellResourceError("portable machine identity incomplete")
@@ -243,6 +245,20 @@ class MachineAdapter:
         project_postgres_cpu = self._project_postgres_cpu_cores()
         self._max_core_memory_bytes()
         self._max_core_cpu_cores()
+        if readonly:
+            from yleum_orchestrator.services.cell_state import _read_plain_json_file
+
+            password = _read_plain_json_file(
+                self.root / "project-postgres-secrets" / f"{state.workspace_id}.json"
+            ).get("postgres_password")
+            if not isinstance(password, str) or not password:
+                raise CellResourceError("portable machine credentials are unavailable")
+            credentials = ProjectDatabaseCredentialStore(self.root / "project-db-credentials").load(
+                state.workspace_id
+            )
+        else:
+            password = self.project_database_password(state.workspace_id)
+            credentials = self.project_database_credentials(state.workspace_id)
         backend = DockerMachineBackend(
             client=self.manager.docker._client_obj(),
             workspace_id=state.workspace_id,
@@ -254,8 +270,8 @@ class MachineAdapter:
             base_image=self.settings.cell_machine_base_image,
             guard_image=self.settings.cell_machine_guard_image,
             postgres_image=profile.postgres_image,
-            project_postgres_password=self.project_database_password(state.workspace_id),
-            project_credentials=self.project_database_credentials(state.workspace_id),
+            project_postgres_password=password,
+            project_credentials=credentials,
             project_postgres_memory_bytes=project_postgres_memory,
             project_postgres_cpu_cores=project_postgres_cpu,
             network_pool=self.settings.cell_network_pool,
@@ -1540,6 +1556,106 @@ class MachineAdapter:
             tail = await machine_effect(backend._read_log, record["log"])
             tails.append(f"[{name}] {tail}")
         return "\n".join(tails)[-24000:]
+
+    async def lease_quiescent(self, state: Any) -> bool:
+        """Observe retained process death without creating, stopping or restoring it."""
+        if not self.exists(state.workspace_id) or state.active_generation_run_id is not None:
+            return False
+        machine, backend = self.parts(state, readonly=True)
+
+        def inspect() -> bool:
+            from yleum_orchestrator.services.project_machine import MachineOperationResult
+
+            saved = machine.state()
+            operations = saved.get("operations")
+            if not isinstance(operations, dict):
+                return False
+            for key, operation in operations.items():
+                if (
+                    not isinstance(operation, dict)
+                    or operation.get("kind") not in {"command", "request"}
+                    or operation.get("state") != "completed"
+                    or operation.get("result") is None
+                ):
+                    return False
+                result = MachineOperationResult.model_validate(operation["result"])
+                if result.operation_id != key or result.state != "completed":
+                    return False
+            metadata = backend._metadata()
+            raw_reference = metadata.get("environment_ref")
+            if raw_reference is None:
+                return False
+            reference = MachineEnvironmentRef.model_validate(raw_reference)
+            epoch = metadata.get("epoch")
+            if type(epoch) is not int or epoch < 1:
+                return False
+            proof = backend._retained_preview_proof(
+                reference,
+                epoch=epoch,
+                retain_trusted=True,
+            )
+            if proof is None:
+                return False
+            names = state.resource_names
+            if names is None:
+                return False
+            trusted_ids = {item["id"] for item in proof["trusted"].values()}
+
+            def sample() -> set[tuple[str, tuple[str, ...]]]:
+                containers = backend.client.containers.list(
+                    all=True,
+                    filters={"label": f"omnia.workspace_id={state.workspace_id}"},
+                )
+                rows = set()
+                for container in containers:
+                    container.reload()
+                    if container.id not in trusted_ids and container.name not in {
+                        names.postgres_container,
+                        names.redis_container,
+                    }:
+                        raise CellIdentityConflict("unclassified physical generation writer")
+                    if container.id not in trusted_ids:
+                        kind = "postgres" if container.name == names.postgres_container else "redis"
+                        expected = self.manager._state_labels(state, kind)
+                        labels = container.attrs.get("Config", {}).get("Labels")
+                        if not isinstance(labels, dict) or any(
+                            labels.get(k) != v for k, v in expected.items()
+                        ):
+                            raise CellIdentityConflict("base service identity changed")
+                    if "ExecIDs" not in container.attrs:
+                        raise CellIdentityConflict("physical exec inventory is missing")
+                    exec_ids = container.attrs["ExecIDs"]
+                    if exec_ids is None:  # Docker explicitly reports no execs as null.
+                        exec_ids = []
+                    if not isinstance(exec_ids, list) or not all(
+                        type(x) is str and bool(x) for x in exec_ids
+                    ):
+                        raise CellIdentityConflict("physical exec inventory is unknown")
+                    for exec_id in exec_ids:
+                        execution = backend.client.api.exec_inspect(exec_id)
+                        if (
+                            execution.get("ContainerID") != container.id
+                            or execution.get("Running") is not False
+                            or type(execution.get("ExitCode")) is not int
+                        ):
+                            raise CellIdentityConflict("physical generation writer is unresolved")
+                    rows.add((container.id, tuple(sorted(exec_ids))))
+                return rows
+
+            before = sample()
+            return (
+                sample() == before
+                and machine.state() == saved
+                and backend._metadata() == metadata
+                and backend._retained_preview_proof(
+                    reference,
+                    epoch=metadata["epoch"],
+                    retain_trusted=True,
+                )
+                == proof
+            )
+
+        return bool(await machine_effect(inspect))
 
     async def halt(
         self, state: Any, *, remove_network: bool = False, capture: bool = True,

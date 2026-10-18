@@ -9,6 +9,8 @@ from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
+from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
 from yleum_api.services.orchestrator_client import ProjectCellOrchestratorClient
 from yleum_api.services.project_cell_lifecycle import (
@@ -29,7 +31,9 @@ from yleum_api.services.project_cells import (
 )
 
 _CHAIN_KINDS = ("ensure", "reconcile")
-_REPAIRABLE_STATES = frozenset({"partial", "degraded", "retained", "resources_paused"})
+_REPAIRABLE_STATES = frozenset(
+    {"resources_ready", "partial", "degraded", "retained", "resources_paused"}
+)
 _MAX_CHAIN_DEPTH = 32
 
 
@@ -143,11 +147,19 @@ async def _repair_after_observation(
     if (
         outcome.status != "completed"
         or response is None
-        or response.state == "resources_ready"
         or outcome.kind != "reconcile"
         or response.state not in _REPAIRABLE_STATES
     ):
         return outcome
+    if (
+        response.lease_observation is not None
+        and response.lease_observation.active_generation_run_id
+        not in {
+            None,
+            context.generation_run_id,
+        }
+    ):
+        raise ProjectCellStateConflict("observed generation lease belongs to another run")
     repair = await _reserve_repair_ensure(
         session_factory,
         context,
@@ -279,13 +291,38 @@ async def _reserve_repair_ensure(
 ) -> _ReservationDecision:
     prefix = f"cell-recovery:repair:{context.workspace_id}:{context.generation_run_id}"
     async with session_factory() as session:
-        current = await _lock_and_validate_tail(
-            session,
-            context,
+        # Match executor release: namespace -> owning Project -> Run -> Workspace.
+        await _advisory_lock(session, context.workspace_id)
+        hint = await session.get(ProjectCellWorkspace, context.workspace_id)
+        if hint is None:
+            raise ProjectCellNotFound("Project Cell workspace was not found")
+        project = await session.get(Project, hint.project_id, with_for_update=True)
+        run = await session.get(
+            GenerationRun,
+            context.generation_run_id,
+            with_for_update=True,
+            populate_existing=True,
         )
-        if current.id != expected_tail_id:
+        if (
+            project is None
+            or run is None
+            or project.owner_id != run.user_id
+            or run.project_id != project.id
+            or hint.owner_id != project.owner_id
+        ):
+            raise ProjectCellStateConflict("repair run ownership changed")
+        current = await _lock_and_validate_tail(session, context)
+        current_id = current.id
+        workspace = await _require_workspace(session, context.workspace_id)
+        if workspace.project_id != project.id or workspace.owner_id != project.owner_id:
+            raise ProjectCellStateConflict("repair workspace ownership changed")
+        if current_id != expected_tail_id or run.status not in {
+            "pending",
+            "queued_for_capacity",
+            "running",
+        }:
             await session.rollback()
-            return _ReservationDecision(current.id, False)
+            return _ReservationDecision(current_id, False)
         observation = await _require_operation(session, observation_id)
         if (
             observation.workspace_id != context.workspace_id
@@ -336,6 +373,7 @@ async def _require_workspace(
     workspace = await session.scalar(
         select(ProjectCellWorkspace)
         .where(ProjectCellWorkspace.id == workspace_id)
+        .execution_options(populate_existing=True)
         .with_for_update()
     )
     if workspace is None:

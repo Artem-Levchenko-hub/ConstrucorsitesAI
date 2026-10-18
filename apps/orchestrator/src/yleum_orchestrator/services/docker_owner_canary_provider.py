@@ -683,6 +683,7 @@ class DockerOwnerCanaryProvider:
             provider_ref=provider_ref,
             fencing_epoch=fencing_epoch,
             checkpoint_ref=checkpoint_ref,
+            lease_observation=observation.lease_observation,
             has_workspace=observation.volumes.get("workspace", False),
             has_agent_home=observation.volumes.get("agent-home", False),
             has_postgres=(

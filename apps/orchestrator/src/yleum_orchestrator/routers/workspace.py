@@ -1547,6 +1547,7 @@ async def _resource_response(
         provider_ref=status.provider_ref,
         fencing_epoch=status.fencing_epoch,
         checkpoint_ref=status.checkpoint_ref,
+        lease_observation=status.lease_observation,
         has_workspace=status.has_workspace,
         has_agent_home=status.has_agent_home,
         has_postgres=status.has_postgres,
