@@ -17,10 +17,9 @@ from yleum_api.services import orchestrator_client
 
 @pytest.fixture
 def wire_schemas(monkeypatch):
-    schema_path = (
-        Path(__file__).resolve().parents[2]
-        / "orchestrator/src/yleum_orchestrator/schemas/workspace.py"
-    )
+    orchestrator_src = Path(__file__).resolve().parents[2] / "orchestrator/src"
+    monkeypatch.syspath_prepend(str(orchestrator_src))
+    schema_path = orchestrator_src / "yleum_orchestrator/schemas/workspace.py"
     spec = importlib.util.spec_from_file_location("cell_wire_contract", schema_path)
     assert spec is not None and spec.loader is not None
     schemas = importlib.util.module_from_spec(spec)
