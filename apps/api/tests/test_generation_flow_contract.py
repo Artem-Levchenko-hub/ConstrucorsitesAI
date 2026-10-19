@@ -368,6 +368,7 @@ async def test_real_process_prompt_hands_uncertain_activation_to_late_reconciler
     from yleum_api.services.generation.agent_finalization import (
         AdaptationActivationPending,
     )
+    from yleum_api.services.generation.completion_release import GenerationReleasePending
     from yleum_api.services.generation_runs import terminalize_generation_run_locked
 
     flow = await flow_factory("max_miniapp")
@@ -452,13 +453,24 @@ async def test_real_process_prompt_hands_uncertain_activation_to_late_reconciler
     assert message.content == "" and message.tokens_out is None
     assert "llm.error" not in flow.trace
 
-    # A later controller receipt can still win the canonical transaction: the
-    # process/tracker did not terminalize or poison either durable owner.
+    # Simulate late domain completion after the handoff. This fixture supplies
+    # external activation/release outcomes, not the typed receipt validators.
+    # An activation marker alone must not let the generic finalizer skip a held
+    # generation lease; the real activation domain has its own transaction.
     async with factory() as session:
+        await session.get(Project, flow.project_id, with_for_update=True)
         late_run = await session.get(GenerationRun, flow.run_id, with_for_update=True)
         late_operation = await session.get(Restoration, operation_id, with_for_update=True)
         late_message = await session.get(Message, flow.assistant_id, with_for_update=True)
         assert late_run is not None and late_operation is not None and late_message is not None
+        late_workspace = await session.get(
+            ProjectCellWorkspace, late_operation.workspace_id, with_for_update=True,
+        )
+        assert late_workspace is not None
+        assert late_workspace.project_id == flow.project_id
+        assert late_workspace.owner_id == flow.owner_id
+        assert late_workspace.generation_run_id == flow.run_id
+        assert late_workspace.fencing_epoch == late_operation.fencing_epoch == 11
         late_operation.state = "completed"
         late_operation.phase = "activation_complete"
         late_operation.error = None
@@ -474,6 +486,14 @@ async def test_real_process_prompt_hands_uncertain_activation_to_late_reconciler
         late_message.content = "Готово — версия адаптирована и восстановлена."
         late_message.tokens_in = late_message.tokens_in or 0
         late_message.tokens_out = late_message.tokens_out or 0
+        with pytest.raises(GenerationReleasePending):
+            await terminalize_generation_run_locked(session, late_run, status="completed")
+        assert late_run.status == "running" and late_run.finished_at is None
+        # Only now simulate the separate confirmed release of this exact owned
+        # lease. Cleanup during the unresolved activation must retain it.
+        late_workspace.generation_run_id = None
+        late_workspace.fencing_epoch += 1
+        await session.flush()
         await terminalize_generation_run_locked(session, late_run, status="completed")
         await session.commit()
 
