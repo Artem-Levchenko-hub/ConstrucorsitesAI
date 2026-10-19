@@ -485,6 +485,7 @@ class ProjectCellExecutorHandle:
     prove_restoration_adaptation: (
         Callable[[ProofIdentity, str, int], Awaitable[RestorationAdaptationProof]] | None
     ) = None
+    release_for_completion: Callable[[], Awaitable[None]] | None = None
 
 
 # Оркестратор отвечает этой фразой из трёх мест (routers/workspace.py), с кодом
@@ -527,7 +528,12 @@ async def _release_generation_lease(
     profile_version: str,
     expected_fencing_epoch: int | None = None,
     adaptation_stopping: bool = False,
+    completion_ready: bool = False,
 ) -> None:
+    from yleum_api.services.generation.completion_release import (
+        GenerationReleasePending,
+        retain_completion_release,
+    )
     from yleum_api.services.generation.recovery_contract import RecoveryStateV2, decode_recovery
     from yleum_api.services.generation.recovery_execution import recovery_state
 
@@ -596,6 +602,10 @@ async def _release_generation_lease(
             kind="release", idempotency_key=key, request={},
         )
         retain_release(run, operation.id, workspace.fencing_epoch, "release_pending")
+        completion_handoff = completion_ready and await retain_completion_release(
+            session, run=run, workspace=workspace, operation=operation,
+            profile_version=profile_version,
+        )
         await session.commit()
     client = HttpProjectCellOrchestratorClient()
     deadline = monotonic() + _PROJECT_CELL_RELEASE_RETRY_SECONDS
@@ -615,6 +625,10 @@ async def _release_generation_lease(
     if (outcome.status != "completed" or response is None
         or response.workspace_id != workspace_id or response.fencing_epoch is None
         or response.state != "resources_ready"):
+        if completion_handoff and outcome.status in {
+            "pending", "running", "waiting_capacity", "indeterminate",
+        }:
+            raise GenerationReleasePending("generation release awaits its durable receipt")
         raise ProjectCellExecutorUnavailable(f"Project Cell release failed: {outcome.status}")
     async with session_factory() as session:
         run = await locked_run(session)
@@ -1411,7 +1425,7 @@ async def maybe_create_project_cell_executor(
         await _refresh_workspace_from_cell()
         return dict(workspace_files)
 
-    async def _release() -> None:
+    async def _release(*, completion_ready: bool = False) -> None:
         cleanup_error: BaseException | None = None
         retain_activation_lease = False
         if adaptation_workspace is not None:
@@ -1453,6 +1467,7 @@ async def maybe_create_project_cell_executor(
                     workspace_id=workspace_id,
                     generation_run_id=leased_run_id,
                     profile_version=profile_version,
+                    completion_ready=completion_ready and adaptation_workspace is None,
                 )
         finally:
             if cleanup_error is not None:
@@ -1833,6 +1848,9 @@ async def maybe_create_project_cell_executor(
         workspace_id=agent_workspace_id,
         create_preview_session=_create_preview_session,
         release=_release,
+        release_for_completion=(
+            (lambda: _release(completion_ready=True)) if not restoration_adaptation else None
+        ),
         current_identity=_current_identity,
         run_role=_run_role,
         replay_role_response=_replay_role_response,

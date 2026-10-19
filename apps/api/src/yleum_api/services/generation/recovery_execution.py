@@ -325,6 +325,10 @@ async def recovery_failure_outcome(
                 return "preserve"
             if run.status in {"cancel_requested", "cancelled"}:
                 return "cancelled"
+            from yleum_api.services.generation.completion_release import has_completion_release
+
+            if has_completion_release(run):
+                return "preserve"  # Release-only intent must never replay/fail the completed body.
             if not isinstance(run.agent_state, dict):
                 return "preserve"
             state = recovery_state(run)

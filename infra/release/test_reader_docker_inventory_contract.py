@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import copy
+import contextlib
 import importlib.util
+import io
 import json
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -125,6 +128,119 @@ class DockerInventoryTests(unittest.TestCase):
 
     def inspected_ids(self):
         return [call[4:] for call in self.calls if call[1] == "inspect"]
+
+    def collect_real_command(self, outputs):
+        """Keep command's exit/output checks; fake only the external process."""
+        self.calls = []
+        self.command_stderr = io.StringIO()
+        remaining = iter(outputs)
+
+        def run(argv, **kwargs):
+            self.calls.append(argv)
+            self.assertEqual(kwargs["timeout"], 20)
+            self.assertTrue(kwargs["capture_output"] and kwargs["text"])
+            value = next(remaining)
+            status, stdout, stderr = value if isinstance(value, tuple) else (0, value, "")
+            return SimpleNamespace(returncode=status, stdout=stdout, stderr=stderr)
+
+        with patch.object(self.observer.subprocess, "run", side_effect=run), \
+                contextlib.redirect_stderr(self.command_stderr):
+            return self.observer.docker_inventory()
+
+    def unseen_inspect_prefix(self, reader, candidate):
+        return [self.census(reader), self.inspection(reader), self.inspection(reader),
+                self.census(reader, candidate)]
+
+    def test_real_unseen_inspect_exit_restarts_full_census_with_safe_diagnostic(self):
+        reader, candidate = self.reader(self.a), self.opaque_dev(self.b)
+        fresh = {**reader, "pid": 200}
+        secret = "private-cookie-argument-stderr"
+        result = self.collect_real_command([
+            *self.unseen_inspect_prefix(reader, candidate), (1, secret, secret),
+            self.census(fresh), self.inspection(fresh), self.inspection(fresh), self.census(fresh),
+        ])
+        self.assertEqual(result, [fresh])
+        diagnostics = [json.loads(line)["docker_observation_failure"]
+                       for line in self.command_stderr.getvalue().splitlines()]
+        self.assertEqual(len(diagnostics), 1)
+        self.assertEqual(diagnostics[0]["reason"], "nonzero_exit")
+        self.assertEqual(diagnostics[0]["stage"], "unseen_inspect")
+        self.assertEqual(diagnostics[0]["requested_count"], 1)
+        self.assertEqual(diagnostics[0]["returncode"], 1)
+        self.assertEqual(diagnostics[0]["stdout_bytes"], len(secret.encode()))
+        self.assertEqual(diagnostics[0]["stderr_bytes"], len(secret.encode()))
+        self.assertEqual(diagnostics[0]["attempt"], 1)
+        self.assertEqual(self.inspected_ids(),
+                         [[self.a], [self.a], [self.b], [self.a], [self.a]])
+        self.assertNotIn(secret, self.command_stderr.getvalue())
+
+    def test_three_real_unseen_inspect_failures_deny_without_partial_authority(self):
+        reader, candidate = self.reader(self.a), self.opaque_dev(self.b)
+        failures = [
+            ("permission", (1, "", "private-permission-cookie"), "nonzero_exit"),
+            ("overflow", (0, "private-output" + "x" * 2_000_001, ""), "stdout_limit"),
+            ("partial", (1, self.inspection(candidate), "private-partial-error"), "nonzero_exit"),
+        ]
+        for label, failure, reason in failures:
+            with self.subTest(label=label):
+                outputs = [*self.unseen_inspect_prefix(reader, candidate), failure] * 3
+                with self.assertRaises(ValueError) as raised:
+                    self.collect_real_command(outputs)
+                self.assertEqual([call[1] for call in self.calls],
+                                 ["ps", "inspect", "inspect", "ps", "inspect"] * 3)
+                diagnostics = [json.loads(line)["docker_observation_failure"]
+                               for line in self.command_stderr.getvalue().splitlines()]
+                self.assertEqual([item["attempt"] for item in diagnostics], [1, 2, 3])
+                self.assertTrue(all(item["reason"] == reason for item in diagnostics))
+                self.assertTrue(all(item["stage"] == "unseen_inspect" for item in diagnostics))
+                self.assertNotIn("private-", self.command_stderr.getvalue())
+                self.assertNotIn("private-", str(raised.exception))
+
+    def test_real_inspect_restart_does_not_hide_a_new_reader(self):
+        reader, candidate = self.reader(self.a), self.opaque_dev(self.b)
+        foreign = self.reader(self.c, name="foreign-worker")
+        result = self.collect_real_command([
+            *self.unseen_inspect_prefix(reader, candidate), (1, "", "private-error"),
+            self.census(reader, foreign), self.inspection(reader, foreign),
+            self.inspection(reader, foreign), self.census(reader, foreign),
+        ])
+        with self.assertRaises(ValueError):
+            self.observer.classify_containers(result, "core")
+
+    def test_remote_command_diagnostics_keep_only_bounded_numeric_and_enum_metadata(self):
+        diagnostic = {
+            "reason": "nonzero_exit", "returncode": 1, "stage": "unseen_inspect",
+            "stdout_chars": 0, "stdout_bytes": 0, "stderr_bytes": 32,
+            "requested_count": 1, "attempt": 1, "maximum_attempts": 3,
+        }
+        record = json.dumps({"docker_observation_failure": diagnostic})
+        self.assertEqual(self.observer.remote_docker_diagnostics(record), [diagnostic])
+        invalid = [
+            {**diagnostic, "argv": "private-argument"},
+            {**diagnostic, "stage": "private-argument"},
+            {**diagnostic, "stage": []},
+            {**diagnostic, "attempt": True},
+            {**diagnostic, "requested_count": 10001},
+            {**diagnostic, "stdout_chars": -1},
+            {**diagnostic, "returncode": 0},
+            {**diagnostic, "reason": "stdout_limit"},
+        ]
+        for value in invalid:
+            with self.subTest(value=value):
+                self.assertEqual(self.observer.remote_docker_diagnostics(json.dumps({
+                    "docker_observation_failure": value,
+                })), [])
+        self.assertEqual(self.observer.remote_docker_diagnostics("\n".join([record] * 4)), [])
+        result = SimpleNamespace(returncode=1, stdout="private-stdout",
+                                 stderr=record + "\nprivate-stderr")
+        with patch.object(self.observer.subprocess, "run", return_value=result), \
+                contextlib.redirect_stderr(io.StringIO()) as captured:
+            with self.assertRaises(ValueError):
+                self.observer.command(["ssh", "private-argument"])
+        self.assertEqual(json.loads(captured.getvalue()), {
+            "host": "commerce", "docker_observation_failure": diagnostic,
+        })
+        self.assertNotIn("private-", captured.getvalue())
 
     def possible(self, summary):
         with patch.object(self.observer, "command", return_value=self.raw_census(summary)):

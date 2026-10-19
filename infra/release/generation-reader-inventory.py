@@ -290,6 +290,27 @@ def classify_containers(rows: list[dict], host: str) -> dict[str, dict]:
     return selected
 
 
+_COMMAND_STDOUT_LIMIT = 2_000_000
+_DOCKER_DIAGNOSTIC_STAGES = frozenset({
+    "census", "initial_inspect", "unseen_inspect", "reader_reinspect",
+})
+
+
+class CommandObservationFailure(ValueError):
+    """Retain numeric failure facts, never command arguments or captured bodies."""
+
+    def __init__(self, returncode: int, stdout: str, stderr: str) -> None:
+        super().__init__("reader inventory command observation failed")
+        self.metrics = {
+            "reason": "nonzero_exit" if returncode else "stdout_limit",
+            "returncode": returncode,
+            "stdout_chars": len(stdout),
+            "stdout_bytes": len(stdout.encode("utf-8", errors="replace")),
+            "stderr_bytes": len(stderr.encode("utf-8", errors="replace")),
+        }
+        self.docker_context: tuple[str, int] | None = None
+
+
 def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> str:
     result = subprocess.run(
         argv, input=stdin, capture_output=True, text=True, timeout=timeout
@@ -300,8 +321,51 @@ def command(argv: list[str], *, stdin: str | None = None, timeout: int = 20) -> 
         context = remote_failure_context(result.stderr)
         if context:
             print(canonical({"host": "commerce", "failure_context": context}), file=sys.stderr)
-    need(result.returncode == 0 and len(result.stdout) <= 2_000_000)
+        for diagnostic in remote_docker_diagnostics(result.stderr):
+            print(canonical({"host": "commerce", "docker_observation_failure": diagnostic}),
+                  file=sys.stderr)
+    if result.returncode != 0 or len(result.stdout) > _COMMAND_STDOUT_LIMIT:
+        raise CommandObservationFailure(result.returncode, result.stdout, result.stderr)
     return result.stdout.strip()
+
+
+def remote_docker_diagnostics(stderr: str) -> list[dict]:
+    """Forward at most three validated numeric/enum records from a remote scan."""
+    diagnostics = []
+    numeric = {"returncode", "stdout_chars", "stdout_bytes", "stderr_bytes",
+               "requested_count", "attempt", "maximum_attempts"}
+    for line in stderr.splitlines():
+        try:
+            envelope = json.loads(line)
+        except ValueError:
+            continue
+        if type(envelope) is not dict or set(envelope) != {"docker_observation_failure"}:
+            continue
+        row = envelope["docker_observation_failure"]
+        if (
+            type(row) is dict and set(row) == numeric | {"reason", "stage"}
+            and all(type(row[key]) is int and abs(row[key]) <= 2**53 for key in numeric)
+            and type(row["stage"]) is str and row["stage"] in _DOCKER_DIAGNOSTIC_STAGES
+            and row["maximum_attempts"] == 3 and 1 <= row["attempt"] <= 3
+            and 0 <= row["requested_count"] <= 10000
+            and 0 <= row["stdout_chars"] <= row["stdout_bytes"]
+            and row["stderr_bytes"] >= 0
+            and (
+                (row["reason"] == "nonzero_exit" and row["returncode"] != 0)
+                or (row["reason"] == "stdout_limit" and row["returncode"] == 0
+                    and row["stdout_chars"] > _COMMAND_STDOUT_LIMIT)
+            )
+        ):
+            diagnostics.append(row)
+    return diagnostics if len(diagnostics) <= 3 else []
+
+
+def _docker_command(argv: list[str], *, stage: str, requested_count: int = 0) -> str:
+    try:
+        return command(argv)
+    except CommandObservationFailure as exc:
+        exc.docker_context = (stage, requested_count)
+        raise
 
 
 def remote_failure_context(stderr: str) -> list[dict]:
@@ -339,7 +403,8 @@ def _docker_container_census() -> dict[str, DockerCensusSummary]:
         '{"id":{{json .ID}},"name":{{json .Names}},'
         '"image_reference":{{json .Image}},"rendered_command":{{json .Command}}}'
     )
-    raw = command(["docker", "ps", "-a", "--no-trunc", "--format", template])
+    raw = _docker_command(["docker", "ps", "-a", "--no-trunc", "--format", template],
+                          stage="census")
     rows = [json.loads(line) for line in raw.splitlines()]
     need(
         len(rows) <= 10000
@@ -393,7 +458,7 @@ def _possible_reader(summary: DockerCensusSummary) -> bool:
     )
 
 
-def _inspect_docker_containers(ids: list[str]) -> dict[str, dict]:
+def _inspect_docker_containers(ids: list[str], *, stage: str = "initial_inspect") -> dict[str, dict]:
     """Inspect every requested ID; a disappearing or unobserved ID is unknown."""
     template = (
         '{"id":{{json .Id}},"image":{{json .Image}},"name":{{json .Name}},'
@@ -404,7 +469,8 @@ def _inspect_docker_containers(ids: list[str]) -> dict[str, dict]:
         '"entrypoint":{{json .Config.Entrypoint}},"cmd":{{json .Config.Cmd}}}'
     )
     rows = []
-    raw = command(["docker", "inspect", "--format", template, *ids]) if ids else ""
+    raw = _docker_command(["docker", "inspect", "--format", template, *ids],
+                          stage=stage, requested_count=len(ids)) if ids else ""
     for line in raw.splitlines():
         row = json.loads(line)
         row["name"] = row["name"].removeprefix("/")
@@ -438,7 +504,13 @@ def docker_inventory() -> list[dict]:
     for attempt in range(3):
         try:
             return _observe_docker_readers()
-        except ValueError:
+        except ValueError as exc:
+            if isinstance(exc, CommandObservationFailure) and exc.docker_context is not None:
+                stage, count = exc.docker_context
+                print(canonical({"docker_observation_failure": {
+                    **exc.metrics, "stage": stage, "requested_count": count,
+                    "attempt": attempt + 1, "maximum_attempts": 3,
+                }}), file=sys.stderr)
             if attempt == 2:
                 raise
     raise AssertionError("bounded Docker observation did not return")
@@ -465,12 +537,12 @@ def _observe_docker_readers() -> list[dict]:
             key for key, summary in current.items()
             if _possible_reader(summary) and key not in observed
         )
-        added = _inspect_docker_containers(unseen)
+        added = _inspect_docker_containers(unseen, stage="unseen_inspect")
         need(all(not is_reader_container(row) for row in added.values()))
         need(all(row["name"] == current[key]["name"] for key, row in added.items()))
         observed.update(added)
         need(_reader_cohort(current, observed) == readers)
-        fresh = _inspect_docker_containers(sorted(readers))
+        fresh = _inspect_docker_containers(sorted(readers), stage="reader_reinspect")
         need(all(fresh[key]["name"] == current[key]["name"] for key in readers))
         need(all(is_reader_container(row) for row in fresh.values()))
         observed.update(fresh)

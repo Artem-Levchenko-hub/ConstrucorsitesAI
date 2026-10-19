@@ -253,9 +253,10 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
             "CREATE TABLE project_cell_workspaces (project_id text UNIQUE, orchestrator text)"
         )
         connection.execute(
-            "CREATE TABLE project_cell_operations (execution_run_id text, status text)"
+            "CREATE TABLE project_cell_operations (execution_run_id text, status text, "
+            "generation_run_id text, kind text, next_attempt_at text)"
         )
-        ids = [uuid4() for _ in range(8)]
+        ids = [uuid4() for _ in range(12)]
         cases = [
             ("pending", None, None),
             ("queued_for_capacity", "started", None),
@@ -265,6 +266,10 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
             ("failed", "started", None),
             ("completed", None, "completed"),
             ("cancel_requested", None, None),
+            ("running", None, None),
+            ("running", "started", None),
+            ("running", None, None),
+            ("running", None, None),
         ]
         for index, (status, started, operation) in enumerate(cases):
             run_id = ids[index].hex
@@ -272,12 +277,26 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
                 "INSERT INTO generation_runs "
                 "(id, project_id, execution_backend, status, execution_started_at, created_at) "
                 "VALUES (?,?,?,?,?,?)",
-                (run_id, run_id, "worker" if index < 7 else "in_process", status, started, index),
+                (run_id, run_id,
+                 "worker" if index < 7 or index == 9 else "api" if index >= 8 else "in_process",
+                 status, started, index),
             )
+            if index in {8, 9, 10}:
+                connection.execute(
+                    "UPDATE generation_runs SET agent_state=? WHERE id=?",
+                    ('{"completion_release_v1":{"version":1}}', run_id),
+                )
+            if index in {9, 10}:
+                connection.execute(
+                    "INSERT INTO project_cell_operations "
+                    "(generation_run_id,kind,next_attempt_at) VALUES (?,'release',?)",
+                    (run_id, "2099-01-01 00:00:00" if index == 9 else "2000-01-01 00:00:00"),
+                )
             connection.execute("INSERT INTO project_cell_workspaces VALUES (?, 'A')", (run_id,))
             if operation:
                 connection.execute(
-                    "INSERT INTO project_cell_operations VALUES (?,?)", (run_id, operation)
+                    "INSERT INTO project_cell_operations (execution_run_id,status) VALUES (?,?)",
+                    (run_id, operation),
                 )
 
         def execute(query):
@@ -287,9 +306,11 @@ def test_sql_routes_cancel_started_orphan_and_terminal_cleanup_outside_host_queu
 
         assert execute(generation._unstarted_candidates_query([])) == [(ids[0].hex, "A")]
         assert execute(generation._maintenance_candidates_query([])) == [
-            (run_id.hex, "A") for run_id in ids[1:5]
+            (run_id.hex, "A") for run_id in [*ids[1:5], ids[8], ids[10]]
         ]
-        assert execute(generation._maintenance_candidates_query(ids[1:4])) == [(ids[4].hex, "A")]
+        assert execute(generation._maintenance_candidates_query(ids[1:4])) == [
+            (run_id.hex, "A") for run_id in [ids[4], ids[8], ids[10]]
+        ]
 
 
 def test_cleanup_keeps_global_slot_but_does_not_reserve_host_provisional_slot():

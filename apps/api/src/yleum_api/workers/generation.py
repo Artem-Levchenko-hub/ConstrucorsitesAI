@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Select, and_, exists, func, or_, select, text, update
+from sqlalchemy import Select, String, and_, cast, exists, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession, async_sessionmaker
 
 from yleum_api.core.config import get_settings
@@ -32,6 +32,11 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import ProjectCellOperation, ProjectCellWorkspace
+from yleum_api.services.generation.completion_release import (
+    COMPLETION_RELEASE_KEY,
+    has_completion_release,
+    resume_completion_release,
+)
 from yleum_api.services.generation_execution_context import execution_run_id
 from yleum_api.services.generation_runs import (
     ACTIVE_GENERATION_STATUSES,
@@ -93,6 +98,25 @@ async def _abandon_operations(session: AsyncSession, run_id: UUID) -> None:
     )
 
 
+async def _await_owned_dispatch(
+    work: asyncio.Task[Any], ownership: AsyncConnection, run_id: UUID,
+) -> None:
+    """Normal execution and release-only work lose authority on the same monitor."""
+    monitor = asyncio.create_task(_ownership_monitor(ownership, run_id))
+    try:
+        done, _ = await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
+        if monitor in done:
+            await monitor
+            work.cancel()
+        with suppress(asyncio.CancelledError):
+            await work
+    finally:
+        if not monitor.done():
+            monitor.cancel()
+            with suppress(asyncio.CancelledError, Exception):
+                await monitor
+
+
 async def _fail_orphan(run_id: UUID, message: str) -> None:
     from yleum_api.services.generation.recovery_execution import has_recovery_state
     from yleum_api.services.generation.supervisor import _emergency_error
@@ -105,7 +129,7 @@ async def _fail_orphan(run_id: UUID, message: str) -> None:
         # A durable Stop request wins a race with ownership loss. Other active
         # runs are infrastructure failures, never a fabricated user cancellation.
         cancelled = run.status == "cancel_requested"
-        if not cancelled and has_recovery_state(run):
+        if not cancelled and (has_recovery_state(run) or has_completion_release(run)):
             # Unknown/new recovery contracts own durable effects. A legacy
             # orphan finalizer must not destroy their state or seal billing.
             return
@@ -152,8 +176,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
         await ownership.commit()
         if not locked:
             return False
-        work: asyncio.Task[None] | None = None
-        monitor: asyncio.Task[None] | None = None
+        work: asyncio.Task[Any] | None = None
         context_token = execution_run_id.set(run_id)
         recovery_owner = recovery_execution._SESSION_OWNER.set(
             recovery_execution.SessionOwnership(run_id, ownership)
@@ -162,7 +185,9 @@ async def execute_dispatch(run_id: UUID) -> bool:
         try:
             async with factory() as session:
                 run = await session.get(GenerationRun, run_id, with_for_update=True)
-                if run is None or run.execution_backend != "worker":
+                if run is None or (
+                    run.execution_backend != "worker" and not has_completion_release(run)
+                ):
                     return False
                 if run.status not in ACTIVE_GENERATION_STATUSES:
                     await _abandon_operations(session, run_id)
@@ -172,7 +197,11 @@ async def execute_dispatch(run_id: UUID) -> bool:
                     await apply_cancelled_generation_locked(session, run)
                     await session.commit()
                     return False
-                if run.execution_started_at is not None:
+                release_only = has_completion_release(run)
+                if release_only:
+                    orphan = False
+                    dispatch = None
+                elif run.execution_started_at is not None:
                     orphan = True
                     dispatch = None
                 else:
@@ -196,6 +225,10 @@ async def execute_dispatch(run_id: UUID) -> bool:
                         raise ValueError("generation dispatch message ownership mismatch")
                     run.execution_started_at = datetime.now(UTC)
                 await session.commit()
+            if release_only:
+                work = asyncio.create_task(resume_completion_release(factory, run_id))
+                await _await_owned_dispatch(work, ownership, run_id)
+                return True
             if orphan:
                 if recovery_execution.has_recovery_state(run):
                     try:
@@ -253,15 +286,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
                     capacity_dispatch_token=capacity_token,
                 )
             )
-            monitor = asyncio.create_task(_ownership_monitor(ownership, run_id))
-            done, _ = await asyncio.wait({work, monitor}, return_when=asyncio.FIRST_COMPLETED)
-            if monitor in done:
-                await monitor
-                # The database cancellation/deadline is authoritative even if a
-                # Redis notification was lost. Cancel the actual running task.
-                work.cancel()
-            with suppress(asyncio.CancelledError):
-                await work
+            await _await_owned_dispatch(work, ownership, run_id)
             return True
         except Exception:
             log.exception("generation dispatcher failed", extra={"run_id": str(run_id)})
@@ -276,7 +301,7 @@ async def execute_dispatch(run_id: UUID) -> bool:
             )
             return False
         finally:
-            for task in (work, monitor):
+            for task in (work,):
                 if task is not None and not task.done():
                     task.cancel()
                     with suppress(asyncio.CancelledError, Exception):
@@ -463,6 +488,14 @@ def _unstarted_candidates_query(active: Sequence[UUID]) -> Select[Any]:
 
 def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
     # Ownership and unknown effects are still decided by execute_dispatch.
+    release_intent = cast(
+        GenerationRun.agent_state[COMPLETION_RELEASE_KEY]["version"].as_string(), String,
+    ) == "1"
+    release_due = ~exists().where(
+        ProjectCellOperation.generation_run_id == GenerationRun.id,
+        ProjectCellOperation.kind == "release",
+        ProjectCellOperation.next_attempt_at > datetime.now(UTC),
+    )
     return (
         select(GenerationRun.id, ProjectCellWorkspace.orchestrator)
         .outerjoin(
@@ -470,13 +503,15 @@ def _maintenance_candidates_query(active: Sequence[UUID]) -> Select[Any]:
             ProjectCellWorkspace.project_id == GenerationRun.project_id,
         )
         .where(
-            GenerationRun.execution_backend == "worker",
+            or_(GenerationRun.execution_backend == "worker", release_intent),
             GenerationRun.id.not_in(active),
             or_(
                 GenerationRun.status == "cancel_requested",
+                and_(GenerationRun.status == "running", release_intent, release_due),
                 and_(
                     GenerationRun.status.in_(ACTIVE_GENERATION_STATUSES),
                     GenerationRun.execution_started_at.is_not(None),
+                    ~func.coalesce(release_intent, False),
                     _recovery_due_clause(),
                 ),
                 and_(

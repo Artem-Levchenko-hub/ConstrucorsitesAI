@@ -268,8 +268,12 @@ async def cleanup_generation_runtime(
         try:
             if runtime.handle is not None:
                 try:
+                    release = runtime.handle.release
+                    completion_release = getattr(runtime.handle, "release_for_completion", None)
+                    if primary_error is None and completion_release is not None:
+                        release = completion_release
                     release_task: asyncio.Future[None] = asyncio.ensure_future(
-                        runtime.handle.release()
+                        release()
                     )
                     try:
                         await asyncio.shield(release_task)

@@ -20,6 +20,7 @@ from yleum_api.core.redis import (
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.services.generation.agent_finalization import AdaptationActivationPending
+from yleum_api.services.generation.completion_release import GenerationReleasePending
 from yleum_api.services.generation.lightweight_turns import (
     _run_async_onboarding,
     _run_clarify,
@@ -307,6 +308,11 @@ async def _run_tracked_prompt(
     except AdaptationActivationPending:
         # The restoration reconciler owns the durable activation outbox and
         # will settle the run after the controller returns a terminal receipt.
+        return
+    except GenerationReleasePending:
+        # The completed body and exact release outbox were committed together.
+        # The worker resumes only that release under its normal executor lock.
+        durable_handoff = True
         return
     except Exception as exc:
         logging.getLogger("yleum_api.routers.messages").error("%s failed", label, exc_info=exc)

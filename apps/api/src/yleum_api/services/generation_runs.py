@@ -270,8 +270,16 @@ async def terminalize_generation_run_locked(
     The acceptance guard then revalidates the fresh owning rows under those locks.
     """
     if status == "completed":
+        from yleum_api.services.generation.completion_release import (
+            GenerationReleasePending,
+            generation_release_pending,
+        )
         from yleum_api.services.generation.recovery_acceptance import require_terminal_acceptance
 
+        if run.status in {"cancel_requested", "cancelled", "failed"} or (
+            await generation_release_pending(session, run)
+        ):
+            raise GenerationReleasePending("generation release is not confirmed for completion")
         await require_terminal_acceptance(session, run)
     run.status = status
     run.finished_at = finished_at or datetime.now(UTC)
@@ -738,7 +746,11 @@ async def reserve_generation_run(
     # even if the task callback has not updated generation_runs yet.
     if active is not None and active.assistant_message_id is not None:
         assistant = await session.get(Message, active.assistant_message_id)
-        if assistant is not None and assistant.tokens_out is not None:
+        from yleum_api.services.generation.completion_release import generation_release_pending
+
+        if (active.status != "cancel_requested"
+                and assistant is not None and assistant.tokens_out is not None
+                and not await generation_release_pending(session, active)):
             completion_error = _generation_completion_error(active, assistant)
             await terminalize_generation_run_locked(
                 session,
@@ -812,8 +824,13 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
         .all()
     )
     now = datetime.now(UTC)
+    recovered = 0
     marker = "[Генерация прервана перезапуском сервера — отправьте запрос повторно]"
     for run in runs:
+        from yleum_api.services.generation.completion_release import has_completion_release
+
+        if has_completion_release(run):
+            continue  # The worker owns release-only recovery, including API-owned bodies.
         await terminalize_generation_run_locked(
             session,
             run,
@@ -821,6 +838,7 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
             error="API process restarted before generation completed",
             finished_at=now,
         )
+        recovered += 1
         if run.assistant_message_id is None:
             await compile_terminal_run_memory(session, run)
             continue
@@ -834,7 +852,7 @@ async def _recover_interrupted_generation_runs(session: AsyncSession) -> int:
 
     await session.commit()
     await _retry_terminal_adaptation_notifications(session)
-    return len(runs)
+    return recovered
 
 
 async def recover_interrupted_generation_runs(
@@ -940,6 +958,10 @@ async def _finalize_generation_run(session: AsyncSession, run_id: UUID) -> str:
     if run is None:
         return "failed"
     if run.status in {"completed", "failed", "cancelled"}:
+        await session.commit()
+        return run.status
+    if run.status == "cancel_requested":
+        await apply_cancelled_generation_locked(session, run)
         await session.commit()
         return run.status
     message = (
