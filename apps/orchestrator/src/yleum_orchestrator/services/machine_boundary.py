@@ -12,6 +12,7 @@ import os
 import re
 import secrets
 import time
+from collections.abc import Iterable
 from html import escape
 from typing import Any, cast
 from urllib.parse import quote, unquote, urlsplit
@@ -342,6 +343,21 @@ def route_port(path: str, routes: list[dict[str, Any]]) -> int | None:
     return None
 
 
+def managed_headers(
+    headers: Iterable[tuple[str, str]], *, actor_precondition: bool = False,
+) -> dict[str, str]:
+    """Keep a caller's actor expectation, never caller-supplied identity claims."""
+    forwarded = {}
+    for key, value in headers:
+        name = key.casefold()
+        if name in _HOP:
+            continue
+        if name.startswith("x-omnia-") and not (actor_precondition and name == "x-omnia-actor"):
+            continue
+        forwarded[key] = value
+    return forwarded
+
+
 def product_headers(
     headers: dict[str, str], *, project_id: str, epoch: int, user: dict[str, Any],
     origin: object = None,
@@ -552,11 +568,12 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
             ):
                 return self._reply(401, b"MAX authentication required")
             target, port = str(config["core_host"]), 3000
-            headers = {
-                key: value
-                for key, value in self.headers.items()
-                if key.casefold() not in _HOP and not key.casefold().startswith("x-omnia-")
-            }
+            headers = managed_headers(
+                self.headers.items(),
+                actor_precondition=self.command == "POST" and path in {
+                    "/api/omnia/actions", "/api/omnia/consents",
+                },
+            )
             if public:
                 headers = {
                     key: value for key, value in headers.items()

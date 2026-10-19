@@ -35,6 +35,7 @@ def session_boundary(monkeypatch):
     core_state = SimpleNamespace(
         status=200,
         cookies=[f"{CANONICAL}={token}; Path=/; Secure; HttpOnly; SameSite=Lax; Max-Age=3600"],
+        respond=None,
     )
 
     class Core(http.server.BaseHTTPRequestHandler):
@@ -43,15 +44,20 @@ def session_boundary(monkeypatch):
 
         def do_GET(self):
             core_requests.append((self.path, dict(self.headers)))
-            self.send_response(core_state.status)
+            if core_state.respond is None:
+                status, body = core_state.status, b'{"user":{"id":"123"}}'
+            else:
+                status, body = core_state.respond(self)
+            self.send_response(status)
             if self.command == "POST" and self.path == "/api/max/session":
                 for value in core_state.cookies:
                     self.send_header("Set-Cookie", value)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
-            self.wfile.write(b'{"user":{"id":"123"}}')
+            self.wfile.write(body)
 
         do_POST = do_GET
+        do_PATCH = do_GET
         do_DELETE = do_GET
 
     class Product(http.server.BaseHTTPRequestHandler):
@@ -149,6 +155,67 @@ def test_each_transport_authenticates_but_credentials_never_reach_product(sessio
     core_cookie = http.cookies.SimpleCookie(session.core_requests[-1][1].get("Cookie", ""))
     assert core_cookie[CANONICAL].value == session.token
     assert EMBEDDED not in core_cookie and PARTITIONED not in core_cookie
+
+
+@pytest.mark.parametrize("public_mode", [False, True])
+@pytest.mark.parametrize("path", ["/api/omnia/actions", "/api/omnia/consents"])
+@pytest.mark.parametrize("actor_header", ["X-Omnia-Actor", "x-OmNiA-aCtOr"])
+def test_actor_precondition_survives_gateway_without_becoming_identity(
+    session_boundary, public_mode, path, actor_header,
+):
+    session = session_boundary
+    session.gateway.config.update(public_mode=public_mode, preview_origin=ORIGIN)
+    writes = []
+
+    def guarded_core(request):
+        actor, _ = boundary.authenticated_session(
+            request.headers.get("Cookie", ""), SECRET, public=public_mode,
+        )
+        assert actor is not None
+        expected = request.headers.get("X-Omnia-Actor")
+        if expected is not None and expected != actor["id"]:
+            return 409, b'{"error":"actor changed"}'
+        writes.append(actor["id"])
+        return 201, b'{"synthetic":true}'
+
+    session.core.respond = guarded_core
+    headers = {
+        "Cookie": f"{CANONICAL}={signed_session('456')}", "Origin": ORIGIN,
+        actor_header: "123", "X-Omnia-User-ID": "forged",
+        "X-Omnia-Project-ID": "forged", "X-Omnia-Session-Epoch": "999",
+        "X-Omnia-MAX-Init-Data": "forged", "X-Omnia-Integration-Assertion": "forged",
+    }
+    assert session.request(path, method="POST", headers=headers)[0] == 409
+    assert writes == []
+    delivered = {key.lower(): value for key, value in session.core_requests[-1][1].items()}
+    assert delivered["x-omnia-actor"] == "123"
+    assert {key for key in delivered if key.startswith("x-omnia-")} == {"x-omnia-actor"}
+
+    # The cookie remains authoritative; a matching precondition permits one write.
+    headers[actor_header] = "456"
+    assert session.request(path, method="POST", headers=headers)[0] == 201
+    assert writes == ["456"]
+
+    assert session.request("/api/records", method="POST", headers=headers)[0] == 200
+    product = {key.lower(): value for key, value in session.product_requests[-1][1].items()}
+    assert "x-omnia-actor" not in product
+    assert product["x-omnia-user-id"] == "456"
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/api/omnia/actions"), ("PATCH", "/api/omnia/actions/synthetic"),
+    ("POST", "/api/omnia/events"), ("POST", "/api/max/session"),
+])
+def test_actor_precondition_is_not_forwarded_outside_explicit_write_contracts(
+    session_boundary, method, path,
+):
+    session = session_boundary
+    assert session.request(path, method=method, headers={
+        "Cookie": f"{CANONICAL}={session.token}", "Origin": ORIGIN,
+        "X-Omnia-Actor": "untrusted-expectation", "X-Omnia-User-ID": "forged",
+    })[0] == 200
+    delivered = {key.lower() for key in session.core_requests[-1][1]}
+    assert not any(key.startswith("x-omnia-") for key in delivered)
 
 
 @pytest.mark.parametrize("name", (EMBEDDED, PARTITIONED))
