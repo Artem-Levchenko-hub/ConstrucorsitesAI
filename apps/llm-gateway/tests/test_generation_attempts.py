@@ -191,7 +191,8 @@ def test_identity_raw_duplicate_keys_cannot_be_lost_in_pydantic(
 
 
 @pytest.mark.parametrize("stream", [False, True, "nonstream"])
-async def test_durable_late_connect_error_is_not_preconnect_proof(monkeypatch, stream):
+@pytest.mark.parametrize("retry_preconnect", [False, True])
+async def test_late_connect_error_is_not_preconnect_proof(monkeypatch, stream, retry_preconnect):
     import httpx
 
     from yleum_gateway.core.config import reset_settings_cache
@@ -223,19 +224,21 @@ async def test_durable_late_connect_error_is_not_preconnect_proof(monkeypatch, s
     with pytest.raises(UpstreamProviderError) as caught:
         if stream is True:
             async for _ in llmgw.astream(
-                "claude-sonnet-5.5", [{"role": "user", "content": "x"}], retry_preconnect=False
+                "claude-sonnet-5.5", [{"role": "user", "content": "x"}],
+                retry_preconnect=retry_preconnect,
             ):
                 pass
         else:
             await llmgw.acompletion(
                 model="claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "x"}],
-                retry_preconnect=False,
+                retry_preconnect=retry_preconnect,
                 max_tokens=32 if stream == "nonstream" else None,
             )
     assert len(posts) == 1
     assert caught.value.details["provider_charge_ambiguous"] is True
     assert caught.value.details.get("provider_failure_kind") != "preconnect"
+    assert caught.value.details["provider_request_id"] == "accepted-request"
 
 
 def test_native_durable_late_connect_error_retains_receipt_without_retry(

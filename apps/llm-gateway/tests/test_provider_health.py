@@ -7,6 +7,7 @@ from uuid import UUID
 
 import pytest
 from pydantic import SecretStr
+
 from yleum_gateway.core import provider_health_auth as auth
 from yleum_gateway.services import provider_health as health
 
@@ -319,6 +320,7 @@ async def test_http_route_rechecks_ownership_and_returns_only_signed_advisory(
     from unittest.mock import AsyncMock
 
     import httpx
+
     from yleum_gateway.core import generation_response_auth
     from yleum_gateway.main import create_app
     from yleum_gateway.routers import provider_health as route

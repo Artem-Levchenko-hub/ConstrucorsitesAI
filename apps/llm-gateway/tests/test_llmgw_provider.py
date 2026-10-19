@@ -19,8 +19,9 @@ _MODEL = "gemini-3.1-pro-preview-customtools"
 
 @pytest.mark.parametrize("failure", ["timeout", "oversize"])
 @pytest.mark.parametrize("reported_cost", [None, "1.23"])
+@pytest.mark.parametrize("retry_preconnect", [False, True])
 async def test_error_headers_status_survives_durable_json_body_failure(
-    monkeypatch, failure, reported_cost,
+    monkeypatch, failure, reported_cost, retry_preconnect,
 ):
     from yleum_gateway.core.config import reset_settings_cache
 
@@ -51,7 +52,7 @@ async def test_error_headers_status_survives_durable_json_body_failure(
     monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
     with pytest.raises(UpstreamProviderError) as raised:
         await llmgw.acompletion(model=_MODEL, messages=[{"role": "user", "content": "synthetic"}],
-                               retry_preconnect=False)
+                               retry_preconnect=retry_preconnect)
 
     details = raised.value.details
     assert details.get("upstream_http_status") == 502

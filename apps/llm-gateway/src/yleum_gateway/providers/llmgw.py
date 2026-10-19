@@ -47,6 +47,11 @@ from yleum_gateway.services.receipt_evidence import receipt_evidence
 _SAFE_TO_RETRY = (httpx.ConnectError, httpx.ConnectTimeout)
 
 
+def _is_preconnect_failure(exc: httpx.HTTPError, transport_stage: str | None) -> bool:
+    """Exception type alone cannot prove that a paid POST was never accepted."""
+    return isinstance(exc, _SAFE_TO_RETRY) and transport_stage in {None, "connect"}
+
+
 # Only explicit structured refusal codes become public diagnostics. HTTP 401
 # alone and free-form messages cannot distinguish access from provider funds.
 _REFUSAL_CATEGORIES = {
@@ -358,7 +363,6 @@ async def astream(
         for attempt in range(2 if retry_preconnect else 1):
             if stopped.is_set():
                 return
-            accepted_headers = False
             transport_stage = "connect"
             try:
                 with (
@@ -370,7 +374,6 @@ async def astream(
                     dispatch_capacity_guard(),
                     client.stream("POST", url, json=payload, headers=headers) as r,
                 ):
-                    accepted_headers = True
                     transport_stage = "headers"
                     if r.status_code >= 400:
                         enqueue(("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}",
@@ -426,8 +429,8 @@ async def astream(
                         transport_stage=transport_stage),
                 )
             except httpx.HTTPError as exc:
-                safe = isinstance(exc, _SAFE_TO_RETRY) and (retry_preconnect or not accepted_headers)
-                if retry_preconnect and isinstance(exc, _SAFE_TO_RETRY) and attempt == 0:
+                safe = _is_preconnect_failure(exc, transport_stage)
+                if retry_preconnect and safe and attempt == 0:
                     time.sleep(0.5)
                     continue
                 enqueue(("err", UpstreamProviderError(
@@ -532,6 +535,7 @@ async def acompletion(
         # provider endpoint is hit DIRECT. Retry connection establishment only.
         last: Exception | None = None
         for attempt in range(2 if retry_preconnect else 1):
+            evidence["transport_stage"] = "connect"
             try:
                 with httpx.Client(
                     timeout=httpx.Timeout(timeout, connect=30.0),
@@ -539,18 +543,14 @@ async def acompletion(
                     mounts={"all://": httpx.HTTPTransport()},
                 ) as client:
                     verify_dispatch_capacity()
-                    if retry_preconnect:
-                        r = client.post(url, json=payload, headers=headers)
-                    else:
-                        # Durable admission has already spent its sole dispatch.
-                        # Capture acceptance before reading body, so a late transport
-                        # exception cannot be mistaken for zero-send preconnect.
-                        with client.stream("POST", url, json=payload, headers=headers) as r:
-                            evidence["transport_stage"] = "headers"
-                            if type(r.status_code) is int and 400 <= r.status_code <= 599:
-                                evidence["upstream_http_status"] = r.status_code
-                            evidence.update(receipt_evidence({}, _receipt_headers(r.headers)))
-                            r.read()
+                    # Capture acceptance before reading the body in both admission
+                    # modes. A late ConnectError is not proof of a zero-send POST.
+                    with client.stream("POST", url, json=payload, headers=headers) as r:
+                        evidence["transport_stage"] = "headers"
+                        if type(r.status_code) is int and 400 <= r.status_code <= 599:
+                            evidence["upstream_http_status"] = r.status_code
+                        evidence.update(receipt_evidence({}, _receipt_headers(r.headers)))
+                        r.read()
                     provider_headers = _receipt_headers(r.headers)
                     evidence["transport_stage"] = "body"
                     r.raise_for_status()
@@ -569,7 +569,7 @@ async def acompletion(
                     return result
             except _SAFE_TO_RETRY as exc:
                 last = exc
-                if retry_preconnect and attempt == 0:
+                if retry_preconnect and _is_preconnect_failure(exc, evidence.get("transport_stage")) and attempt == 0:
                     time.sleep(0.5)
                     continue
                 raise
@@ -600,7 +600,7 @@ async def acompletion(
             details=details,
         ) from exc
     except httpx.HTTPError as exc:
-        safe = isinstance(exc, _SAFE_TO_RETRY) and (retry_preconnect or evidence.get("transport_stage") in {None, "connect"})
+        safe = _is_preconnect_failure(exc, evidence.get("transport_stage"))
         raise UpstreamProviderError(
             f"llmgw transport error: {type(exc).__name__}",
             details={

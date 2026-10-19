@@ -154,6 +154,48 @@ def test_transport_retry_classification_requires_actual_preconnect_proof(client,
 
 
 @pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("cost", [None, "1.23"])
+def test_late_connect_error_keeps_generation_receipt_without_paid_replay(
+    client, monkeypatch, streaming, cost,
+):
+    from yleum_gateway.services import provider_calls
+
+    calls = []
+
+    class AcceptedBody(httpx.SyncByteStream):
+        def __iter__(self):
+            raise httpx.ConnectError("private accepted body failure")
+            yield b""
+
+    def reply(request):
+        calls.append(request)
+        headers = {"x-llmgw-request-id": "accepted-once"}
+        if cost is not None:
+            headers["x-llmgw-cost-rub"] = cost
+        return httpx.Response(200, stream=AcceptedBody(), headers=headers)
+
+    monkeypatch.setattr(httpx, "HTTPTransport", lambda *a, **kw: httpx.MockTransport(reply))
+    result = client.post("/v1/chat/completions", json={
+        "model": MODEL, "messages": [{"role": "user", "content": "hello"}],
+        "user": str(uuid4()), "stream": streaming, "metadata": {"free": True},
+    })
+    error = json.loads(events(result)[-1])["error"] if streaming else result.json()["detail"]["error"]
+    assert len(calls) == 1
+    assert error["details"]["provider_charge_ambiguous"] is True
+    assert error["details"]["provider_failure_kind"] == "transport"
+    assert "retry_safe" not in result.text and "private" not in result.text
+    closed = provider_calls.finish_call.await_args.kwargs
+    assert closed["status"] == "ambiguous"
+    assert closed["provider_request_id"] == "accepted-once"
+    assert closed["provider_cost_rub"] == (Decimal(cost) if cost is not None else None)
+    # Generation calls can record a received monetary receipt as free usage;
+    # the final generation settlement owns any eventual customer debit.
+    assert all(call.kwargs["free"] is True for call in chat.billing.charge.await_args_list)
+    if cost is None:
+        chat.billing.charge.assert_not_awaited()
+
+
+@pytest.mark.parametrize("streaming", [False, True])
 def test_ambiguous_accepted_post_is_not_retried(client, monkeypatch, streaming):
     calls = []
 
