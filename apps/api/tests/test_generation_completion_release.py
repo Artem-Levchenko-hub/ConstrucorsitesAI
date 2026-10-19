@@ -65,6 +65,23 @@ async def test_completed_cannot_bypass_a_retained_generation_cell_lease(monkeypa
     billing.assert_not_awaited()
 
 
+async def test_functional_acceptance_keeps_its_own_rejection_contract(monkeypatch):
+    session = SimpleNamespace(scalar=AsyncMock(return_value=True))
+    run = SimpleNamespace(id=uuid4(), status="running", agent_state={})
+    acceptance = AsyncMock(side_effect=RecoveryContractError("functional authority missing"))
+    monkeypatch.setattr(
+        "yleum_api.services.generation.recovery_acceptance.acceptance_required", lambda _: True,
+    )
+    monkeypatch.setattr(
+        "yleum_api.services.generation.recovery_acceptance.require_terminal_acceptance", acceptance,
+    )
+    with pytest.raises(RecoveryContractError, match="functional authority missing"):
+        await generation_runs.terminalize_generation_run_locked(session, run, status="completed")
+    assert run.status == "running"
+    acceptance.assert_awaited_once()
+    session.scalar.assert_not_awaited()
+
+
 async def test_normal_cleanup_uses_the_completion_release_callback(monkeypatch):
     release = AsyncMock()
     completion_release = AsyncMock()

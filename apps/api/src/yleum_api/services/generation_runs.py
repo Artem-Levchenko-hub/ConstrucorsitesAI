@@ -274,10 +274,13 @@ async def terminalize_generation_run_locked(
             GenerationReleasePending,
             generation_release_pending,
         )
-        from yleum_api.services.generation.recovery_acceptance import require_terminal_acceptance
+        from yleum_api.services.generation.recovery_acceptance import (
+            acceptance_required,
+            require_terminal_acceptance,
+        )
 
         if run.status in {"cancel_requested", "cancelled", "failed"} or (
-            await generation_release_pending(session, run)
+            not acceptance_required(run) and await generation_release_pending(session, run)
         ):
             raise GenerationReleasePending("generation release is not confirmed for completion")
         await require_terminal_acceptance(session, run)
