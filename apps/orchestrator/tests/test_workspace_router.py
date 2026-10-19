@@ -1958,6 +1958,41 @@ async def test_portable_owner_start_retries_do_not_restart_healthy_services(
     assert manager.state_store.load(workspace_id) == before
 
 
+async def test_portable_owner_start_before_first_build_preserves_draft(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    from yleum_orchestrator.core.cell_resources import CellPreviewNotMaterialized
+
+    workspace_id = uuid4()
+    provider, manager, _, run_id = await _ready_provider(tmp_path, workspace_id)
+    await manager.release_generation(
+        workspace_id, workspace.LifecycleMutation(uuid4(), 5, "b" * 64),
+        generation_run_id=run_id,
+    )
+    before = manager.state_store.load(workspace_id)
+    spec = _default_workspace_spec(workspace_id)
+    resume = AsyncMock(side_effect=CellPreviewNotMaterialized("first successful build required"))
+    publish = AsyncMock(side_effect=AssertionError("no ingress before a successful build"))
+    monkeypatch.setattr(workspace, "build_workspace_provider", lambda _: provider)
+    monkeypatch.setattr(workspace, "_portable_active", lambda *_: True)
+    monkeypatch.setattr(workspace, "_require_portable_runtime", lambda _: SimpleNamespace(
+        preview=lambda _: None, resume_preview=resume,
+    ))
+    monkeypatch.setattr(workspace, "_publish_draft_preview", publish)
+    async with _client() as client:
+        response = await client.post(
+            f"/internal/workspaces/{workspace_id}/draft/owner-start",
+            headers={"X-Internal-Token": "test-internal-token-not-a-real-secret"},
+            json={"project_id": str(spec.project_id), "owner_id": str(spec.owner_id)},
+        )
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["details"] == {"reason": "draft_not_materialized"}
+    assert "bootstrap_url" not in response.text
+    resume.assert_awaited_once()
+    publish.assert_not_called()
+    assert manager.state_store.load(workspace_id) == before
+
+
 @pytest.mark.parametrize(
     "gateway_state,expected_draft_state",
     [(None, None), ("running", "running"), ("exited", "stopped"),

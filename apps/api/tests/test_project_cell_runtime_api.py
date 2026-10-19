@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import get_current_user
+from yleum_api.core.errors import ApiError
 from yleum_api.main import app
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
@@ -29,6 +30,160 @@ from yleum_api.services.project_cells import (
 # assertion is that the checkpoint happens at all, not that it is fast: a
 # one-second budget failed the release gate on a slow CI runner.
 _EVENT_WAIT_SECONDS = 10
+
+
+def _confirmed_owner_preview_continuation():
+    continuation = runtime._OwnerPreviewContinuation(uuid4(), uuid4(), uuid4(), uuid4(), 8)
+    response = oc.ProjectCellResourceResponse(
+        workspace_id=continuation.workspace_id, state="resources_ready", provider_ref=None,
+        fencing_epoch=8, checkpoint_ref=None, has_workspace=True, has_agent_home=True,
+        has_postgres=True, has_redis=True, has_draft_runtime=False,
+        draft_state=None, preview_url=None,
+    )
+    outcome = runtime.ProjectCellOperationOutcome(
+        operation_id=continuation.operation_id, workspace_id=continuation.workspace_id,
+        kind="wake", status="completed", fencing_epoch=8, response=response,
+        result_payload=response.to_wire_json(), error=None, reconciles_operation_id=None,
+    )
+    return outcome, continuation
+
+
+def _missing_owner_draft():
+    return oc.OrchestratorBadRequest(
+        "No materialized draft", 409, details={"reason": "draft_not_materialized"},
+    )
+
+
+@pytest.fixture
+def owner_preview_attempt(monkeypatch):
+    outcome, continuation = _confirmed_owner_preview_continuation()
+    attempt = SimpleNamespace(
+        factory=object(), outcome=outcome, continuation=continuation,
+        begin=AsyncMock(return_value=continuation), finish=AsyncMock(return_value=True),
+        uncertain=AsyncMock(), start=AsyncMock(side_effect=_missing_owner_draft()),
+    )
+    monkeypatch.setattr(
+        runtime, "_begin_owner_preview_continuation_cancellation_safe", attempt.begin,
+    )
+    monkeypatch.setattr(runtime, "_finish_owner_preview_continuation", attempt.finish)
+    monkeypatch.setattr(
+        runtime, "_mark_owner_preview_continuation_indeterminate", attempt.uncertain,
+    )
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", attempt.start)
+    return attempt
+
+
+async def test_known_missing_draft_is_terminal_only_after_identity_validated_finish(
+    owner_preview_attempt,
+):
+    attempt = owner_preview_attempt
+    before = dict(attempt.outcome.result_payload)
+
+    with pytest.raises(ApiError) as rejected:
+        await runtime._continue_owner_preview(attempt.factory, attempt.outcome)
+
+    assert rejected.value.status_code == 409
+    assert rejected.value.details == {"reason": "draft_not_materialized"}
+    attempt.finish.assert_awaited_once_with(
+        attempt.factory, attempt.continuation, phase="draft_not_materialized",
+    )
+    attempt.uncertain.assert_not_awaited()
+    assert attempt.outcome.result_payload == before and attempt.outcome.status == "completed"
+
+
+def test_known_missing_draft_is_not_an_unfinished_completed_wake():
+    operation = ProjectCellOperation(status="completed", result_payload={
+        "state": "resources_ready", "draft_state": None,
+        "owner_preview_continuation": "draft_not_materialized",
+    })
+    assert runtime._completed_wake_needs_owner_preview(operation) is False
+
+
+@pytest.mark.parametrize("phase", [{}, [], 1, None])
+def test_unrecognized_owner_preview_phase_is_not_a_confirmed_terminal(phase):
+    operation = ProjectCellOperation(status="completed", result_payload={
+        "state": "resources_ready", "draft_state": None, "owner_preview_continuation": phase,
+    })
+    assert runtime._completed_wake_needs_owner_preview(operation) is True
+
+
+@pytest.mark.parametrize("failure", [
+    oc.OrchestratorBadRequest("another conflict", 409, details={"reason": "other"}),
+    oc.OrchestratorBadRequest("wrong status", 400, details={"reason": "draft_not_materialized"}),
+    oc.OrchestratorBadRequest("missing discriminator", 409),
+    oc.OrchestratorUnavailable("unknown response"),
+])
+async def test_other_owner_preview_rejections_remain_indeterminate(owner_preview_attempt, failure):
+    attempt = owner_preview_attempt
+    attempt.start.side_effect = failure
+    assert await runtime._continue_owner_preview(attempt.factory, attempt.outcome) is None
+    attempt.finish.assert_not_awaited()
+    attempt.uncertain.assert_awaited_once_with(
+        attempt.factory, attempt.continuation, type(failure).__name__,
+    )
+
+
+async def test_missing_draft_with_unknown_finalization_stays_indeterminate(owner_preview_attempt):
+    attempt = owner_preview_attempt
+    attempt.finish.side_effect = ConnectionError("commit result unknown")
+    assert await runtime._continue_owner_preview(attempt.factory, attempt.outcome) is None
+    attempt.uncertain.assert_awaited_once_with(
+        attempt.factory, attempt.continuation, "ConnectionError",
+    )
+
+
+async def test_missing_draft_cannot_hide_changed_identity(owner_preview_attempt):
+    attempt = owner_preview_attempt
+    attempt.finish.side_effect = runtime._OwnerPreviewIdentityInvalidated("owner or fence changed")
+    with pytest.raises(runtime._OwnerPreviewIdentityInvalidated):
+        await runtime._continue_owner_preview(attempt.factory, attempt.outcome)
+    attempt.uncertain.assert_not_awaited()
+
+
+@pytest.mark.parametrize("cancel_at", ["request", "finalization"])
+async def test_missing_draft_preserves_cancellation(owner_preview_attempt, cancel_at):
+    attempt = owner_preview_attempt
+    if cancel_at == "request":
+        attempt.start.side_effect = asyncio.CancelledError
+    else:
+        attempt.finish.side_effect = asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await runtime._continue_owner_preview(attempt.factory, attempt.outcome)
+    attempt.uncertain.assert_awaited_once_with(attempt.factory, attempt.continuation, "cancelled")
+
+
+async def test_known_missing_draft_does_not_stop_the_following_worker_project(
+    owner_preview_attempt, monkeypatch,
+):
+    first = owner_preview_attempt
+    second_outcome, second_continuation = _confirmed_owner_preview_continuation()
+    ids = [first.outcome.operation_id, second_outcome.operation_id]
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def scalars(self, _statement):
+            return SimpleNamespace(all=lambda: ids)
+
+        async def get(self, _model, _identifier):
+            return SimpleNamespace(status="completed")
+
+    execute = AsyncMock(side_effect=[first.outcome, second_outcome])
+    first.begin.side_effect = [first.continuation, second_continuation]
+    first.start.side_effect = [
+        _missing_owner_draft(), _preview_session(second_continuation.workspace_id),
+    ]
+    monkeypatch.setattr(runtime, "execute_cell_operation", execute)
+    assert await runtime.advance_owner_wake_operations(Session, SimpleNamespace()) == 1
+    assert execute.await_count == 2 and first.finish.await_count == 2
+    assert [call.kwargs["phase"] for call in first.finish.await_args_list] == [
+        "draft_not_materialized", "completed",
+    ]
+    first.uncertain.assert_not_awaited()
 
 
 async def _seed(session, monkeypatch, *, cell=True, enabled=False, active=False):
@@ -924,3 +1079,187 @@ async def test_owner_capacity_consumer_replays_same_envelope_after_restart(
     assert workspace.fencing_epoch == 9
     assert workspace.state == "ready"
     assert workspace.generation_run_id is None
+
+
+async def test_missing_owner_draft_keeps_confirmed_wake_and_allows_later_build(
+    client, db_session, test_engine, monkeypatch,
+):
+    _owner, project, _run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.state = "stopped"
+    await db_session.commit()
+    snapshot_id = project.current_snapshot_id
+    woke = False
+    materialized = False
+    envelopes = []
+    confirmed_resource = None
+
+    async def request(method, path, **kwargs):
+        nonlocal woke, confirmed_resource
+        if path.endswith("/control"):
+            envelopes.append(kwargs["json"])
+            woke = True
+        payload = _resources(workspace, running=materialized)
+        payload.update(
+            state="resources_ready" if woke else "resources_paused",
+            fencing_epoch=9 if materialized else 8 if woke else 7,
+            preview_url=_origin(workspace.id) if materialized else None,
+        )
+        if path.endswith("/control"):
+            confirmed_resource = dict(payload)
+        return payload
+
+    _deny_legacy(monkeypatch)
+    preview = AsyncMock(side_effect=_missing_owner_draft())
+    monkeypatch.setattr(oc, "_request", request)
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", preview)
+    base = f"/api/projects/{project.id}/runtime"
+    rejected = await client.post(base + "/start")
+    assert rejected.status_code == 409, rejected.text
+    assert rejected.json()["error"]["details"]["reason"] == "draft_not_materialized"
+    # The client fixture reuses this session, where the wake was reserved as
+    # pending. Its finalizer committed in a separate session; read its SQL
+    # receipt rather than the reservation still cached by this identity map.
+    operation = await db_session.scalar(select(ProjectCellOperation).where(
+        ProjectCellOperation.workspace_id == workspace.id,
+    ).execution_options(populate_existing=True))
+    assert operation.status == "completed" and operation.error is None
+    assert operation.result_payload["owner_preview_continuation"] == "draft_not_materialized"
+    assert {key: value for key, value in operation.result_payload.items()
+            if key != "owner_preview_continuation"} == confirmed_resource
+    await db_session.refresh(workspace)
+    await db_session.refresh(project)
+    assert workspace.state == "ready" and workspace.fencing_epoch == operation.fencing_epoch == 8
+    assert workspace.generation_run_id is None and project.current_snapshot_id == snapshot_id
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    assert await runtime.advance_owner_wake_operations(factory, SimpleNamespace()) == 0
+    assert (await client.get(base)).json()["state"] == "stopped"
+    again = await client.post(base + "/start")
+    assert again.status_code == 409 and len(envelopes) == 1
+    assert again.json()["error"]["details"]["reason"] == "draft_not_materialized"
+
+    # A subsequent successful build may materialize the same workspace. The
+    # terminal decision belongs to its old wake, never to every future preview.
+    workspace.fencing_epoch = 9
+    await db_session.commit()
+    materialized = True
+    resumed = await client.post(base + "/start")
+    assert resumed.status_code == 200 and resumed.json()["state"] == "running"
+    assert resumed.json()["dev_url"] == _origin(workspace.id)
+    assert len(envelopes) == 1
+
+
+async def test_worker_terminalizes_missing_draft_and_still_starts_another_project(
+    client, db_session, test_engine, monkeypatch,
+):
+    from yleum_api.services.project_cells import reserve_cell_operation
+
+    owner, _project, _run, first = await _seed(db_session, monkeypatch)
+    first.generation_run_id = None
+    first.state = "stopped"
+    second_project = Project(
+        owner_id=owner.id, name="Another owner preview", slug=f"cell-{uuid4().hex}",
+        template="max_miniapp",
+    )
+    db_session.add(second_project)
+    await db_session.flush()
+    second = ProjectCellWorkspace(
+        project_id=second_project.id, owner_id=owner.id, provider="docker_owner_canary",
+        state="stopped", generation_run_id=None, fencing_epoch=7,
+    )
+    db_session.add(second)
+    await db_session.flush()
+    for workspace in (first, second):
+        await reserve_cell_operation(
+            db_session, workspace_id=workspace.id, generation_run_id=None, kind="wake",
+            idempotency_key=f"owner-preview:wake:{workspace.id}:7", request={},
+        )
+    await db_session.commit()
+    controls = []
+
+    async def control(request):
+        controls.append(request)
+        payload = _resources(SimpleNamespace(id=request.workspace_id), running=False)
+        payload.update(fencing_epoch=request.fencing_epoch, preview_url=None)
+        return oc.ProjectCellResourceResponse.from_json(payload)
+
+    async def start(workspace_id, **_kwargs):
+        if workspace_id == first.id:
+            raise _missing_owner_draft()
+        return _preview_session(workspace_id)
+
+    preview = AsyncMock(side_effect=start)
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", preview)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    controller = SimpleNamespace(control=control)
+    assert await runtime.advance_owner_wake_operations(factory, controller) == 1
+    assert len(controls) == 2 and preview.await_count == 2
+    operations = list((await db_session.scalars(select(ProjectCellOperation).where(
+        ProjectCellOperation.workspace_id.in_((first.id, second.id)),
+    ).execution_options(populate_existing=True))).all())
+    assert {operation.workspace_id: operation.status for operation in operations} == {
+        first.id: "completed", second.id: "completed",
+    }
+    assert {operation.workspace_id: operation.result_payload["owner_preview_continuation"]
+            for operation in operations} == {
+        first.id: "draft_not_materialized", second.id: "completed",
+    }
+    assert await runtime.advance_owner_wake_operations(factory, controller) == 0
+    assert len(controls) == 2 and preview.await_count == 2
+
+
+@pytest.mark.parametrize("changed", ["owner", "fence", "generation", "deletion"])
+async def test_missing_owner_draft_revalidates_identity_before_terminalizing(
+    client, db_session, test_engine, monkeypatch, changed,
+):
+    from yleum_api.services.project_cells import reserve_cell_operation
+
+    _owner, _project, run, workspace = await _seed(db_session, monkeypatch)
+    workspace.generation_run_id = None
+    workspace.fencing_epoch = 8
+    operation, _ = await reserve_cell_operation(
+        db_session, workspace_id=workspace.id, generation_run_id=None, kind="wake",
+        idempotency_key=f"owner-preview:wake:{workspace.id}:7", request={},
+    )
+    receipt = _resources(workspace, running=False)
+    receipt.update(fencing_epoch=8, preview_url=None)
+    operation.status = "completed"
+    operation.fencing_epoch = 8
+    operation.result_payload = dict(receipt)
+    await db_session.commit()
+    outcome = runtime.ProjectCellOperationOutcome(
+        operation_id=operation.id, workspace_id=workspace.id, kind="wake", status="completed",
+        fencing_epoch=8, response=oc.ProjectCellResourceResponse.from_json(receipt),
+        result_payload=receipt, error=None, reconciles_operation_id=None,
+    )
+
+    async def start(_workspace_id, **_kwargs):
+        await db_session.refresh(workspace)
+        if changed == "owner":
+            successor = User(
+                email="successor@example.com", password_hash="x",
+                email_verified_at=datetime.now(UTC), status="active", is_anon=False,
+            )
+            db_session.add(successor)
+            await db_session.flush()
+            workspace.owner_id = successor.id
+        elif changed == "fence":
+            workspace.fencing_epoch += 1
+        elif changed == "generation":
+            workspace.generation_run_id = run.id
+        else:
+            workspace.deleted_at = datetime.now(UTC)
+        await db_session.commit()
+        raise _missing_owner_draft()
+
+    preview = AsyncMock(side_effect=start)
+    monkeypatch.setattr(oc, "project_cell_start_owner_preview", preview)
+    factory = async_sessionmaker(test_engine, expire_on_commit=False)
+    with pytest.raises(runtime._OwnerPreviewIdentityInvalidated):
+        await runtime._continue_owner_preview(factory, outcome)
+    preview.assert_awaited_once()
+    await db_session.refresh(operation)
+    assert operation.status == "failed"
+    assert operation.result_payload["owner_preview_continuation"] == "identity_invalidated"
+    assert {key: value for key, value in operation.result_payload.items()
+            if key != "owner_preview_continuation"} == receipt

@@ -42,6 +42,8 @@ _CELL_LEASE_MISSING = (
 )
 _CELL_OWNERSHIP_MISMATCH = "Project Cell workspace identity mismatch"
 _OWNER_PREVIEW_PHASE_KEY = "owner_preview_continuation"
+_OwnerPreviewTerminalPhase = Literal["completed", "draft_not_materialized"]
+_OWNER_PREVIEW_TERMINAL_PHASES = frozenset({"completed", "draft_not_materialized"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +65,16 @@ class _OwnerPreviewContinuation:
 
 class _OwnerPreviewIdentityInvalidated(ProjectCellStateConflict):
     """Raised only after the continuation was durably terminalized as failed."""
+
+
+class _OwnerPreviewDraftNotMaterialized(ApiError):
+    """Resources woke successfully, but this continuation cannot start a draft."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "conflict", _CELL_FIRST_BUILD_REQUIRED, 409,
+            details={"reason": "draft_not_materialized"},
+        )
 
 
 async def resolve_project_cell_public_selection(
@@ -397,7 +409,7 @@ async def advance_owner_wake_operations(
                                 resource_state == "resources_ready",
                                 or_(
                                     continuation_phase.is_(None),
-                                    continuation_phase != "completed",
+                                    continuation_phase.not_in(_OWNER_PREVIEW_TERMINAL_PHASES),
                                 ),
                             ),
                         ),
@@ -420,7 +432,13 @@ async def advance_owner_wake_operations(
             if replay
             else execute_cell_operation(factory, operation_id, controller)
         )
-        if await _continue_owner_preview(factory, outcome) is not None:
+        try:
+            preview_url = await _continue_owner_preview(factory, outcome)
+        except _OwnerPreviewDraftNotMaterialized:
+            # This completed wake has no draft to start. Other projects must
+            # still advance; an unknown rejection never enters this branch.
+            continue
+        if preview_url is not None:
             completed += 1
     return completed
 
@@ -444,15 +462,24 @@ async def _continue_owner_preview(
     if continuation is None:
         return None
     preview_url = outcome.response.preview_url
+    phase: _OwnerPreviewTerminalPhase = "completed"
     try:
         if outcome.response.draft_state != "running" or not preview_url:
-            preview = await orchestrator_client.project_cell_start_owner_preview(
-                continuation.workspace_id,
-                project_id=continuation.project_id,
-                owner_id=continuation.owner_id,
-            )
-            preview_url = preview.preview_url
-        if not await _finish_owner_preview_continuation(session_factory, continuation):
+            try:
+                preview = await orchestrator_client.project_cell_start_owner_preview(
+                    continuation.workspace_id,
+                    project_id=continuation.project_id,
+                    owner_id=continuation.owner_id,
+                )
+            except orchestrator_client.OrchestratorBadRequest as exc:
+                if not _is_owner_draft_not_materialized(exc):
+                    raise
+                phase = "draft_not_materialized"
+            else:
+                preview_url = preview.preview_url
+        if not await _finish_owner_preview_continuation(
+            session_factory, continuation, phase=phase,
+        ):
             return None
     except asyncio.CancelledError:
         await _mark_owner_preview_continuation_indeterminate(
@@ -466,7 +493,19 @@ async def _continue_owner_preview(
             session_factory, continuation, exc.__class__.__name__
         )
         return None
+    # Do not feed a confirmed rejection back into the unknown-effect handler.
+    # Identity and the terminal SQL commit were verified before signalling 409.
+    if phase == "draft_not_materialized":
+        raise _OwnerPreviewDraftNotMaterialized()
     return preview_url
+
+
+def _is_owner_draft_not_materialized(exc: orchestrator_client.OrchestratorBadRequest) -> bool:
+    return (
+        exc.status_code == 409
+        and isinstance(exc.details, dict)
+        and exc.details.get("reason") == "draft_not_materialized"
+    )
 
 
 async def _begin_owner_preview_continuation(
@@ -509,7 +548,7 @@ async def _begin_owner_preview_continuation(
             or project.owner_id != workspace.owner_id
         ):
             return None
-        if _continuation_phase(operation) == "completed":
+        if _continuation_phase(operation) in _OWNER_PREVIEW_TERMINAL_PHASES:
             return None
         operation.status = "running"
         operation.execution_run_id = None
@@ -664,7 +703,10 @@ async def _mark_owner_preview_continuation_indeterminate(
 async def _finish_owner_preview_continuation(
     session_factory: async_sessionmaker[AsyncSession],
     continuation: _OwnerPreviewContinuation,
+    *,
+    phase: _OwnerPreviewTerminalPhase = "completed",
 ) -> bool:
+    """Finalize the preview decision without replacing its confirmed wake receipt."""
     async with session_factory() as session:
         operation = await session.scalar(
             select(ProjectCellOperation)
@@ -715,7 +757,7 @@ async def _finish_owner_preview_continuation(
         operation.status = "completed"
         operation.error = None
         operation.finished_at = datetime.now(UTC)
-        _set_continuation_phase(operation, "completed")
+        _set_continuation_phase(operation, phase)
         workspace.state = "ready"
         workspace.ready_at = workspace.ready_at or datetime.now(UTC)
         await session.commit()
@@ -729,7 +771,7 @@ def _completed_wake_needs_owner_preview(operation: ProjectCellOperation) -> bool
         and isinstance(payload, dict)
         and payload.get("state") == "resources_ready"
         and payload.get("draft_state") != "running"
-        and payload.get(_OWNER_PREVIEW_PHASE_KEY) != "completed"
+        and _continuation_phase(operation) not in _OWNER_PREVIEW_TERMINAL_PHASES
     )
 
 

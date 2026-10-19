@@ -58,6 +58,10 @@ class CellResourceError(RuntimeError):
     """Base resource-management failure."""
 
 
+class CellPreviewNotMaterialized(CellResourceError):
+    """A retained source draft has not produced a machine that can be resumed."""
+
+
 _CAPACITY_REASONS = frozenset(
     {
         "insufficient_cpu",

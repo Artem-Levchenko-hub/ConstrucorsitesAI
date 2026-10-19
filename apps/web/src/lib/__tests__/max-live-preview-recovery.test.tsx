@@ -323,6 +323,31 @@ describe("MAX live preview recovery", () => {
     expect(startRuntime).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["failed", "Последний запрос завершился с ошибкой."],
+    ["cancelled", "Последний запрос отменён."],
+    ["completed", "Результат последнего запроса пока не подтверждён."],
+  ] as const)("keeps the accepted iframe and reports terminal %s honestly", async (status, label) => {
+    const current: GenerationRun = {
+      id: "terminal-run", project_id: PROJECT.id, assistant_message_id: "terminal-message",
+      status, response_mode: "edit", created_at: "2026-10-17T16:00:00Z",
+      started_at: "2026-10-17T16:00:00Z", finished_at: "2026-10-17T16:10:00Z",
+    };
+    getLatestGeneration.mockResolvedValue(current);
+    queryClient.setQueryData(["generation", PROJECT.id], current);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
+    const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    expect(container.textContent).toContain("Показана последняя сохранённая версия. " + label);
+    expect(container.textContent).not.toContain("Текущий запрос ещё не завершён.");
+    const sessions = createMaxPreviewSession.mock.calls.length;
+    await flushPromises();
+    expect(container.querySelector("iframe")).toBe(frame);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(sessions);
+    expect(startRuntime).not.toHaveBeenCalled();
+  });
+
   it("does not present an unaccepted completed first build as the accepted app", async () => {
     const current: GenerationRun = {
       id: "unaccepted", project_id: PROJECT.id, assistant_message_id: "m", status: "completed",

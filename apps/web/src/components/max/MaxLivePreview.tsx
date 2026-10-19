@@ -34,7 +34,7 @@ import {
 } from "@/lib/api/max-studio";
 import { getLatestGeneration, listMessages } from "@/lib/api/messages";
 import { isGenerationActive } from "@/lib/generation-lifecycle";
-import { acceptedPreviewState } from "@/lib/generation-recovery";
+import { acceptedPreviewLabel, acceptedPreviewState } from "@/lib/generation-recovery";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
 import { getRuntime, startRuntime } from "@/lib/api/runtime";
 import type { Project, ProjectVersion } from "@/lib/api/types";
@@ -184,10 +184,7 @@ export function MaxLivePreview({
   const acceptedPreview = acceptedPreviewState({
     acceptedSnapshotId, acceptedAt: currentRun?.acceptance?.accepted_at ?? null, currentRun,
   });
-  const acceptanceLabel = acceptedPreview.kind === "accepted"
-    ? acceptedPreview.isCurrentRequestComplete ? "Показана сохранённая версия. Текущий запрос завершён."
-      : "Показана последняя сохранённая версия. Текущий запрос ещё не завершён."
-    : "Готовая версия приложения пока не подтверждена.";
+  const acceptanceLabel = acceptedPreviewLabel(acceptedPreview, currentRun);
   // A seed snapshot is not proof of a successful build. Incomplete history is
   // likewise not proof that no working version exists. iframe load can also
   // come from an HTTP error page, so a remembered URL is not build evidence.

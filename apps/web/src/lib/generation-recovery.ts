@@ -1,4 +1,5 @@
 import type { GenerationEventEnvelope, GenerationRecoveryView, GenerationRun, Uuid } from "@/lib/api/types";
+import { isGenerationActive } from "@/lib/generation-lifecycle";
 
 export type { GenerationRecoveryView } from "@/lib/api/types";
 
@@ -93,6 +94,17 @@ export type AcceptedPreviewState = {
   pendingRunId: Uuid | null;
   isCurrentRequestComplete: boolean;
 };
+
+export function acceptedPreviewLabel(preview: AcceptedPreviewState, currentRun: GenerationRun | null | undefined): string {
+  if (preview.kind !== "accepted") return "Готовая версия приложения пока не подтверждена.";
+  if (preview.isCurrentRequestComplete) return "Показана сохранённая версия. Текущий запрос завершён.";
+  const prefix = "Показана последняя сохранённая версия. ";
+  if (isGenerationActive(currentRun)) return prefix + "Текущий запрос ещё не завершён.";
+  if (currentRun?.status === "failed") return prefix + "Последний запрос завершился с ошибкой.";
+  if (currentRun?.status === "cancelled") return prefix + "Последний запрос отменён.";
+  if (currentRun?.status === "completed") return prefix + "Результат последнего запроса пока не подтверждён.";
+  return prefix + "Статус последнего запроса пока не подтверждён.";
+}
 
 export function acceptedPreviewState({ acceptedSnapshotId, acceptedAt, currentRun }: {
   acceptedSnapshotId: Uuid | null;

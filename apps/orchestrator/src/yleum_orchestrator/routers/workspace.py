@@ -19,6 +19,7 @@ from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
     CellIndeterminateOperation,
+    CellPreviewNotMaterialized,
     CellResourceError,
     CellResourceNames,
     CellRestoreFailed,
@@ -1441,7 +1442,17 @@ async def start_workspace_owner_preview(
             serving_epoch, machine_epoch = _owner_resume_epochs(runtime, state)
             detached = serving_epoch is not None and machine_epoch != serving_epoch
             if preview is None or preview[0] != "running" or detached:
-                await runtime.resume_preview(state, epoch=serving_epoch)
+                try:
+                    await runtime.resume_preview(state, epoch=serving_epoch)
+                except CellPreviewNotMaterialized as exc:
+                    raise OrchestratorError(
+                        code="conflict",
+                        message=(
+                            "Предпросмотр появится после первой успешной сборки. Черновик сохранён."
+                        ),
+                        status_code=409,
+                        details={"reason": "draft_not_materialized"},
+                    ) from exc
             response.headers["Cache-Control"] = "no-store"
             return await _draft_preview_session(manager, state)
         draft = await manager.inspect_draft_runtime(workspace_id)

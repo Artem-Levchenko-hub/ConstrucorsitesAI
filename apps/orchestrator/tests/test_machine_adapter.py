@@ -611,6 +611,106 @@ async def test_halt_failed_quiesce_preserves_rootfs_without_recapturing(tmp_path
     assert events == ["helpers-confirmed-dead", "stop-preserve-rootfs"]
 
 
+@pytest.mark.parametrize("initial_ensure", [False, True])
+@pytest.mark.parametrize("metadata_file", [False, True])
+async def test_preview_before_materialization_rejects_without_runtime_or_source_effects(
+    tmp_path, initial_ensure, metadata_file,
+):
+    from unittest.mock import AsyncMock, Mock
+
+    from tests.test_docker_machine_backend import backend as real_backend
+    from yleum_orchestrator.core.cell_resources import CellPreviewNotMaterialized
+    from yleum_orchestrator.services.project_machine import ProjectMachine, write_controller_json
+
+    runtime = module().MachineAdapter(
+        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "states")), SimpleNamespace(),
+    )
+    workspace_id = uuid4()
+    actual = real_backend(tmp_path / "metadata", workspace_id=workspace_id)
+    if metadata_file:
+        write_controller_json(actual.metadata_path, {})
+    backend = SimpleNamespace(
+        _metadata=actual._metadata, _container=Mock(return_value=None),
+        ensure=Mock(side_effect=AssertionError("no implicit materialization")),
+        start_service=Mock(side_effect=AssertionError("no service launch")),
+    )
+    machine = ProjectMachine(tmp_path / "machines", workspace_id, backend, lease_epoch=lambda: None)
+    if initial_ensure:
+        write_controller_json(machine.path, {
+            "workspace_id": str(workspace_id), "epoch": 1, "cancelled_epoch": 0,
+            "ready_epoch": None, "operations": {},
+        })
+    runtime.parts = lambda _: (machine, backend)
+    runtime.checkpoint = AsyncMock(side_effect=AssertionError("no checkpoint"))
+    runtime._start_boundary = Mock(side_effect=AssertionError("no gateway launch"))
+    guest = tmp_path / "guest-manifest.json"
+    guest.write_text('{"untrusted":"never bootstrap from guest source"}', encoding="utf-8")
+    before = machine.path.read_bytes() if machine.path.exists() else None
+
+    with pytest.raises(CellPreviewNotMaterialized, match="first successful build"):
+        await runtime.resume_preview(SimpleNamespace(workspace_id=workspace_id))
+
+    assert (machine.path.read_bytes() if machine.path.exists() else None) == before
+    assert guest.read_text(encoding="utf-8") == '{"untrusted":"never bootstrap from guest source"}'
+    backend.ensure.assert_not_called()
+    backend.start_service.assert_not_called()
+    runtime.checkpoint.assert_not_called()
+    runtime._start_boundary.assert_not_called()
+
+
+@pytest.mark.parametrize("evidence", [
+    "ready", "operations", "retained", "container", "epoch", "null-manifest", "invalid-manifest",
+    "metadata-extra", "metadata-null", "metadata-list", "metadata-services", "epoch-bool",
+])
+async def test_missing_or_invalid_preview_manifest_does_not_hide_integrity_failure(
+    tmp_path, evidence,
+):
+    from unittest.mock import Mock
+
+    from yleum_orchestrator.core.cell_resources import (
+        CellIdentityConflict,
+        CellPreviewNotMaterialized,
+    )
+    from yleum_orchestrator.services.project_machine import ProjectMachine, write_controller_json
+
+    runtime = module().MachineAdapter(
+        SimpleNamespace(state_store=SimpleNamespace(root=tmp_path / "states")), SimpleNamespace(),
+    )
+    workspace_id = uuid4()
+    metadata = {
+        "retained": {"environment_ref": "retained"},
+        "metadata-extra": {"unknown": {}},
+        "metadata-null": {"services": None},
+        "metadata-list": {"exec_pids": []},
+        "metadata-services": {"services": {"web": {}}},
+    }.get(evidence, {})
+    backend = SimpleNamespace(
+        _metadata=Mock(return_value=metadata),
+        _container=Mock(return_value=object() if evidence == "container" else None),
+        ensure=Mock(side_effect=AssertionError("no repair from incomplete controller metadata")),
+    )
+    machine = ProjectMachine(tmp_path / "machines", workspace_id, backend, lease_epoch=lambda: None)
+    saved = {
+        "workspace_id": str(workspace_id), "epoch": "corrupt" if evidence == "epoch" else 7,
+        "cancelled_epoch": 0, "ready_epoch": 7 if evidence == "ready" else None,
+        "operations": {"previous": {}} if evidence == "operations" else {},
+    }
+    if evidence == "epoch-bool":
+        saved["epoch"] = True
+    if evidence in {"null-manifest", "invalid-manifest"}:
+        saved["manifest"] = None if evidence == "null-manifest" else {}
+    write_controller_json(machine.path, saved)
+    before = machine.path.read_bytes()
+    runtime.parts = lambda _: (machine, backend)
+
+    with pytest.raises((CellIdentityConflict, ValueError)) as failure:
+        await runtime.resume_preview(SimpleNamespace(workspace_id=workspace_id))
+
+    assert not isinstance(failure.value, CellPreviewNotMaterialized)
+    assert machine.path.read_bytes() == before
+    backend.ensure.assert_not_called()
+
+
 @pytest.mark.parametrize("receipt_valid", [False, True])
 @pytest.mark.parametrize("state_changed", [False, True])
 async def test_preview_resume_uses_only_consumed_halt_receipt(

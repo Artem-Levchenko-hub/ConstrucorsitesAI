@@ -20,6 +20,7 @@ import docker  # type: ignore[import-untyped]
 from yleum_orchestrator.core.cell_resources import (
     CellFenceRejected,
     CellIdentityConflict,
+    CellPreviewNotMaterialized,
     CellResourceError,
     CellResourceNames,
     LifecycleMutation,
@@ -1810,6 +1811,29 @@ class MachineAdapter:
         require_candidate_writers_allowed(self.manager.state_store.root, state.workspace_id)
         machine, backend = self.parts(state)
         saved = machine.state()
+        if "manifest" not in saved:
+            # An initial ensure can retain source and base resources before the
+            # first build creates a machine. Never bootstrap it from guest files.
+            epoch_value = saved.get("epoch")
+            cancelled_epoch = saved.get("cancelled_epoch")
+            metadata = backend._metadata()
+            initial = (
+                saved.keys() <= {
+                    "workspace_id", "epoch", "cancelled_epoch", "operations", "ready_epoch",
+                }
+                and saved.get("workspace_id") == str(state.workspace_id)
+                and type(epoch_value) is int
+                and type(cancelled_epoch) is int
+                and 0 <= cancelled_epoch <= epoch_value
+                and saved.get("ready_epoch") is None
+                and saved.get("operations") == {}
+                and metadata.keys() <= {"services", "exec_logs", "exec_pids"}
+                and all(value == {} for value in metadata.values())
+                and backend._container() is None
+            )
+            if initial:
+                raise CellPreviewNotMaterialized("preview requires the first successful build")
+            raise CellIdentityConflict("retained preview machine manifest is missing")
         manifest = MachineManifest.model_validate(saved["manifest"])
         metadata = backend._metadata()
         if backend._container() is None and metadata.get("environment_ref"):
