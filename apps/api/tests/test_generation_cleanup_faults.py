@@ -37,7 +37,8 @@ class Session:
 async def test_ownership_fault_drains_work_before_blocked_orphan_write(monkeypatch):
     run_id, project_id, owner_id, user_id, assistant_id = (uuid4() for _ in range(5))
     run = SimpleNamespace(execution_backend="worker", status="queued_for_capacity",
-                          execution_started_at=None, user_id=owner_id, project_id=project_id,
+                          execution_started_at=None, agent_state={},
+                          user_id=owner_id, project_id=project_id,
                           user_message_id=user_id, assistant_message_id=assistant_id)
     dispatch = SimpleNamespace(project_id=project_id, user_id=owner_id, user_message_id=user_id,
                                assistant_message_id=assistant_id, current_snapshot_id=None,
@@ -111,6 +112,9 @@ async def test_ownership_fault_drains_work_before_blocked_orphan_write(monkeypat
         finish_orphan.set()
         if not task.done():
             task.cancel()
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.cancel()
         await asyncio.gather(task, *waiters, return_exceptions=True)
 
 
