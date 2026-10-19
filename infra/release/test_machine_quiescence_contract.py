@@ -18,6 +18,87 @@ COMMAND = "22222222-2222-4222-8222-222222222222"
 PAUSE = "33333333-3333-4333-8333-333333333333"
 
 
+def _checker_module():
+    spec = importlib.util.spec_from_file_location(
+        "quiescence_contract",
+        Path(__file__).with_name("generation-publication-drain.py"),
+    )
+    checker = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checker)
+    return checker
+
+
+class PortableQuiescenceSourcesTests(unittest.TestCase):
+    """Bundle authority is pure: no root, controller imports, or Docker needed."""
+
+    def setUp(self):
+        self.checker = _checker_module()
+        self.old = dict(self.checker._PORTABLE_QUIESCENCE_SOURCES)
+        self.new = dict(self.old)
+        self.new.update(
+            {
+                "services.machine_adapter": "944528d2805e971120b32336d42adc6544538043fc60ff4c6219de10aabc2611",
+                "routers.workspace": "f82e0bb183f1258cccf393d58e9ee047a6b15cf74b2c3ffdb98fd9111c525e29",
+            }
+        )
+
+    def test_live_and_reviewed_successor_are_complete_supported_bundles(self):
+        self.assertEqual(len(self.old), 9)
+        self.assertEqual(
+            (
+                self.old["services.machine_adapter"],
+                self.old["routers.workspace"],
+            ),
+            (
+                "7a8fee13333fee8a79478bc9f64b895a67b1deed284335355158b8a95103d426",
+                "4ad3af972da6e73af3e15eb407cff041f15321cf9af83466502c14c2f6dd0dc6",
+            ),
+        )
+        for sources in (self.old, self.new):
+            with self.subTest(sources=sources):
+                before = copy.deepcopy(sources)
+                self.checker._require_reviewed_portable_sources(sources)
+                self.assertEqual(sources, before)
+        # Receipts continue binding the actual observed bundle, not a common alias.
+        self.assertNotEqual(self.checker._digest(self.old), self.checker._digest(self.new))
+
+    def test_mixed_live_and_successor_modules_are_never_reviewed(self):
+        for changed in ("services.machine_adapter", "routers.workspace"):
+            sources = dict(self.old)
+            sources[changed] = self.new[changed]
+            with self.subTest(changed=changed):
+                with self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+                ):
+                    self.checker._require_reviewed_portable_sources(sources)
+
+    def test_every_unknown_source_hash_is_denied_for_both_bundles(self):
+        for original in (self.old, self.new):
+            for changed in original:
+                sources = dict(original)
+                sources[changed] = "0" * 64
+                with self.subTest(changed=changed, original=original):
+                    with self.assertRaisesRegex(
+                        self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+                    ):
+                        self.checker._require_reviewed_portable_sources(sources)
+
+    def test_missing_or_extra_source_cannot_be_an_accepted_bundle(self):
+        for changed in self.old:
+            sources = dict(self.old)
+            del sources[changed]
+            with self.subTest(missing=changed):
+                with self.assertRaisesRegex(
+                    self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+                ):
+                    self.checker._require_reviewed_portable_sources(sources)
+        sources = {**self.new, "services.unreviewed_producer": "0" * 64}
+        with self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+        ):
+            self.checker._require_reviewed_portable_sources(sources)
+
+
 @unittest.skipUnless(
     AVAILABLE and os.name == "posix" and os.geteuid() == 0,
     "requires root Linux fixture and cached orchestrator dependencies",
@@ -27,12 +108,7 @@ class MachineQuiescenceTests(unittest.TestCase):
         from yleum_orchestrator.core.cell_resources import CellResourceNames
         from yleum_orchestrator.services.cell_state import CellOperationRecord
 
-        spec = importlib.util.spec_from_file_location(
-            "quiescence_contract",
-            Path(__file__).with_name("generation-publication-drain.py"),
-        )
-        self.checker = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.checker)
+        self.checker = _checker_module()
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         root = Path(self.temporary.name)

@@ -64,6 +64,39 @@ _PORTABLE_QUIESCENCE_SOURCES = {
     "services.generation_reader_inventory": "119a83b06d26c2936d1fdf6140c824cb53fee761d7f0d4fe5b8465f34ed04a6e",
     "services.docker_cell_resources": "6a7f931d4a17bc4517137de069186eb6bb4434e65ce32429de3ac46b3ff52710",
 }
+# The initial reviewed producer contract remains valid on live b781. The only
+# reviewed successor (6e5fa4f7) adds a pre-effect missing-draft rejection and its
+# typed route response. These two modules must come from the SAME bundle; an
+# independently allowed hash per module would also trust unreviewed mixed code.
+_PORTABLE_QUIESCENCE_PAIRED_SOURCES = ("services.machine_adapter", "routers.workspace")
+_PORTABLE_QUIESCENCE_SOURCE_PAIRS = (
+    (
+        "7a8fee13333fee8a79478bc9f64b895a67b1deed284335355158b8a95103d426",
+        "4ad3af972da6e73af3e15eb407cff041f15321cf9af83466502c14c2f6dd0dc6",
+    ),
+    (
+        "944528d2805e971120b32336d42adc6544538043fc60ff4c6219de10aabc2611",
+        "f82e0bb183f1258cccf393d58e9ee047a6b15cf74b2c3ffdb98fd9111c525e29",
+    ),
+)
+
+
+def _require_reviewed_portable_sources(sources: dict[str, str]) -> None:
+    """Accept complete reviewed bundles, never hash-by-hash cross-products."""
+    _kernel_need(
+        type(sources) is dict and sources.keys() == _PORTABLE_QUIESCENCE_SOURCES.keys(),
+        "quiescence_unsupported_source",
+    )
+    _kernel_need(
+        all(
+            sources[name] == supported
+            for name, supported in _PORTABLE_QUIESCENCE_SOURCES.items()
+            if name not in _PORTABLE_QUIESCENCE_PAIRED_SOURCES
+        )
+        and tuple(sources[name] for name in _PORTABLE_QUIESCENCE_PAIRED_SOURCES)
+        in _PORTABLE_QUIESCENCE_SOURCE_PAIRS,
+        "quiescence_unsupported_source",
+    )
 
 
 def _digest(value) -> str:
@@ -243,11 +276,11 @@ def _quiescence_binding(state_parent: Path, workspace_id: str, uid: int, client)
         "quiescence_retirement_fence",
     )
     sources = {}
-    for name, supported in _PORTABLE_QUIESCENCE_SOURCES.items():
+    for name in _PORTABLE_QUIESCENCE_SOURCES:
         spec = importlib.util.find_spec("yleum_orchestrator." + name)
         _kernel_need(spec is not None and spec.origin is not None, "quiescence_source")
         sources[name] = hashlib.sha256(Path(spec.origin).read_bytes()).hexdigest()
-        _kernel_need(sources[name] == supported, "quiescence_unsupported_source")
+    _require_reviewed_portable_sources(sources)
     binding = {
         "protocol": "portable-child-command-quiescence",
         "version": 1,
