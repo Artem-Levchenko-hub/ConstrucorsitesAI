@@ -63,25 +63,42 @@ def accepted(data):
     }
 
 
-async def test_green_build_or_visible_old_snapshot_is_not_current_acceptance():
+@pytest.mark.parametrize("mode", ["build", "edit"])
+async def test_green_artifact_or_visible_old_snapshot_is_not_current_acceptance(mode):
     data = records()
+    data["run"].response_mode = mode
     view = await public.project_loaded(**data)
     assert not view.acceptance.current_request_complete
     assert view.acceptance.accepted_at is None
     assert view.acceptance.snapshot_id is None
 
 
-async def test_legacy_free_accepted_candidate_is_complete_without_financial_state():
+@pytest.mark.parametrize("mode", ["build", "edit"])
+@pytest.mark.parametrize("is_free", [False, True])
+async def test_legacy_accepted_artifact_is_complete_without_financial_state(mode, is_free):
     data = records()
+    data["run"].response_mode = mode
+    data["policy"].is_free = is_free
     accepted(data)
     view = await public.project_loaded(**data)
     assert view.acceptance.current_request_complete
     assert view.acceptance.accepted_at is None
+    assert view.acceptance.snapshot_id == data["snapshot"].id
+
+
+@pytest.mark.parametrize("mode", [None, "clarify"])
+async def test_legacy_non_artifact_mode_cannot_confirm_a_candidate(mode):
+    data = records()
+    data["run"].response_mode = mode
+    accepted(data)
+    assert not (await public.project_loaded(**data)).acceptance.current_request_complete
 
 
 @pytest.mark.parametrize("corrupt", [None, {}, {"version": 99}, "private diagnostic"])
-async def test_present_corrupt_recovery_never_falls_back_to_legacy(corrupt):
+@pytest.mark.parametrize("mode", ["build", "edit"])
+async def test_present_corrupt_recovery_never_falls_back_to_legacy(corrupt, mode):
     data = records()
+    data["run"].response_mode = mode
     accepted(data)
     data["run"].agent_state["recovery_v1"] = corrupt
     view = await public.project_loaded(**data)
@@ -139,9 +156,17 @@ async def test_projection_rechecks_owner_run_and_assistant_binding(edge):
         await public.project_loaded(**data)
 
 
-@pytest.mark.parametrize("edge", ["running", "unfinished", "pointer", "commit", "policy", "permit"])
-async def test_legacy_accepted_marker_requires_terminal_and_exact_artifact_chain(edge):
+@pytest.mark.parametrize(
+    "edge",
+    [
+        "running", "unfinished", "pointer", "commit", "policy", "missing_policy",
+        "permit", "artifact", "contract", "message_snapshot", "foreign_snapshot",
+    ],
+)
+@pytest.mark.parametrize("mode", ["build", "edit"])
+async def test_legacy_accepted_marker_requires_terminal_and_exact_artifact_chain(edge, mode):
     data = records()
+    data["run"].response_mode = mode
     accepted(data)
     if edge == "running":
         data["run"].status = "running"
@@ -153,8 +178,18 @@ async def test_legacy_accepted_marker_requires_terminal_and_exact_artifact_chain
         data["run"].agent_state["commit_sha"] = "f" * 40
     if edge == "policy":
         data["policy"].version = "future"
+    if edge == "missing_policy":
+        data["policy"] = None
     if edge == "permit":
         data["run"].agent_state["billing_accepted_candidate"]["permit_digest"] = "not-proof"
+    if edge == "artifact":
+        data["run"].agent_state["billing_accepted_candidate"]["artifact_digest"] = "not-proof"
+    if edge == "contract":
+        data["run"].agent_state["billing_accepted_candidate"]["release_contract"] = "future"
+    if edge == "message_snapshot":
+        data["message"].snapshot_id = uuid4()
+    if edge == "foreign_snapshot":
+        data["snapshot"].project_id = uuid4()
     assert not (await public.project_loaded(**data)).acceptance.current_request_complete
 
 

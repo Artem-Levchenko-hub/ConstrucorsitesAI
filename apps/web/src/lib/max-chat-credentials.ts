@@ -18,7 +18,22 @@ const PROVIDER_ALIASES: Record<string, string[]> = {
 };
 
 const LABELLED_SECRET_PATTERN =
-  /(?<![\p{L}\p{N}_$])(?:api[\s_-]*key|ключ|token|токен)(?![\p{L}\p{N}_$])(?:\s*(?:[:=—–-]|это)\s*|\s+)(["'`]?)([^\s"'`,;]{16,})/giu;
+  /(?<![\p{L}\p{N}_$])(?<label>api[\s_-]*key|ключ|token|токен)(?![\p{L}\p{N}_$])(?<separator>\s*(?:[:=—–-]|это)\s*|\s+)(?<quote>["'`]?)(?<candidate>[^\s"'`,;]{16,})/giu;
+
+function isPublicStorageKey(text: string, match: RegExpExecArray): boolean {
+  const { label, separator, quote, candidate } = match.groups ?? {};
+  // Only an explicit Web Storage instruction identifies a public key name.
+  // Token/API-key labels, assignments and quoted literals stay protected.
+  if (
+    label?.toLocaleLowerCase("ru-RU") !== "ключ"
+    || quote
+    || !/^[ \t]+$/.test(separator ?? "")
+    || !/^[A-Za-z_][A-Za-z0-9_-]*\.?$/.test(candidate ?? "")
+  ) return false;
+
+  const prefix = text.slice(Math.max(0, match.index - 160), match.index);
+  return /\b(?:localStorage|sessionStorage)\b[ \t,]*(?:используй|сохрани|оставь)[ \t]+(?:(?:тот[ \t]+же|существующий|прежний)[ \t]+)?$/iu.test(prefix);
+}
 
 function isPublicCodeExpression(candidate: string): boolean {
   // Standalone labels can also appear in code. Do not treat comparison/
@@ -77,14 +92,18 @@ function highConfidenceSecrets(text: string): string[] {
 }
 
 function keywordSecrets(text: string): string[] {
-  return [
-    ...new Set(
-      [...text.matchAll(new RegExp(LABELLED_SECRET_PATTERN))]
-        .filter((match) => match[1] || !isPublicCodeExpression(match[2] ?? ""))
-        .map((match) => match[2]?.trim() ?? "")
-        .filter((candidate) => candidate && !/^https?:\/\//i.test(candidate)),
-    ),
-  ];
+  const secrets = [...text.matchAll(new RegExp(LABELLED_SECRET_PATTERN))]
+    .flatMap((match) => {
+      const { quote, candidate = "" } = match.groups ?? {};
+      if (
+        !candidate
+        || /^https?:\/\//i.test(candidate)
+        || isPublicStorageKey(text, match)
+        || (!quote && isPublicCodeExpression(candidate))
+      ) return [];
+      return [candidate];
+    });
+  return [...new Set(secrets)];
 }
 
 export function containsChatSecret(text: string): boolean {

@@ -62,11 +62,11 @@ def _legacy_accepted(
     snapshot: Snapshot | None,
     policy: GenerationBillingPolicy | None,
 ) -> bool:
-    """The stored permit-backed candidate marker; no wallet/free/settlement condition."""
+    """Confirm a permit-backed build or edit, independently of its billing outcome."""
     state = run.agent_state if isinstance(run.agent_state, dict) else {}
     marker = state.get("billing_accepted_candidate")
     return bool(
-        run.response_mode == "build"
+        run.response_mode in {"build", "edit"}
         and policy is not None
         and policy.run_id == run.id
         and policy.version == POLICY_VERSION

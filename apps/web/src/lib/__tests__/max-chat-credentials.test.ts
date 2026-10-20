@@ -33,6 +33,61 @@ const aitunnel: IntegrationProvider = {
 };
 
 describe("MAX chat credential intake", () => {
+  const storageKey = "yleum-ui-edit-20261020-counter";
+  const storagePrompt = "Сохрани существующую логику счётчика и значение localStorage, "
+    + `используй тот же ключ ${storageKey}.`;
+
+  it("admits the exact counter edit using its existing localStorage key", () => {
+    expect(containsChatSecret(storagePrompt)).toBe(false);
+    expect(resolveChatCredential(storagePrompt, [aitunnel])).toEqual({ kind: "none" });
+    expect(redactChatSecrets(storagePrompt)).toBe(storagePrompt);
+  });
+
+  it.each([
+    `Для localStorage используй ключ ${storageKey}.`,
+    `Для sessionStorage оставь существующий ключ ${storageKey}.`,
+  ])("admits an explicit unquoted storage key identifier: %s", (prompt) => {
+    expect(containsChatSecret(prompt)).toBe(false);
+    expect(resolveChatCredential(prompt, [aitunnel])).toEqual({ kind: "none" });
+    expect(redactChatSecrets(prompt)).toBe(prompt);
+  });
+
+  it.each([
+    `sk-${"e".repeat(24)}`,
+    "provider_opaque_credential_1234567890",
+  ])("still detects a real credential alongside the storage instruction: %s", (secret) => {
+    const prompt = `${storagePrompt} AITUNNEL token: "${secret}"`;
+    const result = resolveChatCredential(prompt, [aitunnel]);
+    expect(containsChatSecret(prompt)).toBe(true);
+    expect(result.kind).toBe("match");
+    if (result.kind !== "match") return;
+    expect(result.value.secret).toBe(secret);
+    expect(result.value.safePrompt).not.toContain(secret);
+    expect(result.value.safePrompt).toContain(storageKey);
+    expect(redactChatSecrets(prompt)).toContain(storageKey);
+    expect(redactChatSecrets(prompt)).not.toContain(secret);
+  });
+
+  it.each([
+    'localStorage, используй тот же token: "synthetic_opaque_credential_123456"',
+    'localStorage, используй тот же api_key = "synthetic_opaque_credential_123456"',
+    'localStorage, используй тот же ключ: synthetic_opaque_credential_123456',
+    'localStorage, используй тот же ключ "synthetic_opaque_credential_123456"',
+    'Сохрани localStorage. Вот ключ synthetic_opaque_credential_123456',
+  ])("does not turn storage context into a credential exemption: %s", (prompt) => {
+    expect(containsChatSecret(prompt)).toBe(true);
+    expect(resolveChatCredential(prompt, [aitunnel])).toEqual({ kind: "needs_provider" });
+    expect(redactChatSecrets(prompt)).not.toContain("synthetic_opaque_credential_123456");
+  });
+
+  it("keeps a known secret format protected even in the storage key position", () => {
+    const secret = `sk-${"f".repeat(24)}`;
+    const prompt = `localStorage, используй тот же ключ ${secret}`;
+    expect(containsChatSecret(prompt)).toBe(true);
+    expect(resolveChatCredential(prompt, [aitunnel])).toEqual({ kind: "needs_provider" });
+    expect(redactChatSecrets(prompt)).not.toContain(secret);
+  });
+
   it("extracts AITUNNEL key and creates a secretless docs-first agent prompt", () => {
     const secret = `sk-aitunnel-${"a".repeat(24)}`;
     const result = resolveChatCredential(
