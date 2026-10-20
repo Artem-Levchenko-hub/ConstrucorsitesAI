@@ -2,6 +2,7 @@
 
 import importlib
 import importlib.util
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,12 @@ def module():
     name = "yleum_orchestrator.services.machine_environment"
     assert importlib.util.find_spec(name) is not None, "environment recovery is missing"
     return importlib.import_module(name)
+
+
+@pytest.fixture(autouse=True)
+def ample_archive_disk(monkeypatch):
+    """Tiny fake archives do not depend on the shared runner's available disk."""
+    monkeypatch.setattr(module().shutil, "disk_usage", lambda _: SimpleNamespace(free=50 * 1024**3))
 
 
 class ArchiveBackend:
@@ -119,11 +126,10 @@ def test_failed_fresh_capture_does_not_leave_successful_rootfs_or_volume(tmp_pat
 
 
 def test_host_free_space_refusal_precedes_quiesce_and_stop(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
     api = module()
     backend = ArchiveBackend()
     store = api.MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
+    assert store.min_free_disk_bytes == 10 * 1024**3
     monkeypatch.setattr(api.shutil, "disk_usage", lambda _: SimpleNamespace(free=1))
     with pytest.raises(api.EnvironmentIntegrityError, match="free-space reserve"):
         store.capture(manifest_digest="b" * 64, base_image="sha256:" + "c" * 64,
@@ -134,8 +140,6 @@ def test_host_free_space_refusal_precedes_quiesce_and_stop(tmp_path, monkeypatch
 
 
 def test_streaming_archive_never_consumes_the_host_reserve(tmp_path, monkeypatch):
-    from types import SimpleNamespace
-
     api = module()
     store = api.MachineEnvironmentStore(tmp_path, uuid4(), ArchiveBackend(), max_bytes=4096,
                                       min_free_disk_bytes=100)

@@ -278,7 +278,16 @@ async def test_heartbeat_never_rewrites_a_finished_run(tmp_path):
     assert response["phase"] == "done" and "stage" not in response
 
 
-def test_environment_store_reports_capture_stages_and_bytes(tmp_path):
+@pytest.fixture
+def ample_archive_disk(monkeypatch):
+    """Only the fake archive progress case needs deterministic disk capacity."""
+    monkeypatch.setattr(
+        "yleum_orchestrator.services.machine_environment.shutil.disk_usage",
+        lambda _: SimpleNamespace(free=50 * 1024**3),
+    )
+
+
+def test_environment_store_reports_capture_stages_and_bytes(tmp_path, ample_archive_disk):
     backend = ArchiveBackend()
     store = MachineEnvironmentStore(tmp_path, uuid4(), backend, max_bytes=4096)
     trace = PublicationTrace()
