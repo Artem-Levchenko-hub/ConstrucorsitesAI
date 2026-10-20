@@ -7,6 +7,8 @@ import copy
 import importlib.util
 import io
 import json
+import os
+import signal
 import subprocess
 import sys
 import tarfile
@@ -485,3 +487,78 @@ def test_controller_child_gets_exact_census_env_and_no_automatic_replay(tmp_path
     assert environment == {**before, "BACKUP_PLATFORM_CENSUS_JSON": json.dumps(census)}
     assert dict(runtime.os.environ) == before
     assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("project_exists", [False, True])
+def test_owner_peer_export_passes_census_into_real_backup_and_archive(
+    tmp_path, monkeypatch, project_exists
+):
+    from tests.test_backup_cells import (
+        GENERATING,
+        RETIRED_PROJECT,
+        FakeRunner,
+        _terminal_destroy,
+    )
+
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    journal = _terminal_destroy(state, GENERATING)
+    original = journal.read_bytes()
+    census = platform_census()
+    if project_exists:
+        census["projects"] = [RETIRED_PROJECT]
+    ambient = {**platform_census(), "projects": [PROJECT]}
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", json.dumps(ambient))
+    monkeypatch.setattr(cells, "DockerRunner", FakeRunner)
+    # The peer process normally exits after export. Keep only its POSIX process
+    # deadline inert for this in-process, portable test; actual backup is real.
+    monkeypatch.setattr(signal, "SIGALRM", 14, raising=False)
+    monkeypatch.setattr(signal, "signal", lambda *_: None)
+    monkeypatch.setattr(signal, "alarm", lambda *_: None, raising=False)
+    wire = io.BytesIO()
+    stdout = io.TextIOWrapper(wire, encoding="utf-8")
+    monkeypatch.setattr(sys, "stdout", stdout)
+    peer_root = tmp_path / "peer"
+    result = runtime.dispatch_peer(
+        cells,
+        {
+            "spec": {
+                "provider": "docker",
+                "as_owner": True,
+                "name": "commerce",
+                "temp_root": str(peer_root),
+                "state_root": str(state),
+                "postgres_image": IMAGE,
+                "helper_image": IMAGE,
+                "platform_census": census,
+                "producer_sha256": {"cells": "a" * 64, "runtime": "b" * 64, "cold": "c" * 64},
+            }
+        },
+    )
+    assert result == (2 if project_exists else 0)
+    archive_path = tmp_path / "peer.tar.gz"
+    archive_path.write_bytes(wire.getvalue())
+    extracted = tmp_path / "extracted"
+    runtime.unpack(archive_path, extracted)
+    manifest = runtime.read(extracted / "MANIFEST.json")
+    assert manifest["coverage"]["platform_census"] == census
+    assert manifest["node"] == "commerce"
+    assert journal.read_bytes() == original
+    if project_exists:
+        assert manifest["coverage"]["retired_no_local_storage"] == []
+        assert any(
+            row["reason"] == "declared_core_volume_missing"
+            for row in manifest["coverage"]["issues"]
+        )
+        assert len(list(peer_root.iterdir())) == 1, "failed peer evidence must remain private"
+    else:
+        assert manifest["coverage"]["issues"] == []
+        assert [
+            row["workspace_id"] for row in manifest["coverage"]["retired_no_local_storage"]
+        ] == [GENERATING]
+        assert list(peer_root.iterdir()) == [], "only the successful own stage is cleaned"
+        _, verified = cells.run_verify(
+            backup_dir=extracted, postgres_image=IMAGE, runner=FakeRunner()
+        )
+        assert verified == 0
+    assert os.environ["BACKUP_PLATFORM_CENSUS_JSON"] == json.dumps(ambient)
