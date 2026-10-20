@@ -84,6 +84,11 @@ After the pushed revision has passed CI and canonical deployment, on Core:
    The hook reads only the delivered public certificate at
    `/opt/omnia/infra/backup/offhost-backup-cert.pem`. A new public certificate does
    not make old encrypted copies decryptable with the new private key.
+   The installed entrypoint defaults `BACKUP_PRUNE_ENABLED=false`, preserving
+   existing local directories and MinIO prefixes. Enabling expiry requires an
+   explicit operator decision (`BACKUP_PRUNE_ENABLED=true`, positive
+   `RETENTION_DAYS`); invalid policy values fail before taking a backup. Backup
+   preservation directories are never considered timestamped expiry targets.
 4. Verify root's strict-host-key SSH aliases `commerce` and `runtime`, their
    noninteractive sudo, and the runtime `/usr/local/bin/kubectl` context `default`.
    The Commerce dump runs as `zeuszcz`; only a new private staging directory is
@@ -141,6 +146,13 @@ rotation and cannot recover old ciphertext without the corresponding old key.
 
 ## Restore evidence and its limits
 
+New bundles include checksum-bound `platform-globals.sql.gz` and
+`projects-globals.sql.gz`. These contain original database roles and grants and
+are sensitive payloads, subject to the same private staging and CMS encryption
+as runtime configuration. Restore them into a disposable cluster initialized
+with a unique bootstrap administrator before loading their respective database
+dumps. Never print their SQL or substitute permissive placeholder roles.
+
 `restore-test-omnia.sh` creates fresh unique scratch databases/containers only.
 Full-cluster SQL restores use a new scratch bootstrap administrator and
 `ON_ERROR_STOP=1`; SQL/data failures cannot pass just because table counts match.
@@ -157,6 +169,25 @@ restores local plaintext payloads and validates the encrypted envelope; it does
 **not** decrypt that envelope. It records `ciphertext_restore_verified:false`.
 Independent encrypted-copy recovery requires the offline private key and remains
 unproven until an isolated off-host decrypt-and-restore has succeeded.
+
+For an off-host database acceptance run, first verify the downloaded CMS against
+`OFFHOST_SHA256` and decrypt it on the private-key holder's computer. Never copy
+the private key onto a production or restore server. Pass only the decrypted
+archive to a disposable local Docker engine with cached, digest-pinned images:
+
+```sh
+DOCKER_HOST=unix:///run/disposable-recovery.sock python infra/backup/offline-restore.py \
+  --bundle /private/decrypted.tgz --work-dir /private/new-restore-directory \
+  --cells-script apps/orchestrator/scripts/backup_cells.py \
+  --postgres-image 'postgres@sha256:<delivered digest>' \
+  --receipt /private/new-receipt.json --disposable-sandbox
+```
+
+The receipt covers strict database restores, role recovery and platform/legacy
+write-restart checks. Bind it externally to the CMS and plaintext SHA256 and the
+delivered revision. MinIO object GET, current source witnesses and application
+boot remain separate acceptance steps; `passed_checked_scope` alone is not full
+filesystem disaster recovery. Retain the extracted data privately for those steps.
 
 Physical SQL regression on an explicitly selected disposable Docker sandbox:
 

@@ -25,6 +25,9 @@ set -euo pipefail
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/omnia-runtime/backups}"
 PROJECTS_DIR="${PROJECTS_DIR:-/opt/omnia-runtime/projects}"
 RETENTION_DAYS="${RETENTION_DAYS:-14}"
+BACKUP_PRUNE_ENABLED="${BACKUP_PRUNE_ENABLED:-false}"
+source "$(dirname "$0")/retention.sh"
+backup_retention_validate "$BACKUP_PRUNE_ENABLED" "$RETENTION_DAYS"
 OFFHOST_DEST="${BACKUP_OFFHOST_DEST:-}" # optional second encrypted copy via rsync/scp
 PUBLIC_CERT="${BACKUP_PUBLIC_CERT:-/opt/omnia/infra/backup/offhost-backup-cert.pem}"
 MINIO_VOLUME="${MINIO_VOLUME:-full_minio-data}"
@@ -134,6 +137,13 @@ platform_pg_dump(){
   if [ "$PLATFORM_DB_MODE" = host ]; then pg_dump "$PLATFORM_DSN" "$@"
   else docker exec "$PLATFORM_CTR" pg_dump -U "$PLATFORM_USER" -d "$PLATFORM_DB" "$@"; fi
 }
+platform_pg_dumpall(){
+  if [ "$PLATFORM_DB_MODE" = host ]; then
+    (cd /tmp && sudo -n -u postgres pg_dumpall "$@")
+  else
+    docker exec "$PLATFORM_CTR" pg_dumpall -U "$PLATFORM_USER" "$@"
+  fi
+}
 platform_psql(){
   if [ "$PLATFORM_DB_MODE" = host ]; then psql "$PLATFORM_DSN" "$@"
   else docker exec "$PLATFORM_CTR" psql -U "$PLATFORM_USER" -d "$PLATFORM_DB" "$@"; fi
@@ -143,11 +153,16 @@ platform_psql(){
 log "dumping platform DB ${PLATFORM_DB}..."
 platform_pg_dump --no-owner --clean --if-exists \
   | gzip > "${dir}/platform-${PLATFORM_DB}.sql.gz" || fail "platform pg_dump failed"
+platform_pg_dumpall --globals-only \
+  | gzip > "${dir}/platform-globals.sql.gz" || fail "platform role backup failed"
 
 # 2. Per-project DB host — one dump captures every project schema.
 log "dumping per-project DB ${USERS_DB} (all schemas)..."
 docker exec "$USERS_CTR" pg_dump -U "$USERS_USER" -d "$USERS_DB" --no-owner --clean --if-exists \
   | gzip > "${dir}/projects-${USERS_DB}.sql.gz" || fail "per-project pg_dump failed"
+docker exec "$USERS_CTR" pg_dumpall -U "$USERS_USER" --globals-only \
+  | gzip > "${dir}/projects-globals.sql.gz" || fail "legacy project role backup failed"
+chmod 0600 "${dir}/platform-globals.sql.gz" "${dir}/projects-globals.sql.gz"
 
 # 3. Project sources + snapshots. Missing source storage is a failed full backup.
 [ -d "$PROJECTS_DIR" ] || fail "project source directory missing: ${PROJECTS_DIR}"
@@ -276,7 +291,9 @@ log "$verify_out"
   cd "$dir"
   sha256sum \
     "platform-${PLATFORM_DB}.sql.gz" \
+    platform-globals.sql.gz \
     "projects-${USERS_DB}.sql.gz" \
+    projects-globals.sql.gz \
     projects-src.tgz \
     minio-data.tgz > SHA256SUMS
   sha256sum runtime-config.tgz >> SHA256SUMS
@@ -285,7 +302,9 @@ log "$verify_out"
 )
 du -sh \
   "${dir}/platform-${PLATFORM_DB}.sql.gz" \
+  "${dir}/platform-globals.sql.gz" \
   "${dir}/projects-${USERS_DB}.sql.gz" \
+  "${dir}/projects-globals.sql.gz" \
   "${dir}/projects-src.tgz" \
   "${dir}/minio-data.tgz" \
   "${dir}/runtime-config.tgz" \
@@ -297,7 +316,9 @@ du -sh \
 log "building encrypted off-host bundle..."
 tar -czf "$bundle_tmp" -C "$dir" \
   "platform-${PLATFORM_DB}.sql.gz" \
+  platform-globals.sql.gz \
   "projects-${USERS_DB}.sql.gz" \
+  projects-globals.sql.gz \
   projects-src.tgz \
   minio-data.tgz \
   runtime-config.tgz \
@@ -339,16 +360,7 @@ if docker inspect "$MINIO_CONTAINER" >/dev/null 2>&1; then
   uploaded_size="$(minio_mc stat --json "l/${MINIO_BACKUP_BUCKET}/${ts}/$(basename "$encrypted")" 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin).get("size", 0))' 2>/dev/null || echo 0)"
   [ "$uploaded_size" = "$(stat -c%s "$encrypted")" ] || fail "MinIO upload size mismatch (${uploaded_size} vs $(stat -c%s "$encrypted"))"
   log "MinIO upload OK (${uploaded_size} bytes)"
-  cutoff="$(date -u -d "-${RETENTION_DAYS} days" +%Y%m%d-%H%M%S)"
-  for prefix in $(minio_mc ls "l/${MINIO_BACKUP_BUCKET}/" 2>/dev/null | awk '{print $NF}' | tr -d /); do
-    case "$prefix" in
-      20[0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9])
-        if [[ "$prefix" < "$cutoff" ]]; then
-          minio_mc rm --recursive --force "l/${MINIO_BACKUP_BUCKET}/${prefix}/" >/dev/null 2>&1 \
-            && log "pruned MinIO bundle ${prefix}" || true
-        fi ;;
-    esac
-  done
+  backup_prune_minio "$MINIO_BACKUP_BUCKET" "$RETENTION_DAYS" "$BACKUP_PRUNE_ENABLED"
 else
   log "MinIO container ${MINIO_CONTAINER} not found — bundle kept on the host only"
 fi
@@ -367,5 +379,5 @@ if [ -n "$OFFHOST_DEST" ]; then
 fi
 
 # 9. Retention — prune local backups older than RETENTION_DAYS.
-find "$BACKUP_ROOT" -maxdepth 1 -type d -name '20*' -mtime "+${RETENTION_DAYS}" -exec rm -rf {} + 2>/dev/null || true
-log "retained local backups from the last ${RETENTION_DAYS} days."
+backup_prune_local "$BACKUP_ROOT" "$RETENTION_DAYS" "$BACKUP_PRUNE_ENABLED"
+log "backup retention: pruning=${BACKUP_PRUNE_ENABLED}, days=${RETENTION_DAYS}"

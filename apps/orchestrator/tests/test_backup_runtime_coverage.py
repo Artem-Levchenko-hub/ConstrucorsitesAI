@@ -357,6 +357,69 @@ def platform_census():
     }
 
 
+def test_docker_peer_exports_retired_workspace_without_local_storage(tmp_path, monkeypatch):
+    import signal
+
+    workspace_id = "11111111-1111-4111-8111-111111111111"
+    operation_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    stem = "omnia-cell-" + workspace_id.replace("-", "")
+    state = tmp_path / "state"
+    journal = state / "project-cells" / f"{workspace_id}.json"
+    journal.parent.mkdir(parents=True)
+    journal.write_text(json.dumps({"version": 1, "workspace": {
+        "workspace_id": workspace_id, "project_id": PROJECT, "owner_id": PROJECT,
+        "phase": "completed", "bundle_state": "retained", "fencing_epoch": 4,
+        "last_operation_id": operation_id,
+        "resource_names": {
+            "workspace_id": workspace_id, "namespace": "prod",
+            **{field: f"{stem}-{suffix}" for field, suffix in {
+                "internal_network": "internal", "egress_network": "egress",
+                "workspace_volume": "workspace", "agent_home_volume": "agent-home",
+                "postgres_volume": "postgres", "redis_volume": "redis",
+                "checkpoint_volume": "checkpoints", "postgres_container": "postgres",
+                "redis_container": "redis",
+            }.items()},
+        },
+        "operations": [{"operation_id": operation_id, "kind": "destroy",
+                        "status": "completed", "phase": "completed",
+                        "fencing_epoch": 4, "generation_run_id": None}],
+    }}))
+    original = journal.read_bytes()
+
+    class EmptyDocker:
+        def run(self, args, **_kwargs):
+            assert args in (["volume", "ls", "--format", "{{.Name}}"],
+                            ["ps", "--all", "--quiet", "--no-trunc"])
+            return cells.CommandResult(tuple(args), 0, b"", b"")
+
+    output = SimpleNamespace(buffer=io.BytesIO())
+    monkeypatch.setattr(signal, "SIGALRM", 14, raising=False)
+    monkeypatch.setattr(signal, "signal", lambda *_: None)
+    monkeypatch.setattr(signal, "alarm", lambda *_: None, raising=False)
+    monkeypatch.setattr(cells, "DockerRunner", EmptyDocker)
+    monkeypatch.setattr(runtime.sys, "stdout", output)
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", "invalid ambient census")
+    census = platform_census()
+    code = runtime.export_peer(cells, {
+        "provider": "docker", "name": "commerce", "temp_root": str(tmp_path / "stage"),
+        "state_root": str(state), "postgres_image": IMAGE, "helper_image": IMAGE,
+        "platform_census": census, "producer_sha256": {},
+    })
+    with tarfile.open(fileobj=io.BytesIO(output.buffer.getvalue()), mode="r:gz") as archive:
+        manifest = json.load(archive.extractfile("MANIFEST.json"))
+    assert code == 0
+    assert manifest["coverage"]["issues"] == []
+    assert manifest["coverage"]["platform_census"] == census
+    receipts = manifest["coverage"]["retired_no_local_storage"]
+    assert [(row["workspace_id"], row["reason"]) for row in receipts] == [
+        (workspace_id, "retired_no_local_storage")
+    ]
+    assert manifest["workspaces"] == []
+    assert journal.read_bytes() == original
+    assert list((tmp_path / "stage").iterdir()) == []
+    assert runtime.os.environ["BACKUP_PLATFORM_CENSUS_JSON"] == "invalid ambient census"
+
+
 def test_peer_payload_binds_all_three_sources_and_only_shared_platform_census(
     tmp_path, monkeypatch
 ):

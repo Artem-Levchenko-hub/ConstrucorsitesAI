@@ -3,6 +3,8 @@
 set -euo pipefail
 umask 077
 export BACKUP_PUBLIC_CERT=/opt/omnia/infra/backup/offhost-backup-cert.pem
+# Keep legacy ciphertext until its operator explicitly approves expiry.
+export BACKUP_PRUNE_ENABLED="${BACKUP_PRUNE_ENABLED:-false}"
 export MINIO_BACKUP_IMAGE=$(sed -n 's/^CELL_BACKUP_IMAGE=//p' /opt/omnia/apps/orchestrator/.env)
 export MINIO_VOLUME=$(docker inspect yleum-prod-minio --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Name}}{{end}}{{end}}')
 export PLATFORM_DB_MODE=host

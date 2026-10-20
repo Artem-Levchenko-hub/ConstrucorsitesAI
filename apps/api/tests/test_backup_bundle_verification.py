@@ -46,6 +46,11 @@ def _minio(path: Path, repo_count: int) -> None:
             tar.addfile(member)
 
 
+def _globals(directory: Path) -> None:
+    for name in ("platform-globals.sql.gz", "projects-globals.sql.gz"):
+        (directory / name).write_bytes(gzip.compress(b"CREATE ROLE backup_restore_probe;\n"))
+
+
 def _run(bundle: Path, live_projects: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         # Windows' MSYS argv bridge truncates literal newlines. An environment
@@ -69,6 +74,7 @@ def _run(bundle: Path, live_projects: str) -> subprocess.CompletedProcess[str]:
 def bundle(tmp_path: Path) -> Path:
     _dump(tmp_path / "platform-omnia.sql.gz")
     _minio(tmp_path / "minio-data.tgz", repo_count=4)
+    _globals(tmp_path)
     return tmp_path
 
 
@@ -77,6 +83,26 @@ def test_a_complete_bundle_passes(bundle: Path) -> None:
 
     assert result.returncode == OK, result.stderr
     assert "content check OK" in result.stdout
+
+
+@pytest.mark.parametrize("name", ["platform-globals.sql.gz", "projects-globals.sql.gz"])
+def test_cluster_roles_are_required_for_offline_restore(bundle: Path, name: str) -> None:
+    (bundle / name).unlink()
+    result = _run(bundle, "4")
+    assert result.returncode == MISSING_DATA
+    assert name in result.stderr
+
+
+def test_corrupted_cluster_roles_are_unreadable(bundle: Path) -> None:
+    (bundle / "platform-globals.sql.gz").write_bytes(b"truncated roles dump")
+    result = _run(bundle, "4")
+    assert result.returncode == UNREADABLE
+
+
+def test_empty_cluster_roles_are_incomplete(bundle: Path) -> None:
+    (bundle / "projects-globals.sql.gz").write_bytes(gzip.compress(b""))
+    result = _run(bundle, "4")
+    assert result.returncode == MISSING_DATA
 
 
 def test_more_projects_than_archived_repos_is_missing_data(bundle: Path) -> None:
@@ -168,6 +194,7 @@ def test_malformed_live_count_cannot_claim_verified_coverage(bundle: Path, live_
 def test_zero_live_projects_needs_no_repos(tmp_path: Path) -> None:
     _dump(tmp_path / "platform-omnia.sql.gz")
     _minio(tmp_path / "minio-data.tgz", repo_count=0)
+    _globals(tmp_path)
 
     assert _run(tmp_path, "0").returncode == OK
 

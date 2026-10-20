@@ -72,5 +72,14 @@ if [ "$archived_repos" -lt "$live_projects" ]; then
     "missing: MinIO archive holds ${archived_repos} project repos but the platform has ${live_projects}"
 fi
 
+for roles in platform-globals.sql.gz projects-globals.sql.gz; do
+  [ -f "$dir/$roles" ] || die "$EXIT_MISSING_DATA" "missing: $roles"
+  gzip -t "$dir/$roles" 2>/dev/null \
+    || die "$EXIT_UNREADABLE" "unreadable: $roles is not a readable gzip stream"
+  role_count="$(gzip -dc "$dir/$roles" | grep -c '^CREATE ROLE ' || true)"
+  [ "${role_count:-0}" -ge 1 ] \
+    || die "$EXIT_MISSING_DATA" "missing: $roles contains no cluster roles"
+done
+
 printf 'content check OK: %s project repos archived for %s live projects\n' \
   "$archived_repos" "$live_projects"
