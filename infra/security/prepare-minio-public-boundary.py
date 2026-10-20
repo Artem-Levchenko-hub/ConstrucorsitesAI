@@ -267,12 +267,27 @@ def is_tls(server: Node) -> bool:
             raise ValueError("platform_tls_listener_missing")
         if words[1] in {"80", "[::]:80"} and len(words) != 2:
             raise ValueError("unreviewed_platform_listener")
-    return any(words[1] in {"443", "[::]:443"} for words in listens)
+    tls = any(words[1] in {"443", "[::]:443"} for words in listens)
+    if tls and any(words[1] in {"80", "[::]:80"} for words in listens):
+        raise ValueError("mixed_tls_and_http_listener_requires_review")
+    return tls
 
 
 def validate_servers(nodes: list[Node]) -> Node:
-    if len(nodes) != 2 or any(node.words != ("server",) or node.children is None for node in nodes):
+    """Accept only the two documented canonical layouts and their exact hosts.
+
+    The current deployment keeps HTTP redirects in a separate vhost, leaving
+    one TLS server here with the platform's four existing HTTPS aliases. The
+    legacy combined HTTP/TLS file has two servers and only apex/www names.
+    """
+    if len(nodes) not in {1, 2} or any(
+        node.words != ("server",) or node.children is None for node in nodes
+    ):
         raise ValueError("platform_server_shape_changed")
+    expected_names = (
+        ("server_name", "yleum.ru", "www.yleum.ru", "api.yleum.ru", "app.yleum.ru")
+        if len(nodes) == 1 else ("server_name", "yleum.ru", "www.yleum.ru")
+    )
     tls = [node for node in nodes if is_tls(node)]
     if len(tls) != 1:
         raise ValueError("one_tls_server_required")
@@ -280,7 +295,7 @@ def validate_servers(nodes: list[Node]) -> Node:
     for server in nodes:
         children = server.children or []
         names = [node.words for node in children if node.words[0] == "server_name"]
-        if names != [("server_name", "yleum.ru", "www.yleum.ru")]:
+        if names != [expected_names]:
             raise ValueError("platform_server_shape_changed")
         seen: set[str] = set()
         for node in children:

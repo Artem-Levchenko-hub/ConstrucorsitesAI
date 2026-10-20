@@ -74,6 +74,11 @@ before that vhost is activated. There is no automatic production hook here.
    S3 route. Check every relevant effective server/include and origin port,
    not only this candidate file. Recheck all recorded passive include hashes
    immediately before installing/reloading; a change invalidates preparation.
+   The canonical file may use either the legacy combined HTTP/TLS layout for
+   apex/www or the current single TLS server for apex/www/api/app with HTTP
+   redirects in a separate file. The helper accepts only these exact layouts
+   and host sets. The separate HTTP redirect file still needs the full `nginx -T`
+   review and ingress checks; it must not proxy S3.
 5. Verify apex/www and every old public MinIO hostname: synthetic nonexistent
    archive/private paths return edge 403 with and without SigV4-shaped query
    parameters, including normalized traversal/encoding cases. This proves

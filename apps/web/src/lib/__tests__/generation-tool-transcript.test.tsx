@@ -144,6 +144,16 @@ describe("tool liveness in the actual stream and transcript", () => {
     });
     const button = container.querySelector("button")!;
     await act(async () => button.click());
+    expect(container.textContent).toContain("Проверка результата не подтверждена");
+    expect(container.querySelector("ol > li")?.getAttribute("title")).toBe("Правки подготовлены");
+    expect(container.textContent).not.toContain("Изменения готовы");
+    await act(async () => {
+      client.setQueryData<GenerationRun>(["generation", "project-1"], previous => ({
+        ...previous!, acceptance: { run_id: "run-1", assistant_message_id: "message-1",
+          snapshot_id: "accepted-snapshot", accepted_at: null, current_request_complete: true },
+      }));
+      await vi.advanceTimersByTimeAsync(1);
+    });
     expect(container.textContent).toContain("Готово");
     expect(container.textContent).toContain("Изменения готовы");
     expect(container.querySelector("ol > li")?.getAttribute("title")).toBe("Готово");

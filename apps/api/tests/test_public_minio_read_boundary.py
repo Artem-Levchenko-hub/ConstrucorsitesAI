@@ -161,6 +161,26 @@ def test_candidate_guards_only_public_minio_prefix_and_preserves_proxy_and_other
     assert module.prepare(value) == value
 
 
+def test_current_canonical_tls_only_vhost_preserves_all_four_platform_aliases():
+    module = helper()
+    source = VHOST.split("\nserver {", 1)[0].replace(
+        "server_name yleum.ru www.yleum.ru;",
+        "server_name yleum.ru www.yleum.ru api.yleum.ru app.yleum.ru;",
+    )
+    candidate = module.prepare(source)
+    assert "location ^~ /minio/ {" in candidate
+    assert "api.yleum.ru app.yleum.ru;" in candidate
+    clean = "\n".join(line for line in candidate.split("\n") if line.strip() not in module.GUARDS)
+    assert clean.replace("location ^~ /minio/ {", "location /minio/ {") == source
+    assert module.prepare(candidate) == candidate
+    with pytest.raises(ValueError):
+        module.prepare(source.replace("app.yleum.ru", "other.example"))
+    with pytest.raises(ValueError):
+        module.prepare(source + "\n" + source)
+    with pytest.raises(ValueError, match="mixed_tls_and_http"):
+        module.prepare(source.replace("listen 443 ssl;", "listen 443 ssl; listen 80;"))
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -349,6 +369,9 @@ def test_tracked_canonical_routes_and_headers_remain_eligible():
     generator = (ROOT / "infra/max-k3s/migrate/30-bring-up.sh").read_text()
     platform = generator.split('cat > "/etc/nginx/sites-available/$DOMAIN" <<EOF\n')[1]
     platform = platform.split("\nEOF")[0].replace("\\$", "$").replace("$DOMAIN", "yleum.ru")
+    # Model the TLS vhost after Certbot splits HTTP redirects into the second
+    # server. Keeping port 80 here would create two ambiguous HTTP owners.
+    platform = platform.replace("    listen 80;\n", "").replace("    listen [::]:80;\n", "")
     platform = platform.rsplit("\n}", 1)[0] + "\n    listen 443 ssl;\n}\n"
     platform += "server { listen 80; server_name yleum.ru www.yleum.ru; return 404; }\n"
     header = "/etc/nginx/snippets/yleum-platform-https-headers.conf"

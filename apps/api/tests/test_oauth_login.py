@@ -587,11 +587,16 @@ async def test_platform_keeps_only_identifier_and_email(
     for secret in ("Иван", "Петров", "+79990000000", "avatar.png", "vk-access"):
         assert secret not in stored
 
-    # User exports are forbidden; the retained identity still stores only the
-    # same minimal provider binding, available to trusted account operations.
+    # Personal exports preserve the same minimal profile; they never serialize
+    # provider response payloads, tokens or optional contact/profile fields.
     exported = await client.get("/api/account/export")
-    assert exported.status_code == 403
-    assert exported.json()["error"]["code"] == "forbidden"
+    assert exported.status_code == 200
+    assert exported.json()["scope"] == "personal_account_records"
+    assert exported.json()["account"]["email"] == "owner@example.com"
+    assert exported.json()["identities"][0]["provider"] == "vk"
+    assert exported.json()["identities"][0]["provider_user_id"] == "4242"
+    for secret in ("Иван", "Петров", "+79990000000", "avatar.png", "vk-access"):
+        assert secret not in exported.text
     identity = (await db_session.scalars(select(UserIdentity))).one()
     assert (identity.provider, identity.provider_user_id, identity.email) == (
         "vk", "4242", "owner@example.com"

@@ -11,7 +11,8 @@ vi.mock("@/lib/api/owner-profile", () => ({ getOwnerProfile: async () => ({ id: 
 vi.mock("@/lib/api/max-studio", () => ({ getMaxProjectConfig: async () => ({ config_version: 1 }) }));
 vi.mock("@/hooks/usePromptStream", () => ({ usePromptStream: () => ({ submit: vi.fn(), cancel: vi.fn(), cancelPending: vi.fn(), pendingPrompt: null }) }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
-const completed: GenerationRun = { id: "latest", project_id: "p", assistant_message_id: "current", status: "completed", response_mode: "build", created_at: "2026-10-04T08:00:00Z", started_at: "2026-10-04T08:00:00Z", finished_at: "2026-10-04T08:07:26Z" };
+const completed: GenerationRun = { id: "latest", project_id: "p", assistant_message_id: "current", status: "completed", response_mode: "build", created_at: "2026-10-04T08:00:00Z", started_at: "2026-10-04T08:00:00Z", finished_at: "2026-10-04T08:07:26Z",
+  acceptance: { run_id: "latest", assistant_message_id: "current", snapshot_id: "saved", accepted_at: null, current_request_complete: true } };
 const message: Message = { id: "current", project_id: "p", role: "assistant", content: "Каталог готов", model_id: "model", snapshot_id: null, tokens_in: 1, tokens_out: 1, generation_status: "failed", generation_failure: { code: "deadline", message: "Устаревший сбой текущей попытки", retryable: true }, agent_steps: [{ step: 1, kind: "step", action: "Проверка каталога", path: "", ok: false }], created_at: "2026-10-04T08:00:00Z" };
 
 it.each(["completed", "foreign", "failed"])("binds latest %s lifecycle only to its exact chat message, retaining historical failure", async mode => {

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.account_fixture import register_verified_account
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
 from yleum_api.models.user import User
 
@@ -111,11 +112,7 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     from yleum_api.services import yookassa
 
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": "ledger@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
+    await register_verified_account(client, "ledger@example.com")
 
     async def fake_create_payment(**_kwargs: object) -> dict[str, object]:
         return {
@@ -160,8 +157,11 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     assert entry["external_ref"] == f"payment:{payment_id}"
 
     exported = await client.get("/api/account/export")
-    assert exported.status_code == 403
-    assert exported.json()["error"]["code"] == "forbidden"
+    assert exported.status_code == 200
+    assert exported.json()["scope"] == "personal_account_records"
+    assert exported.json()["wallet"][0]["balance_rub"] == "600.0000"
+    assert exported.json()["transactions"][0]["amount_rub"] == "500.0000"
+    assert "provider_payload" not in exported.text and "external_ref" not in exported.text
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "free"

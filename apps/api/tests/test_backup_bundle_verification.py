@@ -17,6 +17,7 @@ SIGPIPE, и под строгим режимом весь конвейер па�
 from __future__ import annotations
 
 import gzip
+import os
 import subprocess
 import tarfile
 from pathlib import Path
@@ -24,6 +25,7 @@ from pathlib import Path
 import pytest
 
 _SCRIPT = Path(__file__).resolve().parents[3] / "infra" / "backup" / "verify-bundle.sh"
+_BASH = "C:/Program Files/Git/bin/bash.exe" if os.name == "nt" else "bash"
 
 OK, MISSING_DATA, UNREADABLE = 0, 3, 4
 
@@ -46,10 +48,20 @@ def _minio(path: Path, repo_count: int) -> None:
 
 def _run(bundle: Path, live_projects: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(_SCRIPT), str(bundle), live_projects],
+        # Windows' MSYS argv bridge truncates literal newlines. An environment
+        # handoff lets the real Bash script receive the complete malformed value.
+        [_BASH, "-c", 'exec bash "$VERIFY_BUNDLE_SCRIPT" . "$VERIFY_LIVE_COUNT"'],
+        cwd=bundle,
         capture_output=True,
         text=True,
         check=False,
+        env={
+            **os.environ,
+            "MSYS_NO_PATHCONV": "1",
+            "MSYS2_ARG_CONV_EXCL": "*",
+            "VERIFY_BUNDLE_SCRIPT": _SCRIPT.as_posix(),
+            "VERIFY_LIVE_COUNT": live_projects,
+        },
     )
 
 
@@ -127,7 +139,7 @@ def test_a_missing_file_is_unreadable_not_silently_ok(tmp_path: Path) -> None:
     assert result.returncode == UNREADABLE
 
 
-def test_an_unknown_live_count_warns_instead_of_claiming_success(bundle: Path) -> None:
+def test_an_unknown_live_count_cannot_claim_verified_coverage(bundle: Path) -> None:
     """Неизвестное число проектов — не доказательство целости.
 
     Прежний код молча пропускал сверку; теперь это видно в выводе, иначе копию
@@ -135,8 +147,21 @@ def test_an_unknown_live_count_warns_instead_of_claiming_success(bundle: Path) -
     """
     result = _run(bundle, "unknown")
 
-    assert result.returncode == OK
-    assert "warning" in result.stdout
+    assert result.returncode == UNREADABLE
+    assert "unconfirmed" in result.stderr
+    assert "content check OK" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "live_count",
+    ["", "oops", "5\nunknown", "4\n", " 4", "+4", "-1", "4.0", "04",
+     "9223372036854775808", "9" * 100],
+)
+def test_malformed_live_count_cannot_claim_verified_coverage(bundle: Path, live_count: str) -> None:
+    result = _run(bundle, live_count)
+
+    assert result.returncode == UNREADABLE
+    assert "unconfirmed" in result.stderr
     assert "content check OK" not in result.stdout
 
 
@@ -145,6 +170,10 @@ def test_zero_live_projects_needs_no_repos(tmp_path: Path) -> None:
     _minio(tmp_path / "minio-data.tgz", repo_count=0)
 
     assert _run(tmp_path, "0").returncode == OK
+
+
+def test_largest_postgres_count_is_compared_without_overflow(bundle: Path) -> None:
+    assert _run(bundle, "9223372036854775807").returncode == MISSING_DATA
 
 
 def test_the_check_never_prints_archive_contents(bundle: Path) -> None:

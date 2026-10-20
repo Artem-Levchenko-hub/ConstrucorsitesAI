@@ -48,11 +48,15 @@ ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 # backup_cells.py dumps each one logically; it needs the same digest-pinned
 # images the orchestrator uses, which are declared in that env file.
 CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.py}"
+RUNTIME_BACKUP_SCRIPT="${RUNTIME_BACKUP_SCRIPT:-$(dirname "$0")/runtime-backup.py}"
+BACKUP_TOPOLOGY="${BACKUP_TOPOLOGY:-$(dirname "$0")/production-topology.json}"
+BACKUP_PEER_TEMP_ROOT="${BACKUP_PEER_TEMP_ROOT:-/opt/omnia-runtime/backups}"
 STATE_ROOT="${STATE_ROOT:-/opt/omnia-runtime/state}"
 # The host python is 3.11 and the script needs 3.12+; the orchestrator's own
 # interpreter is the one that matches its code. Never run the script through a
 # mode bit: a checkout without +x would silently skip the cell backup.
 CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
+BACKUP_PYTHON="${BACKUP_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
 [ -x "$CELLS_PYTHON" ] || CELLS_PYTHON="$(command -v python3 || true)"
 FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 
@@ -90,6 +94,7 @@ started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 dir="${BACKUP_ROOT}/${ts}"
 bundle_tmp="${BACKUP_ROOT}/.omnia-backup-${ts}.tgz"
 mkdir -p "$dir"
+chmod 0700 "$dir"
 log(){ echo "[backup ${ts}] $*"; }
 fail(){ log "ERROR: $*"; exit 1; }
 cleanup(){ rm -f "$bundle_tmp"; }
@@ -177,11 +182,24 @@ docker run --rm \
 # (./backups holds the previous encrypted bundles uploaded by step 7b; archiving
 #  them again would make every nightly bundle carry all earlier ones.)
 
-# 5b. Project Cell databases and the orchestrator state journal. A single busy or
-#     halted cell must not cost the whole nightly backup, so a partial result
-#     (exit 2) is reported and kept; only a hard failure aborts.
+# 5b. Full database coverage requires every configured node. Partial artifacts
+# remain private for diagnosis; they are never promoted as a complete bundle.
 if [ -f "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
   [ -n "$CELLS_PYTHON" ] || fail "no python to run ${CELLS_SCRIPT}"
+  # One read-only SQL statement binds both full lists to the same MVCC snapshot.
+  # Do not filter by started_at: a newly admitted project must never look absent
+  # to a local/peer retirement decision. The existing source-bundle start cohort
+  # below remains unchanged. Only the protected root collector supplies this ENV.
+  BACKUP_PLATFORM_CENSUS_JSON="$(platform_psql -X -v ON_ERROR_STOP=1 -Atc "
+    SELECT json_build_object(
+      'version', 1, 'scope', 'complete_platform_project_workspace_census',
+      'observed_at', to_char(statement_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+      'projects', COALESCE((SELECT json_agg(id::text ORDER BY id) FROM projects), '[]'::json),
+      'workspaces', COALESCE((SELECT json_agg(json_build_object('id', id::text,
+          'project_id', project_id::text) ORDER BY id) FROM project_cell_workspaces), '[]'::json)
+    )" )" || fail "platform project/workspace census query failed"
+  [ -n "$BACKUP_PLATFORM_CENSUS_JSON" ] || fail "platform project/workspace census is empty"
+  export BACKUP_PLATFORM_CENSUS_JSON
   for name in CELL_POSTGRES_IMAGE CELL_BACKUP_IMAGE; do
     if [ -z "${!name:-}" ] && [ -r "$ORCHESTRATOR_ENV" ]; then
       # Read only these two lines: the file holds production secrets.
@@ -191,21 +209,28 @@ if [ -f "$CELLS_SCRIPT" ] && [ -d "$STATE_ROOT" ]; then
   done
   log "backing up Project Cell databases..."
   cells_status=0
-  "$CELLS_PYTHON" "$CELLS_SCRIPT" backup --state-root "$STATE_ROOT" --out "${dir}/cells" \
+  "$CELLS_PYTHON" "$CELLS_SCRIPT" backup --local-scope --state-root "$STATE_ROOT" --out "${dir}/cells" \
     || cells_status=$?
   case "$cells_status" in
     0) : ;;
-    2) log "WARNING: Project Cell backup is partial — see cells/MANIFEST.json" ;;
+    2) fail "Project Cell backup is incomplete — private cells/MANIFEST.json retained" ;;
     *) fail "Project Cell backup failed (exit ${cells_status})" ;;
   esac
   [ -f "${dir}/cells/MANIFEST.json" ] || fail "Project Cell backup left no manifest"
+  [ -f "$RUNTIME_BACKUP_SCRIPT" ] && [ -f "$BACKUP_TOPOLOGY" ] || fail "runtime coverage collector or topology is missing"
+  "$BACKUP_PYTHON" "$RUNTIME_BACKUP_SCRIPT" collect --cells-script "$CELLS_SCRIPT" \
+    --core-cells "${dir}/cells" --out "${dir}/peers" --topology "$BACKUP_TOPOLOGY" \
+    --postgres-image "$CELL_POSTGRES_IMAGE" --helper-image "$CELL_BACKUP_IMAGE" \
+    --peer-temp-root "$BACKUP_PEER_TEMP_ROOT" || fail "peer runtime database coverage is incomplete"
+  tar -czf "${dir}/peers.tgz" -C "${dir}/peers" . || fail "peer archive failed"
+  chmod 0600 "${dir}/peers.tgz"
+  rm -rf "${dir}/peers"
   tar -czf "${dir}/cells.tgz" -C "${dir}" cells || fail "Project Cell archive failed"
   rm -rf "${dir}/cells"
   chmod 600 "${dir}/cells.tgz"
   cells_archive=1
 else
-  # Not a silent skip: this is a real gap in the night's backup.
-  log "WARNING: Project Cell backup skipped (no ${CELLS_SCRIPT} or ${STATE_ROOT})"
+  fail "required Project Cell backup script or state root is missing"
 fi
 
 # 6. Integrity: refuse a backup whose payloads are suspiciously empty (a silent
@@ -256,6 +281,7 @@ log "$verify_out"
     minio-data.tgz > SHA256SUMS
   sha256sum runtime-config.tgz >> SHA256SUMS
   [ -f cells.tgz ] && sha256sum cells.tgz >> SHA256SUMS
+  sha256sum peers.tgz >> SHA256SUMS
 )
 du -sh \
   "${dir}/platform-${PLATFORM_DB}.sql.gz" \
@@ -263,6 +289,7 @@ du -sh \
   "${dir}/projects-src.tgz" \
   "${dir}/minio-data.tgz" \
   "${dir}/runtime-config.tgz" \
+  "${dir}/peers.tgz" \
   ${cells_archive:+"${dir}/cells.tgz"} | tee "${dir}/MANIFEST.txt"
 
 # 7. Build one portable payload and encrypt it with AES-256 + the offline RSA
@@ -275,6 +302,7 @@ tar -czf "$bundle_tmp" -C "$dir" \
   minio-data.tgz \
   runtime-config.tgz \
   ${cells_archive:+cells.tgz} \
+  peers.tgz \
   SHA256SUMS \
   MANIFEST.txt \
   || fail "portable backup bundle failed"

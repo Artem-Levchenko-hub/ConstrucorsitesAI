@@ -15,7 +15,15 @@ SignupSource = Literal["share_link", "remix", "direct"]
 RegistrationProduct = Literal["general", "max"]
 
 
-class UserCreate(BaseModel):
+class LegalAcceptanceRequest(BaseModel):
+    terms_accepted: bool = False
+    privacy_accepted: bool = False
+    personal_data_accepted: bool = False
+    marketing_accepted: bool = False
+    document_version: str | None = Field(default=None, max_length=32)
+
+
+class UserCreate(LegalAcceptanceRequest):
     email: EmailStr
     password: str = Field(min_length=8, max_length=128)
     # Viral-funnel provenance (V4.2b return-edge), both optional → organic signup
@@ -25,11 +33,6 @@ class UserCreate(BaseModel):
     source: SignupSource | None = None
     referrer_project_id: UUID | None = None
     product: RegistrationProduct = "general"
-    terms_accepted: bool = False
-    privacy_accepted: bool = False
-    personal_data_accepted: bool = False
-    marketing_accepted: bool = False
-    document_version: str | None = Field(default=None, max_length=32)
 
     @field_validator("password")
     @classmethod

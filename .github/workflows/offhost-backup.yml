@@ -26,6 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@v4
       - name: Download and verify encrypted snapshot
         id: backup
         env:
@@ -102,6 +103,9 @@ jobs:
           # survives a long weekend of unnoticed failures.
           retention-days: 30
 
+      - name: Require fresh local database restore proof for this exact copy
+        run: python3 infra/backup/verify-offhost-status.py status.json
+
       - name: Raise the alarm when the off-host copy failed
         if: failure()
         env:
@@ -110,7 +114,7 @@ jobs:
         run: |
           set -euo pipefail
           title="Внешняя резервная копия прода не снята"
-          body="Задача off-host backup упала: ${RUN_URL}. Пока она красная, свежей копии вне сервера нет. Проверить на сервере: tail /opt/omnia-runtime/logs/backup.log и GET /api/backups/offhost/status."
+          body="Проверка внешней копии или восстановления не прошла: ${RUN_URL}. Зашифрованный артефакт мог сохраниться до ошибки проверки восстановления; его наличие само по себе не доказывает восстановимость. Проверить артефакты и упавший шаг, tail /opt/omnia-runtime/logs/backup.log и GET /api/backups/offhost/status."
           number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title ${title}" --json number,title --jq "map(select(.title == \"${title}\")) | .[0].number // empty")"
           if [[ -n "${number}" ]]; then
             gh issue comment "${number}" --repo "${GITHUB_REPOSITORY}" --body "${body}"
@@ -128,5 +132,5 @@ jobs:
           title="Внешняя резервная копия прода не снята"
           number="$(gh issue list --repo "${GITHUB_REPOSITORY}" --state open --search "in:title ${title}" --json number,title --jq "map(select(.title == \"${title}\")) | .[0].number // empty")"
           if [[ -n "${number}" ]]; then
-            gh issue close "${number}" --repo "${GITHUB_REPOSITORY}" --comment "Копия снята и проверена: ${BACKUP_TS}."
+            gh issue close "${number}" --repo "${GITHUB_REPOSITORY}" --comment "Зашифрованная внешняя копия сохранена, свежая привязанная проверка локального восстановления подтверждена: ${BACKUP_TS}. Независимая расшифровка проверяется отдельно."
           fi

@@ -19,7 +19,8 @@
 #
 #   verify-bundle.sh <каталог-копии> <число-проектов-в-базе>
 #
-# Коды выхода: 0 — всё на месте; 3 — данных не хватает; 4 — архив нечитаем.
+# Коды выхода: 0 — всё на месте; 3 — данных не хватает;
+# 4 — архив нечитаем или исходное число проектов не подтверждено.
 
 set -euo pipefail
 
@@ -58,22 +59,18 @@ fi
 archived_repos="$(tar -tzf "$minio_archive" \
   | grep -c -E '^\./projects/repos/[0-9a-f-]{36}\.tar\.gz/xl\.meta$' || true)"
 
-case "$live_projects" in
-  ''|unknown)
-    # Сверка не состоялась. «Проверено» об этом говорить нельзя: непроведённая
-    # проверка, названная успешной, ровно так и создаёт ложную уверенность.
-    printf 'warning: live project count unknown; repo count not compared (%s archived)\n' \
-      "$archived_repos"
-    exit 0
-    ;;
-  0) : ;;
-  *)
-    if [ "$archived_repos" -lt "$live_projects" ]; then
-      die "$EXIT_MISSING_DATA" \
-        "missing: MinIO archive holds ${archived_repos} project repos but the platform has ${live_projects}"
-    fi
-    ;;
-esac
+# COUNT(*) returns one canonical nonnegative bigint. Validate before shell
+# arithmetic: a failed numeric comparison inside `if` otherwise looks green.
+# The explicit bigint bound also prevents shell integer overflow.
+if [[ ! "$live_projects" =~ ^(0|[1-9][0-9]*)$ ]] \
+  || [ "${#live_projects}" -gt 19 ] \
+  || { [ "${#live_projects}" -eq 19 ] && [[ "$live_projects" > 9223372036854775807 ]]; }; then
+  die "$EXIT_UNREADABLE" "unconfirmed: live project count invalid or unknown; repository coverage cannot be established"
+fi
+if [ "$archived_repos" -lt "$live_projects" ]; then
+  die "$EXIT_MISSING_DATA" \
+    "missing: MinIO archive holds ${archived_repos} project repos but the platform has ${live_projects}"
+fi
 
 printf 'content check OK: %s project repos archived for %s live projects\n' \
   "$archived_repos" "$live_projects"

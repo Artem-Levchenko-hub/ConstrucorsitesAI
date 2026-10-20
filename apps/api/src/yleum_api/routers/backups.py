@@ -145,7 +145,7 @@ def _latest_host_export(root: Path) -> BackupExport:
     )
 
 
-def _host_restore_verdict(root: Path) -> tuple[bool | None, datetime | None]:
+def _host_restore_verdict(root: Path, export: BackupExport) -> tuple[bool | None, datetime | None]:
     verdict = root / "RESTORE_TEST.json"
     try:
         if (
@@ -154,19 +154,28 @@ def _host_restore_verdict(root: Path) -> tuple[bool | None, datetime | None]:
             or verdict.stat().st_size > _VERDICT_MAX_BYTES
         ):
             return None, None
-        return _parse_verdict(verdict.read_text(encoding="utf-8"))
+        return _parse_verdict(verdict.read_text(encoding="utf-8"), export)
     except OSError:
         return None, None
 
 
-def _parse_verdict(text: str) -> tuple[bool | None, datetime | None]:
-    """The verdict file is written by the restore test; anything odd reads as unknown."""
+def _parse_verdict(text: str, export: BackupExport) -> tuple[bool | None, datetime | None]:
+    """A restore proves only the exact bundle and complete coverage it tested."""
     try:
         data = json.loads(text)
         ok, tested_at = data["ok"], datetime.fromisoformat(data["tested_at"].replace("Z", "+00:00"))
     except (ValueError, KeyError, TypeError, AttributeError):
         return None, None
     if not isinstance(ok, bool) or tested_at.tzinfo is None:
+        return None, None
+    match = _CMS_RE.fullmatch(export.name)
+    if (
+        match is None
+        or data.get("backup_timestamp") != match.group(1)
+        or data.get("backup_sha256") != export.sha256
+        or tested_at < export.created_at
+        or (ok and data.get("coverage_complete") is not True)
+    ):
         return None, None
     return ok, tested_at
 
@@ -242,14 +251,16 @@ def _latest_minio_export(client: Any, bucket: str) -> BackupExport | None:
     )
 
 
-def _minio_restore_verdict(client: Any, bucket: str) -> tuple[bool | None, datetime | None]:
+def _minio_restore_verdict(
+    client: Any, bucket: str, export: BackupExport,
+) -> tuple[bool | None, datetime | None]:
     try:
         data = _read_small_object(client, bucket, "RESTORE_TEST.json", _VERDICT_MAX_BYTES)
     except S3Error:
         return None, None
     if data is None:
         return None, None
-    return _parse_verdict(data.decode("utf-8", errors="replace"))
+    return _parse_verdict(data.decode("utf-8", errors="replace"), export)
 
 
 # ── resolution ───────────────────────────────────────────────────────────────
@@ -274,13 +285,13 @@ def _restore_verdict(export: BackupExport) -> tuple[bool | None, datetime | None
     bucket = _bucket()
     if bucket and export.object_key is not None:
         try:
-            ok, tested_at = _minio_restore_verdict(get_minio_client(), bucket)
+            ok, tested_at = _minio_restore_verdict(get_minio_client(), bucket, export)
         except Exception as error:
             log.warning("offhost backup: MinIO verdict unavailable (%s)", error)
             ok, tested_at = None, None
         if ok is not None:
             return ok, tested_at
-    return _host_restore_verdict(Path(get_settings().backup_export_root))
+    return _host_restore_verdict(Path(get_settings().backup_export_root), export)
 
 
 def _stream_object(bucket: str, key: str) -> Iterator[bytes]:

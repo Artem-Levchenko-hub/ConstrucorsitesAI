@@ -32,7 +32,7 @@ import { agentElapsedSeconds } from "@/lib/agent-elapsed";
 import { collapseAgentSteps } from "@/lib/agent-steps";
 import { humanPath, stepCopy, type StepIconName, type StepTone } from "@/lib/agent-step-copy";
 import { CAPACITY_WAITING_COPY, agentTranscriptTitle } from "@/lib/agent-transcript";
-import { generationVerifiedActionLabel, parseGenerationRecovery } from "@/lib/generation-recovery";
+import { generationVerifiedActionLabel, isGenerationResultConfirmed, parseGenerationRecovery } from "@/lib/generation-recovery";
 import { cn } from "@/lib/utils";
 import { EASE_OUT } from "@/lib/motion";
 
@@ -144,6 +144,7 @@ export function AgentTranscript({
   const recovery = parseGenerationRecovery(boundRun?.recovery);
   const recoveryUnconfirmed = boundRun?.recovery_unavailable === true
     || (boundRun?.recovery != null && recovery === null);
+  const currentRequestComplete = isGenerationResultConfirmed(boundRun);
   const hasRecovery = recovery !== null || recoveryUnconfirmed;
   const recoveryIdle = generationStatus !== "cancel_requested" && (
     recoveryUnconfirmed || recovery?.phase === "waiting_dependency"
@@ -244,7 +245,7 @@ export function AgentTranscript({
             generationStatus,
             visibleSteps.at(-1)?.ok === false,
             recoveryUnconfirmed ? {} : recovery,
-            recoveryUnconfirmed ? false : boundRun?.acceptance?.current_request_complete,
+            currentRequestComplete,
           )}
         </span>
         <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] tabular-nums text-fg-tertiary">
@@ -292,7 +293,7 @@ export function AgentTranscript({
             <ol className="space-y-0.5 p-1.5">
               {rows.map((row, i) => {
                 const s = row.step;
-                const copy = stepCopy(s, generationStatus === "completed");
+                const copy = stepCopy(s, currentRequestComplete);
                 const Icon = STEP_ICON[copy.icon] ?? stepIcon(s);
                 const last = i === rows.length - 1;
                 const live =

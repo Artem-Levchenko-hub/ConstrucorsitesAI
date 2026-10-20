@@ -35,7 +35,7 @@ async def test_verify_route_reports_cleared_moysklad_credentials_as_422(monkeypa
     binding = SimpleNamespace(status="ready", last_error=None)
     session = SimpleNamespace(commit=AsyncMock())
     monkeypatch.setattr(app_integrations, "_owned_max_project", AsyncMock())
-    monkeypatch.setattr(app_integrations, "require_max_studio_access", lambda _: None)
+    monkeypatch.setattr(app_integrations, "require_existing_max_account_access", lambda _: None)
     monkeypatch.setattr(app_integrations, "_account_connection", AsyncMock(return_value=connection))
     monkeypatch.setattr(app_integrations, "_binding", AsyncMock(return_value=binding))
     monkeypatch.setattr(app_integrations, "load_credentials", AsyncMock(return_value={}))

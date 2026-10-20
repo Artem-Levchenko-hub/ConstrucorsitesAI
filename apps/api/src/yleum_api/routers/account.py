@@ -7,11 +7,11 @@ from sqlalchemy import select, update
 
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import CurrentUserDep, SessionDep
-from yleum_api.core.errors import ApiError
 from yleum_api.models.account import (
     AuthSession,
 )
 from yleum_api.models.max_integration import MaxIntegration
+from yleum_api.services.account_export import export_personal_account_data
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 legal_router = APIRouter(prefix="/api/legal", tags=["legal"])
@@ -37,11 +37,15 @@ async def legal_config() -> dict[str, object]:
 
 @router.get("/export")
 async def export_account_data(
+    response: Response,
     current_user: CurrentUserDep,
     session: SessionDep,
 ) -> dict[str, object]:
-    """User archive exports are unavailable, including account exports."""
-    raise ApiError("forbidden", "Экспорт данных недоступен.", status.HTTP_403_FORBIDDEN)
+    """Download the signed-in owner's personal account records."""
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Content-Disposition"] = 'attachment; filename="yleum-account-data.json"'
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    return await export_personal_account_data(session, current_user)
 
 
 @router.delete("", status_code=status.HTTP_204_NO_CONTENT)

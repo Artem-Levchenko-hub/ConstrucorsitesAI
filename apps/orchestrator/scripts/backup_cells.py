@@ -25,6 +25,7 @@ import json
 import os
 import re
 import secrets
+import stat
 import subprocess
 import tarfile
 import tempfile
@@ -88,6 +89,9 @@ _STOP_TIMEOUT = 60.0
 # pg_dump takes only ACCESS SHARE locks, but a migration holding ACCESS
 # EXCLUSIVE would queue it behind itself — and every reader behind that.
 _LOCK_WAIT = "30s"
+_CENSUS_SCOPE = "complete_platform_project_workspace_census"
+_CENSUS_MAX_AGE_SECONDS = 3600
+_DOCKER_OBSERVATION_SCOPE = "complete_local_docker_inventory"
 
 _TABLE_COUNT_SQL = (
     "SELECT count(*) FROM pg_catalog.pg_class c "
@@ -345,6 +349,15 @@ class ScratchPool:
         for name in reversed(self.volumes):
             _require_scratch(name)
             self.runner.run(["volume", "rm", "--force", name], timeout=_STOP_TIMEOUT)
+        # Synchronous --rm helpers can already be absent when cleanup starts.
+        # A failed rm alone proves neither a leak nor successful removal.
+        containers = self.runner.run(
+            ["container", "ls", "--all", "--format", "{{.Names}}"], timeout=_QUERY_TIMEOUT
+        )
+        if not containers.ok or set(containers.text().splitlines()).intersection(self.containers):
+            raise BackupError("owned scratch cleanup is unconfirmed")
+        if set(list_volumes(self.runner)).intersection(self.volumes):
+            raise BackupError("owned scratch cleanup is unconfirmed")
         self.containers.clear()
         self.volumes.clear()
 
@@ -405,7 +418,7 @@ def _read_json(path: Path) -> dict[str, Any] | None:
         return None
     try:
         with path.open(encoding="utf-8") as handle:
-            payload = json.load(handle)
+            payload = json.load(handle, object_pairs_hook=_unique_project_metadata)
     except (OSError, ValueError):
         return None
     return payload if isinstance(payload, dict) else None
@@ -465,6 +478,458 @@ class WorkspacePlan:
 class Inventory:
     plans: list[WorkspacePlan] = field(default_factory=list)
     orphans: list[dict[str, str]] = field(default_factory=list)
+    retired: list[dict[str, Any]] = field(default_factory=list)
+    superseded_leases: list[dict[str, Any]] = field(default_factory=list)
+
+
+def _json_digest(value: Any) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
+def _uuid(value: Any) -> bool:
+    return isinstance(value, str) and _UUID_RE.fullmatch(value) is not None
+
+
+def parse_platform_census(encoded: str, *, now: datetime | None = None) -> dict[str, Any]:
+    """Protected caller supplies a full, single-statement platform DB snapshot.
+
+    A checksum binds the receipt, not its authentication: only the canonical
+    root collector may supply this environment value, including to peer roots.
+    """
+    try:
+        payload = json.loads(encoded, object_pairs_hook=_unique_project_metadata)
+        if (
+            not isinstance(payload, dict)
+            or set(payload)
+            != {
+                "version",
+                "scope",
+                "observed_at",
+                "projects",
+                "workspaces",
+            }
+            or type(payload["version"]) is not int
+            or payload["version"] != 1
+            or payload["scope"] != _CENSUS_SCOPE
+        ):
+            raise ValueError
+        stamp = payload["observed_at"]
+        if not isinstance(stamp, str) or not stamp.endswith("Z"):
+            raise ValueError
+        observed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        age = ((now or datetime.now(UTC)) - observed).total_seconds()
+        if not -60 <= age <= _CENSUS_MAX_AGE_SECONDS:
+            raise ValueError
+        projects, workspaces = payload["projects"], payload["workspaces"]
+        if (
+            not isinstance(projects, list)
+            or any(not _uuid(item) for item in projects)
+            or len(set(projects)) != len(projects)
+            or not isinstance(workspaces, list)
+        ):
+            raise ValueError
+        seen: set[str] = set()
+        for row in workspaces:
+            if (
+                not isinstance(row, dict)
+                or set(row) != {"id", "project_id"}
+                or not _uuid(row["id"])
+                or row["id"] in seen
+                or row["project_id"] not in projects
+            ):
+                raise ValueError
+            seen.add(row["id"])
+        return payload
+    except (ValueError, TypeError, KeyError, OverflowError) as error:
+        raise BackupError("platform project/workspace census is invalid or stale") from error
+
+
+def _terminal_destroy(workspace: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Only an exact current terminal receipt supersedes earlier compute leases."""
+    epoch, operations = workspace.get("fencing_epoch"), workspace.get("operations")
+    if (
+        workspace.get("phase") != "completed"
+        or workspace.get("bundle_state") != "retained"
+        or not _uuid(workspace.get("project_id"))
+        or not _uuid(workspace.get("owner_id"))
+        or type(epoch) is not int
+        or epoch <= 0
+        or not isinstance(operations, list)
+        or not _uuid(workspace.get("last_operation_id"))
+    ):
+        return None
+    wid = workspace.get("workspace_id")
+    if not _uuid(wid):
+        return None
+    names = workspace.get("resource_names")
+    stem = f"omnia-cell-{UUID(wid).hex}"
+    expected = {
+        "workspace_id": wid,
+        "namespace": "prod",
+        **{
+            field: f"{stem}-{suffix}"
+            for field, suffix in {
+                "internal_network": "internal",
+                "egress_network": "egress",
+                "workspace_volume": "workspace",
+                "agent_home_volume": "agent-home",
+                "postgres_volume": "postgres",
+                "redis_volume": "redis",
+                "checkpoint_volume": "checkpoints",
+                "postgres_container": "postgres",
+                "redis_container": "redis",
+            }.items()
+        },
+    }
+    if names != expected:
+        return None
+    seen: set[str] = set()
+    latest = None
+    for operation in operations:
+        if (
+            not isinstance(operation, dict)
+            or not _uuid(operation.get("operation_id"))
+            or operation["operation_id"] in seen
+            or type(operation.get("fencing_epoch")) is not int
+            or not 0 < operation["fencing_epoch"] <= epoch
+        ):
+            return None
+        seen.add(operation["operation_id"])
+        if operation["operation_id"] == workspace["last_operation_id"]:
+            latest = operation
+        elif operation["fencing_epoch"] == epoch:
+            return None
+    if (
+        latest is None
+        or latest.get("kind") != "destroy"
+        or latest.get("status") != "completed"
+        or latest.get("phase") != "completed"
+        or latest["fencing_epoch"] != epoch
+        or "generation_run_id" not in latest
+        or latest["generation_run_id"] is not None
+    ):
+        return None
+    return latest
+
+
+def _matched_superseded_lease(workspace: Mapping[str, Any]) -> bool:
+    latest = _terminal_destroy(workspace)
+    epoch, run = (
+        workspace.get("active_generation_fencing_epoch"),
+        workspace.get("active_generation_run_id"),
+    )
+    return (
+        latest is not None
+        and _uuid(run)
+        and type(epoch) is int
+        and 0 < epoch < latest["fencing_epoch"]
+        and any(
+            item.get("fencing_epoch") == epoch
+            and item.get("generation_run_id") == run
+            and item.get("kind") in {"ensure", "reconcile"}
+            and item.get("status") == "completed"
+            and item.get("phase") == "completed"
+            for item in workspace["operations"]
+        )
+    )
+
+
+def _docker_json_lines(runner: DockerRunner, args: list[str]) -> list[dict[str, Any]]:
+    result = runner.run(args, timeout=_QUERY_TIMEOUT)
+    if not result.ok:
+        raise BackupError("complete Docker inventory command failed")
+    try:
+        rows = [
+            json.loads(line, object_pairs_hook=_unique_project_metadata)
+            for line in result.text().splitlines()
+            if line.strip()
+        ]
+        if any(not isinstance(row, dict) for row in rows):
+            raise ValueError
+        return rows
+    except ValueError as error:
+        raise BackupError("complete Docker inventory is unreadable") from error
+
+
+def _docker_labels(value: Any) -> dict[str, str]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or any(
+        not isinstance(key, str) or not isinstance(item, str) for key, item in value.items()
+    ):
+        raise BackupError("Docker inventory labels are unconfirmed")
+    # Never archive arbitrary labels (which may contain customer secrets).
+    return {
+        key: item
+        for key, item in value.items()
+        if key
+        in {
+            "omnia.workspace_id",
+            "omnia.project_id",
+            "omnia.owner_id",
+            "omnia.resource_kind",
+            "omnia.workspace-id",
+            "omnia.project-id",
+            "omnia.owner-id",
+        }
+    }
+
+
+def _resolve_docker_source(source: Any, *, with_sudo: bool) -> str:
+    if (
+        not isinstance(source, str)
+        or not Path(source).is_absolute()
+        or any(character in source for character in ("\n", "\r", "\0"))
+    ):
+        raise BackupError("Docker source path is unconfirmed")
+    if not with_sudo:
+        try:
+            return str(Path(source).resolve(strict=True))
+        except (OSError, RuntimeError) as error:
+            raise BackupError("Docker source path is inaccessible") from error
+    # The controller must retain its UID for credential authority. Canonical
+    # root callers explicitly allow only this fixed, metadata-only resolver.
+    try:
+        result = subprocess.run(
+            ["/usr/bin/sudo", "-n", "--", "/usr/bin/realpath", "-e", "--", source],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            timeout=_QUERY_TIMEOUT,
+            env={"PATH": "/usr/bin:/bin", "LC_ALL": "C"},
+            check=False,
+        )
+        resolved = result.stdout.decode("utf-8")
+        if result.returncode != 0 or not resolved.endswith("\n") or len(resolved.splitlines()) != 1:
+            raise ValueError
+        resolved = resolved.removesuffix("\n")
+        if not Path(resolved).is_absolute() or any(
+            character in resolved for character in ("\r", "\0")
+        ):
+            raise ValueError
+        return resolved
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # Never include argv, stderr, or returned path contents in diagnostics.
+        raise BackupError("privileged Docker source resolution is unconfirmed") from None
+
+
+def observe_docker_inventory(
+    runner: DockerRunner,
+    *,
+    resolve_sources_with_sudo: bool = False,
+) -> dict[str, Any]:
+    """All volumes and all container states, without reading container environments."""
+    names = list_volumes(runner)
+    listed = runner.run(["ps", "--all", "--quiet", "--no-trunc"], timeout=_QUERY_TIMEOUT)
+    if not listed.ok:
+        raise BackupError("complete Docker container census failed")
+    ids = listed.text().split()
+    if (
+        any(_VOLUME_NAME_RE.fullmatch(name) is None for name in names)
+        or len(set(names)) != len(names)
+        or len(set(ids)) != len(ids)
+        or any(_CONTAINER_ID_RE.fullmatch(item) is None for item in ids)
+    ):
+        raise BackupError("complete Docker inventory identity is invalid")
+    volumes, containers = [], []
+    for start in range(0, len(names), 64):
+        batch = names[start : start + 64]
+        rows = _docker_json_lines(
+            runner,
+            [
+                "volume",
+                "inspect",
+                "--format",
+                '{"name":{{json .Name}},"labels":{{json .Labels}},'
+                '"mountpoint":{{json .Mountpoint}}}',
+                *batch,
+            ],
+        )
+        if (
+            len(rows) != len(batch)
+            or any(not isinstance(row.get("name"), str) for row in rows)
+            or {row["name"] for row in rows} != set(batch)
+        ):
+            raise BackupError("Docker volume census and inspect disagree")
+        for row in rows:
+            if set(row) != {"name", "labels", "mountpoint"}:
+                raise BackupError("Docker volume inventory fields are unconfirmed")
+            row["labels"] = _docker_labels(row.get("labels"))
+            row["mountpoint"] = _resolve_docker_source(
+                row["mountpoint"],
+                with_sudo=resolve_sources_with_sudo,
+            )
+            volumes.append(row)
+    for start in range(0, len(ids), 64):
+        batch = ids[start : start + 64]
+        rows = _docker_json_lines(
+            runner,
+            [
+                "inspect",
+                "--type",
+                "container",
+                "--format",
+                '{"id":{{json .Id}},"name":{{json .Name}},"labels":{{json .Config.Labels}},'
+                '"state":{{json .State.Status}},"mounts":{{json .Mounts}}}',
+                *batch,
+            ],
+        )
+        if (
+            len(rows) != len(batch)
+            or any(not isinstance(row.get("id"), str) for row in rows)
+            or {row["id"] for row in rows} != set(batch)
+        ):
+            raise BackupError("Docker container census and inspect disagree")
+        for row in rows:
+            if (
+                set(row) != {"id", "name", "labels", "state", "mounts"}
+                or not isinstance(row.get("name"), str)
+                or not isinstance(row.get("mounts"), list)
+                or row.get("state")
+                not in {"created", "running", "paused", "restarting", "removing", "exited", "dead"}
+            ):
+                raise BackupError("Docker container identity/state is unconfirmed")
+            row["name"] = _require_name(
+                row["name"].removeprefix("/"), _VOLUME_NAME_RE, "container name"
+            )
+            row["labels"] = _docker_labels(row.get("labels"))
+            mounts = []
+            for mount in row["mounts"]:
+                if not isinstance(mount, dict) or mount.get("Type") not in {
+                    "volume",
+                    "bind",
+                    "tmpfs",
+                }:
+                    raise BackupError("Docker container mount is unconfirmed")
+                kind, source = mount["Type"], mount.get("Source", "")
+                if kind == "tmpfs":
+                    mounts.append({"type": kind})
+                    continue
+                source = _resolve_docker_source(source, with_sudo=resolve_sources_with_sudo)
+                name = mount.get("Name", "")
+                if kind == "volume" and (not isinstance(name, str) or name not in names):
+                    raise BackupError("Docker named mount is absent from volume census")
+                mounts.append({"type": kind, "name": name, "source": source})
+            row["mounts"] = sorted(mounts, key=lambda item: json.dumps(item, sort_keys=True))
+            containers.append(row)
+    return {
+        "scope": _DOCKER_OBSERVATION_SCOPE,
+        "volumes": sorted(volumes, key=lambda row: row["name"]),
+        "containers": sorted(containers, key=lambda row: row["id"]),
+    }
+
+
+def _owned_resource(row: Mapping[str, Any], workspace: Mapping[str, Any]) -> bool:
+    wid, pid = workspace["workspace_id"], workspace["project_id"]
+    stem = UUID(wid).hex
+    name = row["name"]
+    labels = row["labels"]
+    return (
+        name.startswith(
+            (
+                f"omnia-cell-{stem}-",
+                f"omnia-cell-test-{stem}-",
+                f"omnia-machine-{stem}-",
+                f"omnia-machine-test-{stem}-",
+            )
+        )
+        or any(labels.get(key) == wid for key in ("omnia.workspace_id", "omnia.workspace-id"))
+        or any(labels.get(key) == pid for key in ("omnia.project_id", "omnia.project-id"))
+    )
+
+
+def _overlap(left: str, right: str) -> bool:
+    a, b = Path(left), Path(right)
+    return a == b or a in b.parents or b in a.parents
+
+
+def scoped_docker_observation(
+    observation: Mapping[str, Any], workspace: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Foreign containers mounting this workspace are writers too, including bind aliases."""
+    if observation.get("scope") != _DOCKER_OBSERVATION_SCOPE:
+        raise BackupError("Docker inventory scope is unconfirmed")
+    volumes = [row for row in observation["volumes"] if _owned_resource(row, workspace)]
+    names = {row["name"] for row in volumes}
+    mounts = [row["mountpoint"] for row in volumes]
+    containers = [
+        row
+        for row in observation["containers"]
+        if _owned_resource(row, workspace)
+        or any(
+            mount.get("name") in names
+            or (
+                mount.get("source") is not None
+                and any(_overlap(mount["source"], path) for path in mounts)
+            )
+            for mount in row["mounts"]
+        )
+    ]
+    return {"scope": _DOCKER_OBSERVATION_SCOPE, "volumes": volumes, "containers": containers}
+
+
+def _terminal_receipt(
+    state_root: Path, workspace: Mapping[str, Any], observation: Mapping[str, Any]
+) -> dict[str, Any]:
+    operation = _terminal_destroy(workspace)
+    assert operation is not None
+    wid = workspace["workspace_id"]
+    return {
+        "workspace_id": wid,
+        "project_id": workspace["project_id"],
+        "operation_id": operation["operation_id"],
+        "fencing_epoch": operation["fencing_epoch"],
+        "journal_sha256": _file_digest(state_root / "project-cells" / f"{wid}.json")[0],
+        "docker_observation": observation,
+        "docker_observation_sha256": _json_digest(observation),
+    }
+
+
+def _publication_obligation(state_root: Path, workspace: Mapping[str, Any]) -> bool:
+    for project, payload in _publication_records(state_root):
+        if payload.get("disabled") is True and payload.get("deletion_completed") is True:
+            continue
+        if project == workspace["project_id"] or workspace["workspace_id"] in json.dumps(payload):
+            return True
+    return False
+
+
+def _terminal_metadata_valid(state_root: Path, workspace_id: str) -> bool:
+    path = state_root / "project-machines" / workspace_id / "docker.json"
+    if not path.exists() and not path.is_symlink():
+        return True
+    return _terminal_metadata_payload_valid(_read_json(path), workspace_id)
+
+
+def _terminal_metadata_payload_valid(metadata: Any, workspace_id: str) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    protocol = metadata.get("project_database_role_protocol", 0)
+    if type(protocol) is not int or protocol not in (0, 1):
+        return False
+    stem = f"omnia-machine-{UUID(workspace_id).hex}-"
+    selected = [
+        metadata[key] for key in ("active_code_volume", "active_database_volume") if key in metadata
+    ]
+    reference = metadata.get("environment_ref")
+    if reference is not None:
+        if (
+            not isinstance(reference, dict)
+            or reference.get("workspace_id") != workspace_id
+            or not isinstance(reference.get("volumes"), list)
+        ):
+            return False
+        for row in reference["volumes"]:
+            if not isinstance(row, dict) or not isinstance(row.get("name"), str):
+                return False
+            selected.append(row["name"])
+    return all(
+        isinstance(name, str)
+        and (name.startswith(stem) or name == f"omnia-cell-{UUID(workspace_id).hex}-workspace")
+        and _VOLUME_NAME_RE.fullmatch(name) is not None
+        for name in selected
+    )
 
 
 def list_volumes(runner: DockerRunner) -> list[str]:
@@ -474,20 +939,65 @@ def list_volumes(runner: DockerRunner) -> list[str]:
     return [line.strip() for line in result.text().splitlines() if line.strip()]
 
 
+def _publication_records(state_root: Path) -> list[tuple[str, dict[str, Any]]]:
+    """Separate canonical service artifacts from strict UUID journal directories."""
+    root = state_root / "cell-publications"
+    if not root.exists() and not root.is_symlink():
+        return []
+    if not root.is_dir() or root.is_symlink():
+        raise BackupError("publication inventory root is invalid")
+    records = []
+    for entry in sorted(root.iterdir()):
+        info = entry.lstat()
+        if entry.name in {"locks", "identities"}:
+            if not stat.S_ISDIR(info.st_mode):
+                raise BackupError("publication service directory is invalid")
+            continue
+        if entry.name == "fingerprint.key":
+            if (not stat.S_ISREG(info.st_mode) or info.st_size != 32
+                    or stat.S_IMODE(info.st_mode) != 0o600):
+                raise BackupError("publication fingerprint key is invalid")
+            continue
+        if _UUID_RE.fullmatch(entry.name) is None or not stat.S_ISDIR(info.st_mode):
+            raise BackupError("publication inventory contains an invalid journal path")
+        payload = _read_json(entry / "publication.json")
+        if payload is None:
+            raise BackupError("publication inventory contains an unreadable journal")
+        records.append((entry.name, payload))
+    return records
+
+
 def production_workspaces(state_root: Path) -> dict[str, str]:
     """Production workspace id -> project id, from the publication journals."""
     found: dict[str, str] = {}
-    root = state_root / "cell-publications"
-    if not root.is_dir():
-        return found
-    for entry in sorted(root.iterdir()):
-        payload = _read_json(entry / "publication.json")
-        if payload is None:
+    for project, payload in _publication_records(state_root):
+        if payload.get("disabled") is True and payload.get("deletion_completed") is True:
             continue
         workspace_id = payload.get("production_workspace_id")
         project_id = payload.get("project_id")
         if isinstance(workspace_id, str) and _UUID_RE.fullmatch(workspace_id):
-            found[workspace_id] = project_id if isinstance(project_id, str) else entry.name
+            found[workspace_id] = project_id if isinstance(project_id, str) else project
+    return found
+
+
+def external_publications(state_root: Path) -> list[dict[str, str]]:
+    """Named Kubernetes obligations for the full multi-host backup collector."""
+    found = []
+    for journal_project, payload in _publication_records(state_root):
+        if payload.get("disabled") is True and payload.get("deletion_completed") is True:
+            continue
+        release = payload.get("active_release") or payload.get("prepared_release") or {}
+        placement = release.get("placement") if isinstance(release, dict) else None
+        if not isinstance(placement, dict) or placement.get("backend") != "kubernetes":
+            continue
+        project = payload.get("project_id")
+        workspace = payload.get("production_workspace_id")
+        if (not isinstance(project, str) or project != journal_project
+                or not isinstance(workspace, str) or not _UUID_RE.fullmatch(workspace)
+                or placement.get("namespace") != f"app-{project}"):
+            raise BackupError("published runtime identity is unconfirmed")
+        found.append({"project_id": project, "workspace_id": workspace,
+                      "namespace": placement["namespace"]})
     return found
 
 
@@ -500,19 +1010,36 @@ def _state_records(state_root: Path) -> dict[str, dict[str, Any]]:
         if entry.suffix != ".json":
             continue
         payload = _read_json(entry)
-        workspace = payload.get("workspace") if payload else None
-        if not isinstance(workspace, dict):
-            continue
+        if payload is None:
+            raise BackupError("workspace inventory contains an unreadable record")
+        workspace = payload.get("workspace")
+        if (not isinstance(workspace, dict) or type(payload.get("version")) is not int
+                or payload["version"] != 1):
+            raise BackupError("workspace inventory contains an unreadable record")
         workspace_id = workspace.get("workspace_id")
         if isinstance(workspace_id, str) and _UUID_RE.fullmatch(workspace_id):
+            if workspace_id in records or entry.stem != workspace_id:
+                raise BackupError("workspace inventory identity is duplicated or misplaced")
             records[workspace_id] = workspace
+        else:
+            raise BackupError("workspace inventory contains an invalid identity")
     return records
 
 
 def _active_database_volume(state_root: Path, workspace_id: str, default: str) -> str:
     """Restoration activates a ``-db-<hex>`` volume; the controller records it."""
-    payload = _read_json(state_root / "project-machines" / workspace_id / "docker.json")
+    path = state_root / "project-machines" / workspace_id / "docker.json"
+    payload = _read_json(path)
+    if (path.exists() or path.is_symlink()) and payload is None:
+        raise BackupError("active database registry is unreadable")
     active = payload.get("active_database_volume") if payload else None
+    if (
+        payload
+        and "active_database_volume" in payload
+        and active is not None
+        and not isinstance(active, str)
+    ):
+        raise BackupError("active database registry is invalid")
     if not isinstance(active, str) or active == default:
         return default
     match = _require_match(active, _PROJECT_DB_VOLUME_RE, "active database volume")
@@ -579,10 +1106,23 @@ def _project_id(workspace: Mapping[str, Any], published: str | None) -> str | No
     return published
 
 
+def _declared_core_volume(workspace: Mapping[str, Any], workspace_id: str) -> str | None:
+    names = workspace.get("resource_names")
+    if names is None:
+        return None
+    expected = f"omnia-cell-{UUID(workspace_id).hex}-postgres"
+    if not isinstance(names, dict) or names.get("postgres_volume") != expected:
+        raise BackupError("declared core database volume identity is invalid")
+    return expected
+
+
 def build_inventory(
     state_root: Path,
     volumes: Sequence[str],
     redactor: SecretRedactor,
+    *,
+    platform_census: Mapping[str, Any] | None = None,
+    docker_observation: Mapping[str, Any] | None = None,
 ) -> Inventory:
     """Union of the state journal and the live volume list; neither alone is complete."""
     core: dict[str, str] = {}
@@ -601,10 +1141,52 @@ def build_inventory(
 
     inventory = Inventory()
     published = production_workspaces(state_root)
-    for workspace_id, workspace in sorted(_state_records(state_root).items()):
+    records = _state_records(state_root)
+    external = {item["workspace_id"] for item in external_publications(state_root)}
+    for missing in sorted(published.keys() - records.keys() - external):
+        inventory.orphans.append(
+            {"workspace_id": missing, "reason": "published_workspace_without_state"}
+        )
+    for workspace_id, workspace in sorted(records.items()):
         stem = UUID(workspace_id).hex
+        terminal = _terminal_destroy(workspace)
+        scoped = (
+            scoped_docker_observation(docker_observation, workspace)
+            if terminal is not None and docker_observation is not None
+            else None
+        )
+        if (
+            terminal is not None
+            and scoped is not None
+            and platform_census is not None
+            and workspace["project_id"] not in platform_census["projects"]
+            and all(row["id"] != workspace_id for row in platform_census["workspaces"])
+            and workspace_id not in published
+            and workspace_id not in external
+            and not _publication_obligation(state_root, workspace)
+            and _terminal_metadata_valid(state_root, workspace_id)
+            and not scoped["volumes"]
+            and not scoped["containers"]
+        ):
+            inventory.retired.append(
+                {
+                    **_terminal_receipt(state_root, workspace, scoped),
+                    "reason": "retired_no_local_storage",
+                    "platform_census_sha256": _json_digest(platform_census),
+                }
+            )
+            continue
         targets: list[DatabaseTarget] = []
         core_volume = core.pop(stem, None)
+        declared_core = _declared_core_volume(workspace, workspace_id)
+        if declared_core is not None and core_volume is None:
+            inventory.orphans.append(
+                {
+                    "workspace_id": workspace_id,
+                    "volume": declared_core,
+                    "reason": "declared_core_volume_missing",
+                }
+            )
         if core_volume is not None:
             password = _credential(
                 state_root / "project-cells-credentials" / f"{workspace_id}.json"
@@ -620,10 +1202,36 @@ def build_inventory(
                 )
             )
         owned = project.pop(stem, set())
-        if owned:
-            active = _active_database_volume(
+        metadata_path = state_root / "project-machines" / workspace_id / "docker.json"
+        active = (
+            _active_database_volume(
                 state_root, workspace_id, f"omnia-machine-{stem}-app-postgres-data"
             )
+            if owned or metadata_path.exists() or metadata_path.is_symlink()
+            else None
+        )
+        metadata = _read_json(metadata_path)
+        declared_active = metadata.get("active_database_volume") if metadata else None
+        # Core-only cells are valid before the portable machine is materialized.
+        # These metadata fields are persisted only after project PG creation (or
+        # explicitly select a restored database); their absence is not a receipt
+        # proving that a previously selected/materialized database may disappear.
+        materialized = metadata is not None and (
+            metadata.get("project_database_role_protocol") == 1 or "manifest" in metadata
+        )
+        if (
+            active is not None
+            and active not in owned
+            and (owned or declared_active or materialized)
+        ):
+            inventory.orphans.append(
+                {
+                    "workspace_id": workspace_id,
+                    "volume": active,
+                    "reason": "active_database_volume_missing",
+                }
+            )
+        if owned:
             if active in owned:
                 protocol, password = _project_database_authority(state_root, workspace_id)
                 redactor.add(password)
@@ -646,12 +1254,22 @@ def build_inventory(
                 {"workspace_id": workspace_id, "reason": "state_without_volume"}
             )
             continue
+        superseded = (
+            scoped is not None
+            and _matched_superseded_lease(workspace)
+            and not any(
+                row["state"] not in {"created", "exited", "dead"} for row in scoped["containers"]
+            )
+        )
+        if superseded:
+            assert scoped is not None
+            inventory.superseded_leases.append(_terminal_receipt(state_root, workspace, scoped))
         inventory.plans.append(
             WorkspacePlan(
                 workspace_id=workspace_id,
                 role="production" if workspace_id in published else "editor",
                 project_id=_project_id(workspace, published.get(workspace_id)),
-                deferred=workspace.get("active_generation_run_id") is not None,
+                deferred=workspace.get("active_generation_run_id") is not None and not superseded,
                 databases=tuple(targets),
                 data_volumes=tuple(owned_data),
             )
@@ -1028,7 +1646,14 @@ class CellBackup:
             detail=_detail(self.redactor, "scratch ownership setup failed", ownership.stderr),
         )
 
-    def start_scratch_server(self, pool: ScratchPool, scratch_volume: str) -> str | DumpOutcome:
+    def start_scratch_server(
+        self, pool: ScratchPool, scratch_volume: str, *, bootstrap_user: str = "postgres",
+    ) -> str | DumpOutcome:
+        if re.fullmatch(r"[a-z_][a-z0-9_]{0,62}", bootstrap_user) is None:
+            raise BackupError("invalid scratch bootstrap role")
+        script = _SCRATCH_SERVER_SCRIPT.replace(
+            "--username=postgres", f"--username={bootstrap_user}"
+        )
         name = pool.container_name()
         started = self.runner.run(
             [
@@ -1067,7 +1692,7 @@ class CellBackup:
                 "sh",
                 self.postgres_image,
                 "-ec",
-                _SCRATCH_SERVER_SCRIPT,
+                script,
             ],
             timeout=_START_TIMEOUT,
         )
@@ -1080,7 +1705,7 @@ class CellBackup:
         deadline = time.monotonic() + _READY_TIMEOUT
         while True:
             ready = self.runner.run(
-                ["exec", name, "pg_isready", "-U", "postgres", "-h", _SCRATCH_SOCKET],
+                ["exec", name, "pg_isready", "-U", bootstrap_user, "-h", _SCRATCH_SOCKET],
                 timeout=_QUERY_TIMEOUT,
             )
             if ready.ok:
@@ -1098,13 +1723,14 @@ class CellBackup:
         try:
             from yleum_orchestrator.services.restoration_database import admin_args
 
-            return admin_args(None)
+            connection, environment = admin_args(None)
+            return list(connection), dict(environment)
         except (ImportError, OSError, RuntimeError, ValueError):
             raise BackupError("project database admin transport unavailable") from None
 
     @staticmethod
-    def scratch_connection() -> list[str]:
-        return ["-U", "postgres", "-h", _SCRATCH_SOCKET, "-d", "postgres"]
+    def scratch_connection(*, user: str = "postgres", database: str = "postgres") -> list[str]:
+        return ["-U", user, "-h", _SCRATCH_SOCKET, "-d", database]
 
     def count_tables(
         self,
@@ -1220,6 +1846,22 @@ def _outcome_payload(outcome: DumpOutcome) -> dict[str, Any]:
     }
 
 
+def _inventory_signature(root: Path) -> str:
+    """Bind the selected database authorities and journals across the export."""
+    signature = hashlib.sha256()
+    patterns = ("project-cells/*.json", "project-cells-credentials/*.json",
+                "project-machines/*/docker.json", "project-machines/project-db-credentials/*.json",
+                "cell-publications/*/publication.json")
+    for path in sorted({path for pattern in patterns for path in root.glob(pattern)}):
+        if path.is_symlink() or not path.is_file():
+            raise BackupError("inventory authority is not a regular file")
+        signature.update(str(path.relative_to(root)).encode())
+        signature.update(b"\0")
+        signature.update(path.read_bytes())
+        signature.update(b"\0")
+    return signature.hexdigest()
+
+
 def run_backup(
     *,
     state_root: Path,
@@ -1227,9 +1869,32 @@ def run_backup(
     postgres_image: str,
     helper_image: str,
     runner: DockerRunner,
+    local_scope: bool = False,
+    platform_census_json: str | None = None,
+    resolve_docker_sources_with_sudo: bool = False,
 ) -> tuple[dict[str, Any], int]:
     redactor = SecretRedactor()
-    inventory = build_inventory(state_root, list_volumes(runner), redactor)
+    started_at = _iso_now()
+    census = (
+        parse_platform_census(platform_census_json) if platform_census_json is not None else None
+    )
+    before = _inventory_signature(state_root)
+    observe_terminal = any(
+        _terminal_destroy(row) is not None for row in _state_records(state_root).values()
+    )
+    observation = (
+        observe_docker_inventory(runner, resolve_sources_with_sudo=resolve_docker_sources_with_sudo)
+        if observe_terminal
+        else None
+    )
+    volumes = (
+        [row["name"] for row in observation["volumes"]]
+        if observation is not None
+        else list_volumes(runner)
+    )
+    inventory = build_inventory(
+        state_root, volumes, redactor, platform_census=census, docker_observation=observation
+    )
     backup = CellBackup(
         runner=runner,
         out_dir=out_dir,
@@ -1270,6 +1935,45 @@ def run_backup(
         f"state archive: {state_archive['entries']} entries, "
         f"{int(state_archive['bytes']) / 1024 / 1024:.1f} MiB"
     )
+    external = external_publications(state_root)
+    issues = [
+        item for item in inventory.orphans if item.get("reason") != "inactive_database_volume"
+    ]
+    after_observation = (
+        observe_docker_inventory(runner, resolve_sources_with_sudo=resolve_docker_sources_with_sudo)
+        if observe_terminal
+        else None
+    )
+    after_volumes = (
+        [row["name"] for row in after_observation["volumes"]]
+        if after_observation is not None
+        else list_volumes(runner)
+    )
+    if (
+        _inventory_signature(state_root) != before
+        or build_inventory(
+            state_root,
+            after_volumes,
+            redactor,
+            platform_census=census,
+            docker_observation=after_observation,
+        )
+        != inventory
+    ):
+        issues.append({"reason": "inventory_changed_during_backup"})
+    coverage = {
+        "version": 1,
+        "scope": "local-docker" if local_scope else "all-runtimes",
+        "expected": _artifact_identities(workspaces),
+        "issues": issues,
+        "inventory_sha256": before,
+        "external_publications": external,
+        "started_at": started_at,
+        "platform_census": census,
+        "retired_no_local_storage": inventory.retired,
+        "superseded_generation_leases": inventory.superseded_leases,
+        "docker_inventory": observation,
+    }
     manifest: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "created_at": _iso_now(),
@@ -1279,6 +1983,7 @@ def run_backup(
         "state_archive": state_archive,
         "workspaces": workspaces,
         "orphans": inventory.orphans,
+        "coverage": coverage,
         "totals": {
             "workspaces": len(workspaces),
             "databases": sum(len(item["databases"]) for item in workspaces),
@@ -1293,7 +1998,8 @@ def run_backup(
             **counts,
         },
     }
-    return manifest, _exit_code(counts)
+    code = _exit_code(counts)
+    return manifest, code or (2 if issues or (external and not local_scope) else 0)
 
 
 def _exit_code(counts: Mapping[str, int]) -> int:
@@ -1318,6 +2024,8 @@ def run_verify(
     manifest = _read_json(backup_dir / "MANIFEST.json")
     if manifest is None or manifest.get("schema_version") != SCHEMA_VERSION:
         raise BackupError(f"unreadable or unsupported manifest in {backup_dir}")
+    _validate_manifest(manifest)
+    _validate_terminal_receipts(backup_dir, manifest)
     backup = CellBackup(
         runner=runner,
         out_dir=backup_dir,
@@ -1338,11 +2046,291 @@ def run_verify(
         "backup": str(backup_dir),
         "created_at": manifest.get("created_at"),
         "results": results,
+        "coverage": manifest["coverage"],
         "totals": {"entries": len(results), **counts},
     }
     if counts["failed"]:
         return report, 1
-    return report, 2 if counts["skipped"] else 0
+    coverage = manifest["coverage"]
+    unconfirmed = coverage["issues"] or (
+        coverage["external_publications"] and coverage["scope"] != "local-docker"
+    )
+    return report, 2 if counts["skipped"] or unconfirmed else 0
+
+
+def _artifact_identities(workspaces: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+    identities = []
+    for workspace in workspaces:
+        for entry in (*workspace["databases"], *workspace["data_volumes"]):
+            identities.append({"workspace_id": workspace["workspace_id"],
+                               "kind": entry.get("kind", "data"), "volume": entry["volume"]})
+    return sorted(identities, key=lambda value: json.dumps(value, sort_keys=True))
+
+
+def _artifact_name(entry: Mapping[str, Any]) -> str:
+    """Bind an artifact to its manifest owner and kind, never just a safe path."""
+    kind = entry.get("kind") or "data"
+    if kind == "state":
+        expected = "state.tar.gz"
+    else:
+        workspace_id = entry.get("workspace_id")
+        if not isinstance(workspace_id, str) or _UUID_RE.fullmatch(workspace_id) is None:
+            raise BackupError("artifact workspace identity is invalid")
+        if kind in {"core", "project"}:
+            expected = workspace_id + ("-core.dump" if kind == "core" else "-project.sql")
+        elif kind == "data":
+            volume = entry.get("volume")
+            match = _DATA_VOLUME_RE.fullmatch(volume) if isinstance(volume, str) else None
+            if match is None or match.group(1) != UUID(workspace_id).hex:
+                raise BackupError("artifact data volume identity is invalid")
+            expected = f"{workspace_id}-data-{match.group(2)}.tar.gz"
+        else:
+            raise BackupError("unsupported artifact kind")
+    if entry.get("file") != expected or _ARTIFACT_RE.fullmatch(expected) is None:
+        raise BackupError("artifact filename does not match its manifest identity")
+    return expected
+
+
+def _validate_manifest(manifest: Mapping[str, Any]) -> None:
+    coverage, workspaces = manifest.get("coverage"), manifest.get("workspaces")
+    if (
+        not isinstance(coverage, dict)
+        or type(coverage.get("version")) is not int
+        or coverage["version"] != 1
+        or coverage.get("scope") not in {"local-docker", "all-runtimes"}
+        or not isinstance(coverage.get("issues"), list)
+        or not isinstance(coverage.get("external_publications"), list)
+        or not isinstance(workspaces, list)
+        or not isinstance(manifest.get("state_archive"), dict)
+    ):
+        raise BackupError("backup coverage or state archive is unconfirmed")
+    orphans = manifest.get("orphans")
+    expected_issues = (
+        [item for item in orphans if item.get("reason") != "inactive_database_volume"]
+        if isinstance(orphans, list) and all(isinstance(item, dict) for item in orphans)
+        else []
+    )
+    if (
+        not isinstance(orphans, list)
+        or any(not isinstance(item, dict) for item in orphans)
+        or coverage["issues"]
+        not in (expected_issues, [*expected_issues, {"reason": "inventory_changed_during_backup"}])
+    ):
+        raise BackupError("backup unresolved inventory does not match coverage")
+    seen = set()
+    for workspace in workspaces:
+        identity = workspace.get("workspace_id")
+        if (not isinstance(identity, str) or not _UUID_RE.fullmatch(identity)
+                or identity in seen or not isinstance(workspace.get("databases"), list)
+                or not isinstance(workspace.get("data_volumes"), list)):
+            raise BackupError("backup workspace inventory is invalid")
+        seen.add(identity)
+        for entry in workspace["databases"]:
+            if not isinstance(entry, dict) or entry.get("kind") not in {"core", "project"}:
+                raise BackupError("backup database inventory is invalid")
+        for entry in workspace["data_volumes"]:
+            if not isinstance(entry, dict) or entry.get("kind", "data") != "data":
+                raise BackupError("backup data volume inventory is invalid")
+        for entry in (*workspace["databases"], *workspace["data_volumes"]):
+            if (
+                not isinstance(entry, dict)
+                or not isinstance(entry.get("volume"), str)
+                or not _VOLUME_NAME_RE.fullmatch(entry["volume"])
+                or entry.get("status") not in {"ok", "busy", "deferred_active_generation", "failed"}
+            ):
+                raise BackupError("backup artifact inventory is invalid")
+            if entry["status"] == "ok":
+                _artifact_name({**entry, "workspace_id": identity})
+    _artifact_name({**manifest["state_archive"], "kind": "state"})
+    identities = _artifact_identities(workspaces)
+    if coverage.get("expected") != identities or len(
+        {json.dumps(item, sort_keys=True) for item in identities}
+    ) != len(identities):
+        raise BackupError("backup artifact coverage does not match its inventory")
+
+
+def _validate_recorded_docker(observation: Any) -> dict[str, Any]:
+    if (
+        not isinstance(observation, dict)
+        or set(observation) != {"scope", "volumes", "containers"}
+        or observation["scope"] != _DOCKER_OBSERVATION_SCOPE
+        or not isinstance(observation["volumes"], list)
+        or not isinstance(observation["containers"], list)
+    ):
+        raise BackupError("terminal Docker inventory receipt is unconfirmed")
+    for row in observation["volumes"]:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"name", "labels", "mountpoint"}
+            or not isinstance(row["name"], str)
+            or not _VOLUME_NAME_RE.fullmatch(row["name"])
+            or not isinstance(row["mountpoint"], str)
+            or row["labels"] != _docker_labels(row["labels"])
+        ):
+            raise BackupError("terminal Docker volume receipt is unconfirmed")
+    for row in observation["containers"]:
+        if (
+            not isinstance(row, dict)
+            or set(row) != {"id", "name", "labels", "state", "mounts"}
+            or not isinstance(row["id"], str)
+            or not _CONTAINER_ID_RE.fullmatch(row["id"])
+            or not isinstance(row["name"], str)
+            or not isinstance(row["state"], str)
+            or row["labels"] != _docker_labels(row["labels"])
+            or not isinstance(row["mounts"], list)
+        ):
+            raise BackupError("terminal Docker container receipt is unconfirmed")
+        for mount in row["mounts"]:
+            if not isinstance(mount, dict) or (
+                mount != {"type": "tmpfs"}
+                and (
+                    set(mount) != {"type", "name", "source"}
+                    or mount["type"] not in {"volume", "bind"}
+                    or not isinstance(mount["name"], str)
+                    or not isinstance(mount["source"], str)
+                )
+            ):
+                raise BackupError("terminal Docker mount receipt is unconfirmed")
+    if len({row["name"] for row in observation["volumes"]}) != len(observation["volumes"]) or len(
+        {row["id"] for row in observation["containers"]}
+    ) != len(observation["containers"]):
+        raise BackupError("terminal Docker inventory identity is duplicated")
+    return observation
+
+
+def _validate_terminal_receipts(backup_dir: Path, manifest: Mapping[str, Any]) -> None:
+    coverage = manifest["coverage"]
+    retired = coverage.get("retired_no_local_storage", [])
+    leases = coverage.get("superseded_generation_leases", [])
+    if not isinstance(retired, list) or not isinstance(leases, list):
+        raise BackupError("terminal inventory receipts are invalid")
+    if not retired and not leases:
+        return
+    try:
+        started = datetime.fromisoformat(coverage["started_at"].replace("Z", "+00:00"))
+        census = (
+            parse_platform_census(json.dumps(coverage["platform_census"]), now=started)
+            if retired
+            else None
+        )
+        observation = _validate_recorded_docker(coverage.get("docker_inventory"))
+        state = manifest["state_archive"]
+        path = backup_dir / "state.tar.gz"
+        if path.is_symlink() or _file_digest(path) != (state["sha256"], state["bytes"]):
+            raise BackupError("terminal receipt state archive checksum mismatch")
+        planned = {row["workspace_id"] for row in manifest["workspaces"]}
+        seen: set[str] = set()
+        with tarfile.open(path, "r:gz") as archive:
+            members = archive.getmembers()
+            for receipt in [*retired, *leases]:
+                if not isinstance(receipt, dict) or not _uuid(receipt.get("workspace_id")):
+                    raise ValueError
+                wid = receipt["workspace_id"]
+                if wid in seen:
+                    raise ValueError
+                seen.add(wid)
+                matched = [row for row in members if row.name == f"state/project-cells/{wid}.json"]
+                if (
+                    len(matched) != 1
+                    or not matched[0].isfile()
+                    or matched[0].size > 4 * 1024 * 1024
+                ):
+                    raise ValueError
+                stream = archive.extractfile(matched[0])
+                if stream is None:
+                    raise ValueError
+                with stream:
+                    raw = stream.read()
+                payload = json.loads(raw, object_pairs_hook=_unique_project_metadata)
+                if type(payload.get("version")) is not int or payload["version"] != 1:
+                    raise ValueError
+                workspace = payload["workspace"]
+                if not isinstance(workspace, dict):
+                    raise ValueError
+                terminal = _terminal_destroy(workspace)
+                scoped = scoped_docker_observation(observation, workspace)
+                if (
+                    workspace["workspace_id"] != wid
+                    or terminal is None
+                    or receipt.get("project_id") != workspace["project_id"]
+                    or receipt.get("operation_id") != terminal["operation_id"]
+                    or type(receipt.get("fencing_epoch")) is not int
+                    or receipt["fencing_epoch"] != terminal["fencing_epoch"]
+                    or receipt.get("journal_sha256") != hashlib.sha256(raw).hexdigest()
+                    or receipt.get("docker_observation") != scoped
+                    or receipt.get("docker_observation_sha256") != _json_digest(scoped)
+                ):
+                    raise ValueError
+                if receipt in retired:
+                    if (
+                        census is None
+                        or wid in planned
+                        or scoped["volumes"]
+                        or scoped["containers"]
+                        or receipt.get("reason") != "retired_no_local_storage"
+                        or receipt.get("platform_census_sha256") != _json_digest(census)
+                        or workspace["project_id"] in census["projects"]
+                        or any(row["id"] == wid for row in census["workspaces"])
+                    ):
+                        raise ValueError
+                    metadata_members = [
+                        row
+                        for row in members
+                        if row.name == f"state/project-machines/{wid}/docker.json"
+                    ]
+                    if len(metadata_members) > 1:
+                        raise ValueError
+                    if metadata_members:
+                        member = metadata_members[0]
+                        if not member.isfile() or member.size > 4 * 1024 * 1024:
+                            raise ValueError
+                        metadata_stream = archive.extractfile(member)
+                        if metadata_stream is None:
+                            raise ValueError
+                        with metadata_stream:
+                            metadata = json.load(
+                                metadata_stream, object_pairs_hook=_unique_project_metadata
+                            )
+                        if not _terminal_metadata_payload_valid(metadata, wid):
+                            raise ValueError
+                    # Even historical publication evidence is retained until its
+                    # own canonical deletion marker confirms retirement.
+                    for member in members:
+                        if not member.name.startswith(
+                            "state/cell-publications/"
+                        ) or not member.name.endswith("/publication.json"):
+                            continue
+                        if not member.isfile() or member.size > 4 * 1024 * 1024:
+                            raise ValueError
+                        public_stream = archive.extractfile(member)
+                        if public_stream is None:
+                            raise ValueError
+                        with public_stream:
+                            public = json.load(
+                                public_stream, object_pairs_hook=_unique_project_metadata
+                            )
+                        if (
+                            public.get("disabled") is True
+                            and public.get("deletion_completed") is True
+                        ):
+                            continue
+                        if member.name.split("/")[-2] == workspace[
+                            "project_id"
+                        ] or wid in json.dumps(public):
+                            raise ValueError
+                elif (
+                    wid not in planned
+                    or not _matched_superseded_lease(workspace)
+                    or any(
+                        row["state"] not in {"created", "exited", "dead"}
+                        for row in scoped["containers"]
+                    )
+                ):
+                    raise ValueError
+    except (OSError, ValueError, TypeError, KeyError, tarfile.TarError) as error:
+        raise BackupError(
+            "terminal inventory receipt does not match its archived authorities"
+        ) from error
 
 
 def _verifiable_entries(manifest: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -1365,10 +2353,16 @@ def _verify_entry(backup: CellBackup, backup_dir: Path, entry: Mapping[str, Any]
         "kind": kind,
         "workspace_id": entry.get("workspace_id"),
     }
+    if kind not in {"core", "project", "data", "state"}:
+        return {**base, "status": "failed", "detail": "unsupported artifact kind"}
+    if entry.get("status") == "failed":
+        return {**base, "status": "failed", "detail": "source backup failed"}
     if entry.get("status") != "ok" or not isinstance(name, str):
         return {**base, "status": "skipped", "detail": f"backup status {entry.get('status')}"}
-    if _ARTIFACT_RE.fullmatch(name) is None:
-        return {**base, "status": "failed", "detail": "unsafe artifact name"}
+    try:
+        _artifact_name(entry)
+    except BackupError:
+        return {**base, "status": "failed", "detail": "artifact identity mismatch"}
     path = backup_dir / name
     if path.is_symlink() or not path.is_file():
         return {**base, "status": "failed", "detail": "artifact missing"}
@@ -1377,6 +2371,8 @@ def _verify_entry(backup: CellBackup, backup_dir: Path, entry: Mapping[str, Any]
         return {**base, "status": "failed", "detail": "checksum or size mismatch"}
     if kind not in {"core", "project"}:
         return {**base, "status": "ok", "detail": "checksum only"}
+    if type(entry.get("tables")) is not int or entry["tables"] < 0:
+        return {**base, "status": "failed", "detail": "expected table count is unconfirmed"}
     try:
         return {**base, **_restore_entry(backup, path, kind, entry)}
     except BackupError as error:
@@ -1407,10 +2403,18 @@ def _restore_entry(
         prepared = backup.prepare_scratch_volume(pool, scratch_volume)
         if prepared is not None:
             return {"status": "failed", "detail": prepared.detail}
-        server = backup.start_scratch_server(pool, scratch_volume)
+        dump_format = _dump_format(path, entry)
+        # A full cluster dump creates the original postgres role. A fresh
+        # independent bootstrap avoids its "already exists" error. Keep initdb's
+        # standard databases: pg_dumpall reconnects to postgres/template1 and
+        # assumes they exist. Every SQL/data error must still stop the restore.
+        admin = "omnia_backup_" + secrets.token_hex(16) if dump_format == "plain" else "postgres"
+        server = backup.start_scratch_server(pool, scratch_volume, bootstrap_user=admin)
         if isinstance(server, DumpOutcome):
             return {"status": "failed", "detail": server.detail}
-        dump_format = _dump_format(path, entry)
+        connection = backup.scratch_connection(
+            user=admin, database="template1" if dump_format == "plain" else "postgres",
+        )
         if kind == "core" and dump_format == "custom":
             # pg_dump preserves ACL references but not cluster roles. This is
             # only a fresh isolated verifier, not a login/bootstrap assertion.
@@ -1422,7 +2426,7 @@ def _restore_entry(
             if not role.ok:
                 return {"status": "failed", "detail": "scratch core ACL role creation failed"}
         restored = backup.runner.run(
-            ["exec", "--interactive", server, *_restore_command(dump_format)],
+            ["exec", "--interactive", server, *_restore_command(dump_format, connection)],
             timeout=_DUMP_TIMEOUT,
             stdin_path=path,
         )
@@ -1431,7 +2435,7 @@ def _restore_entry(
                 "status": "failed",
                 "detail": _detail(backup.redactor, "restore failed", restored.stderr),
             }
-        tables = backup.count_tables(["exec", server], backup.scratch_connection())
+        tables = backup.count_tables(["exec", server], backup.scratch_connection(user=admin))
         expected = entry.get("tables")
         if tables is None:
             return {"status": "failed", "detail": "table count unavailable"}
@@ -1460,12 +2464,13 @@ def _dump_format(path: Path, entry: Mapping[str, Any]) -> DumpFormat:
         return "custom" if handle.read(len(_CUSTOM_DUMP_MAGIC)) == _CUSTOM_DUMP_MAGIC else "plain"
 
 
-def _restore_command(dump_format: DumpFormat) -> list[str]:
+def _restore_command(
+    dump_format: DumpFormat, connection: Sequence[str] | None = None,
+) -> list[str]:
+    connection = CellBackup.scratch_connection() if connection is None else connection
     if dump_format == "custom":
-        return ["pg_restore", "--clean", "--if-exists", *CellBackup.scratch_connection()]
-    # pg_dumpall recreates the bootstrap role, so a harmless "already exists" is
-    # expected on restore: the table count, not psql's exit code, is the verdict.
-    return ["psql", "-X", "-q", *CellBackup.scratch_connection(), "-f", "-"]
+        return ["pg_restore", "--clean", "--if-exists", *connection]
+    return ["psql", "-X", "-v", "ON_ERROR_STOP=1", "-q", *connection, "-f", "-"]
 
 
 # --------------------------------------------------------------------------- #
@@ -1499,6 +2504,15 @@ def _build_parser() -> argparse.ArgumentParser:
     backup.add_argument("--postgres-image", default=None)
     backup.add_argument("--helper-image", default=None)
     backup.add_argument("--docker", default="docker")
+    backup.add_argument(
+        "--resolve-docker-sources-with-sudo", action="store_true",
+        help="canonical controller-user caller: fixed sudo realpath metadata resolver",
+    )
+    backup.add_argument(
+        "--local-scope",
+        action="store_true",
+        help="local Docker coverage only; full collector must close external obligations",
+    )
 
     verify = commands.add_parser("verify", help="prove the dumps in a backup directory restore")
     verify.add_argument("--backup", required=True, type=Path)
@@ -1521,6 +2535,9 @@ def main(argv: Sequence[str] | None = None, *, runner: DockerRunner | None = Non
                 postgres_image=postgres_image,
                 helper_image=_image(args.helper_image, "CELL_BACKUP_IMAGE", "helper image"),
                 runner=docker,
+                local_scope=args.local_scope,
+                platform_census_json=os.environ.get("BACKUP_PLATFORM_CENSUS_JSON"),
+                resolve_docker_sources_with_sudo=args.resolve_docker_sources_with_sudo,
             )
             _write_private_json(args.out / "MANIFEST.json", manifest)
             totals = manifest["totals"]

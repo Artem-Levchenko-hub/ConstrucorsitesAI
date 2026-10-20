@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { toast } from "sonner";
 
 import { MaxOnboarding } from "@/components/max/MaxOnboarding";
-import { getMaxAccess, resendVerification, verifyEmailCode } from "@/lib/api/max-account";
+import { acceptMaxDocuments, getMaxAccess, resendVerification, verifyEmailCode } from "@/lib/api/max-account";
 
 const { replace } = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace }) }));
@@ -13,6 +13,7 @@ vi.mock("@/lib/api/max-account", () => ({
   getMaxAccess: vi.fn(),
   resendVerification: vi.fn(),
   verifyEmailCode: vi.fn(),
+  acceptMaxDocuments: vi.fn(),
 }));
 vi.mock("sonner", () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 
@@ -44,6 +45,7 @@ beforeEach(() => {
   root = createRoot(container);
   vi.mocked(resendVerification).mockResolvedValue({ accepted: true });
   vi.mocked(verifyEmailCode).mockResolvedValue({ verified: true });
+  vi.mocked(acceptMaxDocuments).mockResolvedValue({ accepted: true });
 });
 
 afterEach(async () => {
@@ -110,4 +112,39 @@ it("reports delivery failure without claiming that a letter was sent", async () 
   expect(toast.error).toHaveBeenCalledWith("Не удалось отправить письмо", { description: "SMTP unavailable" });
   expect(toast.success).not.toHaveBeenCalled();
   expect(container.textContent).not.toContain("Письмо отправлено на");
+});
+
+it("requires explicit current consents even when the email is already verified", async () => {
+  await render(true);
+  vi.mocked(getMaxAccess).mockResolvedValue({
+    authenticated: true, email_verified: true, email_delivery_configured: true,
+    can_create_project: false, reason: "legal_acceptance_required",
+    legal_document_version: "current-test-version", payments_configured: false,
+  });
+  await act(async () => { await queryClient.refetchQueries({ queryKey: ["max-access"] }); });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(replace).not.toHaveBeenCalled();
+  const form = container.querySelector("form")!;
+  const boxes = Array.from(form.querySelectorAll<HTMLInputElement>("input[type='checkbox']"));
+  expect(boxes).toHaveLength(3);
+  expect(boxes.every((box) => box.required && !box.checked)).toBe(true);
+  await act(async () => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(acceptMaxDocuments).not.toHaveBeenCalled();
+  for (const box of boxes) await act(async () => { box.click(); });
+  vi.mocked(getMaxAccess).mockResolvedValue({
+    authenticated: true, email_verified: true, email_delivery_configured: true,
+    can_create_project: true, reason: null,
+    legal_document_version: "current-test-version", payments_configured: false,
+  });
+  await act(async () => {
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  });
+  expect(vi.mocked(acceptMaxDocuments).mock.calls[0]?.[0]).toEqual({
+    terms_accepted: true, privacy_accepted: true, personal_data_accepted: true,
+    document_version: "current-test-version",
+  });
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+  expect(replace).toHaveBeenCalledWith("/max");
 });

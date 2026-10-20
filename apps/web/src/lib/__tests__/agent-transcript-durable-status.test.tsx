@@ -11,7 +11,8 @@ import type { AgentStep, GenerationRun } from "@/lib/api/types";
 import { restorePersistedAgentSteps } from "@/lib/agent-steps";
 
 const step: AgentStep = { step: 1, kind: "step", action: "Проверка каталога", path: "", ok: false };
-const completed: GenerationRun = { id: "latest-run", project_id: "p", assistant_message_id: "current-message", status: "completed", response_mode: "build", created_at: "2026-10-04T08:00:00Z", started_at: "2026-10-04T08:00:00Z", finished_at: "2026-10-04T08:07:26Z" };
+const completed: GenerationRun = { id: "latest-run", project_id: "p", assistant_message_id: "current-message", status: "completed", response_mode: "build", created_at: "2026-10-04T08:00:00Z", started_at: "2026-10-04T08:00:00Z", finished_at: "2026-10-04T08:07:26Z",
+  acceptance: { run_id: "latest-run", assistant_message_id: "current-message", snapshot_id: "saved", accepted_at: null, current_request_complete: true } };
 
 function render(messageId: string, generation: GenerationRun, streaming = false) {
   const client = new QueryClient();

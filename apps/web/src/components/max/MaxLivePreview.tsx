@@ -154,8 +154,10 @@ export function MaxLivePreview({
   const promptContentId = useId();
   const promptToggle = useRef<HTMLButtonElement>(null);
   const promptOpen = Boolean(displayedVersion && promptTargetId === displayedVersion.id);
-  const [lastWorkingPreview, setLastWorkingPreview] = useState<{ projectId: string; url: string } | null>(null);
-  const lastWorkingUrl = lastWorkingPreview?.projectId === project.id ? lastWorkingPreview.url : null;
+  const [lastWorkingPreview, setLastWorkingPreview] = useState<{
+    projectId: string; url: string; documentKey: string;
+  } | null>(null);
+  const lastWorking = lastWorkingPreview?.projectId === project.id ? lastWorkingPreview : null;
   const messages = useQuery({
     queryKey: ["messages", project.id],
     queryFn: () => listMessages(project.id),
@@ -178,6 +180,23 @@ export function MaxLivePreview({
     acceptedAt: currentRun?.acceptance?.accepted_at ?? null,
     currentRun,
   });
+  // snapshot.created can precede final validation and physical release. The
+  // confirmed receipt advances preparation even when that snapshot did not
+  // change again. Keep the confirmed anchor when the next request starts so
+  // polling/working status cannot reset an already displayed user's document.
+  const confirmedRunId = currentAcceptance.isCurrentRequestComplete && currentRun?.acceptance?.snapshot_id
+    ? currentRun.id : null;
+  const [confirmedPreview, setConfirmedPreview] = useState<{
+    projectId: string; snapshotId: string | null; runId: string;
+  } | null>(null);
+  if (confirmedPreview && confirmedPreview.projectId !== project.id) setConfirmedPreview(null);
+  if (confirmedRunId && (confirmedPreview?.projectId !== project.id
+    || confirmedPreview.snapshotId !== currentSnapshotId || confirmedPreview.runId !== confirmedRunId)) {
+    setConfirmedPreview({ projectId: project.id, snapshotId: currentSnapshotId, runId: confirmedRunId });
+  }
+  const acceptedGenerationId = confirmedRunId ?? (
+    confirmedPreview?.projectId === project.id && confirmedPreview.snapshotId === currentSnapshotId
+      ? confirmedPreview.runId : null);
   const acceptedSnapshotId = lastAcceptedVersion?.snapshot_id ?? (
     currentAcceptance.isCurrentRequestComplete && currentRun?.acceptance?.snapshot_id
       ? currentSnapshotId : null);
@@ -198,11 +217,12 @@ export function MaxLivePreview({
   const previewDisabled = viewingHistorical || Boolean(firstBuildTerminal) ||
     (noSuccessfulBuild && messages.isPending);
   const previewTargetSnapshotId = currentSnapshotId ?? "no-current-snapshot";
+  const previewDocumentKey = `${previewTargetSnapshotId}:${acceptedGenerationId ?? "unconfirmed"}`;
   // Each pause/project change retires the old mutation, including retries
   // already sleeping when a new generation releases the pause again.
   const activity = useMemo(() => ({
-    projectId: project.id, snapshotId: previewTargetSnapshotId, disabled: previewDisabled,
-  }), [project.id, previewTargetSnapshotId, previewDisabled]);
+    projectId: project.id, snapshotId: previewTargetSnapshotId, acceptedGenerationId, disabled: previewDisabled,
+  }), [project.id, previewTargetSnapshotId, acceptedGenerationId, previewDisabled]);
   const previewActivity = useRef(activity);
   useEffect(() => {
     previewActivity.current = activity;
@@ -215,7 +235,7 @@ export function MaxLivePreview({
   const started = useRef(false);
   useEffect(() => {
     started.current = false;
-  }, [project.id, previewDisabled]);
+  }, [project.id, previewDisabled, acceptedGenerationId]);
   useEffect(() => {
     if (!previewDisabled) return;
     // Disabling an observer does not cancel an already scheduled query retry.
@@ -305,7 +325,7 @@ export function MaxLivePreview({
     return result;
   }, PREVIEW_RETRY_LIMIT);
   const managedKit = useQuery({
-    queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId],
+    queryKey: ["max-managed-kit-sync", project.id, previewTargetSnapshotId, acceptedGenerationId],
     queryFn: () => loadManagedKit(previewActivity.current),
     enabled: !previewDisabled && runtimeRunning,
     retry: false,
@@ -338,14 +358,11 @@ export function MaxLivePreview({
       }
     }
   }, PREVIEW_RETRY_LIMIT);
+  const previewSessionKey = (containerName: string | null, snapshotId: string | null) => [
+    "max-preview-session", project.id, previewTargetSnapshotId, containerName, snapshotId, acceptedGenerationId,
+  ] as const;
   const previewSession = useQuery({
-    queryKey: [
-      "max-preview-session",
-      project.id,
-      previewTargetSnapshotId,
-      runtime.data?.container_name ?? null,
-      managedKit.data?.synced_snapshot_id ?? null,
-    ],
+    queryKey: previewSessionKey(runtime.data?.container_name ?? null, managedKit.data?.synced_snapshot_id ?? null),
     queryFn: () => loadPreviewSession(previewActivity.current),
     enabled: !previewDisabled && runtimeRunning && managedKit.isSuccess,
     retry: false,
@@ -381,13 +398,7 @@ export function MaxLivePreview({
         );
       }
       return queryClient.fetchQuery({
-        queryKey: [
-          "max-preview-session",
-          project.id,
-          previewTargetSnapshotId,
-          activeRuntime?.container_name ?? null,
-          managedKitResult.data.synced_snapshot_id ?? null,
-        ],
+        queryKey: previewSessionKey(activeRuntime?.container_name ?? null, managedKitResult.data.synced_snapshot_id ?? null),
         queryFn: () => loadPreviewSession(activity),
         retry: false,
         staleTime: 0,
@@ -455,7 +466,8 @@ export function MaxLivePreview({
   }, []);
 
   const previewUrl = firstBuildTerminal ? null : previewSession.data?.url ?? null;
-  const displayPreviewUrl = firstBuildTerminal ? null : previewUrl ?? lastWorkingUrl;
+  const displayPreviewUrl = firstBuildTerminal ? null : previewUrl ?? lastWorking?.url ?? null;
+  const displayDocumentKey = previewUrl ? previewDocumentKey : lastWorking?.documentKey;
   useEffect(() => {
     if (!displayPreviewUrl || viewingHistorical) return;
     return installPreviewSessionRenewal({
@@ -695,7 +707,7 @@ export function MaxLivePreview({
                     <>
                       <iframe
                       ref={previewFrame}
-                      key={displayPreviewUrl}
+                      key={`${displayPreviewUrl}:${displayDocumentKey}`}
                       src={displayPreviewUrl}
                       title={`Превью ${project.name}`}
                       className="absolute inset-0 size-full border-0 bg-white"
@@ -703,7 +715,9 @@ export function MaxLivePreview({
                       referrerPolicy="no-referrer"
                       data-testid="max-live-iframe"
                       onLoad={(event) => {
-                        if (previewUrl) setLastWorkingPreview({ projectId: project.id, url: previewUrl });
+                        if (previewUrl) setLastWorkingPreview({
+                          projectId: project.id, url: previewUrl, documentKey: previewDocumentKey,
+                        });
                         event.currentTarget.contentWindow?.postMessage(
                           { type: "omnia:preview:chrome", hideScrollbar: true },
                           "*",

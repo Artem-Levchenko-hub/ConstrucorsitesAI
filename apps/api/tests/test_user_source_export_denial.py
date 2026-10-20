@@ -1,4 +1,4 @@
-"""Real user HTTP/PG: no plan/admin/source-query bypass and no storage access."""
+"""Personal record export never grants source/archive or disaster storage access."""
 
 from unittest.mock import Mock
 from uuid import uuid4
@@ -20,7 +20,7 @@ from yleum_api.services.entitlements import load_plan_context
 
 @pytest.mark.parametrize("persona", ["free", "pro", "business", "admin"])
 @pytest.mark.parametrize("operation", ["archive", "account", "source"])
-async def test_authenticated_user_cannot_export_or_read_source(
+async def test_personal_export_does_not_grant_source_or_disaster_archive_access(
     client, db_session, test_engine, monkeypatch, persona, operation
 ):
     owner = User(
@@ -87,9 +87,14 @@ async def test_authenticated_user_cannot_export_or_read_source(
             elif operation == "account":
                 sql.clear()
                 exported = await client.get(f"/api/account/export{query}")
-                assert exported.status_code == 403
-                assert exported.json()["error"]["code"] == "forbidden"
-                assert not any("FROM billing_accounts" in s or "FROM projects" in s for s in sql)
+                assert exported.status_code == 200
+                payload = exported.json()
+                assert payload["scope"] == "personal_account_records"
+                assert payload["account"]["id"] == str(owner.id)
+                assert payload["projects"][0]["id"] == str(project.id)
+                assert "files" not in exported.text
+                assert "synthetic-private-source" not in exported.text
+                assert not any("FROM snapshots" in s for s in sql)
             else:
                 detail = await client.get(
                     f"/api/projects/{project.id}/snapshots/{snapshot.id}{query}"

@@ -123,7 +123,7 @@ async def test_existing_connection_start_rejected_without_state_or_grant_mutatio
                                     provider="amocrm", credentials_enc="working-ciphertext")
     db_session.add(connection)
     await db_session.commit()
-    monkeypatch.setattr(app_integrations, "require_max_studio_access", lambda _: None)
+    monkeypatch.setattr(app_integrations, "require_existing_max_account_access", lambda _: None)
     monkeypatch.setattr(app_integrations, "assert_integrations_allowed", AsyncMock())
     with pytest.raises(ApiError) as caught:
         await app_integrations.start_integration_oauth(project.id, "amocrm", db_session, owner)
@@ -277,7 +277,7 @@ async def test_actual_start_persists_public_profile_and_absence_through_default_
     db_session, monkeypatch, profiles,
 ):
     owner, project = await _owner(db_session)
-    monkeypatch.setattr(app_integrations, "require_max_studio_access", lambda _: None)
+    monkeypatch.setattr(app_integrations, "require_existing_max_account_access", lambda _: None)
     monkeypatch.setattr(app_integrations, "assert_integrations_allowed", AsyncMock())
     started = await app_integrations.start_integration_oauth(
         project.id, "amocrm", db_session, owner,

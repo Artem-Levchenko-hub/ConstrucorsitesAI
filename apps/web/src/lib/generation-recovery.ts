@@ -106,18 +106,24 @@ export function acceptedPreviewLabel(preview: AcceptedPreviewState, currentRun: 
   return prefix + "Статус последнего запроса пока не подтверждён.";
 }
 
+/** Completion events and agent prose cannot replace the exact public receipt. */
+export function isGenerationResultConfirmed(run: GenerationRun | null | undefined): boolean {
+  const acceptance = run?.acceptance;
+  return Boolean(run?.status === "completed" && isoDateTime(run.finished_at)
+    && run.recovery_unavailable !== true
+    && (run.recovery == null || parseGenerationRecovery(run.recovery) !== null)
+    && acceptance?.current_request_complete === true && acceptance.run_id === run.id
+    && acceptance.assistant_message_id === run.assistant_message_id);
+}
+
 export function acceptedPreviewState({ acceptedSnapshotId, acceptedAt, currentRun }: {
   acceptedSnapshotId: Uuid | null;
   acceptedAt: string | null;
   currentRun: GenerationRun | null | undefined;
 }): AcceptedPreviewState {
   const acceptance = currentRun?.acceptance;
-  const complete = Boolean(currentRun?.status === "completed" && isoDateTime(currentRun.finished_at)
-    && currentRun.recovery_unavailable !== true
-    && (currentRun.recovery == null || parseGenerationRecovery(currentRun.recovery) !== null)
-    && acceptance?.current_request_complete === true && acceptance.run_id === currentRun.id
-    && acceptance.assistant_message_id === currentRun.assistant_message_id
-    && (acceptance.snapshot_id === null || acceptance.snapshot_id === acceptedSnapshotId));
+  const complete = isGenerationResultConfirmed(currentRun)
+    && (acceptance?.snapshot_id === null || acceptance?.snapshot_id === acceptedSnapshotId);
   return {
     kind: acceptedSnapshotId ? "accepted" : "preparing",
     snapshotId: acceptedSnapshotId,

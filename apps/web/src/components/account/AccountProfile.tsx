@@ -2,17 +2,34 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Trash2 } from "lucide-react";
+import { Download, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { deleteAccount } from "@/lib/api/account";
+import { deleteAccount, exportAccount } from "@/lib/api/account";
 import { QueryError } from "./account-presentation";
 
 export function AccountProfile({ email }: { email: string }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState("");
+  const [exported, setExported] = useState(false);
+  const download = useMutation({
+    mutationFn: exportAccount,
+    onMutate: () => setExported(false),
+    onSuccess: (data) => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "yleum-account-data.json";
+      document.body.append(link);
+      link.click();
+      link.remove();
+      // Give the browser time to start consuming the download before revoking.
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setExported(true);
+    },
+  });
   const remove = useMutation({ mutationFn: deleteAccount, onSuccess: () => router.replace("/") });
   return <>
     <section className="account-profile">
@@ -28,6 +45,18 @@ export function AccountProfile({ email }: { email: string }) {
         <Input id="account-email" value={email} readOnly />
         <p className="account-hint">Этот адрес используется для входа и уведомлений аккаунта.</p>
       </div>
+    </section>
+    <section className="account-action-row">
+      <div>
+        <h3>Выгрузка личных данных</h3>
+        <p>Профиль, способы входа, согласия, сессии, сведения о ваших проектах и платежах в файле JSON.</p>
+        <p className="account-hint">Исходники и данные пользователей созданных приложений в эту выгрузку не входят.</p>
+        <QueryError error={download.error} />
+        {exported && <p role="status">Файл личных данных подготовлен.</p>}
+      </div>
+      <Button variant="outline" disabled={download.isPending} onClick={() => download.mutate()}>
+        <Download className="size-4" />{download.isPending ? "Подготовка…" : "Скачать личные данные"}
+      </Button>
     </section>
     <section className="account-action-row account-danger">
       <div>

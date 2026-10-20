@@ -27,7 +27,7 @@ from yleum_api.models.project import Project
 from yleum_api.routers import app_integrations
 from yleum_api.services.entitlements import assert_integrations_allowed
 from yleum_api.services.integration_credentials import load_credentials
-from yleum_api.services.max_access import require_max_studio_access
+from yleum_api.services.max_access import require_existing_max_account_access
 
 router = APIRouter(tags=["moysklad-vendor"])
 RESOURCE = "https://api.moysklad.ru/api/remap/1.2"
@@ -97,7 +97,7 @@ async def public_install_info(
     project_id: UUID, response: Response, session: SessionDep, current_user: CurrentUserDep
 ) -> PublicInstallInfo:
     await app_integrations._owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     url = get_settings().integration_moysklad_public_install_url
     _navigation_headers(response)
     return PublicInstallInfo(available=bool(url), install_url=url)
@@ -111,7 +111,7 @@ async def start_public_install(
     project_id: UUID, response: Response, session: SessionDep, current_user: CurrentUserDep
 ) -> PublicInstallStart:
     await app_integrations._owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     await assert_integrations_allowed(session, current_user.id)
     url = get_settings().integration_moysklad_public_install_url
     if not url:
@@ -164,7 +164,7 @@ async def native_return(
         if owner == current_user.id and version == current_user.session_version:
             try:
                 await app_integrations._owned_max_project(session, project, current_user.id)
-                require_max_studio_access(current_user)
+                require_existing_max_account_access(current_user)
                 await assert_integrations_allowed(session, current_user.id)
             except ApiError as exc:
                 if exc.status_code not in {401, 403, 404, 409}:
@@ -462,7 +462,7 @@ def _bridge_session_marker(owner: UUID, version: int) -> str:
 async def native_connect_session(
     response: Response, current_user: CurrentUserDep
 ) -> dict[str, str]:
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     _navigation_headers(response)
     return {"session_marker": _bridge_session_marker(current_user.id, current_user.session_version)}
 
@@ -475,7 +475,7 @@ async def native_connect(session: SessionDep, current_user: OptionalUserDep) -> 
         )
         _navigation_headers(response)
         return response
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     rows = (
         await session.execute(
             select(Project.id, Project.name, Project.owner_id)
@@ -853,7 +853,7 @@ async def claim(
     project_id: UUID, payload: ClaimRequest, session: SessionDep, current_user: CurrentUserDep
 ) -> dict[str, str]:
     await app_integrations._owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     await assert_integrations_allowed(session, current_user.id)
     digest = hashlib.sha256(payload.code.encode()).hexdigest()
     installation = (

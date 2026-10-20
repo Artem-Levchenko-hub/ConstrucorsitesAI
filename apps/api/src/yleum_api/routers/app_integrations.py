@@ -38,7 +38,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services import integration_oauth, integration_providers
 from yleum_api.services.entitlements import assert_integrations_allowed
 from yleum_api.services.integration_credentials import load_credentials, lock_account_provider
-from yleum_api.services.max_access import require_max_studio_access
+from yleum_api.services.max_access import require_existing_max_account_access
 
 router = APIRouter(tags=["app-integrations"])
 
@@ -320,7 +320,7 @@ async def get_integration_catalog(
     current_user: CurrentUserDep,
 ) -> IntegrationCatalogPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     connections = list(
         (
             await session.execute(
@@ -361,7 +361,7 @@ async def set_platform_ai(
     session: SessionDep, current_user: CurrentUserDep,
 ) -> PlatformAIState:
     project = await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     project.runtime_ai_enabled = payload.enabled
     await session.commit()
     return PlatformAIState(enabled=project.runtime_ai_enabled)
@@ -379,7 +379,7 @@ async def connect_integration(
     current_user: CurrentUserDep,
 ) -> AppIntegrationPublic:
     await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     # Plan flag `integrations` (402 `subscription_entitlement_required`).
     await assert_integrations_allowed(session, current_user.id)
     await lock_account_provider(session, current_user.id, provider_key)
@@ -448,7 +448,7 @@ async def bind_existing_integration(
             "ai_integration_required", "Включите встроенный ИИ в настройках приложения",
             status.HTTP_409_CONFLICT,
         )
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     await assert_integrations_allowed(session, current_user.id)
     connection = await _account_connection(session, current_user.id, provider_key)
     if connection is None:
@@ -473,7 +473,7 @@ async def apply_recommended_pack(
     current_user: CurrentUserDep,
 ) -> IntegrationPackApplyPublic:
     project = await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     await assert_integrations_allowed(session, current_user.id)
     connections = list(
         (
@@ -528,7 +528,7 @@ async def verify_integration(
             "ai_integration_required", "Включите встроенный ИИ в настройках приложения",
             status.HTTP_409_CONFLICT,
         )
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     connection = await _account_connection(session, current_user.id, provider_key)
     if connection is None:
         raise ApiError(
@@ -597,7 +597,7 @@ async def unbind_integration(
     current_user: CurrentUserDep,
 ) -> Response:
     await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     binding = await _binding(session, project_id, provider_key)
     if binding is not None:
         await session.delete(binding)
@@ -617,7 +617,7 @@ async def delete_account_integration(
 ) -> Response:
     """Remove the account-level connection itself, not only this project's binding."""
     await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     await lock_account_provider(session, current_user.id, provider_key)
     connection = await _account_connection(
         session, current_user.id, provider_key, for_update=True,
@@ -639,7 +639,7 @@ async def start_integration_oauth(
     current_user: CurrentUserDep,
 ) -> IntegrationOAuthStartPublic:
     await _owned_max_project(session, project_id, current_user.id)
-    require_max_studio_access(current_user)
+    require_existing_max_account_access(current_user)
     await assert_integrations_allowed(session, current_user.id)
     provider = integration_providers.get_provider(provider_key)
     if not provider.oauth_supported or not _oauth_available(provider_key):

@@ -43,7 +43,7 @@ def set_session_cookie(response: Response, token: str) -> None:
     )
 
 
-async def _resolve_user(
+async def resolve_session_user(
     session: AsyncSession, cookie: str | None, authorization: str | None
 ) -> User | None:
     token = _extract_token(cookie, authorization)
@@ -80,7 +80,7 @@ async def get_current_user(
     omnia_session: Annotated[str | None, Cookie()] = None,
     authorization: Annotated[str | None, Header()] = None,
 ) -> User:
-    user = await _resolve_user(session, omnia_session, authorization)
+    user = await resolve_session_user(session, omnia_session, authorization)
     if user is None:
         raise ApiError("unauthorized", "missing or invalid auth", status.HTTP_401_UNAUTHORIZED)
     return user
@@ -97,7 +97,7 @@ async def get_optional_user(
     stale cookie simply yields an anonymous caller. The anon-project seam
     (V4.1a) uses this so unauthenticated visitors can create a project.
     """
-    return await _resolve_user(session, omnia_session, authorization)
+    return await resolve_session_user(session, omnia_session, authorization)
 
 
 CurrentUserDep = Annotated[User, Depends(get_current_user)]

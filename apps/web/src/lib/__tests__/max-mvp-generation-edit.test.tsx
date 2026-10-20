@@ -3,7 +3,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { MaxWorkspaceShell } from "@/components/max/MaxWorkspaceShell";
-import type { Project } from "@/lib/api/types";
+import type { GenerationRun, Project } from "@/lib/api/types";
 
 type PreviewProps = ComponentProps<typeof import("@/components/max/MaxLivePreview").MaxLivePreview>;
 const api = vi.hoisted(() => ({
@@ -68,4 +68,17 @@ it("preserves generation/edit, current preview and publication without historica
   expect(container.textContent).toContain("Опубликовать приложение");
   expect(container.textContent).not.toContain("адаптаци");
   expect(container.textContent).not.toContain("восстанов");
+  const composer = container.querySelector("textarea")!;
+  composer.value = "Моя следующая правка, ещё не отправленная";
+  const accepted: GenerationRun = { id: "finished", project_id: project.id, assistant_message_id: "answer",
+    status: "completed", response_mode: "edit", created_at: "2026-10-20T10:00:00Z",
+    started_at: "2026-10-20T10:00:00Z", finished_at: "2026-10-20T10:15:00Z",
+    acceptance: { run_id: "finished", assistant_message_id: "answer", snapshot_id: "current",
+      accepted_at: null, current_request_complete: true } };
+  await act(async () => {
+    client.setQueryData(["generation", project.id], accepted);
+    await new Promise(resolve => setTimeout(resolve, 10));
+  });
+  expect(container.querySelector("textarea")).toBe(composer);
+  expect(composer.value).toBe("Моя следующая правка, ещё не отправленная");
 });

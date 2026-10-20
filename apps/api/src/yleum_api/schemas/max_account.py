@@ -2,7 +2,7 @@ from pydantic import BaseModel
 
 
 class MaxAccessPublic(BaseModel):
-    """What a Yleum account needs before building: a verified email, nothing else."""
+    """Admission to new MAX projects: email proof and current legal acceptance."""
 
     authenticated: bool = True
     email_verified: bool

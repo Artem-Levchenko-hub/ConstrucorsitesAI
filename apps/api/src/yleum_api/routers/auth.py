@@ -35,7 +35,12 @@ from yleum_api.services.account_sessions import (
     request_ip,
     request_user_agent,
 )
-from yleum_api.services.accounts import LegalConsent, create_account
+from yleum_api.services.accounts import (
+    LegalConsent,
+    create_account,
+    has_verified_email,
+    require_current_legal_acceptance,
+)
 from yleum_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
@@ -184,20 +189,7 @@ async def register(
 ) -> User:
     settings = get_settings()
     if payload.product == "max":
-        if not (
-            payload.terms_accepted and payload.privacy_accepted and payload.personal_data_accepted
-        ):
-            raise ApiError(
-                "legal_acceptance_required",
-                "Для Yleum нужно принять условия, политику и согласие на обработку данных",
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-            )
-        if payload.document_version != settings.legal_document_version:
-            raise ApiError(
-                "legal_version_outdated",
-                "Юридические документы обновились. Обновите страницу и подтвердите их снова",
-                status.HTTP_409_CONFLICT,
-            )
+        require_current_legal_acceptance(payload)
 
     pwd_hash = await hash_password(payload.password)
     consent = (
@@ -215,9 +207,9 @@ async def register(
             session,
             email=payload.email,
             password_hash=pwd_hash,
-            # General constructor keeps its existing frictionless behaviour. MAX
-            # accounts must prove control of the address before creating a project.
-            email_verified_at=datetime.now(UTC) if payload.product == "general" else None,
+            # A client-selected product cannot prove control of an email address.
+            # General registration still creates an account and opens its session.
+            email_verified_at=None,
             consent=consent,
             signup_source=payload.source,
             referrer_project_id=payload.referrer_project_id,
@@ -317,7 +309,7 @@ async def request_email_verification(
 ) -> dict[str, bool]:
     if current_user.is_anon or current_user.email is None:
         raise ApiError("forbidden", "Нужен аккаунт с email", status.HTTP_403_FORBIDDEN)
-    if current_user.email_verified_at is not None:
+    if await has_verified_email(session, current_user):
         return {"accepted": True}
     raw = await _issue_email_token(session, current_user, "verify_email", ttl=timedelta(hours=24))
     await _deliver(_send_verification(current_user, raw))
@@ -354,7 +346,7 @@ async def verify_email_code(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if user.email_verified_at is not None or token is None or token.code_hash is None:
+    if await has_verified_email(session, user) or token is None or token.code_hash is None:
         raise ApiError(
             "code_invalid", "Код недействителен. Запросите новый", status.HTTP_400_BAD_REQUEST
         )

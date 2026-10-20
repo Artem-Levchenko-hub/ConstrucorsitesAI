@@ -104,6 +104,7 @@ def world(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr(projects.repo_svc, "init_repo", Mock(return_value="a" * 40))
     # Plan limits read the billing tables; these tests own a stub session.
     monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())
+    monkeypatch.setattr(projects, "require_max_studio_access", AsyncMock())
     return state
 
 

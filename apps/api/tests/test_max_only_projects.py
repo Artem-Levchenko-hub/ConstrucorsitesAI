@@ -13,6 +13,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.account_fixture import register_verified_account
 from yleum_api.main import app
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
@@ -53,10 +54,7 @@ def git(monkeypatch: pytest.MonkeyPatch) -> list[tuple[object, ...]]:
 
 
 async def _register(client: httpx.AsyncClient, email: str = "owner@example.com") -> None:
-    response = await client.post(
-        "/api/auth/register", json={"email": email, "password": "secret123"}
-    )
-    assert response.status_code == 201, response.text
+    await register_verified_account(client, email, product="max")
 
 
 async def test_registered_user_creates_a_max_project(client, db_session, git, monkeypatch):

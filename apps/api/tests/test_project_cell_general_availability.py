@@ -151,6 +151,7 @@ async def test_create_needs_a_cell_and_never_makes_a_project_without_one(monkeyp
     monkeypatch.setattr(projects, "publish_event", AsyncMock())
     # Plan limits read the billing tables; this test owns a stub session.
     monkeypatch.setattr(projects, "assert_can_create_project", AsyncMock())
+    monkeypatch.setattr(projects, "require_max_studio_access", AsyncMock())
     call = projects.create_project(
         ProjectCreate.model_validate(
             {"name": "Test", "template": "max_miniapp", "project_cell_enabled": True}

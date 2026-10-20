@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,6 +11,14 @@ import pytest
 from fastapi import HTTPException
 
 from yleum_api.routers import backups
+
+
+def _verdict(ok: bool, timestamp="20260731-031500", payload=b"encrypted-cms",
+             tested_at="2026-09-21T05:20:00Z") -> str:
+    return json.dumps({
+        "ok": ok, "tested_at": tested_at, "backup_timestamp": timestamp,
+        "backup_sha256": hashlib.sha256(payload).hexdigest(), "coverage_complete": ok,
+    })
 
 
 def _write_export(root: Path, timestamp: str, payload: bytes = b"encrypted-cms") -> Path:
@@ -129,11 +138,11 @@ async def test_latest_export_uses_absolute_mtime_not_timezone_affected_name(
     "verdict, expected",
     [
         (
-            '{"ok": true, "tested_at": "2026-09-21T05:20:00Z", "source": "20260921-051517"}',
+            _verdict(True),
             (True, "2026-09-21T05:20:00+00:00"),
         ),
         (
-            '{"ok": false, "tested_at": "2026-09-21T05:20:00Z", "source": "x"}',
+            _verdict(False),
             (False, "2026-09-21T05:20:00+00:00"),
         ),
         (None, (None, None)),
@@ -141,6 +150,12 @@ async def test_latest_export_uses_absolute_mtime_not_timezone_affected_name(
         ('{"ok": "yes", "tested_at": "2026-09-21T05:20:00Z"}', (None, None)),
         ('{"ok": true, "tested_at": "2026-09-21T05:20:00"}', (None, None)),
         ('{"ok": true}', (None, None)),
+        ('{"ok": true, "tested_at": "2026-09-21T05:20:00Z"}', (None, None)),
+        (_verdict(True, payload=b"other-copy"), (None, None)),
+        (_verdict(True, timestamp="20260730-031500"), (None, None)),
+        (_verdict(True, tested_at="2026-07-30T05:20:00Z"), (None, None)),
+        (_verdict(True).replace('"coverage_complete": true', '"coverage_complete": false'),
+         (None, None)),
     ],
 )
 async def test_status_reports_when_a_restore_was_last_proven(
@@ -317,7 +332,9 @@ async def test_restore_verdict_is_read_from_the_bucket_next_to_the_bundle(
 ):
     when = datetime(2026, 9, 25, 0, 15, tzinfo=UTC)
     objects = _bundle("20260925-001500", b"bundle", when)
-    objects["RESTORE_TEST.json"] = (b'{"ok": true, "tested_at": "2026-09-21T04:40:00Z"}', when)
+    objects["RESTORE_TEST.json"] = (
+        _verdict(True, "20260925-001500", b"bundle", "2026-09-25T04:40:00Z").encode(), when,
+    )
     (tmp_path / "RESTORE_TEST.json").write_text(
         '{"ok": false, "tested_at": "2026-09-01T00:00:00Z"}'
     )
@@ -326,7 +343,7 @@ async def test_restore_verdict_is_read_from_the_bucket_next_to_the_bundle(
     status = await backups.offhost_backup_status()
 
     assert status.restore_test_ok is True
-    assert status.restore_tested_at == datetime(2026, 9, 21, 4, 40, tzinfo=UTC)
+    assert status.restore_tested_at == datetime(2026, 9, 25, 4, 40, tzinfo=UTC)
 
 
 @pytest.mark.parametrize("endpoint", ["status", "latest"])

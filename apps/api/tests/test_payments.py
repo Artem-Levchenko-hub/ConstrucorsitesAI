@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.account_fixture import register_verified_account
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import BillingPlan, Subscription
 from yleum_api.models.wallet_charge import WalletCharge
@@ -21,11 +22,7 @@ async def test_payment_webhook_credits_wallet_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": "payer@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
+    await register_verified_account(client, "payer@example.com")
 
     async def fake_create_payment(**_kwargs) -> dict[str, object]:
         return {
@@ -94,11 +91,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": "subscription@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
+    await register_verified_account(client, "subscription@example.com")
 
     provider_calls: list[dict[str, object]] = []
 
@@ -219,11 +212,7 @@ async def test_only_one_subscription_checkout_can_wait_for_payment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": "one-checkout@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
+    await register_verified_account(client, "one-checkout@example.com")
 
     async def fake_create_payment(**_kwargs: object) -> dict[str, object]:
         return {
@@ -257,11 +246,7 @@ async def test_subscription_checkout_applies_immediate_provider_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": "immediate-subscription@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
+    await register_verified_account(client, "immediate-subscription@example.com")
 
     async def fake_create_payment(**kwargs: object) -> dict[str, object]:
         assert kwargs["amount"] == "6990.00"

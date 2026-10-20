@@ -49,16 +49,16 @@ afterEach(async () => {
   await act(async () => root.unmount()); container.remove(); client.clear();
 });
 
-// These controls receive no tier entitlement. Removal must be unconditional,
-// including the admin shell, rather than enabling export for a paid/admin branch.
-it.each([false, true])("removes export controls while keeping profile, publication and saved metadata (admin=%s)", async admin => {
+// A personal-data download grants no source/archive access at any plan or role.
+it.each([false, true])("offers personal records without project archive controls (admin=%s)", async admin => {
   state.admin = admin;
   const shell = await AccountShell({ email: "fixture@example.invalid", active: "profile", children: <AccountProfile email="fixture@example.invalid" /> });
   await act(async () => root.render(<QueryClientProvider client={client}>
     {shell}<MaxWorkspaceShell project={project} email="fixture@example.invalid" />
   </QueryClientProvider>));
   await act(async () => { await vi.waitFor(() => expect(container.querySelector("output")?.textContent).toContain("Saved version metadata")); });
-  expect(container.textContent).not.toMatch(/Скачать|Экспорт|скачайте/i);
+  expect(container.textContent).toContain("Скачать личные данные");
+  expect(container.textContent).not.toMatch(/Скачать исходники|Скачать проект|Экспорт проекта/i);
   expect(container.querySelector("a[download], a[href*='/download'], a[href*='/account/export']")).toBeNull();
   expect(container.querySelector("#account-email")?.getAttribute("value")).toBe("fixture@example.invalid");
   expect(container.textContent).toContain("Удалить аккаунт");

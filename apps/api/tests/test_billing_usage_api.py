@@ -20,6 +20,7 @@ import pytest_asyncio
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.account_fixture import register_verified_account
 from tests.test_cell_publication_api import seed as seed_publication
 from yleum_api.core.config import get_settings
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
@@ -36,15 +37,7 @@ pytestmark = pytest.mark.asyncio
 
 
 async def _register(client: httpx.AsyncClient, session: AsyncSession, email: str) -> User:
-    response = await client.post(
-        "/api/auth/register", json={"email": email, "password": "secret123"}
-    )
-    assert response.status_code == 201, response.text
-    cookie_name = get_settings().jwt_cookie_name
-    token = response.cookies.get(cookie_name)
-    assert token
-    client.cookies.clear()
-    client.cookies.set(cookie_name, token)
+    await register_verified_account(client, email, product="max")
     return (await session.execute(select(User).where(User.email == email))).scalar_one()
 
 

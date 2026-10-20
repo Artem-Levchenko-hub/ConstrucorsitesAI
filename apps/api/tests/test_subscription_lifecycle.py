@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.account_fixture import register_verified_account
 from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import (
@@ -35,11 +36,7 @@ async def _registered_billing_context(
     *,
     email: str,
 ) -> tuple[User, BillingAccount, Subscription]:
-    response = await client.post(
-        "/api/auth/register",
-        json={"email": email, "password": "secret123"},
-    )
-    assert response.status_code == 201
+    await register_verified_account(client, email)
     user = (await session.execute(select(User).where(User.email == email))).scalar_one()
     account = (
         await session.execute(

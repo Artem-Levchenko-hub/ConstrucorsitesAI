@@ -2,7 +2,6 @@ from collections.abc import Sequence
 from typing import Any, Literal
 
 from fastapi import Request, status
-from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -228,12 +227,12 @@ async def validation_error_handler(request: Request, exc: Exception) -> JSONResp
     body = ErrorBody(
         code="validation_failed",
         message=_validation_message(request, exc.errors()),
-        details={
-            "errors": jsonable_encoder(
-                exc.errors(),
-                custom_encoder={ValueError: str},
-            )
-        },
+        # Pydantic input, ctx and custom validator messages can contain passwords
+        # or complete rejected bodies. Only stable field/type metadata is public.
+        details={"errors": [
+            {"type": error["type"], "loc": error["loc"]}
+            for error in exc.errors()
+        ]},
     )
     return JSONResponse(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

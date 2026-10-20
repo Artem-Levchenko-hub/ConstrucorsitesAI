@@ -7,7 +7,9 @@ set -euo pipefail
 
 BACKUP_ROOT="${BACKUP_ROOT:-/opt/omnia-runtime/backups}"
 CELLS_SCRIPT="${CELLS_SCRIPT:-/opt/omnia/apps/orchestrator/scripts/backup_cells.py}"
+RUNTIME_BACKUP_SCRIPT="${RUNTIME_BACKUP_SCRIPT:-$(dirname "$0")/runtime-backup.py}"
 CELLS_PYTHON="${CELLS_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
+BACKUP_PYTHON="${BACKUP_PYTHON:-/opt/omnia/apps/orchestrator/.venv/bin/python}"
 [ -x "$CELLS_PYTHON" ] || CELLS_PYTHON="$(command -v python3 || true)"
 ORCHESTRATOR_ENV="${ORCHESTRATOR_ENV:-/opt/omnia/apps/orchestrator/.env}"
 pick_ctr() { local n; for n in "$@"; do docker inspect "$n" >/dev/null 2>&1 && { echo "$n"; return; }; done; echo "$1"; }
@@ -30,9 +32,12 @@ FULLSTACK_ENV="${FULLSTACK_ENV:-/opt/omnia/apps/llm-gateway/deploy/full/.env}"
 USERS_CTR="${USERS_CTR:-omnia-postgres-users}"
 USERS_USER="${USERS_USER:-omnia_root}"
 USERS_DB="${USERS_DB:-omnia_users}"
-PLATFORM_SCRATCH_DB="omnia_restore_test_$$"
-USERS_SCRATCH_DB="omnia_users_restore_test_$$"
-extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/omnia-restore-test.XXXXXX")"
+scratch_nonce="$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+PLATFORM_SCRATCH_DB="omnia_restore_test_${scratch_nonce}"
+USERS_SCRATCH_DB="omnia_users_restore_test_${scratch_nonce}"
+platform_scratch_created=0
+users_scratch_created=0
+extract_dir=""
 
 # Choose by absolute modification time, not the directory text. This remains
 # correct across the one-time migration from legacy VPS-local names to UTC.
@@ -47,12 +52,37 @@ latest="$(
 platform_dump="${latest}/platform-${PLATFORM_DB}.sql.gz"
 users_dump="${latest}/projects-${USERS_DB}.sql.gz"
 encrypted="$(find "$latest" -maxdepth 1 -type f -name 'omnia-backup-*.cms' -print -quit)"
+backup_sha256=""
+if [ -f "$encrypted" ]; then backup_sha256="$(sha256sum "$encrypted" | cut -d' ' -f1)"; fi
+verdict=false
+write_verdict(){
+  python3 - "$BACKUP_ROOT" "$verdict" "$backup_sha256" "$(basename "$latest")" <<'RESTORE_VERDICT'
+import datetime, json, os, pathlib, sys, tempfile
+root, verdict, sha, timestamp = sys.argv[1:]
+fd, temporary = tempfile.mkstemp(prefix=".restore-verdict-", dir=root)
+try:
+    with os.fdopen(fd, "w") as output:
+        json.dump({"ok": verdict == "true", "coverage_complete": verdict == "true",
+                   "scope": "platform-and-project-databases", "backup_sha256": sha,
+                   "verification_source": "local-plaintext-payloads", "ciphertext_restore_verified": False,
+                   "backup_timestamp": timestamp, "source": timestamp,
+                   "tested_at": datetime.datetime.now(datetime.UTC).isoformat()}, output)
+        output.flush(); os.fsync(output.fileno())
+    os.replace(temporary, pathlib.Path(root) / "RESTORE_TEST.json")
+finally:
+    if os.path.exists(temporary): os.unlink(temporary)
+RESTORE_VERDICT
+}
+# A failed recheck must invalidate an earlier success for the same encrypted copy.
+write_verdict
 for required in \
   "$platform_dump" \
   "$users_dump" \
   "${latest}/projects-src.tgz" \
   "${latest}/minio-data.tgz" \
   "${latest}/runtime-config.tgz" \
+  "${latest}/cells.tgz" \
+  "${latest}/peers.tgz" \
   "${latest}/SHA256SUMS" \
   "${latest}/OFFHOST_SHA256" \
   "$encrypted"; do
@@ -95,21 +125,27 @@ platform_live_psql(){
 
 # The verdict is left next to the backups so the off-host status endpoint (and the
 # scheduled workflow that raises the alarm) can see WHEN a restore was last proven.
-verdict=false
 cleanup(){
-  platform_admin_psql -c "DROP DATABASE IF EXISTS \"$PLATFORM_SCRATCH_DB\";" >/dev/null 2>&1 || true
-  docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
-    -c "DROP DATABASE IF EXISTS \"$USERS_SCRATCH_DB\";" >/dev/null 2>&1 || true
-  rm -rf "$extract_dir"
-  printf '{"ok": %s, "tested_at": "%s", "source": "%s"}\n' \
-    "$verdict" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(basename "$latest")" \
-    > "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" 2>/dev/null \
-    && mv -f "${BACKUP_ROOT}/RESTORE_TEST.json.tmp" "${BACKUP_ROOT}/RESTORE_TEST.json" || true
+  if [ "$platform_scratch_created" = 1 ]; then
+    platform_admin_psql -c "DROP DATABASE \"$PLATFORM_SCRATCH_DB\";" >/dev/null 2>&1 || verdict=false
+  fi
+  if [ "$users_scratch_created" = 1 ]; then
+    docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
+      -c "DROP DATABASE \"$USERS_SCRATCH_DB\";" >/dev/null 2>&1 || verdict=false
+  fi
+  [ -z "$extract_dir" ] || rm -rf "$extract_dir"
+  write_verdict
   # The verdict is also published next to the bundles in MinIO: /api/backups/offhost
   # reads it from there first (the host directory is only a fallback).
   if [ -f "${BACKUP_ROOT}/RESTORE_TEST.json" ] && docker inspect "${MINIO_CONTAINER:-$(pick_ctr yleum-prod-minio omnia-prod-minio)}" >/dev/null 2>&1; then
     docker exec -i "${MINIO_CONTAINER:-$(pick_ctr yleum-prod-minio omnia-prod-minio)}" sh -c 'mc alias set l http://127.0.0.1:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" >/dev/null 2>&1 && mc pipe "l/${1}/RESTORE_TEST.json"' sh "${MINIO_BACKUP_BUCKET:-backups}" \
       < "${BACKUP_ROOT}/RESTORE_TEST.json" >/dev/null 2>&1 || echo "[restore-test] MinIO verdict upload failed (host file kept)"
+  fi
+  if [ "$verdict" = true ]; then
+    echo "[restore-test] OK — local database payloads and coverage verified; ciphertext decrypt not tested."
+  else
+    echo "[restore-test] FAIL — verification or owned scratch cleanup is incomplete" >&2
+    exit 1
   fi
 }
 trap cleanup EXIT
@@ -119,6 +155,7 @@ echo "[restore-test] verifying checksums and encrypted envelope..."
 openssl cms -cmsout -inform DER -in "$encrypted" -print >/dev/null
 
 echo "[restore-test] extracting file/object archives to scratch..."
+extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/omnia-restore-test.XXXXXX")"
 tar -xzf "${latest}/projects-src.tgz" -C "$extract_dir"
 mkdir -p "${extract_dir}/minio"
 tar -xzf "${latest}/minio-data.tgz" -C "${extract_dir}/minio"
@@ -134,6 +171,7 @@ source_files=$(find "$extract_dir" -type f | wc -l | tr -d '[:space:]')
 [ "${source_files:-0}" -ge 1 ] || { echo "[restore-test] archives restored 0 files"; exit 1; }
 
 platform_admin_psql -c "CREATE DATABASE \"$PLATFORM_SCRATCH_DB\";" >/dev/null
+platform_scratch_created=1
 gunzip -c "$platform_dump" | platform_scratch_psql -v ON_ERROR_STOP=1 -q \
   >/tmp/omnia-platform-restore-test.log 2>&1
 platform_tables=$(platform_scratch_psql -tAc \
@@ -141,6 +179,7 @@ platform_tables=$(platform_scratch_psql -tAc \
 
 docker exec "$USERS_CTR" psql -U "$USERS_USER" -d postgres \
   -c "CREATE DATABASE \"$USERS_SCRATCH_DB\";" >/dev/null
+users_scratch_created=1
 gunzip -c "$users_dump" | docker exec -i "$USERS_CTR" psql \
   -v ON_ERROR_STOP=1 -U "$USERS_USER" -d "$USERS_SCRATCH_DB" -q \
   >/tmp/omnia-users-restore-test.log 2>&1
@@ -174,7 +213,6 @@ echo "[restore-test] extracted files: ${source_files:-0}"
 # The owners' MAX apps live in Project Cell databases, not in the two above. Their
 # dumps are restored into throwaway PostgreSQL instances by the same tool that took
 # them; live cells are never touched.
-cells_note="not in this backup"
 if [ -f "${latest}/cells.tgz" ]; then
   mkdir -p "${extract_dir}/cells"
   tar -xzf "${latest}/cells.tgz" -C "${extract_dir}/cells"
@@ -189,18 +227,23 @@ if [ -f "${latest}/cells.tgz" ]; then
         [ -n "$value" ] && export "${name}=${value}"
       fi
     done
+    [ -f "$RUNTIME_BACKUP_SCRIPT" ] || { echo "[restore-test] runtime coverage verifier missing"; exit 1; }
+    mkdir -p "${extract_dir}/peers"
+    tar -xzf "${latest}/peers.tgz" -C "${extract_dir}/peers"
     cells_status=0
-    "$CELLS_PYTHON" "$CELLS_SCRIPT" verify --backup "$cells_dir" || cells_status=$?
+    "$BACKUP_PYTHON" "$RUNTIME_BACKUP_SCRIPT" verify --cells-script "$CELLS_SCRIPT" \
+      --core-cells "$cells_dir" --peers "${extract_dir}/peers" \
+      --postgres-image "$CELL_POSTGRES_IMAGE" || cells_status=$?
     case "$cells_status" in
       0) cells_note="restored" ;;
-      2) cells_note="restored, partial source backup" ;;
       *) echo "[restore-test] FAIL — Project Cell dumps are not restorable"; exit 1 ;;
     esac
   else
-    cells_note="archive present, verifier missing"
+    echo "[restore-test] FAIL — required database verifier missing"; exit 1
   fi
+else
+  echo "[restore-test] FAIL — required database archive missing"; exit 1
 fi
 echo "[restore-test] Project Cell databases: ${cells_note}"
 
 verdict=true
-echo "[restore-test] OK — databases, Project Cells, runtime config, project sources and MinIO objects are restorable."

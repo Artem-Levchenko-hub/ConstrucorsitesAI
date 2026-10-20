@@ -14,6 +14,7 @@ import type {
   Message,
   ProjectVersion,
   RuntimeStatus,
+  Snapshot,
 } from "@/lib/api/types";
 
 const createMaxPreviewSession = vi.fn<
@@ -27,6 +28,7 @@ const startRuntime = vi.fn<(projectId: string) => Promise<RuntimeStatus>>();
 const toastError = vi.fn();
 const listMessages = vi.fn<(projectId: string) => Promise<Message[]>>();
 const getLatestGeneration = vi.fn<(projectId: string) => Promise<GenerationRun | null>>();
+const listSnapshots = vi.fn<(projectId: string) => Promise<Snapshot[]>>();
 
 vi.mock("@/lib/api/messages", () => ({
   listMessages: (projectId: string) => listMessages(projectId),
@@ -45,7 +47,7 @@ vi.mock("@/lib/api/runtime", () => ({
 }));
 
 vi.mock("@/lib/api/snapshots", () => ({
-  listSnapshots: async () => [],
+  listSnapshots: (projectId: string) => listSnapshots(projectId),
   listProjectVersions: async () => ({ versions: [], next_cursor: null }),
 }));
 
@@ -248,6 +250,7 @@ describe("MAX live preview recovery", () => {
     startRuntime.mockResolvedValue(runtime());
     listMessages.mockResolvedValue([]);
     getLatestGeneration.mockResolvedValue(null);
+    listSnapshots.mockResolvedValue([]);
     queryClient = new QueryClient({
       defaultOptions: {
         queries: {
@@ -273,6 +276,7 @@ describe("MAX live preview recovery", () => {
     vi.useRealTimers();
     vi.resetAllMocks();
     vi.restoreAllMocks();
+    localStorage.removeItem("preview-counter");
   });
 
   function renderPreview(
@@ -366,6 +370,238 @@ describe("MAX live preview recovery", () => {
       .toContain("Готовая версия приложения пока не подтверждена.");
   });
 
+  it("activates the confirmed version once after earlier preparation of the same snapshot", async () => {
+    const running: GenerationRun = {
+      id: "finishing", project_id: PROJECT.id, assistant_message_id: "finishing-message",
+      status: "running", response_mode: "build", created_at: "2026-10-20T10:00:00Z",
+      started_at: "2026-10-20T10:00:00Z", finished_at: null,
+    };
+    const accepted: GenerationRun = {
+      ...running, status: "completed", finished_at: "2026-10-20T10:15:00Z",
+      acceptance: { run_id: running.id, assistant_message_id: running.assistant_message_id,
+        snapshot_id: "snapshot-1", accepted_at: null, current_request_complete: true },
+    };
+    getLatestGeneration.mockResolvedValue(running);
+    queryClient.setQueryData(["generation", PROJECT.id], running);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    // The service may return the same renewable owner-session URL. A new
+    // accepted document still needs one navigation; never add a cache-buster.
+    createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
+    renderPreview("snapshot-1");
+    const initial = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => initial.dispatchEvent(new Event("load")));
+    const initialSessions = createMaxPreviewSession.mock.calls.length;
+    const nextSync = deferred<MaxProjectConfig>();
+    syncMaxManagedKit.mockImplementationOnce(() => nextSync.promise);
+    localStorage.setItem("preview-counter", "1");
+    const draft = document.createElement("textarea");
+    draft.value = "Моя ещё не отправленная правка";
+    container.prepend(draft);
+
+    getLatestGeneration.mockResolvedValue(accepted);
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    await waitForValue(() => syncMaxManagedKit.mock.calls.length === 2);
+    expect(container.querySelector("iframe")).toBe(initial);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(initialSessions);
+    nextSync.resolve(managedKit("snapshot-1"));
+    const refreshed = await waitForValue(() => {
+      const frame = container.querySelector<HTMLIFrameElement>("iframe");
+      return frame && frame !== initial ? frame : null;
+    });
+    expect(refreshed.getAttribute("src")).toBe("https://preview-1.example");
+    act(() => refreshed.dispatchEvent(new Event("load")));
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(initialSessions + 1);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(localStorage.getItem("preview-counter")).toBe("1");
+    expect(draft.value).toBe("Моя ещё не отправленная правка");
+    expect(draft.isConnected).toBe(true);
+
+    // Polling the accepted receipt, or starting another request against this
+    // version, must not repeatedly reset the user's current iframe.
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], { ...accepted }));
+    await flushPromises();
+    expect(container.querySelector("iframe")).toBe(refreshed);
+    getLatestGeneration.mockResolvedValue({ ...running, id: "next-request" });
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], { ...running, id: "next-request" }));
+    await flushPromises();
+    expect(container.querySelector("iframe")).toBe(refreshed);
+    expect(createMaxPreviewSession).toHaveBeenCalledTimes(initialSessions + 1);
+    expect(syncMaxManagedKit).toHaveBeenCalledTimes(2);
+    localStorage.removeItem("preview-counter");
+    draft.remove();
+  });
+
+  it("recovers a missed snapshot event from exact accepted generation without reloading the editor", async () => {
+    const running: GenerationRun = {
+      id: "missed-event", project_id: PROJECT.id, assistant_message_id: "built-message",
+      status: "running", response_mode: "build", created_at: "2026-10-20T10:00:00Z",
+      started_at: "2026-10-20T10:00:00Z", finished_at: null,
+    };
+    getLatestGeneration.mockResolvedValue(running);
+    queryClient.setQueryData(["generation", PROJECT.id], running);
+    listSnapshots.mockResolvedValue([{ id: "snapshot-1" } as Snapshot]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://starting.example"));
+    act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
+    const initial = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+    act(() => initial.dispatchEvent(new Event("load")));
+    listSnapshots.mockResolvedValue([{ id: "snapshot-2" } as Snapshot]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-2"));
+    createMaxPreviewSession.mockResolvedValue(session("https://finished.example"));
+    const accepted: GenerationRun = { ...running, status: "completed", finished_at: "2026-10-20T10:15:00Z",
+      acceptance: { run_id: running.id, assistant_message_id: running.assistant_message_id,
+        snapshot_id: "snapshot-2", accepted_at: null, current_request_complete: true } };
+    getLatestGeneration.mockResolvedValue(accepted);
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    const ready = await waitForValue(() => {
+      const frame = container.querySelector<HTMLIFrameElement>("iframe");
+      return frame?.getAttribute("src") === "https://finished.example" ? frame : null;
+    });
+    expect(ready).not.toBe(initial);
+    expect(listSnapshots).toHaveBeenCalledTimes(2);
+    expect(startRuntime).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("Показана сохранённая версия. Текущий запрос завершён.");
+  });
+
+  it("refreshes HEAD after an accepted result arrives during the first snapshot request", async () => {
+    const firstSnapshots = deferred<Snapshot[]>();
+    listSnapshots.mockImplementationOnce(() => firstSnapshots.promise)
+      .mockResolvedValue([{ id: "snapshot-2" } as Snapshot]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://starting.example"));
+    act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
+    await waitForValue(() => listSnapshots.mock.calls.length === 1);
+
+    const accepted: GenerationRun = {
+      id: "accepted-during-first-fetch", project_id: PROJECT.id, assistant_message_id: "built-message",
+      status: "completed", response_mode: "build", created_at: "2026-10-20T10:00:00Z",
+      started_at: "2026-10-20T10:00:00Z", finished_at: "2026-10-20T10:15:00Z",
+      acceptance: { run_id: "accepted-during-first-fetch", assistant_message_id: "built-message",
+        snapshot_id: "snapshot-2", accepted_at: null, current_request_complete: true },
+    };
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-2"));
+    createMaxPreviewSession.mockResolvedValue(session("https://finished.example"));
+    getLatestGeneration.mockResolvedValue(accepted);
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    await flushPromises();
+    // The first request captured the starter before the accepted result existed.
+    // Joining its retryer is insufficient: its response must be followed by a
+    // fresh read, even though the fallback and returned HEAD are both S1.
+    expect(listSnapshots).toHaveBeenCalledTimes(1);
+    firstSnapshots.resolve([{ id: "snapshot-1" } as Snapshot]);
+    await waitForValue(() => queryClient.getQueryData<Snapshot[]>(["snapshots", PROJECT.id])?.[0].id === "snapshot-2");
+    const ready = await waitForValue(() => {
+      const frame = container.querySelector<HTMLIFrameElement>("iframe");
+      return frame?.getAttribute("src") === "https://finished.example" ? frame : null;
+    });
+    expect(ready).not.toBeNull();
+    await flushPromises();
+    expect(listSnapshots).toHaveBeenCalledTimes(2);
+    expect(startRuntime).not.toHaveBeenCalled();
+  });
+
+  it("bounds receipt-driven HEAD refreshes when the server still returns a stale snapshot", async () => {
+    listSnapshots.mockResolvedValue([{ id: "snapshot-1" } as Snapshot]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://starting.example"));
+    act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
+    await waitForValue(() => queryClient.getQueryState(["snapshots", PROJECT.id])?.status === "success");
+    const accepted: GenerationRun = {
+      id: "accepted-with-stale-head", project_id: PROJECT.id, assistant_message_id: "built-message",
+      status: "completed", response_mode: "build", created_at: "2026-10-20T10:00:00Z",
+      started_at: "2026-10-20T10:00:00Z", finished_at: "2026-10-20T10:15:00Z",
+      acceptance: { run_id: "accepted-with-stale-head", assistant_message_id: "built-message",
+        snapshot_id: "snapshot-2", accepted_at: null, current_request_complete: true },
+    };
+    getLatestGeneration.mockResolvedValue(accepted);
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    await waitForValue(() => listSnapshots.mock.calls.length === 2
+      && queryClient.getQueryState(["snapshots", PROJECT.id])?.fetchStatus === "idle");
+    expect(queryClient.getQueryData<Snapshot[]>(["snapshots", PROJECT.id])?.[0].id).toBe("snapshot-1");
+
+    // Another observer may refresh the stale cache. Neither that settled fetch
+    // nor a repeat of the same receipt may create a self-sustaining fetch loop.
+    await act(async () => { await queryClient.invalidateQueries({ queryKey: ["snapshots", PROJECT.id] }); });
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], { ...accepted }));
+    await flushPromises();
+    expect(listSnapshots).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not refresh the previous project when its first snapshot request settles after navigation", async () => {
+    const firstSnapshots = deferred<Snapshot[]>();
+    const other = { ...PROJECT, id: "another-project", current_snapshot_id: "other-snapshot" };
+    listSnapshots.mockImplementation(projectId => projectId === PROJECT.id
+      ? firstSnapshots.promise : Promise.resolve([{ id: "other-snapshot" } as Snapshot]));
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://starting.example"));
+    act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
+    await waitForValue(() => listSnapshots.mock.calls.length === 1);
+    const accepted: GenerationRun = {
+      id: "previous-project-result", project_id: PROJECT.id, assistant_message_id: "built-message",
+      status: "completed", response_mode: "build", created_at: "2026-10-20T10:00:00Z",
+      started_at: "2026-10-20T10:00:00Z", finished_at: "2026-10-20T10:15:00Z",
+      acceptance: { run_id: "previous-project-result", assistant_message_id: "built-message",
+        snapshot_id: "snapshot-2", accepted_at: null, current_request_complete: true },
+    };
+    getLatestGeneration.mockImplementation(projectId => Promise.resolve(projectId === PROJECT.id ? accepted : null));
+    act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    await flushPromises();
+    act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={other} /></QueryClientProvider>));
+    await waitForValue(() => queryClient.getQueryData<Snapshot[]>(["snapshots", other.id])?.[0].id === "other-snapshot");
+    firstSnapshots.resolve([{ id: "snapshot-1" } as Snapshot]);
+    await flushPromises();
+    expect(listSnapshots.mock.calls.filter(([projectId]) => projectId === PROJECT.id)).toHaveLength(1);
+    expect(listSnapshots.mock.calls.filter(([projectId]) => projectId === other.id)).toHaveLength(1);
+    expect(queryClient.getQueryData<Snapshot[]>(["snapshots", other.id])?.[0].id).toBe("other-snapshot");
+    expect(container.querySelector<HTMLAnchorElement>("header a")?.getAttribute("href")).toBe(`/max/${other.id}`);
+  });
+
+  it.each(["unconfirmed", "foreign"] as const)("does not refetch HEAD from %s generation metadata", async condition => {
+    const run: GenerationRun = { id: "not-current", project_id: condition === "foreign" ? "another-project" : PROJECT.id,
+      assistant_message_id: "m", status: "completed", response_mode: "build",
+      created_at: "2026-10-20T10:00:00Z", started_at: "2026-10-20T10:00:00Z", finished_at: "2026-10-20T10:15:00Z",
+      acceptance: { run_id: "not-current", assistant_message_id: "m", snapshot_id: "new-head",
+        accepted_at: null, current_request_complete: condition === "foreign" } };
+    getLatestGeneration.mockResolvedValue(run);
+    queryClient.setQueryData(["generation", PROJECT.id], run);
+    listSnapshots.mockResolvedValue([{ id: "snapshot-1" } as Snapshot]);
+    syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+    createMaxPreviewSession.mockResolvedValue(session("https://working.example"));
+    act(() => root.render(<QueryClientProvider client={queryClient}><MaxOwnerPreviewPage project={PROJECT} /></QueryClientProvider>));
+    await waitForValue(() => container.querySelector("iframe"));
+    await flushPromises();
+    expect(listSnapshots).toHaveBeenCalledTimes(1);
+    expect(queryClient.getQueryData<Snapshot[]>(["snapshots", PROJECT.id])?.[0].id).toBe("snapshot-1");
+  });
+
+  it.each(["running", "completed", "failed", "cancelled"] as const)(
+    "does not activate a new document from an unconfirmed %s result", async status => {
+      const current: GenerationRun = {
+        id: "unconfirmed", project_id: PROJECT.id, assistant_message_id: "unconfirmed-message",
+        status: "running", response_mode: "edit", created_at: "2026-10-20T10:00:00Z",
+        started_at: "2026-10-20T10:00:00Z", finished_at: null,
+      };
+      getLatestGeneration.mockResolvedValue(current);
+      queryClient.setQueryData(["generation", PROJECT.id], current);
+      syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
+      createMaxPreviewSession.mockResolvedValue(session("https://working.example"));
+      renderPreview("snapshot-1", { versions: [{ ...buildVersion("ready"), snapshot_id: "snapshot-1" }] });
+      const frame = await waitForValue(() => container.querySelector<HTMLIFrameElement>("iframe"));
+      act(() => frame.dispatchEvent(new Event("load")));
+      const unconfirmed: GenerationRun = { ...current, status, finished_at: "2026-10-20T10:15:00Z",
+        acceptance: { run_id: current.id, assistant_message_id: current.assistant_message_id,
+          snapshot_id: "snapshot-1", accepted_at: null, current_request_complete: status !== "completed" } };
+      getLatestGeneration.mockResolvedValue(unconfirmed);
+      act(() => queryClient.setQueryData(["generation", PROJECT.id], unconfirmed));
+      await flushPromises();
+      expect(container.querySelector("iframe")).toBe(frame);
+      expect(syncMaxManagedKit).toHaveBeenCalledTimes(1);
+      expect(createMaxPreviewSession).toHaveBeenCalledTimes(1);
+      expect(startRuntime).not.toHaveBeenCalled();
+      expect(container.textContent).not.toContain("Текущий запрос завершён.");
+    },
+  );
+
   async function readySeparatePreview() {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     createMaxPreviewSession.mockResolvedValue(session("https://preview-1.example"));
@@ -446,7 +682,7 @@ describe("MAX live preview recovery", () => {
     expect(createMaxPreviewSession).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["snapshot", "project", "unmount"] as const)("does not publish a late main-frame capability after %s retires its activity", async (change) => {
+  it.each(["snapshot", "project", "acceptance", "unmount"] as const)("does not publish a late main-frame capability after %s retires its activity", async (change) => {
     syncMaxManagedKit.mockResolvedValue(managedKit("snapshot-1"));
     const pendingSession = deferred<MaxPreviewSession>();
     createMaxPreviewSession.mockImplementationOnce(() => pendingSession.promise);
@@ -455,6 +691,14 @@ describe("MAX live preview recovery", () => {
     createMaxPreviewSession.mockResolvedValue(session("https://current.example"));
     if (change === "snapshot") renderPreview("snapshot-2");
     if (change === "project") renderPreview("snapshot-2", { project: { ...PROJECT, id: "other-project" } });
+    if (change === "acceptance") {
+      const accepted: GenerationRun = { id: "confirmed", project_id: PROJECT.id, assistant_message_id: "m",
+        status: "completed", response_mode: "build", created_at: "2026-10-20T10:00:00Z",
+        started_at: "2026-10-20T10:00:00Z", finished_at: "2026-10-20T10:15:00Z", acceptance: { run_id: "confirmed", assistant_message_id: "m",
+          snapshot_id: "snapshot-1", accepted_at: null, current_request_complete: true } };
+      getLatestGeneration.mockResolvedValue(accepted);
+      act(() => queryClient.setQueryData(["generation", PROJECT.id], accepted));
+    }
     if (change === "unmount") act(() => root.render(<div />));
     pendingSession.resolve(session("https://retired.example"));
     await flushPromises();

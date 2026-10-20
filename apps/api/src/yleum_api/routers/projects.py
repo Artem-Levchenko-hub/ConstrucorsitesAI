@@ -82,7 +82,7 @@ async def create_project(
             "Для Yleum нужна регистрация",
             status.HTTP_403_FORBIDDEN,
         )
-    require_max_studio_access(current_user)
+    await require_max_studio_access(session, current_user)
     # Plan limit on the number of apps (402 `entitlement_exceeded` when full).
     await assert_can_create_project(session, current_user.id)
     owner = current_user

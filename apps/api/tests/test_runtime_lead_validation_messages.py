@@ -116,7 +116,7 @@ def rendered_error(path, errors, method="POST", trusted=True):
         ("buyer_name", "string_type", "Имя покупателя должно быть текстом."),
     ],
 )
-def test_details_are_unchanged_and_message_never_echoes_input_msg_or_context(field, kind, message):
+def test_public_details_and_message_never_echo_input_msg_or_context(field, kind, message):
     operation = "orders" if field == "buyer_name" else "leads"
     errors = [
         {
@@ -129,8 +129,11 @@ def test_details_are_unchanged_and_message_never_echoes_input_msg_or_context(fie
     ]
     response, body = rendered_error(PREFIX + "/" + operation, errors)
     assert response.status_code == 422
-    assert body == {"code": "validation_failed", "message": message, "details": {"errors": errors}}
-    assert "QA_PRIVATE" not in body["message"]
+    assert body == {
+        "code": "validation_failed", "message": message,
+        "details": {"errors": [{"loc": ["body", field], "type": kind}]},
+    }
+    assert "QA_PRIVATE" not in json.dumps(body)
 
 
 @pytest.mark.parametrize(

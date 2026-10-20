@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from tests.account_fixture import register_verified_account
 from yleum_api.models.project import Project
 from yleum_api.routers import projects as projects_router
 from yleum_api.services import max_client, orchestrator_client
@@ -37,11 +38,7 @@ async def _register_and_create(
     monkeypatch.setattr(
         orchestrator_client, "configure_published_cell", fake_configure_published_cell
     )
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": f"{template}@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
+    await register_verified_account(client, f"{template}@example.com", product="max")
     created = await client.post(
         "/api/projects",
         json={"name": "MAX loyalty", "template": "max_miniapp"},

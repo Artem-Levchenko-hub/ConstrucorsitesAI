@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "nodes": [
+    {"name": "core", "provider": "docker", "state_root": "/opt/omnia-runtime/state"},
+    {"name": "commerce", "provider": "docker", "ssh_alias": "commerce", "state_root": "/opt/omnia-runtime/state"},
+    {"name": "runtime", "provider": "kubernetes", "ssh_alias": "runtime", "kubectl": "/usr/local/bin/kubectl", "context": "default"}
+  ]
+}

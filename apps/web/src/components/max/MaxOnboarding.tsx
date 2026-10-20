@@ -11,10 +11,12 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import {
+  acceptMaxDocuments,
   getMaxAccess,
   resendVerification,
   verifyEmailCode,
@@ -40,10 +42,16 @@ export function MaxOnboarding({ email }: { email: string }) {
   });
 
   useEffect(() => {
-    if (access.data?.email_verified) {
+    if (access.data?.can_create_project) {
       router.replace("/max");
     }
-  }, [access.data?.email_verified, router]);
+  }, [access.data?.can_create_project, router]);
+
+  const acceptDocuments = useMutation({
+    mutationFn: acceptMaxDocuments,
+    onSuccess: () => access.refetch(),
+    onError: () => access.refetch(),
+  });
 
   const resend = useMutation({
     mutationFn: resendVerification,
@@ -95,8 +103,8 @@ export function MaxOnboarding({ email }: { email: string }) {
               Подготовим доступ к Yleum
             </h1>
             <p className="mt-3 text-sm text-fg-secondary">
-              Нужен только подтверждённый email. Остальное настроите уже внутри
-              студии и MAX Partner.
+              Подтвердите email и примите документы Yleum. Остальное настроите
+              уже внутри студии и MAX Partner.
             </p>
           </div>
           <span className="text-sm text-fg-tertiary">Шаг {step} из 2</span>
@@ -105,7 +113,7 @@ export function MaxOnboarding({ email }: { email: string }) {
         <div className="mt-8 grid gap-3 sm:grid-cols-2">
           {[
             [MailCheck, "Email", data?.email_verified],
-            [ArrowRight, "Yleum", data?.email_verified],
+            [ArrowRight, "Yleum", data?.can_create_project],
           ].map(([Icon, label, complete], index) => {
             const ItemIcon = Icon as typeof MailCheck;
             return (
@@ -214,7 +222,51 @@ export function MaxOnboarding({ email }: { email: string }) {
           </section>
         )}
 
-        {data?.email_verified && (
+        {data?.reason === "legal_acceptance_required" && (
+          <section className="mt-8 rounded-[12px] border border-border-default bg-surface p-6 sm:p-8">
+            <h2 className="text-2xl font-semibold">Документы Yleum</h2>
+            <p className="mt-2 text-sm leading-6 text-fg-secondary">
+              Перед созданием приложения примите действующие документы.
+            </p>
+            <form
+              key={data.legal_document_version}
+              className="mt-6 space-y-4 text-sm"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (acceptDocuments.isPending || !event.currentTarget.reportValidity()) return;
+                const form = new FormData(event.currentTarget);
+                acceptDocuments.mutate({
+                  terms_accepted: form.get("terms_accepted") === "on",
+                  privacy_accepted: form.get("privacy_accepted") === "on",
+                  personal_data_accepted: form.get("personal_data_accepted") === "on",
+                  document_version: data.legal_document_version,
+                });
+              }}
+            >
+              {[
+                ["terms_accepted", "/legal/terms", "Принимаю условия использования"],
+                ["privacy_accepted", "/legal/privacy", "Ознакомлен с политикой конфиденциальности"],
+                ["personal_data_accepted", "/legal/personal-data", "Даю согласие на обработку персональных данных"],
+              ].map(([name, href, label]) => (
+                <label key={name} className="flex cursor-pointer items-start gap-3">
+                  <input name={name} type="checkbox" required className="mt-1 size-4 accent-[#0062ee]" />
+                  <Link href={href} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+                    {label}
+                  </Link>
+                </label>
+              ))}
+              {acceptDocuments.error && (
+                <p role="alert" className="text-warning">{errorMessage(acceptDocuments.error)}</p>
+              )}
+              <Button type="submit" disabled={acceptDocuments.isPending} className="h-12 bg-accent text-fg-on-accent">
+                {acceptDocuments.isPending && <Loader2 className="mr-2 size-4 animate-spin" />}
+                Принять документы и продолжить
+              </Button>
+            </form>
+          </section>
+        )}
+
+        {data?.can_create_project && (
           <section className="mt-8 rounded-[12px] border border-border-default bg-surface p-6 sm:p-8">
             <div className="flex size-11 items-center justify-center rounded-[10px] bg-success/10 text-success-fg">
               <Check className="size-5" />

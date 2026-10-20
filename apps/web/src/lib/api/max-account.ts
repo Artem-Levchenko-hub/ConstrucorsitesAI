@@ -1,7 +1,7 @@
 import { apiFetch } from "./client";
 import { USE_MOCKS } from "./mocks";
 
-/** An account is an email and a password; only the email needs confirming. */
+/** New MAX projects require email proof and explicit current legal acceptances. */
 export type MaxAccess = {
   authenticated: boolean;
   email_verified: boolean;
@@ -25,6 +25,21 @@ export function getMaxAccess(): Promise<MaxAccess> {
     });
   }
   return apiFetch<MaxAccess>("/api/max/account/access");
+}
+
+export type MaxLegalAcceptance = {
+  terms_accepted: boolean;
+  privacy_accepted: boolean;
+  personal_data_accepted: boolean;
+  document_version: string;
+};
+
+export function acceptMaxDocuments(payload: MaxLegalAcceptance): Promise<{ accepted: boolean }> {
+  if (USE_MOCKS) return Promise.resolve({ accepted: true });
+  return apiFetch<{ accepted: boolean }>("/api/max/account/acceptances", {
+    method: "POST",
+    json: payload,
+  });
 }
 
 export function resendVerification(): Promise<{ accepted: boolean }> {

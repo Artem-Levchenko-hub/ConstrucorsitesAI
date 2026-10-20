@@ -12,7 +12,7 @@ import pytest
 from pydantic import SecretStr
 from sqlalchemy import select
 
-from yleum_api.core.config import get_settings
+from tests.account_fixture import register_verified_account
 from yleum_api.core.crypto import decrypt_strong, encrypt_strong
 from yleum_api.models.app_integration import (
     AccountIntegration,
@@ -35,20 +35,7 @@ async def _register_and_create(
         return None
 
     monkeypatch.setattr(projects_router, "publish_event", fake_publish)
-    registered = await client.post(
-        "/api/auth/register",
-        json={"email": "integrations@example.com", "password": "secret123"},
-    )
-    assert registered.status_code == 201
-    # The production image correctly marks the cookie Secure, while ASGITransport
-    # uses http://testserver. Reinsert the same signed token as a transport-local
-    # cookie so this API test is independent of the deployment cookie policy.
-    cookie_name = get_settings().jwt_cookie_name
-    session_cookie = registered.cookies.get(cookie_name)
-    assert session_cookie
-    client.cookies.clear()
-    client.cookies.set(cookie_name, session_cookie)
-    # An account is an email and a password: no requisites before integrations.
+    await register_verified_account(client, "integrations@example.com", product="max")
     created = await client.post(
         "/api/projects",
         json={"name": "MAX storefront", "template": "max_miniapp"},

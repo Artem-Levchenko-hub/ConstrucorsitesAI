@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import os
 import stat
+import subprocess
 import tarfile
 from collections.abc import Mapping, Sequence
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -26,6 +28,7 @@ RESTORED = "33333333-3333-4333-8333-333333333333"
 GENERATING = "44444444-4444-4444-8444-444444444444"
 PROJECT = "99999999-9999-4999-8999-999999999999"
 OWNER = "88888888-8888-4888-8888-888888888888"
+RETIRED_PROJECT = "77777777-7777-4777-8777-777777777777"
 
 CORE_PASSWORD = "core-secret-do-not-leak-0123456789"
 PROJECT_PASSWORD = "project-secret-do-not-leak-98765"
@@ -60,12 +63,15 @@ class FakeRunner:
         self.envs: list[dict[str, str]] = []
         self.stdins: list[Path | None] = []
         self.volumes: list[str] = []
+        self.containers: set[str] = set()
         self.holders: dict[str, list[str]] = {}
         self.table_count = 7
         self.dump_payload = b"PGDMP fake dump payload\n"
         self.dump_exit = 0
         self.dump_stderr = b""
         self.fail_tokens: set[str] = set()
+        self.volume_records: dict[str, dict[str, Any]] = {}
+        self.container_records: dict[str, dict[str, Any]] = {}
 
     # -- helpers used by the assertions ------------------------------------ #
 
@@ -98,8 +104,42 @@ class FakeRunner:
         assert timeout > 0, "every docker call must carry an explicit timeout"
         if self._failed(argv):
             return CommandResult(argv, 1, b"", b"scripted failure")
+        if args[0] == "run" and "--name" in args:
+            self.containers.add(args[args.index("--name") + 1])
+        if args[0] == "rm":
+            self.containers.discard(args[-1])
+        if tuple(args[:2]) == ("volume", "create"):
+            self.volumes.append(args[-1])
+        if tuple(args[:2]) == ("volume", "rm") and args[-1] in self.volumes:
+            self.volumes.remove(args[-1])
+        if tuple(args[:2]) == ("container", "ls"):
+            return CommandResult(argv, 0, "\n".join(sorted(self.containers)).encode(), b"")
         if tuple(args[:2]) == ("volume", "ls"):
             return CommandResult(argv, 0, ("\n".join(self.volumes) + "\n").encode(), b"")
+        if tuple(args[:2]) == ("volume", "inspect"):
+            names = args[args.index("--format") + 2 :]
+            rows = [
+                self.volume_records.get(
+                    name,
+                    {
+                        "name": name,
+                        "labels": {},
+                        "mountpoint": str(Path(__file__).parent.resolve()),
+                    },
+                )
+                for name in names
+            ]
+            return CommandResult(argv, 0, "\n".join(json.dumps(row) for row in rows).encode(), b"")
+        if tuple(args[:2]) == ("ps", "--all"):
+            return CommandResult(argv, 0, "\n".join(self.container_records).encode(), b"")
+        if tuple(args[:3]) == ("inspect", "--type", "container"):
+            ids = args[args.index("--format") + 2 :]
+            return CommandResult(
+                argv,
+                0,
+                "\n".join(json.dumps(self.container_records[item]) for item in ids).encode(),
+                b"",
+            )
         if args[0] == "ps":
             volume = next(item for item in args if item.startswith("volume=")).removeprefix(
                 "volume="
@@ -270,7 +310,6 @@ def _all_volumes() -> list[str]:
         f"omnia-machine-{_hex(EDITOR)}-data-omnia-pnpm-store",
         f"omnia-machine-{_hex(EDITOR)}-data-omnia-corepack",
         f"omnia-machine-{_hex(EDITOR)}-data-omnia-next-{'e' * 24}",
-        f"omnia-cell-{'f' * 32}-postgres",
     ]
 
 
@@ -351,6 +390,7 @@ def test_enumeration_covers_published_production_cells_and_reports_orphans(
     state_root: Path, tmp_path: Path
 ) -> None:
     runner = _runner()
+    runner.volumes.append(f"omnia-cell-{'f' * 32}-postgres")
     _backup(state_root, tmp_path / "out", runner)
     manifest = _manifest(tmp_path / "out")
 
@@ -365,6 +405,797 @@ def test_enumeration_covers_published_production_cells_and_reports_orphans(
     caches = [item for item in manifest["orphans"] if "corepack" in str(item.get("volume"))]
     assert caches == [], "rebuildable caches must not be reported or archived"
     _assert_only_scratch_touched(runner)
+
+
+def test_unknown_retained_volume_prevents_complete_backup(state_root: Path, tmp_path: Path) -> None:
+    _settle_generating_cell(state_root)
+    runner = _runner()
+    runner.volumes.append(f"omnia-cell-{'f' * 32}-postgres")
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert _verify(tmp_path / "out", FakeRunner()) == 2
+
+
+def test_missing_active_database_is_not_hidden_as_an_inactive_copy(
+    state_root: Path, tmp_path: Path
+) -> None:
+    _settle_generating_cell(state_root)
+    runner = _runner()
+    runner.volumes.remove(f"omnia-machine-{_hex(RESTORED)}-db-{'c' * 32}")
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert any(
+        item["reason"] == "active_database_volume_missing"
+        for item in _manifest(tmp_path / "out")["orphans"]
+    )
+
+
+def test_corrupt_active_database_registry_cannot_fall_back_to_legacy_volume(
+    state_root: Path, tmp_path: Path
+) -> None:
+    metadata = state_root / "project-machines" / RESTORED / "docker.json"
+    metadata.write_text('{"active_database_volume":"first","active_database_volume":"second"}')
+    assert _backup(state_root, tmp_path / "out", _runner()) == 1
+
+
+def test_declared_retained_core_volume_missing_prevents_complete_backup(
+    state_root: Path, tmp_path: Path,
+) -> None:
+    _settle_generating_cell(state_root)
+    runner = _runner()
+    runner.volumes.remove(core_volume(EDITOR))
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert {
+        "workspace_id": EDITOR, "volume": core_volume(EDITOR),
+        "reason": "declared_core_volume_missing",
+    } in _manifest(tmp_path / "out")["coverage"]["issues"]
+
+
+@pytest.mark.parametrize("metadata", [
+    {"project_database_role_protocol": 1}, {"manifest": {"version": 1}},
+])
+def test_materialized_project_database_missing_prevents_complete_backup(
+    state_root: Path, tmp_path: Path, metadata: dict[str, Any],
+) -> None:
+    _settle_generating_cell(state_root)
+    _write_json(state_root / "project-machines" / EDITOR / "docker.json", metadata)
+    runner = _runner()
+    runner.volumes.remove(project_volume(EDITOR))
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert {
+        "workspace_id": EDITOR, "volume": project_volume(EDITOR),
+        "reason": "active_database_volume_missing",
+    } in _manifest(tmp_path / "out")["coverage"]["issues"]
+
+
+def test_pre_materialization_core_only_cell_remains_complete(
+    state_root: Path, tmp_path: Path
+) -> None:
+    _settle_generating_cell(state_root)
+    runner = _runner()
+    # GENERATING has only its declared core database and no machine materialization record.
+    assert project_volume(GENERATING) not in runner.volumes
+    assert _backup(state_root, tmp_path / "out", runner) == 0
+    assert [entry["kind"] for entry in _workspace(
+        _manifest(tmp_path / "out"), GENERATING,
+    )["databases"]] == ["core"]
+
+
+def _terminal_destroy(root: Path, workspace_id: str, *, stale_lease: bool = False) -> Path:
+    payload = _workspace_payload(workspace_id)
+    workspace = payload["workspace"]
+    workspace["project_id"] = RETIRED_PROJECT
+    operation = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    generation = "55555555-5555-4555-8555-555555555555"
+    workspace["last_operation_id"] = operation
+    workspace["operations"] = [
+        {
+            "operation_id": operation,
+            "kind": "destroy",
+            "status": "completed",
+            "phase": "completed",
+            "fencing_epoch": 4,
+            "generation_run_id": None,
+        }
+    ]
+    if stale_lease:
+        workspace["active_generation_run_id"] = generation
+        workspace["active_generation_fencing_epoch"] = 3
+        workspace["operations"].insert(
+            0,
+            {
+                "operation_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "kind": "reconcile",
+                "status": "completed",
+                "phase": "completed",
+                "fencing_epoch": 3,
+                "generation_run_id": generation,
+            },
+        )
+    path = root / "project-cells" / f"{workspace_id}.json"
+    _write_json(path, payload)
+    return path
+
+
+def _census(*, present: bool = False) -> str:
+    return json.dumps(
+        {
+            "version": 1,
+            "scope": "complete_platform_project_workspace_census",
+            "observed_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "projects": [PROJECT, RETIRED_PROJECT] if present else [PROJECT],
+            "workspaces": [{"id": GENERATING, "project_id": RETIRED_PROJECT}] if present else [],
+        }
+    )
+
+
+def test_completed_destroy_supersedes_only_older_matched_lease_and_keeps_real_dumps(
+    state_root: Path,
+    tmp_path: Path,
+) -> None:
+    journal = _terminal_destroy(state_root, GENERATING, stale_lease=True)
+    original = journal.read_bytes()
+    runner = _runner()
+    assert _backup(state_root, tmp_path / "out", runner) == 0
+    assert _database(_manifest(tmp_path / "out"), GENERATING, "core")["status"] == "ok"
+    assert journal.read_bytes() == original
+
+
+def test_retired_storage_absence_requires_census_and_has_verifiable_separate_receipt(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _terminal_destroy(state_root, GENERATING)
+    original = journal.read_bytes()
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    assert _backup(state_root, tmp_path / "out", runner) == 0
+    manifest = _manifest(tmp_path / "out")
+    receipts = manifest["coverage"]["retired_no_local_storage"]
+    assert [row["workspace_id"] for row in receipts] == [GENERATING]
+    assert receipts[0]["operation_id"] == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+    assert all(row["workspace_id"] != GENERATING for row in manifest["workspaces"])
+    assert _verify(tmp_path / "out", FakeRunner()) == 0
+    assert journal.read_bytes() == original
+    receipts[0]["fencing_epoch"] = 9
+    _write_json(tmp_path / "out" / "MANIFEST.json", manifest)
+    assert _verify(tmp_path / "out", FakeRunner()) == 1
+
+
+@pytest.mark.parametrize("problem", ["missing", "current_project", "stale", "malformed"])
+def test_terminal_destroy_never_hides_missing_storage_without_current_absence_authority(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    encoded = _census(present=problem == "current_project")
+    if problem == "stale":
+        payload = json.loads(encoded)
+        payload["observed_at"] = (datetime.now(UTC) - timedelta(days=1)).isoformat()
+        encoded = json.dumps(payload)
+    elif problem == "malformed":
+        encoded = '{"version":1}'
+    if problem != "missing":
+        monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", encoded)
+    assert _backup(state_root, tmp_path / "out", runner) != 0
+    if problem in {"missing", "current_project"}:
+        assert any(
+            row.get("reason") == "declared_core_volume_missing"
+            for row in _manifest(tmp_path / "out")["coverage"]["issues"]
+        )
+
+
+@pytest.mark.parametrize(
+    "problem",
+    [
+        "equal_lease",
+        "newer_lease",
+        "unmatched_run",
+        "unmatched_epoch",
+        "pending_destroy",
+        "indeterminate_destroy",
+        "wrong_last_operation",
+        "old_destroy",
+        "conflicting_epoch",
+        "boolean_epoch",
+        "duplicate_operation",
+        "invalid_resource_identity",
+    ],
+)
+def test_terminal_lease_exception_is_exact_and_fail_closed(
+    state_root: Path,
+    tmp_path: Path,
+    problem: str,
+) -> None:
+    path = _terminal_destroy(state_root, GENERATING, stale_lease=True)
+    payload = json.loads(path.read_bytes())
+    workspace = payload["workspace"]
+    operation = workspace["operations"][-1]
+    if problem == "equal_lease":
+        workspace["active_generation_fencing_epoch"] = 4
+    elif problem == "newer_lease":
+        workspace["active_generation_fencing_epoch"] = 5
+    elif problem == "unmatched_run":
+        workspace["active_generation_run_id"] = OWNER
+    elif problem == "unmatched_epoch":
+        workspace["operations"][0]["fencing_epoch"] = 2
+    elif problem == "pending_destroy":
+        operation["status"] = "running"
+    elif problem == "indeterminate_destroy":
+        operation["status"] = "indeterminate"
+    elif problem == "wrong_last_operation":
+        workspace["last_operation_id"] = OWNER
+    elif problem == "old_destroy":
+        operation["fencing_epoch"] = 2
+    elif problem == "conflicting_epoch":
+        workspace["operations"][0]["fencing_epoch"] = 4
+    elif problem == "boolean_epoch":
+        operation["fencing_epoch"] = True
+    elif problem == "duplicate_operation":
+        workspace["operations"].append(dict(operation))
+    elif problem == "invalid_resource_identity":
+        workspace["resource_names"]["workspace_id"] = EDITOR
+    _write_json(path, payload)
+    assert _backup(state_root, tmp_path / "out", _runner()) == 2
+    assert (
+        _database(_manifest(tmp_path / "out"), GENERATING, "core")["status"]
+        == "deferred_active_generation"
+    )
+
+
+def _docker_container(
+    *,
+    labels: dict[str, str] | None = None,
+    mounts: list[dict[str, Any]] | None = None,
+    state: str = "running",
+) -> dict[str, Any]:
+    return {
+        "id": "a" * 64,
+        "name": "/opaque-container",
+        "state": state,
+        "labels": labels or {},
+        "mounts": mounts or [],
+    }
+
+
+@pytest.mark.parametrize(
+    "remaining", ["workspace", "project", "restoration", "data", "labeled", "container"]
+)
+def test_retired_absence_excludes_no_owned_resources(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    remaining: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    stem = _hex(GENERATING)
+    if remaining == "container":
+        row = _docker_container(labels={"omnia.workspace_id": GENERATING}, state="exited")
+        runner.container_records[row["id"]] = row
+    else:
+        name = {
+            "workspace": f"omnia-cell-{stem}-workspace",
+            "project": project_volume(GENERATING),
+            "restoration": f"omnia-machine-{stem}-db-{'d' * 32}",
+            "data": f"omnia-machine-{stem}-data-uploads",
+            "labeled": "opaque-retained-volume",
+        }[remaining]
+        runner.volumes.append(name)
+        if remaining == "labeled":
+            runner.volume_records[name] = {
+                "name": name,
+                "labels": {"omnia.project_id": RETIRED_PROJECT},
+                "mountpoint": str(tmp_path),
+            }
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert _manifest(tmp_path / "out")["coverage"]["retired_no_local_storage"] == []
+
+
+@pytest.mark.parametrize(
+    "mount_type", ["volume", "bind", "bind_parent", "bind_child", "bind_alias"]
+)
+def test_foreign_mounted_writer_prevents_stale_lease_override(
+    state_root: Path,
+    tmp_path: Path,
+    mount_type: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING, stale_lease=True)
+    runner = _runner()
+    data = tmp_path / "owned-pg" / "data"
+    data.mkdir(parents=True)
+    source = data
+    if mount_type == "bind_parent":
+        source = data.parent
+    elif mount_type == "bind_child":
+        source = data / "base"
+        source.mkdir()
+    elif mount_type == "bind_alias":
+        alias = tmp_path / "alias"
+        try:
+            alias.symlink_to(data, target_is_directory=True)
+        except OSError:
+            pytest.skip("symlink privilege unavailable")
+        source = alias
+    runner.volume_records[core_volume(GENERATING)] = {
+        "name": core_volume(GENERATING),
+        "labels": {},
+        "mountpoint": str(data),
+    }
+    mount = {"Type": "volume" if mount_type == "volume" else "bind", "Source": str(source)}
+    if mount_type == "volume":
+        mount["Name"] = core_volume(GENERATING)
+    row = _docker_container(mounts=[mount])
+    runner.container_records[row["id"]] = row
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert (
+        _database(_manifest(tmp_path / "out"), GENERATING, "core")["status"]
+        == "deferred_active_generation"
+    )
+
+
+@pytest.mark.parametrize(
+    "problem", ["query_failure", "inspect_failure", "partial_inspect", "unknown_mount"]
+)
+def test_terminal_decision_never_uses_partial_docker_observation(
+    state_root: Path,
+    tmp_path: Path,
+    problem: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING, stale_lease=True)
+    runner = _runner()
+    if problem == "query_failure":
+        runner.fail_tokens.add("--all")
+    elif problem == "inspect_failure":
+        runner.fail_tokens.add("inspect")
+    elif problem == "partial_inspect":
+        runner.volume_records[core_volume(GENERATING)] = {
+            "name": "unexpected-volume",
+            "labels": {},
+            "mountpoint": str(tmp_path),
+        }
+    else:
+        row = _docker_container(mounts=[{"Type": "unknown"}])
+        runner.container_records[row["id"]] = row
+    assert _backup(state_root, tmp_path / "out", runner) == 1
+
+
+@pytest.mark.parametrize("change", ["journal", "docker", "publication"])
+def test_terminal_exclusion_changed_authority_never_promotes_complete_backup(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    path = _terminal_destroy(state_root, GENERATING)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    archive = backup_cells.archive_state
+
+    def changed(root: Path, destination: Path) -> dict[str, Any]:
+        if change == "journal":
+            payload = json.loads(path.read_bytes())
+            payload["workspace"]["phase"] = "indeterminate"
+            _write_json(path, payload)
+        elif change == "docker":
+            runner.volumes.append(core_volume(GENERATING))
+        else:
+            _write_json(
+                root / "cell-publications" / RETIRED_PROJECT / "publication.json",
+                {
+                    "project_id": RETIRED_PROJECT,
+                    "production_workspace_id": GENERATING,
+                },
+            )
+        return archive(root, destination)
+
+    monkeypatch.setattr(backup_cells, "archive_state", changed)
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert {"reason": "inventory_changed_during_backup"} in _manifest(tmp_path / "out")["coverage"][
+        "issues"
+    ]
+
+
+@pytest.mark.parametrize(
+    "problem", ["duplicates", "orphan_workspace", "future", "boolean", "wrong_scope", "offset"]
+)
+def test_platform_census_is_complete_typed_and_fresh(problem: str) -> None:
+    payload = json.loads(_census())
+    if problem == "duplicates":
+        payload["projects"] *= 2
+    elif problem == "orphan_workspace":
+        payload["workspaces"] = [{"id": GENERATING, "project_id": RETIRED_PROJECT}]
+    elif problem == "future":
+        payload["observed_at"] = (
+            (datetime.now(UTC) + timedelta(minutes=5)).isoformat().replace("+00:00", "Z")
+        )
+    elif problem == "boolean":
+        payload["version"] = True
+    elif problem == "wrong_scope":
+        payload["scope"] = "owner_filtered_projects"
+    else:
+        payload["observed_at"] = datetime.now(UTC).isoformat()
+    with pytest.raises(backup_cells.BackupError, match="census"):
+        backup_cells.parse_platform_census(json.dumps(payload))
+
+
+@pytest.mark.parametrize(
+    "field", ["journal_sha256", "platform_census_sha256", "docker_observation", "operation_id"]
+)
+def test_retired_receipt_tampering_is_rejected_before_any_restore(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    out = tmp_path / "out"
+    assert _backup(state_root, out, runner) == 0
+    manifest = _manifest(out)
+    manifest["coverage"]["retired_no_local_storage"][0][field] = "forged"
+    _write_json(out / "MANIFEST.json", manifest)
+    verify_runner = FakeRunner()
+    assert _verify(out, verify_runner) == 1
+    assert verify_runner.calls == []
+
+
+@pytest.mark.parametrize(
+    "authority",
+    [
+        "source_publication",
+        "external_publication",
+        "bad_metadata",
+        "foreign_metadata",
+        "wrong_workspace_census",
+    ],
+)
+def test_retired_exclusion_requires_no_other_storage_authority(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    authority: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    encoded = _census()
+    if authority in {"source_publication", "external_publication"}:
+        payload: dict[str, Any] = {"project_id": RETIRED_PROJECT, "source_workspace_id": GENERATING}
+        if authority == "external_publication":
+            payload.update(
+                {
+                    "production_workspace_id": GENERATING,
+                    "active_release": {
+                        "placement": {
+                            "backend": "kubernetes",
+                            "namespace": f"app-{RETIRED_PROJECT}",
+                        },
+                    },
+                }
+            )
+        _write_json(
+            state_root / "cell-publications" / RETIRED_PROJECT / "publication.json", payload
+        )
+    elif authority == "wrong_workspace_census":
+        census = json.loads(encoded)
+        census["workspaces"].append({"id": GENERATING, "project_id": PROJECT})
+        encoded = json.dumps(census)
+    else:
+        payload = (
+            {"project_database_role_protocol": True}
+            if authority == "bad_metadata"
+            else {
+                "active_code_volume": f"omnia-machine-{_hex(EDITOR)}-code-{'a' * 32}",
+            }
+        )
+        _write_json(state_root / "project-machines" / GENERATING / "docker.json", payload)
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", encoded)
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert _manifest(tmp_path / "out")["coverage"]["retired_no_local_storage"] == []
+
+
+def _checkpoint_reference(workspace_id: str) -> dict[str, Any]:
+    stem = _hex(workspace_id)
+    return {
+        "workspace_id": workspace_id,
+        "image_id": "sha256:" + "a" * 64,
+        "artifact_ref": "a" * 32 + ".tar",
+        "sha256": "b" * 64,
+        "size": 123,
+        "base_image": HELPER_IMAGE,
+        "manifest_digest": "c" * 64,
+        "volumes": [
+            {"name": name, "artifact_ref": "d" * 32 + ".tar", "sha256": "e" * 64, "size": 123}
+            for name in (
+                f"omnia-cell-{stem}-workspace",
+                f"omnia-machine-{stem}-home",
+                project_volume(workspace_id),
+            )
+        ],
+    }
+
+
+def test_retired_materialized_checkpoint_accepts_exact_own_cell_workspace_volume(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+
+    _terminal_destroy(state_root, GENERATING)
+    reference = _checkpoint_reference(GENERATING)
+    assert MachineEnvironmentRef.model_validate(reference).workspace_id == UUID(GENERATING)
+    _write_json(
+        state_root / "project-machines" / GENERATING / "docker.json",
+        {
+            "project_database_role_protocol": 1,
+            "active_database_volume": project_volume(GENERATING),
+            "environment_ref": reference,
+        },
+    )
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    out = tmp_path / "out"
+    assert _backup(state_root, out, runner) == 0
+    assert [
+        row["workspace_id"] for row in _manifest(out)["coverage"]["retired_no_local_storage"]
+    ] == [GENERATING]
+    assert _verify(out, FakeRunner()) == 0
+
+
+@pytest.mark.parametrize(
+    "problem", ["foreign_cell_workspace", "own_cell_postgres", "foreign_reference_workspace"]
+)
+def test_checkpoint_cannot_expand_retired_storage_identity(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    _terminal_destroy(state_root, GENERATING)
+    reference = _checkpoint_reference(GENERATING)
+    if problem == "foreign_cell_workspace":
+        reference["volumes"][0]["name"] = f"omnia-cell-{_hex(EDITOR)}-workspace"
+    elif problem == "own_cell_postgres":
+        reference["volumes"][0]["name"] = core_volume(GENERATING)
+    else:
+        reference["workspace_id"] = EDITOR
+    _write_json(
+        state_root / "project-machines" / GENERATING / "docker.json", {"environment_ref": reference}
+    )
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+
+
+def test_recorded_lease_receipt_can_be_verified_offline(
+    state_root: Path,
+    tmp_path: Path,
+) -> None:
+    _terminal_destroy(state_root, GENERATING, stale_lease=True)
+    out = tmp_path / "out"
+    assert _backup(state_root, out, _runner()) == 0
+    assert _verify(out, FakeRunner()) == 0
+
+
+def test_unknown_journal_version_cannot_authorize_terminal_exclusion(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    journal = _terminal_destroy(state_root, GENERATING)
+    payload = json.loads(journal.read_bytes())
+    payload["version"] = True
+    _write_json(journal, payload)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    assert _backup(state_root, tmp_path / "out", runner) == 1
+
+
+def test_old_valid_retired_receipt_verifies_against_capture_time_not_wall_clock(
+    state_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _terminal_destroy(state_root, GENERATING)
+    runner = _runner()
+    runner.volumes.remove(core_volume(GENERATING))
+    monkeypatch.setenv("BACKUP_PLATFORM_CENSUS_JSON", _census())
+    out = tmp_path / "out"
+    assert _backup(state_root, out, runner) == 0
+
+    class FutureDatetime(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> datetime:
+            return datetime.now(tz) + timedelta(days=30)
+
+    monkeypatch.setattr(backup_cells, "datetime", FutureDatetime)
+    assert _verify(out, FakeRunner()) == 0
+
+
+def test_explicit_privileged_resolver_uses_fixed_metadata_only_argv(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+
+    def execute(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        calls.append((argv, kwargs))
+        return subprocess.CompletedProcess(argv, 0, (str(tmp_path) + "\n").encode(), b"")
+
+    monkeypatch.setattr(backup_cells.subprocess, "run", execute)
+    assert backup_cells._resolve_docker_source(str(tmp_path), with_sudo=True) == str(tmp_path)
+    assert calls[0][0] == [
+        "/usr/bin/sudo",
+        "-n",
+        "--",
+        "/usr/bin/realpath",
+        "-e",
+        "--",
+        str(tmp_path),
+    ]
+    assert calls[0][1]["env"] == {"PATH": "/usr/bin:/bin", "LC_ALL": "C"}
+    assert calls[0][1]["stdin"] == subprocess.DEVNULL
+    assert calls[0][1]["timeout"] > 0
+    assert "shell" not in calls[0][1]
+
+
+@pytest.mark.parametrize(
+    "problem", ["denied", "multiline", "relative", "missing_newline", "timeout"]
+)
+def test_privileged_resolver_failure_never_leaks_or_falls_back(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    problem: str,
+) -> None:
+    secret = "SECRET-DO-NOT-LOG"
+
+    def execute(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
+        if problem == "timeout":
+            raise subprocess.TimeoutExpired(argv, 60, output=secret.encode())
+        output = (str(tmp_path) + "\n").encode()
+        if problem == "multiline":
+            output += secret.encode() + b"\n"
+        elif problem == "relative":
+            output = b"relative\n"
+        elif problem == "missing_newline":
+            output = str(tmp_path).encode()
+        return subprocess.CompletedProcess(
+            argv, 1 if problem == "denied" else 0, output, secret.encode()
+        )
+
+    monkeypatch.setattr(backup_cells.subprocess, "run", execute)
+    with pytest.raises(backup_cells.BackupError, match="resolution is unconfirmed") as failure:
+        backup_cells._resolve_docker_source(str(tmp_path), with_sudo=True)
+    assert secret not in str(failure.value)
+
+
+def test_native_path_failure_does_not_implicitly_enable_privilege(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def denied(*args: Any, **kwargs: Any) -> Any:
+        raise PermissionError("denied")
+
+    def forbidden(*args: Any, **kwargs: Any) -> Any:
+        pytest.fail("native mode must not invoke sudo")
+
+    monkeypatch.setattr(Path, "resolve", denied)
+    monkeypatch.setattr(backup_cells.subprocess, "run", forbidden)
+    with pytest.raises(backup_cells.BackupError, match="inaccessible"):
+        backup_cells._resolve_docker_source(str(tmp_path), with_sudo=False)
+
+
+def test_publication_identity_directory_is_archived_without_becoming_a_fake_project(
+    state_root: Path, tmp_path: Path
+) -> None:
+    _settle_generating_cell(state_root)
+    _write_json(
+        state_root / "cell-publications" / "identities" / f"{PRODUCTION}.json",
+        {"project_id": PROJECT},
+    )
+    assert _backup(state_root, tmp_path / "out", _runner()) == 0
+
+
+@pytest.mark.skipif(os.name == "nt", reason="canonical private file modes require POSIX")
+def test_publication_service_artifacts_are_validated_and_archived_not_journals(
+    state_root: Path, tmp_path: Path,
+) -> None:
+    _settle_generating_cell(state_root)
+    root = state_root / "cell-publications"
+    (root / "locks").mkdir(mode=0o700)
+    (root / "identities").mkdir(mode=0o700)
+    key = root / "fingerprint.key"
+    key.write_bytes(b"x" * 32)
+    key.chmod(0o600)
+    assert backup_cells.external_publications(state_root) == []
+    assert _backup(state_root, tmp_path / "out", _runner()) == 0
+    with tarfile.open(tmp_path / "out" / "state.tar.gz") as archive:
+        assert "state/cell-publications/fingerprint.key" in archive.getnames()
+
+
+@pytest.mark.parametrize(
+    "fault", ["unknown", "wrong_directory_type", "key_directory", "key_length"],
+)
+def test_publication_shared_entry_names_cannot_hide_unknown_or_invalid_paths(
+    state_root: Path, fault: str,
+) -> None:
+    root = state_root / "cell-publications"
+    if fault == "unknown":
+        (root / "unrecognized").mkdir()
+    elif fault == "wrong_directory_type":
+        (root / "locks").write_text("not a directory")
+    elif fault == "key_directory":
+        (root / "fingerprint.key").mkdir()
+    else:
+        key = root / "fingerprint.key"
+        key.write_bytes(b"not a 32-byte key")
+        key.chmod(0o600)
+    with pytest.raises(backup_cells.BackupError, match="publication"):
+        backup_cells.external_publications(state_root)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="canonical private file modes require POSIX")
+def test_publication_fingerprint_key_must_remain_private(state_root: Path) -> None:
+    key = state_root / "cell-publications" / "fingerprint.key"
+    key.write_bytes(b"x" * 32)
+    key.chmod(0o644)
+    with pytest.raises(backup_cells.BackupError, match="publication fingerprint"):
+        backup_cells.external_publications(state_root)
+
+
+def test_full_cluster_restore_keeps_standard_databases_with_strict_sql(tmp_path: Path) -> None:
+    path = tmp_path / f"{EDITOR}-project.sql"
+    path.write_bytes(b"-- synthetic pg_dumpall\n\\connect postgres\n")
+    runner = FakeRunner()
+    runner.fail_tokens.add("DROP DATABASE postgres")
+    backup = backup_cells.CellBackup(
+        runner=runner, out_dir=tmp_path, postgres_image=POSTGRES_IMAGE,
+        helper_image=HELPER_IMAGE, redactor=backup_cells.SecretRedactor(),
+    )
+    result = backup_cells._restore_entry(
+        backup, path, "project", {"format": "plain", "tables": runner.table_count},
+    )
+    assert result["status"] == "ok", result
+    restores = runner.matching("exec", "psql", "-f", "ON_ERROR_STOP=1")
+    assert len(restores) == 1
+    assert restores[0][restores[0].index("-U") + 1].startswith("omnia_backup_")
+    assert not any("DROP DATABASE postgres" in call for call in runner.calls)
+
+
+def test_registry_change_while_dumping_prevents_complete_coverage(
+    state_root: Path, tmp_path: Path
+) -> None:
+    _settle_generating_cell(state_root)
+    runner = _runner()
+    original = runner.run_to_file
+
+    def changed(*args, **kwargs):
+        result = original(*args, **kwargs)
+        _write_json(
+            state_root / "project-machines" / EDITOR / "docker.json",
+            {"changed_during_backup": True},
+        )
+        return result
+
+    runner.run_to_file = changed
+    assert _backup(state_root, tmp_path / "out", runner) == 2
+    assert {"reason": "inventory_changed_during_backup"} in _manifest(tmp_path / "out")["coverage"][
+        "issues"
+    ]
 
 
 def test_build_caches_are_skipped_but_business_data_volumes_are_archived(
@@ -680,6 +1511,103 @@ def _verify(out: Path, runner: FakeRunner) -> int:
     )
 
 
+def test_verify_refuses_a_manifest_without_any_coverage_or_state_archive(tmp_path: Path) -> None:
+    _write_json(tmp_path / "MANIFEST.json", {"schema_version": backup_cells.SCHEMA_VERSION})
+    verifier = FakeRunner()
+    assert _verify(tmp_path, verifier) == 1
+    assert verifier.calls == [], "unconfirmed coverage must stop before creating scratch resources"
+
+
+def test_backup_cannot_claim_complete_when_published_runtime_databases_are_uncovered(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "state"
+    _write_json(root / "cell-publications" / PROJECT / "publication.json", {
+        "project_id": PROJECT,
+        "production_workspace_id": PRODUCTION,
+        "active_release": {"placement": {"backend": "kubernetes", "namespace": f"app-{PROJECT}"}},
+    })
+    assert _backup(root, tmp_path / "out", FakeRunner()) != 0
+
+
+def test_verify_never_treats_an_unknown_database_kind_as_checksum_only(tmp_path: Path) -> None:
+    payload = tmp_path / "state.tar.gz"
+    payload.write_bytes(b"not a database dump")
+    digest, size = backup_cells._file_digest(payload)
+    backup = backup_cells.CellBackup(
+        runner=FakeRunner(), out_dir=tmp_path, postgres_image=POSTGRES_IMAGE,
+        helper_image=HELPER_IMAGE, redactor=backup_cells.SecretRedactor(),
+    )
+    result = backup_cells._verify_entry(backup, tmp_path, {
+        "kind": "published-project", "status": "ok", "file": payload.name,
+        "sha256": digest, "bytes": size,
+    })
+    assert result["status"] == "failed"
+
+
+@pytest.mark.parametrize("kind", ["core", "project", "data", "state"])
+def test_verify_rejects_validly_hashed_artifact_with_wrong_identity(
+    state_root: Path, tmp_path: Path, kind: str,
+) -> None:
+    _settle_generating_cell(state_root)
+    out = tmp_path / "out"
+    assert _backup(state_root, out, _runner()) == 0
+    manifest = _manifest(out)
+    if kind == "state":
+        entry = manifest["state_archive"]
+        replacement = f"{EDITOR}-core.dump"
+    elif kind == "data":
+        entry = _workspace(manifest, EDITOR)["data_volumes"][0]
+        replacement = f"{PRODUCTION}-data-uploads.tar.gz"
+    else:
+        entry = _database(manifest, EDITOR, kind)
+        replacement = f"{PRODUCTION}-" + ("core.dump" if kind == "core" else "project.sql")
+    original = out / entry["file"]
+    wrong = out / replacement
+    if not wrong.exists():
+        wrong.write_bytes(original.read_bytes())
+    original.unlink()
+    entry.update(file=replacement)
+    entry["sha256"], entry["bytes"] = backup_cells._file_digest(wrong)
+    _write_json(out / "MANIFEST.json", manifest)
+    verifier = FakeRunner()
+    assert _verify(out, verifier) == 1
+    assert verifier.calls == [], "identity mismatch must stop before scratch allocation"
+
+
+def test_direct_verifier_rejects_wrong_workspace_dump_before_restore(tmp_path: Path) -> None:
+    wrong = tmp_path / f"{PRODUCTION}-core.dump"
+    wrong.write_bytes(b"PGDMP validly hashed wrong workspace")
+    digest, size = backup_cells._file_digest(wrong)
+    runner = FakeRunner()
+    backup = backup_cells.CellBackup(
+        runner=runner, out_dir=tmp_path, postgres_image=POSTGRES_IMAGE,
+        helper_image=HELPER_IMAGE, redactor=backup_cells.SecretRedactor(),
+    )
+    result = backup_cells._verify_entry(backup, tmp_path, {
+        "workspace_id": EDITOR, "volume": core_volume(EDITOR), "kind": "core",
+        "status": "ok", "file": wrong.name, "sha256": digest, "bytes": size, "tables": 7,
+    })
+    assert result["status"] == "failed"
+    assert runner.calls == []
+
+
+def test_data_manifest_cannot_relabel_a_state_archive_as_business_data(
+    state_root: Path, tmp_path: Path,
+) -> None:
+    _settle_generating_cell(state_root)
+    out = tmp_path / "out"
+    assert _backup(state_root, out, _runner()) == 0
+    manifest = _manifest(out)
+    data = _workspace(manifest, EDITOR)["data_volumes"][0]
+    data.update({**manifest["state_archive"], "kind": "state"})
+    manifest["coverage"]["expected"] = backup_cells._artifact_identities(manifest["workspaces"])
+    _write_json(out / "MANIFEST.json", manifest)
+    runner = FakeRunner()
+    assert _verify(out, runner) == 1
+    assert runner.calls == []
+
+
 def test_verify_restores_every_dump_into_its_own_scratch_server(
     state_root: Path, tmp_path: Path
 ) -> None:
@@ -744,6 +1672,18 @@ def test_verify_reports_partial_when_the_backup_itself_was_partial(
     assert _verify(out, verifier) == 2
 
 
+def test_successful_restore_cannot_hide_unconfirmed_scratch_cleanup(
+    state_root: Path, tmp_path: Path
+) -> None:
+    _settle_generating_cell(state_root)
+    out = tmp_path / "out"
+    assert _backup(state_root, out, _runner()) == 0
+    verifier = FakeRunner()
+    verifier.fail_tokens.add("rm")
+    assert _verify(out, verifier) == 1
+    _assert_only_scratch_touched(verifier)
+
+
 def test_the_restore_tool_follows_the_format_not_the_file_name(tmp_path: Path) -> None:
     """A halted cell's core dump is a plain script in a `-core.dump` file.
 
@@ -768,6 +1708,7 @@ def test_the_restore_tool_follows_the_format_not_the_file_name(tmp_path: Path) -
 
     assert _restore_command("custom")[0] == "pg_restore"
     assert _restore_command("plain")[0] == "psql"
+    assert "ON_ERROR_STOP=1" in _restore_command("plain")
 
 
 def test_every_dump_records_the_format_it_actually_wrote(
@@ -873,7 +1814,12 @@ def test_invalid_project_protocol_metadata_cannot_downgrade_backup(
     _protocol_one_authority(state_root)
     metadata = state_root / "project-machines" / EDITOR / "docker.json"
     metadata.write_text(encoded, encoding="utf-8")
-    with pytest.raises(backup_cells.BackupError, match="project database authority"):
+    expected = (
+        "active database registry is unreadable"
+        if encoded in {"{broken", "null"} or encoded.count("project_database_role_protocol") > 1
+        else "project database authority"
+    )
+    with pytest.raises(backup_cells.BackupError, match=expected):
         backup_cells.build_inventory(
             state_root, [project_volume(EDITOR)], backup_cells.SecretRedactor(),
         )
@@ -915,11 +1861,11 @@ def test_protocol_one_dump_and_table_count_use_admin_peer_with_trusted_options(
 ) -> None:
     from yleum_orchestrator.services.restoration_database import TRUSTED_ADMIN_PGOPTIONS
     _protocol_one_authority(state_root)
+    _settle_generating_cell(state_root)
     runner = _runner(running=[project_volume(EDITOR)] if running else [])
-    runner.volumes = [project_volume(EDITOR)]
     assert _backup(state_root, tmp_path / "out", runner) == 0
     calls = [(call, env) for call, env in zip(runner.calls, runner.envs, strict=True)
-             if "pg_dumpall" in call or "psql" in call]
+             if ("pg_dumpall" in call or "psql" in call) and "PGOPTIONS" in call]
     assert len(calls) == 2
     for call, env in calls:
         assert call[1:4] == ("exec", "--user", "postgres")
