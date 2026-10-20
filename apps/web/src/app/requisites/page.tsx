@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function RequisitesPage() {
   return (
-    <LegalPage title="Реквизиты исполнителя" updated="7 октября 2026">
+    <LegalPage title="Реквизиты исполнителя" updated="20 октября 2026">
       <LegalSection title="Статус">
         <p>
           Исполнитель сервиса Yleum — ООО «Кортэл».
@@ -86,6 +86,13 @@ export default function RequisitesPage() {
       </LegalSection>
 
       <LegalSection title="Контакты">
+        <p>
+          Корпоративный телефон ООО «Кортэл»:{" "}
+          <a className="font-medium text-accent-secondary" href="tel:+78007759990">
+            8 800 775-99-90
+          </a>
+          .
+        </p>
         <p>
           По вопросам сервиса, документов и платежей:{" "}
           <a
