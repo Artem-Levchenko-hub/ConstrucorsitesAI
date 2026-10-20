@@ -426,7 +426,6 @@ def export_peer(cells, spec: dict) -> int:
                 census = cells.parse_platform_census(
                     json.dumps(spec["platform_census"])
                 )
-                os.environ["BACKUP_PLATFORM_CENSUS_JSON"] = json.dumps(census)
                 manifest, code = cells.run_backup(
                     state_root=Path(spec["state_root"]),
                     out_dir=out,
@@ -434,6 +433,7 @@ def export_peer(cells, spec: dict) -> int:
                     helper_image=spec["helper_image"],
                     runner=cells.DockerRunner(),
                     local_scope=True,
+                    platform_census_json=json.dumps(census),
                     resolve_docker_sources_with_sudo=True,
                 )
             else:
