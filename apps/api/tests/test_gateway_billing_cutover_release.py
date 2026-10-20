@@ -195,10 +195,13 @@ def test_gate_runs_after_replacement_before_both_admission_reopens():
     script = SCRIPT.read_text()
     assert "gateway_capture_identity" in script
     assert "--force-recreate gateway" in script
-    assert script.index("gateway_capture_identity\n") < script.index("build gateway")
+    build = script.index("build gateway")
+    assert script.index("gateway_capture_identity\n") < build
     gate = script.rindex("gateway_cutover_gate\n")
-    assert script.index("build gateway") < gate < script.index("  ingress_drain end")
-    assert gate < script.index("generation_deployment_drain end $SHA")
+    assert build < gate < script.index("  ingress_drain end")
+    assert gate < script.index(
+        'api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"'
+    )
 
 
 def test_green_gate_checks_actual_container_pool_without_secret_output(monkeypatch, capsys):
