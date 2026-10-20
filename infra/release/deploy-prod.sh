@@ -55,6 +55,14 @@ REPO="$(cd "$(dirname "$0")/../.." && pwd)"
 LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
 say() { echo "== $* ($(date -u +%H:%M:%SZ))"; }
+api_maintenance() {
+  local launcher arguments
+  launcher=$(git -C "$REPO" show "$SHA:infra/release/api-maintenance.py" | base64 -w0) || return
+  arguments=$(python3 -c 'import base64,json,sys; print(base64.b64encode(json.dumps(sys.argv[1:]).encode()).decode())' "${API_RUNTIME_SHA:-}" "$@") || return
+  # The API's real mount/network/env are retained, but no process is inserted
+  # into its reader cgroup. Target bootstrap/resume bytes still arrive on stdin.
+  ssh max-core "sudo -n python3 -c 'import base64; exec(compile(base64.b64decode(\"$launcher\"), \"release-api-maintenance\", \"exec\"))' '$arguments'"
+}
 ingress_drain() {
   git -C "$REPO" show "$SHA:infra/release/generation-ingress-drain.py" \
     | ssh max-core "sudo python3 - $1 $SHA"
@@ -80,9 +88,9 @@ database_quiescence() {
     # new fence model/table. Only the verified ingress barrier supplies exclusion.
     ingress_drain check || return
     git -C "$REPO" show "$SHA:apps/api/src/yleum_api/services/generation_deployment_drain.py" \
-      | ssh max-core "docker exec -i yleum-prod-api python - bootstrap-check $SHA"
+      | api_maintenance - bootstrap-check "$SHA"
   else
-    ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain check $SHA"
+    api_maintenance -m yleum_api.services.generation_deployment_drain check "$SHA"
   fi
 }
 
@@ -150,7 +158,7 @@ READER_CONTEXT
   # New process + exact committed package before any app imports. Installed
   # image contributes dependencies only; import/schema incompatibility denies.
   git -C "$REPO" archive --format=tar "$SHA" apps/api/src \
-    | ssh max-core "docker exec -i yleum-prod-api python -c 'import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-reader-resume\", \"exec\"))' '$SHA' '$context'"
+    | api_maintenance -c "import base64; exec(compile(base64.b64decode(\"$loader\"), \"target-reader-resume\", \"exec\"))" "$SHA" "$context"
 }
 
 reader_before() {
@@ -158,10 +166,7 @@ reader_before() {
   local configured
   configured=$(ssh max-core "python3 -c 'import os; print(int(os.path.lexists(\"/var/lib/yleum-generation-readers/config.json\")))'")
   if [ "$configured" = 1 ]; then
-    local current
-    current=$(ssh max-core "curl -fsS http://127.0.0.1:8200/api/health | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"release_sha\"])'")
-    [[ "$current" =~ ^[0-9a-f]{40}$ ]] || return 1
-    reader_control core verify-current --release "$current"
+    reader_control core verify-current --release "$API_RUNTIME_SHA"
   elif [ "$configured" = 0 ]; then
     # First reader-only rollout: no saved shape may rely on a reader which
     # cannot stand by. Neither a TTL nor a waiting status is quiescence.
@@ -318,6 +323,9 @@ ssh max-core "set -o noclobber; echo \"$(whoami)@$(hostname -s) $(date -u +%FT%T
   || { echo "на core уже идёт выкатка (или остался замок): $(ssh max-core cat /opt/omnia/.deploy.lock)" >&2; exit 75; }
 trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 
+API_RUNTIME_SHA=$(api_maintenance --describe-runtime)
+[[ "$API_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "API runtime revision is unconfirmed" >&2; exit 75; }
+
 if [ "$API" = 1 ]; then
   say "scoped ingress barrier: новые изменения проектов временно закрыты"
   ingress_drain begin
@@ -328,9 +336,9 @@ if [ "$API" = 1 ]; then
   # First installation needs the ingress bootstrap documented alongside this
   # script. Never silently bypass this when the old API lacks the drain module.
   if [ "$BOOTSTRAP" = 1 ]; then
-    ssh max-core "docker exec yleum-prod-api python -c 'import importlib.util; assert importlib.util.find_spec(\"yleum_api.services.generation_deployment_drain\") is None, \"use normal fenced deployment\"'"
+    api_maintenance -c 'import importlib.util; assert importlib.util.find_spec("yleum_api.services.generation_deployment_drain") is None, "use normal fenced deployment"'
   else
-    ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain begin $SHA" || {
+    api_maintenance -m yleum_api.services.generation_deployment_drain begin "$SHA" || {
     echo "Не удалось установить durable drain. Первый выпуск: см. generation-drain.md; выкатка остановлена." >&2
     exit 75
   }
@@ -421,6 +429,7 @@ ssh max-core "cd /opt/omnia/apps/llm-gateway/deploy/full && docker compose -f do
 
 say "оркестраторы: core, затем commerce (одна ревизия)"
 BOOTSTRAP=0  # API now runs the target image and must enforce the persisted fence.
+API_RUNTIME_SHA="$SHA"
 # У commerce есть собственные служебные файлы и Git objects: --delete удалял их при выпуске.
 ssh max-core "set -e; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo core: \$(curl -s 127.0.0.1:8003/health); rsync -a --exclude '/.deploy.lock*' --exclude .venv --exclude .env --exclude '.env.before-*' --exclude node_modules --exclude .next --exclude __pycache__ --exclude '*.tsbuildinfo' /opt/omnia/ commerce:/opt/omnia/; ssh -o BatchMode=yes commerce \"set -e; sudo -n /opt/omnia/apps/orchestrator/.venv/bin/python /opt/omnia/infra/release/generation-reader-inventory.py install --host commerce --release $SHA; f=/opt/omnia/apps/orchestrator/.env; sed -i -E 's/^OMNIA_RELEASE_SHA=.*/OMNIA_RELEASE_SHA=$SHA/' \\\$f; cd /opt/omnia/apps/orchestrator && ~/.local/bin/uv sync --frozen 2>&1 | tail -1 && { sudo systemctl restart yleum-orchestrator 2>/dev/null || sudo systemctl restart omnia-orchestrator; }; for i in \\\$(seq 1 30); do curl -sf 127.0.0.1:8003/health >/dev/null 2>&1 && break; sleep 2; done; echo commerce: \\\$(curl -s 127.0.0.1:8003/health)\""
 
@@ -458,7 +467,7 @@ ssh max-core "curl -s https://yleum.ru/api/health | python3 -c 'import json,sys;
 # никуда — платформа ушла в «деградацию» с непонятным «mixed» вместо ревизии.
 # Проверка отсюда ловит любое такое расхождение на той же волне.
 say "core: оркестраторы видны из контейнера api?"
-ssh max-core 'docker exec yleum-prod-api python3 - <<PY
+api_maintenance - <<'PY'
 import json, os, sys, urllib.request
 raw = os.environ.get("ORCHESTRATOR_HOSTS") or "[]"
 hosts = json.loads(raw) if raw.strip().startswith("[") else []
@@ -478,7 +487,7 @@ if bad:
     print("Починка: сверить адреса в ORCHESTRATOR_HOSTS с текущей compose-сетью")
     print("(docker network inspect full_yleum-prod -f \"{{range .IPAM.Config}}{{.Gateway}}{{end}}\")")
     sys.exit(1)
-PY'
+PY
 
 say "core: шлюз моделей не в деградации?"
 ssh max-core 'set -e; code=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:8101/health || true); echo "gateway health: $code"; [ "$code" = 200 ] || { echo "ШЛЮЗ НЕ ОТВЕЧАЕТ"; exit 1; }; n=$(docker logs yleum-prod-gw 2>&1 | grep -c "startup.postgres_unavailable" || true); echo "startup.postgres_unavailable в текущем контейнере: $n"; [ "$n" = 0 ] || { echo "ШЛЮЗ РАБОТАЕТ БЕЗ БАЗЫ: списания теряются, вызовы моделей оплачиваются впустую. Починка: разрешить подсеть контейнера в ufw и pg_hba хостового PostgreSQL, затем docker compose -f docker-compose.yml -f docker-compose.hostdb.yml up -d --no-build --no-deps --force-recreate gateway"; exit 1; }'
@@ -517,7 +526,7 @@ gh workflow run production-smoke.yml >/dev/null && echo "smoke запущен (g
 if [ "$API" = 1 ]; then
   # Only the owning release may reopen admission, after all synchronous health
   # and identity gates above. Failure/EXIT never removes the durable fence.
-  ssh max-core "docker exec -i yleum-prod-api python - '$SHA'" <<'PY'
+  api_maintenance - "$SHA" <<'PY'
 import json, os, sys, urllib.request
 expected = sys.argv[1]
 assert os.environ.get("OMNIA_RELEASE_SHA") == expected, "API process revision mismatch"
@@ -550,7 +559,7 @@ PY
   reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_target
   ingress_drain end
-  ssh max-core "docker exec yleum-prod-api python -m yleum_api.services.generation_deployment_drain end $SHA"
+  api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"
   reader_control core clear --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_control commerce clear --release "$SHA" --owner-nonce "$READER_NONCE"
 fi

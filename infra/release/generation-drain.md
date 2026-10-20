@@ -8,6 +8,23 @@ may replay their existing run; workers may finish pre-fence work. New generation
 and restoration reservations return `generation_draining` (503). The fence is
 owned by the full target release SHA. A crashed deployment leaves it closed.
 
+Canonical API maintenance calls use `api-maintenance.py`, a root host launcher,
+instead of inserting another Python process into a serving reader's cgroup.
+It pins the actual API container/image/PID/start time, namespace descriptors and
+root, and checks that incarnation before and after each command. The mount,
+network and private PID namespaces are joined; serving cgroup membership is not.
+The target must be that PID namespace's init, distinct from the host namespace:
+its exit kernel-kills the maintenance command. A separate owned process session
+also permits bounded termination of both nsenter and its fork on command timeout.
+Runtime discovery uses pinned Docker/PID identity, not an HTTP readiness gate,
+so an interrupted rollout can repair its stale registry. The actual `/app/.venv/bin/python`, installed sources,
+live environment, network and read-only inventory mount are preserved. No host
+dependency environment, copied inventory, new API-image helper container or
+reader allowlist is used. Bootstrap and interrupted-release checks retain their
+exact committed stdin payload and existing target/capture validation. Runtime
+replacement, namespace failure or command timeout fails closed without retrying
+the mutation or falling back to `docker exec`.
+
 The executable quiescence gate also checks filesystem publication journals on
 both core and commerce using each live controller's PID environment and working
 directory. Database zero counts alone are insufficient: queued/building/swapping,
