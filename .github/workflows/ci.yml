@@ -179,7 +179,8 @@ jobs:
   # gate instead of after it (16 of the gate's 24 minutes were this one step). Each shard
   # gets its own disposable PostgreSQL/Redis; membership is `NR % 3` over the sorted file list.
   api-suite:
-    runs-on: ubuntu-latest
+    # The locked Playwright runtime supports Ubuntu 24.04, not the moving latest image.
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
