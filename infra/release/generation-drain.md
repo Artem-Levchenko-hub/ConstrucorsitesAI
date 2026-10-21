@@ -114,8 +114,8 @@ checkout, after independent review. Both revisions are full 40-character
 pushed main SHAs; the owning target must be an ancestor of the control revision.
 The script verifies its own bytes, restricts the complete target-to-control diff
 to the release driver, publication gate, their three release test files, the
-orchestrator's inspector relay deployment contract test, and this runbook. It
-queries GitHub for the latest exact control revision's push-to-main
+orchestrator's inspector relay and API's gateway billing deployment contract
+tests, and this runbook. It queries GitHub for the latest exact control revision's push-to-main
 `CI` run. Missing, queued, failed or mismatched CI denies continuation. The
 changed-path restriction is a scope check; independent review must still confirm
 that the gate preserves all authority, identity, source and physical checks.

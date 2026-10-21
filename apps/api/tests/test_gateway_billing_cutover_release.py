@@ -191,17 +191,91 @@ def execute_gate(
     return commands
 
 
-def test_gate_runs_after_replacement_before_both_admission_reopens():
-    script = SCRIPT.read_text()
-    assert "gateway_capture_identity" in script
-    assert "--force-recreate gateway" in script
-    build = script.index("build gateway")
-    assert script.index("gateway_capture_identity\n") < build
-    gate = script.rindex("gateway_cutover_gate\n")
-    assert build < gate < script.index("  ingress_drain end")
-    assert gate < script.index(
-        'api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"'
+@pytest.mark.parametrize("gate_exit", [0, 75], ids=["green", "failed-cutover"])
+def test_gate_runs_after_replacement_before_both_admission_reopens(tmp_path, gate_exit):
+    import re
+    import shutil
+    import subprocess
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    # Definitions may precede rollout; compare the actual normal call sites.
+    normal = source[source.index('say "core: ff-merge') :]
+    replacement_start = normal.index("if [ $GW = 1 ]; then")
+    replacement = normal[replacement_start : normal.index("\nfi", replacement_start) + 3]
+    closing = normal.index("\n  finish_owned_release\n")
+    assert replacement_start < normal.index("build gateway") < closing
+    call_start = normal.rfind('if [ "$API" = 1 ]; then', 0, closing)
+    assert call_start >= 0
+    closing_call = normal[call_start : normal.index("\nfi", closing) + 3]
+
+    shell = shutil.which("bash") or shutil.which("sh")
+    if shell is None:
+        pytest.skip("requires local Bash for the canonical gateway ending contract")
+
+    def function(name):
+        body = source.split(name + "() {", 1)[1]
+        # A Python dictionary inside the gate's heredoc also closes with `}`.
+        # The shell function ends before the next shell definition or main.
+        ending = re.search(r"\n}\n(?=\n?(?:[a-z_]+\(\) \{|say ))", body)
+        assert ending is not None, name
+        return name + "() {" + body[: ending.end()]
+
+    # Keep identity capture, the gate launcher and the shared end real. Only
+    # host/process boundaries are inert; no SSH, service or fence is touched.
+    program = '''set -euo pipefail
+SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+API=1 GW=1
+READER_NONCE=11111111-1111-4111-8111-111111111111
+record() { printf '%s\\n' "$1" >> events; }
+say() { :; }
+verify_billing_runtime() { record billing; }
+api_maintenance() {
+ if [ "$1" = - ]; then cat >/dev/null; record runtime-health
+ elif [ "$*" = "-m yleum_api.services.generation_deployment_drain end $SHA" ]; then
+  record sql-end
+ else return 99; fi
+}
+ssh() {
+ [ "$1" = max-core ] || return 99
+ case "$2" in
+  "docker inspect yleum-prod-gw --format"*)
+   record capture; printf '%s %s\\n' '__OLD__' '__OLD_IMAGE__' ;;
+  *"--force-recreate gateway"*) record replacement ;;
+  "python3 - '__OLD__' '__OLD_IMAGE__'")
+   cat >/dev/null; record gateway-cutover; return __GATE_EXIT__ ;;
+  "set -euo pipefail; curl -fsS"*) record gateway-health ;;
+  *) return 99 ;;
+ esac
+}
+reader_target() { record target; }
+seq() { printf '1\\n'; }
+ingress_drain() { record "ingress-$1"; }
+quiescence_gate() { record physical; }
+reader_control() { record "$2-$1"; }
+'''
+    program = program.replace("__OLD__", OLD).replace("__OLD_IMAGE__", OLD_IMAGE)
+    program = program.replace("__GATE_EXIT__", str(gate_exit))
+    for name in ("gateway_capture_identity", "gateway_cutover_gate", "finish_owned_release"):
+        program += function(name)
+    program += replacement + "\n" + closing_call
+    # The real gate includes a long Python heredoc; stdin avoids command-line
+    # truncation in the bundled Windows Bash while preserving that payload.
+    result = subprocess.run(
+        [shell, "-s"], input=program, cwd=tmp_path, text=True, capture_output=True, timeout=10
     )
+    assert result.returncode == gate_exit, result.stderr
+    events = (tmp_path / "events").read_text(encoding="utf-8").splitlines()
+    assert events[:2] == ["capture", "replacement"]
+    assert "gateway-cutover" in events
+    assert events.index("replacement") < events.index("gateway-cutover")
+    reopening = ("ingress-end", "sql-end", "clear-core", "clear-commerce")
+    if gate_exit:
+        assert events[-1] == "gateway-cutover"
+        assert all(event not in events for event in reopening)
+    else:
+        assert events.index("gateway-cutover") < events.index("physical")
+        assert events.index("physical") < events.index("ingress-end") < events.index("sql-end")
+        assert events.index("sql-end") < events.index("clear-core") < events.index("clear-commerce")
 
 
 def test_green_gate_checks_actual_container_pool_without_secret_output(monkeypatch, capsys):
