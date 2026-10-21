@@ -211,14 +211,14 @@ def restore_sql(cells, runner, directory, image, name, dump, globals_dump):
     pool = cells.ScratchPool(runner)
     backup = cells.CellBackup(runner=runner, out_dir=directory, postgres_image=image,
                               helper_image=image, redactor=cells.SecretRedactor())
-    admin = "offline_" + uuid4().hex
     try:
         volume = pool.volume_name()
         need(runner.run(["volume", "create", "--label", cells._SCRATCH_LABEL, volume],
                         timeout=60).ok, "sql_volume_failed")
         need(backup.prepare_scratch_volume(pool, volume) is None, "sql_prepare_failed")
-        server = backup.start_scratch_server(pool, volume, bootstrap_user=admin)
+        server = backup.start_scratch_server(pool, volume)
         need(isinstance(server, str), "sql_start_failed")
+        admin = backup.create_scratch_restore_admin(server)
 
         def sql(command=None, path=None, database="postgres"):
             args = ["exec", *(["--interactive"] if path else []), server,
@@ -235,7 +235,11 @@ def restore_sql(cells, runner, directory, image, name, dump, globals_dump):
             expanded = directory / (source.name + ".expanded.sql")
             with gzip.open(source, "rb") as stream, private_file(expanded) as sink:
                 shutil.copyfileobj(stream, sink, 1024 * 1024)
-            sql(path=expanded, database=target_db)
+            if source == globals_dump:
+                with cells.plain_restore_source(expanded, directory) as restored_globals:
+                    sql(path=restored_globals, database=target_db)
+            else:
+                sql(path=expanded, database=target_db)
         counts_file = directory / (name + "-counts.sql")
         counts_sql = """CREATE TEMP TABLE offline_counts(n bigint);
 SELECT format('INSERT INTO offline_counts SELECT count(*) FROM %I.%I',

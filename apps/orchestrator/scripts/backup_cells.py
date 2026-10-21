@@ -25,13 +25,15 @@ import json
 import os
 import re
 import secrets
+import shutil
 import stat
 import subprocess
 import tarfile
 import tempfile
 import threading
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -1833,6 +1835,18 @@ class CellBackup:
     def scratch_connection(*, user: str = "postgres", database: str = "postgres") -> list[str]:
         return ["-U", user, "-h", _SCRATCH_SOCKET, "-d", database]
 
+    def create_scratch_restore_admin(self, server: str) -> str:
+        """Keep postgres at bootstrap OID 10, independent of restored login flags."""
+        admin = "omnia_backup_" + secrets.token_hex(16)
+        result = self.runner.run(
+            ["exec", _require_scratch(server), "psql", "-X", "-v", "ON_ERROR_STOP=1",
+             *self.scratch_connection(), "-c", f"CREATE ROLE {admin} LOGIN SUPERUSER"],
+            timeout=_QUERY_TIMEOUT,
+        )
+        if not result.ok:
+            raise BackupError("scratch restore administrator creation failed")
+        return admin
+
     def count_tables(
         self,
         prefix: Sequence[str],
@@ -2505,14 +2519,14 @@ def _restore_entry(
         if prepared is not None:
             return {"status": "failed", "detail": prepared.detail}
         dump_format = _dump_format(path, entry)
-        # A full cluster dump creates the original postgres role. A fresh
-        # independent bootstrap avoids its "already exists" error. Keep initdb's
-        # standard databases: pg_dumpall reconnects to postgres/template1 and
-        # assumes they exist. Every SQL/data error must still stop the restore.
-        admin = "omnia_backup_" + secrets.token_hex(16) if dump_format == "plain" else "postgres"
-        server = backup.start_scratch_server(pool, scratch_volume, bootstrap_user=admin)
+        # Explicit GRANTED BY postgres requires the original bootstrap OID 10,
+        # not a later superuser of the same name. Keep initdb's standard DBs too.
+        server = backup.start_scratch_server(pool, scratch_volume)
         if isinstance(server, DumpOutcome):
             return {"status": "failed", "detail": server.detail}
+        admin = (
+            backup.create_scratch_restore_admin(server) if dump_format == "plain" else "postgres"
+        )
         connection = backup.scratch_connection(
             user=admin, database="template1" if dump_format == "plain" else "postgres",
         )
@@ -2526,11 +2540,16 @@ def _restore_entry(
             )
             if not role.ok:
                 return {"status": "failed", "detail": "scratch core ACL role creation failed"}
-        restored = backup.runner.run(
-            ["exec", "--interactive", server, *_restore_command(dump_format, connection)],
-            timeout=_DUMP_TIMEOUT,
-            stdin_path=path,
+        source = (
+            plain_restore_source(path, backup.out_dir)
+            if dump_format == "plain" else nullcontext(path)
         )
+        with source as restore_path:
+            restored = backup.runner.run(
+                ["exec", "--interactive", server, *_restore_command(dump_format, connection)],
+                timeout=_DUMP_TIMEOUT,
+                stdin_path=restore_path,
+            )
         if not restored.ok:
             return {
                 "status": "failed",
@@ -2554,6 +2573,128 @@ def _restore_entry(
 
 # A custom-format pg_dump starts with this magic; a plain script never does.
 _CUSTOM_DUMP_MAGIC = b"PGDMP"
+_SQL_WORD = re.compile(rb"[A-Za-z_][A-Za-z_0-9$]*")
+_SQL_DOLLAR_QUOTE = re.compile(rb"\$(?:[A-Za-z_][A-Za-z_0-9]*)?\$")
+
+
+def _bootstrap_role_span(prefix: bytes) -> tuple[int, int] | None:
+    """Locate only a complete global-prefix CREATE ROLE postgres statement.
+
+    This is a conservative lexer, not a SQL rewriter. Stop at database/COPY SQL
+    or psql commands other than dump restrict markers. Ambiguous quoting leaves
+    the input untouched, so psql's normal strict failure remains authoritative.
+    """
+    tokens: list[tuple[str, bytes]] = []
+    start: int | None = None
+    index = 0
+    while index < len(prefix):
+        byte = prefix[index:index + 1]
+        if byte in b" \t\r\n\f":
+            index += 1
+            continue
+        if prefix.startswith(b"--", index):
+            end = prefix.find(b"\n", index)
+            index = len(prefix) if end < 0 else end + 1
+            continue
+        if prefix.startswith(b"/*", index):
+            depth = 1
+            index += 2
+            while index < len(prefix) and depth:
+                if prefix.startswith(b"/*", index):
+                    depth += 1
+                    index += 2
+                elif prefix.startswith(b"*/", index):
+                    depth -= 1
+                    index += 2
+                else:
+                    index += 1
+            if depth:
+                return None
+            continue
+        if byte == b"\\":
+            end = prefix.find(b"\n", index)
+            end = len(prefix) if end < 0 else end
+            if tokens or re.fullmatch(rb"\\(?:un)?restrict[ \t]+[A-Za-z0-9]+[ \t\r]*",
+                                      prefix[index:end]) is None:
+                return None
+            index = end
+            continue
+        if start is None:
+            start = index
+        if byte in {b"'", b'"'}:
+            quote = byte
+            value = bytearray()
+            index += 1
+            while index < len(prefix):
+                current = prefix[index:index + 1]
+                if current == b"\\" and quote == b"'":
+                    return None  # Escape-string/settings ambiguity: never guess.
+                if current == quote:
+                    if prefix[index + 1:index + 2] == quote:
+                        value.extend(quote)
+                        index += 2
+                        continue
+                    index += 1
+                    break
+                value.extend(current)
+                index += 1
+            else:
+                return None
+            tokens.append(("quoted" if quote == b'"' else "opaque", bytes(value)))
+            continue
+        dollar = _SQL_DOLLAR_QUOTE.match(prefix, index)
+        if dollar:
+            delimiter = dollar.group()
+            end = prefix.find(delimiter, index + len(delimiter))
+            if end < 0:
+                return None
+            index = end + len(delimiter)
+            tokens.append(("opaque", b""))
+            continue
+        word = _SQL_WORD.match(prefix, index)
+        if word:
+            tokens.append(("word", word.group().lower()))
+            index += len(word.group())
+            continue
+        if byte == b";":
+            if (len(tokens) == 3 and tokens[:2] == [("word", b"create"), ("word", b"role")]
+                    and tokens[2] in {("word", b"postgres"), ("quoted", b"postgres")}):
+                assert start is not None
+                return start, index + 1
+            global_statement = (
+                bool(tokens) and tokens[0][0] == "word"
+                and (tokens[0][1] in {
+                    b"set", b"alter", b"grant", b"revoke", b"comment", b"security", b"select",
+                }
+                     or tokens[:2] == [("word", b"create"), ("word", b"role")])
+            )
+            if not global_statement:
+                return None
+            tokens.clear()
+            start = None
+        else:
+            tokens.append(("other", byte))
+        index += 1
+    return None
+
+
+@contextmanager
+def plain_restore_source(path: Path, directory: Path) -> Iterator[Path]:
+    """Skip one known bootstrap duplicate; preserve the archive and all SQL errors."""
+    with path.open("rb") as source:
+        prefix = source.read(4 * 1024 * 1024)
+        span = _bootstrap_role_span(prefix)
+        if span is None:
+            yield path
+            return
+        start, end = span
+        blank = bytes(byte if byte in b"\r\n" else 32 for byte in prefix[start:end])
+        with tempfile.TemporaryDirectory(prefix="omnia-restore-", dir=directory) as folder:
+            filtered = Path(folder) / "cluster.sql"
+            with os.fdopen(_create_private_file(filtered), "wb") as target:
+                target.write(prefix[:start] + blank + prefix[end:])
+                shutil.copyfileobj(source, target, _CHUNK_BYTES)
+            yield filtered
 
 
 def _dump_format(path: Path, entry: Mapping[str, Any]) -> DumpFormat:

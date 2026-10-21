@@ -1173,6 +1173,8 @@ def test_full_cluster_restore_keeps_standard_databases_with_strict_sql(tmp_path:
     restores = runner.matching("exec", "psql", "-f", "ON_ERROR_STOP=1")
     assert len(restores) == 1
     assert restores[0][restores[0].index("-U") + 1].startswith("omnia_backup_")
+    starts = runner.matching("run", "--detach", "--entrypoint", "sh")
+    assert len(starts) == 1 and "initdb --username=postgres " in starts[0][-1]
     assert not any("DROP DATABASE postgres" in call for call in runner.calls)
 
 
@@ -1878,3 +1880,128 @@ def test_protocol_one_dump_and_table_count_use_admin_peer_with_trusted_options(
         scripts = [a for call in runner.calls for a in call if "local all all trust" in a]
         assert scripts and all("hba_file=/tmp/" in a for a in scripts)
         assert any(f"{project_volume(EDITOR)}:/source:ro" in call for call in runner.calls)
+
+
+
+@pytest.mark.parametrize("prefix", [
+    b"CREATE ROLE postgres;",
+    b'-- CREATE ROLE postgres;\n/* nested /* quote \' */ comment */\nCREATE ROLE "postgres";',
+    b"\\restrict Abc123\nSET client_encoding = 'UTF8';\nCREATE /* x */ ROLE postgres;",
+    b"SELECT 'CREATE ROLE postgres;';\nCREATE ROLE postgres;",
+    b"SELECT $tag$CREATE ROLE postgres;$tag$;\nCREATE ROLE postgres;",
+    (b'CREATE ROLE "someone; else";\nALTER ROLE "someone; else" PASSWORD \'a\'\'b\';\n'
+     b'CREATE ROLE POSTGRES;'),
+])
+def test_plain_restore_skips_only_top_level_bootstrap_create(tmp_path: Path, prefix: bytes) -> None:
+    source = tmp_path / "dump.sql"
+    tail = (b"\nALTER ROLE postgres NOSUPERUSER NOLOGIN;\n"
+            b"CREATE ROLE reader;\nCREATE ROLE member;\n"
+            b"GRANT reader TO member WITH INHERIT TRUE GRANTED BY postgres;\n"
+            b"\\connect postgres\nCOPY public.t FROM stdin;\nCREATE ROLE postgres;\n\\.\n"
+            b"\\unrestrict Abc123\n")
+    original = prefix + tail
+    source.write_bytes(original)
+    span = backup_cells._bootstrap_role_span(original)
+    assert span is not None
+    with backup_cells.plain_restore_source(source, tmp_path) as filtered:
+        assert filtered != source
+        copied = filtered.read_bytes()
+        start, end = span
+        assert copied[:start] == original[:start] and copied[end:] == original[end:]
+        assert all(byte in b" \r\n" for byte in copied[start:end])
+        assert copied.endswith(tail)
+        assert stat.S_IMODE(filtered.stat().st_mode) == 0o600 if os.name == "posix" else True
+    assert not filtered.exists()
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("source", [
+    b'CREATE ROLE "Postgres";',
+    b"CREATE ROLE postgres LOGIN;",
+    b"COPY t FROM stdin;\nCREATE ROLE postgres;\n\\.\n",
+    b"\\connect postgres\nCREATE ROLE postgres;",
+    b"CREATE FUNCTION f() RETURNS void AS $$ BEGIN CREATE ROLE postgres; END; $$ LANGUAGE plpgsql;",
+    b"SELECT 'unterminated; CREATE ROLE postgres;",
+    b"/* unclosed CREATE ROLE postgres;",
+    b"SET something = E'escaped\\\\';\nCREATE ROLE postgres;",
+    b"\\unknown\nCREATE ROLE postgres;",
+])
+def test_plain_restore_ambiguous_or_database_sql_is_never_rewritten(
+    tmp_path: Path, source: bytes,
+) -> None:
+    path = tmp_path / "dump.sql"
+    path.write_bytes(source)
+    assert backup_cells._bootstrap_role_span(source) is None
+    with backup_cells.plain_restore_source(path, tmp_path) as selected:
+        assert selected == path and selected.read_bytes() == source
+
+
+def test_plain_restore_keeps_second_duplicate_and_cleans_temp_on_error(tmp_path: Path) -> None:
+    path = tmp_path / "dump.sql"
+    original = b"CREATE ROLE postgres;\nCREATE ROLE postgres;\nINVALID SQL;\n"
+    path.write_bytes(original)
+    with pytest.raises(RuntimeError, match="synthetic restore failure"):
+        with backup_cells.plain_restore_source(path, tmp_path) as filtered:
+            assert filtered.read_bytes().count(b"CREATE ROLE postgres;") == 1
+            assert b"INVALID SQL;" in filtered.read_bytes()
+            raise RuntimeError("synthetic restore failure")
+    assert not filtered.exists() and path.read_bytes() == original
+    assert not list(tmp_path.glob("omnia-restore-*"))
+
+
+def test_plain_restore_bounded_prefix_does_not_guess_past_limit(tmp_path: Path) -> None:
+    path = tmp_path / "dump.sql"
+    original = b"--" + b"x" * (4 * 1024 * 1024) + b"\nCREATE ROLE postgres;\n"
+    path.write_bytes(original)
+    with backup_cells.plain_restore_source(path, tmp_path) as filtered:
+        assert filtered == path
+    assert path.read_bytes() == original
+
+
+@pytest.mark.parametrize("invalid_sql", [False, True])
+def test_actual_plain_restore_preserves_bootstrap_and_strict_sql(
+    tmp_path: Path, invalid_sql: bool,
+) -> None:
+    class InspectingRunner(FakeRunner):
+        payloads: list[bytes]
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.payloads = []
+
+        def run(self, args, *, timeout, env=None, stdin_path=None):
+            result = super().run(args, timeout=timeout, env=env, stdin_path=stdin_path)
+            if stdin_path is not None:
+                payload = stdin_path.read_bytes()
+                self.payloads.append(payload)
+                assert b"CREATE ROLE postgres;" not in payload
+                assert b"GRANTED BY postgres" in payload
+                if b"INVALID SQL;" in payload:
+                    return CommandResult(tuple(args), 1, b"", b"unrelated SQL failure")
+            return result
+
+    runner = InspectingRunner()
+    path = tmp_path / "dump.sql"
+    original = (b"CREATE ROLE postgres;\nALTER ROLE postgres NOSUPERUSER NOLOGIN;\n"
+                b"CREATE ROLE reader;\nCREATE ROLE member;\n"
+                b"GRANT reader TO member GRANTED BY postgres;\n")
+    if invalid_sql:
+        original += b"INVALID SQL;\n"
+    path.write_bytes(original)
+    backup = backup_cells.CellBackup(
+        runner=runner, out_dir=tmp_path, postgres_image=POSTGRES_IMAGE,
+        helper_image=HELPER_IMAGE, redactor=backup_cells.SecretRedactor(),
+    )
+    actual = backup_cells._restore_entry(backup, path, "project", {"format": "plain", "tables": 7})
+    assert actual["status"] == ("failed" if invalid_sql else "ok")
+    assert len(runner.payloads) == 1
+    started = runner.matching("run", "--detach")[0]
+    assert "initdb --username=postgres " in started[-1]
+    admin = next(call[-1] for call in runner.matching("psql", "-c")
+                 if call[-1].startswith("CREATE ROLE omnia_backup_"))
+    assert admin.endswith(" LOGIN SUPERUSER")
+    restores = runner.matching("psql", "-f")
+    assert len(restores) == 1 and "ON_ERROR_STOP=1" in restores[0]
+    assert restores[0][restores[0].index("-U") + 1].startswith("omnia_backup_")
+    assert path.read_bytes() == original and not list(tmp_path.glob("omnia-restore-*"))
+    assert not runner.containers and not runner.volumes

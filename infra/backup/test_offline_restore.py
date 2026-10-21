@@ -5,6 +5,7 @@ import importlib.util
 import io
 import json
 import os
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -121,6 +122,75 @@ class OfflineTests(unittest.TestCase):
                     module.AcceptanceError, "sql_globals_required"):
                 module.restore_sql(None, None, self.root, "unused", "omnia",
                                    self.root / "dump.sql.gz", globals_path)
+
+    def test_actual_sql_restore_preserves_bootstrap_and_strict_globals(self):
+        cells_path = SCRIPT.parents[2] / "apps/orchestrator/scripts/backup_cells.py"
+        cells_spec = importlib.util.spec_from_file_location("offline_cells_fixture", cells_path)
+        cells = importlib.util.module_from_spec(cells_spec)
+        with patch.dict(sys.modules, {cells_spec.name: cells}):
+            cells_spec.loader.exec_module(cells)
+
+        class Runner:
+            def __init__(self, invalid):
+                self.invalid, self.calls, self.payloads, self.sum_queries = invalid, [], [], 0
+                self.containers, self.volumes = set(), set()
+
+            def run(self, args, *, timeout, stdin_path=None, **kwargs):
+                self.calls.append(args)
+                if args[:2] == ["volume", "create"]:
+                    self.volumes.add(args[-1])
+                if args[:2] == ["volume", "rm"]:
+                    self.volumes.discard(args[-1])
+                if args[0] == "run" and "--name" in args:
+                    self.containers.add(args[args.index("--name") + 1])
+                if args[0] == "rm":
+                    self.containers.discard(args[-1])
+                output = b""
+                if stdin_path is not None:
+                    payload = stdin_path.read_bytes()
+                    self.payloads.append(payload)
+                    self_outer.assertIn("ON_ERROR_STOP=1", args)
+                    self_outer.assertTrue(args[args.index("-U") + 1].startswith("omnia_backup_"))
+                    self_outer.assertNotIn(b"CREATE ROLE postgres;", payload)
+                    if b"INVALID SQL;" in payload:
+                        return cells.CommandResult(tuple(args), 1, b"", b"unrelated SQL error")
+                    if stdin_path.name.endswith("-counts.sql"):
+                        output = b'{"tables":1,"rows":2}'
+                if "-c" in args and args[-1].startswith("SELECT sum(n)"):
+                    self.sum_queries += 1
+                    output = str(1 if self.sum_queries == 1 else 3).encode()
+                return cells.CommandResult(tuple(args), 0, output, b"")
+
+        self_outer = self
+        for invalid in (False, True):
+            with self.subTest(invalid=invalid):
+                directory = self.root / str(invalid)
+                directory.mkdir()
+                globals_path, dump_path = directory / "globals.sql.gz", directory / "data.sql.gz"
+                sql = (b"\\restrict Abc123\nCREATE ROLE postgres;\n"
+                       b"ALTER ROLE postgres NOSUPERUSER NOLOGIN;\n"
+                       b"CREATE ROLE reader;\nCREATE ROLE member;\n"
+                       b"GRANT reader TO member GRANTED BY postgres;\n\\unrestrict Abc123\n")
+                if invalid:
+                    sql += b"INVALID SQL;\n"
+                globals_path.write_bytes(gzip.compress(sql))
+                dump_path.write_bytes(gzip.compress(b"CREATE TABLE t(n int); INSERT INTO t VALUES(1),(2);"))
+                original = globals_path.read_bytes()
+                runner = Runner(invalid)
+                if invalid:
+                    with self.assertRaisesRegex(module.AcceptanceError, "sql_restore_or_query_failed"):
+                        module.restore_sql(cells, runner, directory, "unused", "omnia", dump_path, globals_path)
+                    self.assertEqual(len(runner.payloads), 1)
+                else:
+                    result = module.restore_sql(cells, runner, directory, "unused", "omnia", dump_path, globals_path)
+                    self.assertEqual(result, {"status": "passed", "tables": 1, "rows": 2,
+                                              "write_restart": True, "globals_restored": True})
+                self.assertIn(b"GRANTED BY postgres", runner.payloads[0])
+                start = next(call for call in runner.calls if call[0] == "run" and "--detach" in call)
+                self.assertIn("initdb --username=postgres ", start[-1])
+                self.assertEqual(globals_path.read_bytes(), original)
+                self.assertFalse(list(directory.glob("omnia-restore-*")))
+                self.assertFalse(runner.containers or runner.volumes)
 
     def test_sandbox_and_local_explicit_host_and_pinned_image_required(self):
         image = "postgres@sha256:" + "a" * 64
@@ -260,7 +330,7 @@ class OfflineTests(unittest.TestCase):
             with self.subTest(args=args), self.assertRaises(module.AcceptanceError):
                 runner.run(args, timeout=1)
 
-    def test_strict_sql_role_collision_fails_and_owned_resources_are_removed(self):
+    def test_nonbootstrap_role_collision_fails_and_owned_resources_are_removed(self):
         cells = module.load_runtime().load_cells(
             Path(__file__).resolve().parents[2] / "apps/orchestrator/scripts/backup_cells.py")
         class Backend:
@@ -290,6 +360,9 @@ class OfflineTests(unittest.TestCase):
                     self.resources["container" if args[0] == "rm" else "volume"].pop(args[-1], None)
                 elif "psql" in args and kwargs.get("stdin_path"):
                     assert "ON_ERROR_STOP=1" in args
+                    payload = kwargs["stdin_path"].read_bytes()
+                    assert b"CREATE ROLE postgres;" not in payload
+                    assert payload.count(b"CREATE ROLE duplicate;") == 2
                     self.failed_sql = True
                     code = 1
                 return cells.CommandResult(tuple(args), code, output,
@@ -298,9 +371,10 @@ class OfflineTests(unittest.TestCase):
         runner = module.OwnedDocker(backend, "b" * 32)
         dump = self.root / "database.sql.gz"
         roles = self.root / "globals.sql.gz"
-        for path in (dump, roles):
-            with gzip.open(path, "wb") as sink:
-                sink.write(b"CREATE ROLE postgres;")
+        with gzip.open(roles, "wb") as sink:
+            sink.write(b"CREATE ROLE postgres;\nCREATE ROLE duplicate;\nCREATE ROLE duplicate;\n")
+        with gzip.open(dump, "wb") as sink:
+            sink.write(b"CREATE TABLE t(n int);")
         with self.assertRaisesRegex(module.AcceptanceError, "^sql_restore_or_query_failed$"):
             module.restore_sql(cells, runner, self.root, "postgres@sha256:" + "a" * 64,
                                "omnia", dump, roles)
