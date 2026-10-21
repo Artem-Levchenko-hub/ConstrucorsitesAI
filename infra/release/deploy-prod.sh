@@ -421,7 +421,7 @@ BILLING_IMAGE
   )
   read -r image producer_release <<< "$validated"
   ssh max-core "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes commerce 'sudo -n python3 - $SHA $image $producer_release'" <<'BILLING_RUNTIME'
-import json, subprocess, sys
+import hashlib, json, re, subprocess, sys
 expected, image, producer = sys.argv[1:]
 def kube(*arguments):
     result = subprocess.run(["k3s", "kubectl", "-n", "billing", *arguments, "-o", "json"],
@@ -448,8 +448,99 @@ assert any(condition["type"] == "Ready" and condition["status"] == "True"
 statuses = pod["status"]["containerStatuses"]
 assert len(statuses) == 1 and statuses[0]["name"] == "worker" and statuses[0]["ready"] is True
 assert "running" in statuses[0]["state"]
-assert statuses[0]["imageID"] in {image, "docker-pullable://" + image,
-                                    "containerd://" + image.split("@", 1)[1]}
+status = statuses[0]
+repository = "registry.yleum.ru/platform/omnia-api"
+digest_pattern = r"sha256:[0-9a-f]{64}"
+reference_pattern = re.escape(repository) + "@" + digest_pattern
+assert re.fullmatch(reference_pattern, image), "invalid billing pinned reference"
+actual = status["imageID"]
+if actual.startswith("docker-pullable://"):
+    actual = actual.removeprefix("docker-pullable://")
+elif actual.startswith("containerd://"):
+    actual = repository + "@" + actual.removeprefix("containerd://")
+assert re.fullmatch(reference_pattern, actual), "invalid billing runtime reference"
+
+def unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        assert key not in result, "duplicate cached image JSON key"
+        result[key] = value
+    return result
+
+def content(digest, size=None):
+    assert re.fullmatch(digest_pattern, digest), "invalid cached image digest"
+    result = subprocess.run(["k3s", "ctr", "-n", "k8s.io", "content", "get", digest],
+                            check=True, capture_output=True, timeout=20)
+    raw = result.stdout
+    assert 0 < len(raw) <= 2 * 1024**2 and (size is None or len(raw) == size), "cached image size differs"
+    assert "sha256:" + hashlib.sha256(raw).hexdigest() == digest, "cached image hash differs"
+    document = json.loads(raw, object_pairs_hook=unique_keys)
+    assert isinstance(document, dict), "cached image object required"
+    return document, len(raw)
+
+manifests = {"application/vnd.oci.image.manifest.v1+json", "application/vnd.docker.distribution.manifest.v2+json"}
+indexes = {"application/vnd.oci.image.index.v1+json", "application/vnd.docker.distribution.manifest.list.v2+json"}
+configs = {"application/vnd.oci.image.config.v1+json", "application/vnd.docker.container.image.v1+json"}
+layers = {"application/vnd.oci.image.layer.v1.tar", "application/vnd.oci.image.layer.v1.tar+gzip",
+          "application/vnd.docker.image.rootfs.diff.tar", "application/vnd.docker.image.rootfs.diff.tar.gzip"}
+
+def descriptor(value, allowed):
+    assert isinstance(value, dict) and set(value) <= {"mediaType", "digest", "size", "platform", "annotations"}
+    assert value["mediaType"] in allowed and re.fullmatch(digest_pattern, value["digest"])
+    assert type(value["size"]) is int and value["size"] > 0
+    return value["mediaType"], value["digest"], value["size"]
+
+def selected_leaf(reference):
+    digest = reference.split("@", 1)[1]
+    root, size = content(digest)
+    assert root["schemaVersion"] == 2 and not ({"artifactType", "subject"} & set(root))
+    if root["mediaType"] in indexes:
+        candidates = [entry for entry in root["manifests"]
+                      if entry.get("platform") == {"os": "linux", "architecture": "amd64"}
+                      and entry.get("annotations", {}).get("vnd.docker.reference.type") != "attestation-manifest"]
+        assert len(candidates) == 1, "billing image platform selection is ambiguous or absent"
+        return descriptor(candidates[0], manifests)
+    return descriptor({"mediaType": root["mediaType"], "digest": digest, "size": size}, manifests)
+
+# Different index attestations may describe the exact same executable platform leaf.
+pinned_leaf, actual_leaf = selected_leaf(image), selected_leaf(actual)
+assert pinned_leaf == actual_leaf, "billing runtime selects different image content"
+leaf, _ = content(pinned_leaf[1], pinned_leaf[2])
+assert leaf["schemaVersion"] == 2 and leaf["mediaType"] == pinned_leaf[0]
+assert not ({"artifactType", "subject"} & set(leaf)), "billing executable manifest is an artifact"
+_, config_id, config_size = descriptor(leaf["config"], configs)
+assert isinstance(leaf["layers"], list) and leaf["layers"], "billing image layers absent"
+for layer in leaf["layers"]:
+    descriptor(layer, layers)
+config, _ = content(config_id, config_size)
+assert config["os"] == "linux" and config["architecture"] == "amd64", "billing config platform differs"
+rootfs = config["rootfs"]
+assert rootfs["type"] == "layers" and len(rootfs["diff_ids"]) == len(leaf["layers"])
+assert all(re.fullmatch(digest_pattern, digest) for digest in rootfs["diff_ids"])
+
+def cri(action, identity):
+    result = subprocess.run(["k3s", "crictl", action, identity], check=True,
+                            capture_output=True, text=True, timeout=20)
+    return json.loads(result.stdout)
+
+for reference in (image, actual):
+    inspected = cri("inspecti", reference)
+    assert inspected["status"]["id"] == config_id, "billing CRI image config differs"
+    repo_digests = inspected["status"]["repoDigests"]
+    assert isinstance(repo_digests, list) and image in repo_digests and actual in repo_digests
+    image_spec = inspected["info"]["imageSpec"]
+    assert image_spec["os"] == "linux" and image_spec["architecture"] == "amd64" and image_spec["rootfs"] == rootfs
+assert status["image"] == config_id, "billing kube image config differs"
+assert re.fullmatch(r"containerd://[0-9a-f]{64}", status["containerID"]), "invalid billing container identity"
+container_id = status["containerID"].removeprefix("containerd://")
+live = cri("inspect", container_id)["status"]
+assert live["id"] == container_id and live["state"] == "CONTAINER_RUNNING" and live["metadata"]["name"] == "worker"
+assert pod["metadata"]["namespace"] == "billing" and pod["metadata"]["uid"] and pod["metadata"]["name"]
+for key, value in {"container.name": "worker", "pod.namespace": "billing",
+                   "pod.uid": pod["metadata"]["uid"], "pod.name": pod["metadata"]["name"]}.items():
+    assert live["labels"]["io.kubernetes." + key] == value, "billing CRI pod binding differs"
+assert live["imageRef"] == actual and live["image"]["image"] == config_id
+assert live["image"]["userSpecifiedImage"] == image, "billing CRI requested image differs"
 print("billing target digest and single ready runtime confirmed")
 BILLING_RUNTIME
 }
