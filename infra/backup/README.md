@@ -43,7 +43,17 @@ or cleanup of a replacement UID is allowed.
 
 Each retained PVC has its own UID-bound tar/hash and complete file-tree digest
 (bytes, POSIX owner/mode, directories and contained links; external links and
-special files are rejected). Verification extracts only into new Docker scratch
+special files are rejected). Its cold-only exec stream uses one read-only tar
+pass: under shell pipefail, tee forwards the archive and SHA256 hashes those same
+bytes. Only a successful pipeline emits a fresh nonce-bound digest trailer. The
+host detects that trailer before EOF, verifies the received hash, flushes and
+fsyncs the private archive, then sends the exact acknowledgment. The producer
+waits for that acknowledgment; collection also requires natural exit zero and
+no later stdout. Missing or corrupt trailers, premature EOF, disk/ACK errors,
+timeouts and nonzero exit fail collection and retain private partial evidence.
+Ordinary logical-dump streams retain their existing behavior. This handshake
+adds no retry, delay, second tar pass or source write.
+Verification extracts only into new Docker scratch
 volumes and compares the extracted tree. Both PGDATA layouts must recover on a
 fresh copy, produce a logical dump and pass a second strict SQL restore. Code
 volumes follow the file-tree path and never start PostgreSQL. This does not

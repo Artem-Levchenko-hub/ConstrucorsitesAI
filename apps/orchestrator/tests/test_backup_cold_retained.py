@@ -224,11 +224,20 @@ class Kube:
 class TarRunner:
     def __init__(self):
         self.calls = []
+        self.nonces = []
 
     def run_to_file(self, args, *, path, timeout):
+        raise AssertionError("cold collection must verify the source SHA before EOF")
+
+    def run_acknowledged_to_file(self, args, *, path, timeout, nonce):
         import hashlib
 
         self.calls.append(args)
+        assert len(nonce) == 32 and int(nonce, 16) >= 0
+        assert nonce not in self.nonces
+        self.nonces.append(nonce)
+        assert "--stdin" in args and "--tty" not in args
+        assert args[-2] == f"/source/{len(self.calls) - 1}" and args[-1] == nonce
         assert timeout == 1800
         payload = tar_bytes()
         path.write_bytes(payload)

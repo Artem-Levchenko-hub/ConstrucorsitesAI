@@ -42,6 +42,21 @@ CONTROLLERS = (
 _BARRIER_TIMEOUT = 30.0
 _CLEANUP_TIMEOUT = 60.0
 
+# fd3 preserves the exec stdout while command substitution captures only the
+# digest. pipefail forbids a successful sha256sum from hiding tar/tee failure.
+_TAR_STREAM_SCRIPT = r"""set -eu
+set -o pipefail
+exec 3>&1
+checksum=$(tar -cf - -C "$1" . | tee /proc/self/fd/3 | sha256sum)
+exec 3>&-
+checksum=${checksum%% *}
+case "$checksum" in ''|*[!0-9a-f]*) exit 4;; esac
+[ "${#checksum}" -eq 64 ]
+printf 'YLEUM-COLD-1 %s %s\n' "$2" "$checksum"
+IFS= read -r acknowledgment
+[ "$acknowledgment" = "YLEUM-COLD-ACK-1 $2 $checksum" ]
+"""
+
 
 def need(value):
     if not value:
@@ -669,26 +684,29 @@ def collect_one(
         for index, volume in enumerate(plan["volumes"]):
             watch.check()
             filename = cold_file(plan["namespace_uid"], volume["uid"])
-            result = runner.run_to_file(
+            nonce = secrets.token_hex(16)
+            result = runner.run_acknowledged_to_file(
                 [
                     "--context",
                     spec["context"],
                     "exec",
+                    "--stdin",
                     "--namespace",
                     plan["namespace"],
                     name,
                     "--container",
                     "archive",
                     "--",
-                    "tar",
-                    "-cf",
-                    "-",
-                    "-C",
+                    "sh",
+                    "-ec",
+                    _TAR_STREAM_SCRIPT,
+                    "cold-tar",
                     f"/source/{index}",
-                    ".",
+                    nonce,
                 ],
                 path=out / filename,
                 timeout=1800,
+                nonce=nonce,
             )
             need(result.ok and result.size_bytes > 0)
             artifacts.append(

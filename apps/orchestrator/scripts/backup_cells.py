@@ -156,6 +156,20 @@ class StreamResult:
         return self.exit_code == 0
 
 
+def _close_stream_process(process: subprocess.Popen[bytes], watchdog: threading.Timer) -> None:
+    watchdog.cancel()
+    if process.stdout is not None:
+        process.stdout.close()
+    if process.poll() is None:
+        process.kill()
+        process.wait()
+    if process.stdin is not None:
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+
+
 class DockerRunner:
     """The only place that talks to docker, so tests can replace it wholesale."""
 
@@ -233,14 +247,101 @@ class DockerRunner:
                     os.fsync(sink.fileno())
                 exit_code = process.wait()
             finally:
-                watchdog.cancel()
-                if process.stdout is not None:
-                    process.stdout.close()
-                if process.poll() is None:  # pragma: no cover - defensive
-                    process.kill()
-                    process.wait()
+                _close_stream_process(process, watchdog)
             errors.seek(0)
             stderr = errors.read(_STDERR_TAIL_BYTES)
+        return StreamResult(argv, exit_code, size, digest.hexdigest(), stderr)
+
+    def run_acknowledged_to_file(
+        self,
+        args: Sequence[str],
+        *,
+        path: Path,
+        timeout: float,
+        nonce: str,
+    ) -> StreamResult:
+        """Cold tar only: verify/fsync its source SHA frame before acknowledging it."""
+        if re.fullmatch(r"[0-9a-f]{32}", nonce) is None or timeout <= 0:
+            raise BackupError("invalid cold stream nonce or deadline")
+        argv = (self.binary, *args)
+        digest, size = hashlib.sha256(), 0
+        prefix = f"YLEUM-COLD-1 {nonce} ".encode()
+        frame_size = len(prefix) + 65
+        deadline = time.monotonic() + timeout
+        expired = threading.Event()
+        with tempfile.TemporaryFile() as errors:
+            try:
+                process = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=errors,
+                    env=_child_env(None),
+                )
+            except OSError as error:
+                return StreamResult(argv, 127, 0, "", f"cannot run docker: {error}".encode())
+
+            def terminate() -> None:
+                expired.set()
+                try:
+                    process.kill()
+                except ProcessLookupError:
+                    pass
+
+            watchdog = threading.Timer(timeout, terminate)
+            watchdog.start()
+            failure = b""
+            try:
+                if process.stdout is None or process.stdin is None:  # pragma: no cover
+                    raise BackupError("cold stream pipes unavailable")
+                tail = b""
+                with os.fdopen(_create_private_file(path), "wb") as sink:
+                    while True:
+                        # A buffered read(CHUNK) can wait for EOF while the producer
+                        # waits for our ACK. os.read returns an available short read.
+                        chunk = os.read(process.stdout.fileno(), _CHUNK_BYTES)
+                        if not chunk:
+                            raise BackupError("cold stream ended before source SHA frame")
+                        pending = tail + chunk
+                        body, tail = pending[:-frame_size], pending[-frame_size:]
+                        if body:
+                            sink.write(body)
+                            digest.update(body)
+                            size += len(body)
+                        if (
+                            len(tail) == frame_size
+                            and tail.startswith(prefix)
+                            and re.fullmatch(rb"[0-9a-f]{64}\n", tail[len(prefix) :])
+                        ):
+                            if tail[len(prefix) : -1].decode() != digest.hexdigest():
+                                raise BackupError("cold stream source SHA mismatch")
+                            sink.flush()
+                            os.fsync(sink.fileno())
+                            if expired.is_set() or time.monotonic() >= deadline:
+                                raise BackupError("cold stream deadline before ACK")
+                            acknowledgment = (
+                                f"YLEUM-COLD-ACK-1 {nonce} {digest.hexdigest()}\n".encode()
+                            )
+                            if process.stdin.write(acknowledgment) != len(acknowledgment):
+                                raise BackupError("cold stream ACK short write")
+                            process.stdin.flush()
+                            process.stdin.close()
+                            break
+                extra = False
+                while chunk := os.read(process.stdout.fileno(), _CHUNK_BYTES):
+                    extra = True
+                exit_code = process.wait()
+                if extra:
+                    raise BackupError("cold stream emitted bytes after source SHA frame")
+                if expired.is_set() or time.monotonic() >= deadline:
+                    raise BackupError("cold stream deadline exceeded")
+            except (BackupError, OSError) as error:
+                failure = str(error).encode()
+                exit_code = 124 if expired.is_set() else 1
+            finally:
+                _close_stream_process(process, watchdog)
+            errors.seek(0)
+            stderr = (failure + b"\n" + errors.read(_STDERR_TAIL_BYTES))[:_STDERR_TAIL_BYTES]
         return StreamResult(argv, exit_code, size, digest.hexdigest(), stderr)
 
     def pipe(
