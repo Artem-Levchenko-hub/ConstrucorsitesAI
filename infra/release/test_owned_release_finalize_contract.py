@@ -88,7 +88,7 @@ verify_billing_runtime() { record billing; }
 
     def test_control_source_guard_rejects_runtime_changes_and_non_green_ci(self):
         functions = self.function("control_preflight")
-        for damage in ("", "source", "runtime", "renamed", "ancestry", "ci", "ci_sha"):
+        for damage in ("", "inspector_contract", "source", "runtime", "renamed", "ancestry", "ci", "ci_sha"):
             with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 driver = root / "driver"
@@ -97,6 +97,8 @@ verify_billing_runtime() { record billing; }
                 expected.write_bytes(b"unreviewed-driver\n" if damage == "source" else driver.read_bytes())
                 changed = "apps/api/src/unsafe.py" if damage == "runtime" else (
                     "infra/release/not-allowed.sh" if damage == "renamed" else "infra/release/generation-publication-drain.py")
+                if damage == "inspector_contract":
+                    changed = "apps/orchestrator/tests/test_inspector_upstream_contract.py"
                 script = '''set -euo pipefail
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -120,7 +122,7 @@ gh() { cat ci.json; }
                 (root / "ci.json").write_text(json.dumps({"workflow_runs": [run]}))
                 result = self.shell('DAMAGE=' + shlex.quote(damage) + '\nCHANGED=' + shlex.quote(changed)
                                     + '\n' + script, cwd=temp)
-                if damage:
+                if damage not in {"", "inspector_contract"}:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn("accepted", result.stdout)
                 else:

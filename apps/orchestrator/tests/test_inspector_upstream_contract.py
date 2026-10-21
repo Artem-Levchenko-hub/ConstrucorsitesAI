@@ -293,18 +293,61 @@ def test_failed_reload_removes_only_own_new_config(tmp_path, monkeypatch):
     ]
 
 
-def test_canonical_deploy_relay_stays_within_api_drain():
-    source = (ROOT / "infra/release/deploy-prod.sh").read_text()
-    relay = source.index('say "commerce: canonical inspector relay')
-    assert (
-        source.index('say "оркестраторы: core')
-        < relay
-        < source.index("reader_control commerce clear")
-    )
-    section = source[relay : source.index("\nfi", relay)]
+def test_canonical_deploy_relay_stays_within_api_drain(tmp_path):
+    import shutil
+    import subprocess
+
+    source = (ROOT / "infra/release/deploy-prod.sh").read_text(encoding="utf-8")
+    # The normal rollout calls a shared ending function, whose definition may
+    # precede the relay. Inspect the normal call site, not that definition.
+    normal = source[source.index('say "core: ff-merge'):]
+    controller = normal.index('say "оркестраторы: core')
+    relay = normal.index('say "commerce: canonical inspector relay')
+    closing = normal.index("\n  finish_owned_release\n")
+    assert controller < relay < closing
+    section = normal[relay : normal.index("\nfi", relay)]
     assert "StrictHostKeyChecking=yes commerce" in section
     assert "--install --expected-sha $SHA --asset-sha256 $INSPECTOR_ASSET_SHA" in section
     assert "git -C /opt/omnia show $SHA:apps/api/src/yleum_api/static/omnia-inspector.js" in section
+
+    shell = shutil.which("bash") or shutil.which("sh")
+    if shell is None:
+        pytest.skip("requires a local Bash for the canonical ending contract")
+    finish_body = source.split("finish_owned_release() {", 1)[1].split("\n}\n", 1)[0]
+    finish = "finish_owned_release() {" + finish_body + "\n}\n"
+    script = '''set -euo pipefail
+SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+API=1 GW=0
+READER_NONCE=11111111-1111-4111-8111-111111111111
+say() { case "$*" in "оркестраторы:"*) printf 'controllers\\n';; esac; }
+verify_billing_runtime() { :; }
+api_maintenance() { if [ "$1" = - ]; then cat >/dev/null; else printf 'sql-end\\n'; fi; }
+ssh() {
+ case "$*" in
+  *"git -C /opt/omnia show"*) printf '%064d' 0 ;;
+  *"--install --expected-sha"*) printf 'relay\\n' ;;
+  *) : ;;
+ esac
+}
+reader_target() { :; }
+seq() { printf '1\\n'; }
+ingress_drain() { printf 'ingress-%s\\n' "$1"; }
+quiescence_gate() { printf 'physical\\n'; }
+reader_control() { printf '%s-%s\\n' "$2" "$1"; }
+''' + finish
+    script += normal[controller : normal.index("\n", controller)] + "\n"
+    script += section + "\n"
+    # Execute the actual normal call block and shared end actions with inert
+    # transports: no host, service, image or fence is touched by this fixture.
+    call_start = normal.rfind('if [ "$API" = 1 ]; then', 0, closing)
+    script += normal[call_start : normal.index("\nfi", closing) + 3]
+    result = subprocess.run([shell, "-c", script], cwd=tmp_path,
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+    events = result.stdout.splitlines()
+    assert events.index("controllers") < events.index("relay") < events.index("physical")
+    assert events.index("physical") < events.index("ingress-end") < events.index("sql-end")
+    assert events.index("sql-end") < events.index("clear-core") < events.index("clear-commerce")
 
 
 def test_actual_nginx_refused_upstream_then_verified_tls_relay(tmp_path, monkeypatch):

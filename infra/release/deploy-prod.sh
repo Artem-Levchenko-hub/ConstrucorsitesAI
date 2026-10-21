@@ -349,6 +349,7 @@ control_preflight() {
 allowed = {b"infra/release/deploy-prod.sh", b"infra/release/generation-publication-drain.py",
            b"infra/release/test_generation_reader_deploy.py", b"infra/release/test_machine_quiescence_contract.py",
            b"infra/release/test_owned_release_finalize_contract.py",
+           b"apps/orchestrator/tests/test_inspector_upstream_contract.py",
            b"infra/release/generation-drain.md"}
 changed = sys.stdin.buffer.read().split(b"\0")
 assert changed[-1] == b"" and changed[:-1] and all(path in allowed for path in changed[:-1]), "control changes exceed reviewed operator scope"
