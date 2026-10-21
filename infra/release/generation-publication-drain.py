@@ -24,6 +24,10 @@ class PhysicalDrainError(RuntimeError):
     """Only fixed structural reasons, never Docker exception bodies."""
 
 
+class ProcessDisappeared(PhysicalDrainError):
+    """An incomplete sample, only after the exact proc directory is absent."""
+
+
 _MACHINE_HELPERS = frozenset(
     {
         "project-postgres-prepare",
@@ -341,7 +345,9 @@ def _require_no_orphan_docker_processes(known_ids: set[str]) -> dict:
         if not process.name.isdecimal():
             continue
         _kernel_need(not process.is_symlink(), "process_path")
-        tasks = list((process / "task").iterdir())
+        with _observed_process(process):
+            start = _process_start(process)
+            tasks = list((process / "task").iterdir())
         _kernel_need(
             any(task.name == process.name for task in tasks),
             "quiescence_task_inventory",
@@ -350,7 +356,13 @@ def _require_no_orphan_docker_processes(known_ids: set[str]) -> dict:
             _kernel_need(
                 member.name.isdecimal() and not member.is_symlink(), "process_path"
             )
-            membership = _kernel_read(member / "cgroup").decode("ascii").strip()
+            with _observed_process(member):
+                member_start = _process_start(member)
+                membership = _kernel_read(member / "cgroup").decode("ascii").strip()
+                _kernel_need(
+                    _process_start(member) == member_start,
+                    "quiescence_process_identity_changed",
+                )
             _kernel_need(
                 membership.startswith("0::/") and "\n" not in membership,
                 "cgroup_v2_required",
@@ -359,8 +371,39 @@ def _require_no_orphan_docker_processes(known_ids: set[str]) -> dict:
             _kernel_need(
                 identity is None or identity in known_ids, "quiescence_orphan_process"
             )
+        with _observed_process(process):
+            _kernel_need(
+                _process_start(process) == start, "quiescence_process_identity_changed"
+            )
     _kernel_need(_kernel_boot_id() == boot, "host_boot_changed")
     return {"boot_id": boot, "no_orphan_docker_membership": True}
+
+
+@contextmanager
+def _observed_process(directory: Path):
+    """Missing membership in a live directory is not evidence of process exit."""
+    try:
+        yield
+    except FileNotFoundError:
+        try:
+            directory.lstat()
+        except FileNotFoundError:
+            raise ProcessDisappeared("quiescence_process_disappeared") from None
+        raise
+
+
+def _process_start(directory: Path) -> int:
+    raw = _kernel_read(directory / "stat")
+    pid, separator, rest = raw.partition(b" (")
+    _comm, closing, suffix = rest.rpartition(b") ")
+    fields = suffix.split()
+    _kernel_need(
+        separator and closing and pid == directory.name.encode("ascii") and len(fields) >= 20
+        and fields[0] in (b"R", b"S", b"D", b"Z", b"T", b"t", b"X", b"x", b"K", b"W", b"P", b"I")
+        and fields[19].isdigit(),
+        "quiescence_process_stat",
+    )
+    return int(fields[19])
 
 
 def _quiescent_roster(client, binding, cell) -> dict:
@@ -437,6 +480,20 @@ def _quiescent_roster(client, binding, cell) -> dict:
 
 
 def _quiescence_physical(state_parent, workspace_id, uid, client, binding, cell):
+    # Discard the entire attempt, including the first successful scan and its
+    # Docker roster. Never retain partial evidence or retry an unknown live file.
+    for attempt in range(5):
+        try:
+            return _quiescence_physical_attempt(
+                state_parent, workspace_id, uid, client, binding, cell
+            )
+        except ProcessDisappeared:
+            if attempt == 4:
+                raise
+    raise AssertionError("unreachable")
+
+
+def _quiescence_physical_attempt(state_parent, workspace_id, uid, client, binding, cell):
     roster = _quiescent_roster(client, binding, cell)
     # Two affirmative complete scans, not equality of unrelated host process
     # topology. Both independently reject every orphan Docker membership.

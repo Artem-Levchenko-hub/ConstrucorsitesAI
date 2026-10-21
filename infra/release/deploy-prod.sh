@@ -19,6 +19,9 @@
 #     --repair-window N   окно починки адаптации (RESTORATION_ADAPTATION_REPAIR_SECONDS), по умолчанию 3600:
 #                         пишется в .env платформы и сверяется в отрендеренном compose (защита от отката к умолчанию)
 #                         (compose и api берут её из docker-compose.yml / config.py)
+#     --finalize-owned-release NONCE --control-revision SHA --no-web
+#                         завершить уже заменённый точный target под прежним владельцем;
+#                         только исправленный publication gate берётся из control SHA
 #
 # Замок: /opt/omnia/.deploy.lock на core — вторая выкатка одновременно не начнётся. Если
 # сценарий умер и замок остался — посмотреть его содержимое (кто, когда, что) и удалить руками.
@@ -33,18 +36,35 @@ LEGAL=""
 REPAIR=3600
 GW=0
 BOOTSTRAP=0
+FINALIZE_NONCE=""
+CONTROL_SHA=""
+REPAIR_OVERRIDE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-web) WEB=0 ;;
     --web-only) API=0 ;;
     --legal-version) LEGAL="${2:?}"; shift ;;
-    --repair-window) REPAIR="${2:?}"; shift ;;
+    --repair-window) REPAIR="${2:?}"; REPAIR_OVERRIDE=1; shift ;;
     --gateway) GW=1 ;;
     --bootstrap-admission) BOOTSTRAP=1 ;;
+    --finalize-owned-release) FINALIZE_NONCE="${2:?}"; shift ;;
+    --control-revision) CONTROL_SHA="${2:?}"; shift ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
   shift
 done
+if [ -n "$FINALIZE_NONCE" ] || [ -n "$CONTROL_SHA" ]; then
+  if [ -z "$FINALIZE_NONCE" ] || [ -z "$CONTROL_SHA" ] || [ "$WEB" != 0 ] \
+    || [ "$API" != 1 ] || [ "$GW" != 0 ] || [ "$BOOTSTRAP" != 0 ] \
+    || [ -n "$LEGAL" ] || [ "$REPAIR_OVERRIDE" != 0 ]; then
+    echo "finalize requires both owner/control flags and --no-web, without rollout overrides" >&2
+    exit 2
+  fi
+  [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]] \
+    && [[ "$FINALIZE_NONCE" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+    echo "finalize requires a full control SHA and canonical existing owner UUID" >&2; exit 2;
+  }
+fi
 if [ "$API" = 0 ] && { [ "$GW" = 1 ] || [ "$BOOTSTRAP" = 1 ]; }; then
   echo "--web-only нельзя сочетать с --gateway или --bootstrap-admission: нужен полный drain" >&2
   exit 2
@@ -52,6 +72,7 @@ fi
 [[ "$SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "нужен полный 40-символьный sha, получено: $SHA" >&2; exit 2; }
 
 REPO="$(cd "$(dirname "$0")/../.." && pwd)"
+RELEASE_DRIVER="${BASH_SOURCE[0]}"
 LOG="/tmp/omnia-build-${SHA:0:12}.log"
 SHORT="${SHA:0:8}"
 say() { echo "== $* ($(date -u +%H:%M:%SZ))"; }
@@ -68,11 +89,12 @@ ingress_drain() {
     | ssh max-core "sudo python3 - $1 $SHA"
 }
 publication_drain() {
+  local gate_revision="${CONTROL_SHA:-$SHA}"
   if [ "$1" = core ]; then
-    git -C "$REPO" show "$SHA:infra/release/generation-publication-drain.py" \
+    git -C "$REPO" show "$gate_revision:infra/release/generation-publication-drain.py" \
       | ssh max-core "sudo /opt/omnia/apps/orchestrator/.venv/bin/python -"
   else
-    git -C "$REPO" show "$SHA:infra/release/generation-publication-drain.py" \
+    git -C "$REPO" show "$gate_revision:infra/release/generation-publication-drain.py" \
       | ssh max-core "ssh -o BatchMode=yes commerce 'sudo /opt/omnia/apps/orchestrator/.venv/bin/python -'"
   fi
 }
@@ -314,9 +336,188 @@ print("gateway writer retirement, runtime health and settlement schema confirmed
 GATEWAY_CUTOVER_PY
 }
 
+control_preflight() {
+  local committed actual ci
+  git -C "$REPO" merge-base --is-ancestor "$SHA" "$CONTROL_SHA"
+  git -C "$REPO" merge-base --is-ancestor "$CONTROL_SHA" origin/main
+  committed=$(git -C "$REPO" show "$CONTROL_SHA:infra/release/deploy-prod.sh" \
+    | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())')
+  actual=$(python3 -c 'import hashlib,pathlib,sys; print(hashlib.sha256(pathlib.Path(sys.argv[1]).read_bytes()).hexdigest())' "$RELEASE_DRIVER")
+  [ "$committed" = "$actual" ] || { echo "control driver differs from committed source" >&2; return 75; }
+  git -C "$REPO" diff --name-only --no-renames -z "$SHA" "$CONTROL_SHA" \
+    | python3 -c 'import sys
+allowed = {b"infra/release/deploy-prod.sh", b"infra/release/generation-publication-drain.py",
+           b"infra/release/test_generation_reader_deploy.py", b"infra/release/test_machine_quiescence_contract.py",
+           b"infra/release/test_owned_release_finalize_contract.py",
+           b"infra/release/generation-drain.md"}
+changed = sys.stdin.buffer.read().split(b"\0")
+assert changed[-1] == b"" and changed[:-1] and all(path in allowed for path in changed[:-1]), "control changes exceed reviewed operator scope"
+'
+  ci=$(cd "$REPO" && gh api --method GET 'repos/{owner}/{repo}/actions/workflows/ci.yml/runs' \
+    -f "head_sha=$CONTROL_SHA" -f branch=main -f event=push -f per_page=100)
+  python3 - "$CONTROL_SHA" "$ci" <<'CONTROL_CI'
+import json, sys
+revision, raw = sys.argv[1:]
+runs = [run for run in json.loads(raw)["workflow_runs"]
+        if run["head_sha"] == revision and run["head_branch"] == "main"
+        and run["event"] == "push" and run["path"] == ".github/workflows/ci.yml"]
+assert runs, "control main CI is unconfirmed"
+latest = max(runs, key=lambda run: (run["created_at"], run["id"], run["run_attempt"]))
+assert latest["status"] == "completed" and latest["conclusion"] == "success", "control main CI is not green"
+print("control CI confirmed", latest["id"], "attempt", latest["run_attempt"])
+CONTROL_CI
+}
+
+verify_expected_revisions() {
+  local repository environment web
+  repository=$(cd "$REPO" && gh variable list --json name,value)
+  environment=$(cd "$REPO" && gh variable list --env production --json name,value)
+  web=$(ssh max-core 'curl -fsS --max-time 10 https://yleum.ru/web-health')
+  python3 - "$SHA" "$repository" "$environment" "$web" <<'EXPECTED_REVISIONS'
+import json, re, sys
+expected, raw_repository, raw_environment, raw_web = sys.argv[1:]
+def variables(raw):
+    rows = json.loads(raw)
+    result = {row["name"]: row["value"] for row in rows}
+    assert len(result) == len(rows), "duplicate expected revision"
+    return result
+repository, environment = variables(raw_repository), variables(raw_environment)
+for role in ("API", "WORKER", "GENERATION_WORKER", "ORCHESTRATOR"):
+    assert repository["PRODUCTION_EXPECTED_" + role + "_RELEASE_SHA"] == expected, "expected role revision differs"
+assert repository["PRODUCTION_EXPECTED_RELEASE_SHA"] == expected
+assert environment["PRODUCTION_EXPECTED_RELEASE_SHA"] == expected
+web = json.loads(raw_web)
+web_expected = repository["PRODUCTION_EXPECTED_WEB_RELEASE_SHA"]
+assert re.fullmatch(r"[0-9a-f]{7,40}", web_expected)
+assert web["status"] == "ok" and web["service"] == "web" and web["release_sha"] == web_expected, "unchanged web identity differs"
+print("expected target revisions and unchanged web confirmed")
+EXPECTED_REVISIONS
+}
+
+verify_billing_runtime() {
+  local binding target_image api_image validated image producer_release
+  binding=$(ssh max-core 'sudo -n cat /etc/max-studio/billing-image.ref')
+  target_image=$(ssh max-core "docker image inspect omnia-api:$SHA --format '{\"id\":{{json .Id}},\"repo_digests\":{{json .RepoDigests}}}'")
+  api_image=$(ssh max-core "docker inspect yleum-prod-api --format '{{.Image}}'")
+  validated=$(python3 - "$SHA" "$binding" "$target_image" "$api_image" <<'BILLING_IMAGE'
+import json, re, sys
+expected, raw, raw_image, api_image = sys.argv[1:]
+rows = [line.split("=", 1) for line in raw.splitlines()]
+binding = dict(rows)
+assert len(rows) == len(binding) == 3 and set(binding) == {"IMAGE_REF", "IMAGE_TAG", "RELEASE_SHA"}
+producer = binding["RELEASE_SHA"]
+assert producer == expected[:12] or re.fullmatch(r"[0-9]{12}", producer), "unsupported billing producer label"
+assert binding["IMAGE_TAG"] == "registry.yleum.ru/platform/omnia-api:" + producer
+assert re.fullmatch(r"registry\.yleum\.ru/platform/omnia-api@sha256:[0-9a-f]{64}", binding["IMAGE_REF"])
+image = json.loads(raw_image)
+assert re.fullmatch(r"sha256:[0-9a-f]{64}", api_image) and image["id"] == api_image, "billing target image differs from live API"
+assert binding["IMAGE_REF"] in image["repo_digests"], "billing digest does not map to target image content"
+if producer != expected[:12]:
+    print("billing producer timestamp retained; target is verified by image content and full runtime revision", file=sys.stderr)
+print(binding["IMAGE_REF"], producer)
+BILLING_IMAGE
+  )
+  read -r image producer_release <<< "$validated"
+  ssh max-core "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes commerce 'sudo -n python3 - $SHA $image $producer_release'" <<'BILLING_RUNTIME'
+import json, subprocess, sys
+expected, image, producer = sys.argv[1:]
+def kube(*arguments):
+    result = subprocess.run(["k3s", "kubectl", "-n", "billing", *arguments, "-o", "json"],
+                            check=True, capture_output=True, text=True, timeout=20)
+    return json.loads(result.stdout)
+deployment = kube("get", "deployment", "billing-worker")
+assert deployment["status"]["observedGeneration"] == deployment["metadata"]["generation"]
+assert deployment["spec"]["replicas"] == 1
+assert all(deployment["status"].get(field) == 1
+           for field in ("replicas", "updatedReplicas", "readyReplicas", "availableReplicas"))
+template = deployment["spec"]["template"]
+assert template["metadata"]["annotations"]["omnia.release_sha"] == producer
+assert len(template["spec"]["containers"]) == 1
+assert template["spec"]["containers"][0]["name"] == "worker"
+assert template["spec"]["containers"][0]["image"] == image
+pods = kube("get", "pods", "-l", "app=billing-worker")["items"]
+assert len(pods) == 1 and not pods[0]["metadata"].get("deletionTimestamp")
+pod = pods[0]
+assert pod["metadata"]["annotations"]["omnia.release_sha"] == producer
+assert len(pod["spec"]["containers"]) == 1 and pod["spec"]["containers"][0]["image"] == image
+assert pod["status"]["phase"] == "Running"
+assert any(condition["type"] == "Ready" and condition["status"] == "True"
+           for condition in pod["status"]["conditions"])
+statuses = pod["status"]["containerStatuses"]
+assert len(statuses) == 1 and statuses[0]["name"] == "worker" and statuses[0]["ready"] is True
+assert "running" in statuses[0]["state"]
+assert statuses[0]["imageID"] in {image, "docker-pullable://" + image,
+                                    "containerd://" + image.split("@", 1)[1]}
+print("billing target digest and single ready runtime confirmed")
+BILLING_RUNTIME
+}
+
+finalize_preflight() {
+  [ "$API_RUNTIME_SHA" = "$SHA" ] || { echo "finalize API runtime differs from target" >&2; return 75; }
+  READER_NONCE="$FINALIZE_NONCE"
+  READER_RETRY=1
+  # Read-only starting-state checks. Missing barriers/captures are never repaired.
+  ingress_drain check
+  reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_resume_check
+  reader_target
+  verify_expected_revisions
+  verify_billing_runtime
+}
+
+finish_owned_release() {
+  local readers_ready=0
+  # Shared normal/finalize closing path. Every call observes the target again.
+  verify_billing_runtime
+  api_maintenance - "$SHA" <<'PY'
+import json, os, sys, urllib.request
+expected = sys.argv[1]
+assert os.environ.get("OMNIA_RELEASE_SHA") == expected, "API process revision mismatch"
+hosts = json.loads(os.environ.get("ORCHESTRATOR_HOSTS") or "[]")
+assert len(hosts) == 2 and {host["name"] for host in hosts} == {"core", "commerce"}, "both controller roles must be verified"
+urls = ["https://yleum.ru/api/health", *[host["url"].rstrip("/") + "/health" for host in hosts]]
+for index, url in enumerate(urls):
+    with urllib.request.urlopen(url, timeout=10) as response:
+        body = json.load(response)
+    assert body.get("release_sha") == expected, "runtime revision mismatch"
+    assert body.get("status") in ("ok", "healthy"), "runtime health is not green"
+    if index == 0:
+        assert body["dependencies"]["billing_worker"] == "ok", "billing health is not green"
+        for role in ("worker", "generation_worker", "orchestrator"):
+            assert body["dependencies"][role + "_release_sha"] == expected, "dependency revision differs"
+        assert body["dependencies"]["billing_worker_release_sha"] in {expected, expected[:12]}, "billing revision differs"
+print("API, workers, billing and both controller runtime identities confirmed")
+PY
+  ssh max-core 'set -euo pipefail; curl -fsS --max-time 10 http://127.0.0.1:8101/health >/dev/null; logs=$(docker logs yleum-prod-gw 2>&1); if grep -q startup.postgres_unavailable <<< "$logs"; then echo "gateway database unavailable; admission remains fenced" >&2; exit 75; fi'
+  if [ "$GW" = 1 ]; then
+    gateway_cutover_gate
+  fi
+  for i in $(seq 1 18); do
+    if reader_target; then readers_ready=1; break; fi
+    sleep 5
+  done
+  [ "$readers_ready" = 1 ] || {
+    echo "Reader inventory/retirement unconfirmed; drain and rollout inhibit retained." >&2
+    return 75
+  }
+  ingress_drain check
+  quiescence_gate
+  reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_target
+  ingress_drain end
+  api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"
+  reader_control core clear --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce clear --release "$SHA" --owner-nonce "$READER_NONCE"
+}
+
 say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
+if [ -n "$FINALIZE_NONCE" ]; then
+  control_preflight
+fi
 
 say "core: замок выкатки"
 ssh max-core "set -o noclobber; echo \"$(whoami)@$(hostname -s) $(date -u +%FT%TZ) $SHA\" > /opt/omnia/.deploy.lock" \
@@ -325,6 +526,12 @@ trap 'ssh max-core rm -f /opt/omnia/.deploy.lock >/dev/null 2>&1 || true' EXIT
 
 API_RUNTIME_SHA=$(api_maintenance --describe-runtime)
 [[ "$API_RUNTIME_SHA" =~ ^[0-9a-f]{40}$ ]] || { echo "API runtime revision is unconfirmed" >&2; exit 75; }
+if [ -n "$FINALIZE_NONCE" ]; then
+  finalize_preflight
+  finish_owned_release
+  say "готово: завершён прежний релиз $SHORT, control ${CONTROL_SHA:0:8}"
+  exit 0
+fi
 
 if [ "$API" = 1 ]; then
   say "scoped ingress barrier: новые изменения проектов временно закрыты"
@@ -524,43 +731,6 @@ say "smoke"
 cd "$REPO"
 gh workflow run production-smoke.yml >/dev/null && echo "smoke запущен (gh run list --workflow production-smoke.yml --limit 1)"
 if [ "$API" = 1 ]; then
-  # Only the owning release may reopen admission, after all synchronous health
-  # and identity gates above. Failure/EXIT never removes the durable fence.
-  api_maintenance - "$SHA" <<'PY'
-import json, os, sys, urllib.request
-expected = sys.argv[1]
-assert os.environ.get("OMNIA_RELEASE_SHA") == expected, "API process revision mismatch"
-urls = ["https://yleum.ru/api/health"]
-hosts = json.loads(os.environ.get("ORCHESTRATOR_HOSTS") or "[]")
-assert len(hosts) >= 2, "both controller roles must be verified"
-urls.extend(h["url"].rstrip("/") + "/health" for h in hosts)
-for url in urls:
-    with urllib.request.urlopen(url, timeout=10) as response:
-        body = json.load(response)
-    assert body.get("release_sha") == expected, "runtime revision mismatch"
-    assert body.get("status") in ("ok", "healthy"), "runtime health is not green"
-print("API and both controller runtime identities confirmed")
-PY
-  if [ "$GW" = 1 ]; then
-    gateway_cutover_gate
-  fi
-  readers_ready=0
-  for i in $(seq 1 18); do
-    if reader_target; then readers_ready=1; break; fi
-    sleep 5
-  done
-  [ "$readers_ready" = 1 ] || {
-    echo "Reader inventory/retirement unconfirmed; drain and rollout inhibit retained." >&2
-    exit 75
-  }
-  # Recheck quiescence and the exact owning barriers immediately before opening.
-  quiescence_gate
-  reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
-  reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
-  reader_target
-  ingress_drain end
-  api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"
-  reader_control core clear --release "$SHA" --owner-nonce "$READER_NONCE"
-  reader_control commerce clear --release "$SHA" --owner-nonce "$READER_NONCE"
+  finish_owned_release
 fi
 say "готово: прод на $SHORT"

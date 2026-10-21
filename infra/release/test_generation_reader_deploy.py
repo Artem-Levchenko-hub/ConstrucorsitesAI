@@ -6,11 +6,14 @@ import shlex
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
+BASH = shutil.which("bash") or shutil.which("sh")
+PYTHON_BRIDGE = 'python3() { ' + shlex.quote(sys.executable.replace("\\", "/")) + ' "$@"; }\n'
 
-@unittest.skipUnless(shutil.which("bash"), "bash required")
+@unittest.skipUnless(BASH, "bash required")
 class ReaderDeployTests(unittest.TestCase):
     def test_same_image_cutover_forces_only_three_captured_api_readers(self):
         source = Path(__file__).with_name("deploy-prod.sh").read_text()
@@ -22,7 +25,7 @@ class ReaderDeployTests(unittest.TestCase):
 case " $* " in *" --force-recreate "*) printf new-incarnations;; *) printf cached-old-incarnations;; esac
 }
 '''
-        result = subprocess.run(["bash", "-c", mock + command], capture_output=True, text=True, timeout=10)
+        result = subprocess.run([BASH, "-c", mock + command], capture_output=True, text=True, timeout=10)
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout, "new-incarnations")
 
@@ -45,7 +48,7 @@ ssh() { echo forbidden >&2; return 99; }
             script += '\nreader_prepare_retry\nprintf "%s:%s\\n" "$READER_RETRY" "$READER_NONCE"\n'
             if retry_before:
                 script += "reader_before\n"
-            result = subprocess.run(["bash", "-c", script], cwd=root, capture_output=True, text=True, timeout=10)
+            result = subprocess.run([BASH, "-c", PYTHON_BRIDGE + script], cwd=root, capture_output=True, text=True, timeout=10)
             calls = (root / "calls").read_text() if (root / "calls").exists() else ""
             return result, calls
 

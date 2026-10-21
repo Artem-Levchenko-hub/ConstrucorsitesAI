@@ -97,6 +97,76 @@ Fresh inventory
 is an observation of the managed topology, not instantaneous exclusion of
 out-of-band privileged processes.
 
+### Finalizing an already replaced target with a repaired operator gate
+
+An exact target can be fully running while its final read-only physical gate
+fails because a host process disappears during observation. A new product
+release cannot take over that target's saved owner. The narrow continuation is:
+
+```sh
+infra/release/deploy-prod.sh "$OWNING_TARGET_SHA" --no-web \
+  --finalize-owned-release "$EXISTING_OWNER_NONCE" \
+  --control-revision "$REVIEWED_CONTROL_SHA"
+```
+
+Run the exact committed driver from the control revision in its repository
+checkout, after independent review. Both revisions are full 40-character
+pushed main SHAs; the owning target must be an ancestor of the control revision.
+The script verifies its own bytes, restricts the complete target-to-control diff
+to the release driver, publication gate, their three test files and this
+runbook, and queries GitHub for the latest exact control revision's push-to-main
+`CI` run. Missing, queued, failed or mismatched CI denies continuation. The
+changed-path restriction is a scope check; independent review must still confirm
+that the gate preserves all authority, identity, source and physical checks.
+
+This mode requires `--no-web` and both owner/control flags. It rejects web-only,
+gateway, bootstrap, legal-version and repair-window overrides. It does not
+build, restart, merge remote source, edit environment, publish images, set GitHub
+variables, create a SQL drain, capture readers, install an inhibit, or derive a
+nonce. The canonical deployment mutex spans every live preflight and the shared
+final checks and ending sequence. All API, reader and ingress helpers remain
+loaded from the owning target. Only the standalone publication/physical helper
+is loaded from the explicitly reviewed control revision. The live controller
+continues supplying its exact installed application sources and dependencies;
+no product source is overlaid and no old command result or attestation is edited.
+
+Starting authority must be complete: the existing owned ingress barrier and SQL
+drain, both original root-owned captures, and both hosts' durable and runtime
+inhibits must all match the original target and nonce. The actual API runtime
+must already be the full target. The read-only capture classifier checks SQL
+quiescence, and both matching target inventories must prove all five readers
+and old-supervisor retirement. Missing authority fails closed; this mode never
+reconstructs it from checkpoint JSON or from the current processes.
+
+The script reads back repository API/worker/generation-worker/controller and
+common expected revision variables plus the production environment's common
+expected revision. It verifies the unchanged web process against its separately
+saved expected revision. It also checks the billing Deployment and its sole ready
+Pod against the persisted immutable registry digest. That digest must be a
+RepoDigest of the exact target API image, whose image ID must equal the serving
+API's image. Legacy billing publication can retain its producer's timestamp
+label after root Git discovery failed; a matching timestamp annotation is only
+metadata, never proof of code. The content chain and target-matching live billing heartbeat
+must independently establish the target. The billing heartbeat retains its
+canonical full-SHA or exact twelve-character target-prefix contract; the image
+content chain establishes the complete target identity. The shared closing path repeats live
+API, both workers, billing, both controllers, gateway health, complete reader
+retirement, ingress ownership and composite SQL/publication/physical quiescence
+before using the original owned ending sequence.
+
+This is a bounded continuation from an **all-barriers-present** starting point.
+The ending sequence remains non-atomic: ingress removal precedes SQL removal,
+then each host removes its durable/runtime inhibit. A failure before ending
+retains the barriers and permits the same explicit continuation after inspection.
+A failure after an earlier ending step succeeds leaves a partial state; this
+mode intentionally refuses to treat missing authority as proof of prior success
+or to recreate it. Preserve the full result and inspect the remaining owned
+state. A separately reviewed recovery procedure is required for partial ending;
+do not rerun individual `end`/`clear` commands, invent a new owner, edit an
+attestation, or clear a remaining marker manually. A successful continuation
+finishes the old target; deploying the pushed control revision as a new release
+still requires the normal documented delivery loop.
+
 The executable `generation-ingress-drain.py` snapshots the exact vhost and SHA,
 validates nginx before reload, probes the live 503 using an unauthenticated
 impossible-project request, and refuses to overwrite another release or a later

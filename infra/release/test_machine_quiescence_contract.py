@@ -99,6 +99,213 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
             self.checker._require_reviewed_portable_sources(sources)
 
 
+class ProcessObservationRetryTests(unittest.TestCase):
+    """A disappearing task invalidates its whole sample, never a single row."""
+
+    def setUp(self):
+        self.checker = _checker_module()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.proc, self.groups = self.root / "proc", self.root / "groups"
+        self.proc.mkdir()
+        self.groups.mkdir()
+        for filename in ("cgroup.procs", "cgroup.threads"):
+            (self.groups / filename).write_text("")
+        (self.proc / "sys/kernel/random").mkdir(parents=True)
+        (self.proc / "sys/kernel/random/boot_id").write_text(WORKSPACE)
+        for name, value in (("_PROC_ROOT", self.proc), ("_CGROUP_ROOT", self.groups)):
+            patcher = patch.object(self.checker, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.process(1)
+        self.process(42)
+
+    def process(self, pid, membership="init.scope"):
+        directory = self.proc / str(pid)
+        task = directory / "task" / str(pid)
+        task.mkdir(parents=True)
+        for member in (directory, task):
+            (member / "cgroup").write_text("0::/" + membership + "\n")
+            (member / "stat").write_text(f"{pid} (fixture) S " + "0 " * 18 + "100\n")
+        return directory
+
+    def observe(self):
+        with patch.object(self.checker, "_quiescent_roster", return_value={}), patch.object(
+            self.checker, "_quiescence_binding", return_value=({}, None)
+        ):
+            return self.checker._quiescence_physical(None, WORKSPACE, 0, None, {}, None)
+
+    def test_disappearing_process_restarts_a_complete_cgroup_and_process_sample(self):
+        original_iterdir = Path.iterdir
+        original_ids = self.checker._kernel_ids
+        group_observations = []
+
+        def read_ids(path):
+            group_observations.append(path)
+            return original_ids(path)
+
+        def exiting_process(path):
+            if path == self.proc / "42/task":
+                (self.proc / "42").rename(self.root / "retired")
+            return original_iterdir(path)
+
+        with patch.object(Path, "iterdir", exiting_process), patch.object(
+            self.checker, "_kernel_ids", read_ids
+        ):
+            result = self.observe()
+        self.assertTrue(result["no_orphan_docker_membership"])
+        self.assertEqual(group_observations.count(self.groups / "cgroup.procs"), 3)
+
+    def test_restarted_sample_detects_a_new_orphan_instead_of_skipping_lost_row(self):
+        original = Path.iterdir
+
+        def replace_process(path):
+            if path == self.proc / "42/task":
+                (self.proc / "42").rename(self.root / "retired")
+                self.process(99, "system.slice/docker-" + "f" * 64 + ".scope")
+            return original(path)
+
+        with patch.object(Path, "iterdir", replace_process), self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "quiescence_orphan_process"
+        ):
+            self.observe()
+
+    def test_continuously_racing_sample_is_bounded_and_never_accepted(self):
+        original = Path.iterdir
+        attempts = []
+
+        def racing_process(path):
+            if path == self.proc:
+                if not (self.proc / "42").exists():
+                    self.process(42)
+            elif path == self.proc / "42/task":
+                attempts.append(path)
+                (self.proc / "42").rename(self.root / f"retired-{len(attempts)}")
+            return original(path)
+
+        with patch.object(Path, "iterdir", racing_process), self.assertRaises(
+            self.checker.ProcessDisappeared
+        ):
+            self.observe()
+        self.assertEqual(len(attempts), 5)
+
+    def test_permission_denial_is_not_a_retryable_process_exit(self):
+        original = Path.iterdir
+        attempts = []
+
+        def inaccessible_process(path):
+            if path == self.proc / "42/task":
+                attempts.append(path)
+                raise PermissionError(13, "denied", str(path))
+            return original(path)
+
+        with patch.object(Path, "iterdir", inaccessible_process), self.assertRaises(PermissionError):
+            self.observe()
+        self.assertEqual(len(attempts), 1)
+
+    def test_second_scan_race_discards_the_first_successful_scan_too(self):
+        original = Path.iterdir
+        task_observations = []
+        group_observations = []
+        original_ids = self.checker._kernel_ids
+
+        def read_ids(path):
+            group_observations.append(path)
+            return original_ids(path)
+
+        def exiting_process(path):
+            if path == self.proc / "42/task":
+                task_observations.append(path)
+                if len(task_observations) == 2:
+                    (self.proc / "42").rename(self.root / "retired")
+            return original(path)
+
+        with patch.object(Path, "iterdir", exiting_process), patch.object(
+            self.checker, "_kernel_ids", read_ids
+        ):
+            self.observe()
+        self.assertEqual(group_observations.count(self.groups / "cgroup.procs"), 4)
+
+    def test_missing_membership_of_live_process_is_not_retried(self):
+        original = self.checker._kernel_read
+        attempts = []
+
+        def missing_file(path):
+            if path == self.proc / "42/cgroup":
+                attempts.append(path)
+                raise FileNotFoundError(2, "membership missing", str(path))
+            return original(path)
+
+        with patch.object(self.checker, "_kernel_read", missing_file), self.assertRaises(FileNotFoundError):
+            self.observe()
+        self.assertEqual(len(attempts), 1)
+
+    def test_reused_process_identity_fails_closed(self):
+        original = self.checker._kernel_read
+
+        def reuse_pid(path):
+            result = original(path)
+            if path == self.proc / "42/cgroup":
+                (self.proc / "42/stat").write_text("42 (replacement) S " + "0 " * 18 + "200\n")
+            return result
+
+        with patch.object(self.checker, "_kernel_read", reuse_pid), self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "process_identity_changed"
+        ):
+            self.observe()
+
+    def test_stat_parser_accepts_embedded_delimiter_and_non_ascii_comm(self):
+        path = self.proc / "42"
+        (path / "stat").write_bytes(b"42 (name ) \xff) S " + b"0 " * 18 + b"0\n")
+        self.assertEqual(self.checker._process_start(path), 0)
+
+    def test_task_exit_restarts_the_entire_sample(self):
+        task = self.proc / "42/task/77"
+        task.mkdir()
+        (task / "stat").write_bytes(b"77 (fixture) S " + b"0 " * 18 + b"100\n")
+        (task / "cgroup").write_text("0::/init.scope\n")
+        original = self.checker._kernel_read
+
+        def exit_task(path):
+            if path == task / "cgroup":
+                task.rename(self.root / "retired-thread")
+            return original(path)
+
+        with patch.object(self.checker, "_kernel_read", exit_task):
+            self.assertTrue(self.observe()["no_orphan_docker_membership"])
+
+    def test_task_pid_reuse_is_denied(self):
+        task = self.proc / "42/task/77"
+        task.mkdir()
+        (task / "stat").write_bytes(b"77 (fixture) S " + b"0 " * 18 + b"100\n")
+        (task / "cgroup").write_text("0::/init.scope\n")
+        original = self.checker._kernel_read
+
+        def reused_task(path):
+            result = original(path)
+            if path == task / "cgroup":
+                (task / "stat").write_bytes(b"77 (replacement) S " + b"0 " * 18 + b"200\n")
+            return result
+
+        with patch.object(self.checker, "_kernel_read", reused_task), self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "process_identity_changed"
+        ):
+            self.observe()
+
+    def test_stat_parser_rejects_truncated_header_wrong_pid_and_unknown_state(self):
+        path = self.proc / "42"
+        for raw in (
+            b"42 (fixture S " + b"0 " * 18 + b"100\n",
+            b"41 (fixture) S " + b"0 " * 18 + b"100\n",
+            b"42 (fixture) ? " + b"0 " * 18 + b"100\n",
+        ):
+            with self.subTest(raw=raw):
+                (path / "stat").write_bytes(raw)
+                with self.assertRaisesRegex(self.checker.PhysicalDrainError, "process_stat"):
+                    self.checker._process_start(path)
+
+
 @unittest.skipUnless(
     AVAILABLE and os.name == "posix" and os.geteuid() == 0,
     "requires root Linux fixture and cached orchestrator dependencies",
@@ -224,6 +431,8 @@ class MachineQuiescenceTests(unittest.TestCase):
         thread.mkdir(parents=True, exist_ok=True)
         (directory / "cgroup").write_text("0::/" + group + "\n")
         (thread / "cgroup").write_text("0::/" + group + "\n")
+        (directory / "stat").write_text(f"{pid} (fixture) S " + "0 " * 18 + "100\n")
+        (thread / "stat").write_text(f"{tid or pid} (fixture) S " + "0 " * 18 + "100\n")
 
     def record(self):
         return self.checker.machine_quiescence(
