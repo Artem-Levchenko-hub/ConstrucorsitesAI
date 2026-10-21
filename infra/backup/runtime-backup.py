@@ -114,6 +114,103 @@ def cold_module():
     return sys.modules[name]
 
 
+def published_module():
+    name = "backup_published_peer"
+    if name not in sys.modules:
+        spec = importlib.util.spec_from_file_location(
+            name, Path(__file__).with_name("published-artifacts.py")
+        )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[name] = module
+        spec.loader.exec_module(module)
+    return sys.modules[name]
+
+
+def validate_runtime_images(facts: list[dict]) -> dict:
+    """Validate saved, filtered CRI evidence; never equate config/manifest hashes."""
+    need(type(facts) is list)
+    seen, projects = set(), set()
+    for fact in facts:
+        project = str(UUID(fact["project_id"]))
+        need(project == fact["project_id"] and fact["namespace"] == "app-" + project)
+        need(fact["component"] in {"app", "core", "guard", "redis"})
+        need(all(type(fact.get(key)) is str and fact[key] for key in
+                 ("namespace_uid", "pod", "pod_uid", "container", "container_id", "reference", "runtime_image_id")))
+        need(re.fullmatch(r"sha256:[0-9a-f]{64}", fact["config_id"]))
+        resolved = fact["runtime_image_id"].removeprefix("docker-pullable://")
+        canonical = published_module().canonical_digest
+        need(re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", resolved)
+             and type(fact["repo_digests"]) is list
+             and canonical(resolved) in {canonical(ref) for ref in fact["repo_digests"]})
+        need(fact["platform"]["os"] == "linux" and fact["platform"]["architecture"])
+        key = (fact["namespace"], fact["pod_uid"], fact["container"])
+        need(key not in seen)
+        seen.add(key)
+        projects.add(project)
+    # Same-role replicas must resolve to the same image/config/platform.
+    return published_module()._runtime_facts(facts, projects)
+
+
+def kube_runtime_images(runner, cri_runner, context: str) -> list[dict]:
+    """Read pod bindings and local CRI metadata only; discard all image Config."""
+    facts, images = [], {}
+    for namespace in kube_json(runner, context, "get", "namespaces")["items"]:
+        meta = namespace["metadata"]
+        name = meta["name"]
+        if not name.startswith("app-"):
+            continue
+        project = str(UUID(name[4:]))
+        tags = meta.get("labels") or {}
+        need(not meta.get("deletionTimestamp") and tags.get("omnia.retired") in {"true", "false"})
+        if tags["omnia.retired"] == "true":
+            continue  # Cold-retained census independently owns these obligations.
+        need(all(tags.get(key) == value for key, value in
+                 {PART: "max-app", MANAGED: "omnia-orchestrator", PROJECT: project}.items()))
+        found = set()
+        for pod in kube_json(runner, context, "get", "pods", "--namespace", name)["items"]:
+            if pod.get("kind") != "Pod":
+                continue
+            metadata, spec, status = pod["metadata"], pod["spec"], pod["status"]
+            labels = metadata.get("labels") or {}
+            component = labels.get(COMPONENT)
+            if component in COMPONENTS:
+                continue
+            role = "guard" if component == "boundary" else component
+            need(role in {"app", "core", "guard", "redis"})
+            need(all(labels.get(key) == value for key, value in
+                     {PART: "max-app", MANAGED: "omnia-orchestrator", PROJECT: project}.items()))
+            need(not metadata.get("deletionTimestamp") and status.get("phase") == "Running")
+            containers, states = spec["containers"], status.get("containerStatuses", [])
+            need(len(containers) == len(states) == 1)
+            container, state = containers[0], states[0]
+            need(container["name"] == state["name"] and state.get("ready") is True
+                 and "running" in state.get("state", {}))
+            resolved = state["imageID"].removeprefix("docker-pullable://")
+            need(re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", resolved))
+            if resolved not in images:
+                result = cri_runner.run(["crictl", "inspecti", "-o", "json", resolved], timeout=60)
+                need(result.ok)
+                raw = json.loads(result.stdout)
+                image = raw["status"]
+                platform = raw["info"]["imageSpec"]
+                canonical = published_module().canonical_digest
+                need(canonical(resolved) in {canonical(ref) for ref in image["repoDigests"]})
+                images[resolved] = {
+                    "config_id": image["id"], "repo_digests": sorted({canonical(ref) for ref in image["repoDigests"]}),
+                    "platform": {key: platform.get(key) or "" for key in ("os", "architecture", "variant")},
+                }
+            facts.append({"project_id": project, "namespace": name, "namespace_uid": meta["uid"],
+                          "component": role, "pod": metadata["name"], "pod_uid": metadata["uid"],
+                          "container": container["name"], "container_id": state["containerID"],
+                          "reference": container["image"], "runtime_image_id": state["imageID"],
+                          **images[resolved]})
+            found.add(role)
+        need(found == {"app", "core", "guard", "redis"})
+    facts.sort(key=lambda row: (row["project_id"], row["component"], row["pod_uid"], row["container"]))
+    validate_runtime_images(facts)
+    return facts
+
+
 def kube_census(runner, context: str, image: str) -> dict:
     namespaces = kube_json(runner, context, "get", "namespaces")
     targets, retired, other_claims, cold_retained = [], [], [], []
@@ -283,8 +380,96 @@ def kube_census(runner, context: str, image: str) -> dict:
     }
 
 
+def boundary_snapshot(runner, context: str, images: list[dict]) -> list[dict]:
+    """Bind only the public source key to its actual running Pod mount."""
+    rows = []
+    for fact in images:
+        if fact["component"] != "guard":
+            continue
+        namespace = fact["namespace"]
+        pods = kube_json(runner, context, "get", "pods", "--namespace", namespace)["items"]
+        matches = [pod for pod in pods if pod.get("kind") == "Pod"
+                   and pod["metadata"]["uid"] == fact["pod_uid"]]
+        need(len(matches) == 1)
+        pod = matches[0]
+        containers = pod["spec"]["containers"]
+        need(len(containers) == 1 and containers[0]["name"] == fact["container"])
+        container = containers[0]
+        need(container.get("command") == ["python3", "/run/omnia-boundary/server.py"])
+        mounts = [item for item in container.get("volumeMounts", [])
+                  if item.get("mountPath") == "/run/omnia-boundary"]
+        need(len(container.get("volumeMounts", [])) == len(mounts) == 1 and mounts[0].get("readOnly") is True
+             and not mounts[0].get("subPath") and not mounts[0].get("subPathExpr"))
+        volumes = [item for item in pod["spec"].get("volumes", [])
+                   if item.get("name") == mounts[0]["name"]]
+        need(len(volumes) == 1)
+        sources = volumes[0].get("projected", {}).get("sources", [])
+        need(all(not any(key.get("path") == "server.py" for key in
+                         source.get("secret", {}).get("items", [])) for source in sources))
+        refs = [item["configMap"] for item in sources if "configMap" in item
+                and any(key.get("path") == "server.py" for key in item["configMap"].get("items", []))]
+        need(len(refs) == 1 and refs[0].get("name") == "boundary-server"
+             and refs[0].get("items") == [{"key": "server.py", "path": "server.py"}]
+             and not refs[0].get("optional"))
+        maps = kube_json(runner, context, "get", "configmaps", "--field-selector", "metadata.name=boundary-server",
+                         "--namespace", namespace)["items"]
+        need(len(maps) == 1)
+        config = maps[0]
+        metadata = config["metadata"]
+        need(metadata.get("name") == "boundary-server" and not metadata.get("deletionTimestamp"))
+        need(all(metadata.get("labels", {}).get(key) == value for key, value in
+                 {PART: "max-app", MANAGED: "omnia-orchestrator", PROJECT: fact["project_id"],
+                  COMPONENT: "boundary"}.items()))
+        source = config.get("data", {}).get("server.py")
+        need(type(source) is str and 0 < len(source.encode("utf-8")) <= 1024 * 1024)
+        payload = source.encode("utf-8")
+        rows.append({**{key: fact[key] for key in
+                       ("project_id", "namespace", "namespace_uid", "pod", "pod_uid", "container", "container_id")},
+                     "configmap_name": "boundary-server", "configmap_uid": metadata["uid"],
+                     "configmap_resource_version": metadata["resourceVersion"],
+                     "volume": mounts[0]["name"], "key": "server.py",
+                     "mounted_path": "/run/omnia-boundary/server.py",
+                     "file": fact["project_id"] + "-boundary-server.py",
+                     "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
+    return sorted(rows, key=lambda item: item["project_id"])
+
+
+def validate_boundary_sources(rows, images, directory=None):
+    need(type(rows) is list)
+    guards = {item["project_id"]: item for item in images if item["component"] == "guard"}
+    need(len(rows) == len(guards) and {row["project_id"] for row in rows} == set(guards))
+    for row in rows:
+        fact = guards[row["project_id"]]
+        need(all(row.get(key) == fact[key] for key in
+                 ("namespace", "namespace_uid", "pod", "pod_uid", "container", "container_id")))
+        need(row.get("file") == row["project_id"] + "-boundary-server.py"
+             and row.get("configmap_name") == "boundary-server" and row.get("key") == "server.py"
+             and row.get("mounted_path") == "/run/omnia-boundary/server.py"
+             and all(type(row.get(key)) is str and row[key] for key in
+                     ("configmap_uid", "configmap_resource_version", "volume"))
+             and type(row.get("bytes")) is int and 0 < row["bytes"] <= 1024 * 1024
+             and type(row.get("sha256")) is str and re.fullmatch(r"[0-9a-f]{64}", row["sha256"]))
+        if directory is not None:
+            path = directory / row["file"]
+            need(path.is_file() and not path.is_symlink())
+            sha, size = hashlib.sha256(path.read_bytes()).hexdigest(), path.stat().st_size
+            need(sha == row["sha256"] and size == row["bytes"])
+
+
 def kube_backup(cells, spec: dict, out: Path) -> tuple[dict, int]:
     runner = cells.DockerRunner(spec["kubectl"])
+    cri = cells.DockerRunner("/usr/local/bin/k3s")
+    images = kube_runtime_images(runner, cri, spec["context"])
+    boundaries = boundary_snapshot(runner, spec["context"], images)
+    validate_boundary_sources(boundaries, images)
+    for row in boundaries:
+        result = runner.run_to_file(
+            ["--context", spec["context"], "exec", "--namespace", row["namespace"], row["pod"],
+             "--container", row["container"], "--", "cat", row["mounted_path"]],
+            path=out / row["file"], timeout=60)
+        need(result.ok and result.size_bytes == row["bytes"] and result.sha256 == row["sha256"])
+        os.chmod(out / row["file"], 0o600)
+    validate_boundary_sources(boundaries, images, out)
     before = kube_census(runner, spec["context"], spec["postgres_image"])
     authorities = spec.get("cold_authorities", [])
     need(type(authorities) is list)
@@ -374,6 +559,8 @@ def kube_backup(cells, spec: dict, out: Path) -> tuple[dict, int]:
             }
         )
     need(kube_census(runner, spec["context"], spec["postgres_image"]) == before)
+    need(kube_runtime_images(runner, cri, spec["context"]) == images)
+    need(boundary_snapshot(runner, spec["context"], images) == boundaries)
     inventory = out / "runtime-inventory.json"
     cells._write_private_json(inventory, before)
     with tarfile.open(out / "state.tar.gz", "w:gz") as archive:
@@ -394,6 +581,9 @@ def kube_backup(cells, spec: dict, out: Path) -> tuple[dict, int]:
         "workspaces": rows,
         "orphans": [],
         "runtime_census": before,
+        "recovery_coverage_version": 2,
+        "runtime_images": images,
+        "boundary_sources": boundaries,
         "cold_retained": cold_retained,
         "coverage": {
             "version": 1,
@@ -436,6 +626,9 @@ def export_peer(cells, spec: dict) -> int:
                     platform_census_json=json.dumps(census),
                     resolve_docker_sources_with_sudo=True,
                 )
+                if code == 0:
+                    add_published(cells, manifest, Path(spec["state_root"]), out,
+                                  spec.get("runtime_images", []))
             else:
                 manifest, code = kube_backup(cells, spec, out)
             manifest["node"] = spec["name"]
@@ -465,6 +658,8 @@ def peer_program() -> str:
         "exec(compile(p['sources']['cells'],'backup_cells_peer','exec'),c.__dict__); "
         "d=types.ModuleType('backup_cold_peer'); sys.modules[d.__name__]=d; "
         "exec(compile(p['sources'].get('cold',''),'backup_cold_peer','exec'),d.__dict__); "
+        "a=types.ModuleType('backup_published_peer'); sys.modules[a.__name__]=a; "
+        "exec(compile(p['sources'].get('published',''),'backup_published_peer','exec'),a.__dict__); "
         "r=types.ModuleType('runtime_backup_peer'); "
         "exec(compile(p['sources']['runtime'],'runtime_backup_peer','exec'),r.__dict__); "
         "raise SystemExit(r.dispatch_peer(c,p))"
@@ -479,6 +674,16 @@ def encode_peer(payload: dict) -> str:
 
 def dispatch_peer(cells, payload: dict) -> int:
     spec = payload["spec"]
+    if spec.get("mode") == "images-only":
+        need(spec["provider"] == "kubernetes")
+        facts = kube_runtime_images(cells.DockerRunner(spec["kubectl"]),
+                                    cells.DockerRunner("/usr/local/bin/k3s"), spec["context"])
+        if "expected_boundary_sources" in spec:
+            need(boundary_snapshot(cells.DockerRunner(spec["kubectl"]), spec["context"], facts)
+                 == spec["expected_boundary_sources"])
+        print(json.dumps({"runtime_images": facts, "producer_sha256": spec["producer_sha256"]}))
+        return 0
+    need(spec.get("mode") is None)
     if spec["provider"] != "docker" or spec.get("as_owner") is True:
         return export_peer(cells, spec)
     # The controller validates credential ownership against its Unix identity.
@@ -540,6 +745,26 @@ def unpack(path: Path, out: Path) -> None:
     need("MANIFEST.json" in names)
 
 
+def published_pointer(cells, directory, sidecar, witness):
+    sha, size = cells._file_digest(directory / "PUBLISHED.json")
+    return {"version": 1, "file": "PUBLISHED.json", "sha256": sha, "bytes": size,
+            "blob_count": len(sidecar["blobs"]), "blob_bytes": sum(b["size"] for b in sidecar["blobs"].values()),
+            "runtime_witness": witness,
+            "publications": [{key: row[key] for key in
+                              ("project_id", "release_id", "epoch", "journal_sha256", "databases", "images", "durable_pvc_gaps")}
+                             for row in sidecar["publications"]]}
+
+
+def add_published(cells, manifest, state_root, directory, runtime_images):
+    module = published_module()
+    runner = cells.DockerRunner()
+    witness = module.resolve_witness(cells, runner, state_root, directory / "state.tar.gz", runtime_images)
+    sidecar = module.collect(cells, runner, state_root, directory / "state.tar.gz", directory,
+                             runtime_witness=witness)
+    manifest["published_artifacts"] = published_pointer(cells, directory, sidecar, witness)
+    manifest["recovery_coverage_version"] = 2
+
+
 def validate_local(cells, directory: Path) -> dict:
     manifest = read(directory / "MANIFEST.json")
     cells._validate_manifest(manifest)
@@ -555,10 +780,25 @@ def validate_local(cells, directory: Path) -> dict:
     if manifest.get("provider") == "kubernetes":
         cold_module().validate(cells, directory, manifest.get("cold_retained", []))
         cold_module().coverage(manifest)
+    version = manifest.get("recovery_coverage_version", 1)
+    need(type(version) is int and version in {1, 2})
+    if version == 2:
+        if manifest.get("provider") == "kubernetes":
+            facts = validate_runtime_images(manifest.get("runtime_images"))
+            need(set(facts) == {row["project_id"] for row in manifest["workspaces"]})
+            validate_boundary_sources(manifest.get("boundary_sources"), manifest["runtime_images"], directory)
+        else:
+            pointer = manifest.get("published_artifacts")
+            need(type(pointer) is dict)
+            witness = pointer["runtime_witness"]
+            sidecar = published_module().validate(directory, directory / "state.tar.gz", runtime_witness=witness)
+            need(pointer == published_pointer(cells, directory, sidecar, witness))
+    else:
+        need("published_artifacts" not in manifest and "runtime_images" not in manifest)
     return manifest
 
 
-def close_coverage(manifests: dict[str, dict]) -> dict:
+def close_coverage(manifests: dict[str, dict], *, require_published=False) -> dict:
     need(set(manifests) == set(NODES))
     expected = {}
     for name in ("core", "commerce"):
@@ -582,8 +822,9 @@ def close_coverage(manifests: dict[str, dict]) -> dict:
         }
     need(observed == expected)
     cold = cold_module().coverage(runtime)
-    return {
+    result = {
         "version": 1,
+        "full_dr_verified": False,
         "coverage_complete": True,
         "scope": "platform-and-project-databases",
         "nodes": {name: digest(manifest) for name, manifest in manifests.items()},
@@ -593,6 +834,32 @@ def close_coverage(manifests: dict[str, dict]) -> dict:
         "cold_retained": cold,
         "excluded_system_databases": "max-* are covered by the separate max-backup service",
     }
+    if require_published or any(item.get("recovery_coverage_version", 1) == 2 for item in manifests.values()):
+        need(all(item.get("recovery_coverage_version") == 2 for item in manifests.values()))
+        facts = validate_runtime_images(runtime["runtime_images"])
+        validate_boundary_sources(runtime.get("boundary_sources"), runtime["runtime_images"])
+        need(set(facts) == set(observed))
+        published, pointers, gaps = {}, {}, {}
+        for node in ("core", "commerce"):
+            pointer = manifests[node].get("published_artifacts")
+            need(type(pointer) is dict)
+            need(pointer["file"] == "PUBLISHED.json" and pointer["bytes"] > 0
+                 and re.fullmatch(r"[0-9a-f]{64}", pointer["sha256"]))
+            pointers[node] = {key: pointer[key] for key in ("file", "bytes", "sha256", "blob_count", "blob_bytes")}
+            for row in pointer["publications"]:
+                project = row["project_id"]
+                need(project not in published and project in observed and row["images"] == facts[project])
+                databases = row["databases"]
+                need(len(databases) == 2 and {db["kind"] for db in databases} == {"core", "project"})
+                need(all(db["project_id"] == project and db["workspace_id"] == observed[project]["workspace_id"]
+                         and db["source"] == "existing-runtime-backup" for db in databases))
+                published[project] = row["release_id"]
+                gaps[project] = row["durable_pvc_gaps"]
+        need(set(published) == set(observed))
+        result.update(version=2, scope="platform-and-project-databases-and-active-published-artifacts",
+                      published_artifacts=pointers, active_releases=published,
+                      runtime_images=runtime["runtime_images"], boundary_sources=runtime["boundary_sources"], durable_pvc_gaps=gaps)
+    return result
 
 
 def load_cells(path: Path):
@@ -626,64 +893,66 @@ def _collect_peers(cells, args, nodes, manifests, authorities, census):
         "cells": args.cells_script.read_text(),
         "runtime": Path(__file__).read_text(),
         "cold": Path(__file__).with_name("cold-retained.py").read_text(),
+        "published": Path(__file__).with_name("published-artifacts.py").read_text(),
     }
-    for node in nodes:
-        if node["name"] == "core":
-            continue
-        spec = {
-            **node,
-            "temp_root": args.peer_temp_root,
-            "postgres_image": args.postgres_image,
-            "helper_image": args.helper_image,
-            "cold_authorities": authorities,
-            "platform_census": census,
-            "producer_sha256": {
-                name: hashlib.sha256(value.encode()).hexdigest()
-                for name, value in sources.items()
-            },
-        }
-        payload = encode_peer({"sources": sources, "spec": spec})
-        interpreter = (
-            "/opt/omnia/apps/orchestrator/.venv/bin/python"
-            if node["provider"] == "docker"
-            else "python3"
-        )
-        command = (
-            "sudo -n "
-            + shlex.quote(interpreter)
-            + " -c "
-            + shlex.quote(peer_program())
-            + " "
-            + shlex.quote(payload)
-        )
-        archive = args.out / (node["name"] + ".tgz")
-        result = cells.DockerRunner("ssh").run_to_file(
-            [
-                "-o",
-                "BatchMode=yes",
-                "-o",
-                "StrictHostKeyChecking=yes",
-                "-o",
-                "ConnectTimeout=15",
-                node["ssh_alias"],
-                command,
-            ],
-            path=archive,
-            timeout=7200,
-        )
-        need(result.ok)
-        with tempfile.TemporaryDirectory(prefix="verify-peer-", dir=args.out) as temp:
-            directory = Path(temp) / node["name"]
-            unpack(archive, directory)
-            manifests[node["name"]] = validate_local(cells, directory)
-        need(manifests[node["name"]].get("node") == node["name"])
-        need(manifests[node["name"]].get("producer_sha256") == spec["producer_sha256"])
-    coverage = close_coverage(manifests)
+    by_name = {node["name"]: node for node in nodes}
+    common = {"temp_root": args.peer_temp_root, "postgres_image": args.postgres_image,
+              "helper_image": args.helper_image, "cold_authorities": authorities, "platform_census": census,
+              "producer_sha256": {name: hashlib.sha256(value.encode()).hexdigest() for name, value in sources.items()}}
+    runtime_spec = {**common, **by_name["runtime"]}
+    manifests["runtime"] = _fetch_peer(cells, args.out, sources, runtime_spec)
+    images = manifests["runtime"]["runtime_images"]
+    # Core's original state.tar.gz remains the publication/request authority.
+    manifest_path = args.core_cells / "MANIFEST.json"
+    original = manifest_path.read_bytes()
+    need(json.loads(original) == manifests["core"])
+    add_published(cells, manifests["core"], Path(by_name["core"]["state_root"]), args.core_cells, images)
+    manifests["core"]["producer_sha256"] = common["producer_sha256"]
+    replacement = args.core_cells / "MANIFEST.published.json"
+    cells._write_private_json(replacement, manifests["core"])
+    need(not manifest_path.is_symlink() and manifest_path.read_bytes() == original)
+    os.replace(replacement, manifest_path)
+    commerce_spec = {**common, **by_name["commerce"], "runtime_images": images}
+    manifests["commerce"] = _fetch_peer(cells, args.out, sources, commerce_spec)
+    coverage = close_coverage(manifests, require_published=True)
+    # No second PG export: recheck only Pod/CRI bindings and ConfigMap source witnesses.
+    need(_fetch_runtime_images(cells, sources, {**runtime_spec,
+         "expected_boundary_sources": manifests["runtime"]["boundary_sources"]}) == images)
     cold_module().verify_authorities(
         args.core_cells / "state.tar.gz", manifests["runtime"].get("cold_retained", [])
     )
     coverage["topology_sha256"] = hashlib.sha256(args.topology.read_bytes()).hexdigest()
     cells._write_private_json(args.out / "COVERAGE.json", coverage)
+
+
+def _peer_command(sources, spec):
+    interpreter = "/opt/omnia/apps/orchestrator/.venv/bin/python" if spec["provider"] == "docker" else "python3"
+    payload = encode_peer({"sources": sources, "spec": spec})
+    command = "sudo -n " + shlex.quote(interpreter) + " -c " + shlex.quote(peer_program()) + " " + shlex.quote(payload)
+    return ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=15",
+            spec["ssh_alias"], command]
+
+
+def _fetch_peer(cells, out, sources, spec):
+    archive = out / (spec["name"] + ".tgz")
+    result = cells.DockerRunner("ssh").run_to_file(_peer_command(sources, spec), path=archive, timeout=7200)
+    need(result.ok)
+    with tempfile.TemporaryDirectory(prefix="verify-peer-", dir=out) as temp:
+        directory = Path(temp) / spec["name"]
+        unpack(archive, directory)
+        manifest = validate_local(cells, directory)
+    need(manifest.get("node") == spec["name"] and manifest.get("producer_sha256") == spec["producer_sha256"])
+    need(manifest.get("recovery_coverage_version") == 2)
+    return manifest
+
+
+def _fetch_runtime_images(cells, sources, spec):
+    result = cells.DockerRunner("ssh").run(_peer_command(sources, {**spec, "mode": "images-only"}), timeout=600)
+    need(result.ok)
+    value = json.loads(result.stdout)
+    need(value["producer_sha256"] == spec["producer_sha256"])
+    validate_runtime_images(value["runtime_images"])
+    return value["runtime_images"]
 
 
 def verify(cells, args) -> None:
@@ -714,7 +983,9 @@ def verify(cells, args) -> None:
                 )
     recorded = read(args.peers / "COVERAGE.json")
     actual = close_coverage(manifests)
-    need(all(recorded.get(key) == value for key, value in actual.items()))
+    need(all(recorded.get(key) == value for key, value in actual.items()
+             if not (actual["version"] == 1 and key == "full_dr_verified")))
+    need(recorded.get("full_dr_verified", False) is False)
 
 
 def main() -> int:
@@ -739,11 +1010,12 @@ def main() -> int:
             verify(cells, args)
         print(
             json.dumps(
-                {"coverage_complete": True, "scope": "platform-and-project-databases"}
+                {"coverage_complete": True, "full_dr_verified": False,
+                 "scope": (read((args.out if args.command == "collect" else args.peers) / "COVERAGE.json"))["scope"]}
             )
         )
         return 0
-    except Exception as error:
+    except Exception as error:  # noqa: BLE001 -- secret-safe outer command boundary
         # SQL, kubectl and peer stderr can contain retained secrets or row data.
         print(
             json.dumps(

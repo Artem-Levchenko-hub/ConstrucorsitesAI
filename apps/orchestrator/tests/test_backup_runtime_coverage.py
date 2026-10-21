@@ -93,11 +93,51 @@ class Kube:
                     },
                 },
             ]
+        self.boundary_source = b"print('boundary fixture')\n"
+        self.configmap = {"metadata": {"name": "boundary-server", "uid": "cm-uid",
+                          "resourceVersion": "1",
+                          "labels": {**tags, runtime.COMPONENT: "boundary"}},
+                          "data": {"server.py": self.boundary_source.decode()}}
+        self.cri = {}
+        for component in ("app", "core", "boundary", "redis"):
+            config_id = "sha256:" + runtime.digest(component)
+            resolved = f"registry/{component}@sha256:" + runtime.digest("manifest-" + component)
+            self.cri[resolved] = {
+                "status": {"id": config_id, "repoDigests": [resolved]},
+                "info": {"imageSpec": {"os": "linux", "architecture": "amd64",
+                                       "config": {"Env": ["PRIVATE=never-persist"]}}},
+            }
+            self.resources.append({
+                "kind": "Pod",
+                "metadata": {"name": component + "-pod", "uid": component + "-pod-uid",
+                             "labels": {**tags, runtime.COMPONENT: component}},
+                "spec": {"containers": [
+                    {"name": component, "image": f"registry/{component}:current"},
+                ]},
+                "status": {"phase": "Running", "containerStatuses": [
+                    {"name": component, "ready": True, "containerID": "containerd://" + component,
+                     "imageID": resolved, "state": {"running": {}}},
+                ]},
+            })
+
+        boundary = next(pod for pod in self.resources
+                        if pod.get("kind") == "Pod" and pod["metadata"]["name"] == "boundary-pod")
+        boundary["spec"]["containers"][0].update(
+            command=["python3", "/run/omnia-boundary/server.py"],
+            volumeMounts=[{"name": "boundary", "mountPath": "/run/omnia-boundary",
+                           "readOnly": True}])
+        boundary["spec"]["volumes"] = [{"name": "boundary", "projected": {"sources": [
+            {"configMap": {"name": "boundary-server",
+                           "items": [{"key": "server.py", "path": "server.py"}]}}
+        ]}}]
 
     def run(self, args, **_kwargs):
         self.calls.append(tuple(args))
+        if args[:2] == ["crictl", "inspecti"]:
+            return cells.CommandResult(tuple(args), 0, json.dumps(self.cri[args[-1]]).encode(), b"")
         if "get" in args:
-            items = self.namespaces if "namespaces" in args else self.resources
+            items = ([self.configmap] if "configmaps" in args else
+                     self.namespaces if "namespaces" in args else self.resources)
             items = copy.deepcopy(items)
             if self.dumps and self.change_after_dump and "namespaces" in args:
                 items[0]["metadata"]["uid"] = "replacement-uid"
@@ -108,8 +148,10 @@ class Kube:
         import hashlib
 
         self.calls.append(tuple(args))
-        self.dumps += 1
-        payload = b"-- fixture cluster dump\n"
+        is_source = args[-2:] == ["cat", "/run/omnia-boundary/server.py"]
+        if not is_source:
+            self.dumps += 1
+        payload = self.boundary_source if is_source else b"-- fixture cluster dump\n"
         path.write_bytes(payload)
         return cells.StreamResult(
             tuple(args), 0, len(payload), hashlib.sha256(payload).hexdigest(), b""
@@ -218,7 +260,7 @@ def test_dump_is_read_only_complete_and_rechecks_all_runtime_bindings(tmp_path, 
     assert all(
         "default_transaction_read_only=on" in " ".join(call)
         for call in kube.calls
-        if "exec" in call
+        if "exec" in call and ("pg_dumpall" in call or "psql" in call)
     )
     assert all("--lock-wait-timeout=30s" in call for call in kube.calls if "pg_dumpall" in call)
     assert not any(
@@ -274,6 +316,189 @@ def complete_manifests():
             "runtime_census": {"non_database_pvcs": []},
         },
     }
+
+
+def test_runtime_image_facts_bind_cri_config_and_manifest_without_env():
+    kube = Kube()
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    assert {row["component"] for row in facts} == {"app", "core", "guard", "redis"}
+    assert all(row["pod_uid"] and row["config_id"] != row["runtime_image_id"] for row in facts)
+    assert "PRIVATE" not in json.dumps(facts)
+    assert sum(call[:2] == ("crictl", "inspecti") for call in kube.calls) == 4
+    assert not any(
+        verb in call for call in kube.calls for verb in ("pull", "create", "run", "apply")
+    )
+
+
+def test_cri_redis_alias_is_bound_and_distinct_image_lookup_is_deduplicated():
+    kube = Kube()
+    redis = next(row for row in kube.resources
+                 if row.get("metadata", {}).get("name") == "redis-pod")
+    state = redis["status"]["containerStatuses"][0]
+    suffix = "@sha256:" + "e" * 64
+    proof = kube.cri.pop(state["imageID"])
+    state["imageID"] = "docker.io/library/redis" + suffix
+    redis["spec"]["containers"][0]["image"] = "redis" + suffix
+    proof["status"]["repoDigests"] = ["redis" + suffix]
+    proof["info"]["imageSpec"]["variant"] = None
+    kube.cri[state["imageID"]] = proof
+    replica = copy.deepcopy(next(row for row in kube.resources
+                                 if row.get("metadata", {}).get("name") == "app-pod"))
+    replica["metadata"].update(name="app-replica", uid="app-replica-uid")
+    kube.resources.append(replica)
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    assert len(facts) == 5
+    assert sum(call[:2] == ("crictl", "inspecti") for call in kube.calls) == 4
+    redis_fact = next(row for row in facts if row["component"] == "redis")
+    assert redis_fact["repo_digests"] == ["docker.io/library/redis" + suffix]
+    assert redis_fact["platform"]["variant"] == ""
+
+
+def test_live_image_drift_during_pg_dump_refuses_completion(tmp_path, monkeypatch):
+    kube = Kube()
+    dump = kube.run_to_file
+
+    def changed(*args, **kwargs):
+        result = dump(*args, **kwargs)
+        app = next(row for row in kube.resources
+                   if row.get("metadata", {}).get("name") == "app-pod")
+        app["spec"]["containers"][0]["image"] = "registry/app:changed"
+        return result
+
+    monkeypatch.setattr(kube, "run_to_file", changed)
+    monkeypatch.setattr(cells, "DockerRunner", lambda *args: kube)
+    with pytest.raises(ValueError):
+        runtime.kube_backup(cells, {"kubectl": "kubectl", "context": "default",
+                                    "postgres_image": IMAGE}, tmp_path)
+    assert not (tmp_path / "MANIFEST.json").exists()
+
+
+@pytest.mark.parametrize("fault", ["cri_digest", "missing_role", "not_ready", "foreign_owner"])
+def test_runtime_image_facts_fail_closed(fault):
+    kube = Kube()
+    pod = next(row for row in kube.resources if row.get("metadata", {}).get("name") == "app-pod")
+    if fault == "cri_digest":
+        kube.cri[pod["status"]["containerStatuses"][0]["imageID"]]["status"]["repoDigests"] = []
+    elif fault == "missing_role":
+        kube.resources.remove(pod)
+    elif fault == "not_ready":
+        pod["status"]["containerStatuses"][0]["ready"] = False
+    else:
+        pod["metadata"]["labels"][runtime.PROJECT] = "foreign"
+    with pytest.raises(ValueError):
+        runtime.kube_runtime_images(kube, kube, "default")
+
+
+def test_new_coverage_refuses_missing_published_sidecar_but_legacy_is_honest():
+    manifests = complete_manifests()
+    assert runtime.close_coverage(manifests)["full_dr_verified"] is False
+    with pytest.raises(ValueError):
+        runtime.close_coverage(manifests, require_published=True)
+
+
+def complete_v2_manifests():
+    manifests = complete_manifests()
+    facts = runtime.kube_runtime_images(Kube(), Kube(), "default")
+    images = runtime.validate_runtime_images(facts)
+    workspace = manifests["runtime"]["workspaces"][0]["workspace_id"]
+    for value in manifests.values():
+        value["recovery_coverage_version"] = 2
+    for node in ("core", "commerce"):
+        manifests[node]["published_artifacts"] = {
+            "file": "PUBLISHED.json", "bytes": 100, "sha256": "a" * 64,
+            "blob_count": 0, "blob_bytes": 0, "publications": [],
+        }
+    manifests["runtime"]["runtime_images"] = facts
+    manifests["runtime"]["boundary_sources"] = runtime.boundary_snapshot(Kube(), "default", facts)
+    manifests["commerce"]["published_artifacts"]["publications"] = [{
+        "project_id": PROJECT, "release_id": PROJECT, "images": images[PROJECT],
+        "durable_pvc_gaps": ["/mutable-business"],
+        "databases": [{"project_id": PROJECT, "workspace_id": workspace, "kind": kind,
+                       "source": "existing-runtime-backup"} for kind in ("project", "core")],
+    }]
+    return manifests
+
+
+@pytest.mark.parametrize("fault", [None, "missing_closure", "wrong_config"])
+def test_v2_coverage_requires_exact_artifact_runtime_image_and_db_closure(fault):
+    manifests = complete_v2_manifests()
+    if fault == "missing_closure":
+        manifests["commerce"]["published_artifacts"]["publications"] = []
+    elif fault == "wrong_config":
+        record = manifests["commerce"]["published_artifacts"]["publications"][0]
+        record["images"]["app"]["config_id"] = "sha256:" + "f" * 64
+    if fault:
+        with pytest.raises(ValueError):
+            runtime.close_coverage(manifests, require_published=True)
+    else:
+        result = runtime.close_coverage(manifests, require_published=True)
+        assert result["version"] == 2 and result["full_dr_verified"] is False
+        assert result["durable_pvc_gaps"] == {PROJECT: ["/mutable-business"]}
+
+
+@pytest.mark.parametrize("drift", [False, True])
+def test_collect_runtime_first_then_sidecars_final_images_only_probe(tmp_path, monkeypatch, drift):
+    complete = complete_v2_manifests()
+    manifests = {"core": copy.deepcopy(complete["core"])}
+    manifests["core"].pop("published_artifacts")
+    manifests["core"].pop("recovery_coverage_version")
+    core = tmp_path / "core"
+    core.mkdir()
+    (core / "MANIFEST.json").write_text(json.dumps(manifests["core"]))
+    nodes = json.loads(SOURCE.with_name("production-topology.json").read_text())["nodes"]
+    order = []
+
+    def fetch(cells_arg, out, sources, spec):
+        assert set(sources) == {"cells", "cold", "runtime", "published"}
+        order.append(spec["name"])
+        if spec["name"] == "commerce":
+            assert spec["runtime_images"] == complete["runtime"]["runtime_images"]
+            assert "published_artifacts" in json.loads((core / "MANIFEST.json").read_text())
+        return copy.deepcopy(complete[spec["name"]])
+
+    def supplement(cells_arg, manifest, state, directory, images):
+        order.append("core")
+        assert images == complete["runtime"]["runtime_images"]
+        manifest.update(copy.deepcopy(complete["core"]))
+
+    def final_probe(cells_arg, sources, spec):
+        order.append("images-only")
+        result = copy.deepcopy(complete["runtime"]["runtime_images"])
+        if drift:
+            result[0]["pod_uid"] = "replaced-pod"
+        return result
+
+    monkeypatch.setattr(runtime, "_fetch_peer", fetch)
+    monkeypatch.setattr(runtime, "add_published", supplement)
+    monkeypatch.setattr(runtime, "_fetch_runtime_images", final_probe)
+    monkeypatch.setattr(runtime.cold_module(), "verify_authorities", lambda *args: None)
+    args = SimpleNamespace(
+        cells_script=SOURCE.parents[2] / "apps/orchestrator/scripts/backup_cells.py",
+        out=tmp_path, core_cells=core, topology=SOURCE.with_name("production-topology.json"),
+        peer_temp_root="/private/stage", postgres_image=IMAGE, helper_image=IMAGE,
+    )
+    if drift:
+        with pytest.raises(ValueError):
+            runtime._collect_peers(cells, args, nodes, manifests, [], platform_census())
+        assert not (tmp_path / "COVERAGE.json").exists()
+    else:
+        runtime._collect_peers(cells, args, nodes, manifests, [], platform_census())
+        assert json.loads((tmp_path / "COVERAGE.json").read_text())["version"] == 2
+    assert order == ["runtime", "core", "commerce", "images-only"]
+
+
+def test_images_only_peer_never_creates_backup_or_dumps(tmp_path, monkeypatch, capsys):
+    kube = Kube()
+    monkeypatch.setattr(cells, "DockerRunner", lambda *args: kube)
+    monkeypatch.setattr(runtime, "export_peer", lambda *args: pytest.fail("unexpected PG export"))
+    result = runtime.dispatch_peer(cells, {"spec": {
+        "mode": "images-only", "provider": "kubernetes", "kubectl": "kubectl",
+        "context": "default", "producer_sha256": {"published": "a" * 64},
+        "temp_root": str(tmp_path / "not-created"),
+    }})
+    response = json.loads(capsys.readouterr().out)
+    assert result == 0 and len(response["runtime_images"]) == 4
+    assert kube.dumps == 0 and not (tmp_path / "not-created").exists()
 
 
 def test_global_closure_requires_exact_nodes_and_journal_to_runtime_matches():
@@ -420,9 +645,18 @@ def test_docker_peer_exports_retired_workspace_without_local_storage(tmp_path, m
     assert journal.read_bytes() == original
     assert list((tmp_path / "stage").iterdir()) == []
     assert runtime.os.environ["BACKUP_PLATFORM_CENSUS_JSON"] == "invalid ambient census"
+    assert manifest["recovery_coverage_version"] == 2
+    peer_tar = tmp_path / "saved.tgz"
+    peer_tar.write_bytes(output.buffer.getvalue())
+    extracted = tmp_path / "verified-peer"
+    runtime.unpack(peer_tar, extracted)
+    assert runtime.validate_local(cells, extracted) == manifest
+    (extracted / "PUBLISHED.json").unlink()
+    with pytest.raises(runtime.published_module().PublishedError):
+        runtime.validate_local(cells, extracted)
 
 
-def test_peer_payload_binds_all_three_sources_and_only_shared_platform_census(
+def test_peer_payload_binds_all_four_sources_and_only_shared_platform_census(
     tmp_path, monkeypatch
 ):
     import shlex
@@ -451,7 +685,8 @@ def test_peer_payload_binds_all_three_sources_and_only_shared_platform_census(
     payload = json.loads(zlib.decompress(base64.b64decode(wire)))
     assert payload["spec"]["platform_census"] == census
     assert "docker_observation" not in payload["spec"]
-    assert set(payload["sources"]) == {"cells", "runtime", "cold"}
+    assert set(payload["sources"]) == {"cells", "runtime", "cold", "published"}
+    assert payload["spec"]["name"] == "runtime", "runtime image facts must precede Docker peers"
     assert payload["spec"]["producer_sha256"] == {
         name: runtime.hashlib.sha256(value.encode()).hexdigest()
         for name, value in payload["sources"].items()
@@ -562,3 +797,60 @@ def test_owner_peer_export_passes_census_into_real_backup_and_archive(
         )
         assert verified == 0
     assert os.environ["BACKUP_PLATFORM_CENSUS_JSON"] == json.dumps(ambient)
+
+
+@pytest.mark.parametrize("fault", ["missing", "wrong-mount", "mounted-mismatch", "cm-drift"])
+def test_boundary_source_collection_fails_closed(tmp_path, monkeypatch, fault):
+    kube = Kube()
+    if fault == "missing":
+        kube.configmap["data"] = {}
+    elif fault == "wrong-mount":
+        pod = next(item for item in kube.resources if item.get("kind") == "Pod"
+                   and item["metadata"]["name"] == "boundary-pod")
+        pod["spec"]["containers"][0]["volumeMounts"][0]["readOnly"] = False
+    elif fault == "mounted-mismatch":
+        kube.boundary_source += b"changed"
+    else:
+        original = kube.run_to_file
+        def drift(*args, **kwargs):
+            result = original(*args, **kwargs)
+            kube.configmap["metadata"]["resourceVersion"] = "2"
+            return result
+        kube.run_to_file = drift
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    with pytest.raises(ValueError):
+        runtime.kube_backup(cells, {"kubectl": "kubectl", "context": "default",
+                                   "postgres_image": IMAGE}, tmp_path)
+
+
+def test_boundary_source_offline_corruption_and_missing_fail(tmp_path):
+    kube = Kube()
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    rows = runtime.boundary_snapshot(kube, "default", facts)
+    path = tmp_path / rows[0]["file"]
+    path.write_bytes(kube.boundary_source)
+    runtime.validate_boundary_sources(rows, facts, tmp_path)
+    path.write_bytes(b"corrupt")
+    with pytest.raises(ValueError):
+        runtime.validate_boundary_sources(rows, facts, tmp_path)
+    with pytest.raises(ValueError):
+        runtime.validate_boundary_sources([], facts)
+
+
+@pytest.mark.parametrize("fault", ["cm", "pod"])
+def test_final_images_probe_rejects_boundary_drift(monkeypatch, fault):
+    kube = Kube()
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    expected = runtime.boundary_snapshot(kube, "default", facts)
+    if fault == "cm":
+        kube.configmap["metadata"]["resourceVersion"] = "2"
+    else:
+        pod = next(item for item in kube.resources if item.get("kind") == "Pod"
+                   and item["metadata"]["name"] == "boundary-pod")
+        pod["metadata"]["uid"] = "replacement"
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    with pytest.raises(ValueError):
+        runtime.dispatch_peer(cells, {"spec": {
+            "mode": "images-only", "provider": "kubernetes", "kubectl": "kubectl",
+            "context": "default", "producer_sha256": {},
+            "expected_boundary_sources": expected}})
