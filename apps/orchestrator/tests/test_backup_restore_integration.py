@@ -144,9 +144,9 @@ def test_full_cluster_restore_rejects_sql_failure_even_with_matching_table_count
                     "'public.backup_restore_probe', 'SELECT'), "
                     "'can_insert', has_table_privilege('backup_restore_reader', "
                      "'public.backup_restore_probe', 'INSERT'), "
-                     "'bootstrap', (SELECT jsonb_build_array(oid,rolsuper,rolcanlogin) "
+                     "'bootstrap', (SELECT jsonb_build_array(oid::bigint,rolsuper,rolcanlogin) "
                      "FROM pg_catalog.pg_roles WHERE rolname='postgres'), "
-                     "'grantor', (SELECT grantor FROM pg_catalog.pg_auth_members "
+                     "'grantor', (SELECT grantor::bigint FROM pg_catalog.pg_auth_members "
                      "WHERE roleid=(SELECT oid FROM pg_catalog.pg_roles "
                      "WHERE rolname='backup_restore_reader') AND member=(SELECT oid "
                      "FROM pg_catalog.pg_roles WHERE rolname='backup_restore_member')))",
@@ -205,8 +205,8 @@ def test_offline_globals_restore_preserves_bootstrap_grantor_and_data(tmp_path):
             if source is not None and source.name.endswith("-counts.sql") and result.ok:
                 sql = (
                     "SELECT jsonb_build_object('bootstrap',(SELECT jsonb_build_array("
-                    "oid,rolsuper,rolcanlogin) FROM pg_roles WHERE rolname='postgres'),"
-                    "'grantor',(SELECT grantor FROM pg_auth_members WHERE roleid=(SELECT "
+                    "oid::bigint,rolsuper,rolcanlogin) FROM pg_roles WHERE rolname='postgres'),"
+                    "'grantor',(SELECT grantor::bigint FROM pg_auth_members WHERE roleid=(SELECT "
                     "oid FROM pg_roles WHERE rolname='globals_reader') AND member=(SELECT "
                     "oid FROM pg_roles WHERE rolname='globals_member')),"
                     "'rows',(SELECT jsonb_agg(n ORDER BY n) FROM public.globals_probe),"
