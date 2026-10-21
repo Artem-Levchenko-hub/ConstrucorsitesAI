@@ -211,16 +211,18 @@ verify_billing_runtime() { record billing; }
     def test_control_source_guard_rejects_runtime_changes_and_non_green_ci(self):
         functions = self.function("control_preflight")
         for damage in (
-            "", "inspector_contract", "gateway_contract", "gateway_neighbor", "source", "runtime",
+            "", "same_commit", "empty", "same_commit_runtime", "same_commit_source", "same_commit_ci",
+            "inspector_contract", "gateway_contract", "gateway_neighbor", "source", "runtime",
             "renamed", "ancestry", "ci", "ci_sha",
         ):
             with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
+                control = self.target if damage.startswith("same_commit") else self.control
                 driver = root / "driver"
                 driver.write_bytes(b"reviewed-driver\n")
                 expected = root / "committed"
-                expected.write_bytes(b"unreviewed-driver\n" if damage == "source" else driver.read_bytes())
-                changed = "apps/api/src/unsafe.py" if damage == "runtime" else (
+                expected.write_bytes(b"unreviewed-driver\n" if damage in {"source", "same_commit_source"} else driver.read_bytes())
+                changed = "apps/api/src/unsafe.py" if damage in {"runtime", "same_commit_runtime"} else (
                     "infra/release/not-allowed.sh" if damage == "renamed" else "infra/release/generation-publication-drain.py")
                 if damage == "inspector_contract":
                     changed = "apps/orchestrator/tests/test_inspector_upstream_contract.py"
@@ -228,30 +230,28 @@ verify_billing_runtime() { record billing; }
                     changed = "apps/api/tests/test_gateway_billing_cutover_release.py"
                 elif damage == "gateway_neighbor":
                     changed = "apps/api/tests/test_gateway_billing_cutover_release_other.py"
-                script = '''set -euo pipefail
-SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-REPO=.
+                script = 'set -euo pipefail\nSHA=' + self.target + '\nCONTROL_SHA=' + control + '\n' + '''REPO=.
 RELEASE_DRIVER=driver
 git() {
  case " $* " in
   *" merge-base "*) [ "$DAMAGE" != ancestry ]; ;;
   *" show "*) cat committed ;;
-  *" diff "*) printf '%s\\0' "$CHANGED" ;;
+  *" diff "*) if [ "$EMPTY_DIFF" = 0 ]; then printf '%s\\0' "$CHANGED"; fi ;;
   *) return 99 ;;
  esac
 }
 gh() { cat ci.json; }
 ''' + functions + '\ncontrol_preflight\nprintf accepted\n'
-                run = {"id": 123, "head_sha": self.target if damage == "ci_sha" else self.control,
+                run = {"id": 123, "head_sha": self.target if damage == "ci_sha" else control,
                        "head_branch": "main", "event": "push", "status": "completed",
-                       "conclusion": "failure" if damage == "ci" else "success",
+                       "conclusion": "failure" if damage in {"ci", "same_commit_ci"} else "success",
                        "path": ".github/workflows/ci.yml", "run_attempt": 1,
                        "created_at": "2026-10-21T00:00:00Z"}
                 (root / "ci.json").write_text(json.dumps({"workflow_runs": [run]}))
                 result = self.shell('DAMAGE=' + shlex.quote(damage) + '\nCHANGED=' + shlex.quote(changed)
+                                    + '\nEMPTY_DIFF=' + ("1" if damage in {"empty", "same_commit", "same_commit_source", "same_commit_ci"} else "0")
                                     + '\n' + script, cwd=temp)
-                if damage not in {"", "inspector_contract", "gateway_contract"}:
+                if damage not in {"", "same_commit", "inspector_contract", "gateway_contract"}:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn("accepted", result.stdout)
                 else:

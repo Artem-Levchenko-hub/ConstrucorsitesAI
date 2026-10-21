@@ -352,9 +352,11 @@ allowed = {b"infra/release/deploy-prod.sh", b"infra/release/generation-publicati
            b"apps/orchestrator/tests/test_inspector_upstream_contract.py",
            b"apps/api/tests/test_gateway_billing_cutover_release.py",
            b"infra/release/generation-drain.md"}
+target, control = sys.argv[1:]
 changed = sys.stdin.buffer.read().split(b"\0")
-assert changed[-1] == b"" and changed[:-1] and all(path in allowed for path in changed[:-1]), "control changes exceed reviewed operator scope"
-'
+paths = changed[:-1]
+assert changed[-1] == b"" and (paths or target == control) and all(path in allowed for path in paths), "control changes exceed reviewed operator scope"
+' "$SHA" "$CONTROL_SHA"
   ci=$(cd "$REPO" && gh api --method GET 'repos/{owner}/{repo}/actions/workflows/ci.yml/runs' \
     -f "head_sha=$CONTROL_SHA" -f branch=main -f event=push -f per_page=100)
   python3 - "$CONTROL_SHA" "$ci" <<'CONTROL_CI'
