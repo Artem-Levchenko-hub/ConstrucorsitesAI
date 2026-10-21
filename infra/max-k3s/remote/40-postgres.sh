@@ -80,28 +80,119 @@ EOF
 chmod 600 "$ENV"
 PGPASSWORD=$PW psql -h "$WG_IP" -U "$DBUSER" -d "$DBNAME" -tAc "select 'PG_LOGIN_OK ' || version()" | cut -c1-40
 
-echo "== [$NAME] ночной бэкап (03:15 MSK): все базы + state K3s, хранить 14 дней"
+echo "== [$NAME] ночной бэкап (03:15 MSK): все базы + state K3s, без автоматического удаления"
 install -d -m 700 /var/backups/max-studio
 cat > /usr/local/bin/max-backup.sh <<'EOF'
 #!/usr/bin/env bash
 # Локальный бэкап VPS: pg_dumpall (роли) + pg_dump -Fc каждой базы + state K3s + конфиги.
 set -euo pipefail
+umask 077
 ROOT=/var/backups/max-studio
-DAY=$(date +%F)
-DEST=$ROOT/$DAY
-install -d -m 700 "$DEST"
+DAY=$(date -u +%F)
+RUN_ID=${INVOCATION_ID:-}
+if [[ -z "$RUN_ID" ]]; then RUN_ID=$(python3 -I -c 'import uuid; print(uuid.uuid4().hex)'); fi
+[[ "$RUN_ID" =~ ^[0-9a-f]{32}$ ]] || { echo 'host backup: invalid invocation identity' >&2; exit 64; }
+private_directory(){
+  [[ -d "$1" && ! -L "$1" && -O "$1" && "$(realpath -e -- "$1")" == "$1" &&
+     "$(stat -c %a -- "$1")" == 700 ]] || { echo 'host backup: unsafe output directory' >&2; exit 65; }
+}
+private_directory "$ROOT"
+if [[ ! -e "$ROOT/$DAY" && ! -L "$ROOT/$DAY" ]]; then mkdir -m 700 -- "$ROOT/$DAY"; fi
+private_directory "$ROOT/$DAY"
+DEST=$ROOT/$DAY/$RUN_ID
+# Existing/unknown attempts are evidence, never an overwrite or cleanup target.
+mkdir -m 700 -- "$DEST"
+private_directory "$DEST"
+STARTED=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+STEP=starting
+K3S_STATE=not_present
+write_receipt(){
+  python3 -I - "$DEST" "$RUN_ID" "$STARTED" "$1" "$2" "$STEP" "$K3S_STATE" <<'HOST_RECEIPT'
+import hashlib,json,os,pathlib,stat,sys
+from datetime import datetime,timezone
+directory=pathlib.Path(sys.argv[1])
+run_id,started,kind,code,step,k3s=sys.argv[2:]
+artifacts={}
+if kind=='result':
+    for path in sorted(directory.iterdir()):
+        if path.name.startswith('HOST-SNAPSHOT'):continue
+        info=path.lstat()
+        if not stat.S_ISREG(info.st_mode):raise RuntimeError('unexpected snapshot entry')
+        digest=hashlib.sha256()
+        with path.open('rb+') as source:
+            for block in iter(lambda:source.read(1024*1024),b''):digest.update(block)
+            os.fsync(source.fileno())
+        artifacts[path.name]={'sha256':digest.hexdigest(),'bytes':info.st_size}
+databases=directory/'databases.json'
+value={'schema':1,'scope':'host-artifact-snapshot','run_id':run_id,
+       'started_at_utc':started,'checked_at_utc':datetime.now(timezone.utc).isoformat(),
+       'status':'started' if kind=='intent' else ('complete' if code=='0' else 'failed'),
+       'exit_code':int(code),'step':step,'k3s_state':k3s,'artifacts':artifacts,
+       'databases':json.loads(databases.read_text()) if databases.exists() else [],
+       'restore_verified':False,'full_application_backup':False,'k3s_consistency_verified':False}
+name='HOST-SNAPSHOT-INTENT.json' if kind=='intent' else 'HOST-SNAPSHOT.json'
+target=directory/name
+temporary=directory/(name+'.partial')
+with temporary.open('xb') as sink:
+    sink.write((json.dumps(value,sort_keys=True,indent=2)+'\n').encode())
+    sink.flush();os.fsync(sink.fileno())
+# Hard-link publication never replaces an existing receipt, including on Linux.
+os.link(temporary,target)
+temporary.unlink()
+if os.name=='posix':
+    for parent in (directory,directory.parent,directory.parent.parent):
+        fd=os.open(parent,os.O_RDONLY|os.O_DIRECTORY)
+        try:os.fsync(fd)
+        finally:os.close(fd)
+HOST_RECEIPT
+}
+finish(){
+  rc=$?
+  trap - EXIT
+  if ! write_receipt result "$rc"; then exit 1; fi
+  if [[ "$rc" -eq 0 ]]; then echo "host backup $RUN_ID: complete (host scope; restore unverified)"; fi
+  exit "$rc"
+}
+trap finish EXIT
+write_receipt intent 0
 cd /tmp
-sudo -u postgres pg_dumpall --globals-only | gzip > "$DEST/globals.sql.gz"
-for db in $(sudo -u postgres psql -tAc "select datname from pg_database where not datistemplate and datname<>'postgres'"); do
-  sudo -u postgres pg_dump -Fc "$db" > "$DEST/$db.dump"
-done
-# K3s: sqlite-state + токен + конфиги (восстановление: остановить k3s, вернуть каталог, запустить)
+STEP=globals
+sudo -n -u postgres pg_dumpall --host=/var/run/postgresql --username=postgres --globals-only | gzip > "$DEST/globals.sql.gz"
+STEP=database_inventory
+sudo -n -u postgres psql --host=/var/run/postgresql --username=postgres --dbname=postgres -X -v ON_ERROR_STOP=1 -A -t -0 -c \
+  "select datname from pg_database where not datistemplate and datname<>'postgres' order by datname" > "$DEST/databases.nul"
+python3 -I - "$DEST" <<'HOST_DATABASES'
+import json,pathlib,sys
+from urllib.parse import quote
+directory=pathlib.Path(sys.argv[1])
+raw=(directory/'databases.nul').read_bytes()
+if raw and not raw.endswith(b'\0'):raise RuntimeError('incomplete database inventory')
+names=[part.decode('utf-8') for part in raw.split(b'\0')[:-1]]
+if any(not name for name in names) or len(set(names))!=len(names):raise RuntimeError('invalid database inventory')
+rows=[{'name':name,'file':f'database-{index:06d}.dump'} for index,name in enumerate(names,1)]
+with (directory/'databases.json').open('x',encoding='utf-8') as sink:json.dump(rows,sink)
+with (directory/'database-plan.nul').open('xb') as sink:
+    for row in rows:
+        # Encode the name as URI data; it cannot become a filename or conninfo.
+        uri='postgresql:///'+quote(row['name'],safe='')+'?host=/var/run/postgresql&user=postgres'
+        sink.write((row['file']+'\0'+uri+'\0').encode())
+HOST_DATABASES
+STEP=database_dumps
+while IFS= read -r -d '' file && IFS= read -r -d '' uri; do
+  sudo -n -u postgres pg_dump -Fc --dbname="$uri" > "$DEST/$file"
+done < "$DEST/database-plan.nul"
+STEP=k3s_state
+# Keep the existing raw control-plane scope. A tar error is a failed snapshot.
 if [ -d /var/lib/rancher/k3s/server/db ]; then
-  tar -C / -czf "$DEST/k3s-state.tgz" var/lib/rancher/k3s/server/db var/lib/rancher/k3s/server/token etc/rancher/k3s 2>/dev/null || true
+  tar -C / -czf "$DEST/k3s-state.tgz" var/lib/rancher/k3s/server/db var/lib/rancher/k3s/server/token etc/rancher/k3s
+  K3S_STATE=included
+elif [[ -e /var/lib/rancher/k3s/server/db || -L /var/lib/rancher/k3s/server/db ]]; then
+  echo 'host backup: unexpected K3s state path' >&2; exit 66
 fi
-tar -C / -czf "$DEST/etc-max-studio.tgz" etc/max-studio etc/wireguard etc/ssh/sshd_config.d etc/ssh/authorized_keys.d 2>/dev/null || true
-find "$ROOT" -mindepth 1 -maxdepth 1 -type d -mtime +14 -exec rm -rf {} +
-du -sh "$DEST" | awk '{print "backup " $2 ": " $1}'
+STEP=host_configuration
+tar -C / -czf "$DEST/etc-max-studio.tgz" etc/max-studio etc/wireguard etc/ssh/sshd_config.d etc/ssh/authorized_keys.d
+STEP=finished
+# Retention is an explicit operator decision. This job never prunes old copies.
 EOF
 chmod 700 /usr/local/bin/max-backup.sh
 cat > /etc/systemd/system/max-backup.service <<'EOF'
