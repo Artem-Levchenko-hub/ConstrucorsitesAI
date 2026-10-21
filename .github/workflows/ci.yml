@@ -175,9 +175,10 @@ jobs:
           tests/test_template_registration.py
           tests/test_template_mapping.py
 
-  # The complete API suite, split into three shards by file so it runs in parallel with the
+  # The complete API suite, split into six shards by file so it runs in parallel with the
   # gate instead of after it (16 of the gate's 24 minutes were this one step). Each shard
-  # gets its own disposable PostgreSQL/Redis; membership is `NR % 3` over the sorted file list.
+  # gets its own disposable PostgreSQL/Redis. Each old NR % 3 group is split into a pair;
+  # full phase timings will support a measured future balance without omitting tests.
   api-suite:
     # The locked Playwright runtime supports Ubuntu 24.04, not the moving latest image.
     runs-on: ubuntu-24.04
@@ -185,7 +186,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6]
     env:
       DATABASE_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_dev
       DATABASE_TEST_URL: postgresql+asyncpg://omnia:omnia@127.0.0.1:5432/omnia_test
@@ -239,16 +240,28 @@ jobs:
       - name: Install frozen managed-footer browser fixture dependencies
         working-directory: apps/orchestrator/templates/max-miniapp-nextjs
         run: pnpm install --frozen-lockfile --ignore-scripts
-      - name: Run API suite shard ${{ matrix.shard }} of 3 on disposable services
+      - name: Run API suite shard ${{ matrix.shard }} of 6 on disposable services
         working-directory: apps/api
         run: |
           # Task15 remains in the ordinary disposable-service gate, not a paid canary job.
           test -f tests/test_generation_recovery_campaign.py
           test -f tests/test_generation_recovery_fault_matrix.py
-          mapfile -t files < <(find tests -maxdepth 1 -name 'test_*.py' | sort | awk -v k=$(( ${{ matrix.shard }} - 1 )) 'NR % 3 == k')
+          uv run --frozen python -m unittest discover -s ../../infra/ci -p 'test_*.py' -q
+          selection=$(uv run --frozen python ../../infra/ci/api-test-shards.py --shards 6 --shard ${{ matrix.shard }})
+          mapfile -t files <<< "$selection"
           echo "files in shard: ${#files[@]}"
           # A test that hangs longer than four minutes dumps every thread's stack into the log.
-          uv run --frozen pytest -o addopts='' -o faulthandler_timeout=240 -q --durations=10 "${files[@]}"
+          PYTHONPATH="$GITHUB_WORKSPACE/infra/ci" uv run --frozen pytest \
+            -p pytest_file_timings --file-timings-output "$RUNNER_TEMP/api-file-timings-${{ matrix.shard }}/report.json" \
+            -o addopts='' -o faulthandler_timeout=240 -q --durations=10 "${files[@]}"
+      - name: Retain full per-file API timings, including failed tests
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-file-timings-${{ github.sha }}-${{ matrix.shard }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/api-file-timings-${{ matrix.shard }}/report.json
+          if-no-files-found: warn
+          retention-days: 14
 
   orchestrator-release-gate:
     runs-on: ubuntu-latest
