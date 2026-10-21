@@ -82,7 +82,7 @@ jobs:
             echo "::error::SHA-256 mismatch"
             exit 1
           }
-          openssl cms -cmsout -inform DER -in omnia-backup.cms -print >/dev/null
+          python3 infra/backup/cms-envelope.py omnia-backup.cms --sha256 "${expected_sha}"
 
           printf '%s  %s\n' "${actual_sha}" "omnia-backup.cms" > omnia-backup.cms.sha256
           timestamp="$(date -u -d "${created_at}" +%Y%m%d-%H%M%S)"

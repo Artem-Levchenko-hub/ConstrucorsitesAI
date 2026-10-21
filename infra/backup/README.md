@@ -4,6 +4,19 @@ The canonical source is `/opt/omnia/infra/backup`, from the delivered Git revisi
 Do not run a frozen `/root/yleum-bootstrap-*/backup` copy. The platform entrypoint
 and the controller-user wrapper are installed separately from application rollout.
 
+`cms-envelope.py` is the shared encrypted-envelope gate for backup, local payload
+restore checks and the off-host workflow. It streams the complete original file
+against its exact SHA-256, binds its physical path and file identity, and checks
+canonical DER lengths through exact EOF. Only the existing single RSA recipient,
+AES-256-CBC profile is accepted. Bounded original metadata and the first actual
+ciphertext block are re-encoded with four adjusted enclosing lengths and parsed
+by OpenSSL; the encrypted backup itself is never rewritten. This avoids the
+OpenSSL 3.0 ASN.1 BIO buffer ceiling at `0x5ffffffc` bytes. The encryption format,
+payload checksums and offline key requirements remain unchanged. Envelope success
+does not assert a ciphertext decrypt or restore; those require independent
+private-key recovery and restore evidence. Deliver the helper alongside both
+canonical shell scripts before running either hook.
+
 The explicit topology requires Core, Commerce and runtime. Core/Commerce collect
 their local Docker cell databases and state journals. Runtime lists every `app-*`
 namespace and logically dumps both `core-postgres` and `project-postgres`, using

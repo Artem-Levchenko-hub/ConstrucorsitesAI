@@ -152,7 +152,7 @@ trap cleanup EXIT
 
 echo "[restore-test] verifying checksums and encrypted envelope..."
 ( cd "$latest" && sha256sum -c SHA256SUMS && sha256sum -c OFFHOST_SHA256 )
-openssl cms -cmsout -inform DER -in "$encrypted" -print >/dev/null
+python3 "$(dirname "$0")/cms-envelope.py" "$encrypted" --sha256-file "${latest}/OFFHOST_SHA256"
 
 echo "[restore-test] extracting file/object archives to scratch..."
 extract_dir="$(mktemp -d "${TMPDIR:-/tmp}/omnia-restore-test.XXXXXX")"

@@ -339,7 +339,7 @@ rm -f "$bundle_tmp"
   cd "$dir"
   sha256sum "$(basename "$encrypted")" > OFFHOST_SHA256
 )
-openssl cms -cmsout -inform DER -in "$encrypted" -print >/dev/null \
+python3 "$(dirname "$0")/cms-envelope.py" "$encrypted" --sha256-file "$dir/OFFHOST_SHA256" \
   || fail "encrypted CMS envelope validation failed"
 log "backup complete: ${dir}"
 
