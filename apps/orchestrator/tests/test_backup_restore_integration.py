@@ -111,10 +111,10 @@ def test_full_cluster_restore_rejects_sql_failure_even_with_matching_table_count
             timeout=1800,
         )
         assert dumped.ok and dumped.size_bytes > 0
-        # The input intentionally disables postgres after replaying its grants;
-        # maintenance must use the separate scratch-only login, not rename OID10.
+        # The input intentionally disables postgres login after replaying its grants;
+        # PG16 keeps its SUPERUSER attribute; maintenance uses a separate login.
         with path.open("ab") as stream:
-            stream.write(b"\nALTER ROLE postgres NOSUPERUSER NOLOGIN;\n")
+            stream.write(b"\nALTER ROLE postgres NOLOGIN;\n")
         tables = backup.count_tables(["exec", server], backup.scratch_connection())
         assert tables == 1
         entry = {"kind": "project", "format": "plain", "tables": tables}
@@ -161,7 +161,7 @@ def test_full_cluster_restore_rejects_sql_failure_even_with_matching_table_count
                 "role_flags": [False, False, False, False],
                 "can_select": True,
                 "can_insert": False,
-                "bootstrap": [10, False, False],
+                "bootstrap": [10, True, False],
                 "grantor": 10,
             }
             recovered.append(proof)
@@ -216,7 +216,7 @@ def test_offline_globals_restore_preserves_bootstrap_grantor_and_data(tmp_path):
                 checked = super().run([*args[:args.index("-f")], "-c", sql], timeout=60)
                 assert checked.ok
                 proof = json.loads(checked.text())
-                assert proof == {"bootstrap": [10, False, False], "grantor": 10,
+                assert proof == {"bootstrap": [10, True, False], "grantor": 10,
                                  "rows": [1, 2], "member_select": True}
                 recovered.append(proof)
             return result
@@ -244,7 +244,7 @@ def test_offline_globals_restore_preserves_bootstrap_grantor_and_data(tmp_path):
             assert runner.run_to_file(["exec", server, *command], path=plain, timeout=1800).ok
             if name == "globals":
                 with plain.open("ab") as output:
-                    output.write(b"\nALTER ROLE postgres NOSUPERUSER NOLOGIN;\n")
+                    output.write(b"\nALTER ROLE postgres NOLOGIN;\n")
             compressed = tmp_path / (name + ".sql.gz")
             with plain.open("rb") as source, gzip.open(compressed, "wb") as output:
                 shutil.copyfileobj(source, output)
