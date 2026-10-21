@@ -10,6 +10,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).with_name("offline-restore.py")
@@ -137,6 +138,61 @@ class OfflineTests(unittest.TestCase):
         self.assertFalse(result["ciphertext_restore_verified"])
         self.assertIn("minio_object_get", result["unverified"])
 
+    def test_normal_digest_resolution_does_not_load_archive_verifier_or_fall_back(self):
+        class Runner:
+            def __init__(self, available):
+                self.available, self.calls = available, []
+            def run(self, args, **kwargs):
+                self.calls.append(args)
+                return SimpleNamespace(ok=self.available)
+        for available in (True, False):
+            runner = Runner(available)
+            requested = "postgres@sha256:" + "a" * 64
+            with patch.object(module, "load_image_provenance",
+                              side_effect=AssertionError("fallback")):
+                if available:
+                    self.assertEqual(module.resolve_postgres_image(runner, requested, None),
+                                     (requested, None))
+                else:
+                    with self.assertRaisesRegex(module.AcceptanceError,
+                                                "pinned_postgres_image_not_local"):
+                        module.resolve_postgres_image(runner, requested, None)
+            self.assertEqual(runner.calls, [["image", "inspect", requested]])
+
+    def test_explicit_archive_mapping_reaches_runtime_and_sql_and_retains_requested_pin(self):
+        requested = "postgres@sha256:" + "a" * 64
+        execution = "sha256:" + "b" * 64
+        proof = {"status": "verified_explicit_archive_content_mapping",
+                 "requested_image": requested, "execution_image": execution}
+        backend = SimpleNamespace(run=lambda *_args, **_kwargs: SimpleNamespace(ok=True))
+        cells = SimpleNamespace(DockerRunner=lambda: backend)
+        observed = []
+        runtime = SimpleNamespace(load_cells=lambda _path: cells,
+                                  verify=lambda _cells, args: observed.append(args.postgres_image))
+        verifier = SimpleNamespace(verify_local_image=lambda *_args: proof)
+        report = self.root / "mapped-result.json"
+        with (
+            patch.dict(os.environ, {"DOCKER_HOST": "unix:///isolated.sock", "DOCKER_CONTEXT": ""}),
+            patch.object(module, "safe_extract"),
+            patch.object(module, "verify_checksums", return_value=9),
+            patch.object(module, "load_runtime", return_value=runtime),
+            patch.object(module, "load_image_provenance", return_value=verifier),
+            patch.object(module, "restore_sql", return_value={"status": "passed"}) as restored,
+            redirect_stdout(io.StringIO()),
+        ):
+            code = module.main(["--bundle", str(self.root / "unused.tgz"),
+                                "--work-dir", str(self.root / "new"),
+                                "--cells-script", str(self.root / "unused.py"),
+                                "--postgres-image", requested,
+                                "--postgres-image-archive", str(self.root / "image.tar"),
+                                "--receipt", str(report), "--disposable-sandbox"])
+        self.assertEqual(code, 0)
+        self.assertEqual(observed, [execution])
+        self.assertEqual([call.args[3] for call in restored.call_args_list], [execution, execution])
+        result = json.loads(report.read_text())
+        self.assertEqual(result["stages"]["postgres_image_provenance"], proof)
+        self.assertFalse(result["full_dr_verified"])
+
     def test_guard_refuses_foreign_cleanup_and_network(self):
         class Backend:
             def __init__(self):
@@ -254,7 +310,8 @@ class OfflineTests(unittest.TestCase):
     def test_guard_refuses_label_change_before_cleanup(self):
         class Backend:
             def run(self, args, **kwargs):
-                return type("Result", (), {"ok": True, "stdout": b'{"yleum.offline-restore":"foreign"}'})()
+                return type("Result", (), {
+                    "ok": True, "stdout": b'{"yleum.offline-restore":"foreign"}'})()
         guarded = module.OwnedDocker(Backend(), "a" * 32)
         guarded.containers.add("omnia-backup-scratch-" + "b" * 32)
         with self.assertRaisesRegex(module.AcceptanceError, "ownership_label_mismatch"):

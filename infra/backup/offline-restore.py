@@ -281,12 +281,33 @@ def receipt():
                            "external_integrations", "archive_environment_activation"]}
 
 
-def load_runtime():
+def load_helper(name, filename):
     spec = importlib.util.spec_from_file_location(
-        "offline_runtime_backup", Path(__file__).with_name("runtime-backup.py"))
+        name, Path(__file__).with_name(filename))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def load_runtime():
+    return load_helper("offline_runtime_backup", "runtime-backup.py")
+
+
+def load_image_provenance():
+    return load_helper("offline_image_provenance", "image-provenance.py")
+
+
+def resolve_postgres_image(runner, requested_image, archive):
+    if archive is None:
+        need(runner.run(["image", "inspect", requested_image], timeout=30).ok,
+             "pinned_postgres_image_not_local")
+        return requested_image, None
+    provenance = load_image_provenance()
+    try:
+        proof = provenance.verify_local_image(runner, requested_image, archive)
+    except provenance.ImageProvenanceError as error:
+        raise AcceptanceError(str(error)) from error
+    return proof["execution_image"], proof
 
 
 def main(argv=None):
@@ -295,7 +316,10 @@ def main(argv=None):
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--cells-script", type=Path, required=True)
     parser.add_argument("--postgres-image", required=True)
-    parser.add_argument("--minio-image", help="Reserved; MinIO GET remains a separate acceptance stage")
+    parser.add_argument("--postgres-image-archive", type=Path,
+                        help="Explicit OCI save archive proving original digest to local config ID")
+    parser.add_argument("--minio-image",
+                        help="Reserved; MinIO GET remains a separate acceptance stage")
     parser.add_argument("--receipt", type=Path, required=True)
     parser.add_argument("--disposable-sandbox", action="store_true")
     args = parser.parse_args(argv)
@@ -321,12 +345,17 @@ def main(argv=None):
         cells = runtime.load_cells(args.cells_script)
         runner = OwnedDocker(cells.DockerRunner(), uuid4().hex)
         cells.DockerRunner = lambda: runner
-        need(runner.run(["image", "inspect", args.postgres_image], timeout=30).ok,
-             "pinned_postgres_image_not_local")
+        if args.postgres_image_archive is not None:
+            stage = "postgres_image_provenance"
+        postgres_image, image_proof = resolve_postgres_image(
+            runner, args.postgres_image, args.postgres_image_archive)
+        if image_proof is not None:
+            result["stages"][stage] = image_proof
+        stage = "runtime_peers"
         with open(os.devnull, "w") as silent, redirect_stdout(silent), redirect_stderr(silent):
             runtime.verify(cells, SimpleNamespace(
                 core_cells=args.work_dir / "cells-unpacked/cells",
-                peers=args.work_dir / "peers-unpacked", postgres_image=args.postgres_image))
+                peers=args.work_dir / "peers-unpacked", postgres_image=postgres_image))
         result["stages"][stage] = {"status": "passed"}
         for stage, name, filename in (
             ("platform_sql", "omnia", "platform-omnia.sql.gz"),
@@ -334,10 +363,10 @@ def main(argv=None):
         ):
             globals_dump = args.work_dir / (stage.split("_")[0] + "-globals.sql.gz")
             result["stages"][stage] = restore_sql(
-                cells, runner, args.work_dir, args.postgres_image, name,
+                cells, runner, args.work_dir, postgres_image, name,
                 args.work_dir / filename, globals_dump)
         result["status"] = "passed_checked_scope"
-    except Exception as error:  # noqa: BLE001 -- fail closed without leaking SQL or secrets
+    except Exception as error:  # Fail closed without leaking SQL or secrets.
         result["stages"][stage] = {
             "status": "failed", "error": str(error) if isinstance(error, AcceptanceError)
             else type(error).__name__}

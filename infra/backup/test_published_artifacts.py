@@ -61,11 +61,22 @@ class Docker:
     def __init__(self, images):
         self.images, self.calls, self.hook = images, [], None
 
+    def lookup(self, reference):
+        if reference in self.images:
+            return self.images[reference]
+        if "@sha256:" in reference:
+            canonical = module.canonical_digest(reference)
+            matches = [value for value in self.images.values()
+                       if canonical in {module.canonical_digest(ref) for ref in value[0].get("RepoDigests", [])}]
+            if len(matches) == 1:
+                return matches[0]
+        return None
+
     def run(self, args, **kwargs):
         self.calls.append(args)
         if args[:2] != ["image", "inspect"]:
             raise AssertionError("network or mutation command")
-        value = self.images.get(args[2])
+        value = self.lookup(args[2])
         return SimpleNamespace(ok=value is not None,
                                text=lambda: json.dumps([value[0]]) if value else "private error")
 
@@ -74,7 +85,7 @@ class Docker:
         if args[:2] != ["image", "save"]:
             raise AssertionError("network or mutation command")
         with path.open("xb") as output:
-            output.write(self.images[args[2]][1])
+            output.write(self.lookup(args[2])[1])
         if self.hook:
             self.hook()
         return SimpleNamespace(ok=True)
@@ -173,6 +184,97 @@ class PublishedTests(unittest.TestCase):
     def resolve(self, facts=None):
         return module.resolve_witness(self.cells, self.runner, self.state, self.archive,
                                       self.runtime_facts() if facts is None else facts)
+
+    def use_manifest_inspect_ids(self):
+        images = self.witness["publications"][0]["images"]
+        cached = {}
+        for image in images.values():
+            metadata, raw = self.runner.images[image["config_id"]]
+            record = {**metadata, "Id": image["repo_digest"].split("@", 1)[1],
+                      "RepoDigests": [image["repo_digest"]]}
+            cached[image["repo_digest"]] = (record, raw)
+        self.runner.images = cached
+        self.payload["active_release"]["image_id"] = images["app"]["repo_digest"].split("@", 1)[1]
+        self.refresh_archive()
+        self.witness["publications"][0]["journal_sha256"] = sha(self.journal.read_bytes())
+
+    def test_classic_ids_inspect_and_save_by_exact_runtime_repo_digest(self):
+        self.assertEqual(self.resolve(), self.witness)
+        result = self.collect()
+        self.assertEqual(module.validate(self.out, self.archive, runtime_witness=self.witness), result)
+        images = self.witness["publications"][0]["images"]
+        allowed = {image["repo_digest"] for image in images.values()}
+        self.assertTrue(all(call[2] in allowed for call in self.runner.calls))
+        saves = [call for call in self.runner.calls if call[:2] == ["image", "save"]]
+        self.assertEqual(saves, [["image", "save", images["core"]["repo_digest"]]])
+
+    def test_manifest_ids_resolve_trusted_config_archive_and_round_trip(self):
+        self.use_manifest_inspect_ids()
+        self.assertNotEqual(self.payload["active_release"]["image_id"], self.app_id)
+        self.assertEqual(self.resolve(), self.witness)
+        result = self.collect()
+        self.assertEqual(module.validate(self.out, self.archive, runtime_witness=self.witness), result)
+        record = result["publications"][0]
+        self.assertEqual(record["images"]["app"]["config_id"], self.app_id)
+        self.assertEqual(record["image_blobs"]["app"], record["artifacts"][self.app.name])
+        self.assertTrue(all("@sha256:" in call[2] for call in self.runner.calls))
+
+    def test_wrong_publication_manifest_cannot_match_another_role(self):
+        self.use_manifest_inspect_ids()
+        self.payload["active_release"]["image_id"] = self.witness["publications"][0]["images"]["core"]["repo_digest"].split("@", 1)[1]
+        self.refresh_archive()
+        self.witness["publications"][0]["journal_sha256"] = sha(self.journal.read_bytes())
+        with self.assertRaisesRegex(module.PublishedError, "active_image_mismatch"):
+            self.resolve()
+        with self.assertRaisesRegex(module.PublishedError, "active_image_mismatch"):
+            self.collect()
+        self.assertEqual(self.runner.calls, [])
+
+    def test_manifest_lookup_requires_exact_identity_repo_platform_and_runtime_binding(self):
+        image = copy.deepcopy(self.witness["publications"][0]["images"]["app"])
+        manifest = image["repo_digest"].split("@", 1)[1]
+        metadata = {"Id": manifest, "RepoDigests": [image["repo_digest"]],
+                    "Os": "linux", "Architecture": "amd64"}
+        raw = self.app.read_bytes()
+        for identity in (self.app_id, manifest):
+            runner = Docker({image["repo_digest"]: ({**metadata, "Id": identity}, raw)})
+            module.inspect_local(runner, image)
+            self.assertEqual(runner.calls, [["image", "inspect", image["repo_digest"]]])
+        for fault in ("identity", "repository", "platform", "runtime"):
+            with self.subTest(fault=fault):
+                damaged, record = copy.deepcopy(image), copy.deepcopy(metadata)
+                if fault == "identity":
+                    record["Id"] = "sha256:" + "e" * 64
+                elif fault == "repository":
+                    record["RepoDigests"] = ["foreign/app@" + manifest]
+                elif fault == "platform":
+                    record["Architecture"] = "arm64"
+                else:
+                    damaged["runtime_image_id"] = "docker-pullable://foreign/app@" + manifest
+                runner = Docker({image["repo_digest"]: (record, raw)})
+                with self.assertRaises(module.PublishedError):
+                    module.inspect_local(runner, damaged)
+
+    def test_manifest_export_config_and_layer_mismatch_never_promote_or_succeed(self):
+        self.use_manifest_inspect_ids()
+        image = self.witness["publications"][0]["images"]["core"]
+        metadata, original = self.runner.images[image["repo_digest"]]
+        with tarfile.open(fileobj=io.BytesIO(original)) as archive:
+            entries = [(member.name, archive.extractfile(member).read()) for member in archive]
+        damaged_layer = tar_bytes([(name, b"wrong layer" if name == "layer.tar" else data)
+                                   for name, data in entries])
+        _, wrong_config = image_bytes({"unexpected": "config"})
+        for fault, raw, reason in (("config", wrong_config, "image_config_mismatch"),
+                                   ("layer", damaged_layer, "image_layer_mismatch")):
+            with self.subTest(fault=fault):
+                out = self.root / ("failed-" + fault)
+                out.mkdir()
+                self.runner.images[image["repo_digest"]] = (metadata, raw)
+                with self.assertRaisesRegex(module.PublishedError, reason):
+                    module.collect(self.cells, self.runner, self.state, self.archive, out,
+                                   runtime_witness=self.witness)
+                self.assertFalse((out / "PUBLISHED.json").exists())
+                self.assertFalse((out / ("published-" + sha(raw) + ".tar")).exists())
 
     def test_resolve_exact_historical_image_ignores_latest_environment(self):
         stale_id, raw = image_bytes({**self.labels, "stale": "true"})
@@ -318,6 +420,7 @@ class PublishedTests(unittest.TestCase):
         image = copy.deepcopy(self.witness["publications"][0]["images"]["redis"])
         suffix = "@sha256:" + "e" * 64
         image["repo_digest"] = "docker.io/library/redis" + suffix
+        image["runtime_image_id"] = "docker-pullable://" + image["repo_digest"]
         record = self.runner.images[self.common_id][0]
         record["Variant"] = None
         for alias in ("redis", "library/redis", "docker.io/library/redis"):

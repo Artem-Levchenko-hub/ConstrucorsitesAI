@@ -231,6 +231,24 @@ delivered revision. MinIO object GET, current source witnesses and application
 boot remain separate acceptance steps; `passed_checked_scope` alone is not full
 filesystem disaster recovery. Retain the extracted data privately for those steps.
 
+Docker 29 can report an image manifest as its inspect ID while CRI reports the
+config ID. Collection binds both to the exact resolved runtime digest; saved
+archives are still verified against the config and their complete layer chain.
+Neither identity may be substituted with an arbitrary digest.
+
+Classic Docker `save`/`load` can lose `RepoDigests`. If the original digest no
+longer resolves in the disposable engine, preserve that failure. A separately
+reviewed explicit archive can prove the same content without adding a fake tag:
+add `--postgres-image-archive /private/postgres-save.tar` to the command above,
+retaining the original `--postgres-image repository@sha256:...` argument.
+`image-provenance.py` checks the original OCI index hash, one exact Linux/amd64
+manifest, config, every compressed layer hash and decoded diff ID, then checks
+the already loaded local config ID/platform/layers. Only that immutable config
+ID is used for scratch runs. The receipt records both identities and the archive
+checksum; it explicitly does not claim that RepoDigest lookup survived. There
+is no automatic fallback, network pull, image load or tag creation in this path.
+An unsupported/missing/ambiguous chain fails before scratch resources are made.
+
 Physical SQL regression on an explicitly selected disposable Docker sandbox:
 
 ```sh

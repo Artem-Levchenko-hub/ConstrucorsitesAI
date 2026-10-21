@@ -307,6 +307,16 @@ def source_workspace(payload, request):
     return workspace
 
 
+def image_ids(image):
+    """Bind the trusted config and manifest identities without conflating them."""
+    config_id = image.get("config_id")
+    need(isinstance(config_id, str) and IMAGE.fullmatch(config_id), "runtime_witness_image_invalid")
+    reference = canonical_digest(image["repo_digest"])
+    need(canonical_digest(image["runtime_image_id"].removeprefix("docker-pullable://")) == reference,
+         "runtime_manifest_identity_mismatch")
+    return {config_id, reference.split("@", 1)[1]}
+
+
 def plan(payload, journal, request, witness):
     project, release = payload["project_id"], payload["active_release"]
     workspace = source_workspace(payload, request)
@@ -320,17 +330,13 @@ def plan(payload, journal, request, witness):
     for role, value in images.items():
         need(set(value) == {"reference", "config_id", "repo_digest", "runtime_image_id", "platform"},
              "runtime_witness_image_invalid")
-        need(IMAGE.fullmatch(value["config_id"]) and re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", value["repo_digest"]),
-             "runtime_witness_image_invalid")
-        need(canonical_digest(value["runtime_image_id"].removeprefix("docker-pullable://"))
-             == canonical_digest(value["repo_digest"]),
-             "runtime_manifest_identity_mismatch")
+        image_ids(value)
         need(value["reference"] and not any(c.isspace() for c in value["reference"]), "invalid_image_reference")
         need(set(value["platform"]) == {"os", "architecture", "variant"}
              and value["platform"]["os"] == "linux" and value["platform"]["architecture"], "invalid_platform")
         if role != "redis":
             need(value["reference"] == release["placement"].get(role + "_image"), "placement_image_mismatch")
-    need(images["app"]["config_id"] == release["image_id"], "active_image_mismatch")
+    need(release["image_id"] in image_ids(images["app"]), "active_image_mismatch")
     seeds, durable, mounts = [], set(), set()
     for seed in release["placement"].get("seeds", []):
         mount = seed["mount_path"]
@@ -368,13 +374,15 @@ def provenance(payload, workspace):
 
 
 def inspect_local(runner, image):
-    result = runner.run(["image", "inspect", image["config_id"]], timeout=60)
+    identities = image_ids(image)
+    reference = canonical_digest(image["repo_digest"])
+    result = runner.run(["image", "inspect", reference], timeout=60)
     need(result.ok, "local_image_missing")
     try:
         records = json.loads(result.text())
         need(len(records) == 1, "local_image_ambiguous")
         record = records[0]
-        need(record["Id"] == image["config_id"] and canonical_digest(image["repo_digest"])
+        need(record["Id"] in identities and reference
              in {canonical_digest(ref) for ref in record.get("RepoDigests", [])},
              "local_image_identity_mismatch")
         need({"os": record.get("Os") or "", "architecture": record.get("Architecture") or "",
@@ -401,20 +409,20 @@ def _archive_config(path):
             return None
 
 
-def _resolve_source_image(root, payload, request):
+def _resolve_source_image(root, payload, request, image):
     workspace = source_workspace(payload, request)
     store = root / "project-machines" / "artifacts" / workspace
     need(store.is_dir() and not store.is_symlink(), "source_image_store_missing")
-    image_id = payload["active_release"]["image_id"]
+    config_id = image["config_id"]
     matches = {}
     # Search only the exact request workspace. Latest docker.json may describe
     # a different revision; no editor environment or retained history is trusted.
     for path in sorted(store.glob("*.tar")):
         need(ARTIFACT.fullmatch(path.name), "invalid_source_artifact_name")
-        if _archive_config(path) != image_id:
+        if _archive_config(path) != config_id:
             continue
         checksum = verify_sealed(path)
-        verify_image(path, image_id, provenance=provenance(payload, workspace))
+        verify_image(path, config_id, provenance=provenance(payload, workspace), platform=image["platform"])
         matches.setdefault(checksum["sha256"], path.name)
     need(matches, "source_image_missing")
     need(len(matches) == 1, "source_image_ambiguous")
@@ -460,8 +468,9 @@ def resolve_witness(cells, runner, state_root, state_archive, runtime_images):
             publications = []
             for payload, journal, request in snapshot:
                 project, release = payload["project_id"], payload["active_release"]
-                need(facts[project]["app"]["config_id"] == release["image_id"], "active_image_mismatch")
-                ref = _resolve_source_image(root, payload, request)
+                app = facts[project]["app"]
+                need(release["image_id"] in image_ids(app), "active_image_mismatch")
+                ref = _resolve_source_image(root, payload, request, app)
                 witness = {"project_id": project, "release_id": release["release_id"], "epoch": release["epoch"],
                            "journal_sha256": digest(journal), "source_image": {"artifact_ref": ref},
                            "images": facts[project]}
@@ -527,7 +536,8 @@ def collect(cells, runner, state_root, state_archive, out_dir, *, runtime_witnes
                     config_id = image["config_id"]
                     if config_id not in exported:
                         temporary = out / ("published-export-" + config_id[7:] + ".tar")
-                        result = runner.run_to_file(["image", "save", config_id], path=temporary, timeout=1800)
+                        result = runner.run_to_file(["image", "save", canonical_digest(image["repo_digest"])],
+                                                    path=temporary, timeout=1800)
                         need(result.ok, "local_image_export_failed")
                         os.chmod(temporary, 0o600)
                         verify_image(temporary, config_id, platform=image["platform"])
