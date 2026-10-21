@@ -182,9 +182,47 @@ while IFS= read -r -d '' file && IFS= read -r -d '' uri; do
   sudo -n -u postgres pg_dump -Fc --dbname="$uri" > "$DEST/$file"
 done < "$DEST/database-plan.nul"
 STEP=k3s_state
-# Keep the existing raw control-plane scope. A tar error is a failed snapshot.
+# SQLite's online backup includes committed WAL data without stopping K3s.
+# Raw tar of the live database/WAL races normal writes and can be unusable.
 if [ -d /var/lib/rancher/k3s/server/db ]; then
-  tar -C / -czf "$DEST/k3s-state.tgz" var/lib/rancher/k3s/server/db var/lib/rancher/k3s/server/token etc/rancher/k3s
+  python3 -I - /var/lib/rancher/k3s/server/db "$DEST/k3s-state.tgz" <<'HOST_K3S'
+import os,pathlib,sqlite3,stat,subprocess,sys,tempfile,time
+from contextlib import closing
+
+source=pathlib.Path(sys.argv[1])
+archive=pathlib.Path(sys.argv[2])
+database=source/'state.db'
+allowed={'state.db','state.db-wal','state.db-shm'}
+if source.resolve(strict=True)!=source or not source.is_dir():
+    raise RuntimeError('unsafe K3s database directory')
+if not {p.name for p in source.iterdir()}<=allowed or not database.is_file():
+    raise RuntimeError('unsupported K3s datastore; online SQLite snapshot required')
+if any(p.is_symlink() or not stat.S_ISREG(p.lstat().st_mode) for p in source.iterdir()):
+    raise RuntimeError('unsafe K3s database entry')
+
+deadline=time.monotonic()+300
+def progress(*_):
+    if time.monotonic()>deadline:raise TimeoutError('K3s online snapshot timed out')
+
+# Only this fresh private staging directory is removed; old attempts stay intact.
+with tempfile.TemporaryDirectory(prefix='.k3s-snapshot-',dir=archive.parent.parent) as temporary:
+    staging=pathlib.Path(temporary)
+    member='var/lib/rancher/k3s/server/db'
+    target=staging/member/'state.db'
+    target.parent.mkdir(parents=True,mode=0o700)
+    fd=os.open(target,os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+    os.close(fd)
+    with closing(sqlite3.connect(database.as_uri()+'?mode=ro',uri=True,timeout=5)) as live:
+        with closing(sqlite3.connect(target,timeout=5)) as saved:
+            live.backup(saved,pages=128,progress=progress,sleep=0.05)
+            if saved.execute('PRAGMA quick_check').fetchall()!=[('ok',)]:
+                raise RuntimeError('K3s SQLite snapshot failed integrity check')
+    with target.open('rb+') as saved:os.fsync(saved.fileno())
+    # Tokens/config retain their original archive paths. A tar failure stays fatal.
+    subprocess.run(['tar','-C',str(staging),'-czf',str(archive),member,
+                    '-C','/','var/lib/rancher/k3s/server/token','etc/rancher/k3s'],
+                   check=True,timeout=300)
+HOST_K3S
   K3S_STATE=included
 elif [[ -e /var/lib/rancher/k3s/server/db || -L /var/lib/rancher/k3s/server/db ]]; then
   echo 'host backup: unexpected K3s state path' >&2; exit 66

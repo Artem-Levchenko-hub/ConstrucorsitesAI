@@ -7,21 +7,29 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
+from contextlib import closing
 from pathlib import Path
+from render_host_backup import render_file, render_payload
 
 BASE = Path(__file__).resolve().parent
-BASH = shutil.which("bash") or shutil.which("sh")
-if not BASH and os.name == "nt":
+BASH = None
+if os.name == "nt":
     candidate = Path.home() / ".cache/codex-runtimes/codex-primary-runtime/dependencies/native/git/usr/bin/sh.exe"
     if candidate.is_file():
         BASH = str(candidate)
+if not BASH:
+    BASH = shutil.which("bash") or shutil.which("sh")
 
 
 def generated(name: str, target: str) -> str:
+    if (name, target) == ("40-postgres.sh", "/usr/local/bin/max-backup.sh"):
+        return render_file(BASE / "remote" / name)
     source = (BASE / "remote" / name).read_text(encoding="utf-8")
     match = re.search(r"cat > " + re.escape(target) + r" <<('?)(EOF)\1\n(.*?)\nEOF", source, re.S)
     if match is None:
@@ -30,7 +38,7 @@ def generated(name: str, target: str) -> str:
         return match[3] + "\n"
     rendered = subprocess.run(
         [BASH, "-s"], input="TARGET=commerce\nTARGET_WG=10.10.0.3\ncat <<EOF\n" + match[3] + "\nEOF\n",
-        text=True, capture_output=True, check=True,
+        text=True, encoding="utf-8", capture_output=True, check=True,
         env={**os.environ, "PATH": str(Path(BASH).parent) + os.pathsep + os.environ["PATH"]},
     )
     return rendered.stdout
@@ -48,6 +56,10 @@ class HostBackupPipelineTests(unittest.TestCase):
         self.bin.mkdir()
         self.k3s = self.folder / "k3s-db"
         self.k3s.mkdir()
+        with closing(sqlite3.connect(self.k3s / "state.db")) as database:
+            database.execute("create table committed(value text)")
+            database.execute("insert into committed values ('base')")
+            database.commit()
         self.trace = self.folder / "trace"
         self.script = self.folder / "payload.sh"
         self.env = {**os.environ, "PATH": str(self.bin) + os.pathsep + str(Path(BASH).parent) + os.pathsep + os.environ["PATH"],
@@ -72,12 +84,16 @@ case " $* " in
 esac''')
         self.stub("tar", r'''printf '%s\0' "$@" >> "$TRACE.tar"
 output=
+staging=$2
 while [[ $# -gt 0 ]]; do
   if [[ "$1" == -czf ]]; then output=$2; break; fi
   shift
 done
 [[ -n "$output" ]] || exit 91
 printf synthetic-archive > "$output"
+if [[ ${CAPTURE_K3S:-} != '' && "$output" == *k3s-state.tgz ]]; then
+  python3 -c 'import shutil,sys;shutil.copyfile(sys.argv[1]+"/var/lib/rancher/k3s/server/db/state.db",sys.argv[2])' "$staging" "$CAPTURE_K3S"
+fi
 [[ ! ( ${FAULT:-} == k3s && "$output" == *k3s-state.tgz ) ]] || exit 9
 [[ ! ( ${FAULT:-} == config && "$output" == *etc-max-studio.tgz ) ]] || exit 10''')
         self.stub("rsync", r'''printf '%s\0' "$@" > "$TRACE.rsync"; exit "${RSYNC_EXIT:-0}"''')
@@ -103,12 +119,17 @@ printf synthetic-archive > "$output"
         body = generated("40-postgres.sh", "/usr/local/bin/max-backup.sh")
         body = body.replace("/var/backups/max-studio", self.shell_path(self.root))
         body = body.replace("/var/lib/rancher/k3s/server/db", self.shell_path(self.k3s))
+        if os.name == "nt":
+            # Windows Python cannot exec a POSIX stub; preserve the same argv
+            # through Bash so this harness exercises its instrumented tar.
+            body = body.replace("subprocess.run(['tar',", "subprocess.run([" + repr(BASH) +
+                                ",'-c','exec tar \"$@\"','fixture-tar',")
         return self.run_payload(body, INVOCATION_ID=invocation, **environment)
 
     def run_payload(self, body, **environment):
         self.script.write_text(body, encoding="utf-8", newline="\n")
         return subprocess.run([BASH, self.shell_path(self.script)], env={**self.env, **environment},
-                              capture_output=True, text=True, timeout=30)
+                              capture_output=True, text=True, encoding="utf-8", timeout=30)
 
     def receipt(self, invocation):
         path = self.root / "2026-10-21" / invocation / "HOST-SNAPSHOT.json"
@@ -192,7 +213,125 @@ printf synthetic-archive > "$output"
                 self.assertNotIn(": complete", result.stdout)
                 self.assertTrue(receipt["artifacts"])
 
+    def test_online_k3s_snapshot_includes_committed_wal_without_checkpointing_live_database(self):
+        saved = self.folder / "saved-k3s.db"
+        live = sqlite3.connect(self.k3s / "state.db")
+        self.addCleanup(live.close)
+        live.execute("PRAGMA journal_mode=WAL")
+        live.execute("PRAGMA wal_autocheckpoint=0")
+        live.execute("insert into committed values ('only-in-wal')")
+        live.commit()
+        wal = self.k3s / "state.db-wal"
+        before = wal.read_bytes()
+        result = self.backup(CAPTURE_K3S=self.shell_path(saved))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        with closing(sqlite3.connect(saved)) as restored:
+            self.assertEqual(restored.execute("select value from committed order by rowid").fetchall(),
+                             [("base",), ("only-in-wal",)])
+            self.assertEqual(restored.execute("PRAGMA quick_check").fetchall(), [("ok",)])
+        self.assertEqual(wal.read_bytes(), before, "backup must not checkpoint or rewrite live WAL")
+        self.assertFalse(list((self.root / "2026-10-21").glob(".k3s-snapshot-*")))
+
+    def test_online_k3s_snapshot_is_transactionally_consistent_with_concurrent_wal_writer(self):
+        saved = self.folder / "concurrent-saved-k3s.db"
+        stop, ready, backup_running = threading.Event(), threading.Event(), threading.Event()
+        state_lock = threading.Lock()
+        commits = {"during_backup": 0}
+        errors = []
+
+        def append_pair(connection):
+            with connection:
+                sequence = connection.execute("select value from sequence_state").fetchone()[0] + 1
+                connection.executemany("insert into paired values (?, ?, ?)",
+                                       [(sequence, half, f"commit-{sequence}") for half in (0, 1)])
+                connection.execute("update sequence_state set value = ?", (sequence,))
+            return sequence
+
+        def write_live():
+            try:
+                with closing(sqlite3.connect(self.k3s / "state.db", timeout=1)) as writer:
+                    writer.execute("PRAGMA wal_autocheckpoint=0")
+                    while not stop.is_set():
+                        sequence = append_pair(writer)
+                        with state_lock:
+                            if backup_running.is_set():
+                                commits["during_backup"] += 1
+                        if sequence >= 4:
+                            ready.set()
+                        stop.wait(0.002)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                ready.set()
+
+        with closing(sqlite3.connect(self.k3s / "state.db", timeout=1)) as live:
+            self.assertEqual(live.execute("PRAGMA journal_mode=WAL").fetchone(), ("wal",))
+            live.execute("PRAGMA wal_autocheckpoint=0")
+            live.execute("create table sequence_state(value integer not null)")
+            live.execute("insert into sequence_state values (0)")
+            live.execute("create table paired(sequence integer, half integer check(half in (0, 1)), "
+                         "value text not null, primary key(sequence, half))")
+            live.commit()
+            worker = threading.Thread(target=write_live, name="synthetic-k3s-wal-writer", daemon=True)
+            worker.start()
+            try:
+                self.assertTrue(ready.wait(5), "synthetic writer must commit before backup starts")
+                self.assertFalse(errors, repr(errors))
+                before = live.execute("select value from sequence_state").fetchone()[0]
+                self.assertGreaterEqual(before, 4)
+                backup_running.set()
+                try:
+                    result = self.backup(CAPTURE_K3S=self.shell_path(saved))
+                finally:
+                    backup_running.clear()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue(worker.is_alive(), "writer must remain active throughout backup")
+                with state_lock:
+                    self.assertGreater(commits["during_backup"], 0, "writer must commit while generated job runs")
+                self.assertTrue(saved.is_file())
+                self.assertFalse(Path(str(saved) + "-wal").exists())
+                self.assertFalse(Path(str(saved) + "-shm").exists())
+                with closing(sqlite3.connect(saved.as_uri() + "?mode=ro", uri=True)) as restored:
+                    self.assertEqual(restored.execute("PRAGMA quick_check").fetchall(), [("ok",)])
+                    captured = restored.execute("select value from sequence_state").fetchone()[0]
+                    pairs = restored.execute("select sequence, half, value from paired order by sequence, half").fetchall()
+                    self.assertEqual(pairs, [(sequence, half, f"commit-{sequence}")
+                                             for sequence in range(1, captured + 1) for half in (0, 1)])
+                self.assertGreaterEqual(captured, before, "snapshot must include already committed WAL rows")
+                self.assertGreaterEqual(live.execute("select value from sequence_state").fetchone()[0], captured)
+            finally:
+                stop.set()
+                worker.join(timeout=5)
+                self.assertFalse(worker.is_alive(), "own writer must stop before fixture cleanup")
+            self.assertFalse(errors, repr(errors))
+            after = append_pair(live)
+            self.assertGreater(after, captured, "source must accept another transaction after backup")
+            self.assertEqual(live.execute("select count(*) from paired").fetchone()[0], after * 2)
+        self.assertFalse(list((self.root / "2026-10-21").glob(".k3s-snapshot-*")))
+
+    def test_renderer_rejects_missing_or_ambiguous_payloads(self):
+        source = (BASE / "remote/40-postgres.sh").read_text(encoding="utf-8")
+        self.assertTrue(render_payload(source).startswith("#!/usr/bin/env bash\n"))
+        for invalid in ("", source + "\n" + source):
+            with self.assertRaises(ValueError):
+                render_payload(invalid)
+
+    def test_unknown_or_corrupt_k3s_datastore_fails_instead_of_dropping_data(self):
+        unexpected = self.k3s / "etcd"
+        unexpected.mkdir()
+        result = self.backup()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.receipt("1" * 32)["status"], "failed")
+        self.assertIn("unsupported K3s datastore", result.stderr)
+        unexpected.rmdir()
+        (self.k3s / "state.db").write_bytes(b"corrupt sqlite fixture")
+        result = self.backup("2" * 32)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(self.receipt("2" * 32)["status"], "failed")
+        self.assertFalse(list((self.root / "2026-10-21").glob(".k3s-snapshot-*")))
+
     def test_absent_k3s_is_explicit_and_unsafe_output_mode_stops_before_work(self):
+        (self.k3s / "state.db").unlink()
         self.k3s.rmdir()
         result = self.backup()
         self.assertEqual(result.returncode, 0, result.stderr)
