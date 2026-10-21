@@ -75,8 +75,9 @@ verify_group() {
 }
 # verify_files ROOTDIR ROLE — обязательные группы роли лежат в ROOTDIR/certs/<group>.
 verify_files() {
-  local root=$1 role=$2 g
-  for g in $(role_groups "$role"); do verify_group "$root/certs/$g" "$g"; done
+  local root=$1 role=$2 groups g
+  groups=$(role_groups "$role") || return 1
+  for g in $groups; do verify_group "$root/certs/$g" "$g"; done
 }
 root_group_ok() { [ -s "$ROOT_FULLCHAIN" ] && verify_group "$CERTS_DIR/root" root 2>/dev/null; }
 # probe_tls ADDR SNI EXPECTED_SAN [ATTEMPTS] — что отдаёт :443 за это имя; 0 = SAN совпал.
@@ -203,8 +204,9 @@ rollback_runtime() {
 # ------------------------------------------------------------------ apply / rollback / status
 do_apply() {
   local role=$1
+  role_groups "$role" >/dev/null
   need_root
-  verify_files "$EDGE_DIR" "$role"
+  verify_files "$EDGE_DIR" "$role" || return 1
   case "$role" in
     runtime)  apply_runtime ;;
     core)     orchestrator_layout "dev.$EDGE_DOMAIN" dev; platform_vhost_switch; nginx_reload; status_core || true ;;
@@ -224,8 +226,9 @@ status_core() {
   return $ok
 }
 do_status() {
-  local role=$1 g
-  for g in $(role_groups "$role") root; do
+  local role=$1 groups g
+  groups=$(role_groups "$role") || return 1
+  for g in $groups root; do
     [ -s "$CERTS_DIR/$g/fullchain.pem" ] && echo "edge/$(hostname) [$role] $g: $(openssl x509 -in "$CERTS_DIR/$g/fullchain.pem" -noout -enddate | sed 's/notAfter=/до /')" \
       || { [ "$g" = root ] || echo "edge/$(hostname) [$role] $g: сертификата нет"; }
   done
@@ -237,6 +240,7 @@ do_status() {
 }
 do_rollback() {
   local role=$1
+  role_groups "$role" >/dev/null
   need_root
   case "$role" in
     runtime)  rollback_runtime ;;
@@ -254,8 +258,8 @@ do_keygen() {
 }
 do_authorize() {
   local pub=$1 role=$2 keys=/etc/ssh/authorized_keys.d/maxedge
-  need_root
   role_groups "$role" >/dev/null
+  need_root
   [ -x "$SELF" ] || die "нет $SELF — сначала edge.sh install"
   id maxedge >/dev/null 2>&1 || useradd --system --home-dir /var/lib/max-edge --shell /bin/sh --create-home maxedge
   install -d -m 755 /etc/ssh/authorized_keys.d
@@ -276,6 +280,7 @@ do_authorize() {
 }
 do_receive() {
   local role=$1
+  role_groups "$role" >/dev/null
   need_root
   # Не local: ловушка EXIT выполняется уже вне функции (set -u).
   RECEIVE_TMP=$(mktemp -d)
@@ -313,9 +318,9 @@ case "${1:-}" in
   keygen)    do_keygen ;;
   authorize) [ $# -eq 3 ] || die "authorize PUBKEY ROLE"; do_authorize "$2" "$3" ;;
   push)      do_push ;;
-  receive)   [ $# -eq 2 ] || die "receive ROLE"; do_receive "$2" ;;
-  apply)     do_apply "${2:-$(hostname)}" ;;
-  rollback)  do_rollback "${2:-$(hostname)}" ;;
-  status)    do_status "${2:-$(hostname)}" ;;
+  receive|apply|rollback|status)
+    [ $# -eq 2 ] || die "$1 ROLE"
+    "do_$1" "$2"
+    ;;
   *) sed -n '2,12p' "$0"; exit 1 ;;
 esac

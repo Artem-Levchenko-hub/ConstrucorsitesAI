@@ -427,6 +427,10 @@ jobs:
         run: |
           for script in infra/backup/*.sh; do bash -n "$script"; done
           python3 -m unittest discover -s infra/backup -p 'test_*.py' -v
+      - name: Verify certificate role validation without host changes
+        run: |
+          bash -n infra/max-k3s/edge/20-wildcard-distribute.sh
+          python3 -m unittest discover -s infra/max-k3s/edge -p 'test_*.py' -v
       - name: Build production API and web images
         run: docker compose -f apps/llm-gateway/deploy/full/docker-compose.yml build api web
       - name: Verify the web client bundle carries no production domain
