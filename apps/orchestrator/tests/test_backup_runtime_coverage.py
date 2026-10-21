@@ -837,6 +837,69 @@ def test_boundary_source_offline_corruption_and_missing_fail(tmp_path):
         runtime.validate_boundary_sources([], facts)
 
 
+def _add_service_account_mount(kube):
+    pod = next(item for item in kube.resources if item.get("kind") == "Pod"
+               and item["metadata"]["name"] == "boundary-pod")
+    mount = {"name": "kube-api-access-t6b6n", "readOnly": True,
+             "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount"}
+    pod["spec"]["containers"][0]["volumeMounts"].append(mount)
+    volume = {"name": mount["name"], "projected": {"defaultMode": 420, "sources": [
+        {"serviceAccountToken": {"expirationSeconds": 3607, "path": "token"}},
+        {"configMap": {"name": "kube-root-ca.crt",
+                       "items": [{"key": "ca.crt", "path": "ca.crt"}]}},
+        {"downwardAPI": {"items": [{"fieldRef": {"apiVersion": "v1",
+            "fieldPath": "metadata.namespace"}, "path": "namespace"}]}},
+    ]}}
+    pod["spec"]["volumes"].append(volume)
+    return pod, mount, volume
+
+
+def test_boundary_source_accepts_standard_kubernetes_service_account_mount(tmp_path, monkeypatch):
+    kube = Kube()
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    expected = runtime.boundary_snapshot(kube, "default", facts)
+    _add_service_account_mount(kube)
+    assert runtime.boundary_snapshot(kube, "default", facts) == expected
+    monkeypatch.setattr(cells, "DockerRunner", lambda *_: kube)
+    manifest, code = runtime.kube_backup(
+        cells, {"kubectl": "kubectl", "context": "default", "postgres_image": IMAGE}, tmp_path
+    )
+    assert code == 0
+    assert manifest["boundary_sources"] == expected
+    assert "serviceAccountToken" not in json.dumps(manifest)
+    runtime.validate_boundary_sources(expected, facts, tmp_path)
+
+
+@pytest.mark.parametrize("fault", [
+    "unknown-mount", "overlap", "writable", "subpath", "duplicate-source",
+    "foreign-volume", "unexpected-projection", "boundary-writable",
+])
+def test_boundary_source_keeps_mount_guards_with_service_account(fault):
+    kube = Kube()
+    pod, mount, volume = _add_service_account_mount(kube)
+    if fault == "unknown-mount":
+        mount["name"] = "arbitrary-extra-volume"
+    elif fault == "overlap":
+        mount["mountPath"] = "/run/omnia-boundary/server.py"
+    elif fault == "writable":
+        mount["readOnly"] = False
+    elif fault == "subpath":
+        mount["subPath"] = "token"
+    elif fault == "duplicate-source":
+        pod["spec"]["containers"][0]["volumeMounts"].append(
+            copy.deepcopy(pod["spec"]["containers"][0]["volumeMounts"][0]))
+    elif fault == "foreign-volume":
+        volume.pop("projected")
+        volume["hostPath"] = {"path": "/run/omnia-boundary"}
+    elif fault == "unexpected-projection":
+        volume["projected"]["sources"].append({"secret": {"name": "foreign"}})
+    else:
+        pod["spec"]["containers"][0]["volumeMounts"][0]["readOnly"] = False
+    facts = runtime.kube_runtime_images(kube, kube, "default")
+    with pytest.raises(ValueError):
+        runtime.boundary_snapshot(kube, "default", facts)
+
+
 @pytest.mark.parametrize("fault", ["cm", "pod"])
 def test_final_images_probe_rejects_boundary_drift(monkeypatch, fault):
     kube = Kube()

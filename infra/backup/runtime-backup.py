@@ -380,6 +380,44 @@ def kube_census(runner, context: str, image: str) -> dict:
     }
 
 
+def _service_account_mount(mount: dict, volumes: list[dict]) -> None:
+    """Allow only Kubernetes' separate, read-only injected API credentials."""
+    name = mount.get("name")
+    need(type(name) is str and re.fullmatch(r"kube-api-access-[a-z0-9]{5}", name))
+    need(mount.get("readOnly") is True and mount == {"name": name, "readOnly": True,
+                   "mountPath": "/var/run/secrets/kubernetes.io/serviceaccount"})
+    matches = [volume for volume in volumes if volume.get("name") == name]
+    need(len(matches) == 1 and set(matches[0]) == {"name", "projected"})
+    projected = matches[0]["projected"]
+    need(type(projected) is dict and set(projected) <= {"defaultMode", "sources"}
+         and projected.get("defaultMode", 420) == 420)
+    sources = projected.get("sources")
+    need(type(sources) is list and len(sources) == 3
+         and all(type(source) is dict for source in sources))
+    token = sources[0].get("serviceAccountToken", {})
+    need(type(token) is dict and set(sources[0]) == {"serviceAccountToken"}
+         and set(token) == {"expirationSeconds", "path"}
+         and token.get("path") == "token"
+         and type(token.get("expirationSeconds")) is int
+         and 0 < token["expirationSeconds"] <= 86400)
+    need(sources[1] == {"configMap": {"name": "kube-root-ca.crt",
+         "items": [{"key": "ca.crt", "path": "ca.crt"}]}})
+    need(sources[2] == {"downwardAPI": {"items": [{"fieldRef": {
+         "apiVersion": "v1", "fieldPath": "metadata.namespace"}, "path": "namespace"}]}})
+
+
+def _boundary_source_mount(container: dict, volumes: list[dict]) -> dict:
+    mounts = container.get("volumeMounts", [])
+    need(type(mounts) is list and 1 <= len(mounts) <= 2)
+    boundary = [item for item in mounts if item.get("mountPath") == "/run/omnia-boundary"]
+    need(len(boundary) == 1 and boundary[0].get("readOnly") is True
+         and not boundary[0].get("subPath") and not boundary[0].get("subPathExpr"))
+    for mount in mounts:
+        if mount is not boundary[0]:
+            _service_account_mount(mount, volumes)
+    return boundary[0]
+
+
 def boundary_snapshot(runner, context: str, images: list[dict]) -> list[dict]:
     """Bind only the public source key to its actual running Pod mount."""
     rows = []
@@ -396,12 +434,9 @@ def boundary_snapshot(runner, context: str, images: list[dict]) -> list[dict]:
         need(len(containers) == 1 and containers[0]["name"] == fact["container"])
         container = containers[0]
         need(container.get("command") == ["python3", "/run/omnia-boundary/server.py"])
-        mounts = [item for item in container.get("volumeMounts", [])
-                  if item.get("mountPath") == "/run/omnia-boundary"]
-        need(len(container.get("volumeMounts", [])) == len(mounts) == 1 and mounts[0].get("readOnly") is True
-             and not mounts[0].get("subPath") and not mounts[0].get("subPathExpr"))
+        mount = _boundary_source_mount(container, pod["spec"].get("volumes", []))
         volumes = [item for item in pod["spec"].get("volumes", [])
-                   if item.get("name") == mounts[0]["name"]]
+                   if item.get("name") == mount["name"]]
         need(len(volumes) == 1)
         sources = volumes[0].get("projected", {}).get("sources", [])
         need(all(not any(key.get("path") == "server.py" for key in
@@ -427,7 +462,7 @@ def boundary_snapshot(runner, context: str, images: list[dict]) -> list[dict]:
                        ("project_id", "namespace", "namespace_uid", "pod", "pod_uid", "container", "container_id")},
                      "configmap_name": "boundary-server", "configmap_uid": metadata["uid"],
                      "configmap_resource_version": metadata["resourceVersion"],
-                     "volume": mounts[0]["name"], "key": "server.py",
+                     "volume": mount["name"], "key": "server.py",
                      "mounted_path": "/run/omnia-boundary/server.py",
                      "file": fact["project_id"] + "-boundary-server.py",
                      "bytes": len(payload), "sha256": hashlib.sha256(payload).hexdigest()})
