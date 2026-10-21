@@ -1,4 +1,4 @@
-# Production database backup contract
+# Production backup contract
 
 The canonical source is `/opt/omnia/infra/backup`, from the delivered Git revision.
 Do not run a frozen `/root/yleum-bootstrap-*/backup` copy. The platform entrypoint
@@ -61,12 +61,54 @@ kind and data-volume suffix before any scratch restoration can start.
 publication obligations are closed by `runtime-backup.py` before `peers.tgz` and
 the encrypted full bundle can be promoted. Partial local artifacts remain private.
 
-The coverage scope is **platform and project databases**. Non-database runtime
-PVCs are recorded as `non-database-pvc-not-copied`; this does not certify their
-business files. The separate `max-backup` service covers `max-*` system databases.
+New full bundles require coverage version 2: **platform and project databases
+and active published application artifacts**. Older version-1 bundles retain
+their database-only verification contract. Neither version claims a completed
+full disaster-recovery exercise (`full_dr_verified=false`). Non-database runtime
+PVCs are still recorded as `non-database-pvc-not-copied`; historical release
+seeds do not certify their current business files. The separate `max-backup`
+service covers `max-*` system databases.
 Source repositories/objects and runtime configuration retain their existing full
 bundle payloads. Classify and back up any additional durable business-file PVC
 before claiming full filesystem disaster recovery.
+
+## Active published applications
+
+Runtime collection runs first and records a narrow Pod/CRI image witness: Pod
+and container identities, requested references, resolved manifest digests,
+image config IDs and platforms. Core and Commerce then add `PUBLISHED.json` and
+deduplicated `published-<sha256>.tar` payloads beside their existing database
+artifacts. These files travel inside the same `cells.tgz`/`peers.tgz` and encrypted
+CMS bundle; no separate database exporter or external registry pull is added.
+
+The runtime peer also contains each active guard's mounted `server.py`, with
+its SHA256, ConfigMap and Pod/container identities in `boundary_sources`.
+Mounted bytes must match the referenced ConfigMap; missing sources, changed
+mounts or a changed source witness fail collection and offline verification.
+These bytes restore the boundary source, without certifying which bytes an
+already running Python process previously loaded into memory.
+
+The collector selects each active release's original source workspace and exact
+saved image and non-PostgreSQL seeds. It does not substitute the editor's latest
+environment. Every copied archive must match its seal, actual bytes and expected
+Docker config/layers/provenance. Trusted core, guard and Redis images are saved
+from verified local image IDs. A config ID and registry manifest digest remain
+separate identities, bound by Docker/CRI metadata. Official Docker Hub aliases
+are normalized without accepting a different repository or private registry.
+
+Existing publication lock inodes are held only for short initial/final reads;
+copying, hashing and image export run without those locks. Changed journal,
+request, lock inode, active publication set, or final runtime image/source witness
+rejects the bundle. Version 2 requires sidecar hashes, every active publication's
+image obligations and both fresh published database dumps to close together.
+PostgreSQL seeds reference those logical dumps rather than restoring an older
+captured database archive over them.
+
+Missing artifacts, unresolved image mappings and durable business-file gaps are
+not a successful full recovery. Acceptance still requires downloading and
+decrypting a new CMS copy off-host, restoring into an isolated environment,
+booting the published application through its trusted boundary and proving
+read/write persistence after restart.
 
 ## Install the delivered hooks
 
