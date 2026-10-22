@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.errors import ApiError
 from yleum_api.models.generation_billing import GenerationBillingPolicy
+from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
@@ -110,6 +111,7 @@ async def project_loaded(
     policy: GenerationBillingPolicy | None,
     effects: list[GenerationRecoveryEffect],
     user_id: UUID,
+    latest_step: dict[str, Any] | None = None,
 ) -> GenerationRunPublic:
     if (
         project.owner_id != user_id
@@ -129,7 +131,9 @@ async def project_loaded(
         raise ApiError("not_found", "generation not found", 404)
     view = GenerationRunPublic.model_validate(run)
     view.failure = public_generation_failure(
-        run, agent_steps=message.agent_steps if message is not None else None,
+        run, agent_steps=[latest_step] if latest_step is not None else (
+            message.agent_steps if message is not None else None
+        ),
     )
     acceptance = GenerationAcceptancePublic(
         run_id=run.id, assistant_message_id=run.assistant_message_id
@@ -208,6 +212,21 @@ async def project_generation_public(
         .correlate(None)
         .scalar_subquery()
     )
+    # The UI transcript intentionally stops after 200 steps. Operational
+    # diagnostics must follow the uncapped durable journal in the SAME snapshot.
+    latest_step = (
+        select(GenerationEvent.payload)
+        .where(
+            GenerationEvent.generation_run_id == GenerationRun.id,
+            GenerationEvent.project_id == project_id,
+            GenerationEvent.message_id == GenerationRun.assistant_message_id,
+            GenerationEvent.event_type == "agent.step",
+        )
+        .order_by(GenerationEvent.seq.desc())
+        .limit(1)
+        .correlate(GenerationRun)
+        .scalar_subquery()
+    )
     query = (
         select(
             Project,
@@ -216,6 +235,7 @@ async def project_generation_public(
             Snapshot,
             GenerationBillingPolicy,
             GenerationRecoveryEffect,
+            latest_step,
         )
         .select_from(Project)
         .outerjoin(GenerationRun, GenerationRun.id == target_id)
@@ -238,7 +258,7 @@ async def project_generation_public(
     rows = (await session.execute(query)).all()
     if not rows:
         raise ApiError("not_found", "project not found", 404)
-    project, run, message, snapshot, policy, _ = rows[0]
+    project, run, message, snapshot, policy, _, step = rows[0]
     if run is None:
         if run_id is not None:
             raise ApiError("not_found", "generation not found", 404)
@@ -251,4 +271,5 @@ async def project_generation_public(
         policy=policy,
         effects=[row[5] for row in rows if row[5] is not None],
         user_id=user_id,
+        latest_step=step if isinstance(step, dict) else None,
     )

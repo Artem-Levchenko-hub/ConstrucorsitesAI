@@ -136,10 +136,14 @@ def test_public_diagnostics_schema_is_closed_and_strict(payload):
         GenerationFailureDiagnostics.model_validate(payload)
 
 
-async def test_rest_failed_generation_preserves_committed_provider_cause(client, db_session):
+@pytest.mark.parametrize("capped_transcript", [False, True])
+async def test_rest_failed_generation_preserves_committed_provider_cause(
+    client, db_session, capped_transcript,
+):
     from tests.test_generation_runs import _owner_and_project
     from yleum_api.core.deps import get_current_user
     from yleum_api.main import app
+    from yleum_api.models.generation_event import GenerationEvent
     from yleum_api.models.message import Message
     from yleum_api.services.generation_runs import reserve_generation_run
 
@@ -150,13 +154,19 @@ async def test_rest_failed_generation_preserves_committed_provider_cause(client,
     )
     message = Message(
         project_id=project.id, role="assistant", content="private-assistant-body",
-        agent_steps=[provider_step()],
+        agent_steps=([{"kind": "step", "tool": "build", "ok": True}] * 200
+                     if capped_transcript else [provider_step()]),
     )
     db_session.add(message)
     await db_session.flush()
     run.assistant_message_id = message.id
     run.status = "failed"
     run.error = "provider_http_502: private-provider-body"
+    if capped_transcript:
+        db_session.add(GenerationEvent(
+            generation_run_id=run.id, project_id=project.id, message_id=message.id,
+            seq=201, event_type="agent.step", payload=provider_step(),
+        ))
     await db_session.commit()
 
     async def current_user():
@@ -168,6 +178,8 @@ async def test_rest_failed_generation_preserves_committed_provider_cause(client,
         assert response.status_code == 200
         body = response.json()
         assert body["failure"]["diagnostics"]["upstream_http_status"] == 502
+        assert body["failure"]["diagnostics"]["http_status"] == 502
+        assert body["failure"]["diagnostics"]["error_code"] == "model_unavailable"
         assert body["failure"]["diagnostics"]["retry_safe"] is False
         assert body["failure"]["code"] == "provider_unavailable"
         assert body["acceptance"]["current_request_complete"] is False
