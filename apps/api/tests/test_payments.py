@@ -148,8 +148,9 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     active = await client.get("/api/billing/subscription")
     assert active.status_code == 200
     assert active.json()["plan"]["code"] == "pro"
-    assert active.json()["plan"]["version"] == 2
+    assert active.json()["plan"]["version"] == 3
     assert active.json()["plan"]["price_rub"] == "2990.00"
+    assert active.json()["plan"]["entitlements"]["included_generations"] == 5
     assert active.json()["status"] == "active"
     assert active.json()["auto_renew"] is False
     assert active.json()["current_period_start"] is not None
@@ -157,14 +158,13 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
 
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
-    assert wallet.json()["balance_rub"] == "600.0000"
+    assert wallet.json()["balance_rub"] == "100.0000"
     subscription_entries = [
         entry
         for entry in wallet.json()["recent_charges"]
         if entry["entry_type"] == "subscription_credit"
     ]
-    assert len(subscription_entries) == 1
-    assert subscription_entries[0]["external_ref"] == f"subscription-credit:{payment_id}"
+    assert subscription_entries == []
 
     live_count = (
         await db_session.execute(
@@ -191,7 +191,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
             .where(WalletCharge.external_ref == f"subscription-credit:{payment_id}")
         )
     ).scalar_one()
-    assert ledger_count == 1
+    assert ledger_count == 0
     payment = await db_session.get(Payment, UUID(created.json()["id"]))
     assert payment is not None
     assert payment.purpose == "subscription_initial"
