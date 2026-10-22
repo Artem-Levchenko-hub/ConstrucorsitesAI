@@ -85,7 +85,7 @@ async def test_payment_endpoint_is_closed_without_provider_configuration(
     assert response.json()["error"]["code"] == "payments_unavailable"
 
 
-async def test_subscription_payment_activates_plan_and_credit_exactly_once(
+async def test_subscription_payment_activates_plan_and_allowance_exactly_once(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,

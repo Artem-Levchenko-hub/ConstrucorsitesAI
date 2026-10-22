@@ -294,7 +294,7 @@ async def test_late_success_cannot_resurrect_a_refunded_payment(
                 WalletCharge.entry_type.in_(("subscription_credit", "payment")),
             )
         )
-        == 1
+        == (1 if purpose == "wallet_topup" else 0)
     )
 
 

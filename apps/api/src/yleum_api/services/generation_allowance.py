@@ -24,12 +24,15 @@ def _limit(context: PlanContext) -> int | None:
     return max(0, value) if isinstance(value, int) and not isinstance(value, bool) else None
 
 
-def _paid_period(context: PlanContext) -> tuple[datetime, datetime] | None:
+def _paid_period(
+    context: PlanContext,
+    *,
+    now: datetime,
+) -> tuple[datetime, datetime] | None:
     account, subscription, plan = context.account, context.subscription, context.plan
     if account is None or subscription is None or plan is None:
         return None
     start, end = subscription.current_period_start, subscription.current_period_end
-    now = datetime.now(UTC)
     if (
         subscription.status != "active"
         or subscription.billing_account_id != account.id
@@ -69,11 +72,14 @@ async def _replay(
     return True
 
 
-async def quota_usage(session: AsyncSession, context: PlanContext) -> dict[str, object] | None:
-    limit = _limit(context)
-    period = _paid_period(context)
-    if limit is None or period is None:
-        return None
+async def _usage_for_period(
+    session: AsyncSession,
+    context: PlanContext,
+    *,
+    limit: int,
+    period: tuple[datetime, datetime],
+) -> dict[str, object]:
+    """Count the period already validated by the caller without sampling time again."""
     assert context.account is not None and context.subscription is not None
     rows = await session.execute(
         select(GenerationAllowance.status, func.count())
@@ -98,6 +104,14 @@ async def quota_usage(session: AsyncSession, context: PlanContext) -> dict[str, 
     }
 
 
+async def quota_usage(session: AsyncSession, context: PlanContext) -> dict[str, object] | None:
+    limit = _limit(context)
+    period = _paid_period(context, now=datetime.now(UTC))
+    if limit is None or period is None:
+        return None
+    return await _usage_for_period(session, context, limit=limit, period=period)
+
+
 async def reserve_included_generation(
     session: AsyncSession, *, user_id: UUID, run_id: UUID
 ) -> bool:
@@ -119,7 +133,11 @@ async def reserve_included_generation(
         )
         plan = await session.get(BillingPlan, subscription.plan_id) if subscription else None
         context = PlanContext(context.account, subscription, plan)
-    period = _paid_period(context)
+    limit = _limit(context)
+    if limit is None:
+        return False
+    admitted_at = datetime.now(UTC)
+    period = _paid_period(context, now=admitted_at)
     if period is None:
         raise ApiError(
             "subscription_entitlement_required",
@@ -131,8 +149,8 @@ async def reserve_included_generation(
     existing = await session.get(GenerationAllowance, run_id, populate_existing=True)
     if existing is not None:
         return await _replay(session, existing, user_id)
-    usage = await quota_usage(session, context)
-    assert usage is not None and context.account is not None and subscription is not None
+    usage = await _usage_for_period(session, context, limit=limit, period=period)
+    assert context.account is not None and subscription is not None
     if usage["remaining"] == 0:
         raise ApiError(
             "entitlement_exceeded",

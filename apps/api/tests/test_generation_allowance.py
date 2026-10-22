@@ -505,3 +505,40 @@ async def test_stale_replay_cannot_restart_a_released_generation(
         with pytest.raises(ApiError) as refused:
             await reserve_included_generation(stale, user_id=owner.id, run_id=run.id)
         assert refused.value.status_code == 409
+
+
+@pytest.mark.parametrize("at_expiry", [False, True])
+async def test_admission_uses_one_locked_period_timestamp_at_expiry(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+    at_expiry: bool,
+) -> None:
+    from yleum_api.services import generation_allowance
+
+    owner, subscription = await _paid_account(db_session)
+    run = await _run(db_session, owner)
+    end = subscription.current_period_end
+    assert end is not None
+    first = end if at_expiry else end - timedelta(milliseconds=1)
+    instants = iter((first, end))
+
+    class ExpiryClock:
+        @staticmethod
+        def now(_zone: object) -> datetime:
+            return next(instants, end)
+
+    monkeypatch.setattr(generation_allowance, "datetime", ExpiryClock)
+    if at_expiry:
+        with pytest.raises(ApiError) as refused:
+            await reserve_included_generation(db_session, user_id=owner.id, run_id=run.id)
+        assert refused.value.status_code == 402
+        assert refused.value.code == "subscription_entitlement_required"
+        assert await db_session.get(GenerationAllowance, run.id) is None
+    else:
+        assert await reserve_included_generation(db_session, user_id=owner.id, run_id=run.id)
+        entry = await db_session.get(GenerationAllowance, run.id)
+        assert entry.status == "reserved"
+        assert entry.period_end == end
+        # Later reads see expiry, without invalidating the earlier admission.
+        context = await load_plan_context(db_session, owner.id)
+        assert await quota_usage(db_session, context) is None
