@@ -1,13 +1,27 @@
 """Allowlisted failure summaries for durable message history; never echo logs."""
 
 import re
+from uuid import UUID
 
+from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_run import GenerationRun
+from yleum_api.models.snapshot import Snapshot
 from yleum_api.schemas.message import GenerationFailure, GenerationFailureDiagnostics
+
+NO_TERMINAL_EVENTS = object()
+_EVENT_IDENTITIES = (
+    "run_id", "generation_run_id", "project_id", "message_id", "assistant_message_id",
+    "snapshot_id",
+)
+_PROVIDER_FACTS = (
+    "error_code", "error_origin", "http_status", "upstream_http_status",
+    "provider_charge_ambiguous", "retry_safe", "will_retry",
+)
 
 
 def public_generation_failure(
     run: GenerationRun | None, *, agent_steps: object = None,
+    terminal_events: object = NO_TERMINAL_EVENTS, snapshot: Snapshot | None = None,
 ) -> GenerationFailure | None:
     if run is None or run.status != "failed":
         return None
@@ -16,8 +30,106 @@ def public_generation_failure(
         run.error or "",
         restoration=isinstance(state.get("restoration_adaptation"), dict),
     )
+    if terminal_events is not NO_TERMINAL_EVENTS:
+        # An explicitly loaded, malformed/empty journal is a barrier, not a
+        # reason to borrow a provider error from the capped UI transcript.
+        agent_steps = _terminal_provider_steps(run, terminal_events, snapshot)
     failure.diagnostics = _provider_diagnostics(run.error, agent_steps)
     return failure
+
+
+def _event_payload(
+    run: GenerationRun, event: object, snapshot: Snapshot | None,
+) -> dict[str, object] | None:
+    """Validate durable ownership and optional producer identities before use."""
+    if (
+        not isinstance(event, GenerationEvent)
+        or event.generation_run_id != run.id
+        or event.project_id != run.project_id
+        or run.assistant_message_id is None
+        or event.message_id != run.assistant_message_id
+        or event.event_type != "agent.step"
+        or type(event.seq) is not int or event.seq <= 0
+        or not isinstance(event.payload, dict)
+    ):
+        return None
+    payload = event.payload
+    trace = payload.get("recovery_trace", {})
+    if not isinstance(trace, dict):
+        return None
+    snapshot_id = (
+        snapshot.id if snapshot is not None and snapshot.project_id == run.project_id else None
+    )
+    identities: dict[str, UUID | None] = {
+        "run_id": run.id, "generation_run_id": run.id, "project_id": run.project_id,
+        "message_id": run.assistant_message_id, "assistant_message_id": run.assistant_message_id,
+        "snapshot_id": snapshot_id,
+    }
+    for source in (payload, trace):
+        for key, expected in identities.items():
+            if key in source and (expected is None or source[key] != str(expected)):
+                return None
+    return payload
+
+
+def _terminal_provider_steps(
+    run: GenerationRun, terminal_events: object, snapshot: Snapshot | None,
+) -> list[dict[str, object]]:
+    """Allow one proven rollback after a stopped provider request, never other work.
+
+    Only the owning snapshot query supplies this bounded suffix. Historical
+    transcript callers retain their latest-step-only contract.
+    """
+    if not isinstance(terminal_events, list) or not 1 <= len(terminal_events) <= 2:
+        return []
+    latest_event = terminal_events[-1]
+    latest = _event_payload(run, latest_event, snapshot)
+    if latest is None:
+        return []
+    if len(terminal_events) == 2:
+        previous_event = terminal_events[0]
+        if (not isinstance(previous_event, GenerationEvent)
+                or type(previous_event.seq) is not int or previous_event.seq <= 0
+                or previous_event.seq >= latest_event.seq):
+            return []
+    if latest.get("kind") == "provider_error":
+        return [latest]
+    if len(terminal_events) != 2:
+        return []
+    previous = _event_payload(run, terminal_events[0], snapshot)
+    if previous is None:
+        return []
+    latest_index, previous_index = latest.get("step"), previous.get("step")
+    latest_trace = latest.get("recovery_trace", {})
+    previous_trace = previous.get("recovery_trace", {})
+    if not isinstance(latest_trace, dict) or not isinstance(previous_trace, dict):
+        return []
+    if (
+        latest.get("kind") != "step" or latest.get("tool") != "rollback"
+        or latest.get("ok") is not False or latest.get("path") != ""
+        or type(latest_index) is not int or latest_index < 0
+        or not set(latest).issubset({
+            "kind", "tool", "ok", "path", "step", "action", "detail", "recovery_trace",
+            *_EVENT_IDENTITIES,
+        })
+        or not set(latest_trace).issubset(_EVENT_IDENTITIES)
+        or previous.get("kind") != "provider_error"
+        or previous.get("tool") != "provider_request" or previous.get("ok") is not False
+        or type(previous_index) is not int or previous_index != latest_index
+    ):
+        return []
+    if previous.get("will_retry", previous_trace.get("will_retry")) is not False:
+        return []
+    # Flat facts and the trace must describe the same request. In particular,
+    # a retrying trace cannot be turned into a stopped request by an outer flag.
+    if any(
+        key in previous and key in previous_trace
+        and (type(previous[key]) is not type(previous_trace[key])
+             or previous[key] != previous_trace[key])
+        for key in _PROVIDER_FACTS
+    ):
+        return []
+    return [previous]
 
 
 def _provider_diagnostics(
@@ -46,7 +158,7 @@ def _provider_diagnostics(
     if isinstance(agent_steps, list):
         for step in reversed(agent_steps[-1000:]):
             if not isinstance(step, dict):
-                continue
+                break
             # Never walk past later work to borrow an earlier transient error.
             if step.get("kind") != "provider_error" or step.get("ok") is not False:
                 break
@@ -58,7 +170,7 @@ def _provider_diagnostics(
                 break  # A stale HTTP response cannot explain a later timeout.
             safe = safe_recovery_trace({**trace, **{
                 key: step[key] for key in (
-                    "error_code", "http_status", "upstream_http_status",
+                    "error_code", "error_origin", "http_status", "upstream_http_status",
                     "provider_charge_ambiguous", "retry_safe",
                 ) if key in step
             }})

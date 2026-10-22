@@ -25,7 +25,7 @@ from yleum_api.schemas.message import (
 from yleum_api.services.generation.recovery_contract import RecoveryStateV2
 from yleum_api.services.generation.recovery_execution import recovery_state
 from yleum_api.services.generation_billing import POLICY_VERSION
-from yleum_api.services.generation_failure import public_generation_failure
+from yleum_api.services.generation_failure import NO_TERMINAL_EVENTS, public_generation_failure
 from yleum_api.services.promotion_permit import (
     MAX_FULL_BUILD_CONTRACT_VERSION,
     MAX_RELEASE_PROOF_CONTRACT_VERSION,
@@ -112,6 +112,7 @@ async def project_loaded(
     effects: list[GenerationRecoveryEffect],
     user_id: UUID,
     latest_step: dict[str, Any] | None = None,
+    terminal_events: object = NO_TERMINAL_EVENTS,
 ) -> GenerationRunPublic:
     if (
         project.owner_id != user_id
@@ -131,9 +132,13 @@ async def project_loaded(
         raise ApiError("not_found", "generation not found", 404)
     view = GenerationRunPublic.model_validate(run)
     view.failure = public_generation_failure(
-        run, agent_steps=[latest_step] if latest_step is not None else (
+        run,
+        agent_steps=([latest_step] if latest_step is not None else (
             message.agent_steps if message is not None else None
-        ),
+        )),
+        terminal_events=terminal_events,
+        snapshot=(snapshot if snapshot is not None and project.current_snapshot_id == snapshot.id
+                  else None),
     )
     acceptance = GenerationAcceptancePublic(
         run_id=run.id, assistant_message_id=run.assistant_message_id
@@ -214,8 +219,8 @@ async def project_generation_public(
     )
     # The UI transcript intentionally stops after 200 steps. Operational
     # diagnostics must follow the uncapped durable journal in the SAME snapshot.
-    latest_step = (
-        select(GenerationEvent.payload)
+    terminal_event_ids = (
+        select(GenerationEvent.id)
         .where(
             GenerationEvent.generation_run_id == GenerationRun.id,
             GenerationEvent.project_id == project_id,
@@ -223,9 +228,8 @@ async def project_generation_public(
             GenerationEvent.event_type == "agent.step",
         )
         .order_by(GenerationEvent.seq.desc())
-        .limit(1)
+        .limit(2)
         .correlate(GenerationRun)
-        .scalar_subquery()
     )
     query = (
         select(
@@ -235,7 +239,7 @@ async def project_generation_public(
             Snapshot,
             GenerationBillingPolicy,
             GenerationRecoveryEffect,
-            latest_step,
+            GenerationEvent,
         )
         .select_from(Project)
         .outerjoin(GenerationRun, GenerationRun.id == target_id)
@@ -252,24 +256,28 @@ async def project_generation_public(
                 ),
             ),
         )
+        .outerjoin(GenerationEvent, GenerationEvent.id.in_(terminal_event_ids))
         .where(Project.id == project_id, Project.owner_id == user_id)
         .execution_options(populate_existing=True, autoflush=False)
     )
     rows = (await session.execute(query)).all()
     if not rows:
         raise ApiError("not_found", "project not found", 404)
-    project, run, message, snapshot, policy, _, step = rows[0]
+    project, run, message, snapshot, policy, _, _ = rows[0]
     if run is None:
         if run_id is not None:
             raise ApiError("not_found", "generation not found", 404)
         return None
+    effects = {row[5].effect_id: row[5] for row in rows if row[5] is not None}
+    events = {row[6].id: row[6] for row in rows if row[6] is not None}
     return await project_loaded(
         project=project,
         run=run,
         message=message,
         snapshot=snapshot,
         policy=policy,
-        effects=[row[5] for row in rows if row[5] is not None],
+        effects=list(effects.values()),
         user_id=user_id,
-        latest_step=step if isinstance(step, dict) else None,
+        terminal_events=(sorted(events.values(), key=lambda row: row.seq) if events
+                         else NO_TERMINAL_EVENTS),
     )
