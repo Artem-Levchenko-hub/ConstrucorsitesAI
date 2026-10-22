@@ -107,11 +107,11 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     idempotency_key = "421ba1e0-9677-4e1f-aee9-80dfd6970e62"
     created = await client.post(
         "/api/payments/subscription",
-        json={"plan_code": "pro", "idempotency_key": idempotency_key},
+        json={"plan_code": "pro", "plan_version": 3, "idempotency_key": idempotency_key},
     )
     duplicate = await client.post(
         "/api/payments/subscription",
-        json={"plan_code": "pro", "idempotency_key": idempotency_key},
+        json={"plan_code": "pro", "plan_version": 3, "idempotency_key": idempotency_key},
     )
     assert created.status_code == 201
     assert duplicate.status_code == 201
@@ -200,6 +200,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "2a28fcd6-b698-49bc-af68-4fae23025ff4",
         },
     )
@@ -226,6 +227,7 @@ async def test_only_one_subscription_checkout_can_wait_for_payment(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "57a4f44d-3307-4f0b-9cba-76bd2b3b4f2e",
         },
     )

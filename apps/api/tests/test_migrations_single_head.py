@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_RECOVERY_HEAD = "0088_generation_recovery_effects"
+_RECOVERY_HEAD = "0089_pro_generation_allowance"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
 # the optional `(?::[^=\n]+)?` swallows a type annotation. A root's
@@ -201,13 +201,14 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_recovery_effects_is_the_only_head() -> None:
+def test_pro_generation_allowance_is_the_only_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_RECOVERY_HEAD]
-    assert chain[_RECOVERY_HEAD] == "0087_generation_responses"
+    assert chain[_RECOVERY_HEAD] == "0088_generation_recovery_effects"
+    assert chain["0088_generation_recovery_effects"] == "0087_generation_responses"
     assert chain["0087_generation_responses"] == "0086_generation_provider_attempts"
     assert chain["0086_generation_provider_attempts"] == "0085_integration_consent"
     assert chain["0085_integration_consent"] == "0084_billing_catalog_v3"
@@ -258,7 +259,7 @@ def test_recovery_effect_migration_retains_evidence_on_downgrade(
     database.upgrade("head")
     database.upgrade("head")
     after = {str(row["tablename"]) for row in database.fetch(relation_query)}
-    assert after == before | {"generation_recovery_effects"}
+    assert after == before | {"generation_recovery_effects", "generation_allowances"}
     assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
 
     if with_effect:

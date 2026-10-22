@@ -107,6 +107,7 @@ ErrorCode = Literal[
     "subscription_already_active",
     "subscription_checkout_in_progress",
     "subscription_plan_not_purchasable",
+    "subscription_plan_changed",
     "subscription_consent_required",
     "subscription_management_unavailable",
     "subscription_entitlement_required",

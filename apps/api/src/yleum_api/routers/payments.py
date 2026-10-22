@@ -310,6 +310,16 @@ async def create_subscription_checkout(
             "Тариф недоступен для покупки",
             status.HTTP_409_CONFLICT,
         )
+    if (
+        payload.plan_version is not None and payload.plan_version != plan.version
+    ) or (payload.plan_version is None and "included_generations" in plan.entitlements):
+        # Existing idempotent orders were resolved above with their frozen
+        # package. A fresh order must match the terms the user just reviewed.
+        raise ApiError(
+            "subscription_plan_changed",
+            "Условия тарифа обновились. Выберите тариф заново и проверьте условия оплаты.",
+            status.HTTP_409_CONFLICT,
+        )
     current = (
         await session.execute(
             select(Subscription)

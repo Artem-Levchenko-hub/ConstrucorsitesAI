@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PaymentCreate(BaseModel):
@@ -13,6 +13,7 @@ class PaymentCreate(BaseModel):
 
 class SubscriptionCheckoutCreate(BaseModel):
     plan_code: Literal["pro", "business"]
+    plan_version: int | None = Field(default=None, ge=1)
     idempotency_key: UUID
     auto_renew: bool = False
     consent_version: str | None = None

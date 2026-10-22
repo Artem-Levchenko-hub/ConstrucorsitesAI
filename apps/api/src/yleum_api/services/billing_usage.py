@@ -254,6 +254,10 @@ async def build_usage_report(
     )
 
     usages = await entitlements.entitlement_usages(session, user.id, context=context)
+    from yleum_api.schemas.billing import IncludedGenerationsPublic
+    from yleum_api.services.generation_allowance import quota_usage
+
+    included = await quota_usage(session, context)
     return BillingUsagePublic(
         period=period,
         plan=BillingPlanPublic.model_validate(context.plan) if context.plan else None,
@@ -261,6 +265,9 @@ async def build_usage_report(
             context.subscription.status if context.subscription is not None else None
         ),
         generations=generations,
+        included_generations=(
+            IncludedGenerationsPublic.model_validate(included) if included else None
+        ),
         app_ai_answers=app_ai,
         other_ai=other_ai,
         publications=publications,

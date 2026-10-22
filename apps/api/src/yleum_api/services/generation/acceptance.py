@@ -133,11 +133,32 @@ class PromptAcceptance:
         set_generation_billing_context(
             self.generation_run.id, self.current_user.id, self.project_id
         )
-        await self.route_existing_project()
-        await self.conduct_interview()
-        await self.select_intent_and_model()
-        await self.persist_messages()
-        await self.dispatch()
+        run_id = self.generation_run.id
+        try:
+            await self.route_existing_project()
+            await self.conduct_interview()
+            await self.select_intent_and_model()
+            await self.persist_messages()
+            await self.dispatch()
+        except Exception:
+            # No model job exists before dispatch. Release a committed admission
+            # after routing fails, but retain a durable dispatch for recovery if
+            # the queue notification/HTTP response was lost after its commit.
+            await self.session.rollback()
+            run = await self.session.get(
+                GenerationRun, run_id, with_for_update=True, populate_existing=True,
+            )
+            if run is not None and run.status == "pending" and not (
+                run.agent_state or {}
+            ).get("dispatch"):
+                from yleum_api.services.generation_runs import terminalize_generation_run_locked
+
+                await terminalize_generation_run_locked(
+                    self.session, run, status="failed",
+                    error="generation acceptance failed before dispatch",
+                )
+                await self.session.commit()
+            raise
         return await self.present_response()
 
     async def reserve_or_replay(self) -> PromptResponse | None:
@@ -303,8 +324,17 @@ class PromptAcceptance:
         # Free-tier gate: every project spends the owner's personal allowance.
         # `UNLIMITED_GENERATIONS=true` (testing escape hatch) forces every gen to be
         # free → skips this wallet-floor check AND the gateway debit (metadata.free).
+        from yleum_api.services.generation_allowance import reserve_included_generation
+
+        included = (
+            await reserve_included_generation(
+                self.session, user_id=self.current_user.id, run_id=self.generation_run.id,
+            )
+            if not self.credential_redirect and not self.explain_failed_build else False
+        )
         self.is_free = (
-            get_settings().unlimited_generations
+            included
+            or get_settings().unlimited_generations
             or getattr(self, "free_chat_limited", False)
             or ((self.current_user.free_generations_used or 0) < FREE_GENERATION_LIMIT)
         )

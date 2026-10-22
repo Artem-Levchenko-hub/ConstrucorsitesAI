@@ -284,12 +284,12 @@ async def test_historical_free_run_message_or_success_counter_is_already_spent(d
 async def test_paid_pro_and_business_chat_allowance_and_billing_are_unchanged(
     client, db_session, monkeypatch
 ):
-    from yleum_api.models.billing import BUSINESS_PLAN_ID, PRO_PLAN_ID, BillingPlan
+    from yleum_api.models.billing import BUSINESS_PLAN_ID, PRO_PLAN_V2_ID, BillingPlan
     from yleum_api.models.generation_billing import GenerationBillingPolicy
     from yleum_api.models.wallet import Wallet
     from yleum_api.services.entitlements import entitlement_limit
 
-    for plan_id, capacity in [(PRO_PLAN_ID, 3), (BUSINESS_PLAN_ID, 10)]:
+    for plan_id, capacity in [(PRO_PLAN_V2_ID, 3), (BUSINESS_PLAN_ID, 10)]:
         owner, projects, account = await owner_projects(db_session, plan_id, count=2)
         owner.free_generations_used = 99
         db_session.add(

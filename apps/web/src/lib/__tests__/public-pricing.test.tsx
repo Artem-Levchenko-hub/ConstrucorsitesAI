@@ -30,6 +30,23 @@ it("uses changed prices from the API rather than a static marketing snapshot", a
   expect(renderToStaticMarkup(await PricingPage())).toMatch(/3\s210/);
 });
 
+it.each([5, 7])("renders %s included generations from the entitlement while keeping legacy Pro credit", async count => {
+  const legacy = { ...plans[1], id: "legacy-pro", name: "Pro прежний" };
+  const included = { ...plans[1], id: "pro-v3", version: 3, included_credit_rub: "0", entitlements: { ...plans[1].entitlements, included_generations: count } };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json([plans[0], included, legacy, plans[2]])));
+  const host = document.createElement("div");
+  host.innerHTML = renderToStaticMarkup(await PricingPage());
+  const cards = [...host.querySelectorAll("article")];
+  const newPro = cards.find(card => card.querySelector("h2")?.textContent === "Pro")!;
+  const oldPro = cards.find(card => card.querySelector("h2")?.textContent === "Pro прежний")!;
+  expect(newPro.textContent).toContain(`Включённых генераций за оплаченный месяц${count}`);
+  expect(newPro.textContent).toContain("создание и правки");
+  expect(newPro.textContent).toContain("без списания с баланса");
+  expect(newPro.textContent).not.toContain("на баланс после");
+  expect(oldPro.textContent).toMatch(/500.*на баланс после/);
+  expect(oldPro.textContent).not.toContain("Включённых генераций");
+});
+
 it.each([new Response(null, { status: 503 }), Response.json([]), Response.json({ error: "bad" }), Response.json([{ code: "pro" }])])("shows honest unavailable state for failed or invalid catalog", async response => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
   const html = renderToStaticMarkup(await PricingPage());

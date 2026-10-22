@@ -1,6 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { getBillingUsage, type EntitlementUsage } from "@/lib/api/account";
+import { includedGenerationLimit } from "@/lib/billing-plan-allowance";
 import { CostSource } from "@/components/ui/CostSource";
 import { date, money, QueryError } from "./account-presentation";
 
@@ -21,15 +22,29 @@ function entitlementValue(item: EntitlementUsage): string {
 export function AccountUsage() {
   const usage = useQuery({ queryKey: ["billing-usage"], queryFn: () => getBillingUsage() });
   const data = usage.data;
+  const included = data?.included_generations;
+  const hasIncludedGenerations = Boolean(data?.plan && includedGenerationLimit(data.plan) !== null);
   return <section className="account-panel account-usage" aria-label="Расход за период">
     <h2>Расход за период</h2>
     <QueryError error={usage.error} retry={() => void usage.refetch()} />
     {usage.isPending && <p role="status">Считаем расход…</p>}
     {data && <>
+      {included && <section aria-label="Включённые генерации текущего оплаченного периода">
+        <h3>Включённые генерации текущего оплаченного периода</h3>
+        <p className="account-hint">{date(included.period_start)} — {date(included.period_end)} · лимит {included.limit} на весь аккаунт</p>
+        <dl className="account-usage-grid">
+          <div><dt>Использовано</dt><dd>{included.used}</dd></div>
+          <div><dt>В работе</dt><dd>{included.in_progress}</dd></div>
+          <div><dt>Осталось</dt><dd>{included.remaining}</dd></div>
+        </dl>
+        <p className="account-hint">В общий лимит входят создание и правки — без списания с баланса. Техническая ошибка не расходует генерацию. Запущенная генерация продолжится, даже если лимит исчерпан.</p>
+        {included.remaining === 0 && <p className="account-notice pending">Новая генерация станет доступна в следующем оплаченном периоде.</p>}
+      </section>}
       <p className="account-hint">
         {periodLabel(data.period.source)}: {date(data.period.start)} — {date(data.period.end)}
         {data.plan ? ` · тариф ${data.plan.name}` : ""}
       </p>
+      {hasIncludedGenerations && <p className="account-hint">Затраты на ИИ показаны для справки. Включённые генерации не списывают баланс; фактические списания указаны отдельно.</p>}
       <dl className="account-usage-grid">
         <div>
           <dt>Сборки приложений</dt>
@@ -60,10 +75,10 @@ export function AccountUsage() {
           <dt>Списано с баланса</dt>
           <dd>{money(data.wallet.debited_rub)}<small>зачислено {money(data.wallet.credited_rub)} · операций {data.wallet.charges}</small></dd>
         </div>
-        <div>
+        {!hasIncludedGenerations && <div>
           <dt>Бесплатные сборки</dt>
           <dd>{data.free_generations.unlimited ? "без ограничений" : `осталось ${data.free_generations.left} из ${data.free_generations.limit}`}</dd>
-        </div>
+        </div>}
       </dl>
       <h3>Что включено в тариф и сколько уже используется</h3>
       <ul className="account-usage-entitlements">

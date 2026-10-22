@@ -11,6 +11,8 @@ vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 const payment = { id: "pay-1", purpose: "wallet_topup", subscription_id: null, package_code: "start", amount_rub: "777", credit_rub: "888", status: "pending", confirmation_url: null, created_at: "2026-09-07T00:00:00Z" };
 const plan = { id: "pro-1", code: "pro", version: 1, name: "Pro", price_rub: "999", billing_interval: "month", included_credit_rub: "456", entitlements: { max_projects: 7, team_seats: 3, static_publish_slots: 5, always_on_slots: 2, integrations: false } };
 const freePlan = { id: "free-3", code: "free", version: 3, name: "Free", price_rub: "0.00", billing_interval: "month", included_credit_rub: "0", entitlements: { max_projects: 1, team_seats: 1, static_publish_slots: 1, always_on_slots: 0, integrations: true, generation_messages_lifetime: 1 } };
+const includedPlan = { ...plan, id: "pro-v3", version: 3, price_rub: "2990", included_credit_rub: "0", entitlements: { ...plan.entitlements, included_generations: 5 } };
+let offeredPlan = plan;
 let currentPlan = freePlan;
 const usage = {
   period: { start: "2026-09-01T00:00:00Z", end: "2026-09-23T12:00:00Z", source: "calendar_month" },
@@ -36,7 +38,7 @@ beforeEach(() => {
   localStorage.clear(); mocks.search = ""; mocks.replace.mockReset(); sessionError = false; requests = [];
   config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888" }] };
   payments = []; post = async () => Response.json(payment);
-  usageResponse = usage; currentPlan = freePlan;
+  usageResponse = usage; currentPlan = freePlan; offeredPlan = plan;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
@@ -44,7 +46,7 @@ beforeEach(() => {
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
-    if (path === "/api/billing/plans") return Response.json([freePlan, plan]);
+    if (path === "/api/billing/plans") return Response.json([freePlan, offeredPlan]);
     if (path === "/api/billing/usage") return Response.json(usageResponse);
     if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: currentPlan, status: "active", auto_renew: false, cancel_at_period_end: false });
     if (path === "/api/auth/sessions") return sessionError ? Promise.reject(new Error("Sessions offline")) : Response.json([{ id: "current", current: true, user_agent: "Macintosh", ip_address: "127.0.0.1", created_at: "2026-09-06", last_seen_at: "2026-09-07" }]);
@@ -110,7 +112,93 @@ it("shows disabled provider reason and real wallet without offering checkout", a
 });
 it("reviews monthly server plan with auto-renew explicitly off by default", async () => {
   const app = await mount("plan");
-  try { await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro"); expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.checked).toBe(false); await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1)); expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: false, consent_version: null }); } finally { await app.close(); }
+  try { await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro"); expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.checked).toBe(false); await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1)); expect(requests[0]).toMatchObject({ plan_code: "pro", plan_version: 1, auto_renew: false, consent_version: null }); } finally { await app.close(); }
+});
+
+it("reviews included generation entitlement instead of a zero-credit purchase", async () => {
+  offeredPlan = includedPlan;
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    const proCard = [...app.container.querySelectorAll("article")].find(card => card.querySelector("h3")?.textContent === "Pro")!;
+    expect(proCard.textContent).toContain("Включённых генераций за оплаченный месяц5");
+    expect(proCard.textContent).not.toContain("Включённый кредит");
+    await click("Выбрать Pro");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Включённых генераций5");
+    expect(dialog.textContent).toContain("создание и правки");
+    expect(dialog.textContent).toContain("без списания с баланса");
+    expect(dialog.textContent).not.toContain("Зачисление на баланс");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ plan_code: "pro", plan_version: 3, auto_renew: false });
+    expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!).selection.includedGenerations).toBe(5);
+  } finally { await app.close(); }
+});
+
+it("resumes a pending legacy Pro credit order unchanged after the catalog switches to included generations", async () => {
+  offeredPlan = includedPlan;
+  const selection = { kind: "plan", code: "pro", title: "Pro", price: "2990", credit: "500" };
+  const attempt = { key: "legacy-order-key", selection, autoRenew: false, paymentId: "pay-1" };
+  localStorage.setItem("max-checkout:qa@example.test", JSON.stringify(attempt));
+  payments = [{ ...payment, purpose: "subscription_initial", credit_rub: "500" }];
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Продолжить незавершённую оплату")).toBeDefined());
+    await click("Продолжить незавершённую оплату");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Зачисление на баланс500 ₽");
+    expect(dialog.textContent).not.toContain("Включённых генераций");
+    expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!)).toEqual(attempt);
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ plan_code: "pro", idempotency_key: "legacy-order-key" });
+    expect(requests[0]).not.toHaveProperty("plan_version");
+    expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!).selection).toEqual(selection);
+  } finally { await app.close(); }
+});
+
+it("rejects a stale plan version, refreshes the catalog and requires reviewing the new terms", async () => {
+  offeredPlan = { ...plan, id: "pro-v2", version: 2, price_rub: "2990", included_credit_rub: "500" };
+  post = async () => {
+    offeredPlan = includedPlan;
+    return Response.json({ error: { code: "subscription_plan_changed", message: "Версия тарифа изменилась" } }, { status: 409 });
+  };
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    await click("Выбрать Pro");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Зачисление на баланс500 ₽");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ plan_code: "pro", plan_version: 2 });
+    await wait(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    expect(localStorage.length).toBe(0);
+    expect(button("Продолжить незавершённую оплату")).toBeUndefined();
+    expect(app.container.textContent).toContain("Выберите тариф заново");
+    await wait(() => expect(app.container.textContent).toContain("Включённых генераций за оплаченный месяц5"));
+    expect(requests).toHaveLength(1);
+    await click("Выбрать Pro");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Включённых генераций5");
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("Зачисление на баланс");
+    post = async () => Response.json(payment);
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toMatchObject({ plan_code: "pro", plan_version: 3 });
+    expect(requests[1].idempotency_key).not.toBe(requests[0].idempotency_key);
+  } finally { await app.close(); }
+});
+
+it("refreshes current quota after a confirmed subscription payment without promising a wallet credit", async () => {
+  mocks.search = "payment=pay-1";
+  payments = [{ ...payment, purpose: "subscription_initial", credit_rub: "0", status: "succeeded" }];
+  const app = await mount("profile");
+  try {
+    await wait(() => expect(document.body.textContent).toContain("Оплата подтверждена"));
+    expect(app.invalidate.mock.calls.some(([query]) => query?.queryKey?.[0] === "billing-usage")).toBe(true);
+    expect(document.querySelector(".account-payment-result")?.textContent).toContain("Тариф и доступные возможности обновляются");
+    expect(document.querySelector(".account-payment-result")?.textContent).not.toContain("Баланс и тариф обновляются");
+  } finally { await app.close(); }
 });
 it("labels current device and exposes session query errors", async () => {
   let app = await mount("security"); try { await wait(() => expect(document.body.textContent).toContain("Текущая сессия")); expect(document.body.textContent).toContain("Mac"); } finally { await app.close(); }
@@ -216,6 +304,67 @@ it("shows the period's spend and the plan's use next to each limit", async () =>
     expect(rows).toContain("Приложений2 · без ограничений");
     expect(rows).toContain("Опубликованных приложений2 из 1сверх тарифа");
     expect(rows).toContain("Интеграцииподключено: 1");
+  } finally { await app.close(); }
+});
+
+it.each([0, 2])("shows current included quota when remaining is %s even for a historical spend period", async remaining => {
+  usageResponse = { ...usage, plan: includedPlan,
+    period: { start: "2026-01-01T00:00:00Z", end: "2026-02-01T00:00:00Z", source: "custom" },
+    included_generations: { limit: 5, used: 4 - remaining, in_progress: 1, remaining,
+      period_start: "2026-09-10T00:00:00Z", period_end: "2026-10-10T00:00:00Z" } };
+  const app = await mount("billing");
+  try {
+    const quota = () => document.querySelector('[aria-label="Включённые генерации текущего оплаченного периода"]');
+    await wait(() => expect(quota()).not.toBeNull());
+    expect(quota()!.textContent).toContain(`Использовано${4 - remaining}`);
+    expect(quota()!.textContent).toContain("В работе1");
+    expect(quota()!.textContent).toContain(`Осталось${remaining}`);
+    expect(quota()!.textContent).toContain("10 сент. 2026");
+    expect(quota()!.textContent).toContain("10 окт. 2026");
+    expect(quota()!.textContent).not.toContain("янв.");
+    expect(quota()!.textContent).toContain("создание и правки");
+    expect(quota()!.textContent).toContain("на весь аккаунт");
+    expect(quota()!.textContent).toContain("Техническая ошибка не расходует");
+    expect(quota()!.textContent).toContain("Запущенная генерация продолжится");
+    if (remaining === 0) expect(quota()!.textContent).toContain("Новая генерация станет доступна в следующем оплаченном периоде");
+    else expect(quota()!.textContent).not.toContain("Новая генерация станет доступна");
+    expect(document.querySelector('[aria-label="Расход за период"]')?.textContent).toContain("выбранный период");
+  } finally { await app.close(); }
+});
+
+it.each([undefined, null])("does not invent a paid included quota for a legacy response: %s", async included => {
+  usageResponse = { ...usage, included_generations: included };
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(app.container.textContent).toContain("Сборки приложений"));
+    expect(document.querySelector('[aria-label="Включённые генерации текущего оплаченного периода"]')).toBeNull();
+  } finally { await app.close(); }
+});
+
+it.each([
+  { label: "Free", billingPlan: freePlan, included: null, showLegacy: true },
+  { label: "legacy Pro", billingPlan: plan, included: null, showLegacy: true },
+  { label: "included Pro active", billingPlan: includedPlan,
+    included: { limit: 5, used: 2, in_progress: 1, remaining: 2, period_start: "2026-09-10T00:00:00Z", period_end: "2026-10-10T00:00:00Z" }, showLegacy: false },
+  { label: "included Pro expired", billingPlan: includedPlan, included: null, showLegacy: false },
+])("distinguishes the $label generation allowance from legacy free builds and wallet debits", async ({ billingPlan, included, showLegacy }) => {
+  usageResponse = { ...usage, plan: billingPlan, included_generations: included,
+    free_generations: { limit: 3, used: 0, left: 3, unlimited: false },
+    wallet: { ...usage.wallet, debited_rub: "0" } };
+  const app = await mount("billing");
+  try {
+    const panel = () => app.container.querySelector('[aria-label="Расход за период"]')!;
+    await wait(() => expect(panel().textContent).toContain("Сборки приложений"));
+    const legacyRow = [...panel().querySelectorAll("dl > div")].find(row => row.querySelector("dt")?.textContent === "Бесплатные сборки");
+    if (showLegacy) {
+      expect(legacyRow?.textContent).toContain("осталось 3 из 3");
+      expect(panel().textContent).not.toContain("Затраты на ИИ показаны для справки.");
+    } else {
+      expect(legacyRow).toBeUndefined();
+      expect(panel().textContent).toContain("Затраты на ИИ показаны для справки. Включённые генерации не списывают баланс; фактические списания указаны отдельно.");
+      expect(panel().textContent).toContain("48,5 ₽ за модели");
+      expect(panel().textContent).toContain("Списано с баланса0 ₽");
+    }
   } finally { await app.close(); }
 });
 

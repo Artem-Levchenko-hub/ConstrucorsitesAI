@@ -45,6 +45,11 @@ export function describeEntitlementError(
 ): string {
   const key = typeof details?.entitlement === "string" ? details.entitlement : "";
   if (key === "free_chat_messages") return "На Free доступно одно сообщение на весь аккаунт. Для новых запросов выберите Pro или Business. Готовое приложение можно настроить и опубликовать. Сменить тариф можно в разделе «Аккаунт → Тариф».";
+  if (key === "included_generations") {
+    if (code === "subscription_entitlement_required") return "Для новой генерации оплатите следующий период в разделе «Аккаунт → Тариф». Запущенная генерация продолжится.";
+    const allowance = typeof details?.limit === "number" ? `${details.limit} включённых генераций` : "Включённые генерации";
+    return `${allowance} текущего оплаченного месяца уже использованы или находятся в работе. Новая генерация станет доступна в следующем оплаченном периоде. Запущенная генерация продолжится.`;
+  }
   const names = ENTITLEMENT_NAMES[key];
   const plan = planLabel(details?.plan_code);
   if (code === "subscription_entitlement_required") {

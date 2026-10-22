@@ -2,6 +2,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
+import { includedGenerationLimit, INCLUDED_GENERATION_TERMS } from "@/lib/billing-plan-allowance";
 import type { PaymentJourney } from "./PaymentCheckout";
 import { date, money, QueryError } from "./account-presentation";
 // Historical plans can store `null` for "no limit"; a missing key is unknown.
@@ -12,6 +13,7 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
   const subscription = useQuery({ queryKey: ["billing-subscription"], queryFn: getSubscription });
   const manage = useMutation({ mutationFn: manageSubscription, onSuccess: updated => client.setQueryData(["billing-subscription"], updated) });
   const current = subscription.data;
+  const currentIncluded = current ? includedGenerationLimit(current.plan) : null;
   const historical = current && current.plan.code !== "free" && plans.data
     && !plans.data.some(plan => plan.id === current.plan.id);
   return <>
@@ -23,6 +25,8 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
         <h2>{String(current.plan.code) === "qa_internal" ? "Тестовый безлимит" : current.plan.name}</h2>
         <strong>{money(current.plan.price_rub)} / месяц</strong>
         <p>{current.current_period_end ? `Оплачен до ${date(current.current_period_end)}` : "Нет оплаченного периода"}</p>
+        {currentIncluded !== null ? <p>{currentIncluded} включённых генераций за оплаченный месяц. {INCLUDED_GENERATION_TERMS}</p>
+          : current.plan.code !== "free" && <p>Включённый кредит на баланс: {money(current.plan.included_credit_rub)} после каждой успешной ежемесячной оплаты.</p>}
         {historical && <p>У вас сохранены условия прежней версии тарифа. Стоимость действующей подписки указана выше; новые тарифы — ниже.</p>}
       </div>
       <div className="account-renewal">
@@ -44,6 +48,7 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
       <QueryError error={j.config.error} retry={() => void j.config.refetch()} />
       <div className="account-plans">{plans.data?.map(plan => {
         const active = current?.plan.id === plan.id;
+        const included = includedGenerationLimit(plan);
         return <article key={plan.id} className={active ? "current" : ""}>
           <h3>{plan.name}</h3>
           {active && <span className="account-status success">Текущий</span>}
@@ -68,17 +73,17 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
               <dd>{plan.entitlements.integrations ? "Да" : "Нет"}</dd>
             </div>}
             <div>
-              <dt>Включённый кредит на баланс</dt>
-              <dd>{money(plan.included_credit_rub)}</dd>
+              <dt>{included === null ? "Включённый кредит на баланс" : "Включённых генераций за оплаченный месяц"}</dt>
+              <dd>{included === null ? money(plan.included_credit_rub) : included}</dd>
             </div>
           </dl>
-          <p className="account-hint">{plan.code === "free"
+          <p className="account-hint">{included !== null ? INCLUDED_GENERATION_TERMS : plan.code === "free"
             ? "Лимит сообщений для генерации даётся один раз на аккаунт и не обновляется каждый месяц."
             : "Включённый кредит поступает на баланс после каждой успешной ежемесячной оплаты тарифа."}</p>
-          {plan.code !== "free" && <Button variant={active ? "outline" : "primary"} disabled={active || !current || !j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "plan", code: plan.code, title: plan.name, price: plan.price_rub, credit: plan.included_credit_rub })}>{active ? "Текущий тариф" : `Выбрать ${plan.name}`}</Button>}</article>;
+          {plan.code !== "free" && <Button variant={active ? "outline" : "primary"} disabled={active || !current || !j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "plan", code: plan.code, title: plan.name, price: plan.price_rub, credit: plan.included_credit_rub, planVersion: plan.version, ...(included !== null ? { includedGenerations: included } : {}) })}>{active ? "Текущий тариф" : `Выбрать ${plan.name}`}</Button>}</article>;
       })}</div>
       {j.config.data && !j.config.data.enabled && <p className="account-notice pending">{j.config.data.reason ?? "Платёжный сервис недоступен"}</p>}
-      <p className="account-hint">Тариф и включённый кредит активируются после подтверждения оплаты. Автопродление подключается только с отдельного согласия при проверке заказа.</p>
+      <p className="account-hint">Тариф и включённые возможности активируются после подтверждения оплаты. Автопродление подключается только с отдельного согласия при проверке заказа.</p>
     </section>
   </>;
 }

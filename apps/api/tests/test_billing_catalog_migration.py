@@ -145,7 +145,10 @@ def test_catalog_upgrade_preserves_history_and_paid_contracts(
     assert [str(row["id"]) for row in active] == [f"{PREFIX}{n}" for n in (5, 6, 7)]
     from yleum_api.models.billing import DEFAULT_BILLING_PLANS
 
-    expected = [plan for plan in DEFAULT_BILLING_PLANS if plan["is_active"]]
+    # This test targets the historical 0084 cutover, not today's active sales.
+    expected = [
+        plan for row in active for plan in DEFAULT_BILLING_PLANS if plan["id"] == row["id"]
+    ]
     assert [json.loads(row["entitlements"]) for row in active] == [
         plan["entitlements"] for plan in expected
     ]

@@ -15,6 +15,7 @@ from yleum_api.models.account import Payment
 from yleum_api.models.billing import (
     PRO_PLAN_ID,
     PRO_PLAN_V1_ID,
+    PRO_PLAN_V2_ID,
     BillingAccount,
     BillingPaymentMethod,
     BillingPlan,
@@ -66,6 +67,7 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "cc65869c-5717-4a88-a678-f70aa5ef97e3",
             "auto_renew": True,
             "consent_version": "outdated",
@@ -89,6 +91,7 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "bc143ea1-34c0-4564-bf22-7986f06483df",
             "auto_renew": True,
             "consent_version": get_settings().legal_document_version,
@@ -146,9 +149,13 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
 
 
 @pytest.mark.parametrize(
-    ("plan_id", "version", "amount"),
-    [(PRO_PLAN_ID, 2, "2990.00"), (PRO_PLAN_V1_ID, 1, "1490.00")],
-    ids=["current-pro-v2", "legacy-inactive-pro-v1"],
+    ("plan_id", "version", "amount", "credit"),
+    [
+        (PRO_PLAN_ID, 3, "2990.00", "0"),
+        (PRO_PLAN_V2_ID, 2, "2990.00", "500"),
+        (PRO_PLAN_V1_ID, 1, "1490.00", "500"),
+    ],
+    ids=["current-pro-v3", "legacy-inactive-pro-v2", "legacy-inactive-pro-v1"],
 )
 async def test_lifecycle_renews_and_credits_exactly_once(
     client: httpx.AsyncClient,
@@ -157,6 +164,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     plan_id: UUID,
     version: int,
     amount: str,
+    credit: str,
 ) -> None:
     user, account, free = await _registered_billing_context(
         client,
@@ -168,7 +176,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     assert plan is not None
     assert plan.version == version
     assert plan.price_rub == Decimal(amount)
-    assert plan.is_active is (version == 2)
+    assert plan.is_active is (version == 3)
     free.status = "expired"
     free.ended_at = now
     await db_session.flush()
@@ -239,7 +247,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
         or 0
     )
     assert renewal_count == 1
-    assert credit_count == 1
+    assert credit_count == (1 if Decimal(credit) > 0 else 0)
     renewal = (
         await db_session.execute(
             select(Payment).where(
@@ -249,7 +257,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
         )
     ).scalar_one()
     assert renewal.amount_rub == Decimal(amount)
-    assert renewal.credit_rub == Decimal("500.0000")
+    assert renewal.credit_rub == Decimal(credit)
     assert renewal.package_code == f"subscription:pro:v{version}"
     assert renewal.status == "succeeded"
 

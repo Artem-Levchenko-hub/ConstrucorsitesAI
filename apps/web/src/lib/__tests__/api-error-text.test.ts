@@ -30,6 +30,23 @@ describe("describeApiError", () => {
       .toBe("Тариф Free не включает: интеграций. Сменить тариф можно в разделе «Аккаунт → Тариф».");
   });
 
+  it("explains included generation exhaustion using the paid period rather than a wallet or Free upgrade", () => {
+    const text = describeApiError(error("entitlement_exceeded", { entitlement: "included_generations", limit: 5, used: 5, plan_code: "pro", plan_version: 3 }));
+    expect(text).toContain("5 включённых генераций");
+    expect(text).toContain("следующем оплаченном периоде");
+    expect(text).toContain("Запущенная генерация продолжится");
+    expect(text).not.toContain("Free");
+    expect(text).not.toContain("Сменить тариф");
+    expect(text).not.toContain("Пополните баланс");
+  });
+
+  it("requires a paid period for included generations when the subscription is no longer active", () => {
+    const text = describeApiError(error("subscription_entitlement_required", { entitlement: "included_generations", plan_code: "pro", plan_version: 3 }));
+    expect(text).toContain("оплатите следующий период");
+    expect(text).toContain("Аккаунт → Тариф");
+    expect(text).not.toContain("Free");
+  });
+
   it("falls back to the server text plus the plan hint for an unknown entitlement", () => {
     expect(describeApiError(error("entitlement_exceeded", { entitlement: "mystery", limit: 2, used: 2 }, "Лимит исчерпан")))
       .toBe("Лимит исчерпан Сменить тариф можно в разделе «Аккаунт → Тариф».");

@@ -30,7 +30,8 @@ FREE_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000004")
 PRO_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000002")
 BUSINESS_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000003")
 FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000005")
-PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
+PRO_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
+PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000008")
 BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000007")
 
 # Entitlement keys the platform enforces. A numeric key set to ``null`` (or
@@ -142,7 +143,7 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "is_active": True,
     },
     {
-        "id": PRO_PLAN_ID,
+        "id": PRO_PLAN_V2_ID,
         "code": "pro",
         "version": 2,
         "name": "Pro",
@@ -150,6 +151,27 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "billing_interval": "month",
         "included_credit_rub": Decimal("500.0000"),
         "entitlements": {
+            "custom_domains": 0,
+            "max_projects": 3,
+            "static_publish_slots": 3,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 60,
+        },
+        "sort_order": 10,
+        "is_active": False,
+    },
+    {
+        "id": PRO_PLAN_ID,
+        "code": "pro",
+        "version": 3,
+        "name": "Pro",
+        "price_rub": Decimal("2990.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "included_generations": 5,
             "custom_domains": 0,
             "max_projects": 3,
             "static_publish_slots": 3,

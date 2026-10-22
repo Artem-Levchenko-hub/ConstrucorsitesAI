@@ -972,6 +972,12 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (e instanceof ApiError && e.details?.entitlement === "included_generations" &&
+          (e.code === "entitlement_exceeded" || e.code === "subscription_entitlement_required")) {
+          void qc.invalidateQueries({ queryKey: ["billing-usage"] });
+          _failPrompt(describeApiError(e), false);
+          return false;
+        }
         if (isFreeChatRefusal(e)) {
           void qc.invalidateQueries({ queryKey: OWNER_PROFILE_QUERY_KEY });
           _failPrompt(describeApiError(e), false);

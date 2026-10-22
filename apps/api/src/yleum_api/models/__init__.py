@@ -23,6 +23,7 @@ from yleum_api.models.billing_usage_event import BillingUsageEvent
 from yleum_api.models.custom_domain import CustomDomain
 from yleum_api.models.deploy_target import DeployTarget
 from yleum_api.models.deployment_drain import DeploymentDrain
+from yleum_api.models.generation_allowance import GenerationAllowance
 from yleum_api.models.generation_billing import (
     GenerationBillingIntent,
     GenerationBillingOutbox,
@@ -93,6 +94,7 @@ __all__ = [
     "CustomDomain",
     "DeployTarget",
     "DeploymentDrain",
+    "GenerationAllowance",
     "GenerationBillingIntent",
     "GenerationBillingOutbox",
     "GenerationBillingPolicy",

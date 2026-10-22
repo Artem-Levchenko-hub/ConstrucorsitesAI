@@ -9,4 +9,5 @@ GRANT SELECT ON TABLE
   TO :"billing_role";
 GRANT SELECT, INSERT ON TABLE public.generation_billing_intents TO :"billing_role";
 GRANT SELECT, INSERT, UPDATE ON TABLE public.generation_billing_outbox TO :"billing_role";
+GRANT SELECT, UPDATE ON TABLE public.generation_allowances TO :"billing_role";
 COMMIT;

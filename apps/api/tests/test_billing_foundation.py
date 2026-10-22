@@ -23,13 +23,14 @@ async def test_public_plan_catalog_is_versioned_and_ordered(
     assert response.status_code == 200
     plans = response.json()
     assert [plan["code"] for plan in plans] == ["free", "pro", "business"]
-    assert [plan["version"] for plan in plans] == [3, 2, 2]
+    assert [plan["version"] for plan in plans] == [3, 3, 2]
     assert [plan["price_rub"] for plan in plans] == ["0.00", "2990.00", "6990.00"]
     assert plans[0]["entitlements"]["max_projects"] == 1
     assert plans[0]["entitlements"]["static_publish_slots"] == 1
     assert plans[0]["entitlements"]["generation_messages_lifetime"] == 1
     assert plans[0]["entitlements"]["integrations"] is True
-    assert plans[1]["included_credit_rub"] == "500.0000"
+    assert plans[1]["included_credit_rub"] == "0.0000"
+    assert plans[1]["entitlements"]["included_generations"] == 5
     assert plans[2]["included_credit_rub"] == "1500.0000"
     assert plans[2]["entitlements"]["always_on_slots"] == 1
 
