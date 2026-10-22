@@ -309,6 +309,24 @@ async def run_agent_generation(
     # this worker fn — use the in-scope `current_snapshot_id` (None on a
     # brand-new project's first build) so this never NameErrors.
     _agent_res: agent_builder.AgentResult | None = None
+    prepare_runtime = partial(
+        prepare_agent_runtime,
+        ids=ids,
+        project_info=project_info,
+        runtime=runtime,
+        progress=progress,
+        factory=factory,
+        _agent_res=_agent_res,
+        capacity_dispatch_token=capacity_dispatch_token,
+    )
+    # A fresh legacy MAX dispatch is still pending/queued here. The runtime's
+    # capacity CAS must admit it before the strict checkpoint reader can record
+    # provenance. V2 keeps its committed bootstrap/cold-entry ordering intact.
+    admit_before_checkpoint = _resume_state is None and project_info.template == "max_miniapp"
+    prepared_runtime = (
+        await prepare_runtime(prompt_text=prompt_text, _design_contract=None)
+        if admit_before_checkpoint else None
+    )
     resumed: tuple[SourceCheckpoint, str] | None = None
     if prepared_entry is not None:
         (prompt_text, _is_continue, _is_edit,
@@ -395,17 +413,17 @@ async def run_agent_generation(
             context=execution_context,
         )
 
-    bindings, _agent_res = await prepare_agent_runtime(
-        ids=ids,
-        project_info=project_info,
-        runtime=runtime,
-        progress=progress,
-        factory=factory,
-        prompt_text=prompt_text,
-        _design_contract=_design_contract,
-        _agent_res=_agent_res,
-        capacity_dispatch_token=capacity_dispatch_token,
-    )
+    if prepared_runtime is None:
+        prepared_runtime = await prepare_runtime(
+            prompt_text=prompt_text, _design_contract=_design_contract,
+        )
+    bindings, _agent_res = prepared_runtime
+    if admit_before_checkpoint:
+        # Provisioning is model-free; all later model-facing preparation uses
+        # the recovered task/design, never the short or expanded retry prompt.
+        bindings.vision_context = (
+            _design_contract.vision_context if _design_contract else prompt_text
+        )
     if _resume_state is not None:
         assert execution_context is not None
         continuation = attach_driver(factory, _resume_state, execution_context, runtime.handle)

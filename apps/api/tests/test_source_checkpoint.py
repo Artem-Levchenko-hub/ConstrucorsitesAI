@@ -441,7 +441,7 @@ def test_checkpoint_resume_does_not_replace_an_amended_request(prompt, want):
 async def test_pipeline_uses_original_retry_intent_before_expanded_discovery_prompt(
     history, checkpoints, monkeypatch, owner_prompt, resumes,  # noqa: F811
 ):
-    """Actual pipeline + SQL history + checkpoint bytes, stopped before runtime/LLM."""
+    """Actual pipeline + SQL history + checkpoint bytes after admitted runtime."""
     from types import SimpleNamespace
     from uuid import uuid4
 
@@ -475,6 +475,10 @@ async def test_pipeline_uses_original_retry_intent_before_expanded_discovery_pro
     async def no_execution(*_args, **_kwargs):
         return None
 
+    async def admitted_runtime(**_kwargs):
+        assert current.status == 'running'
+        return SimpleNamespace(vision_context=expanded), None
+
     class ReachedClassification(Exception):
         pass
 
@@ -488,6 +492,7 @@ async def test_pipeline_uses_original_retry_intent_before_expanded_discovery_pro
 
     monkeypatch.setattr(requirements, 'freeze_for_run', no_execution)
     monkeypatch.setattr(recovery_execution, 'initialize_execution', no_execution)
+    monkeypatch.setattr(agent_pipeline, 'prepare_agent_runtime', admitted_runtime)
     monkeypatch.setattr(agent_pipeline, 'classify_agent_turn', classified)
     ids = GenerationIds(current.id, current.project_id, current.user_id,
                         current.user_message_id, uuid4())
