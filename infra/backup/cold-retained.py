@@ -42,6 +42,24 @@ CONTROLLERS = (
 _BARRIER_TIMEOUT = 30.0
 _CLEANUP_TIMEOUT = 60.0
 
+# Same trusted startup overrides as the controller, but no controller-package
+# import: this verifier runs with only the standalone archive helper sources.
+# A source-AST equality regression keeps this narrow offline copy from drifting.
+_SCRATCH_ADMIN_PGOPTIONS = " ".join(
+    "-c " + setting
+    for setting in (
+        "search_path=public",
+        "log_statement=none",
+        "log_duration=off",
+        "log_min_duration_statement=-1",
+        "log_min_duration_sample=-1",
+        "log_transaction_sample_rate=0",
+        "log_min_error_statement=panic",
+        "session_preload_libraries=",
+        "local_preload_libraries=",
+    )
+)
+
 # fd3 preserves the exec stdout while command substitution captures only the
 # digest. pipefail forbids a successful sha256sum from hiding tar/tee failure.
 _TAR_STREAM_SCRIPT = r"""set -eu
@@ -911,6 +929,37 @@ def verify_authorities(state_archive, entries):
             )
 
 
+def _scratch_backup(cells, directory, image, runner):
+    """Administrative transport only for the verifier's disposable PGDATA copy."""
+
+    class CopiedScratchBackup(cells.CellBackup):
+        def helper_flags(self, name, *, read_caps=False, write_caps=False):
+            flags = super().helper_flags(
+                name, read_caps=read_caps, write_caps=write_caps
+            )
+            # Only the disposable write helper must retain archived SGID bits
+            # while tar restores owners/groups outside the root user's groups.
+            # Reader helpers and the production collector keep the base flags.
+            return flags + (["--cap-add", "FSETID"] if write_caps else [])
+
+        @staticmethod
+        def project_admin_connection():
+            # The copied server already uses our private trust socket/HBA. Keep
+            # startup defenses against retained role defaults without importing
+            # production controller dependencies or changing roles/credentials.
+            return cells.CellBackup.scratch_connection(), {
+                "PGOPTIONS": _SCRATCH_ADMIN_PGOPTIONS
+            }
+
+    return CopiedScratchBackup(
+        runner=runner,
+        out_dir=directory,
+        postgres_image=image,
+        helper_image=image,
+        redactor=cells.SecretRedactor(),
+    )
+
+
 def verify(cells, directory, entries, image, runner):
     validate(cells, directory, entries)
     for entry in entries:
@@ -924,13 +973,7 @@ def verify(cells, directory, entries, image, runner):
                         timeout=60,
                     ).ok
                 )
-                backup = cells.CellBackup(
-                    runner=runner,
-                    out_dir=directory,
-                    postgres_image=image,
-                    helper_image=image,
-                    redactor=cells.SecretRedactor(),
-                )
+                backup = _scratch_backup(cells, directory, image, runner)
                 source = directory / volume["file"]
                 restored = runner.run(
                     [

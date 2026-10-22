@@ -585,3 +585,194 @@ def test_canonical_lock_is_existing_owned_inode_and_journal_is_archived(tmp_path
     lock.unlink()
     with pytest.raises(FileNotFoundError), cold.publication_locks(cells, root, archive):
         pass
+
+
+def standalone_cells(monkeypatch):
+    """Load the exact standalone script, without controller package initialization."""
+    import sys
+
+    source = SOURCE.parents[2] / "apps/orchestrator/scripts/backup_cells.py"
+    name = "cold_standalone_cells_contract"
+    spec = importlib.util.spec_from_file_location(name, source)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+class ScratchVerifyRunner:
+    """Docker I/O double; the real cold/cells copy, dump and restore paths run."""
+
+    def __init__(self, module, archive, fault=None):
+        self.module, self.archive, self.fault = module, archive, fault
+        self.calls, self.containers, self.volumes = [], set(), set()
+
+    def run(self, args, *, timeout, env=None, stdin_path=None):
+        self.calls.append((list(args), dict(env or {})))
+        assert timeout > 0
+        failed = self.fault == "cleanup" and (args[0] == "rm" or args[:2] == ["volume", "rm"])
+        if not failed:
+            if args[:2] == ["volume", "create"]:
+                self.volumes.add(args[-1])
+            elif args[:2] == ["volume", "rm"]:
+                self.volumes.discard(args[-1])
+            elif args[0] == "run":
+                self.containers.add(args[args.index("--name") + 1])
+            elif args[0] == "rm":
+                self.containers.discard(args[-1])
+        if args[:2] == ["container", "ls"]:
+            output = "\n".join(sorted(self.containers)).encode()
+        elif args[:2] == ["volume", "ls"]:
+            output = "\n".join(sorted(self.volumes)).encode()
+        else:
+            output = b"7\n" if "psql" in args else b""
+        return self.module.CommandResult(
+            tuple(args), int(failed), output, b"synthetic cleanup failure" if failed else b""
+        )
+
+    def run_to_file(self, args, *, path, timeout, env=None):
+        self.calls.append((list(args), dict(env or {})))
+        assert timeout > 0
+        failed = self.fault == "dump" and "pg_dumpall" in args
+        payload = (
+            self.archive if "tar" in args else b"CREATE ROLE postgres;\n-- synthetic cluster dump\n"
+        )
+        if not failed:
+            path.write_bytes(payload)
+        return self.module.StreamResult(
+            tuple(args),
+            int(failed),
+            0 if failed else len(payload),
+            cells.hashlib.sha256(payload).hexdigest(),
+            b"synthetic dump failure" if failed else b"",
+        )
+
+    def pipe(self, producer, consumer, *, timeout):
+        self.calls.extend(((list(producer), {}), (list(consumer), {})))
+        assert timeout > 0
+        return (
+            self.module.CommandResult(tuple(producer), 0, b"", b""),
+            self.module.CommandResult(tuple(consumer), 0, b"", b""),
+        )
+
+
+def standalone_entry(module, tmp_path, kind):
+    archive = tmp_path / cold.cold_file(NAMESPACE_UID, HELPER_UID)
+    payload = tar_bytes()
+    archive.write_bytes(payload)
+    sha, size = module._file_digest(archive)
+    entry = {
+        "project_id": PROJECT,
+        "owner_id": OWNER,
+        "namespace_uid": NAMESPACE_UID,
+        "authority": {"project_id": PROJECT, "owner_id": OWNER},
+        "proof": {
+            "cleanup_confirmed": True,
+            "watch_start": "fixture",
+            "barrier": "fixture",
+            "helper_uid": HELPER_UID,
+        },
+        "volumes": [
+            {
+                "uid": HELPER_UID,
+                "kind": kind,
+                "file": archive.name,
+                "sha256": sha,
+                "bytes": size,
+                **cold.filesystem_manifest(archive),
+            }
+        ],
+    }
+    return entry, payload
+
+
+@pytest.mark.parametrize("kind", ["core", "project"])
+def test_standalone_cold_verify_uses_only_own_scratch_transport(tmp_path, monkeypatch, kind):
+    import builtins
+
+    module = standalone_cells(monkeypatch)
+    entry, archive = standalone_entry(module, tmp_path, kind)
+    runner = ScratchVerifyRunner(module, archive)
+    original_import = builtins.__import__
+    imports = []
+
+    def no_controller_import(name, *args, **kwargs):
+        if name.startswith("yleum_orchestrator"):
+            imports.append(name)
+            raise ImportError("controller package absent in standalone verifier")
+        return original_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as guard:
+        guard.setattr(builtins, "__import__", no_controller_import)
+        cold.verify(module, tmp_path, [entry], IMAGE, runner)
+    assert imports == []
+    assert runner.containers == runner.volumes == set()
+    assert (tmp_path / entry["volumes"][0]["file"]).read_bytes() == archive
+    dump = [(args, env) for args, env in runner.calls if "pg_dumpall" in args]
+    assert len(dump) == 1
+    command, environment = dump[0]
+    assert command[:4] == ["exec", "--user", "postgres", "-e"]
+    assert command[4] == "PGOPTIONS" and command[command.index("-h") + 1] == "/tmp"
+    assert environment == {"PGOPTIONS": cold._SCRATCH_ADMIN_PGOPTIONS}
+    assert not any("PGPASSWORD" in arg for args, _ in runner.calls for arg in args)
+    assert any("local all all trust" in arg for args, _ in runner.calls for arg in args)
+
+
+@pytest.mark.parametrize("fault", ["dump", "cleanup"])
+def test_standalone_cold_failure_never_claims_verified(tmp_path, monkeypatch, fault):
+    module = standalone_cells(monkeypatch)
+    entry, archive = standalone_entry(module, tmp_path, "project")
+    runner = ScratchVerifyRunner(module, archive, fault)
+    with pytest.raises((ValueError, module.BackupError)):
+        cold.verify(module, tmp_path, [entry], IMAGE, runner)
+    if fault == "dump":
+        assert runner.containers == runner.volumes == set()
+    else:
+        assert runner.containers or runner.volumes, "unconfirmed cleanup must not fabricate absence"
+
+
+def test_scratch_admin_options_match_canonical_controller_without_imports():
+    import ast
+
+    path = (
+        SOURCE.parents[2]
+        / "apps/orchestrator/src/yleum_orchestrator/services/restoration_database.py"
+    )
+    tree = ast.parse(path.read_bytes())
+    declaration = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "TRUSTED_ADMIN_PGOPTIONS"
+            for target in node.targets
+        )
+    )
+    expected = eval(
+        compile(ast.Expression(declaration.value), "<trusted-options-expression>", "eval"),
+        {"__builtins__": {}},
+    )
+    assert cold._SCRATCH_ADMIN_PGOPTIONS == expected
+
+
+@pytest.mark.parametrize(
+    "read_caps,write_caps", [(False, False), (True, False), (False, True), (True, True)]
+)
+def test_cold_copied_scratch_adds_FSETID_only_for_writes(
+    tmp_path, monkeypatch, read_caps, write_caps
+):
+    module = standalone_cells(monkeypatch)
+    backup = cold._scratch_backup(module, tmp_path, IMAGE, object())
+    name = "omnia-backup-scratch-" + "a" * 32
+    native = module.CellBackup.helper_flags(
+        backup, name, read_caps=read_caps, write_caps=write_caps
+    )
+    actual = backup.helper_flags(name, read_caps=read_caps, write_caps=write_caps)
+    assert actual == native + (["--cap-add", "FSETID"] if write_caps else [])
+    assert "FSETID" not in native, "global/producer flags must stay unchanged"
+    assert actual[actual.index("--cap-drop") + 1] == "ALL"
+    assert actual[actual.index("--network") + 1] == "none"
+    assert actual[actual.index("--security-opt") + 1] == "no-new-privileges:true"
+    assert "--read-only" in actual
+    assert actual[actual.index("--memory") + 1] == "256m"
+    assert actual[actual.index("--pids-limit") + 1] == "64"
