@@ -110,6 +110,15 @@ def bounded_redacted_diagnostic(value: str, *, max_bytes: int) -> str:
     )
 
 
+def provider_error_origin(payload: dict[str, Any]) -> str:
+    """Keep the known error hop without enabling browser-text diagnostics."""
+    for source in (payload, payload.get("recovery_trace")):
+        value = source.get("error_origin") if isinstance(source, dict) else None
+        if isinstance(value, str) and value in {"provider", "gateway", "transport", "unknown"}:
+            return value
+    return "provider"
+
+
 def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
     """Copy one agent-step payload while redacting every textual surface."""
 
@@ -124,7 +133,7 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
             key: value for key, value in safe.items()
             if key in {"step", "kind", "tool", "ok", "skipped", "message_id", "recovery_trace"}
         }
-        safe.update(safe_recovery_trace({**step, "error_origin": "provider"}))
+        safe.update(safe_recovery_trace({**step, "error_origin": provider_error_origin(step)}))
         safe["path"] = ""
         safe["tool"] = "provider_request" if provider_error else "provider_response"
         safe["action"] = (
@@ -150,7 +159,7 @@ def sanitize_agent_step(step: dict[str, Any]) -> dict[str, Any]:
 
         trace = safe["recovery_trace"]
         if isinstance(trace, dict) and (provider_error or safe.get("tool") == "provider_response"):
-            trace = {**trace, "error_origin": "provider"}
+            trace = {**trace, "error_origin": provider_error_origin(step)}
         safe["recovery_trace"] = safe_recovery_trace(trace) if isinstance(trace, dict) else {}
     for key in ("action", "tool", "path", "detail", "human"):
         value = safe.get(key)

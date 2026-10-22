@@ -3,17 +3,77 @@
 import re
 
 from yleum_api.models.generation_run import GenerationRun
-from yleum_api.schemas.message import GenerationFailure
+from yleum_api.schemas.message import GenerationFailure, GenerationFailureDiagnostics
 
 
-def public_generation_failure(run: GenerationRun | None) -> GenerationFailure | None:
+def public_generation_failure(
+    run: GenerationRun | None, *, agent_steps: object = None,
+) -> GenerationFailure | None:
     if run is None or run.status != "failed":
         return None
     state = run.agent_state if isinstance(run.agent_state, dict) else {}
-    return failure_for_error(
+    failure = failure_for_error(
         run.error or "",
         restoration=isinstance(state.get("restoration_adaptation"), dict),
     )
+    failure.diagnostics = _provider_diagnostics(run.error, agent_steps)
+    return failure
+
+
+def _provider_diagnostics(
+    raw_error: object, agent_steps: object,
+) -> GenerationFailureDiagnostics | None:
+    """Project only facts belonging to this terminal provider failure.
+
+    Old messages may have arbitrary log text. A prior transient provider error
+    must not become the cause of an unrelated final build failure. The terminal
+    marker establishes that link; numeric fallback supports historical runs.
+    """
+    error = raw_error if isinstance(raw_error, str) else ""
+    marker = re.match(r"\Aprovider_http_([45]\d\d):", error, re.IGNORECASE)
+    if marker is None and re.match(
+        r"\A(?:provider_request_failed|provider_timeout|provider_unavailable|"
+        r"provider_refusal_(?:access|funds|rate_limit)|billing_unavailable):",
+        error, re.IGNORECASE,
+    ) is None:
+        return None
+    from yleum_api.services.generation.recovery_trace import safe_recovery_trace
+
+    upstream = int(marker.group(1)) if marker is not None else None
+    fields: dict[str, object] = {"error_origin": "provider" if upstream is not None else "unknown"}
+    if upstream is not None:
+        fields["upstream_http_status"] = upstream
+    if isinstance(agent_steps, list):
+        for step in reversed(agent_steps[-1000:]):
+            if not isinstance(step, dict):
+                continue
+            # Never walk past later work to borrow an earlier transient error.
+            if step.get("kind") != "provider_error" or step.get("ok") is not False:
+                break
+            trace = step.get("recovery_trace")
+            trace = trace if isinstance(trace, dict) else {}
+            if step.get("will_retry", trace.get("will_retry")) is not False:
+                break
+            if upstream is None and error.casefold().startswith("provider_timeout:"):
+                break  # A stale HTTP response cannot explain a later timeout.
+            safe = safe_recovery_trace({**trace, **{
+                key: step[key] for key in (
+                    "error_code", "http_status", "upstream_http_status",
+                    "provider_charge_ambiguous", "retry_safe",
+                ) if key in step
+            }})
+            if upstream is not None and safe.get("upstream_http_status") != upstream:
+                break  # Contradictory/stale evidence cannot decorate this failure.
+            if safe.get("error_origin") in {"provider", "gateway", "unknown"}:
+                fields["error_origin"] = safe["error_origin"]
+            fields.update({key: safe[key] for key in (
+                "error_code", "http_status", "upstream_http_status",
+                "provider_charge_ambiguous", "retry_safe",
+            ) if key in safe})
+            break
+    if fields.get("provider_charge_ambiguous") is True:
+        fields["retry_safe"] = False
+    return GenerationFailureDiagnostics.model_validate(fields)
 
 
 def failure_for_error(raw_error: object, *, restoration: bool = False) -> GenerationFailure:

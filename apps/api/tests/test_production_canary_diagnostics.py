@@ -9,12 +9,15 @@ bodies or signed preview URLs.
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
 import pytest
 
 from tests.production_canary_fakes import (
+    BUILD_RUN_ID,
+    EDIT_RUN_ID,
     OTHER_RELEASE_SHA,
     PROJECT_ID,
     FakeProduction,
@@ -293,3 +296,141 @@ def test_failed_run_cancels_its_active_generation_before_deleting_the_project(
     assert failure.value.stage == "build"
     assert cancel in production.calls and delete in production.calls
     assert production.calls.index(cancel) < production.calls.index(delete)
+
+
+@pytest.mark.parametrize("stage,status", [("build", "failed"), ("edit", "cancelled")])
+def test_terminal_generation_diagnostic_reaches_CLI_before_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    stage: str,
+    status: str,
+) -> None:
+    canary_env(monkeypatch)
+    diagnostics = {
+        "error_code": "model_unavailable", "error_origin": "provider", "http_status": 502,
+        "upstream_http_status": 503, "provider_charge_ambiguous": True, "retry_safe": False,
+    }
+    failure = {"code": "provider_unavailable", "message": "private provider body",
+               "retryable": False, "diagnostics": diagnostics}
+    production = FakeProduction(**{f"{stage}_generation_status": status,
+                                   f"{stage}_failure": failure}, delete_status=503)
+    result_path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, result_path) == 1
+    result = json.loads(result_path.read_text(encoding="utf-8"))
+    run_id = BUILD_RUN_ID if stage == "build" else EDIT_RUN_ID
+    assert result["code"] == f"{stage}_failed" and result["stage"] == stage
+    assert result["project_id"] == PROJECT_ID and result["run_id"] == run_id
+    assert result["failure_code"] == "provider_unavailable"
+    assert result["generation_diagnostics"] == diagnostics
+    assert result["cleanup"] == "failed"
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    failed = next(i for i, event in enumerate(events)
+                  if event["step"] == "generation" and event["status"] == status)
+    cleanup = next(i for i, event in enumerate(events) if event["step"] == "project_delete")
+    assert failed < cleanup
+    assert events[failed]["failure_code"] == result["failure_code"]
+    assert events[failed]["generation_diagnostics"] == diagnostics
+    assert "private provider body" not in json.dumps(result) + json.dumps(events)
+
+
+@pytest.mark.parametrize("bad_failure", [None, [], "secret-password", {"code": "x" * 100_000},
+    {"code": "provider_unavailable", "diagnostics": ["secret-password"]}])
+def test_missing_malformed_or_huge_failure_keeps_safe_terminal_identity(
+    monkeypatch: pytest.MonkeyPatch, bad_failure: object,
+) -> None:
+    canary_env(monkeypatch)
+    production = FakeProduction(build_generation_status="failed", build_failure=bad_failure,
+                                generation_extra={"error": "secret-password"})
+    events: list[dict[str, object]] = []
+    with pytest.raises(CanaryFailure) as caught:
+        _run(production, events)
+    report = caught.value.diagnostics()
+    assert report["code"] == "build_failed"
+    assert report["project_id"] == PROJECT_ID and report["run_id"] == BUILD_RUN_ID
+    assert len(json.dumps(report)) < 1024
+    assert "secret-password" not in json.dumps(report) + json.dumps(events)
+
+
+def test_failure_diagnostics_drop_unknown_codes_origins_types_and_raw_secrets(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary_env(monkeypatch)
+    secret = "github_pat_injected_SECRET_should_never_reach_canary_output"
+    production = FakeProduction(build_generation_status="failed", build_failure={
+        "code": secret, "message": secret, "retryable": secret,
+        "diagnostics": {"error_code": secret, "error_origin": secret, "http_status": True,
+                        "upstream_http_status": 399, "provider_charge_ambiguous": 1,
+                        "retry_safe": "false", "provider_body": secret}},
+        generation_extra={"error": secret, "provider_body": secret})
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert "failure_code" not in report
+    assert report["generation_diagnostics"] == {"error_origin": "unknown"}
+    assert secret not in path.read_text(encoding="utf-8") + capsys.readouterr().out
+
+
+def test_canary_failure_code_allowlists_match_current_server_producers() -> None:
+    source = Path(canary_module.__file__).parents[1]
+    gateway = ast.parse((source / "services/llm_client.py").read_text(encoding="utf-8"))
+    gateway_codes = next(ast.literal_eval(node.value) for node in gateway.body
+                         if isinstance(node, ast.Assign)
+                         and any(isinstance(target, ast.Name)
+                                 and target.id == "_GATEWAY_ERROR_CODES"
+                                 for target in node.targets))
+    public = ast.parse((source / "services/generation_failure.py").read_text(encoding="utf-8"))
+    public_codes = {node.value.value for node in ast.walk(public)
+                    if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+                    and isinstance(node.value.value, str)
+                    and any(isinstance(target, ast.Name) and target.id == "code"
+                            for target in node.targets)}
+    assert canary_module._GATEWAY_ERROR_CODES == gateway_codes
+    assert canary_module._GENERATION_FAILURE_CODES == public_codes
+
+
+@pytest.mark.parametrize("status,upstream", [(100, 400), (599, 599)])
+def test_generation_diagnostics_preserve_only_exact_bounded_primitives(
+    status: int, upstream: int,
+) -> None:
+    code, safe = canary_module._safe_generation_failure({
+        "code": "verification", "diagnostics": {
+            "error_code": "provider_output_invalid", "error_origin": "gateway",
+            "http_status": status, "upstream_http_status": upstream,
+            "provider_charge_ambiguous": False, "retry_safe": True,
+        },
+    })
+    assert code == "verification"
+    assert safe == {"error_code": "provider_output_invalid", "error_origin": "gateway",
+                    "http_status": status, "upstream_http_status": upstream,
+                    "provider_charge_ambiguous": False, "retry_safe": True}
+
+
+@pytest.mark.parametrize("bad", [None, True, False, 99, 600, 502.0, "502", [], {}])
+def test_generation_status_diagnostics_do_not_coerce_untrusted_types(bad: object) -> None:
+    _, safe = canary_module._safe_generation_failure({"diagnostics": {
+        "http_status": bad, "upstream_http_status": bad,
+    }})
+    assert safe == {"error_origin": "unknown"}
+
+
+def test_primary_terminal_failure_survives_raised_cleanup_exception(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary_env(monkeypatch)
+    production = FakeProduction(build_generation_status="failed", build_failure={
+        "code": "provider_unavailable", "diagnostics": {"http_status": 502},
+    })
+    def rejected_cleanup(self: ProductionCanary, project_id: str) -> bool:
+        raise RuntimeError("secret-password-in-cleanup")
+    monkeypatch.setattr(ProductionCanary, "_delete_project_with_retry", rejected_cleanup)
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["code"] == "build_failed" and result["cleanup"] == "failed"
+    assert result["project_id"] == PROJECT_ID and result["run_id"] == BUILD_RUN_ID
+    assert result["failure_code"] == "provider_unavailable"
+    assert result["generation_diagnostics"]["http_status"] == 502
+    assert ("POST", "/api/auth/logout") in production.calls
+    published = path.read_text(encoding="utf-8") + capsys.readouterr().out
+    assert "secret-password-in-cleanup" not in published

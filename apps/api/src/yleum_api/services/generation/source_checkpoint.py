@@ -19,8 +19,11 @@ from yleum_api.core.config import get_settings
 from yleum_api.core.minio import get_minio_client
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
+from yleum_api.models.project import Project
+from yleum_api.models.snapshot import Snapshot
 from yleum_api.services.generation.agent_messages import _is_retry_request
 from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+from yleum_api.services.generation_runs import load_generation_dispatch
 from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
 from yleum_api.services.repo import MAX_FILE_BYTES, MAX_FILES, MAX_REPO_BYTES
 
@@ -226,9 +229,9 @@ async def adjacent_checkpoint(
 ) -> tuple[SourceCheckpoint, str] | None:
     """Persist explicit resume provenance before fallible draft setup begins.
 
-    Each validated resume carries the original immutable object identity forward;
-    no private-object copy or unbounded history walk is needed after an outage.
-    Only the adjacent failed task may authorize that reference.
+    Explicit references retain their exact identity checks. Legacy unmarked retries
+    may cross at most twenty proven admissions on the same accepted snapshot;
+    malformed markers and unrelated history are barriers, never skipped.
     """
     async with factory() as session:
         current = await session.get(GenerationRun, ids.run_id, with_for_update=True)
@@ -247,47 +250,22 @@ async def adjacent_checkpoint(
         previous = await _adjacent_run(session, current)
         if (
             not _owned_failed_source(previous, ids)
-            or previous is None or previous.created_at == current.created_at
+            or previous is None or previous.created_at >= current.created_at
+            or await _ambiguous_run_order(session, previous)
         ):
             return None
-        source = previous
-        state: Any = (source.agent_state or {}).get("source_checkpoint")
-        if state is None:
-            inherited = _resume_reference(previous, baseline.sha)
-            if inherited is None:
-                return None
-            message = await session.get(Message, previous.user_message_id)
-            parent = await _adjacent_run(session, previous)
-            inherited_source = await session.get(GenerationRun, UUID(inherited["source_run_id"]))
-            if (
-                message is None or message.project_id != ids.project_id or message.role != "user"
-                or not checkpoint_resume_request(message.content)
-                or not _owned_failed_source(parent, ids) or parent is None
-                or str(parent.id) != inherited["previous_run_id"]
-                or not _owned_failed_source(inherited_source, ids) or inherited_source is None
-                or inherited_source.created_at >= previous.created_at
-                or parent.created_at >= previous.created_at
-            ):
-                return None
-            source = inherited_source
-            if parent.id != source.id:
-                parent_reference = _resume_reference(parent, baseline.sha)
-                parent_message = await session.get(Message, parent.user_message_id)
-                if (
-                    parent_reference is None or parent.created_at <= source.created_at
-                    or parent_message is None or parent_message.project_id != ids.project_id
-                    or parent_message.role != "user"
-                    or not checkpoint_resume_request(parent_message.content)
-                    or parent_reference["previous_run_id"] in {
-                        str(parent.id), str(previous.id), str(current.id),
-                    }
-                    or any(parent_reference[key] != inherited[key]
-                           for key in ("source_run_id", "digest", "baseline_sha"))
-                ):
-                    return None
-            state = (source.agent_state or {}).get("source_checkpoint")
-            if not isinstance(state, dict) or state.get("digest") != inherited["digest"]:
-                return None
+        if _unmarked_checkpoint_state(previous):
+            source = await _legacy_checkpoint_source(
+                session, newer=current, previous=previous, ids=ids, baseline=baseline,
+            )
+        else:
+            source = await _explicit_checkpoint_source(
+                session, previous, ids, baseline, current=current,
+            )
+        if source is None:
+            return None
+        state = _checkpoint_state(source)
+        state = state.get("source_checkpoint") if state is not None else None
         if not isinstance(state, dict) or state.get("baseline_sha") != baseline.sha:
             return None
         digest = state.get("digest")
@@ -326,6 +304,147 @@ async def adjacent_checkpoint(
         return decoded, task
 
 
+def _checkpoint_state(run: GenerationRun) -> dict[str, Any] | None:
+    return run.agent_state if isinstance(run.agent_state, dict) else None
+
+
+def _unmarked_checkpoint_state(run: GenerationRun) -> bool:
+    state = _checkpoint_state(run)
+    return state is not None and not any(
+        key in state for key in ("source_checkpoint", "source_checkpoint_resume")
+    )
+
+
+async def _explicit_checkpoint_source(
+    session: AsyncSession, previous: GenerationRun, ids: GenerationIds, baseline: SourceBaseline,
+    *, current: GenerationRun,
+) -> GenerationRun | None:
+    """Resolve the existing explicit object reference without loosening its chain."""
+    state = _checkpoint_state(previous)
+    if state is None:
+        return None
+    if "source_checkpoint" in state:
+        return previous  # An invalid nearest checkpoint is a hard barrier below.
+    inherited = _resume_reference(previous, baseline.sha)
+    if inherited is None:
+        return None
+    message = await session.get(Message, previous.user_message_id)
+    parent = await _adjacent_run(session, previous)
+    source = await session.get(GenerationRun, UUID(inherited["source_run_id"]))
+    if (
+        message is None or message.project_id != ids.project_id or message.role != "user"
+        or not checkpoint_resume_request(message.content)
+        or not _owned_failed_source(parent, ids) or parent is None
+        or str(parent.id) != inherited["previous_run_id"]
+        or not _owned_failed_source(source, ids) or source is None
+        or source.created_at >= previous.created_at or parent.created_at >= previous.created_at
+    ):
+        return None
+    if parent.id != source.id:
+        if _unmarked_checkpoint_state(parent):
+            if not _admitted_checkpoint_baseline(current, baseline):
+                return None
+            # A newly persisted marker may name a historical unmarked parent.
+            # Re-prove that same bounded legacy segment; never rewrite the parent.
+            legacy_source = await _legacy_checkpoint_source(
+                session, newer=previous, previous=parent, ids=ids, baseline=baseline,
+            )
+            if legacy_source is None or legacy_source.id != source.id:
+                return None
+        else:
+            parent_reference = _resume_reference(parent, baseline.sha)
+            parent_message = await session.get(Message, parent.user_message_id)
+            if (
+                parent_reference is None or parent.created_at <= source.created_at
+                or parent_message is None or parent_message.project_id != ids.project_id
+                or parent_message.role != "user"
+                or not checkpoint_resume_request(parent_message.content)
+                or parent_reference["previous_run_id"] in {
+                    str(parent.id), str(previous.id), str(ids.run_id),
+                }
+                or any(parent_reference[key] != inherited[key]
+                       for key in ("source_run_id", "digest", "baseline_sha"))
+            ):
+                return None
+    source_state = _checkpoint_state(source)
+    checkpoint = source_state.get("source_checkpoint") if source_state is not None else None
+    if not isinstance(checkpoint, dict) or checkpoint.get("digest") != inherited["digest"]:
+        return None
+    return source
+
+
+def _admitted_checkpoint_baseline(run: GenerationRun, baseline: SourceBaseline) -> bool:
+    try:
+        dispatch = load_generation_dispatch(run)
+    except ValueError:
+        return False
+    return (
+        dispatch.user_message_id == run.user_message_id
+        and dispatch.assistant_message_id == run.assistant_message_id
+        and dispatch.current_snapshot_id == baseline.snapshot_id
+    )
+
+
+async def _legacy_checkpoint_source(
+    session: AsyncSession, *, newer: GenerationRun, previous: GenerationRun,
+    ids: GenerationIds, baseline: SourceBaseline,
+) -> GenerationRun | None:
+    """Read only pre-marker standalone retries with one real admitted baseline."""
+    if (
+        baseline.snapshot_id is None or baseline.sha is None
+        or re.fullmatch(r"[a-f0-9]{40}", baseline.sha) is None
+        or not _admitted_checkpoint_baseline(newer, baseline)
+    ):
+        return None
+    project = await session.get(Project, ids.project_id, populate_existing=True)
+    snapshot = await session.get(Snapshot, baseline.snapshot_id, populate_existing=True)
+    if (
+        project is None or project.owner_id != ids.user_id
+        or project.current_snapshot_id != baseline.snapshot_id
+        or snapshot is None or snapshot.project_id != ids.project_id
+        or snapshot.commit_sha != baseline.sha
+    ):
+        return None
+    candidate: GenerationRun | None = previous
+    for _hop in range(20):
+        if (
+            candidate is None or not _owned_failed_source(candidate, ids)
+            or candidate.created_at >= newer.created_at
+            or not _admitted_checkpoint_baseline(candidate, baseline)
+        ):
+            return None
+        if await _ambiguous_run_order(session, candidate):
+            return None
+        state = _checkpoint_state(candidate)
+        if state is None:
+            return None
+        if "source_checkpoint" in state:
+            return candidate  # Stop at the nearest object, even if it is invalid.
+        if "source_checkpoint_resume" in state:
+            return None  # Explicit references are not legacy omissions.
+        message = await session.get(Message, candidate.user_message_id)
+        if (
+            message is None or message.project_id != ids.project_id or message.role != "user"
+            or not checkpoint_resume_request(message.content)
+        ):
+            return None
+        if _hop == 19:
+            return None
+        newer = candidate
+        candidate = await _adjacent_run(session, candidate)
+    return None
+
+
+async def _ambiguous_run_order(session: AsyncSession, run: GenerationRun) -> bool:
+    """A UUID tie-break is not evidence that an equally timed turn came first."""
+    tied = await session.scalar(select(1).select_from(GenerationRun).where(
+        GenerationRun.project_id == run.project_id,
+        GenerationRun.created_at == run.created_at,
+        GenerationRun.id != run.id,
+    ).limit(1))
+    return tied is not None
+
+
 async def _adjacent_run(session: AsyncSession, current: GenerationRun) -> GenerationRun | None:
     return cast(GenerationRun | None, await session.scalar(
         select(GenerationRun).where(
@@ -345,7 +464,8 @@ def _owned_failed_source(run: GenerationRun | None, ids: GenerationIds) -> bool:
 
 
 def _resume_reference(run: GenerationRun, baseline_sha: str | None) -> dict[str, Any] | None:
-    state: Any = (run.agent_state or {}).get("source_checkpoint_resume")
+    agent_state = _checkpoint_state(run)
+    state: Any = agent_state.get("source_checkpoint_resume") if agent_state is not None else None
     if (
         not isinstance(state, dict)
         or set(state) != {"previous_run_id", "source_run_id", "digest", "baseline_sha"}

@@ -14,6 +14,7 @@ from yleum_api.services.agent_progress import (
     PROVIDER_ERROR_DETAIL,
     PROVIDER_ERROR_DETAILS,
     PROVIDER_RESPONSE_DETAIL,
+    provider_error_origin,
     sanitize_agent_step,
 )
 from yleum_api.services.generation.agent_messages import _humanize_step
@@ -146,7 +147,7 @@ class GenerationProgress:
                 step_row["recovery_attempt"] = recovery_attempt
         if kind == "provider_error" or raw_tool == "provider_response":
             trace = safe_recovery_trace({
-                **data, "run_id": str(self.run_id), "error_origin": "provider",
+                **data, "run_id": str(self.run_id), "error_origin": provider_error_origin(data),
             })
             step_row["recovery_trace"] = trace
             # Preserve the existing flat diagnostic contract using the same

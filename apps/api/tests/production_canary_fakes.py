@@ -60,6 +60,9 @@ class FakeProduction:
     project_create_status: int = 201
     build_generation_status: str = "completed"
     edit_generation_status: str = "completed"
+    build_failure: object | None = None
+    edit_failure: object | None = None
+    generation_extra: dict[str, object] = field(default_factory=dict)
     build_queue_polls: int = 0
     cancel_status: int = 202
     runtime_state: str = "running"
@@ -161,6 +164,8 @@ class FakeProduction:
                         self.build_generation_status if building else self.edit_generation_status
                     ),
                     "response_mode": "build" if building else "edit",
+                    "failure": self.build_failure if building else self.edit_failure,
+                    **self.generation_extra,
                 },
             )
         if path == project_path and method == "GET":

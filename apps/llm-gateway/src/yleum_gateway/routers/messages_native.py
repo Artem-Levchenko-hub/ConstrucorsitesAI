@@ -95,6 +95,21 @@ def _err(
     )
 
 
+def _unconfirmed_provider_outcome(upstream_status: int | None = None) -> Response:
+    """Known HTTP status is diagnostic evidence, never replay permission."""
+    details = None
+    if type(upstream_status) is int and 500 <= upstream_status <= 599:
+        details = {
+            "upstream_http_status": upstream_status,
+            "provider_charge_ambiguous": True,
+            "retry_safe": False,
+        }
+    return _err(
+        503, "billing_unavailable", "Provider request outcome could not be confirmed",
+        details=details,
+    )
+
+
 def _text(content: Any) -> str:
     if isinstance(content, str):
         return content
@@ -685,7 +700,7 @@ async def _native_messages_execute(
             })
         # Once a request may have been accepted, replay risks a second paid call.
         # Deployed API callers already stop on this terminal billing error.
-        return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
+        return _unconfirmed_provider_outcome()
 
     known_evidence = _known_response_evidence(upstream)
     if upstream.status_code >= 400:
@@ -697,7 +712,9 @@ async def _native_messages_execute(
             error_type="HTTPStatusError", **known_evidence,
         )
         if upstream.status_code >= 500 or not recorded:
-            return _err(503, "billing_unavailable", "Provider request outcome could not be confirmed")
+            # A failed journal commit does not erase the locally observed HTTP
+            # status, and cannot turn an ambiguous outcome into a safe retry.
+            return _unconfirmed_provider_outcome(upstream.status_code)
         if not ambiguous and retry_candidate is not None:
             from yleum_gateway.services.generation_response_capture import (
                 confirm_response_accounting,

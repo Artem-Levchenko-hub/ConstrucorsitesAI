@@ -7,6 +7,7 @@ import pytest
 
 from yleum_api.services import agent_native
 from yleum_api.services.generation import provider_attempts
+from yleum_api.services.generation.recovery_trace import safe_recovery_trace
 from yleum_api.services.generation_failure import failure_for_error
 
 URL = "https://gateway.test/v1/messages"
@@ -184,4 +185,140 @@ async def test_native_terminal_preserves_strict_safe_marker_for_history(monkeypa
     assert "private" not in result.summary
     failure = failure_for_error(result.summary)
     assert failure.code == code and not failure.retryable
+    agent_native.get_settings.cache_clear()
+
+
+def server_error_body(status=502):
+    return {"type": "error", "error": {
+        "type": "billing_unavailable", "message": "private-key https://private.test/path",
+        "details": {
+            "upstream_http_status": status, "provider_charge_ambiguous": True, "retry_safe": False,
+        },
+    }}
+
+
+@pytest.mark.parametrize("gateway_status,upstream_status", [
+    (503, 502), (502, 502), (503, 504), (503, 500),
+])
+async def test_native_server_failure_preserves_exact_status_without_retry(
+    monkeypatch, gateway_status, upstream_status,
+):
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        return httpx.Response(gateway_status, json=server_error_body(upstream_status))
+
+    async def no_sleep(delay):
+        pytest.fail("an ambiguous server response must not retry")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(agent_native._NativeProviderServerError) as raised:
+            await agent_native._call_messages(client, URL, [], "s")
+    assert len(calls) == 1
+    assert str(raised.value).startswith(f"provider_http_{upstream_status}:")
+    assert "private" not in str(raised.value)
+    diagnostic = raised.value.diagnostics()
+    assert diagnostic["http_status"] == gateway_status
+    assert diagnostic["upstream_http_status"] == upstream_status
+    assert diagnostic["retry_safe"] is diagnostic["will_retry"] is False
+    assert diagnostic["provider_charge_ambiguous"] is True
+    assert safe_recovery_trace(diagnostic)["upstream_http_status"] == upstream_status
+
+
+@pytest.mark.parametrize("body", [
+    "<html>private bad gateway</html>", {"error": {"message": "private"}},
+])
+async def test_bare_gateway_502_never_claims_an_upstream_status(monkeypatch, body):
+    calls = []
+
+    def reply(request):
+        calls.append(request)
+        if isinstance(body, str):
+            return httpx.Response(502, text=body)
+        return httpx.Response(502, json=body)
+
+    async def no_sleep(delay):
+        pytest.fail("an unproven gateway 502 must not retry")
+
+    monkeypatch.setattr(agent_native.asyncio, "sleep", no_sleep)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(reply)) as client:
+        with pytest.raises(agent_native._NativeProviderServerError) as raised:
+            await agent_native._call_messages(client, URL, [], "s")
+    assert len(calls) == 1 and str(raised.value).startswith("provider_request_failed:")
+    diagnostic = raised.value.diagnostics()
+    assert diagnostic["http_status"] == 502 and "upstream_http_status" not in diagnostic
+    assert diagnostic["error_origin"] == "gateway"
+    assert "private" not in str(raised.value)
+
+
+@pytest.mark.parametrize("mutation", [
+    "ambiguous", "retry", "bool_status", "low_status", "high_status", "extra",
+    "type", "duplicate", "redirect", "url", "method", "large",
+])
+def test_native_server_diagnostic_requires_closed_internal_gateway_contract(mutation):
+    import json
+
+    body = server_error_body()
+    details = body["error"]["details"]
+    request = httpx.Request("POST", URL)
+    if mutation == "ambiguous":
+        details["provider_charge_ambiguous"] = False
+    elif mutation == "retry":
+        details["retry_safe"] = True
+    elif mutation == "bool_status":
+        details["upstream_http_status"] = True
+    elif mutation in {"low_status", "high_status"}:
+        details["upstream_http_status"] = 499 if mutation == "low_status" else 600
+    elif mutation == "extra":
+        details["private"] = "anything"
+    elif mutation == "type":
+        body["error"]["type"] = "api_error"
+    elif mutation == "url":
+        request = httpx.Request("POST", "https://foreign.test/v1/messages")
+    elif mutation == "method":
+        request = httpx.Request("GET", URL)
+    content = json.dumps(body)
+    if mutation == "duplicate":
+        content = content.replace(
+            '"upstream_http_status": 502',
+            '"upstream_http_status": 502, "upstream_http_status": 503',
+        )
+    elif mutation == "large":
+        content += " " * 16_384
+    response = httpx.Response(503, content=content.encode(), request=request,
+                             history=[httpx.Response(307)] if mutation == "redirect" else [])
+    assert agent_native._gateway_ambiguous_server_status(response, URL) is None
+    assert not agent_native._gateway_preconnect_proven(response, URL)
+
+
+@pytest.mark.parametrize("trace_fails", [False, True])
+async def test_native_terminal_server_error_keeps_primary_and_emits_safe_trace(
+    monkeypatch, trace_fails,
+):
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test")
+    monkeypatch.setenv("JWT_SECRET", "test-only-native-secret")
+    agent_native.get_settings.cache_clear()
+    monkeypatch.setattr(agent_native, "_call_messages", AsyncMock(
+        side_effect=agent_native._NativeProviderServerError(503, 502),
+    ))
+    events = []
+
+    async def emit(kind, data):
+        events.append((kind, data))
+        if kind == "agent.provider_error" and trace_fails:
+            raise RuntimeError("private diagnostic sink detail")
+
+    async def execute(action):
+        pytest.fail("provider failure must not execute a tool or accept a starter")
+
+    result = await agent_native.run_native_build(system="s", task="t", execute=execute, emit=emit)
+    assert not result.done and result.stop_reason == "provider_error"
+    assert result.summary.startswith("provider_http_502:") and "private" not in result.summary
+    diagnostics = [data for kind, data in events if kind == "agent.provider_error"]
+    assert len(diagnostics) == 1
+    assert diagnostics[0]["upstream_http_status"] == 502 and diagnostics[0]["http_status"] == 503
+    assert diagnostics[0]["will_retry"] is False
+    assert diagnostics[0]["provider_charge_ambiguous"] is True
     agent_native.get_settings.cache_clear()

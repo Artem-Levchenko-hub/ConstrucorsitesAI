@@ -165,15 +165,15 @@ def _terminal_provider_error(marker: str) -> RuntimeError:
     return RuntimeError(f"{marker}: {failure_for_error(marker + ':').message}")
 
 
-def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
-    """Accept only the internal gateway's closed, post-journal refusal proof."""
-    if response.status_code != 502 or len(response.content) > 16_384 or response.history:
-        return False
+def _gateway_native_error(response: httpx.Response, url: str) -> dict[str, Any] | None:
+    """Read the bounded internal envelope; callers never forward its message."""
+    if len(response.content) > 16_384 or response.history:
+        return None
     try:
         request = response.request
         if (request.method != "POST" or request.url != httpx.URL(url)
                 or request.url.path not in {"/v1/messages", "/v1/project-cell/messages"}):
-            return False
+            return None
 
         def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
             result: dict[str, Any] = {}
@@ -185,13 +185,23 @@ def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
 
         body = json.loads(response.content, object_pairs_hook=unique)
     except (RuntimeError, ValueError, RecursionError):
-        return False
+        return None
     if (not isinstance(body, dict) or set(body) - {"type", "error"}
             or body.get("type", "error") != "error"):
-        return False
+        return None
     error = body.get("error")
-    if (not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}
-            or error.get("type") != "api_error" or error.get("code", "api_error") != "api_error"):
+    if not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}:
+        return None
+    return error
+
+
+def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
+    """Accept only the internal gateway's closed, post-journal refusal proof."""
+    if response.status_code != 502:
+        return False
+    error = _gateway_native_error(response, url)
+    if (error is None or error.get("type") != "api_error"
+            or error.get("code", "api_error") != "api_error"):
         return False
     details = error.get("details")
     return (
@@ -204,6 +214,51 @@ def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
         and details["retry_safe"] is True
         and details["retry_policy"] == "llmgw_preconnect_v1"
     )
+
+
+def _gateway_ambiguous_server_status(response: httpx.Response, url: str) -> int | None:
+    if not 500 <= response.status_code <= 599:
+        return None
+    error = _gateway_native_error(response, url)
+    if (error is None or error.get("type") != "billing_unavailable"
+            or error.get("code", "billing_unavailable") != "billing_unavailable"):
+        return None
+    details = error.get("details")
+    if not isinstance(details, dict) or set(details) != {
+        "upstream_http_status", "provider_charge_ambiguous", "retry_safe",
+    }:
+        return None
+    status = details["upstream_http_status"]
+    return status if (
+        type(status) is int and 500 <= status <= 599
+        and details["provider_charge_ambiguous"] is True and details["retry_safe"] is False
+    ) else None
+
+
+class _NativeProviderServerError(RuntimeError):
+    """Safe typed evidence from one HTTP response, with no replay authorization."""
+
+    def __init__(self, http_status: int, upstream_http_status: int | None = None) -> None:
+        self.http_status = http_status
+        self.upstream_http_status = upstream_http_status
+        marker = (
+            f"provider_http_{upstream_http_status}"
+            if upstream_http_status is not None else "provider_request_failed"
+        )
+        super().__init__(str(_terminal_provider_error(marker)))
+
+    def diagnostics(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "tool": "provider_response", "kind": "provider_error",
+            "http_status": self.http_status,
+            "provider_charge_ambiguous": True, "retry_safe": False,
+            "will_retry": False, "retry_decision": "stop",
+            "error_code": "billing_reconciliation_required",
+            "error_origin": "provider" if self.upstream_http_status is not None else "gateway",
+        }
+        if self.upstream_http_status is not None:
+            result["upstream_http_status"] = self.upstream_http_status
+        return result
 
 
 # The gateway allows 240s per upstream I/O. A 210s caller window discarded
@@ -1199,6 +1254,9 @@ async def _call_messages(
                                 f"{output_error[field].upper()}: "
                                 "ответ модели не принят; автоматический повтор остановлен."
                             )
+            upstream_server_status = _gateway_ambiguous_server_status(r, url)
+            if upstream_server_status is not None:
+                raise _NativeProviderServerError(r.status_code, upstream_server_status)
             category = _provider_refusal_category(r)
             if r.status_code == 503:
                 try:
@@ -1266,6 +1324,10 @@ async def _call_messages(
                 delay = max(6.0 * (attempt + 1), rate_delay)
                 retry_parent, generation_attempt = generation_attempt, None
             else:
+                if 500 <= r.status_code <= 599:
+                    # A bare proxy/gateway 5xx proves only this hop's status.
+                    # Keep the upstream unknown and do not replay the POST.
+                    raise _NativeProviderServerError(r.status_code)
                 r.raise_for_status()
                 body = r.json()
                 if not isinstance(body, dict):
@@ -1811,7 +1873,7 @@ async def _run_native_segment(
                 marker = re.match(
                     r"\A(PLATFORM_WALLET_EMPTY|provider_request_failed|"
                     r"provider_refusal_(?:access|funds|rate_limit)|"
-                    r"provider_http_(?:400|401|402|403|404|413|422|429)):",
+                    r"provider_http_(?:400|401|402|403|404|413|422|429|5\d\d)):",
                     str(exc),
                 )
                 if marker is not None:
@@ -1831,6 +1893,14 @@ async def _run_native_segment(
                     message_id=str(message_id) if message_id else None,
                     stage=call_stage,
                 )
+                if emit and isinstance(exc, _NativeProviderServerError):
+                    try:
+                        await emit("agent.provider_error", exc.diagnostics())
+                    except Exception as diagnostic_error:
+                        # A secondary trace failure must not replace the actual
+                        # provider outcome or cause another model/tool request.
+                        log.warning("agent_native.provider_diagnostic_failed",
+                                    error_type=type(diagnostic_error).__name__)
                 return AgentResult(
                     done=False, summary=safe_reason, files=written, steps=step,
                     transcript=convo, stop_reason="provider_error", evidence=_evidence(),

@@ -24,6 +24,7 @@ from yleum_api.schemas.message import (
 from yleum_api.services.generation.recovery_contract import RecoveryStateV2
 from yleum_api.services.generation.recovery_execution import recovery_state
 from yleum_api.services.generation_billing import POLICY_VERSION
+from yleum_api.services.generation_failure import public_generation_failure
 from yleum_api.services.promotion_permit import (
     MAX_FULL_BUILD_CONTRACT_VERSION,
     MAX_RELEASE_PROOF_CONTRACT_VERSION,
@@ -127,6 +128,9 @@ async def project_loaded(
     ):
         raise ApiError("not_found", "generation not found", 404)
     view = GenerationRunPublic.model_validate(run)
+    view.failure = public_generation_failure(
+        run, agent_steps=message.agent_steps if message is not None else None,
+    )
     acceptance = GenerationAcceptancePublic(
         run_id=run.id, assistant_message_id=run.assistant_message_id
     )

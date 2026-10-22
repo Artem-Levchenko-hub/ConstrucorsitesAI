@@ -142,6 +142,41 @@ async def test_provider_error_metadata_survives_real_committed_event_and_message
     assert events[0].payload["ok"] is False and transcript[0]["ok"] is False
 
 
+@pytest.mark.parametrize("origin,expected", [
+    ("gateway", "gateway"), ("provider", "provider"),
+    ("private-key", "provider"), ([], "provider"),
+])
+async def test_provider_progress_preserves_validated_error_hop(monkeypatch, origin, expected):
+    recorder = progress.GenerationProgress(None, uuid4(), uuid4(), uuid4())
+    recorded = []
+
+    async def capture(event_type, payload, **kwargs):
+        recorded.append(dict(payload))
+
+    monkeypatch.setattr(recorder, "_record", capture)
+    await recorder.emit_agent_event("agent.provider_error", {
+        "http_status": 502, "provider_charge_ambiguous": True,
+        "will_retry": False, "error_origin": origin,
+    })
+    assert recorded[0]["recovery_trace"]["error_origin"] == expected
+    assert "upstream_http_status" not in recorded[0]
+
+
+async def test_provider_origin_cannot_enable_browser_text_in_historical_steps():
+    from yleum_api.services.agent_progress import sanitize_agent_step
+
+    safe = sanitize_agent_step({
+        "kind": "provider_error", "error_origin": "browser",
+        "console_error": {"message": "private-provider-body"},
+        "recovery_trace": {"error_origin": "browser", "console_error": {
+            "message": "private-provider-body",
+        }},
+    })
+    assert safe["error_origin"] == "provider"
+    assert safe["recovery_trace"]["error_origin"] == "provider"
+    assert "private-provider-body" not in str(safe)
+
+
 async def test_mixed_progress_keeps_wire_payload_order_and_independent_durable_sequence(
     test_engine,
     monkeypatch,

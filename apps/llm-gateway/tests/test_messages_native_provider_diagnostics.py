@@ -128,19 +128,24 @@ def test_native_refusal_returns_only_safe_category_and_keeps_receipt(
     assert billing.charge.await_count == 0
 
 
-@pytest.mark.parametrize("status", [500, 502, 503])
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+@pytest.mark.parametrize("journal_ok", [False, True])
 def test_native_server_error_still_quarantines_receipt_without_diagnostic_replay(
-    client, monkeypatch, status,
+    client, monkeypatch, status, journal_ok,
 ):
     monkeypatch.setattr(messages_native, "native_messages_route",
                         lambda: ("synthetic", "https://provider.test/v1"))
     calls = []
+    if not journal_ok:
+        monkeypatch.setattr(provider_calls, "finish_call", AsyncMock(
+            side_effect=RuntimeError("private journal detail"),
+        ))
 
     def reply(*args):
         calls.append(args)
         return httpx.Response(status, json={"error": {
             "code": "insufficient_funds", "message": "private-key",
-        }})
+        }}, headers={"x-llmgw-request-id": "known-server-error", "x-cost-rub": "2.50"})
 
     monkeypatch.setattr(messages_native, "_post_llmgw", reply)
     response = client.post("/v1/messages", json={
@@ -148,9 +153,15 @@ def test_native_server_error_still_quarantines_receipt_without_diagnostic_replay
     })
     assert response.status_code == 503
     assert response.json()["error"]["type"] == "billing_unavailable"
+    assert response.json()["error"]["details"] == {
+        "upstream_http_status": status, "provider_charge_ambiguous": True, "retry_safe": False,
+    }
     assert "provider_refusal_category" not in response.text and "private" not in response.text
     assert len(calls) == 1
     assert provider_calls.finish_call.await_args.kwargs["status"] == "ambiguous"
+    assert provider_calls.finish_call.await_args.kwargs["provider_request_id"] == "known-server-error"
+    assert provider_calls.finish_call.await_args.kwargs["provider_cost_rub"] == Decimal("2.50")
+    assert provider_calls.finish_call.await_count == 1
     assert billing.charge.await_count == 0
 
 

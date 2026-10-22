@@ -22,10 +22,29 @@ class SelectedElement(BaseModel):
     comment: str | None = Field(default=None, max_length=1000)
 
 
+class GenerationFailureDiagnostics(BaseModel):
+    """Closed operational facts; no raw provider messages or request bodies."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+
+    error_code: Literal[
+        "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
+        "billing_reconciliation_required", "provider_output_truncated",
+        "provider_output_invalid", "provider_output_filtered",
+        "unknown",
+    ] | None = None
+    error_origin: Literal["provider", "gateway", "platform", "unknown"] = "unknown"
+    http_status: int | None = Field(default=None, ge=100, le=599)
+    upstream_http_status: int | None = Field(default=None, ge=400, le=599)
+    provider_charge_ambiguous: bool | None = None
+    retry_safe: bool | None = None
+
+
 class GenerationFailure(BaseModel):
     code: str
     message: str
     retryable: bool
+    diagnostics: GenerationFailureDiagnostics | None = None
 
 
 class MessagePublic(BaseModel):
@@ -265,3 +284,4 @@ class GenerationRunPublic(BaseModel):
     recovery: GenerationRecoveryPublic | None = None
     recovery_unavailable: bool = False
     acceptance: GenerationAcceptancePublic | None = None
+    failure: GenerationFailure | None = None

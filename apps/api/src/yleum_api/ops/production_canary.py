@@ -66,6 +66,58 @@ _STAGE_REQUEST_CODES = {
 }
 
 
+# Keep this off-host probe independent of the server's LLM/schema imports.
+# The regression suite checks these fixed vocabularies against their producers.
+_GENERATION_FAILURE_CODES = frozenset({
+    "wallet_empty", "provider_unavailable", "provider_access", "runtime_unavailable",
+    "deadline", "no_changes", "data_contract", "verification",
+})
+_GATEWAY_ERROR_CODES = frozenset({
+    "model_unavailable", "model_not_found", "validation_failed", "wallet_empty",
+    "billing_reconciliation_required", "provider_output_invalid", "provider_output_filtered",
+})
+_ERROR_ORIGINS = frozenset({"provider", "gateway", "platform", "unknown"})
+
+
+def _safe_generation_failure(payload: object) -> tuple[str | None, dict[str, object]]:
+    """Copy only bounded public primitives; never inspect error/message/body text."""
+    diagnostic: dict[str, object] = {"error_origin": "unknown"}
+    if not isinstance(payload, dict) or len(payload) > 8:
+        return None, diagnostic
+    code = payload.get("code")
+    safe_code = (
+        code if isinstance(code, str) and len(code) <= 64 and code in _GENERATION_FAILURE_CODES
+        else None
+    )
+    details = payload.get("diagnostics")
+    if not isinstance(details, dict) or len(details) > 16:
+        return safe_code, diagnostic
+    error_code = details.get("error_code")
+    if isinstance(error_code, str) and len(error_code) <= 64 and error_code in _GATEWAY_ERROR_CODES:
+        diagnostic["error_code"] = error_code
+    origin = details.get("error_origin")
+    if isinstance(origin, str) and len(origin) <= 16 and origin in _ERROR_ORIGINS:
+        diagnostic["error_origin"] = origin
+    for key, lower in (("http_status", 100), ("upstream_http_status", 400)):
+        value = details.get(key)
+        if type(value) is int and lower <= value <= 599:
+            diagnostic[key] = value
+    for key in ("provider_charge_ambiguous", "retry_safe"):
+        value = details.get(key)
+        if type(value) is bool:
+            diagnostic[key] = value
+    return safe_code, diagnostic
+
+
+def _diagnostic_uuid(value: str | None) -> str | None:
+    if not isinstance(value, str) or len(value) > 36:
+        return None
+    try:
+        return str(UUID(value))
+    except ValueError:
+        return None
+
+
 class CanaryConfigurationError(ValueError):
     pass
 
@@ -92,6 +144,9 @@ class CanaryFailure(RuntimeError):
         expected: str | None = None,
         actual: str | None = None,
         http_status: int | None = None,
+        project_id: str | None = None,
+        run_id: str | None = None,
+        generation_failure: object = None,
     ) -> None:
         super().__init__(message)
         resolved_stage = stage if stage is not None else type(self).default_stage
@@ -106,6 +161,14 @@ class CanaryFailure(RuntimeError):
         self.expected = expected
         self.actual = actual
         self.http_status = http_status
+        self.project_id = _diagnostic_uuid(project_id)
+        self.run_id = _diagnostic_uuid(run_id)
+        self.failure_code: str | None = None
+        self.generation_diagnostics: dict[str, object] | None = None
+        if self.project_id is not None and self.run_id is not None:
+            self.failure_code, self.generation_diagnostics = _safe_generation_failure(
+                generation_failure,
+            )
         self.cleanup = "unknown"
         self.elapsed_seconds: float | None = None
 
@@ -121,10 +184,15 @@ class CanaryFailure(RuntimeError):
             ("actual_sha", self.actual),
             ("http_status", self.http_status),
             ("elapsed_seconds", self.elapsed_seconds),
+            ("project_id", self.project_id),
+            ("run_id", self.run_id),
+            ("failure_code", self.failure_code),
         )
         for key, value in optional:
             if value is not None:
                 report[key] = value
+        if self.generation_diagnostics is not None:
+            report["generation_diagnostics"] = dict(self.generation_diagnostics)
         return report
 
 
@@ -442,21 +510,7 @@ class ProductionCanary:
             caught = exc
         finally:
             self._stage = "cleanup"
-            if project_id is not None:
-                # An active run makes deletion return 409 and would keep building.
-                self._cancel_active_generation(project_id)
-                if not self._delete_project_with_retry(project_id):
-                    cleanup_failure = CanaryCleanupFailure("project cleanup failed")
-            if logged_in and not self._request_has_status(
-                "POST",
-                "/api/auth/logout",
-                expected_status=204,
-            ):
-                cleanup_failure = CanaryCleanupFailure("logout cleanup failed")
-                self._event("logout", "failed", error_code=cleanup_failure.code)
-            elif logged_in:
-                self._event("logout", "ok")
-            self._client.close()
+            cleanup_failure = self._cleanup(project_id, logged_in=logged_in)
 
         if caught is not None:
             if isinstance(caught, CanaryFailure):
@@ -469,6 +523,39 @@ class ProductionCanary:
             raise self._fail("canary did not produce a result", code="canary_failed")
         self._event("canary", "ok", project_id=result.project_id)
         return result
+
+    def _cleanup(self, project_id: str | None, *, logged_in: bool) -> CanaryCleanupFailure | None:
+        """Attempt all cleanup steps without replacing a captured primary failure."""
+        failure = None
+        try:
+            if project_id is not None:
+                try:
+                    # Stop this canary's run before deleting only its own project.
+                    self._cancel_active_generation(project_id)
+                    deleted = self._delete_project_with_retry(project_id)
+                except Exception:
+                    deleted = False
+                if not deleted:
+                    failure = CanaryCleanupFailure("project cleanup failed")
+            if logged_in:
+                try:
+                    logged_out = self._request_has_status(
+                        "POST", "/api/auth/logout", expected_status=204,
+                    )
+                except Exception:
+                    logged_out = False
+                if not logged_out:
+                    failure = CanaryCleanupFailure("logout cleanup failed")
+                self._event(
+                    "logout", "ok" if logged_out else "failed",
+                    error_code=None if logged_out else "cleanup_failed",
+                )
+        finally:
+            try:
+                self._client.close()
+            except Exception:
+                failure = CanaryCleanupFailure("canary client cleanup failed")
+        return failure
 
     def _finalize_failure(self, failure: CanaryFailure, *, cleanup_failed: bool) -> None:
         """Stamp the outcome the workflow artifact reports for this run."""
@@ -486,6 +573,9 @@ class ProductionCanary:
         expected: str | None = None,
         actual: str | None = None,
         http_status: int | None = None,
+        project_id: str | None = None,
+        run_id: str | None = None,
+        generation_failure: object = None,
     ) -> CanaryFailure:
         return CanaryFailure(
             message,
@@ -495,6 +585,9 @@ class ProductionCanary:
             expected=expected,
             actual=actual,
             http_status=http_status,
+            project_id=project_id,
+            run_id=run_id,
+            generation_failure=generation_failure,
         )
 
     def _request_json(
@@ -522,7 +615,7 @@ class ProductionCanary:
             )
         try:
             payload: Any = response.json()
-        except ValueError as exc:
+        except (ValueError, RecursionError) as exc:
             raise self._fail(
                 "public API returned invalid JSON",
                 code=self._request_code(invalid=True),
@@ -712,12 +805,17 @@ class ProductionCanary:
                     run_id=run_id,
                 )
                 return run
-            if status in {"failed", "cancelled"}:
-                raise self._fail(
+            if isinstance(status, str) and status in {"failed", "cancelled"}:
+                failure = self._fail(
                     "generation reached a failed terminal status",
                     code=self._request_code(),
+                    project_id=project_id,
+                    run_id=run_id,
+                    generation_failure=run.get("failure"),
                 )
-            if status not in _ACTIVE_GENERATION_STATUSES:
+                self._event("generation", status, failure=failure)
+                raise failure
+            if not isinstance(status, str) or status not in _ACTIVE_GENERATION_STATUSES:
                 raise self._fail(
                     "generation returned an invalid status",
                     code=self._request_code(invalid=True),
@@ -935,6 +1033,7 @@ class ProductionCanary:
         error_code: str | None = None,
         attempts: int | None = None,
         http_status: int | None = None,
+        failure: CanaryFailure | None = None,
     ) -> None:
         event: dict[str, object] = {
             "step": step,
@@ -953,4 +1052,6 @@ class ProductionCanary:
             event["attempts"] = attempts
         if http_status is not None:
             event["http_status"] = http_status
+        if failure is not None:
+            event.update(failure.diagnostics())
         self._emit(event)

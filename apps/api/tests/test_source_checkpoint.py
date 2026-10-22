@@ -432,3 +432,330 @@ def test_checkpoint_resume_does_not_replace_an_amended_request(prompt, want):
     from yleum_api.services.generation.source_checkpoint import checkpoint_resume_request
 
     assert checkpoint_resume_request(prompt) is want
+
+
+@pytest.mark.parametrize('owner_prompt,resumes', [
+    ('Попробуй еще раз', True),
+    ('Продолжи, но измени цены', False),
+])
+async def test_pipeline_uses_original_retry_intent_before_expanded_discovery_prompt(
+    history, checkpoints, monkeypatch, owner_prompt, resumes,  # noqa: F811
+):
+    """Actual pipeline + SQL history + checkpoint bytes, stopped before runtime/LLM."""
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from yleum_api.services.generation import agent_pipeline, recovery_execution
+    from yleum_api.services.generation import recovery_requirements as requirements
+    from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+
+    save, _ = checkpoints
+    original = history.add('Original product with orders', status='running')
+    await save(original)
+    current = history.add(owner_prompt, status='running')
+    expanded = 'Expanded onboarding transcript: build a complete new application.'
+    expected = 'Original product with orders' if resumes else expanded
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            return history.session.get(*args, **kwargs)
+
+        async def scalar(self, statement):
+            return history.session.scalar(statement)
+
+        async def commit(self):
+            history.session.commit()
+
+    async def no_execution(*_args, **_kwargs):
+        return None
+
+    class ReachedClassification(Exception):
+        pass
+
+    async def classified(**kwargs):
+        assert kwargs['prompt_text'] == expected
+        marker = (current.agent_state or {}).get('source_checkpoint_resume')
+        assert (marker is not None) is resumes
+        if resumes:
+            assert marker['source_run_id'] == str(original.id)
+        raise ReachedClassification
+
+    monkeypatch.setattr(requirements, 'freeze_for_run', no_execution)
+    monkeypatch.setattr(recovery_execution, 'initialize_execution', no_execution)
+    monkeypatch.setattr(agent_pipeline, 'classify_agent_turn', classified)
+    ids = GenerationIds(current.id, current.project_id, current.user_id,
+                        current.user_message_id, uuid4())
+    with pytest.raises(ReachedClassification):
+        await agent_pipeline.run_agent_generation(
+            _consume_free_generation=None, baseline=SourceBaseline(None, BASE, {}),
+            capacity_dispatch_token=None, factory=Session, force_model=None, ids=ids,
+            is_free=False, model_id='claude-sonnet-5.5', orchestrate=True, progress=None,
+            project_info=SimpleNamespace(template='max_miniapp'), prompt_text=expanded,
+            runtime=None, selected_elements=None,
+        )
+
+
+@pytest.fixture
+async def legacy_checkpoints(history, monkeypatch):  # noqa: F811
+    """Real SQLite admissions, snapshot and immutable checkpoint object storage."""
+    import io
+    from types import SimpleNamespace
+    from uuid import uuid4
+
+    from sqlalchemy import JSON, Column, MetaData, Table, select
+    from sqlalchemy.dialects.postgresql import JSONB
+
+    from yleum_api.models.message import Message
+    from yleum_api.models.project import Project
+    from yleum_api.models.snapshot import Snapshot
+    from yleum_api.services.generation import source_checkpoint as sc
+    from yleum_api.services.generation.contracts import GenerationIds, SourceBaseline
+    from yleum_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
+
+    metadata = MetaData()
+    Table(Project.__tablename__, metadata, *(Column(
+        column.name, JSON() if isinstance(column.type, JSONB) else column.type,
+        primary_key=column.primary_key,
+    ) for column in Project.__table__.columns))
+    metadata.create_all(history.session.get_bind())
+    original = history.add('Original Cartel product with orders', status='running')
+    original.id = UUID('ffffffff-ffff-4fff-afff-ffffffffffff')
+    snapshot = history.session.scalar(select(Snapshot))
+    snapshot.commit_sha = BASE
+    project = Project(id=original.project_id, owner_id=original.user_id, name='Cartel',
+                      slug='cartel', template='max_miniapp', current_snapshot_id=snapshot.id)
+    history.session.add(project)
+    baseline = SourceBaseline(snapshot.id, BASE, {'src/app/old.ts': 'accepted old source'})
+    objects = {}
+    reads = []
+
+    class Response(io.BytesIO):
+        def release_conn(self):
+            pass
+
+    class Storage:
+        def put_object(self, bucket, key, data, length, **kwargs):
+            objects[bucket, key] = data.read(length)
+
+        def get_object(self, bucket, key):
+            reads.append(key)
+            return Response(objects[bucket, key])
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            pass
+
+        async def get(self, *args, **kwargs):
+            return history.session.get(*args, **kwargs)
+
+        async def scalar(self, statement):
+            return history.session.scalar(statement)
+
+        async def commit(self):
+            history.session.commit()
+
+    def admit(run):
+        assistant = Message(id=uuid4(), project_id=run.project_id, role='assistant',
+                            content='', created_at=run.created_at)
+        history.session.add(assistant)
+        run.assistant_message_id = assistant.id
+        store_generation_dispatch(run, GenerationDispatch(
+            schema_version=1, project_id=run.project_id, user_id=run.user_id,
+            user_message_id=run.user_message_id, assistant_message_id=assistant.id,
+            current_snapshot_id=snapshot.id,
+            prompt_text='Expanded discovery transcript, not the original retry message.',
+            model_id='test-no-provider', force_model=None, is_free=False,
+            orchestrate=True, selected_elements=None,
+        ))
+        history.session.commit()
+        return run
+
+    def add(prompt='Попробуй еще раз', **kwargs):
+        return admit(history.add(prompt, **kwargs))
+
+    async def resume(run, value=baseline):
+        return await sc.adjacent_checkpoint(
+            factory=Session,
+            ids=GenerationIds(run.id, run.project_id, run.user_id,
+                              run.user_message_id, run.assistant_message_id), baseline=value,
+        )
+
+    monkeypatch.setattr(sc, 'get_minio_client', lambda: Storage())
+    admit(original)
+    await sc.persist_checkpoint(
+        factory=Session,
+        ids=GenerationIds(original.id, original.project_id, original.user_id,
+                          original.user_message_id, original.assistant_message_id),
+        baseline=baseline,
+        files={'src/app/page.tsx': 'Cartel saved source', 'src/app/empty.ts': ''},
+        original_prompt='Original Cartel product with orders',
+    )
+    original.status = 'failed'
+    history.session.commit()
+    return SimpleNamespace(original=original, add=add, resume=resume, objects=objects,
+                           reads=reads, snapshot=snapshot, project=project, baseline=baseline)
+
+
+async def test_unmarked_legacy_retry_recovers_nearest_checkpoint_without_mutating_history(
+    history, legacy_checkpoints,  # noqa: F811
+):
+    """Actual old6f checkpoint -> unmarked e201 standalone retry -> new admission."""
+    from sqlalchemy import select
+
+    from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.snapshot import Snapshot
+
+    legacy = legacy_checkpoints
+    failed = legacy.add()  # expanded dispatch, but immutable message is standalone retry
+    prior = {row.id: json.dumps(row.agent_state, sort_keys=True)
+             for row in history.session.scalars(select(GenerationRun))}
+    objects = dict(legacy.objects)
+    snapshots = list(history.session.scalars(select(Snapshot.id)))
+    current = legacy.add('Продолжи', status='running')
+    expected = ({'files': {'src/app/page.tsx': 'Cartel saved source', 'src/app/empty.ts': ''},
+                 'deleted_paths': ['src/app/old.ts']}, 'Original Cartel product with orders')
+    assert await legacy.resume(current) == expected
+    marker = current.agent_state['source_checkpoint_resume']
+    assert marker['previous_run_id'] == str(failed.id)
+    assert marker['source_run_id'] == str(legacy.original.id)
+    assert len(legacy.reads) == 1
+    after = {key: json.dumps(history.session.get(GenerationRun, key).agent_state, sort_keys=True)
+             for key in prior}
+    assert after == prior and legacy.objects == objects
+    assert list(history.session.scalars(select(Snapshot.id))) == snapshots
+    assert legacy.project.current_snapshot_id == legacy.baseline.snapshot_id
+    # The new explicit link must remain usable even though its old parent stays unmarked.
+    _mark_failed(history, current)
+    retry = legacy.add('Попробуй еще раз', status='running')
+    assert await legacy.resume(retry) == expected
+
+
+@pytest.mark.parametrize('key,value', [
+    ('source_checkpoint', None), ('source_checkpoint', {}), ('source_checkpoint', []),
+    ('source_checkpoint_resume', None), ('source_checkpoint_resume', {}),
+    ('source_checkpoint_resume', {'source_run_id': 'not-a-UUID'}),
+])
+async def test_legacy_fallback_never_bypasses_explicit_malformed_checkpoint_keys(
+    history, legacy_checkpoints, key, value,  # noqa: F811
+):
+    legacy = legacy_checkpoints
+    failed = legacy.add()
+    failed.agent_state = {**failed.agent_state, key: value}
+    history.session.commit()
+    current = legacy.add(status='running')
+    assert await legacy.resume(current) is None
+    assert not legacy.reads and 'source_checkpoint_resume' not in current.agent_state
+
+
+@pytest.mark.parametrize('mutation', [
+    'amended', 'completed', 'owner', 'mode', 'foreign_message', 'missing_dispatch',
+    'dispatch_message', 'dispatch_snapshot', 'missing_snapshot', 'snapshot_project',
+    'snapshot_sha', 'project_snapshot', 'project_owner', 'equal_timestamp',
+    'missing_current_dispatch', 'current_baseline', 'source_dispatch',
+])
+async def test_legacy_chain_requires_every_original_admission_and_unchanged_baseline(
+    history, legacy_checkpoints, mutation,  # noqa: F811
+):
+    from uuid import uuid4
+
+    from yleum_api.models.message import Message
+    from yleum_api.services.generation.contracts import SourceBaseline
+
+    legacy = legacy_checkpoints
+    failed = legacy.add()
+    current = legacy.add(status='running')
+    baseline = legacy.baseline
+    if mutation == 'amended':
+        history.session.get(Message, failed.user_message_id).content = 'Продолжи, но измени цены'
+    elif mutation == 'completed':
+        failed.status = 'completed'
+    elif mutation == 'owner':
+        failed.user_id = uuid4()
+    elif mutation == 'mode':
+        failed.response_mode = 'chat'
+    elif mutation == 'foreign_message':
+        history.session.get(Message, failed.user_message_id).project_id = uuid4()
+    elif mutation in {'missing_dispatch', 'missing_current_dispatch', 'source_dispatch'}:
+        target = {'missing_dispatch': failed, 'missing_current_dispatch': current,
+                  'source_dispatch': legacy.original}[mutation]
+        target.agent_state = {key: value for key, value in target.agent_state.items()
+                              if key != 'dispatch'}
+    elif mutation in {'dispatch_message', 'dispatch_snapshot'}:
+        dispatch = dict(failed.agent_state['dispatch'])
+        key = 'user_message_id' if mutation == 'dispatch_message' else 'current_snapshot_id'
+        dispatch[key] = str(uuid4())
+        failed.agent_state = {**failed.agent_state, 'dispatch': dispatch}
+    elif mutation == 'missing_snapshot':
+        history.session.delete(legacy.snapshot)
+    elif mutation == 'snapshot_project':
+        legacy.snapshot.project_id = uuid4()
+    elif mutation == 'snapshot_sha':
+        legacy.snapshot.commit_sha = 'b' * 40
+    elif mutation == 'project_snapshot':
+        legacy.project.current_snapshot_id = uuid4()
+    elif mutation == 'project_owner':
+        legacy.project.owner_id = uuid4()
+    elif mutation == 'equal_timestamp':
+        failed.created_at = legacy.original.created_at
+        failed.id = UUID('00000000-0000-4000-a000-000000000001')  # Old tie-break picks source.
+    elif mutation == 'current_baseline':
+        baseline = SourceBaseline(legacy.baseline.snapshot_id, 'b' * 40, {})
+    history.session.commit()
+    assert await legacy.resume(current, baseline) is None
+    assert not legacy.reads and 'source_checkpoint_resume' not in current.agent_state
+
+
+@pytest.mark.parametrize('intermediates,allowed', [(19, True), (20, False)])
+async def test_legacy_resume_has_exact_twenty_predecessor_hop_budget(
+    history, legacy_checkpoints, intermediates, allowed,  # noqa: F811
+):
+    legacy = legacy_checkpoints
+    for _ in range(intermediates):
+        legacy.add()
+    current = legacy.add(status='running')
+    assert (await legacy.resume(current) is not None) is allowed
+    assert len(legacy.reads) == int(allowed)
+
+
+async def test_legacy_resume_does_not_skip_nearer_broken_checkpoint(
+    history, legacy_checkpoints, monkeypatch,  # noqa: F811
+):
+    legacy = legacy_checkpoints
+    broken = legacy.add()
+    broken.agent_state = {**broken.agent_state, 'source_checkpoint': {
+        'digest': 'f' * 64, 'baseline_sha': BASE,
+    }}
+    history.session.commit()
+    legacy.add()  # The compatibility walk must stop at that broken nearer object.
+    current = legacy.add(status='running')
+    # Nearest authoritative object is missing; the older valid object must not be read.
+    from yleum_api.services.generation import source_checkpoint as sc
+    monkeypatch.setattr(sc, '_get_checkpoint', lambda *_args: None)
+    assert await legacy.resume(current) is None
+    assert current.agent_state['source_checkpoint_resume']['source_run_id'] == str(broken.id)
+    assert not legacy.reads
+
+
+async def test_inherited_legacy_resume_still_requires_current_real_admitted_baseline(
+    history, legacy_checkpoints,  # noqa: F811
+):
+    legacy = legacy_checkpoints
+    legacy.add()
+    resumed = legacy.add(status='running')
+    assert await legacy.resume(resumed) is not None
+    _mark_failed(history, resumed)
+    current = legacy.add(status='running')
+    current.agent_state = {}
+    history.session.commit()
+    reads = list(legacy.reads)
+    assert await legacy.resume(current) is None
+    assert legacy.reads == reads and not current.agent_state

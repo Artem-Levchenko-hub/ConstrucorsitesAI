@@ -76,7 +76,6 @@ from yleum_api.services.generation.runtime import _apply_project_cell_preview_fi
 from yleum_api.services.generation.source_checkpoint import (
     SourceCheckpoint,
     adjacent_checkpoint,
-    checkpoint_resume_request,
     persist_checkpoint,
 )
 from yleum_api.services.generation_runs import record_generation_product_failure
@@ -323,7 +322,10 @@ async def run_agent_generation(
                 "deleted_paths": list(bootstrap_preparation.adjacent_deleted_paths),
             }, prompt_text)
     else:
-        if project_info.template == "max_miniapp" and checkpoint_resume_request(prompt_text):
+        if project_info.template == "max_miniapp":
+            # Admission can expand a short retry into a discovery/build prompt.
+            # The checkpoint loader verifies the committed owner message itself;
+            # testing that expanded prompt here incorrectly restarted saved work.
             resumed = await adjacent_checkpoint(factory=factory, ids=ids, baseline=baseline)
             if resumed is not None:
                 prompt_text = resumed[1]
