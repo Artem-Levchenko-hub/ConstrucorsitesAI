@@ -10,7 +10,6 @@ the caller owns the transaction boundary.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 
 import structlog
@@ -24,6 +23,14 @@ from yleum_api.models.billing import Subscription
 from yleum_api.models.wallet import Wallet
 from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.services import yookassa
+from yleum_api.services.payment_submission import (
+    PaymentSubmissionNeedsReview,
+    bind_provider_payment,
+    has_submission,
+    require_manual_review,
+    send_saved_payment,
+    verify_provider_payment,
+)
 from yleum_api.services.subscription_lifecycle import (
     apply_subscription_provider_state,
     provider_status,
@@ -57,18 +64,15 @@ async def apply_provider_state(
     provider: dict[str, Any],
 ) -> str:
     """Move `payment` to the state the provider reports; returns that state."""
+    verify_provider_payment(payment, provider)
+    if payment.status in {"succeeded", "refunded"}:
+        return payment.status
     if payment.purpose in {"subscription_initial", "subscription_renewal"}:
         state = await apply_subscription_provider_state(session, payment, provider)
         if state in {"cancelled", "failed"}:
             await cancel_pending_subscription(session, payment)
         return state
     state = provider_status(provider.get("status"))
-    amount = provider.get("amount")
-    if not isinstance(amount, dict):
-        raise ApiError("invalid_webhook", "invalid payment amount", 400)
-    if amount.get("currency") != "RUB" or Decimal(str(amount.get("value"))) != payment.amount_rub:
-        raise ApiError("invalid_webhook", "payment amount mismatch", 400)
-
     payment.provider_payload = provider
     if state == "succeeded" and payment.status != "succeeded":
         if payment.purpose == "wallet_topup":
@@ -127,37 +131,56 @@ async def reconcile_pending_payments(
     sweep for this cycle rather than half-applying a batch.
     """
     current = now or datetime.now(UTC)
-    reread_before, abandon_before = stale_payment_cutoffs(current)
-    payments = list(
+    reread_before, _ = stale_payment_cutoffs(current)
+    payment_ids = list(
         (
             await session.execute(
-                select(Payment)
+                select(Payment.id)
                 .where(
                     Payment.status.in_(OPEN_PAYMENT_STATUSES),
                     Payment.purpose.in_(RECONCILED_PURPOSES),
                     Payment.created_at <= reread_before,
+                    Payment.provider_payload["_recovery_review"].as_boolean().is_not(True),
                 )
                 .order_by(Payment.created_at)
                 .limit(_RECONCILE_BATCH)
-                .with_for_update(skip_locked=True)
             )
         ).scalars()
     )
     changed = 0
-    for payment in payments:
-        if not payment.provider_payment_id:
-            # The provider never acknowledged this order (creation failed after
-            # our row was written); once it is clearly abandoned, close it so the
-            # cabinet stops showing a payment nobody can finish.
-            if payment.created_at <= abandon_before:
-                payment.status = "failed"
-                await cancel_pending_subscription(session, payment)
-                await session.commit()
-                changed += 1
+    for payment_id in payment_ids:
+        payment = (
+            await session.execute(
+                select(Payment).where(
+                    Payment.id == payment_id, Payment.status.in_(OPEN_PAYMENT_STATUSES),
+                ).with_for_update(skip_locked=True).execution_options(populate_existing=True)
+            )
+        ).scalar_one_or_none()
+        if payment is None:
             continue
         try:
-            provider = await yookassa.get_payment(payment.provider_payment_id)
-        except yookassa.YooKassaUnavailable:
+            if payment.provider_payment_id:
+                provider = await yookassa.get_payment(payment.provider_payment_id)
+            elif has_submission(payment):
+                provider = await send_saved_payment(payment, now=current)
+            else:
+                # Legacy ambiguous orders also must not be called failed merely
+                # because we lost their response. Keep them for verified recovery.
+                require_manual_review(payment)
+                await session.commit()
+                continue
+        except PaymentSubmissionNeedsReview:
+            log.error("payments.reconcile_needs_review", payment_id=str(payment.id))
+            require_manual_review(payment)
+            await session.commit()
+            continue
+        except yookassa.YooKassaUnavailable as exc:
+            if exc.definitive:
+                # A rejected replay does not disprove an earlier accepted POST.
+                # Keep the order open, but do not starve unrelated recovery work.
+                require_manual_review(payment)
+                await session.commit()
+                continue
             log.warning("payments.reconcile_provider_unavailable", payment_id=str(payment.id))
             await session.rollback()
             break
@@ -169,6 +192,7 @@ async def reconcile_pending_payments(
         before = payment.status
         try:
             await apply_provider_state(session, payment, provider)
+            bind_provider_payment(payment, provider)
         except ApiError as exc:
             log.error("payments.reconcile_rejected", payment_id=str(payment.id), reason=exc.message)
             await session.rollback()

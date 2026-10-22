@@ -32,6 +32,13 @@ from yleum_api.services.payment_state import (
 from yleum_api.services.payment_state import (
     cancel_pending_subscription as _cancel_pending_subscription,
 )
+from yleum_api.services.payment_submission import (
+    bind_provider_payment,
+    has_submission,
+    prepare_submission,
+    require_manual_review,
+    send_saved_payment,
+)
 from yleum_api.services.subscription_lifecycle import provider_status as _provider_status
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
@@ -82,44 +89,40 @@ async def _send_to_provider(
 ) -> Payment:
     assert current_user.email is not None
     settings = get_settings()
-    try:
-        provider = await yookassa.create_payment(
-            amount=f"{payment.amount_rub:.2f}",
-            description=title,
-            return_url=f"{settings.web_base_url.rstrip('/')}{return_path}",
-            customer_email=str(current_user.email),
-            idempotency_key=payment.idempotency_key,
-            metadata={
-                "payment_id": str(payment.id),
-                "billing_account_id": str(payment.billing_account_id),
-                "user_id": str(current_user.id),
-                "purpose": payment.purpose,
-            },
-            save_payment_method=save_payment_method,
+    prepare_submission(
+        payment,
+        customer_email=str(current_user.email),
+        title=title,
+        return_url=f"{settings.web_base_url.rstrip('/')}{return_path}",
+        save_payment_method=save_payment_method,
+    )
+    # These exact parameters, including VAT/email/return URL, must survive a
+    # process crash before any request leaves this server.
+    await session.commit()
+    return await _resume_checkout(session=session, payment=payment)
+
+
+async def _resume_checkout(*, session: SessionDep, payment: Payment) -> Payment:
+    payment = (
+        await session.execute(
+            select(Payment).where(Payment.id == payment.id).with_for_update()
+            .execution_options(populate_existing=True)
         )
+    ).scalar_one()
+    if payment.provider_payment_id or payment.status != "pending" or not has_submission(payment):
+        return payment
+    try:
+        provider = await send_saved_payment(payment)
     except yookassa.YooKassaUnavailable as exc:
-        payment.status = "failed"
-        await _cancel_pending_subscription(session, payment)
+        if exc.definitive:
+            require_manual_review(payment)
         await session.commit()
         raise ApiError(
             "payment_provider_unavailable",
             "ЮKassa временно недоступна",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
-    provider_payment_id = str(provider.get("id") or "")
-    if not provider_payment_id:
-        payment.status = "failed"
-        await _cancel_pending_subscription(session, payment)
-        await session.commit()
-        raise ApiError(
-            "payment_provider_unavailable",
-            "ЮKassa вернула неполный ответ",
-            status.HTTP_502_BAD_GATEWAY,
-        )
-    payment.provider_payment_id = provider_payment_id
-    confirmation = provider.get("confirmation")
-    if isinstance(confirmation, dict):
-        payment.confirmation_url = str(confirmation.get("confirmation_url") or "") or None
+    bind_provider_payment(payment, provider)
     provider_status = _provider_status(provider.get("status"))
     if provider_status == "succeeded":
         await _apply_provider_state(session, payment, provider)
@@ -193,9 +196,13 @@ async def create_payment(
         await session.execute(select(Payment).where(Payment.idempotency_key == key))
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.billing_account_id != account.id:
+        if (
+            existing.billing_account_id != account.id
+            or existing.purpose != "wallet_topup"
+            or existing.package_code != payload.package_code
+        ):
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
-        return existing
+        return await _resume_checkout(session=session, payment=existing)
 
     price, credit, title = PACKAGES[payload.package_code]
     payment = Payment(
@@ -258,9 +265,10 @@ async def create_subscription_checkout(
         if (
             existing.billing_account_id != account.id
             or existing.purpose != "subscription_initial"
+            or not existing.package_code.startswith(f"subscription:{payload.plan_code}:")
         ):
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
-        return existing
+        return await _resume_checkout(session=session, payment=existing)
 
     pending_payment = (
         await session.execute(
@@ -354,7 +362,7 @@ async def create_subscription_checkout(
     )
 
 
-@router.post("/yookassa/webhook", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/yookassa/webhook", status_code=status.HTTP_200_OK)
 async def yookassa_webhook(request: Request, session: SessionDep) -> None:
     # YooKassa signs nothing: the source network filter (production only) plus
     # re-reading the payment from the API are the two checks the provider
@@ -370,10 +378,6 @@ async def yookassa_webhook(request: Request, session: SessionDep) -> None:
             select(Payment).where(Payment.provider_payment_id == provider_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if payment is None:
-        # Unknown provider events are acknowledged so retries cannot amplify a
-        # stale or foreign notification.
-        return
     try:
         provider = await yookassa.get_payment(provider_id)
     except yookassa.YooKassaUnavailable as exc:
@@ -383,9 +387,29 @@ async def yookassa_webhook(request: Request, session: SessionDep) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
     metadata = provider.get("metadata")
+    if payment is None:
+        # A verified notification can arrive after provider acceptance but
+        # before its lost response was persisted. Never trust posted metadata.
+        local_id = metadata.get("payment_id") if isinstance(metadata, dict) else None
+        try:
+            local_uuid = UUID(str(local_id))
+        except ValueError:
+            return
+        payment = (
+            await session.execute(
+                select(Payment).where(Payment.id == local_uuid).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if payment is None:
+            return
     if not isinstance(metadata, dict) or metadata.get("payment_id") != str(payment.id):
         raise ApiError("invalid_webhook", "payment metadata mismatch", status.HTTP_400_BAD_REQUEST)
+    if str(provider.get("id") or "") != provider_id:
+        raise ApiError("invalid_webhook", "provider identity mismatch", status.HTTP_400_BAD_REQUEST)
+    if payment.provider_payment_id and payment.provider_payment_id != provider_id:
+        raise ApiError("invalid_webhook", "payment already linked", status.HTTP_400_BAD_REQUEST)
     await _apply_provider_state(session, payment, provider)
+    bind_provider_payment(payment, provider)
     await session.commit()
 
 
@@ -404,7 +428,7 @@ async def reconcile_payment(
     ):
         raise ApiError("not_found", "payment not found", status.HTTP_404_NOT_FOUND)
     if not payment.provider_payment_id:
-        return payment
+        return await _resume_checkout(session=session, payment=payment)
     try:
         provider = await yookassa.get_payment(payment.provider_payment_id)
     except yookassa.YooKassaUnavailable as exc:

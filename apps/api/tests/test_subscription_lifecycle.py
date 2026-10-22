@@ -118,7 +118,7 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
         "/api/payments/yookassa/webhook",
         json={"object": {"id": "provider-saved-method"}},
     )
-    assert webhook.status_code == 204
+    assert webhook.status_code == 200
     active = await client.get("/api/billing/subscription")
     assert active.json()["auto_renew"] is True
     assert active.json()["next_charge_at"] == active.json()["current_period_end"]

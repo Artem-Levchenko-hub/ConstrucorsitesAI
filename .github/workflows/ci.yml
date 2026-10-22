@@ -120,6 +120,14 @@ jobs:
           tests/test_readiness.py
           tests/test_auth.py
           tests/test_oauth_login.py
+          tests/test_payments.py
+          tests/test_payment_recovery.py
+          tests/test_subscription_lifecycle.py
+          tests/test_yookassa_requests.py
+          tests/test_yookassa_transport.py
+          tests/test_yookassa_notification_source.py
+          tests/test_billing_worker.py
+          tests/test_billing_foundation.py
           tests/test_vk_email_diagnostics.py
           tests/test_agent_native.py
           tests/test_generation_runs.py
