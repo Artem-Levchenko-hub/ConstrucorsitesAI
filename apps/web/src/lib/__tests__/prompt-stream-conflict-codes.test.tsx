@@ -241,8 +241,11 @@ it("Free entitlement402 keeps draft unaccepted, reports upgrade and does not aut
  await act(async()=>vi.advanceTimersByTime(60000));expect(sendPrompt).toHaveBeenCalledOnce();
 });
 
-it.each(["entitlement_exceeded", "subscription_entitlement_required"] as const)("included generation refusal %s keeps the draft and refreshes current quota without retrying", async code => {
-  vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402, { code, message: "server text", details: { entitlement: "included_generations", plan_code: "pro", plan_version: 3, limit: 5, used: 5 } }));
+it.each([
+  ["entitlement_exceeded", "included_creations"], ["entitlement_exceeded", "included_edits"],
+  ["subscription_entitlement_required", "included_creations"], ["subscription_entitlement_required", "included_edits"],
+] as const)("split generation refusal %s/%s keeps the draft and refreshes quota without retrying", async (code, entitlement) => {
+  vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402, { code, message: "server text", details: { entitlement, period: "paid_month", plan_code: "pro", plan_version: 4, limit: 2, used: 2 } }));
   await mount();
   const invalidate = vi.spyOn(client, "invalidateQueries");
   await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });

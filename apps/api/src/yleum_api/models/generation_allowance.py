@@ -24,8 +24,9 @@ class GenerationAllowance(Base):
     subscription_id: Mapped[UUID] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="RESTRICT"), nullable=False
     )
-    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    kind: Mapped[str] = mapped_column(Text, nullable=False)
+    period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="reserved")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
@@ -34,14 +35,28 @@ class GenerationAllowance(Base):
 
     __table_args__ = (
         CheckConstraint("status IN ('reserved', 'consumed', 'released')", name="status"),
-        CheckConstraint("period_end > period_start", name="period_order"),
+        CheckConstraint("kind IN ('creation', 'edit')", name="kind"),
+        CheckConstraint(
+            "(period_start IS NULL AND period_end IS NULL) OR "
+            "(period_start IS NOT NULL AND period_end IS NOT NULL AND period_end > period_start)",
+            name="period_order",
+        ),
         CheckConstraint("(status = 'reserved') = (settled_at IS NULL)", name="settlement"),
         Index(
             "ix_generation_allowances_account_subscription_period",
             "billing_account_id",
             "subscription_id",
+            "kind",
             "period_start",
             "period_end",
             "status",
+        ),
+        Index(
+            "ix_generation_allowances_account_lifetime_kind",
+            "billing_account_id",
+            "user_id",
+            "kind",
+            "status",
+            postgresql_where=(period_start.is_(None) & period_end.is_(None)),
         ),
     )

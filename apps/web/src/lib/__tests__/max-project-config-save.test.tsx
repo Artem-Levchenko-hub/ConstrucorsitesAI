@@ -327,7 +327,8 @@ it("saves content before showing an explicit, version-bound AI application actio
     mocks.get.mockResolvedValue(updated);
     await act(async () => finishSave(updated));
     await act(async () => { await vi.waitFor(() => expect(button("Запустить доработку")).toBeDefined()); });
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("баланс");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("по условиям вашего тарифа");
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("баланс");
     expect(mocks.send).not.toHaveBeenCalled();
     await click("Запустить доработку");
     await act(async () => { await vi.waitFor(() => expect(mocks.send).toHaveBeenCalledTimes(1)); });

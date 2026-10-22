@@ -2,8 +2,16 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { listPayments } from "@/lib/api/account";
+import { listPayments, type Payment } from "@/lib/api/account";
 import { date, money, paymentState, QueryError } from "./account-presentation";
+
+function paymentBenefitLabel(payment: Payment): string {
+  if (payment.purpose !== "wallet_topup" && Number(payment.credit_rub) === 0) {
+    return payment.status === "succeeded" ? "Тариф подтверждён"
+      : paymentState(payment.status).terminal ? "Результат получен" : "Ожидает подтверждения";
+  }
+  return payment.status === "succeeded" ? `Кредит: ${money(payment.credit_rub)}` : "Не зачислено";
+}
 export function AccountTransactions() {
   const payments = useQuery({ queryKey: ["payments"], queryFn: listPayments });
   const [filter, setFilter] = useState("all");
@@ -25,8 +33,8 @@ export function AccountTransactions() {
     <QueryError error={payments.error} retry={() => void payments.refetch()} />{payments.isPending && <p role="status">Загружаем операции…</p>}
     {rows?.length === 0 && <div className="account-empty">
       <h3>{payments.data?.length ? "Нет операций с этим статусом" : "Операций пока нет"}</h3>
-      <p>Здесь появятся платежи за пополнения и тарифы.</p>
-      <Link href="/billing">К балансу →</Link>
+      <p>Здесь появятся платежи и их статусы.</p>
+      <Link href="/billing">К использованию →</Link>
     </div>}
     {Boolean(rows?.length) && <div className="account-table-scroll">
       <table role="table" aria-label="Платежи аккаунта">
@@ -44,7 +52,7 @@ export function AccountTransactions() {
             <small>{p.package_code}</small>
           </td>
           <td role="cell" headers="payment-amount"><span className="account-operation-label" aria-hidden="true">Сумма</span>{money(p.amount_rub)}
-            <small>{p.status === "succeeded" ? `Кредит: ${money(p.credit_rub)}` : "Не зачислено"}</small>
+            <small>{paymentBenefitLabel(p)}</small>
           </td>
           <td role="cell" headers="payment-status"><span className="account-operation-label" aria-hidden="true">Статус</span>
             <Link href={`/billing?payment=${encodeURIComponent(p.id)}`} className={`account-status ${paymentState(p.status).tone}`}>{paymentState(p.status).label}</Link>

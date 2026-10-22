@@ -228,7 +228,7 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     assert response.status_code == 200, response.text
     report = response.json()
     assert report["period"]["source"] == "calendar_month"
-    assert report["plan"]["code"] == "free" and report["plan"]["version"] == 3
+    assert report["plan"]["code"] == "free" and report["plan"]["version"] == 4
     assert report["subscription_status"] == "active"
     legacy_generations = report["generations"].pop("cost_breakdown")
     assert legacy_generations["unknown"] == {"calls": 2, "cost_rub": "4.7500"}
@@ -256,7 +256,7 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
     assert report["total_ai_cost_breakdown"]["unknown"] == {"calls": 4, "cost_rub": "5.2000"}
     assert report["publications"] == {"total": 2, "projects": 1}
     assert report["wallet"] == {
-        "balance_rub": "100.0000",
+        "balance_rub": "0.0000",
         "debited_rub": "5.1500",
         "credited_rub": "50.0000",
         "charges": 2,
@@ -386,7 +386,7 @@ async def test_cost_evidence_breakdown_uses_saved_amounts_and_owner_period_filte
     assert report["app_ai_answers"]["cost_breakdown"] == expected
     assert report["total_ai_cost_breakdown"] == expected
     assert Decimal(report["total_ai_cost_rub"]) == Decimal("7.8689")
-    assert report["wallet"]["balance_rub"] == "100.0000"
+    assert report["wallet"]["balance_rub"] == "0.0000"
     assert report["wallet"]["charges"] == 0
     project = await client.get(f"/api/projects/{project_id}/max/usage")
     assert project.status_code == 200, project.text

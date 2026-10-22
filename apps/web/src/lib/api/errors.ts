@@ -27,6 +27,7 @@ type EntitlementDetails = {
   limit?: unknown;
   used?: unknown;
   plan_code?: unknown;
+  period?: unknown;
 };
 
 function planLabel(code: unknown): string {
@@ -45,10 +46,12 @@ export function describeEntitlementError(
 ): string {
   const key = typeof details?.entitlement === "string" ? details.entitlement : "";
   if (key === "free_chat_messages") return "На Free доступно одно сообщение на весь аккаунт. Для новых запросов выберите Pro или Business. Готовое приложение можно настроить и опубликовать. Сменить тариф можно в разделе «Аккаунт → Тариф».";
-  if (key === "included_generations") {
+  if (key === "included_creations" || key === "included_edits") {
+    const label = key === "included_creations" ? "созданий" : "правок";
+    if (details?.period === "lifetime") return `Лимит ${key === "included_creations" ? "создания" : "правок"} за всё время исчерпан. Для новых операций выберите Pro или Business в разделе «Аккаунт → Тариф». Запущенная генерация продолжится.`;
     if (code === "subscription_entitlement_required") return "Для новой генерации оплатите следующий период в разделе «Аккаунт → Тариф». Запущенная генерация продолжится.";
-    const allowance = typeof details?.limit === "number" ? `${details.limit} включённых генераций` : "Включённые генерации";
-    return `${allowance} текущего оплаченного месяца уже использованы или находятся в работе. Новая генерация станет доступна в следующем оплаченном периоде. Запущенная генерация продолжится.`;
+    const limit = typeof details?.limit === "number" ? `: ${details.limit}` : "";
+    return `Лимит ${label}${limit}. Доступные операции уже использованы или находятся в работе. ${key === "included_creations" ? "Следующее создание" : "Следующая правка"} станет доступна в следующем оплаченном периоде. Запущенная генерация продолжится.`;
   }
   const names = ENTITLEMENT_NAMES[key];
   const plan = planLabel(details?.plan_code);

@@ -1,9 +1,23 @@
 import type { BillingPlan } from "./api/account";
 
-/** The entitlement distinguishes included-generation plans from legacy credit plans. */
-export function includedGenerationLimit(plan: Pick<BillingPlan, "entitlements">): number | null {
-  const count = plan.entitlements.included_generations;
-  return typeof count === "number" && Number.isInteger(count) && count >= 0 ? count : null;
+export type GenerationAllowance = { creations: number; edits: number; period: "lifetime" | "paid_month" };
+
+/** Explicit split entitlements identify new plans; historical credit plans stay separate. */
+export function generationAllowance(plan?: Pick<BillingPlan, "entitlements"> | null): GenerationAllowance | null {
+  const entitlements = plan?.entitlements;
+  if (!entitlements) return null;
+  const creations = entitlements.included_creations;
+  const edits = entitlements.included_edits;
+  const period = entitlements.generation_allowance_period;
+  return typeof creations === "number" && Number.isInteger(creations) && creations >= 0
+    && typeof edits === "number" && Number.isInteger(edits) && edits >= 0
+    && (period === "lifetime" || period === "paid_month") ? { creations, edits, period } : null;
 }
 
-export const INCLUDED_GENERATION_TERMS = "В общий лимит на весь аккаунт входят создание и правки — без списания с баланса. Техническая ошибка не расходует генерацию. После исчерпания лимита новая генерация доступна в следующем оплаченном периоде; запущенная продолжится.";
+export const allowancePeriodLabel = (period: GenerationAllowance["period"]) => period === "lifetime" ? "За всё время" : "За оплаченный месяц";
+
+export function generationAllowanceTerms(allowance: GenerationAllowance): string {
+  return `Лимиты создания и правок учитываются отдельно на весь аккаунт. Техническая ошибка не расходует лимит. Запущенная генерация продолжится. ${allowance.period === "lifetime"
+    ? "Лимиты даются один раз и не обновляются каждый месяц."
+    : "После исчерпания соответствующего лимита новая операция станет доступна в следующем оплаченном периоде."}`;
+}

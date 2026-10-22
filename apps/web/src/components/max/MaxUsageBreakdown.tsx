@@ -2,10 +2,13 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Check, Coins, RotateCcw } from "lucide-react";
+import Link from "next/link";
 
 import { getMaxUsage } from "@/lib/api/max-studio";
 import type { Uuid } from "@/lib/api/types";
 import { CostSource } from "@/components/ui/CostSource";
+import { getSubscription } from "@/lib/api/account";
+import { generationAllowance } from "@/lib/billing-plan-allowance";
 
 function rub(value: number): string {
   return new Intl.NumberFormat("ru-RU", {
@@ -15,16 +18,21 @@ function rub(value: number): string {
 }
 
 export function MaxUsageBreakdown({ projectId }: { projectId: Uuid }) {
+  const subscription = useQuery({ queryKey: ["billing-subscription"], queryFn: getSubscription, staleTime: 60_000, retry: false });
+  const allowance = generationAllowance(subscription.data?.plan);
   const usage = useQuery({
     queryKey: ["max-usage", projectId],
     queryFn: () => getMaxUsage(projectId),
     refetchInterval: 5_000,
     retry: false,
+    enabled: subscription.isSuccess && allowance === null,
   });
   const current = usage.data?.run_cost_rub ?? 0;
   const total = usage.data?.total_cost_rub ?? 0;
   const currentLabel = usage.isError ? "Недоступно" : usage.isLoading ? "…" : `${rub(current)} ₽`;
   const totalLabel = usage.isError ? "Недоступно" : usage.isLoading ? "…" : `${rub(total)} ₽`;
+
+  if (!subscription.data || allowance) return <Link href="/billing" className="max-editor-nav-link">Лимиты создания и правок</Link>;
 
   return (
     <details className="group relative" data-testid="max-usage-breakdown">

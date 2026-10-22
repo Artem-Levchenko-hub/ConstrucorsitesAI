@@ -262,11 +262,7 @@ class PromptAcceptance:
             else None
         )
         self.is_first_build = _cur_snapshot is None or _cur_snapshot.prompt_text is None
-        if (
-            self.payload.max_config_version is not None
-            and self.is_first_build
-            and _cur_snapshot is not None
-        ):
+        if self.is_first_build and _cur_snapshot is not None:
             # Model-free config saves create technical snapshots. Follow this head's
             # ancestry, not unrelated historical branches, before choosing a rebuild.
             lineage = (
@@ -275,7 +271,7 @@ class PromptAcceptance:
                     Snapshot.id == _cur_snapshot.id,
                     Snapshot.project_id == self.project_id,
                 )
-                .cte("max_config_lineage", recursive=True)
+                .cte("generated_snapshot_lineage", recursive=True)
             )
             lineage = lineage.union(
                 select(Snapshot.id, Snapshot.parent_id, Snapshot.prompt_text)
@@ -329,6 +325,7 @@ class PromptAcceptance:
         included = (
             await reserve_included_generation(
                 self.session, user_id=self.current_user.id, run_id=self.generation_run.id,
+                kind="creation" if self.is_first_build else "edit",
             )
             if not self.credential_redirect and not self.explain_failed_build else False
         )

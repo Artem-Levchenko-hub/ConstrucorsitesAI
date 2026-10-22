@@ -82,6 +82,8 @@ export type EntitlementUsage = {
   exceeded: boolean;
 };
 
+export type GenerationUsageBucket = { limit: number; used: number; in_progress: number; remaining: number };
+
 /** GET /api/billing/usage — the account's spend journal for a period. */
 export type BillingUsage = {
   period: { start: string; end: string; source: "subscription" | "calendar_month" | "custom" };
@@ -100,12 +102,11 @@ export type BillingUsage = {
   free_generations: { limit: number; used: number; left: number; unlimited: boolean };
   /** Current paid-period quota, independent of the spend journal's selected dates. */
   included_generations?: {
-    limit: number;
-    used: number;
-    in_progress: number;
-    remaining: number;
-    period_start: string;
-    period_end: string;
+    period: "lifetime" | "paid_month";
+    period_start: string | null;
+    period_end: string | null;
+    creations: GenerationUsageBucket;
+    edits: GenerationUsageBucket;
   } | null;
   wallet: { balance_rub: string; debited_rub: string; credited_rub: string; charges: number };
   entitlements: EntitlementUsage[];

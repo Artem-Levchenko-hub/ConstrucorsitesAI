@@ -8,7 +8,7 @@ export type Uuid = string;
 export type IsoDateTime = string;
 
 export type User = {
-  /** Account-wide authored-message quota. null for paid/no-plan; absent on older API. */
+  /** Legacy authored-message quota. null for split-allowance plans, paid/no-plan; absent on older API. */
   user_chat_messages_limit?: number | null;
   user_chat_messages_remaining?: number | null;
   id: Uuid;
@@ -537,6 +537,7 @@ export type ApiErrorCode =
   | "email_delivery_unavailable"
   | "token_invalid"
   | "payments_unavailable"
+  | "wallet_topup_unavailable"
   | "payment_provider_unavailable"
   | "invalid_webhook"
   | "subscription_already_active"

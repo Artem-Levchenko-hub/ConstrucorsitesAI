@@ -58,10 +58,15 @@ class User(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    # First-N free generations (wow-effect onboarding). Incremented after each
-    # successful free generation; once it reaches FREE_GENERATION_LIMIT
-    # (core/config.py) the user is billed from their wallet like everyone else.
+    # Legacy successful free-generation counter, retained for historical
+    # admission and reporting. New creation/edit quotas use the durable ledger.
     free_generations_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    # Frozen migration carryover from legacy Free usage. Paid included builds
+    # can still change the legacy counter; they never change this lifetime debit.
+    free_creations_carryover: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
 
     # Lifetime Free admission, independent of successful-build billing. Neither
     # project deletion nor an unknown publication result releases this allowance.
@@ -97,4 +102,5 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("free_chat_messages_used IN (0, 1)", name="free_chat_messages_used"),
+        CheckConstraint("free_creations_carryover IN (0, 1)", name="free_creations_carryover"),
     )

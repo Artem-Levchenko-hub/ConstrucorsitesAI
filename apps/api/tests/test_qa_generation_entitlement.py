@@ -122,7 +122,7 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
             await turn.check_admission()
         assert refused.value.code == "wallet_empty"
     reserve_included.assert_awaited_once_with(
-        session, user_id=owner.id, run_id=turn.generation_run.id,
+        session, user_id=owner.id, run_id=turn.generation_run.id, kind="edit",
     )
 
 

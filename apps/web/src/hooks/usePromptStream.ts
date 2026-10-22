@@ -972,7 +972,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
-        if (e instanceof ApiError && e.details?.entitlement === "included_generations" &&
+        if (e instanceof ApiError && e.status === 402 &&
+          (e.details?.entitlement === "included_creations" || e.details?.entitlement === "included_edits") &&
           (e.code === "entitlement_exceeded" || e.code === "subscription_entitlement_required")) {
           void qc.invalidateQueries({ queryKey: ["billing-usage"] });
           _failPrompt(describeApiError(e), false);

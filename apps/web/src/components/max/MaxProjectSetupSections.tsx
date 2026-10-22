@@ -155,8 +155,8 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
       </div>
 
       <ol className="max-content-steps">
-        <li><span aria-hidden="true">1</span><span><b>«Сохранить и проверить»</b> — позиции уезжают в приложение как данные. ИИ не запускается, баланс не расходуется.</span></li>
-        <li><span aria-hidden="true">2</span><span><b>«Применить к приложению»</b> — разовая доработка: ИИ выводит каталог на экраны и учит их читать эти данные. Расходует баланс.</span></li>
+        <li><span aria-hidden="true">1</span><span><b>«Сохранить и проверить»</b> — позиции уезжают в приложение как данные. ИИ не запускается, лимит правок не расходуется.</span></li>
+        <li><span aria-hidden="true">2</span><span><b>«Применить к приложению»</b> — разовая доработка: ИИ выводит каталог на экраны и учит их читать эти данные. Учитывается по условиям вашего тарифа.</span></li>
         <li><span aria-hidden="true">3</span><span>После этого правки позиций видны в приложении <b>без новой сборки</b> — достаточно сохранить.</span></li>
       </ol>
 
@@ -192,7 +192,7 @@ export function MaxProjectSetupSections({ section, projectId, current, onChange 
 
   if (section === "owner") return <section className="max-setup-section">
     <Intro title="Документы приложения">Yleum не запрашивает реквизиты: бизнес за ботом проверяет сам MAX. Здесь только то, что увидят пользователи в документах и поддержке приложения — всё необязательно.</Intro>
-    <p className="max-setup-notice">Сохранение этих полей не запускает ИИ и не расходует баланс.</p>
+    <p className="max-setup-notice">Сохранение этих полей не запускает ИИ и не расходует лимит правок.</p>
     <Group title="Владелец в документах" description="Как назвать владельца в политике и условиях приложения. Если оставить пустым, документы назовут само приложение.">
       <div className="max-setup-field max-setup-wide">
         <Label htmlFor="max-legal-name">Название владельца для документов</Label>

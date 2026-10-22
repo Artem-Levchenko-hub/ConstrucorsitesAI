@@ -118,13 +118,19 @@ class EntitlementUsagePublic(BaseModel):
     exceeded: bool
 
 
-class IncludedGenerationsPublic(BaseModel):
+class GenerationAllowanceCounterPublic(BaseModel):
     limit: int
     used: int
     in_progress: int
     remaining: int
-    period_start: datetime
-    period_end: datetime
+
+
+class IncludedGenerationsPublic(BaseModel):
+    period: Literal["lifetime", "paid_month"]
+    period_start: datetime | None
+    period_end: datetime | None
+    creations: GenerationAllowanceCounterPublic
+    edits: GenerationAllowanceCounterPublic
 
 
 class BillingUsagePublic(BaseModel):

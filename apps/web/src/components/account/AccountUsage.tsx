@@ -1,7 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { getBillingUsage, type EntitlementUsage } from "@/lib/api/account";
-import { includedGenerationLimit } from "@/lib/billing-plan-allowance";
+import { generationAllowance, allowancePeriodLabel } from "@/lib/billing-plan-allowance";
 import { CostSource } from "@/components/ui/CostSource";
 import { date, money, QueryError } from "./account-presentation";
 
@@ -23,59 +23,64 @@ export function AccountUsage() {
   const usage = useQuery({ queryKey: ["billing-usage"], queryFn: () => getBillingUsage() });
   const data = usage.data;
   const included = data?.included_generations;
-  const hasIncludedGenerations = Boolean(data?.plan && includedGenerationLimit(data.plan) !== null);
+  const allowance = generationAllowance(data?.plan);
   return <section className="account-panel account-usage" aria-label="Расход за период">
     <h2>Расход за период</h2>
     <QueryError error={usage.error} retry={() => void usage.refetch()} />
     {usage.isPending && <p role="status">Считаем расход…</p>}
     {data && <>
-      {included && <section aria-label="Включённые генерации текущего оплаченного периода">
-        <h3>Включённые генерации текущего оплаченного периода</h3>
-        <p className="account-hint">{date(included.period_start)} — {date(included.period_end)} · лимит {included.limit} на весь аккаунт</p>
-        <dl className="account-usage-grid">
-          <div><dt>Использовано</dt><dd>{included.used}</dd></div>
-          <div><dt>В работе</dt><dd>{included.in_progress}</dd></div>
-          <div><dt>Осталось</dt><dd>{included.remaining}</dd></div>
-        </dl>
-        <p className="account-hint">В общий лимит входят создание и правки — без списания с баланса. Техническая ошибка не расходует генерацию. Запущенная генерация продолжится, даже если лимит исчерпан.</p>
-        {included.remaining === 0 && <p className="account-notice pending">Новая генерация станет доступна в следующем оплаченном периоде.</p>}
+      {included && <section aria-label="Включённые создания и правки">
+        <h3>Включённые создания и правки</h3>
+        <p className="account-hint">{allowancePeriodLabel(included.period)} · на весь аккаунт{included.period === "paid_month" ? `: ${date(included.period_start)} — ${date(included.period_end)}` : ""}</p>
+        {([ ["creations", "Создания приложений"], ["edits", "Правки"] ] as const).map(([key, label]) => <section key={key} aria-label={label}>
+          <h4>{label} · лимит {included[key].limit}</h4>
+          <dl className="account-usage-grid">
+            <div><dt>Использовано</dt><dd>{included[key].used}</dd></div>
+            <div><dt>В работе</dt><dd>{included[key].in_progress}</dd></div>
+            <div><dt>Осталось</dt><dd>{included[key].remaining}</dd></div>
+          </dl>
+          {included[key].remaining === 0 && <p className="account-notice pending">{included.period === "lifetime"
+            ? `Лимит ${key === "creations" ? "создания" : "правок"} за всё время исчерпан. Выберите Pro или Business.`
+            : key === "creations" ? "Следующее создание станет доступно в следующем оплаченном периоде." : "Следующая правка станет доступна в следующем оплаченном периоде."}</p>}
+        </section>)}
+        <p className="account-hint">Создания и правки имеют отдельные лимиты. Техническая ошибка не расходует лимит. Запущенная генерация продолжится, даже если соответствующий лимит исчерпан.</p>
       </section>}
       <p className="account-hint">
         {periodLabel(data.period.source)}: {date(data.period.start)} — {date(data.period.end)}
         {data.plan ? ` · тариф ${data.plan.name}` : ""}
       </p>
-      {hasIncludedGenerations && <p className="account-hint">Затраты на ИИ показаны для справки. Включённые генерации не списывают баланс; фактические списания указаны отдельно.</p>}
+      {allowance?.period === "paid_month" && !included && <p className="account-hint">Для новых созданий и правок оплатите следующий период в разделе «Тариф».</p>}
       <dl className="account-usage-grid">
         <div>
           <dt>Сборки приложений</dt>
-          <dd>{data.generations.total}<small>{money(data.generations.cost_rub)} за модели · завершено {data.generations.completed}, с ошибкой {data.generations.failed}</small>
-            <CostSource label="Сборки приложений" breakdown={data.generations.cost_breakdown} calls={data.generations.calls} costRub={data.generations.cost_rub} />
+          <dd>{data.generations.total}<small>{!allowance && `${money(data.generations.cost_rub)} за модели · `}завершено {data.generations.completed}, с ошибкой {data.generations.failed}</small>
+            {!allowance && <CostSource label="Сборки приложений" breakdown={data.generations.cost_breakdown} calls={data.generations.calls} costRub={data.generations.cost_rub} />}
           </dd>
         </div>
         <div>
           <dt>Ответы ИИ посетителям приложений</dt>
-          <dd>{data.app_ai_answers.calls}<small>{money(data.app_ai_answers.cost_rub)}</small>
-            <CostSource label="Ответы ИИ посетителям приложений" breakdown={data.app_ai_answers.cost_breakdown} calls={data.app_ai_answers.calls} costRub={data.app_ai_answers.cost_rub} />
+          <dd>{data.app_ai_answers.calls}{!allowance && <><small>{money(data.app_ai_answers.cost_rub)}</small>
+            <CostSource label="Ответы ИИ посетителям приложений" breakdown={data.app_ai_answers.cost_breakdown} calls={data.app_ai_answers.calls} costRub={data.app_ai_answers.cost_rub} /></>}
           </dd>
         </div>
         {data.other_ai.calls > 0 && <div>
           <dt>Другие обращения к ИИ</dt>
-          <dd>{money(data.other_ai.cost_rub)}<CostSource label="Другие обращения к ИИ" breakdown={data.other_ai.cost_breakdown} calls={data.other_ai.calls} costRub={data.other_ai.cost_rub} /></dd>
+          <dd>{allowance ? data.other_ai.calls : <>{money(data.other_ai.cost_rub)}<CostSource label="Другие обращения к ИИ" breakdown={data.other_ai.cost_breakdown} calls={data.other_ai.calls} costRub={data.other_ai.cost_rub} /></>}</dd>
         </div>}
-        <div>
+        {!allowance && <div>
           <dt>Все расходы на ИИ</dt>
           <dd>{money(data.total_ai_cost_rub)}<CostSource label="Все расходы на ИИ" breakdown={data.total_ai_cost_breakdown}
             calls={data.generations.calls + data.app_ai_answers.calls + data.other_ai.calls} costRub={data.total_ai_cost_rub} /></dd>
-        </div>
+        </div>}
         <div>
           <dt>Публикации</dt>
           <dd>{data.publications.total}<small>приложений опубликовано: {data.publications.projects}</small></dd>
         </div>
-        <div>
+        {!allowance && <div>
           <dt>Списано с баланса</dt>
           <dd>{money(data.wallet.debited_rub)}<small>зачислено {money(data.wallet.credited_rub)} · операций {data.wallet.charges}</small></dd>
-        </div>
-        {!hasIncludedGenerations && <div>
+        </div>}
+        {!allowance && <div>
           <dt>Бесплатные сборки</dt>
           <dd>{data.free_generations.unlimited ? "без ограничений" : `осталось ${data.free_generations.left} из ${data.free_generations.limit}`}</dd>
         </div>}

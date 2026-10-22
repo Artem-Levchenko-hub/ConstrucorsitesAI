@@ -7,10 +7,10 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { createPayment, createSubscriptionCheckout, getPaymentConfig, listPayments } from "@/lib/api/account";
 import { ApiError } from "@/lib/api/client";
-import { INCLUDED_GENERATION_TERMS } from "@/lib/billing-plan-allowance";
+import { generationAllowanceTerms, allowancePeriodLabel, type GenerationAllowance } from "@/lib/billing-plan-allowance";
 import { money, paymentState } from "./account-presentation";
 
-export type CheckoutSelection = { kind: "topup" | "plan"; code: string; title: string; price: string; credit: string; includedGenerations?: number; planVersion?: number };
+export type CheckoutSelection = { kind: "topup" | "plan"; code: string; title: string; price: string; credit: string; allowance?: GenerationAllowance; planVersion?: number };
 type Attempt = { key: string; selection: CheckoutSelection; autoRenew: boolean; paymentId?: string };
 function readAttempt(storageKey: string): Attempt | null {
   const value = localStorage.getItem(storageKey);
@@ -117,13 +117,13 @@ export function usePaymentJourney(email: string) {
       // Consent is checked BEFORE that lookup: a rejected retry could still
       // have an earlier payment, so its durable intent must remain frozen.
       const planChanged = e instanceof ApiError && e.status === 409 && e.code === "subscription_plan_changed";
-      const rejectedBeforeCreation = submitted?.selection.kind === "plan" && !submitted.paymentId &&
-        e instanceof ApiError && e.status === 409 && (
-          e.code === "subscription_already_active" ||
-          e.code === "subscription_plan_not_purchasable" ||
-          planChanged ||
+      const topupUnavailable = submitted?.selection.kind === "topup" && e instanceof ApiError
+        && e.status === 409 && e.code === "wallet_topup_unavailable";
+      const rejectedBeforeCreation = submitted && !submitted.paymentId && (
+        topupUnavailable || (submitted.selection.kind === "plan" && e instanceof ApiError && e.status === 409 && (
+          e.code === "subscription_already_active" || e.code === "subscription_plan_not_purchasable" || planChanged ||
           (e.code === "subscription_consent_required" && !retrying)
-        );
+        )));
       if (submitted && rejectedBeforeCreation) {
         try {
           const saved = readAttempt(storageKey);
@@ -134,9 +134,13 @@ export function usePaymentJourney(email: string) {
         } catch {
           setStorageError("Не удалось обновить сохранённый заказ. Проверьте операции перед новой оплатой.");
         }
-        if (planChanged) {
+        if (planChanged || topupUnavailable) {
           setSelection(null);
-          void client.invalidateQueries({ queryKey: ["billing-plans"] });
+          if (planChanged) void client.invalidateQueries({ queryKey: ["billing-plans"] });
+          if (topupUnavailable) {
+            void client.invalidateQueries({ queryKey: ["billing-subscription"] });
+            void client.invalidateQueries({ queryKey: ["billing-usage"] });
+          }
         }
       }
       setError(planChanged ? "Условия тарифа изменились. Выберите тариф заново и проверьте актуальные условия перед оплатой."
@@ -182,16 +186,14 @@ export function PaymentCheckout({ journey: j }: { journey: PaymentJourney }) {
               <dt>К оплате</dt>
               <dd>{money(j.selection.price)}</dd>
             </div>
-            <div>
-              <dt>{j.selection.includedGenerations === undefined ? "Зачисление на баланс" : "Включённых генераций"}</dt>
-              <dd>{j.selection.includedGenerations === undefined ? money(j.selection.credit) : j.selection.includedGenerations}</dd>
-            </div>
+            {j.selection.allowance ? <><div><dt>Созданий приложений</dt><dd>{j.selection.allowance.creations}</dd></div><div><dt>Правок</dt><dd>{j.selection.allowance.edits}</dd></div></>
+              : <div><dt>Зачисление на баланс</dt><dd>{money(j.selection.credit)}</dd></div>}
             <div>
               <dt>Период</dt>
-              <dd>{j.selection.kind === "topup" ? "Разовое пополнение" : "1 месяц"}</dd>
+              <dd>{j.selection.allowance ? allowancePeriodLabel(j.selection.allowance.period) : j.selection.kind === "topup" ? "Разовое пополнение" : "1 месяц"}</dd>
             </div>
           </dl>
-          {j.selection.includedGenerations !== undefined && <p className="account-hint">{INCLUDED_GENERATION_TERMS}</p>}
+          {j.selection.allowance && <p className="account-hint">{generationAllowanceTerms(j.selection.allowance)}</p>}
           {j.selection.kind === "plan" && <label className="account-consent">
             <input type="checkbox" checked={j.autoRenew} disabled={Boolean(j.attempt) || j.pending} onChange={e => j.setAutoRenew(e.target.checked)} />
             <span>Включить автопродление. Разрешаю ежемесячное списание стоимости тарифа с сохранённого способа оплаты. Согласие можно отозвать в разделе «Тариф».</span>

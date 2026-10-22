@@ -2,7 +2,7 @@
 VK ID / Яндекс ID.
 
 Аккаунт = email (+ пароль, если он есть). Вместе с пользователем создаются
-личный платёжный счёт, кошелёк со стартовым балансом, бесплатная подписка и,
+личный платёжный счёт, пустой служебный кошелёк, бесплатная подписка и,
 если переданы, записи о принятых юридических документах. Функция только
 добавляет строки и делает flush — транзакцию завершает вызывающий.
 """
@@ -117,7 +117,6 @@ async def create_account(
     signup_source: str | None = None,
     referrer_project_id: UUID | None = None,
 ) -> User:
-    settings = get_settings()
     user = User(
         email=email,
         password_hash=password_hash,
@@ -136,7 +135,9 @@ async def create_account(
     await session.flush()
     user.wallet = Wallet(
         billing_account_id=billing_account.id,
-        balance_rub=Decimal(str(settings.initial_wallet_balance_rub)),
+        # New Free terms include work rather than prepaid rubles. Retain the
+        # wallet row for historical payment/export compatibility, without a grant.
+        balance_rub=Decimal("0"),
     )
     session.add(
         Subscription(

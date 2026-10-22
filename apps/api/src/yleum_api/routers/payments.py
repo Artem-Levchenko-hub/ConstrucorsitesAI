@@ -214,6 +214,15 @@ async def create_payment(
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
         return await _resume_checkout(session=session, payment=existing)
 
+    from yleum_api.services.entitlements import has_generation_allowance_terms, load_plan_context
+
+    if has_generation_allowance_terms((await load_plan_context(session, current_user.id)).plan):
+        raise ApiError(
+            "wallet_topup_unavailable",
+            "На этом тарифе включены создания и правки. Пополнять рублёвый баланс не нужно.",
+            status.HTTP_409_CONFLICT,
+        )
+
     price, credit, title = PACKAGES[payload.package_code]
     payment = Payment(
         billing_account_id=account.id,
@@ -310,9 +319,11 @@ async def create_subscription_checkout(
             "Тариф недоступен для покупки",
             status.HTTP_409_CONFLICT,
         )
+    from yleum_api.services.entitlements import has_generation_allowance_terms
+
     if (
         payload.plan_version is not None and payload.plan_version != plan.version
-    ) or (payload.plan_version is None and "included_generations" in plan.entitlements):
+    ) or (payload.plan_version is None and has_generation_allowance_terms(plan)):
         # Existing idempotent orders were resolved above with their frozen
         # package. A fresh order must match the terms the user just reviewed.
         raise ApiError(

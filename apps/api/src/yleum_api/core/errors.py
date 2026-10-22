@@ -102,6 +102,7 @@ ErrorCode = Literal[
     "code_expired",
     "code_attempts_exceeded",
     "payments_unavailable",
+    "wallet_topup_unavailable",
     "payment_provider_unavailable",
     "invalid_webhook",
     "subscription_already_active",

@@ -414,6 +414,14 @@ def is_free_plan(plan: BillingPlan | None) -> bool:
     return plan is not None and plan.code == "free"
 
 
+def has_generation_allowance_terms(plan: BillingPlan | None) -> bool:
+    """Presence opts into durable quotas; malformed terms fail closed at admission."""
+    return plan is not None and any(
+        key in plan.entitlements
+        for key in ("included_creations", "included_edits", "generation_allowance_period")
+    )
+
+
 async def admit_free_chat_message(session: AsyncSession, *, user_id: UUID, run_id: UUID) -> bool:
     """Spend one Free human-message allowance in the admission transaction.
 
@@ -422,7 +430,7 @@ async def admit_free_chat_message(session: AsyncSession, *, user_id: UUID, run_i
     admission leaves the allowance intact. Tools and workers never call this.
     """
     ctx = await load_plan_context(session, user_id)
-    if not is_free_plan(ctx.plan):
+    if not is_free_plan(ctx.plan) or has_generation_allowance_terms(ctx.plan):
         return False
     owner = await session.scalar(
         select(User)
@@ -519,7 +527,7 @@ async def free_chat_allowance(
 ) -> tuple[int | None, int | None]:
     """Current authenticated owner's remaining Free message allowance."""
     ctx = await load_plan_context(session, user_id)
-    if not is_free_plan(ctx.plan):
+    if not is_free_plan(ctx.plan) or has_generation_allowance_terms(ctx.plan):
         return None, None
     owner = await session.get(User, user_id, populate_existing=True)
     if owner is None:

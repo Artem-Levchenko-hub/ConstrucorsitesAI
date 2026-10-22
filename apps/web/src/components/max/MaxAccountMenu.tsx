@@ -8,7 +8,7 @@ import {
   Settings,
   Shield,
   UserRound,
-  WalletCards,
+  Gauge,
 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useId, useRef, useState } from "react";
@@ -19,7 +19,7 @@ import { popIn, springSnappy, tapSubtle } from "@/lib/motion";
 const accountLinks = [
   ["/account", UserRound, "Профиль"],
   ["/account/security", Shield, "Безопасность"],
-  ["/billing", WalletCards, "Баланс"],
+  ["/billing", Gauge, "Использование"],
   ["/billing/transactions", Receipt, "Операции"],
   ["/billing/plan", CreditCard, "Тариф"],
 ] as const;
