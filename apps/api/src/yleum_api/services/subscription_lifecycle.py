@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from calendar import monthrange
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
@@ -25,6 +24,14 @@ from yleum_api.models.user import User
 from yleum_api.models.wallet import Wallet
 from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.services import orchestrator_client, yookassa
+from yleum_api.services.payment_submission import (
+    PaymentSubmissionNeedsReview,
+    bind_provider_payment,
+    prepare_submission,
+    require_manual_review,
+    send_saved_payment,
+    verify_provider_payment,
+)
 from yleum_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
@@ -285,15 +292,10 @@ async def apply_subscription_provider_state(
     *,
     now: datetime | None = None,
 ) -> str:
+    verify_provider_payment(payment, provider)
+    if payment.status in {"succeeded", "refunded"}:
+        return payment.status
     status_value = provider_status(provider.get("status"))
-    amount = provider.get("amount")
-    if not isinstance(amount, dict):
-        raise ApiError("invalid_webhook", "invalid payment amount", 400)
-    if amount.get("currency") != "RUB" or Decimal(str(amount.get("value"))) != payment.amount_rub:
-        raise ApiError("invalid_webhook", "payment amount mismatch", 400)
-    metadata = provider.get("metadata")
-    if not isinstance(metadata, dict) or metadata.get("payment_id") != str(payment.id):
-        raise ApiError("invalid_webhook", "payment metadata mismatch", 400)
     payment.provider_payload = provider
     current_time = now or datetime.now(UTC)
     if status_value == "succeeded" and payment.status != "succeeded":
@@ -445,28 +447,9 @@ async def _renew_subscription(
             .with_for_update()
         )
     ).scalar_one_or_none()
-    if pending is not None and pending.provider_payment_id:
-        try:
-            provider = await yookassa.get_payment(pending.provider_payment_id)
-        except yookassa.YooKassaUnavailable:
-            subscription.next_charge_at = now + timedelta(
-                hours=get_settings().billing_renewal_retry_hours
-            )
-            await session.commit()
-            return
-        state = await apply_subscription_provider_state(
-            session, pending, provider, now=now
-        )
-        if state in {"cancelled", "failed"}:
-            await _mark_past_due(session, subscription, now=now)
-        elif state in {"pending", "waiting_for_capture"}:
-            subscription.next_charge_at = now + timedelta(
-                hours=get_settings().billing_renewal_retry_hours
-            )
-        await session.commit()
-        return
     if pending is not None:
-        pending.status = "failed"
+        await _resolve_renewal_payment(session, subscription, pending, now=now)
+        return
 
     if (
         subscription.grace_period_ends_at is not None
@@ -515,36 +498,47 @@ async def _renew_subscription(
         status="pending",
     )
     session.add(payment)
+    await session.flush()
+    prepare_submission(
+        payment,
+        customer_email=str(user.email),
+        title=f"Продление Yleum {plan.name}, 1 месяц",
+        payment_method_id=method.provider_payment_method_id,
+        now=now,
+    )
     await session.commit()
-    try:
-        provider = await yookassa.create_recurring_payment(
-            amount=f"{payment.amount_rub:.2f}",
-            description=f"Продление Yleum {plan.name}, 1 месяц",
-            customer_email=str(user.email),
-            payment_method_id=method.provider_payment_method_id,
-            idempotency_key=payment.idempotency_key,
-            metadata={
-                "payment_id": str(payment.id),
-                "billing_account_id": str(payment.billing_account_id),
-                "user_id": str(payment.user_id),
-                "purpose": payment.purpose,
-            },
+    await _resolve_renewal_payment(session, subscription, payment, now=now)
+
+
+async def _resolve_renewal_payment(
+    session: AsyncSession, subscription: Subscription, payment: Payment, *, now: datetime,
+) -> None:
+    payment = (
+        await session.execute(
+            select(Payment).where(Payment.id == payment.id).with_for_update()
+            .execution_options(populate_existing=True)
         )
-    except yookassa.YooKassaUnavailable:
-        payment.status = "failed"
+    ).scalar_one()
+    if payment.status not in {"pending", "waiting_for_capture"}:
+        return
+    try:
+        provider = (
+            await yookassa.get_payment(payment.provider_payment_id)
+            if payment.provider_payment_id else await send_saved_payment(payment, now=now)
+        )
+    except yookassa.YooKassaUnavailable as exc:
+        if isinstance(exc, PaymentSubmissionNeedsReview):
+            log.error("subscription.renewal_needs_review", payment_id=str(payment.id))
+        if exc.definitive or isinstance(exc, PaymentSubmissionNeedsReview):
+            require_manual_review(payment)
+        # Preserve the same pending operation on an ambiguous failure. A later
+        # tick replays its frozen parameters, never a new numbered charge.
         await _mark_past_due(session, subscription, now=now)
         await session.commit()
         return
-    payment.provider_payment_id = str(provider.get("id") or "") or None
-    if payment.provider_payment_id is None:
-        payment.status = "failed"
-        await _mark_past_due(session, subscription, now=now)
-        await session.commit()
-        return
+    bind_provider_payment(payment, provider)
     state = await apply_subscription_provider_state(session, payment, provider, now=now)
-    if state in {"cancelled", "failed"}:
-        await _mark_past_due(session, subscription, now=now)
-    elif state in {"pending", "waiting_for_capture"}:
+    if state in {"cancelled", "failed", "pending", "waiting_for_capture"}:
         await _mark_past_due(session, subscription, now=now)
     await session.commit()
 

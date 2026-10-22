@@ -16,8 +16,6 @@ from yleum_api.core.ratelimit import _client_ip
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import BillingPlan, Subscription
 from yleum_api.models.user import User
-from yleum_api.models.wallet import Wallet
-from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.schemas.payments import (
     PaymentConfigPublic,
     PaymentCreate,
@@ -31,6 +29,13 @@ from yleum_api.services.payment_state import (
 )
 from yleum_api.services.payment_state import (
     cancel_pending_subscription as _cancel_pending_subscription,
+)
+from yleum_api.services.payment_submission import (
+    bind_provider_payment,
+    has_submission,
+    prepare_submission,
+    require_manual_review,
+    send_saved_payment,
 )
 from yleum_api.services.subscription_lifecycle import provider_status as _provider_status
 
@@ -82,44 +87,52 @@ async def _send_to_provider(
 ) -> Payment:
     assert current_user.email is not None
     settings = get_settings()
+    purpose = payment.purpose
     try:
-        provider = await yookassa.create_payment(
-            amount=f"{payment.amount_rub:.2f}",
-            description=title,
-            return_url=f"{settings.web_base_url.rstrip('/')}{return_path}",
+        await session.flush()
+        prepare_submission(
+            payment,
             customer_email=str(current_user.email),
-            idempotency_key=payment.idempotency_key,
-            metadata={
-                "payment_id": str(payment.id),
-                "billing_account_id": str(payment.billing_account_id),
-                "user_id": str(current_user.id),
-                "purpose": payment.purpose,
-            },
+            title=title,
+            return_url=f"{settings.web_base_url.rstrip('/')}{return_path}?payment={payment.id}",
             save_payment_method=save_payment_method,
         )
+        # The order and its exact request are one durable transaction: there
+        # must be no committed provider-less row without replay parameters.
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        if purpose == "subscription_initial":
+            raise ApiError(
+                "subscription_checkout_in_progress",
+                "Оплата другого тарифа уже ожидает завершения",
+                status.HTTP_409_CONFLICT,
+            ) from exc
+        raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT) from exc
+    return await _resume_checkout(session=session, payment=payment)
+
+
+async def _resume_checkout(*, session: SessionDep, payment: Payment) -> Payment:
+    payment = (
+        await session.execute(
+            select(Payment).where(Payment.id == payment.id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one()
+    if payment.provider_payment_id or payment.status != "pending" or not has_submission(payment):
+        return payment
+    try:
+        provider = await send_saved_payment(payment)
     except yookassa.YooKassaUnavailable as exc:
-        payment.status = "failed"
-        await _cancel_pending_subscription(session, payment)
+        if exc.definitive:
+            require_manual_review(payment)
         await session.commit()
         raise ApiError(
             "payment_provider_unavailable",
             "ЮKassa временно недоступна",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
-    provider_payment_id = str(provider.get("id") or "")
-    if not provider_payment_id:
-        payment.status = "failed"
-        await _cancel_pending_subscription(session, payment)
-        await session.commit()
-        raise ApiError(
-            "payment_provider_unavailable",
-            "ЮKassa вернула неполный ответ",
-            status.HTTP_502_BAD_GATEWAY,
-        )
-    payment.provider_payment_id = provider_payment_id
-    confirmation = provider.get("confirmation")
-    if isinstance(confirmation, dict):
-        payment.confirmation_url = str(confirmation.get("confirmation_url") or "") or None
+    bind_provider_payment(payment, provider)
     provider_status = _provider_status(provider.get("status"))
     if provider_status == "succeeded":
         await _apply_provider_state(session, payment, provider)
@@ -193,9 +206,13 @@ async def create_payment(
         await session.execute(select(Payment).where(Payment.idempotency_key == key))
     ).scalar_one_or_none()
     if existing is not None:
-        if existing.billing_account_id != account.id:
+        if (
+            existing.billing_account_id != account.id
+            or existing.purpose != "wallet_topup"
+            or existing.package_code != payload.package_code
+        ):
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
-        return existing
+        return await _resume_checkout(session=session, payment=existing)
 
     price, credit, title = PACKAGES[payload.package_code]
     payment = Payment(
@@ -209,14 +226,12 @@ async def create_payment(
         status="pending",
     )
     session.add(payment)
-    await session.commit()
-    await session.refresh(payment)
     return await _send_to_provider(
         session=session,
         payment=payment,
         current_user=current_user,
         title=title,
-        return_path=f"/account?payment={payment.id}",
+        return_path="/account",
     )
 
 
@@ -258,9 +273,10 @@ async def create_subscription_checkout(
         if (
             existing.billing_account_id != account.id
             or existing.purpose != "subscription_initial"
+            or not existing.package_code.startswith(f"subscription:{payload.plan_code}:")
         ):
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
-        return existing
+        return await _resume_checkout(session=session, payment=existing)
 
     pending_payment = (
         await session.execute(
@@ -334,27 +350,17 @@ async def create_subscription_checkout(
         status="pending",
     )
     session.add(payment)
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise ApiError(
-            "subscription_checkout_in_progress",
-            "Оплата другого тарифа уже ожидает завершения",
-            status.HTTP_409_CONFLICT,
-        ) from exc
-    await session.refresh(payment)
     return await _send_to_provider(
         session=session,
         payment=payment,
         current_user=current_user,
         title=f"Подписка Yleum {plan.name}, 1 месяц",
-        return_path=f"/billing/plan?payment={payment.id}",
+        return_path="/billing/plan",
         save_payment_method=payload.auto_renew,
     )
 
 
-@router.post("/yookassa/webhook", status_code=status.HTTP_204_NO_CONTENT)
+@router.post("/yookassa/webhook", status_code=status.HTTP_200_OK)
 async def yookassa_webhook(request: Request, session: SessionDep) -> None:
     # YooKassa signs nothing: the source network filter (production only) plus
     # re-reading the payment from the API are the two checks the provider
@@ -370,10 +376,6 @@ async def yookassa_webhook(request: Request, session: SessionDep) -> None:
             select(Payment).where(Payment.provider_payment_id == provider_id).with_for_update()
         )
     ).scalar_one_or_none()
-    if payment is None:
-        # Unknown provider events are acknowledged so retries cannot amplify a
-        # stale or foreign notification.
-        return
     try:
         provider = await yookassa.get_payment(provider_id)
     except yookassa.YooKassaUnavailable as exc:
@@ -383,9 +385,29 @@ async def yookassa_webhook(request: Request, session: SessionDep) -> None:
             status.HTTP_503_SERVICE_UNAVAILABLE,
         ) from exc
     metadata = provider.get("metadata")
+    if payment is None:
+        # A verified notification can arrive after provider acceptance but
+        # before its lost response was persisted. Never trust posted metadata.
+        local_id = metadata.get("payment_id") if isinstance(metadata, dict) else None
+        try:
+            local_uuid = UUID(str(local_id))
+        except ValueError:
+            return
+        payment = (
+            await session.execute(
+                select(Payment).where(Payment.id == local_uuid).with_for_update()
+            )
+        ).scalar_one_or_none()
+        if payment is None:
+            return
     if not isinstance(metadata, dict) or metadata.get("payment_id") != str(payment.id):
         raise ApiError("invalid_webhook", "payment metadata mismatch", status.HTTP_400_BAD_REQUEST)
+    if str(provider.get("id") or "") != provider_id:
+        raise ApiError("invalid_webhook", "provider identity mismatch", status.HTTP_400_BAD_REQUEST)
+    if payment.provider_payment_id and payment.provider_payment_id != provider_id:
+        raise ApiError("invalid_webhook", "payment already linked", status.HTTP_400_BAD_REQUEST)
     await _apply_provider_state(session, payment, provider)
+    bind_provider_payment(payment, provider)
     await session.commit()
 
 
@@ -404,7 +426,7 @@ async def reconcile_payment(
     ):
         raise ApiError("not_found", "payment not found", status.HTTP_404_NOT_FOUND)
     if not payment.provider_payment_id:
-        return payment
+        return await _resume_checkout(session=session, payment=payment)
     try:
         provider = await yookassa.get_payment(payment.provider_payment_id)
     except yookassa.YooKassaUnavailable as exc:
@@ -427,57 +449,11 @@ async def refund_payment(
 ) -> Payment:
     if not _is_admin(current_user):
         raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
-    payment = (
-        await session.execute(select(Payment).where(Payment.id == payment_id).with_for_update())
-    ).scalar_one_or_none()
-    if payment is None:
-        raise ApiError("not_found", "payment not found", status.HTTP_404_NOT_FOUND)
-    if payment.status != "succeeded" or not payment.provider_payment_id:
-        raise ApiError("refund_unavailable", "payment cannot be refunded", status.HTTP_409_CONFLICT)
-    wallet = (
-        await session.execute(
-            select(Wallet)
-            .where(Wallet.billing_account_id == payment.billing_account_id)
-            .with_for_update()
-        )
-    ).scalar_one()
-    if wallet.balance_rub < payment.credit_rub:
-        raise ApiError(
-            "refund_balance_used",
-            "Зачисленные средства уже использованы",
-            status.HTTP_409_CONFLICT,
-        )
-    # The refund carries its own fiscal receipt («чек возврата», 54-ФЗ) for the
-    # payer of the original order, not for the admin who triggers it.
-    payer_email = await session.scalar(select(User.email).where(User.id == payment.user_id))
-    try:
-        await yookassa.create_refund(
-            provider_payment_id=payment.provider_payment_id,
-            amount=f"{payment.amount_rub:.2f}",
-            idempotency_key=f"refund-{payment.id}",
-            customer_email=str(payer_email) if payer_email else None,
-            description=f"Возврат платежа Yleum ({payment.package_code})",
-        )
-    except yookassa.YooKassaUnavailable as exc:
-        raise ApiError(
-            "payment_provider_unavailable",
-            "ЮKassa временно недоступна",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
-    wallet.balance_rub -= payment.credit_rub
-    payment.status = "refunded"
-    payment.refunded_at = datetime.now(UTC)
-    session.add(
-        WalletCharge(
-            billing_account_id=payment.billing_account_id,
-            user_id=payment.user_id,
-            entry_type="refund",
-            amount_rub=-payment.credit_rub,
-            balance_after_rub=wallet.balance_rub,
-            external_ref=f"refund:{payment.id}",
-            description="Возврат платежа через ЮKassa",
-        )
+    # A refund must be provider-confirmed and reconcile the subscription's
+    # entitlements. Until that flow is accepted, use the merchant cabinet and
+    # manual billing review; even admins cannot initiate it through this API.
+    raise ApiError(
+        "refund_unavailable",
+        "Возвраты выполняются вручную в кабинете ЮKassa с проверкой тарифа и баланса",
+        status.HTTP_409_CONFLICT,
     )
-    await session.commit()
-    await session.refresh(payment)
-    return payment

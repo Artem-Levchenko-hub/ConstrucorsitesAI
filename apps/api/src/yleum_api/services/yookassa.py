@@ -22,7 +22,11 @@ YOOKASSA_NOTIFICATION_NETWORKS: tuple[str, ...] = (
 
 
 class YooKassaUnavailable(RuntimeError):
-    pass
+    def __init__(self, message: str, *, definitive: bool = False) -> None:
+        super().__init__(message)
+        # A timeout/5xx is not evidence that a charge failed. Only a documented
+        # request rejection can close the local order and permit a new intent.
+        self.definitive = definitive
 
 
 def configured() -> bool:
@@ -87,6 +91,11 @@ async def _request(
             response = await client.request(method, path, headers=headers, json=json)
             response.raise_for_status()
             body = response.json()
+    except httpx.HTTPStatusError as exc:
+        raise YooKassaUnavailable(
+            "YooKassa rejected the request",
+            definitive=exc.response.status_code in {400, 401, 403, 404},
+        ) from exc
     except (httpx.HTTPError, ValueError) as exc:
         raise YooKassaUnavailable("YooKassa API request failed") from exc
     if not isinstance(body, dict):
@@ -94,7 +103,7 @@ async def _request(
     return body
 
 
-def _receipt(customer_email: str, description: str, amount: str) -> dict[str, object]:
+def payment_receipt(customer_email: str, description: str, amount: str) -> dict[str, object]:
     """The fiscal receipt: one full-payment service line for the whole amount."""
     return {
         "customer": {"email": customer_email},
@@ -120,6 +129,7 @@ async def create_payment(
     idempotency_key: str,
     metadata: dict[str, str],
     save_payment_method: bool = False,
+    receipt: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     return await _request(
         "POST",
@@ -132,7 +142,9 @@ async def create_payment(
             "confirmation": {"type": "redirect", "return_url": return_url},
             "description": description[:128],
             "metadata": metadata,
-            "receipt": _receipt(customer_email, description, amount),
+            "receipt": receipt if receipt is not None else payment_receipt(
+                customer_email, description, amount
+            ),
         },
     )
 
@@ -145,6 +157,7 @@ async def create_recurring_payment(
     payment_method_id: str,
     idempotency_key: str,
     metadata: dict[str, str],
+    receipt: dict[str, object] | None = None,
 ) -> dict[str, Any]:
     """Charge a provider-saved method without handling raw card data."""
     return await _request(
@@ -157,7 +170,9 @@ async def create_recurring_payment(
             "payment_method_id": payment_method_id,
             "description": description[:128],
             "metadata": metadata,
-            "receipt": _receipt(customer_email, description, amount),
+            "receipt": receipt if receipt is not None else payment_receipt(
+                customer_email, description, amount
+            ),
         },
     )
 
@@ -187,7 +202,7 @@ async def create_refund(
         "amount": {"value": amount, "currency": "RUB"},
     }
     if customer_email:
-        body["receipt"] = _receipt(
+        body["receipt"] = payment_receipt(
             customer_email, description or "Возврат платежа Yleum", amount
         )
     return await _request("POST", "/refunds", idempotency_key=idempotency_key, json=body)

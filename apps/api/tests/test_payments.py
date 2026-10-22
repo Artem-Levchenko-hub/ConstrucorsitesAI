@@ -54,8 +54,8 @@ async def test_payment_webhook_credits_wallet_exactly_once(
     payload = {"event": "payment.succeeded", "object": {"id": "provider-payment-1"}}
     first = await client.post("/api/payments/yookassa/webhook", json=payload)
     second = await client.post("/api/payments/yookassa/webhook", json=payload)
-    assert first.status_code == 204
-    assert second.status_code == 204
+    assert first.status_code == 200
+    assert second.status_code == 200
 
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
@@ -142,8 +142,8 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     }
     first = await client.post("/api/payments/yookassa/webhook", json=payload)
     second = await client.post("/api/payments/yookassa/webhook", json=payload)
-    assert first.status_code == 204
-    assert second.status_code == 204
+    assert first.status_code == 200
+    assert second.status_code == 200
 
     active = await client.get("/api/billing/subscription")
     assert active.status_code == 200

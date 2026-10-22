@@ -145,7 +145,7 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
         "/api/payments/yookassa/webhook",
         json={"event": "payment.succeeded", "object": {"id": "provider-ledger-payment"}},
     )
-    assert webhook.status_code == 204
+    assert webhook.status_code == 200
 
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
