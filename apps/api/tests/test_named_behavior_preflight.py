@@ -24,7 +24,8 @@ def before_provider(monkeypatch):
         ids = GenerationIds(*(uuid4() for _ in range(5)))
         original = authoritative or request
         contract = proof.required_contract(original, template="max_miniapp")
-        record = NS(id=ids.run_id, prompt_hash=hashlib.sha256(original.encode()).hexdigest(),
+        record = NS(id=ids.run_id, status="running",
+                    prompt_hash=hashlib.sha256(original.encode()).hexdigest(),
                     user_message_id=ids.user_message_id, agent_state={},
                     project_id=ids.project_id, user_id=ids.user_id)
         if saved:
