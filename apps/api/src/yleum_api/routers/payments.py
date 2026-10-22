@@ -16,8 +16,6 @@ from yleum_api.core.ratelimit import _client_ip
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import BillingPlan, Subscription
 from yleum_api.models.user import User
-from yleum_api.models.wallet import Wallet
-from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.schemas.payments import (
     PaymentConfigPublic,
     PaymentCreate,
@@ -89,16 +87,28 @@ async def _send_to_provider(
 ) -> Payment:
     assert current_user.email is not None
     settings = get_settings()
-    prepare_submission(
-        payment,
-        customer_email=str(current_user.email),
-        title=title,
-        return_url=f"{settings.web_base_url.rstrip('/')}{return_path}",
-        save_payment_method=save_payment_method,
-    )
-    # These exact parameters, including VAT/email/return URL, must survive a
-    # process crash before any request leaves this server.
-    await session.commit()
+    purpose = payment.purpose
+    try:
+        await session.flush()
+        prepare_submission(
+            payment,
+            customer_email=str(current_user.email),
+            title=title,
+            return_url=f"{settings.web_base_url.rstrip('/')}{return_path}?payment={payment.id}",
+            save_payment_method=save_payment_method,
+        )
+        # The order and its exact request are one durable transaction: there
+        # must be no committed provider-less row without replay parameters.
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        if purpose == "subscription_initial":
+            raise ApiError(
+                "subscription_checkout_in_progress",
+                "Оплата другого тарифа уже ожидает завершения",
+                status.HTTP_409_CONFLICT,
+            ) from exc
+        raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT) from exc
     return await _resume_checkout(session=session, payment=payment)
 
 
@@ -216,14 +226,12 @@ async def create_payment(
         status="pending",
     )
     session.add(payment)
-    await session.commit()
-    await session.refresh(payment)
     return await _send_to_provider(
         session=session,
         payment=payment,
         current_user=current_user,
         title=title,
-        return_path=f"/account?payment={payment.id}",
+        return_path="/account",
     )
 
 
@@ -342,22 +350,12 @@ async def create_subscription_checkout(
         status="pending",
     )
     session.add(payment)
-    try:
-        await session.commit()
-    except IntegrityError as exc:
-        await session.rollback()
-        raise ApiError(
-            "subscription_checkout_in_progress",
-            "Оплата другого тарифа уже ожидает завершения",
-            status.HTTP_409_CONFLICT,
-        ) from exc
-    await session.refresh(payment)
     return await _send_to_provider(
         session=session,
         payment=payment,
         current_user=current_user,
         title=f"Подписка Yleum {plan.name}, 1 месяц",
-        return_path=f"/billing/plan?payment={payment.id}",
+        return_path="/billing/plan",
         save_payment_method=payload.auto_renew,
     )
 
@@ -451,57 +449,11 @@ async def refund_payment(
 ) -> Payment:
     if not _is_admin(current_user):
         raise ApiError("forbidden", "admin access required", status.HTTP_403_FORBIDDEN)
-    payment = (
-        await session.execute(select(Payment).where(Payment.id == payment_id).with_for_update())
-    ).scalar_one_or_none()
-    if payment is None:
-        raise ApiError("not_found", "payment not found", status.HTTP_404_NOT_FOUND)
-    if payment.status != "succeeded" or not payment.provider_payment_id:
-        raise ApiError("refund_unavailable", "payment cannot be refunded", status.HTTP_409_CONFLICT)
-    wallet = (
-        await session.execute(
-            select(Wallet)
-            .where(Wallet.billing_account_id == payment.billing_account_id)
-            .with_for_update()
-        )
-    ).scalar_one()
-    if wallet.balance_rub < payment.credit_rub:
-        raise ApiError(
-            "refund_balance_used",
-            "Зачисленные средства уже использованы",
-            status.HTTP_409_CONFLICT,
-        )
-    # The refund carries its own fiscal receipt («чек возврата», 54-ФЗ) for the
-    # payer of the original order, not for the admin who triggers it.
-    payer_email = await session.scalar(select(User.email).where(User.id == payment.user_id))
-    try:
-        await yookassa.create_refund(
-            provider_payment_id=payment.provider_payment_id,
-            amount=f"{payment.amount_rub:.2f}",
-            idempotency_key=f"refund-{payment.id}",
-            customer_email=str(payer_email) if payer_email else None,
-            description=f"Возврат платежа Yleum ({payment.package_code})",
-        )
-    except yookassa.YooKassaUnavailable as exc:
-        raise ApiError(
-            "payment_provider_unavailable",
-            "ЮKassa временно недоступна",
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-        ) from exc
-    wallet.balance_rub -= payment.credit_rub
-    payment.status = "refunded"
-    payment.refunded_at = datetime.now(UTC)
-    session.add(
-        WalletCharge(
-            billing_account_id=payment.billing_account_id,
-            user_id=payment.user_id,
-            entry_type="refund",
-            amount_rub=-payment.credit_rub,
-            balance_after_rub=wallet.balance_rub,
-            external_ref=f"refund:{payment.id}",
-            description="Возврат платежа через ЮKassa",
-        )
+    # A refund must be provider-confirmed and reconcile the subscription's
+    # entitlements. Until that flow is accepted, use the merchant cabinet and
+    # manual billing review; even admins cannot initiate it through this API.
+    raise ApiError(
+        "refund_unavailable",
+        "Возвраты выполняются вручную в кабинете ЮKassa с проверкой тарифа и баланса",
+        status.HTTP_409_CONFLICT,
     )
-    await session.commit()
-    await session.refresh(payment)
-    return payment

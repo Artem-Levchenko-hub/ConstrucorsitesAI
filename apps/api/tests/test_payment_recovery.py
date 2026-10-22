@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 
 from tests.account_fixture import register_verified_account
 from tests.test_subscription_lifecycle import _registered_billing_context
@@ -369,3 +369,78 @@ async def test_manual_review_orders_do_not_starve_newer_recovery(
         )
         == 51
     )
+
+
+@pytest.mark.parametrize("purpose", ["wallet_topup", "subscription_initial"])
+async def test_original_request_is_durable_in_the_first_order_commit(
+    client,
+    db_session,
+    accepted_then_lost,
+    purpose,
+):
+    await register_verified_account(client, "atomic-order@example.com")
+    committed_without_request = []
+
+    def observe_commit(session):
+        for row in session.identity_map.values():
+            if isinstance(row, Payment) and row.status == "pending" and not row.provider_payment_id:
+                if not isinstance((row.provider_payload or {}).get("_submission"), dict):
+                    committed_without_request.append(str(row.id))
+
+    event.listen(db_session.sync_session, "after_commit", observe_commit)
+    try:
+        path = (
+            "/api/payments/subscription" if purpose == "subscription_initial" else "/api/payments"
+        )
+        body = {"idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be"}
+        body.update(
+            {"plan_code": "pro"} if purpose == "subscription_initial" else {"package_code": "start"}
+        )
+        response = await client.post(path, json=body)
+        assert response.status_code == 503
+        assert committed_without_request == [], "a crash here would strand an unsubmitted order"
+    finally:
+        event.remove(db_session.sync_session, "after_commit", observe_commit)
+
+
+async def test_refund_is_blocked_until_manual_provider_and_entitlement_review(
+    client,
+    monkeypatch,
+):
+    await register_verified_account(client, "manual-refund@example.com")
+    monkeypatch.setattr(payments_router, "_configured", lambda: True)
+
+    async def immediate_payment(**kwargs):
+        return {
+            "id": "paid-manual-refund",
+            "status": "succeeded",
+            "amount": {"value": "490.00", "currency": "RUB"},
+            "metadata": kwargs["metadata"],
+        }
+
+    calls = []
+
+    async def pending_refund(**kwargs):
+        calls.append(kwargs)
+        return {"id": "unconfirmed-refund", "status": "pending"}
+
+    monkeypatch.setattr(yookassa, "create_payment", immediate_payment)
+    monkeypatch.setattr(yookassa, "create_refund", pending_refund)
+    created = await client.post(
+        "/api/payments",
+        json={
+            "package_code": "start",
+            "idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be",
+        },
+    )
+    assert created.status_code == 201 and created.json()["status"] == "succeeded"
+    payment_id = created.json()["id"]
+    path = f"/api/payments/{payment_id}/refund"
+    assert (await client.post(path)).status_code == 403
+    monkeypatch.setattr(payments_router, "_is_admin", lambda user: True)
+    response = await client.post(path)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "refund_unavailable"
+    assert calls == []
+    assert (await client.get("/api/wallet")).json()["balance_rub"] == "600.0000"
+    assert (await client.get("/api/payments")).json()[0]["status"] == "succeeded"
