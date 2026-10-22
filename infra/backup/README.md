@@ -4,6 +4,15 @@ The canonical source is `/opt/omnia/infra/backup`, from the delivered Git revisi
 Do not run a frozen `/root/yleum-bootstrap-*/backup` copy. The platform entrypoint
 and the controller-user wrapper are installed separately from application rollout.
 
+The platform entrypoint prepares one UTC day under the existing physical,
+root-owned `0700` `/var/backups/max-studio` before collection starts, and reuses
+that same day when copying the encrypted output. New days are created `0700`.
+An existing root-owned `0755` day left by GNU `install -d` is tightened through
+its verified directory FD to `0700`; existing files are never modified by this
+preparation. Symlinks, foreign ownership, writable ancestors and unexpected
+parent/day modes fail before collection. GNU `install -d -m 0700` alone does not
+make its missing leading directories private, even with `umask 077`.
+
 `cms-envelope.py` is the shared encrypted-envelope gate for backup, local payload
 restore checks and the off-host workflow. It streams the complete original file
 against its exact SHA-256, binds its physical path and file identity, and checks
