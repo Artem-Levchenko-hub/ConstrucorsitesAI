@@ -11,8 +11,11 @@ from __future__ import annotations
 
 import ast
 import json
+import time
+from collections.abc import Callable
 from pathlib import Path
 
+import httpx
 import pytest
 
 from tests.production_canary_fakes import (
@@ -41,6 +44,9 @@ def _run_cli(
     production: FakeProduction,
     monkeypatch: pytest.MonkeyPatch,
     result_path: Path | None,
+    *,
+    clock: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> int:
     from scripts import production_generation_canary as cli
 
@@ -50,7 +56,8 @@ def _run_cli(
         return real(
             config,  # type: ignore[arg-type]
             transport=production.transport(),
-            sleep=lambda _seconds: None,
+            clock=clock if clock is not None else time.monotonic,
+            sleep=sleep if sleep is not None else (lambda _seconds: None),
             emit=emit,  # type: ignore[arg-type]
         )
 
@@ -434,3 +441,228 @@ def test_primary_terminal_failure_survives_raised_cleanup_exception(
     assert ("POST", "/api/auth/logout") in production.calls
     published = path.read_text(encoding="utf-8") + capsys.readouterr().out
     assert "secret-password-in-cleanup" not in published
+
+
+class ObservationClock:
+    def __init__(self) -> None:
+        self.value = 0.0
+        self.delays: list[float] = []
+
+    def __call__(self) -> float:
+        return self.value
+
+    def sleep(self, seconds: float) -> None:
+        self.delays.append(seconds)
+        self.value += seconds
+
+
+def test_cli_observation_transport_failure_has_context_and_survives_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary_env(monkeypatch)
+    secret = "do-not-publish-request-url-headers-or-exception"
+    errors = [httpx.ReadTimeout(secret, request=httpx.Request(
+        "GET", f"https://secret.invalid/{secret}?token={secret}",
+        headers={"authorization": f"Bearer {secret}"},
+    )) for _ in range(3)]
+    production = FakeProduction(edit_observations=errors, delete_status=503)
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["stage"] == "edit" and report["code"] == "edit_failed"
+    assert report["project_id"] == PROJECT_ID and report["run_id"] == EDIT_RUN_ID
+    assert report["request_method"] == "GET" and report["request_route"] == "project_generation"
+    assert report["request_failure"] == "transport" and report["transport_error"] == "read_timeout"
+    assert report["observation_attempts"] == 3 and report["cleanup"] == "failed"
+    stdout = capsys.readouterr().out
+    events = [json.loads(line) for line in stdout.splitlines()]
+    failed = next(i for i, row in enumerate(events) if row["step"] == "stage_failure")
+    cleanup = next(i for i, row in enumerate(events) if row["step"] == "project_delete")
+    assert failed < cleanup and events[failed]["run_id"] == EDIT_RUN_ID
+    retries = [row["observation_attempts"] for row in events if row["step"] == "observation_retry"]
+    assert retries == [1, 2]
+    assert production.paths("POST").count(f"/api/projects/{PROJECT_ID}/prompt") == 2
+    assert secret not in path.read_text(encoding="utf-8") + stdout
+
+
+@pytest.mark.parametrize("outcome,reason,code", [
+    (httpx.Response(503, text="private body"), "http_status", "edit_failed"),
+    (httpx.Response(200, text="private body"), "invalid_json", "api_invalid_response"),
+    (httpx.Response(200, json=["private body"]), "invalid_payload", "api_invalid_response"),
+    (httpx.Response(200, json={"id": "private body", "status": "running"}),
+     "generation_identity", "edit_failed"),
+    (httpx.Response(200, json={"id": EDIT_RUN_ID, "status": ["private body"]}),
+     "generation_status", "api_invalid_response"),
+])
+def test_cli_observation_response_failure_has_closed_cause_and_ids(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    outcome: httpx.Response, reason: str, code: str,
+) -> None:
+    canary_env(monkeypatch)
+    attempts = 3 if reason == "http_status" else 1
+    production = FakeProduction(edit_observations=[outcome] * attempts)
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["stage"] == "edit" and report["code"] == code
+    assert report["request_failure"] == reason and report["observation_attempts"] == attempts
+    assert report["project_id"] == PROJECT_ID and report["run_id"] == EDIT_RUN_ID
+    assert report["request_method"] == "GET" and report["request_route"] == "project_generation"
+    assert report["cleanup"] == "ok"
+    assert "private body" not in path.read_text(encoding="utf-8") + capsys.readouterr().out
+
+
+@pytest.mark.parametrize("error", [httpx.ConnectTimeout, httpx.ReadTimeout,
+                                  httpx.ConnectError, httpx.RemoteProtocolError])
+def test_transient_observation_retries_are_reads_only_and_recover_to_real_completion(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: type[httpx.HTTPError],
+) -> None:
+    canary_env(monkeypatch)
+    clock = ObservationClock()
+    production = FakeProduction(edit_observations=[error("private"), error("private")])
+    assert _run_cli(production, monkeypatch, tmp_path / "result.json",
+                    clock=clock, sleep=clock.sleep) == 0
+    assert clock.delays == [1.0, 2.0]
+    assert production.paths("POST").count(f"/api/projects/{PROJECT_ID}/prompt") == 2
+    assert production.paths("DELETE") == [f"/api/projects/{PROJECT_ID}"]
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+def test_transient_HTTP_observation_recovers_without_new_mutation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: int,
+) -> None:
+    canary_env(monkeypatch)
+    production = FakeProduction(edit_observations=[httpx.Response(status)])
+    assert _run_cli(production, monkeypatch, tmp_path / "result.json") == 0
+    assert production.paths("POST").count(f"/api/projects/{PROJECT_ID}/prompt") == 2
+
+
+@pytest.mark.parametrize("error,name", [(httpx.LocalProtocolError, "local_protocol_error"),
+                                       (httpx.UnsupportedProtocol, "unsupported_protocol")])
+def test_deterministic_transport_failures_are_never_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, error: type[httpx.HTTPError], name: str,
+) -> None:
+    canary_env(monkeypatch)
+    production = FakeProduction(edit_observations=[error("private")])
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    result = json.loads(path.read_text(encoding="utf-8"))
+    assert result["observation_attempts"] == 1 and result["transport_error"] == name
+
+
+def test_ambiguous_mutating_prompt_is_not_replayed_and_does_not_borrow_build_run_id(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    canary_env(monkeypatch)
+    production = FakeProduction(edit_prompt_error=httpx.ReadTimeout("private"))
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["request_method"] == "POST" and report["request_route"] == "project_prompt"
+    assert report["project_id"] == PROJECT_ID and "run_id" not in report
+    assert "observation_attempts" not in report
+    assert production.paths("POST").count(f"/api/projects/{PROJECT_ID}/prompt") == 2
+
+
+def test_observation_retry_honors_remaining_deadline_without_sleep_or_extra_GET(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    canary_env(monkeypatch, PRODUCTION_CANARY_TIMEOUT_SECONDS="300")
+    clock = ObservationClock()
+
+    class NearDeadline(FakeProduction):
+        def handle(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/prompt") and self._edit_started:
+                clock.value = 299.5
+            return super().handle(request)
+
+    production = NearDeadline(edit_observations=[httpx.ReadTimeout("private")])
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path, clock=clock, sleep=clock.sleep) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["observation_attempts"] == 1 and report["request_failure"] == "transport"
+    assert report["run_id"] == EDIT_RUN_ID and clock.delays == [] and clock.value == 299.5
+
+
+def test_expired_deadline_keeps_current_run_without_dispatching_another_observation(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    canary_env(monkeypatch, PRODUCTION_CANARY_TIMEOUT_SECONDS="300")
+    clock = ObservationClock()
+
+    class Expired(FakeProduction):
+        def handle(self, request: httpx.Request) -> httpx.Response:
+            if request.url.path.endswith("/prompt") and self._edit_started:
+                clock.value = 300.0
+            return super().handle(request)
+
+    production = Expired()
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path, clock=clock, sleep=clock.sleep) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["code"] == "timeout" and report["request_failure"] == "deadline"
+    assert report["project_id"] == PROJECT_ID and report["run_id"] == EDIT_RUN_ID
+    assert report["request_route"] == "project_generation" and clock.delays == []
+    assert report["observation_attempts"] == 0
+    # Build observation and cleanup only; no edit observation after the deadline.
+    assert production.paths("GET").count(f"/api/projects/{PROJECT_ID}/generation") == 2
+
+
+def test_terminal_generation_failure_never_triggers_observation_retry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+) -> None:
+    canary_env(monkeypatch)
+    production = FakeProduction(edit_generation_status="failed", edit_failure={
+        "code": "provider_unavailable", "diagnostics": {"http_status": 502},
+    })
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["request_failure"] == "generation_terminal"
+    assert report["observation_attempts"] == 1
+    assert report["failure_code"] == "provider_unavailable" and report["cleanup"] == "ok"
+    assert not any(json.loads(line)["step"] == "observation_retry"
+                   for line in capsys.readouterr().out.splitlines())
+
+
+def test_request_diagnostics_never_accept_raw_or_coerced_values() -> None:
+    secret = "secret-url-or-exception"
+    failure = CanaryFailure("fixed", request_diagnostics={
+        "request_method": secret, "request_route": secret, "request_failure": secret,
+        "transport_error": secret, "observation_attempts": True,
+    })
+    report = failure.diagnostics()
+    assert not any(key in report for key in ("request_method", "request_route", "request_failure",
+                                            "transport_error", "observation_attempts"))
+    assert secret not in json.dumps(report)
+
+
+@pytest.mark.parametrize("failing_step", ["stage_failure", "canary"])
+@pytest.mark.parametrize("cleanup_status", [204, 503])
+def test_cli_event_sink_failure_keeps_primary_request_cause_and_cleanup_result(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    failing_step: str, cleanup_status: int,
+) -> None:
+    from scripts import production_generation_canary as cli
+
+    canary_env(monkeypatch)
+    original_emit = cli._emit
+    secret = "secret-from-failing-event-sink"
+
+    def failing_emit(event: dict[str, object]) -> None:
+        if event["step"] == failing_step:
+            raise OSError(secret)
+        original_emit(event)
+
+    monkeypatch.setattr(cli, "_emit", failing_emit)
+    production = FakeProduction(edit_observations=[httpx.Response(502)] * 3,
+                                delete_status=cleanup_status)
+    path = tmp_path / "result.json"
+    assert _run_cli(production, monkeypatch, path) == 1
+    report = json.loads(path.read_text(encoding="utf-8"))
+    assert report["stage"] == "edit" and report["code"] == "edit_failed"
+    assert report["project_id"] == PROJECT_ID and report["run_id"] == EDIT_RUN_ID
+    assert report["http_status"] == 502 and report["request_failure"] == "http_status"
+    assert report["diagnostic_event_emission_failed"] is True
+    assert report["cleanup"] == ("ok" if cleanup_status == 204 else "failed")
+    assert secret not in path.read_text(encoding="utf-8") + capsys.readouterr().out

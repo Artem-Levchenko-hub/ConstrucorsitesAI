@@ -118,6 +118,78 @@ def _diagnostic_uuid(value: str | None) -> str | None:
         return None
 
 
+_REQUEST_METHODS = frozenset({"GET", "POST", "DELETE", "unknown"})
+_REQUEST_ROUTES = frozenset({
+    "web_health", "api_health", "auth_login", "project_create", "project_prompt",
+    "project_generation", "project_detail", "project_snapshot", "project_runtime",
+    "project_runtime_start", "project_preview_session", "unknown",
+})
+_REQUEST_FAILURES = frozenset({
+    "transport", "http_status", "invalid_json", "invalid_payload", "generation_identity",
+    "generation_status", "generation_terminal", "response_mode", "runtime_state", "deadline",
+})
+_TRANSPORT_TYPES = (
+    (httpx.ConnectTimeout, "connect_timeout"), (httpx.ReadTimeout, "read_timeout"),
+    (httpx.WriteTimeout, "write_timeout"), (httpx.PoolTimeout, "pool_timeout"),
+    (httpx.ConnectError, "connect_error"), (httpx.ReadError, "read_error"),
+    (httpx.WriteError, "write_error"), (httpx.CloseError, "close_error"),
+    (httpx.RemoteProtocolError, "remote_protocol_error"),
+    (httpx.LocalProtocolError, "local_protocol_error"),
+    (httpx.UnsupportedProtocol, "unsupported_protocol"), (httpx.ProxyError, "proxy_error"),
+    (httpx.TimeoutException, "timeout"), (httpx.NetworkError, "network_error"),
+    (httpx.HTTPError, "http_error"),
+)
+_TRANSPORT_NAMES = frozenset(name for _kind, name in _TRANSPORT_TYPES)
+_OBSERVATION_ROUTES = frozenset({
+    "web_health", "api_health", "project_generation", "project_detail",
+    "project_snapshot", "project_runtime",
+})
+_OBSERVATION_RETRY_STATUSES = frozenset({429, 502, 503, 504})
+_OBSERVATION_MAX_ATTEMPTS = 3
+_OBSERVATION_RETRY_BASE_SECONDS = 1.0
+_UUID_ROUTE = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+
+
+def _request_route(path: str) -> str:
+    """Publish only an endpoint label; never a URL, query, token or arbitrary path."""
+    fixed = {"/web-health": "web_health", "/api/health": "api_health",
+             "/api/auth/login": "auth_login", "/api/projects": "project_create"}
+    if path in fixed:
+        return fixed[path]
+    project = rf"/api/projects/{_UUID_ROUTE}"
+    for suffix, route in (
+        ("", "project_detail"), ("/prompt", "project_prompt"),
+        ("/generation", "project_generation"), ("/runtime", "project_runtime"),
+        ("/runtime/start", "project_runtime_start"),
+        ("/max/preview-session", "project_preview_session"),
+        (rf"/snapshots/{_UUID_ROUTE}", "project_snapshot"),
+    ):
+        if re.fullmatch(project + suffix, path) is not None:
+            return route
+    return "unknown"
+
+
+def _safe_request_diagnostics(value: object) -> dict[str, object]:
+    if not isinstance(value, dict) or len(value) > 8:
+        return {}
+    safe: dict[str, object] = {}
+    for key, allowed in (
+        ("request_method", _REQUEST_METHODS), ("request_route", _REQUEST_ROUTES),
+        ("request_failure", _REQUEST_FAILURES), ("transport_error", _TRANSPORT_NAMES),
+    ):
+        item = value.get(key)
+        if isinstance(item, str) and len(item) <= 64 and item in allowed:
+            safe[key] = item
+    attempts = value.get("observation_attempts")
+    if type(attempts) is int and 0 <= attempts <= _OBSERVATION_MAX_ATTEMPTS:
+        safe["observation_attempts"] = attempts
+    return safe
+
+
+def _transport_type(error: httpx.HTTPError) -> str:
+    return next(name for kind, name in _TRANSPORT_TYPES if isinstance(error, kind))
+
+
 class CanaryConfigurationError(ValueError):
     pass
 
@@ -147,6 +219,7 @@ class CanaryFailure(RuntimeError):
         project_id: str | None = None,
         run_id: str | None = None,
         generation_failure: object = None,
+        request_diagnostics: object = None,
     ) -> None:
         super().__init__(message)
         resolved_stage = stage if stage is not None else type(self).default_stage
@@ -160,7 +233,10 @@ class CanaryFailure(RuntimeError):
         self.component = component
         self.expected = expected
         self.actual = actual
-        self.http_status = http_status
+        self.http_status = (
+            http_status if type(http_status) is int and 100 <= http_status <= 599 else None
+        )
+        self.request_diagnostics = _safe_request_diagnostics(request_diagnostics)
         self.project_id = _diagnostic_uuid(project_id)
         self.run_id = _diagnostic_uuid(run_id)
         self.failure_code: str | None = None
@@ -171,6 +247,7 @@ class CanaryFailure(RuntimeError):
             )
         self.cleanup = "unknown"
         self.elapsed_seconds: float | None = None
+        self.diagnostic_event_emission_failed = False
 
     def diagnostics(self) -> dict[str, object]:
         report: dict[str, object] = {
@@ -193,6 +270,9 @@ class CanaryFailure(RuntimeError):
                 report[key] = value
         if self.generation_diagnostics is not None:
             report["generation_diagnostics"] = dict(self.generation_diagnostics)
+        report.update(self.request_diagnostics)
+        if self.diagnostic_event_emission_failed:
+            report["diagnostic_event_emission_failed"] = True
         return report
 
 
@@ -417,6 +497,10 @@ class ProductionCanary:
         self._started_at = 0.0
         self._deadline = 0.0
         self._stage = "unknown"
+        self._project_id: str | None = None
+        self._run_id: str | None = None
+        self._last_request_info: dict[str, object] = {}
+        self._last_response_status: int | None = None
 
     def run(self) -> CanaryResult:
         self._started_at = self._clock()
@@ -448,6 +532,7 @@ class ProductionCanary:
                 },
             )
             project_id = self._required_uuid(project, "id", code="project_create_failed")
+            self._project_id = project_id
             self._created_project_id = project_id  # the only project cleanup may delete
             seed_snapshot_id = self._required_uuid(
                 project,
@@ -460,9 +545,9 @@ class ProductionCanary:
             build_run_id = self._start_prompt(project_id, BUILD_PROMPT, "build")
             build_run = self._poll_generation(project_id, build_run_id)
             if build_run.get("response_mode") != "build":
-                raise self._fail(
+                raise self._response_failure(
                     "build run returned the wrong response mode",
-                    code="build_failed",
+                    code="build_failed", reason="response_mode",
                 )
             build_snapshot_id = self._assert_new_snapshot(project_id, seed_snapshot_id)
 
@@ -488,9 +573,9 @@ class ProductionCanary:
             edit_run_id = self._start_prompt(project_id, EDIT_PROMPT, "edit")
             edit_run = self._poll_generation(project_id, edit_run_id)
             if edit_run.get("response_mode") != "edit":
-                raise self._fail(
+                raise self._response_failure(
                     "edit run returned the wrong response mode",
-                    code="edit_failed",
+                    code="edit_failed", reason="response_mode",
                 )
             edit_snapshot_id = self._assert_new_snapshot(project_id, build_snapshot_id)
 
@@ -508,9 +593,14 @@ class ProductionCanary:
             )
         except BaseException as exc:
             caught = exc
+            if isinstance(exc, CanaryFailure):
+                self._failure_event("stage_failure", "failed", exc)
         finally:
             self._stage = "cleanup"
-            cleanup_failure = self._cleanup(project_id, logged_in=logged_in)
+            try:
+                cleanup_failure = self._cleanup(project_id, logged_in=logged_in)
+            except Exception:
+                cleanup_failure = CanaryCleanupFailure("canary cleanup failed")
 
         if caught is not None:
             if isinstance(caught, CanaryFailure):
@@ -562,7 +652,14 @@ class ProductionCanary:
 
         failure.cleanup = "failed" if cleanup_failed else "ok"
         failure.elapsed_seconds = round(max(0.0, self._clock() - self._started_at), 3)
-        self._emit({"step": "canary", "status": "failed"} | failure.diagnostics())
+        self._failure_event("canary", "failed", failure)
+
+    def _failure_event(self, step: str, status: str, failure: CanaryFailure) -> None:
+        """A broken event sink is secondary; the original failure still reaches CLI."""
+        try:
+            self._event(step, status, failure=failure)
+        except Exception:
+            failure.diagnostic_event_emission_failed = True
 
     def _fail(
         self,
@@ -576,6 +673,7 @@ class ProductionCanary:
         project_id: str | None = None,
         run_id: str | None = None,
         generation_failure: object = None,
+        request_diagnostics: object = None,
     ) -> CanaryFailure:
         return CanaryFailure(
             message,
@@ -585,9 +683,19 @@ class ProductionCanary:
             expected=expected,
             actual=actual,
             http_status=http_status,
-            project_id=project_id,
-            run_id=run_id,
+            project_id=project_id if project_id is not None else self._project_id,
+            run_id=run_id if run_id is not None else self._run_id,
             generation_failure=generation_failure,
+            request_diagnostics=request_diagnostics,
+        )
+
+    def _response_failure(
+        self, message: str, *, code: str, reason: str, generation_failure: object = None,
+    ) -> CanaryFailure:
+        return self._fail(
+            message, code=code, http_status=self._last_response_status,
+            generation_failure=generation_failure,
+            request_diagnostics={**self._last_request_info, "request_failure": reason},
         )
 
     def _request_json(
@@ -597,37 +705,71 @@ class ProductionCanary:
         *,
         json: object | None = None,
         timeout_seconds: float = _REQUEST_TIMEOUT_SECONDS,
+        observation_deadline: float | None = None,
     ) -> dict[str, object]:
-        try:
-            response = self._client.request(
-                method,
-                path,
-                json=json,
-                timeout=self._request_timeout(timeout_seconds),
-            )
-        except httpx.HTTPError as exc:
-            raise self._fail("public API request failed", code=self._request_code()) from exc
-        if not 200 <= response.status_code < 300:
-            raise self._fail(
-                "public API returned an unexpected status",
-                code=self._request_code(),
-                http_status=response.status_code,
-            )
-        try:
-            payload: Any = response.json()
-        except (ValueError, RecursionError) as exc:
-            raise self._fail(
-                "public API returned invalid JSON",
-                code=self._request_code(invalid=True),
-                http_status=response.status_code,
-            ) from exc
-        if not isinstance(payload, dict):
-            raise self._fail(
-                "public API returned an invalid payload",
-                code=self._request_code(invalid=True),
-                http_status=response.status_code,
-            )
-        return payload
+        route = _request_route(path)
+        deadline = min(
+            self._deadline,
+            observation_deadline if observation_deadline is not None else self._deadline,
+        )
+        observation = method == "GET" and route in _OBSERVATION_ROUTES
+        attempts = _OBSERVATION_MAX_ATTEMPTS if observation else 1
+        for attempt in range(1, attempts + 1):
+            context: dict[str, object] = {"request_method": method, "request_route": route}
+            if observation:
+                context["observation_attempts"] = attempt
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                if observation:
+                    context["observation_attempts"] = attempt - 1
+                raise self._fail(
+                    "canary deadline exceeded", code="timeout",
+                    request_diagnostics={**context, "request_failure": "deadline"},
+                )
+            timeout = min(timeout_seconds, remaining)
+            try:
+                response = self._client.request(method, path, json=json, timeout=timeout)
+            except httpx.HTTPError as exc:
+                failure = self._fail(
+                    "public API request failed", code=self._request_code(),
+                    request_diagnostics={**context, "request_failure": "transport",
+                                         "transport_error": _transport_type(exc)},
+                )
+                retryable = isinstance(
+                    exc, (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError),
+                )
+            else:
+                if 200 <= response.status_code < 300:
+                    self._last_request_info = context
+                    self._last_response_status = response.status_code
+                    try:
+                        payload: Any = response.json()
+                    except (ValueError, RecursionError) as exc:
+                        raise self._response_failure(
+                            "public API returned invalid JSON",
+                            code=self._request_code(invalid=True), reason="invalid_json",
+                        ) from exc
+                    if not isinstance(payload, dict):
+                        raise self._response_failure(
+                            "public API returned an invalid payload",
+                            code=self._request_code(invalid=True), reason="invalid_payload",
+                        )
+                    return payload
+                failure = self._fail(
+                    "public API returned an unexpected status", code=self._request_code(),
+                    http_status=response.status_code,
+                    request_diagnostics={**context, "request_failure": "http_status"},
+                )
+                retryable = response.status_code in _OBSERVATION_RETRY_STATUSES
+            delay = _OBSERVATION_RETRY_BASE_SECONDS * attempt
+            if (
+                not observation or not retryable or attempt == attempts
+                or deadline - self._clock() <= delay
+            ):
+                raise failure
+            self._failure_event("observation_retry", "retry", failure)
+            self._sleep(delay)
+        raise AssertionError("bounded observation request exhausted")
 
     def _request_code(self, *, invalid: bool = False) -> str:
         codes = _STAGE_REQUEST_CODES.get(self._stage, ("api_http_error", "api_invalid_response"))
@@ -765,6 +907,8 @@ class ProductionCanary:
         self._event("generation_cancel", "ok", project_id=project_id)
 
     def _start_prompt(self, project_id: str, prompt: str, expected_mode: str) -> str:
+        self._project_id = _diagnostic_uuid(project_id)
+        self._run_id = None
         response = self._request_json(
             "POST",
             f"/api/projects/{project_id}/prompt",
@@ -775,10 +919,11 @@ class ProductionCanary:
             },
         )
         run_id = self._required_uuid(response, "run_id", code=f"{expected_mode}_failed")
+        self._run_id = run_id
         if response.get("mode") != expected_mode:
-            raise self._fail(
+            raise self._response_failure(
                 "prompt returned the wrong generation mode",
-                code=f"{expected_mode}_failed",
+                code=f"{expected_mode}_failed", reason="response_mode",
             )
         self._event(
             f"{expected_mode}_start",
@@ -789,12 +934,14 @@ class ProductionCanary:
         return run_id
 
     def _poll_generation(self, project_id: str, run_id: str) -> dict[str, object]:
+        self._project_id = _diagnostic_uuid(project_id)
+        self._run_id = _diagnostic_uuid(run_id)
         while True:
             run = self._request_json("GET", f"/api/projects/{project_id}/generation")
             if run.get("id") != run_id:
-                raise self._fail(
+                raise self._response_failure(
                     "latest generation run identity changed",
-                    code=self._request_code(),
+                    code=self._request_code(), reason="generation_identity",
                 )
             status = run.get("status")
             if status == "completed":
@@ -806,23 +953,23 @@ class ProductionCanary:
                 )
                 return run
             if isinstance(status, str) and status in {"failed", "cancelled"}:
-                failure = self._fail(
+                failure = self._response_failure(
                     "generation reached a failed terminal status",
-                    code=self._request_code(),
-                    project_id=project_id,
-                    run_id=run_id,
+                    code=self._request_code(), reason="generation_terminal",
                     generation_failure=run.get("failure"),
                 )
-                self._event("generation", status, failure=failure)
+                self._failure_event("generation", status, failure)
                 raise failure
             if not isinstance(status, str) or status not in _ACTIVE_GENERATION_STATUSES:
-                raise self._fail(
+                raise self._response_failure(
                     "generation returned an invalid status",
-                    code=self._request_code(invalid=True),
+                    code=self._request_code(invalid=True), reason="generation_status",
                 )
             remaining = self._remaining_seconds()
             if remaining <= 0:
-                raise self._fail("generation deadline exceeded", code="timeout")
+                raise self._response_failure(
+                    "generation deadline exceeded", code="timeout", reason="deadline",
+                )
             self._sleep(min(self.config.poll_seconds, remaining))
 
     def _start_runtime(self, project_id: str) -> None:
@@ -837,7 +984,9 @@ class ProductionCanary:
             if runtime.get("state") == "running":
                 return
             if runtime.get("state") != "provisioning":
-                raise self._fail("runtime did not start", code="runtime_failed")
+                raise self._response_failure(
+                    "runtime did not start", code="runtime_failed", reason="runtime_state",
+                )
             remaining = deadline - self._clock()
             if remaining <= 0:
                 break
@@ -848,8 +997,11 @@ class ProductionCanary:
             runtime = self._request_json(
                 "GET", f"/api/projects/{project_id}/runtime",
                 timeout_seconds=min(_REQUEST_TIMEOUT_SECONDS, remaining),
+                observation_deadline=deadline,
             )
-        raise self._fail("runtime start deadline exceeded", code="timeout")
+        raise self._response_failure(
+            "runtime start deadline exceeded", code="timeout", reason="deadline",
+        )
 
     def _observe_releases(self) -> dict[str, str]:
         """Read the running revision of every checked component."""
@@ -1007,11 +1159,15 @@ class ProductionCanary:
     ) -> str:
         value = payload.get(key)
         if not isinstance(value, str):
-            raise self._fail(f"{key} is not a valid identifier", code=code)
+            raise self._response_failure(
+                f"{key} is not a valid identifier", code=code, reason="invalid_payload",
+            )
         try:
             return str(UUID(value))
         except ValueError as exc:
-            raise self._fail(f"{key} is not a valid identifier", code=code) from exc
+            raise self._response_failure(
+                f"{key} is not a valid identifier", code=code, reason="invalid_payload",
+            ) from exc
 
     def _remaining_seconds(self) -> float:
         return self._deadline - self._clock()

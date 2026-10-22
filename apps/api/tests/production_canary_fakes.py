@@ -63,6 +63,9 @@ class FakeProduction:
     build_failure: object | None = None
     edit_failure: object | None = None
     generation_extra: dict[str, object] = field(default_factory=dict)
+    build_observations: list[httpx.Response | httpx.HTTPError] = field(default_factory=list)
+    edit_observations: list[httpx.Response | httpx.HTTPError] = field(default_factory=list)
+    edit_prompt_error: httpx.HTTPError | None = None
     build_queue_polls: int = 0
     cancel_status: int = 202
     runtime_state: str = "running"
@@ -140,6 +143,8 @@ class FakeProduction:
             if prompt_mode == "build":
                 self._edit_started = True
                 return httpx.Response(202, json={"run_id": BUILD_RUN_ID, "mode": "build"})
+            if self.edit_prompt_error is not None:
+                raise self.edit_prompt_error
             self._edit_prompted = True
             return httpx.Response(202, json={"run_id": EDIT_RUN_ID, "mode": "edit"})
         if path == f"{project_path}/generation/cancel" and method == "POST":
@@ -149,6 +154,12 @@ class FakeProduction:
             return httpx.Response(self.cancel_status, json={"status": "cancel_requested"})
         if path == f"{project_path}/generation":
             building = self._project_reads == 0
+            observations = self.build_observations if building else self.edit_observations
+            if observations:
+                outcome = observations.pop(0)
+                if isinstance(outcome, httpx.HTTPError):
+                    raise outcome
+                return outcome
             if building and self.build_queue_polls > 0:
                 self.build_queue_polls -= 1
                 return httpx.Response(
