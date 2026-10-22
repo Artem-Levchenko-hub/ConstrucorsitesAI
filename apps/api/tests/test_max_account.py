@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from yleum_api.core.config import FREE_GENERATION_LIMIT, get_settings
+from yleum_api.core.config import get_settings
 from yleum_api.models.account import LegalAcceptance
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.user import User
@@ -230,7 +230,11 @@ async def test_max_free_generation_limit_belongs_to_the_user(
     async def capture_verification(_user, raw_token):
         verification_tokens.append(raw_token)
 
+    async def destroy_runtime(_project_id, _slug):
+        return {"state": "destroyed"}
+
     monkeypatch.setattr(auth_router, "_send_verification", capture_verification)
+    monkeypatch.setattr("yleum_api.services.orchestrator_client.destroy", destroy_runtime)
     registered = await client.post(
         "/api/auth/register",
         json={**MAX_REGISTRATION, "email": "quota@example.com"},
@@ -248,37 +252,48 @@ async def test_max_free_generation_limit_belongs_to_the_user(
     user = (
         await db_session.execute(select(User).where(User.email == "quota@example.com"))
     ).scalar_one()
-    user.free_generations_used = FREE_GENERATION_LIMIT
+    user_id = user.id
+    user.free_creations_carryover = 1
     wallet = await db_session.get(Wallet, user.id)
     assert wallet is not None
     wallet.balance_rub = Decimal("0")
     await db_session.commit()
 
-    blocked = await client.post(
-        f"/api/projects/{project.json()['id']}/prompt",
-        json={
-            "prompt": "Собери приложение",
-            "skip_clarify": True,
-            "idempotency_key": "max-user-quota-1",
-        },
+    async def assert_creation_exhausted(project_id: str, key: str) -> None:
+        blocked = await client.post(
+            f"/api/projects/{project_id}/prompt",
+            json={
+                "prompt": "Собери приложение",
+                "skip_clarify": True,
+                "idempotency_key": key,
+            },
+        )
+        assert blocked.status_code == 402
+        error = blocked.json()["error"]
+        assert error["code"] == "entitlement_exceeded"
+        assert error["details"]["entitlement"] == "included_creations"
+        assert error["details"]["period"] == "lifetime"
+        assert error["details"]["used"] == 1
+        assert error["details"]["remaining"] == 0
+        # Match the production request-session rollback before the next request.
+        await db_session.rollback()
+
+    project_id = project.json()["id"]
+    await assert_creation_exhausted(project_id, "max-user-quota-1")
+    await assert_creation_exhausted(project_id, "max-user-quota-1")
+
+    deleted = await client.delete(f"/api/projects/{project_id}")
+    assert deleted.status_code == 204, deleted.text
+    assert await db_session.scalar(
+        select(User.free_creations_carryover).where(User.id == user_id)
+    ) == 1
+    replacement = await client.post(
+        "/api/projects",
+        json={"name": "Replacement MAX", "template": "max_miniapp"},
     )
-    assert blocked.status_code == 402
-    assert blocked.json()["error"]["code"] == "entitlement_exceeded"
-    assert blocked.json()["error"]["details"]["entitlement"] == "free_chat_messages"
-    # Match the production request-session rollback before retrying the same key.
-    await db_session.rollback()
-    retry = await client.post(
-        f"/api/projects/{project.json()['id']}/prompt",
-        json={
-            "prompt": "Собери приложение",
-            "skip_clarify": True,
-            "idempotency_key": "max-user-quota-1",
-        },
-    )
-    assert retry.status_code == 402
-    assert retry.json()["error"]["code"] == "entitlement_exceeded"
-    assert retry.json()["error"]["details"]["entitlement"] == "free_chat_messages"
-    await db_session.rollback()
+    assert replacement.status_code == 201, replacement.text
+    assert replacement.json()["id"] != project_id
+    await assert_creation_exhausted(replacement.json()["id"], "max-user-quota-2")
     assert (await db_session.scalars(select(GenerationRun))).all() == []
 
 

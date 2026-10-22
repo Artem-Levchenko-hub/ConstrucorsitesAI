@@ -317,11 +317,17 @@ def test_canonical_deploy_relay_stays_within_api_drain(tmp_path):
     finish = "finish_owned_release() {" + finish_body + "\n}\n"
     script = '''set -euo pipefail
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+REPO=.
 API=1 GW=0
 READER_NONCE=11111111-1111-4111-8111-111111111111
 say() { case "$*" in "оркестраторы:"*) printf 'controllers\\n';; esac; }
 verify_billing_runtime() { :; }
-api_maintenance() { if [ "$1" = - ]; then cat >/dev/null; else printf 'sql-end\\n'; fi; }
+api_maintenance() {
+ if [ "$1" = - ]; then cat >/dev/null
+ elif [ "$2" = yleum_api.services.billing_plan_cutover ]; then printf 'free-normalize\\n'
+ else printf 'sql-end\\n'; fi
+}
+git() { return 0; }
 ssh() {
  case "$*" in
   *"git -C /opt/omnia show"*) printf '%064d' 0 ;;
@@ -346,7 +352,8 @@ reader_control() { printf '%s-%s\\n' "$2" "$1"; }
     assert result.returncode == 0, result.stderr
     events = result.stdout.splitlines()
     assert events.index("controllers") < events.index("relay") < events.index("physical")
-    assert events.index("physical") < events.index("ingress-end") < events.index("sql-end")
+    assert events.index("physical") < events.index("free-normalize") < events.index("ingress-end")
+    assert events.index("ingress-end") < events.index("sql-end")
     assert events.index("sql-end") < events.index("clear-core") < events.index("clear-commerce")
 
 
