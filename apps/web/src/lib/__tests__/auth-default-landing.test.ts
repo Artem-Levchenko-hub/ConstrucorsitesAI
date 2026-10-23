@@ -10,7 +10,7 @@ const redirect = vi.fn((target: string) => {
   throw new Error(`redirect:${target}`);
 });
 vi.mock("next/navigation", () => ({ redirect }));
-vi.mock("next/headers", () => ({ cookies: async () => ({ set: vi.fn() }) }));
+vi.mock("next/headers", () => ({ cookies: async () => ({ get: vi.fn(), set: vi.fn() }), headers: async () => new Headers() }));
 
 function form(fields: Record<string, string>): FormData {
   const data = new FormData();

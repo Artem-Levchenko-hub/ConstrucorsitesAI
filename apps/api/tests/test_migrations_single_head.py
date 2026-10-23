@@ -31,7 +31,8 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_RECOVERY_HEAD = "0088_generation_recovery_effects"
+_CURRENT_HEAD = "0089_shared_max_bots"
+_RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
 # the optional `(?::[^=\n]+)?` swallows a type annotation. A root's
@@ -201,13 +202,14 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_recovery_effects_is_the_only_head() -> None:
+def test_shared_max_bots_is_the_only_head_after_recovery_effects() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
-    assert heads == [_RECOVERY_HEAD]
-    assert chain[_RECOVERY_HEAD] == "0087_generation_responses"
+    assert heads == [_CURRENT_HEAD]
+    assert chain[_CURRENT_HEAD] == _RECOVERY_REVISION
+    assert chain[_RECOVERY_REVISION] == "0087_generation_responses"
     assert chain["0087_generation_responses"] == "0086_generation_provider_attempts"
     assert chain["0086_generation_provider_attempts"] == "0085_integration_consent"
     assert chain["0085_integration_consent"] == "0084_billing_catalog_v3"
@@ -255,11 +257,13 @@ def test_recovery_effect_migration_retains_evidence_on_downgrade(
         "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
     )
     before = {str(row["tablename"]) for row in database.fetch(relation_query)}
-    database.upgrade("head")
-    database.upgrade("head")
+    # Pin this round-trip to 0088: its evidence-retention safeguard must remain
+    # independently tested as later migrations advance the current schema head.
+    database.upgrade(_RECOVERY_REVISION)
+    database.upgrade(_RECOVERY_REVISION)
     after = {str(row["tablename"]) for row in database.fetch(relation_query)}
     assert after == before | {"generation_recovery_effects"}
-    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_REVISION
 
     if with_effect:
         effect, run, project, user, claim = [str(uuid4()) for _ in range(5)]
@@ -275,7 +279,7 @@ def test_recovery_effect_migration_retains_evidence_on_downgrade(
         )
         with pytest.raises(RuntimeError, match="generation recovery evidence prevents downgrade"):
             command.downgrade(database.config, parent)
-        assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+        assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_REVISION
         assert database.fetchval("SELECT count(*) FROM generation_recovery_effects") == 1
         assert (
             database.fetchval("SELECT effect_id::text FROM generation_recovery_effects") == effect
@@ -437,7 +441,7 @@ def test_email_code_upgrade_preserves_existing_verification_links(
 
     database.upgrade("head")
 
-    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _CURRENT_HEAD
     assert [
         tuple(row)
         for row in database.fetch(
@@ -469,7 +473,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     database = project_cell_migration_database
     database.upgrade("0065_restoration_execution_policy")
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _CURRENT_HEAD
     assert [
         tuple(row)
         for row in database.fetch(
@@ -625,7 +629,7 @@ def test_restoration_adaptation_migrations_roundtrip(
     assert database.fetchval("SELECT to_regclass('moysklad_installations')") is None
     assert database.fetchval("SELECT to_regclass('moysklad_vendor_receipts')") is None
     database.upgrade("head")
-    assert database.fetchval("SELECT version_num FROM alembic_version") == _RECOVERY_HEAD
+    assert database.fetchval("SELECT version_num FROM alembic_version") == _CURRENT_HEAD
     assert database.fetchval("SELECT to_regclass('usage_settlements')") is not None
 
 

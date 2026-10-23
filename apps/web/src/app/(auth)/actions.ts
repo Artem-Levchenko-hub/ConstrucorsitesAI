@@ -1,6 +1,6 @@
 "use server";
 
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import {
@@ -74,11 +74,22 @@ async function callAuth(
   body: Record<string, unknown>,
 ): Promise<string | null> {
   const url = `${apiBaseUrl()}/api/auth/${endpoint}`;
+  const cookieStore = await cookies();
+  const existingSession = endpoint === "login" ? cookieStore.get(COOKIE_NAME)?.value : undefined;
+  const browserHeaders = await headers();
+  const userAgent = browserHeaders.get("user-agent");
+  // The edge overwrites X-Real-IP. Do not relay the client's X-Forwarded-For chain.
+  const clientIp = browserHeaders.get("x-real-ip");
   let response: Response;
   try {
     response = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(existingSession ? { Cookie: `${COOKIE_NAME}=${existingSession}` } : {}),
+        ...(userAgent ? { "User-Agent": userAgent } : {}),
+        ...(clientIp ? { "X-Forwarded-For": clientIp } : {}),
+      },
       body: JSON.stringify(body),
       cache: "no-store",
     });
@@ -131,7 +142,6 @@ async function callAuth(
     return "Не удалось установить сессию (cookie не получен от api)";
   }
 
-  const cookieStore = await cookies();
   cookieStore.set({
     name: COOKIE_NAME,
     value: token,

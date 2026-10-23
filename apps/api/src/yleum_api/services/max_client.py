@@ -155,7 +155,7 @@ async def list_subscriptions(token: str) -> list[dict[str, Any]]:
 
 
 async def subscribe(token: str, url: str, secret: str) -> None:
-    await _request(
+    result = await _request(
         "POST",
         "/subscriptions",
         token,
@@ -165,10 +165,18 @@ async def subscribe(token: str, url: str, secret: str) -> None:
             "update_types": ["message_created", "message_callback", "bot_started"],
         },
     )
+    _check_subscription_result(result)
 
 
 async def unsubscribe(token: str, url: str) -> None:
-    await _request("DELETE", "/subscriptions", token, params={"url": url})
+    result = await _request("DELETE", "/subscriptions", token, params={"url": url})
+    _check_subscription_result(result)
+
+
+def _check_subscription_result(result: Any) -> None:
+    if isinstance(result, dict) and result.get("success") is False:
+        # Provider messages may echo credentials or webhook URLs.
+        raise MaxClientError("MAX не подтвердил изменение webhook-подписки")
 
 
 async def has_subscription(token: str, url: str) -> bool:

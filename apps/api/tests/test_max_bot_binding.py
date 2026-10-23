@@ -1,4 +1,4 @@
-"""Real PostgreSQL reservations with synthetic MAX and runtime boundaries."""
+"""Independent project bindings with real PostgreSQL and synthetic MAX boundaries."""
 
 import asyncio
 from types import SimpleNamespace
@@ -6,10 +6,9 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import Select, func, select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.sql.elements import TextClause
 
 from yleum_api.core.crypto import decrypt_strong, encrypt_strong
 from yleum_api.core.deps import get_current_user
@@ -77,7 +76,7 @@ def boundaries(monkeypatch):
 
 @pytest.mark.parametrize("same_owner", [False, True])
 @pytest.mark.parametrize("existing_status", ["verified", "active", "error"])
-async def test_other_project_conflict_is_409_without_mutation(
+async def test_other_project_can_connect_same_bot_without_mutating_existing_binding(
     client,
     db_session,
     boundaries,
@@ -95,16 +94,16 @@ async def test_other_project_conflict_is_409_without_mutation(
         f"/api/projects/{values[1].id}/integrations/max/connect",
         json={"token": TOKEN},
     )
-    assert response.status_code == 409, response.text
-    assert response.json()["error"]["code"] == "max_bot_already_bound"
+    assert response.status_code == 200, response.text
+    assert response.json()["bot_id"] == "fixture-bot"
     assert str(values[0].id) not in response.text and str(owners[0].id) not in response.text
     assert TOKEN not in response.text and old_ciphertext not in response.text
-    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 2
     await db_session.refresh(old)
     assert old.bot_token_enc == old_ciphertext and old.status == existing_status
     boundaries["unsubscribe"].assert_not_awaited()
     boundaries["subscribe"].assert_not_awaited()
-    boundaries["sync"].assert_not_awaited()
+    boundaries["sync"].assert_awaited_once()
 
 
 async def test_same_project_reconnect_preserves_binding_and_secret(db_session, boundaries):
@@ -116,7 +115,7 @@ async def test_same_project_reconnect_preserves_binding_and_secret(db_session, b
     result = await router.connect_max(
         values[0].id, MaxConnectRequest(token=TOKEN), db_session, owners[0]
     )
-    assert result.connected and result.bot_id == "fixture-bot"
+    assert result.connected and result.bot_id == "fixture-bot" and result.status == "active"
     assert old.id == old_id and old.bot_token_enc == old_ciphertext
     assert old.webhook_secret_enc == old_secret
     assert old.webhook_url == "https://source.example.test/api/max/webhook"
@@ -124,26 +123,29 @@ async def test_same_project_reconnect_preserves_binding_and_secret(db_session, b
     boundaries["unsubscribe"].assert_not_awaited()
 
 
-async def test_rejected_replacement_keeps_old_bot_and_webhook(db_session, boundaries):
+async def test_replacement_changes_only_target_project_bot_and_webhook(db_session, boundaries):
     owners, values = await projects(db_session)
     source, target = binding(values[0]), binding(values[1], "other-bot")
     target.bot_token_enc = encrypt_strong("previous-target-token")
     db_session.add_all([source, target])
     await db_session.commit()
-    before = (target.bot_id, target.bot_token_enc, target.webhook_secret_enc, target.webhook_url)
-    with pytest.raises(ApiError) as error:
-        await router.connect_max(
-            values[1].id, MaxConnectRequest(token=TOKEN), db_session, owners[1]
-        )
-    assert error.value.code == "max_bot_already_bound" and error.value.status_code == 409
+    before = (source.bot_id, source.bot_token_enc, source.webhook_secret_enc, source.webhook_url)
+    result = await router.connect_max(
+        values[1].id, MaxConnectRequest(token=TOKEN), db_session, owners[1]
+    )
+    assert result.connected and result.bot_id == "fixture-bot"
     await db_session.refresh(target)
+    await db_session.refresh(source)
     assert (
-        target.bot_id,
-        target.bot_token_enc,
-        target.webhook_secret_enc,
-        target.webhook_url,
+        source.bot_id,
+        source.bot_token_enc,
+        source.webhook_secret_enc,
+        source.webhook_url,
     ) == before
-    boundaries["unsubscribe"].assert_not_awaited()
+    assert target.webhook_url is None
+    boundaries["unsubscribe"].assert_awaited_once_with(
+        "previous-target-token", "https://source.example.test/api/max/webhook"
+    )
 
 
 @pytest.mark.parametrize("bot_id", [None, "", "  "])
@@ -169,7 +171,7 @@ async def test_foreign_project_denied_before_provider_lookup(db_session, boundar
     boundaries["get_me"].assert_not_awaited()
 
 
-async def test_parallel_different_project_connect_has_one_winner(
+async def test_parallel_different_project_connect_both_succeed(
     test_engine, db_session, boundaries
 ):
     owners, values = await projects(db_session)
@@ -199,25 +201,21 @@ async def test_parallel_different_project_connect_has_one_winner(
                 return error
 
     results = await asyncio.wait_for(asyncio.gather(attempt(0), attempt(1)), 10)
-    errors = [result for result in results if isinstance(result, ApiError)]
-    assert len(errors) == 1 and errors[0].code in {
-        "max_bot_already_bound",
-        "max_bot_binding_busy",
-    }
-    assert errors[0].status_code == 409
-    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
-    boundaries["sync"].assert_awaited_once()
+    assert all(not isinstance(result, ApiError) and result.connected for result in results)
+    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 2
+    assert boundaries["sync"].await_count == 2
+    boundaries["unsubscribe"].assert_not_awaited()
 
 
-async def test_database_rejects_duplicate_even_without_api_guard(db_session, boundaries):
+async def test_database_allows_shared_bot_but_one_binding_per_project(db_session, boundaries):
     _, values = await projects(db_session)
-    db_session.add(binding(values[0]))
+    db_session.add_all([binding(values[0]), binding(values[1])])
     await db_session.commit()
     with pytest.raises(IntegrityError):
         async with db_session.begin_nested():
-            db_session.add(binding(values[1]))
+            db_session.add(binding(values[0], "another-bot"))
             await db_session.flush()
-    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 2
 
 
 async def test_parallel_same_project_reconnect_and_retry_keep_single_binding(
@@ -253,7 +251,7 @@ async def test_parallel_same_project_reconnect_and_retry_keep_single_binding(
     boundaries["unsubscribe"].assert_not_awaited()
 
 
-async def test_racing_replacements_leave_loser_credentials_and_webhook_untouched(
+async def test_racing_replacements_use_only_each_projects_previous_webhook(
     test_engine,
     db_session,
     boundaries,
@@ -266,9 +264,6 @@ async def test_racing_replacements_leave_loser_credentials_and_webhook_untouched
     db_session.add_all(old)
     await db_session.commit()
     ids = [item.id for item in old]
-    before = [
-        (item.bot_id, item.bot_token_enc, item.webhook_secret_enc, item.webhook_url) for item in old
-    ]
     owner_ids, project_ids = [owner.id for owner in owners], [project.id for project in values]
     await db_session.rollback()
     ready, arrived = asyncio.Event(), 0
@@ -295,17 +290,19 @@ async def test_racing_replacements_leave_loser_credentials_and_webhook_untouched
                 return error
 
     results = await asyncio.wait_for(asyncio.gather(attempt(0), attempt(1)), 10)
-    loser = next(index for index, result in enumerate(results) if isinstance(result, ApiError))
-    assert results[loser].code in {"max_bot_already_bound", "max_bot_binding_busy"}
-    saved = await db_session.get(MaxIntegration, ids[loser])
-    assert (
-        saved.bot_id,
-        saved.bot_token_enc,
-        saved.webhook_secret_enc,
-        saved.webhook_url,
-    ) == before[loser]
-    assert boundaries["unsubscribe"].await_count == 1
-    assert boundaries["unsubscribe"].await_args.args[1] != before[loser][3]
+    assert all(not isinstance(result, ApiError) and result.connected for result in results)
+    for identifier in ids:
+        # Both writers committed in other sessions; do not reuse the retained
+        # fixture objects from this expire_on_commit=False identity map.
+        saved = await db_session.get(MaxIntegration, identifier, populate_existing=True)
+        assert saved.bot_id == "fixture-bot" and saved.webhook_url is None
+        assert decrypt_strong(saved.bot_token_enc) == TOKEN
+    assert {
+        call.args for call in boundaries["unsubscribe"].await_args_list
+    } == {
+        ("previous-token-0", "https://old-0.example.test/api/max/webhook"),
+        ("previous-token-1", "https://old-1.example.test/api/max/webhook"),
+    }
     assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 2
 
 
@@ -331,13 +328,13 @@ async def test_commit_failure_does_not_leave_new_claim_or_sync_runtime(
     boundaries["unsubscribe"].assert_not_awaited()
 
 
-async def test_unrelated_integrity_failure_is_not_reported_as_bot_conflict(db_session, boundaries):
+async def test_status_constraint_still_rejects_invalid_binding(db_session, boundaries):
     _, values = await projects(db_session)
     invalid = binding(values[0], status="invalid-status")
     with pytest.raises(IntegrityError):
-        await router._reserve_bot_id(
-            db_session, invalid, max_client.MaxBot("fixture-bot", "Fixture", None)
-        )
+        async with db_session.begin_nested():
+            db_session.add(invalid)
+            await db_session.flush()
     assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 0
 
 
@@ -351,17 +348,16 @@ async def test_sync_failure_keeps_committed_reservation_for_same_project_retry(
             values[0].id, MaxConnectRequest(token=TOKEN), db_session, owners[0]
         )
     assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
-    with pytest.raises(ApiError) as error:
-        await router.connect_max(
-            values[1].id, MaxConnectRequest(token=TOKEN), db_session, owners[1]
-        )
-    assert error.value.code == "max_bot_already_bound"
     boundaries["sync"].side_effect = None
+    other = await router.connect_max(
+        values[1].id, MaxConnectRequest(token=TOKEN), db_session, owners[1]
+    )
+    assert other.connected
     result = await router.connect_max(
         values[0].id, MaxConnectRequest(token=TOKEN), db_session, owners[0]
     )
     assert result.connected
-    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
+    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 2
 
 
 async def test_failed_unsubscribe_releases_new_reservation_and_preserves_old(
@@ -397,16 +393,57 @@ async def test_failed_unsubscribe_releases_new_reservation_and_preserves_old(
     assert result.connected
 
 
-async def test_verify_cannot_reassign_to_another_project_bot(db_session, boundaries):
+async def test_verify_accepts_shared_identity_without_changing_other_project(
+    db_session, boundaries,
+):
     owners, values = await projects(db_session)
     source, target = binding(values[0]), binding(values[1], "previous-target-bot")
     db_session.add_all([source, target])
     await db_session.commit()
-    with pytest.raises(ApiError) as error:
-        await router.verify_max(values[1].id, db_session, owners[1])
-    assert error.value.code == "max_bot_already_bound"
+    before = (source.bot_token_enc, source.webhook_secret_enc, source.webhook_url, source.status)
+    result = await router.verify_max(values[1].id, db_session, owners[1])
+    assert result.connected and result.bot_id == "fixture-bot"
     await db_session.refresh(target)
-    assert target.bot_id == "previous-target-bot" and target.status == "active"
+    await db_session.refresh(source)
+    assert target.bot_id == "fixture-bot" and target.status == "active"
+    assert (
+        source.bot_token_enc, source.webhook_secret_enc, source.webhook_url, source.status
+    ) == before
+
+
+@pytest.mark.parametrize("operation", ["activate", "disconnect"])
+async def test_shared_bot_lifecycle_changes_only_current_projects_webhook(
+    db_session, boundaries, monkeypatch, operation,
+):
+    owners, values = await projects(db_session)
+    current, other = binding(values[0]), binding(values[1])
+    current.webhook_url = "https://current.example.test/api/max/webhook"
+    other.webhook_url = "https://other.example.test/api/max/webhook"
+    db_session.add_all([current, other])
+    await db_session.commit()
+    before = (other.bot_token_enc, other.webhook_secret_enc, other.webhook_url, other.status)
+    monkeypatch.setattr(router.orchestrator_client, "get_deploy", AsyncMock(return_value={
+        "phase": "done", "prod_url": "https://current-new.example.test",
+    }))
+    monkeypatch.setattr(max_client, "has_subscription", AsyncMock(return_value=False))
+    if operation == "activate":
+        result = await router.activate_max(values[0].id, db_session, owners[0])
+        assert result.webhook_url == "https://current-new.example.test/api/max/webhook"
+        boundaries["subscribe"].assert_awaited_once_with(
+            TOKEN, "https://current-new.example.test/api/max/webhook", "fixture-hook",
+        )
+    else:
+        response = await router.disconnect_max(values[0].id, db_session, owners[0])
+        assert response.status_code == 204
+        assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
+        boundaries["subscribe"].assert_not_awaited()
+    boundaries["unsubscribe"].assert_awaited_once_with(
+        TOKEN, "https://current.example.test/api/max/webhook",
+    )
+    await db_session.refresh(other)
+    assert (
+        other.bot_token_enc, other.webhook_secret_enc, other.webhook_url, other.status
+    ) == before
 
 
 @pytest.mark.parametrize("bot_id", [None, "", "  "])
@@ -424,7 +461,7 @@ async def test_verify_missing_identity_preserves_existing_binding(db_session, bo
     assert (old.bot_id, old.bot_token_enc, old.webhook_secret_enc, old.status) == before
 
 
-async def test_slow_provider_race_returns_409_before_production_db_timeout(
+async def test_slow_provider_different_projects_do_not_serialize_on_shared_bot(
     test_engine,
     db_session,
     boundaries,
@@ -473,60 +510,9 @@ async def test_slow_provider_race_returns_409_before_production_db_timeout(
         results = await asyncio.wait_for(
             asyncio.gather(attempt(0), attempt(1), return_exceptions=True), 18
         )
-        errors = [result for result in results if isinstance(result, ApiError)]
-        assert len(errors) == 1, [type(result).__name__ for result in results]
-        assert errors[0].status_code == 409
-        assert sum(not isinstance(result, BaseException) for result in results) == 1
+        assert all(not isinstance(result, BaseException) and result.connected for result in results)
     finally:
         await engine.dispose()
-
-
-async def test_database_unique_violation_is_mapped_when_conflict_prechecks_race(
-    test_engine,
-    db_session,
-    boundaries,
-    monkeypatch,
-):
-    owners, values = await projects(db_session)
-    owner_ids, project_ids = [owner.id for owner in owners], [project.id for project in values]
-    await db_session.rollback()
-    arrived, ready = 0, asyncio.Event()
-    factory = async_sessionmaker(test_engine, expire_on_commit=False)
-
-    async def attempt(index):
-        async with factory() as session:
-            original = session.scalar
-
-            async def stale_precheck(statement, *args, **kwargs):
-                nonlocal arrived
-                if isinstance(statement, TextClause) and "pg_try_advisory_xact_lock" in str(
-                    statement
-                ):
-                    # Model another writer that doesn't participate in advisory locking.
-                    return True
-                result = await original(statement, *args, **kwargs)
-                if isinstance(statement, Select) and "max_integrations.bot_id" in str(statement):
-                    assert result is None
-                    arrived += 1
-                    if arrived == 2:
-                        ready.set()
-                    await asyncio.wait_for(ready.wait(), 5)
-                return result
-
-            monkeypatch.setattr(session, "scalar", stale_precheck)
-            owner = await session.get(User, owner_ids[index])
-            try:
-                return await router.connect_max(
-                    project_ids[index], MaxConnectRequest(token=TOKEN), session, owner
-                )
-            except ApiError as error:
-                return error
-
-    results = await asyncio.wait_for(asyncio.gather(attempt(0), attempt(1)), 10)
-    errors = [result for result in results if isinstance(result, ApiError)]
-    assert len(errors) == 1 and errors[0].code == "max_bot_already_bound"
-    assert errors[0].status_code == 409
-    assert await db_session.scalar(select(func.count()).select_from(MaxIntegration)) == 1
 
 
 async def test_real_public_lock_and_sync_do_not_invert_row_advisory_order(

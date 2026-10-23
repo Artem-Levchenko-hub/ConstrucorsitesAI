@@ -96,3 +96,39 @@ async def test_subscription_lookup_accepts_wrapped_response(
     assert (
         await max_client.has_subscription("secret", "https://app.example/api/max/webhook") is True
     )
+
+
+@pytest.mark.parametrize("operation", ["subscribe", "unsubscribe"])
+async def test_subscription_http_success_with_negative_result_is_safe_failure(
+    monkeypatch: pytest.MonkeyPatch, operation: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"success": False, "message": "private-secret-response"})
+
+    monkeypatch.setattr(max_client, "_http_client", lambda: httpx.AsyncClient(
+        base_url=max_client.BASE_URL, transport=httpx.MockTransport(handler),
+    ))
+    with pytest.raises(max_client.MaxClientError) as error:
+        if operation == "subscribe":
+            await max_client.subscribe(
+                "token-secret", "https://app.example/api/max/webhook", "hook",
+            )
+        else:
+            await max_client.unsubscribe("token-secret", "https://app.example/api/max/webhook")
+    assert "private-secret-response" not in str(error.value)
+    assert "token-secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("operation", ["subscribe", "unsubscribe"])
+@pytest.mark.parametrize("empty", [False, True])
+async def test_subscription_accepts_explicit_success_or_empty_204(monkeypatch, operation, empty):
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204) if empty else httpx.Response(200, json={"success": True})
+
+    monkeypatch.setattr(max_client, "_http_client", lambda: httpx.AsyncClient(
+        base_url=max_client.BASE_URL, transport=httpx.MockTransport(handler),
+    ))
+    if operation == "subscribe":
+        await max_client.subscribe("token", "https://app.example/api/max/webhook", "hook")
+    else:
+        await max_client.unsubscribe("token", "https://app.example/api/max/webhook")
