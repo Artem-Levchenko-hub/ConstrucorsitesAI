@@ -37,6 +37,10 @@ _PUBLIC_ANONYMOUS = {
 _SESSION_COOKIE = "__Host-max_session"
 _EMBEDDED_COOKIES = ("__Host-max_session_embedded", "__Host-max_session_partitioned")
 _PUBLIC_FRAMING = "frame-ancestors 'self' https://web.max.ru https://max.ru"
+_CACHE_POLICY = {
+    "cache-control", "cdn-cache-control", "cloudflare-cdn-cache-control",
+    "surrogate-control", "expires", "pragma", "age",
+}
 # Адрес кабинета приходит в конфигурации шлюза: он менялся при переименовании,
 # а вшитый адрес означает, что после переезда браузер перестаёт показывать
 # превью владельцу. Старые шлюзы без этого ключа продолжают работать на
@@ -387,6 +391,21 @@ def product_headers(
     return clean
 
 
+def response_headers(
+    headers: Iterable[tuple[str, str]], *, managed: bool, personal: bool,
+) -> list[tuple[str, str]]:
+    """Generated responses cannot opt a verified user's dynamic data into caching."""
+    clean = [
+        (key, value) for key, value in headers
+        if key.casefold() not in _HOP
+        and (managed or key.casefold() != "set-cookie")
+        and (not personal or key.casefold() not in _CACHE_POLICY)
+    ]
+    if personal:
+        clean.append(("Cache-Control", "private, no-store"))
+    return clean
+
+
 class BoundaryServer(http.server.ThreadingHTTPServer):
     daemon_threads = True
     config: dict[str, Any]
@@ -559,6 +578,9 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         upstream_path = self.path
         if path.startswith(core_assets):
             upstream_path = "/_next/" + self.path[len(core_assets) :]
+        personal_response = (
+            user is not None or path in {"/api/max/session", preview_path}
+        ) and not path.startswith(core_assets + "static/")
         managed = legal_page or any(
             path == prefix or path.startswith(prefix + "/") for prefix in ("/api/omnia", "/api/max")
         )
@@ -648,9 +670,10 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
                 # assets in the managed namespace rather than loading project JS.
                 data = data.replace(b"/_next/", core_assets.encode())
             self.send_response(response.status)
-            for key, value in response.getheaders():
-                if key.casefold() not in _HOP and (managed or key.casefold() != "set-cookie"):
-                    self.send_header(key, value)
+            for key, value in response_headers(
+                response.getheaders(), managed=managed, personal=personal_response,
+            ):
+                self.send_header(key, value)
             if public and path == "/api/max/session" and self.command == "POST" and (
                 response.status == 200
             ):
