@@ -170,7 +170,39 @@ async def subscribe(token: str, url: str, secret: str) -> None:
 
 async def unsubscribe(token: str, url: str) -> None:
     result = await _request("DELETE", "/subscriptions", token, params={"url": url})
+    if isinstance(result, dict) and result.get("success") is False:
+        # MAX also rejects deletion when this URL is already absent. Confirm
+        # that postcondition without trusting a malformed or failed lookup.
+        subscriptions = await _request("GET", "/subscriptions", token)
+        if _confirmed_subscription_absence(subscriptions, url):
+            return
     _check_subscription_result(result)
+
+
+def _confirmed_subscription_absence(result: Any, url: str) -> bool:
+    if isinstance(result, dict):
+        if "success" in result and result["success"] is not True:
+            return False
+        result = result.get("subscriptions")
+    if not isinstance(result, list):
+        return False
+    try:
+        target = httpx.URL(url)
+    except httpx.InvalidURL:
+        return False
+    if target.scheme != "https" or not target.host:
+        return False
+    for item in result:
+        value = item.get("url") if isinstance(item, dict) else None
+        if not isinstance(value, str) or any(char.isspace() or ord(char) < 32 for char in value):
+            return False
+        try:
+            candidate = httpx.URL(value)
+        except httpx.InvalidURL:
+            return False
+        if candidate.scheme != "https" or not candidate.host or candidate == target:
+            return False
+    return True
 
 
 def _check_subscription_result(result: Any) -> None:

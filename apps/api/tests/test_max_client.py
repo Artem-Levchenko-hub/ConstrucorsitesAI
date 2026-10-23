@@ -132,3 +132,67 @@ async def test_subscription_accepts_explicit_success_or_empty_204(monkeypatch, o
         await max_client.subscribe("token", "https://app.example/api/max/webhook", "hook")
     else:
         await max_client.unsubscribe("token", "https://app.example/api/max/webhook")
+
+
+@pytest.mark.parametrize("subscriptions", [
+    {"subscriptions": []},
+    {"subscriptions": [{"url": "https://other.example/another-project"}]},
+    [],
+])
+async def test_unsubscribe_accepts_already_absent_url_only_after_provider_confirmation(
+    monkeypatch, subscriptions,
+):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"success": False})
+        return httpx.Response(200, json=subscriptions)
+
+    monkeypatch.setattr(max_client, "_http_client", lambda: httpx.AsyncClient(
+        base_url=max_client.BASE_URL, transport=httpx.MockTransport(handler),
+    ))
+    url = "https://app.example/api/max/webhook"
+    await max_client.unsubscribe("token", url)
+    assert [request.method for request in calls] == ["DELETE", "GET"]
+    assert calls[0].url.params["url"] == url
+    assert calls[1].url.path == "/subscriptions"
+    assert "url" not in calls[1].url.params
+
+
+@pytest.mark.parametrize("subscriptions", [
+    None, {}, {"subscriptions": None}, {"subscriptions": [None]},
+    {"subscriptions": [{}]}, {"subscriptions": [{"url": ""}]},
+    {"success": False, "subscriptions": []},
+    {"success": None, "subscriptions": []},
+    {"subscriptions": [{"url": "https://app.example/api/max/webhook"}]},
+    {"subscriptions": [{"url": "not-a-webhook-url"}]},
+    {"subscriptions": [{"url": " https://app.example/api/max/webhook "}]},
+    {"subscriptions": [{"url": "https://APP.EXAMPLE:443/api/max/webhook"}]},
+])
+async def test_unsubscribe_still_fails_when_absence_cannot_be_confirmed(
+    monkeypatch, subscriptions,
+):
+    def handler(request):
+        payload = {"success": False} if request.method == "DELETE" else subscriptions
+        return httpx.Response(200, json=payload)
+
+    monkeypatch.setattr(max_client, "_http_client", lambda: httpx.AsyncClient(
+        base_url=max_client.BASE_URL, transport=httpx.MockTransport(handler),
+    ))
+    with pytest.raises(max_client.MaxClientError):
+        await max_client.unsubscribe("token", "https://app.example/api/max/webhook")
+
+
+async def test_unsubscribe_does_not_ignore_failed_confirmation_request(monkeypatch):
+    def handler(request):
+        if request.method == "DELETE":
+            return httpx.Response(200, json={"success": False})
+        raise httpx.ConnectError("provider unavailable", request=request)
+
+    monkeypatch.setattr(max_client, "_http_client", lambda: httpx.AsyncClient(
+        base_url=max_client.BASE_URL, transport=httpx.MockTransport(handler),
+    ))
+    with pytest.raises(max_client.MaxApiUnavailable):
+        await max_client.unsubscribe("token", "https://app.example/api/max/webhook")
