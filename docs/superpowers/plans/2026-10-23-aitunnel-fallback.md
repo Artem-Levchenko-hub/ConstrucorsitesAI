@@ -54,7 +54,7 @@ Owner: primary. Files: new provider routing/fallback adapter, native/chat/stream
 - [x] Validate rejection policy, server-owned parent route, cancellation, partial stream and absent receipt.
 - [x] Implement one bounded fallback before accepted output; preserve messages/tools and model, actual provider scope and internal fallback metadata.
 - [x] Probe AI Tunnel Sonnet 5.5 tool call, tool result and streaming with minimal synthetic payload; record sanitized model/cost/results.
-- [x] Run focused tests followed by required complete gateway/API and PostgreSQL contracts (gateway 1032, API/migrations 232; Linux PostgreSQL 199 passed, four Redis-dependent cases deferred to configured CI).
+- [x] Run focused tests followed by required complete gateway/API and PostgreSQL contracts (gateway 1032, API/migrations 232; Linux PostgreSQL 199 passed, one Redis-dependent case deferred to configured CI, three physical MinIO cases excluded by the ordinary suite).
 
 ### Task 4: Review and delivery
 
