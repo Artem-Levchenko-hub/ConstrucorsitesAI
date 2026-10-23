@@ -120,11 +120,11 @@ export function MaxConnectionWizard({ projectId, onNavigate, onBusyChange }: {
       <Input id="max-connect-bot-token" type="password" autoComplete="off" value={token} disabled={busy}
         onChange={event => { if (busy) return; setToken(event.target.value); connect.reset(); }} placeholder="Вставьте токен из кабинета MAX" />
       <p className="max-connect-hint">Токен — секретный ключ бота. Он хранится зашифрованно и не показывается повторно.</p>
+      <p className="max-connect-hint">Можно подключить одного бота к нескольким приложениям. Данные и подключения каждого приложения сохраняются отдельно.</p>
+      <p className="max-connect-hint">У этих приложений будет общий чат с ботом. Чтобы у каждого был отдельный чат, используйте разных ботов.</p>
       {connect.isError && <p role="alert" className="max-connect-error">{
-        connect.error instanceof ApiError && connect.error.code === "max_bot_already_bound"
-          ? "Этот бот уже подключён к другому приложению. Сначала отключите его там."
-          : connect.error instanceof ApiError && connect.error.code === "max_bot_binding_busy"
-          ? "Подключение этого бота уже выполняется. Повторите попытку позже."
+        connect.error instanceof ApiError && connect.error.code === "max_bot_binding_busy"
+          ? "Подключение MAX для этого приложения уже изменяется. Повторите попытку позже."
           : "Не удалось подключить бота. Проверьте токен и повторите попытку."
       }</p>}
     </div>

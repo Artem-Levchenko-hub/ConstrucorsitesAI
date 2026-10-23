@@ -426,7 +426,11 @@ async def list_sessions(
     rows = (
         await session.execute(
             select(AuthSession)
-            .where(AuthSession.user_id == current_user.id, AuthSession.revoked_at.is_(None))
+            .where(
+                AuthSession.user_id == current_user.id,
+                AuthSession.revoked_at.is_(None),
+                AuthSession.expires_at > datetime.now(UTC),
+            )
             .order_by(AuthSession.created_at.desc())
         )
     ).scalars()

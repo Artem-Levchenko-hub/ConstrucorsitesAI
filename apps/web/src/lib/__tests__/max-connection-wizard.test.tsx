@@ -124,20 +124,18 @@ describe("MAX connection wizard", () => {
     expect(api.saveAttached).not.toHaveBeenCalled();
   });
 
-  it("explains a bot already connected elsewhere without advancing or disconnecting it", async () => {
+  it("connects a reusable bot without disconnecting another project", async () => {
     await render();
     await click("Бот готов — далее");
     await fillToken("test-secret-12345");
-    api.connect.mockRejectedValueOnce(new ApiError(409, {
-      code: "max_bot_already_bound",
-      message: "Этот бот уже подключён к другому приложению. Сначала отключите его там.",
-    }));
+    expect(container.textContent).toContain("одного бота к нескольким приложениям");
+    api.connect.mockResolvedValueOnce({ ...connected, bot_id: "shared-bot" });
     await click("Подключить бота");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("уже подключён к другому приложению");
-    expect(button("Перейти к публикации")).toBeUndefined();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(button("Перейти к публикации")).toBeDefined();
     expect(api.disconnect).not.toHaveBeenCalled();
     expect(api.activate).not.toHaveBeenCalled();
-    expect(container.querySelector<HTMLInputElement>('input[type="password"]')?.value).toBe("test-secret-12345");
+    expect(api.connect).toHaveBeenLastCalledWith("project-1", "test-secret-12345");
   });
 
   it("explains an in-progress bot connection without suggesting an invalid token", async () => {
@@ -149,7 +147,7 @@ describe("MAX connection wizard", () => {
       message: "Подключение этого бота уже выполняется. Повторите попытку позже.",
     }));
     await click("Подключить бота");
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain("уже выполняется");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("для этого приложения уже изменяется");
     expect(api.disconnect).not.toHaveBeenCalled();
     expect(button("Перейти к публикации")).toBeUndefined();
   });

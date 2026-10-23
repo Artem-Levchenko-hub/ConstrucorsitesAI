@@ -14,6 +14,7 @@ const redirect = vi.fn((target: string) => {
 vi.mock("next/navigation", () => ({ redirect }));
 vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => ({ value: "session-token" }), set: vi.fn() }),
+  headers: async () => new Headers(),
 }));
 
 import { apiFetch, apiUrl, postBlob } from "@/lib/api/client";
