@@ -1591,6 +1591,10 @@ async def test_clean_portable_shell_retains_preview_and_proof_identity(
     ok,
     timed_out,
 ):
+    # Exercise draft-preview sync; coordinator mode intentionally skips draft apply.
+    monkeypatch.setattr(project_cell_executor, "get_settings", lambda: get_settings().model_copy(
+        update={"use_max_finalization_coordinator": False},
+    ))
     harness = await _prepare_executor(
         monkeypatch,
         db_session,
