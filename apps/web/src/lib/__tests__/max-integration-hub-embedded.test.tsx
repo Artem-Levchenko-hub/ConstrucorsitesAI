@@ -175,7 +175,8 @@ describe("Integration Hub inside the editor modal", () => {
     expect(dialog.querySelector('input[aria-label="Найти сервис"]')).toBeNull();
     expect(dialog.querySelector<HTMLTextAreaElement>("textarea")?.value).toContain("ЮKassa");
     expect(dialog.querySelector<HTMLTextAreaElement>("textarea")?.value).not.toContain("must-not-leak");
-    expect(dialog.textContent).toContain("Оплата списывается после успешной сборки приложения.");
+    expect(dialog.textContent).toContain("Доработка учитывается по условиям вашего тарифа.");
+    expect(dialog.textContent).not.toContain("Оплата списывается");
     expect(boundary.send).not.toHaveBeenCalled();
     await act(async () => input(dialog.querySelector("textarea")!, "   "));
     expect(button("Запустить доработку")?.disabled).toBe(true);

@@ -97,11 +97,11 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
           Данные сохранены. ИИ доработает экраны: название, содержание, оформление и пользовательские сценарии.
         </DialogDescription>
       </DialogHeader>
-      <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>
+      <p className="text-sm text-fg-secondary">Доработка учитывается по условиям вашего тарифа. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>
       <p className="text-sm text-fg-secondary">После привязки названия и каталог смогут обновляться из настроек. Изменение функций и дизайна каждый раз требует запуска доработки.</p>
       <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
       {start.error && <p role="alert" className="text-sm text-danger-fg">{describeApiError(start.error, "Не удалось передать задание. Повторите попытку.")}</p>}
-      {terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по этим же данным; она расходует баланс.</p>}
+      {terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по этим же данным; она учитывается по условиям вашего тарифа.</p>}
       <div className="flex flex-wrap justify-end gap-3">
         <Button variant="secondary" disabled={start.isPending} onClick={onClose}>Пока только сохранить</Button>
         <Button disabled={start.isPending || quotaBlocksNewAttempt} onClick={() => {

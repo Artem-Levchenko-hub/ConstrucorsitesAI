@@ -48,3 +48,30 @@ async def register_verified_account(
         verified = await client.post("/api/auth/email/verify", json={"token": tokens[0]})
         assert verified.status_code == 200, verified.text
     return registered
+
+
+async def register_legacy_wallet_account(client, session, email: str) -> httpx.Response:
+    """Explicit historical contract fixture; new sales use included quotas instead."""
+    from decimal import Decimal
+
+    from sqlalchemy import select
+
+    from yleum_api.models.billing import FREE_PLAN_V3_ID, Subscription
+    from yleum_api.models.user import User
+    from yleum_api.models.wallet import Wallet
+
+    registered = await register_verified_account(client, email)
+    subscription = await session.scalar(
+        select(Subscription).join(User, User.id == Subscription.user_id).where(User.email == email)
+    )
+    assert subscription is not None
+    subscription.plan_id = FREE_PLAN_V3_ID
+    wallet = await session.scalar(
+        select(Wallet).where(
+            Wallet.billing_account_id == subscription.billing_account_id,
+        )
+    )
+    assert wallet is not None
+    wallet.balance_rub = Decimal("100")
+    await session.commit()
+    return registered

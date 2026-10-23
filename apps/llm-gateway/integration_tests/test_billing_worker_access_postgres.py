@@ -102,6 +102,7 @@ async def test_new_billing_grants_are_least_privilege_and_idempotent(database_ur
             "generation_billing_policies": {"SELECT"},
             "generation_billing_intents": {"SELECT", "INSERT"},
             "generation_billing_outbox": {"SELECT", "INSERT", "UPDATE"},
+            "generation_allowances": {"SELECT", "UPDATE"},
             "usage": {"SELECT"}, "messages": {"SELECT"}, "snapshots": {"SELECT"},
         }
         for table, privileges in expected.items():

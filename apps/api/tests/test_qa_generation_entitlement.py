@@ -85,6 +85,7 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
     monkeypatch, qa, global_unlimited,
 ):
     from yleum_api.core.errors import ApiError
+    from yleum_api.services import generation_allowance
     from yleum_api.services.generation import acceptance
 
     owner, context = qa_context()
@@ -98,6 +99,10 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
     monkeypatch.setattr(
         acceptance, "resolve_billing_account", AsyncMock(return_value=context.account),
     )
+    # This unit test isolates the existing QA/global path; paid Pro reservation
+    # has database-backed coverage in test_generation_allowance.py.
+    reserve_included = AsyncMock(return_value=False)
+    monkeypatch.setattr(generation_allowance, "reserve_included_generation", reserve_included)
     session = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(prompt_text="Existing app")),
         execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: None)),
@@ -107,6 +112,7 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
         current_user=owner, session=session,
         payload=SimpleNamespace(prompt="Add a product page", max_config_version=None),
     )
+    turn.generation_run = SimpleNamespace(id=uuid4())
     if qa or global_unlimited:
         await turn.check_admission()
         assert turn.is_free is True
@@ -115,6 +121,9 @@ async def test_exhausted_zero_wallet_admission_uses_only_trusted_qa_or_existing_
         with pytest.raises(ApiError) as refused:
             await turn.check_admission()
         assert refused.value.code == "wallet_empty"
+    reserve_included.assert_awaited_once_with(
+        session, user_id=owner.id, run_id=turn.generation_run.id, kind="edit",
+    )
 
 
 @pytest.mark.parametrize("role", ["user", "admin"])

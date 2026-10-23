@@ -601,6 +601,11 @@ PY
   reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
   reader_target
+  # An old commerce billing tick can insert legacy Free after API migrations.
+  # All old writers are now retired; keep the fence until catalog repair commits.
+  if git -C "$REPO" cat-file -e "$SHA:apps/api/src/yleum_api/services/billing_plan_cutover.py" 2>/dev/null; then
+    api_maintenance -m yleum_api.services.billing_plan_cutover "$SHA"
+  fi
   ingress_drain end
   api_maintenance -m yleum_api.services.generation_deployment_drain end "$SHA"
   reader_control core clear --release "$SHA" --owner-nonce "$READER_NONCE"

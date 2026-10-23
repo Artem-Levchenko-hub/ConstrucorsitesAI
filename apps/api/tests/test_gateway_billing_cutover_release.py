@@ -224,6 +224,7 @@ def test_gate_runs_after_replacement_before_both_admission_reopens(tmp_path, gat
     # host/process boundaries are inert; no SSH, service or fence is touched.
     program = '''set -euo pipefail
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+REPO=.
 API=1 GW=1
 READER_NONCE=11111111-1111-4111-8111-111111111111
 record() { printf '%s\\n' "$1" >> events; }
@@ -231,10 +232,13 @@ say() { :; }
 verify_billing_runtime() { record billing; }
 api_maintenance() {
  if [ "$1" = - ]; then cat >/dev/null; record runtime-health
+ elif [ "$*" = "-m yleum_api.services.billing_plan_cutover $SHA" ]; then
+  record free-normalize
  elif [ "$*" = "-m yleum_api.services.generation_deployment_drain end $SHA" ]; then
   record sql-end
  else return 99; fi
 }
+git() { return 0; }
 ssh() {
  [ "$1" = max-core ] || return 99
  case "$2" in
@@ -271,10 +275,14 @@ reader_control() { record "$2-$1"; }
     reopening = ("ingress-end", "sql-end", "clear-core", "clear-commerce")
     if gate_exit:
         assert events[-1] == "gateway-cutover"
+        assert "free-normalize" not in events
         assert all(event not in events for event in reopening)
     else:
         assert events.index("gateway-cutover") < events.index("physical")
-        assert events.index("physical") < events.index("ingress-end") < events.index("sql-end")
+        assert (
+            events.index("physical") < events.index("free-normalize") < events.index("ingress-end")
+        )
+        assert events.index("ingress-end") < events.index("sql-end")
         assert events.index("sql-end") < events.index("clear-core") < events.index("clear-commerce")
 
 

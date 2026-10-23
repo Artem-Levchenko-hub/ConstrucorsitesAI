@@ -16,6 +16,13 @@ const payload: MaxUsage = {
     calls: 2, tokens_in: 100, tokens_out: 50, cache_read_tokens: 10,
     cache_write_tokens: 0, retries: 1 }],
 };
+const legacySubscription = {
+  id: "sub", status: "active", auto_renew: false, cancel_at_period_end: false,
+  current_period_start: "2026-10-01T00:00:00Z", current_period_end: "2026-11-01T00:00:00Z",
+  next_charge_at: null, grace_period_ends_at: null, renewal_consent_version: null,
+  can_restore: false, canceled_at: null, ended_at: null, created_at: "2026-10-01T00:00:00Z",
+  plan: { id: "pro-v2", code: "pro", version: 2, name: "Pro", price_rub: "2990", included_credit_rub: "500", billing_interval: "month", entitlements: { max_projects: 3 } },
+};
 
 let root: Root;
 let container: HTMLDivElement;
@@ -29,6 +36,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: {
     retry: false, gcTime: 0, staleTime: Infinity,
   } } });
+  client.setQueryData(["billing-subscription"], legacySubscription);
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -62,6 +70,20 @@ function assertUnavailable() {
   expect(details.textContent).not.toContain("₽");
   expect(details.textContent).not.toContain("private backend diagnostic");
 }
+
+it.each([
+  { creations: 1, edits: 1, period: "lifetime" },
+  { creations: 2, edits: 25, period: "paid_month" },
+  { creations: 5, edits: 50, period: "paid_month" },
+])("replaces ruble cost drill-down with allowance access for split $creations/$edits plans", async ({ creations, edits, period }) => {
+  client.setQueryData(["billing-subscription"], { ...legacySubscription,
+    plan: { ...legacySubscription.plan, included_credit_rub: "0", entitlements: { included_creations: creations, included_edits: edits, generation_allowance_period: period } } });
+  client.setQueryData(queryKey, payload);
+  await mount();
+  expect(container.querySelector('a[href="/billing"]')?.textContent).toContain("Лимиты создания и правок");
+  expect(container.textContent).not.toMatch(/₽|баланс|расход/i);
+  expect(container.querySelector("details")).toBeNull();
+});
 
 it.each(["HTTP 401", "network"])("shows unavailable data instead of zero after initial %s failure", async failure => {
   if (failure === "HTTP 401") {

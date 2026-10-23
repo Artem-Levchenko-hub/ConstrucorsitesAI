@@ -490,7 +490,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       {embedded && <Button variant="ghost" className="w-fit" disabled={implement.isPending} onClick={() => setImplementationProvider(null)}><ArrowLeft className="size-4" />Назад к сервисам</Button>}
       <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
       <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
-      <p className="text-sm text-fg-secondary">Оплата списывается после успешной сборки приложения. Результат появится в редакторе; затем потребуется публикация.</p>
+      <p className="text-sm text-fg-secondary">Доработка учитывается по условиям вашего тарифа. Результат появится в редакторе; затем потребуется публикация.</p>
       <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
       {implementationSummary && <IntegrationRequestCard request={implementationSummary} text={implementationPrompt} expandable={false} />}
       <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
@@ -501,7 +501,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       {implementationProvider && !canUseProvider(implementationProvider) && <p className="text-sm text-danger-fg">Подключение требует настройки. Проверьте доступ перед доработкой.</p>}
       {proposalHasSecret && <p role="alert" className="text-sm text-danger-fg">Удалите ключи и токены из задания. Используйте защищённую форму подключения.</p>}
       {embedded && implement.error && <p role="alert" className="text-sm text-danger-fg">{message(implement.error)}</p>}
-      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку. Оплата — после успешной сборки.</p>}
+      {embedded && terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по условиям вашего тарифа.</p>}
       <Button disabled={!canImplement || implement.isPending} onClick={startImplementation} className="min-h-11">{implement.isPending && <Loader2 className="size-4 animate-spin" />}{embedded && terminalFailure ? "Повторить доработку" : "Запустить доработку"}</Button>
     </>
   );
@@ -736,7 +736,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
                             : !provider.available ? <span className="text-xs font-medium text-fg-tertiary">Готовим</span>
                             : null}
                         </h3>
-                        <p className="mt-1 text-xs leading-5 text-fg-tertiary">{provider.key === "llmgw" ? "Работает через LLMGW; расходы с баланса владельца" : provider.description}</p>
+                        <p className="mt-1 text-xs leading-5 text-fg-tertiary">{provider.key === "llmgw" ? "Работает через LLMGW; использование по условиям тарифа владельца" : provider.description}</p>
                         {provider.capabilities.length > 0 && (
                           <p className="mt-1 text-xs text-fg-tertiary">{provider.capabilities.slice(0, 3).join(" · ")}</p>
                         )}

@@ -352,7 +352,7 @@ ssh() { cat web; }
 
     def test_shared_end_never_opens_on_bad_runtime_or_failed_physical_gate(self):
         functions = self.function("finish_owned_release")
-        for failure in ("", "billing", "billing_short", "billing_revision", "controller_revision", "physical", "verify-owner-commerce", "gateway"):
+        for failure in ("", "billing", "billing_short", "billing_revision", "controller_revision", "physical", "verify-owner-commerce", "gateway", "free-normalize"):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 dependencies = {role + "_release_sha": self.target
@@ -378,13 +378,17 @@ with patch("urllib.request.urlopen", side_effect=request):
 ''')
                 script = '''set -euo pipefail
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+REPO=.
 READER_NONCE=11111111-1111-4111-8111-111111111111
 GW=0
 record() { printf '%s\\n' "$1" >> calls; [ "$1" != "$FAILURE" ]; }
 verify_billing_runtime() { record billing; }
 api_maintenance() {
- if [ "$1" = - ]; then python3 health_fixture.py "$SHA"; else record sql-end; fi
+ if [ "$1" = - ]; then python3 health_fixture.py "$SHA"
+ elif [ "$2" = yleum_api.services.billing_plan_cutover ]; then record free-normalize
+ else record sql-end; fi
 }
+git() { return 0; }
 ssh() { record gateway; }
 reader_target() { record target; }
 seq() { printf '1\\n'; }
@@ -401,6 +405,7 @@ reader_control() { record "$2-$1"; }
                     self.assertNotIn("clear-", calls)
                 else:
                     self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertLess(calls.rfind("target\n"), calls.index("free-normalize\n"))
                     self.assertEqual(calls.splitlines()[-4:], ["ingress-end", "sql-end", "clear-core", "clear-commerce"])
 
     def test_finalize_main_path_exits_before_rollout_and_holds_mutex_until_end(self):

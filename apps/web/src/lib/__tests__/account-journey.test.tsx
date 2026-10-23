@@ -11,7 +11,11 @@ vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
 const payment = { id: "pay-1", purpose: "wallet_topup", subscription_id: null, package_code: "start", amount_rub: "777", credit_rub: "888", status: "pending", confirmation_url: null, created_at: "2026-09-07T00:00:00Z" };
 const plan = { id: "pro-1", code: "pro", version: 1, name: "Pro", price_rub: "999", billing_interval: "month", included_credit_rub: "456", entitlements: { max_projects: 7, team_seats: 3, static_publish_slots: 5, always_on_slots: 2, integrations: false } };
 const freePlan = { id: "free-3", code: "free", version: 3, name: "Free", price_rub: "0.00", billing_interval: "month", included_credit_rub: "0", entitlements: { max_projects: 1, team_seats: 1, static_publish_slots: 1, always_on_slots: 0, integrations: true, generation_messages_lifetime: 1 } };
-let currentPlan = freePlan;
+const includedPlan = { ...plan, id: "pro-v4", version: 4, price_rub: "2990", included_credit_rub: "0", entitlements: { ...plan.entitlements, included_creations: 2, included_edits: 25, generation_allowance_period: "paid_month" } };
+const includedFreePlan = { ...freePlan, id: "free-v4", version: 4, entitlements: { max_projects: 1, team_seats: 1, static_publish_slots: 1, always_on_slots: 0, integrations: true, included_creations: 1, included_edits: 1, generation_allowance_period: "lifetime" } };
+const includedBusinessPlan = { ...includedPlan, id: "business-v3", code: "business", name: "Business", version: 3, price_rub: "6990", entitlements: { ...plan.entitlements, included_creations: 5, included_edits: 50, generation_allowance_period: "paid_month" } };
+let offeredPlan = plan;
+let currentPlan: unknown = freePlan;
 const usage = {
   period: { start: "2026-09-01T00:00:00Z", end: "2026-09-23T12:00:00Z", source: "calendar_month" },
   plan: freePlan, subscription_status: "active",
@@ -36,7 +40,7 @@ beforeEach(() => {
   localStorage.clear(); mocks.search = ""; mocks.replace.mockReset(); sessionError = false; requests = [];
   config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888" }] };
   payments = []; post = async () => Response.json(payment);
-  usageResponse = usage; currentPlan = freePlan;
+  usageResponse = usage; currentPlan = freePlan; offeredPlan = plan;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
@@ -44,7 +48,7 @@ beforeEach(() => {
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
-    if (path === "/api/billing/plans") return Response.json([freePlan, plan]);
+    if (path === "/api/billing/plans") return Response.json([freePlan, offeredPlan]);
     if (path === "/api/billing/usage") return Response.json(usageResponse);
     if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: currentPlan, status: "active", auto_renew: false, cancel_at_period_end: false });
     if (path === "/api/auth/sessions") return sessionError ? Promise.reject(new Error("Sessions offline")) : Response.json([{ id: "current", current: true, user_agent: "Macintosh", ip_address: "127.0.0.1", created_at: "2026-09-06", last_seen_at: "2026-09-07" }]);
@@ -110,7 +114,94 @@ it("shows disabled provider reason and real wallet without offering checkout", a
 });
 it("reviews monthly server plan with auto-renew explicitly off by default", async () => {
   const app = await mount("plan");
-  try { await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro"); expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.checked).toBe(false); await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1)); expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: false, consent_version: null }); } finally { await app.close(); }
+  try { await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro"); expect(document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.checked).toBe(false); await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1)); expect(requests[0]).toMatchObject({ plan_code: "pro", plan_version: 1, auto_renew: false, consent_version: null }); } finally { await app.close(); }
+});
+
+it.each([includedPlan, includedBusinessPlan])("reviews $name split entitlement instead of a zero-credit purchase", async selectedPlan => {
+  offeredPlan = selectedPlan;
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button(`Выбрать ${selectedPlan.name}`)).toBeDefined());
+    const proCard = [...app.container.querySelectorAll("article")].find(card => card.querySelector("h3")?.textContent === selectedPlan.name)!;
+    expect(proCard.textContent).toContain(`Созданий приложений${selectedPlan.entitlements.included_creations}`);
+    expect(proCard.textContent).toContain(`Правок${selectedPlan.entitlements.included_edits}`);
+    expect(proCard.textContent).not.toContain("Включённый кредит");
+    await click(`Выбрать ${selectedPlan.name}`);
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain(`Созданий приложений${selectedPlan.entitlements.included_creations}`);
+    expect(dialog.textContent).toContain(`Правок${selectedPlan.entitlements.included_edits}`);
+    expect(dialog.textContent).not.toMatch(/баланс|кредит/i);
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ plan_code: selectedPlan.code, plan_version: selectedPlan.version, auto_renew: false });
+    expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!).selection.allowance).toEqual({ creations: selectedPlan.entitlements.included_creations, edits: selectedPlan.entitlements.included_edits, period: "paid_month" });
+  } finally { await app.close(); }
+});
+
+it("resumes a pending legacy Pro credit order unchanged after the catalog switches to included generations", async () => {
+  offeredPlan = includedPlan;
+  const selection = { kind: "plan", code: "pro", title: "Pro", price: "2990", credit: "500" };
+  const attempt = { key: "legacy-order-key", selection, autoRenew: false, paymentId: "pay-1" };
+  localStorage.setItem("max-checkout:qa@example.test", JSON.stringify(attempt));
+  payments = [{ ...payment, purpose: "subscription_initial", credit_rub: "500" }];
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Продолжить незавершённую оплату")).toBeDefined());
+    await click("Продолжить незавершённую оплату");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Зачисление на баланс500 ₽");
+    expect(dialog.textContent).not.toContain("Включённых генераций");
+    expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!)).toEqual(attempt);
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ plan_code: "pro", idempotency_key: "legacy-order-key" });
+    expect(requests[0]).not.toHaveProperty("plan_version");
+    expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!).selection).toEqual(selection);
+  } finally { await app.close(); }
+});
+
+it("rejects a stale plan version, refreshes the catalog and requires reviewing the new terms", async () => {
+  offeredPlan = { ...plan, id: "pro-v2", version: 2, price_rub: "2990", included_credit_rub: "500" };
+  post = async () => {
+    offeredPlan = includedPlan;
+    return Response.json({ error: { code: "subscription_plan_changed", message: "Версия тарифа изменилась" } }, { status: 409 });
+  };
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    await click("Выбрать Pro");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Зачисление на баланс500 ₽");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ plan_code: "pro", plan_version: 2 });
+    await wait(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    expect(localStorage.length).toBe(0);
+    expect(button("Продолжить незавершённую оплату")).toBeUndefined();
+    expect(app.container.textContent).toContain("Выберите тариф заново");
+    await wait(() => expect(app.container.textContent).toContain("Созданий приложений2"));
+    expect(requests).toHaveLength(1);
+    await click("Выбрать Pro");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Созданий приложений2");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Правок25");
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("Зачисление на баланс");
+    post = async () => Response.json(payment);
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toMatchObject({ plan_code: "pro", plan_version: 4 });
+    expect(requests[1].idempotency_key).not.toBe(requests[0].idempotency_key);
+  } finally { await app.close(); }
+});
+
+it("refreshes current quota after a confirmed subscription payment without promising a wallet credit", async () => {
+  mocks.search = "payment=pay-1";
+  payments = [{ ...payment, purpose: "subscription_initial", credit_rub: "0", status: "succeeded" }];
+  const app = await mount("profile");
+  try {
+    await wait(() => expect(document.body.textContent).toContain("Оплата подтверждена"));
+    expect(app.invalidate.mock.calls.some(([query]) => query?.queryKey?.[0] === "billing-usage")).toBe(true);
+    expect(document.querySelector(".account-payment-result")?.textContent).toContain("Тариф и доступные возможности обновляются");
+    expect(document.querySelector(".account-payment-result")?.textContent).not.toContain("Баланс и тариф обновляются");
+  } finally { await app.close(); }
 });
 it("labels current device and exposes session query errors", async () => {
   let app = await mount("security"); try { await wait(() => expect(document.body.textContent).toContain("Текущая сессия")); expect(document.body.textContent).toContain("Mac"); } finally { await app.close(); }
@@ -219,6 +310,82 @@ it("shows the period's spend and the plan's use next to each limit", async () =>
   } finally { await app.close(); }
 });
 
+it.each([0, 1])("shows separate current paid quotas with creation remaining %s for a historical spend period", async remaining => {
+  usageResponse = { ...usage, plan: includedPlan,
+    period: { start: "2026-01-01T00:00:00Z", end: "2026-02-01T00:00:00Z", source: "custom" },
+    included_generations: { period: "paid_month", creations: { limit: 2, used: 1 - remaining, in_progress: 1, remaining },
+      edits: { limit: 25, used: 5, in_progress: 1, remaining: 19 },
+      period_start: "2026-09-10T00:00:00Z", period_end: "2026-10-10T00:00:00Z" } };
+  currentPlan = includedPlan;
+  const app = await mount("billing");
+  try {
+    const quota = () => document.querySelector('[aria-label="Включённые создания и правки"]');
+    await wait(() => expect(quota()).not.toBeNull());
+    const creations = quota()!.querySelector('[aria-label="Создания приложений"]')!;
+    const edits = quota()!.querySelector('[aria-label="Правки"]')!;
+    expect(creations.textContent).toContain(`Использовано${1 - remaining}`);
+    expect(creations.textContent).toContain("В работе1");
+    expect(creations.textContent).toContain(`Осталось${remaining}`);
+    expect(edits.textContent).toContain("Использовано5");
+    expect(edits.textContent).toContain("В работе1");
+    expect(edits.textContent).toContain("Осталось19");
+    expect(quota()!.textContent).toContain("10 сент. 2026");
+    expect(quota()!.textContent).toContain("10 окт. 2026");
+    expect(quota()!.textContent).not.toContain("янв.");
+    expect(quota()!.textContent).toContain("на весь аккаунт");
+    expect(quota()!.textContent).toContain("Техническая ошибка не расходует");
+    expect(quota()!.textContent).toContain("Запущенная генерация продолжится");
+    if (remaining === 0) expect(creations.textContent).toContain("Следующее создание станет доступно в следующем оплаченном периоде");
+    else expect(creations.textContent).not.toContain("Следующее создание станет доступно");
+    expect(edits.textContent).not.toContain("следующем оплаченном периоде");
+    expect(document.querySelector('[aria-label="Расход за период"]')?.textContent).toContain("выбранный период");
+  } finally { await app.close(); }
+});
+
+it.each([undefined, null])("does not invent a paid included quota for a legacy response: %s", async included => {
+  usageResponse = { ...usage, included_generations: included };
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(app.container.textContent).toContain("Сборки приложений"));
+    expect(document.querySelector('[aria-label="Включённые создания и правки"]')).toBeNull();
+  } finally { await app.close(); }
+});
+
+it.each([
+  { label: "Free", billingPlan: freePlan, included: null, showLegacy: true },
+  { label: "legacy Pro", billingPlan: plan, included: null, showLegacy: true },
+  { label: "included Pro active", billingPlan: includedPlan,
+    included: { period: "paid_month", creations: { limit: 2, used: 1, in_progress: 0, remaining: 1 }, edits: { limit: 25, used: 5, in_progress: 1, remaining: 19 }, period_start: "2026-09-10T00:00:00Z", period_end: "2026-10-10T00:00:00Z" }, showLegacy: false },
+  { label: "included Pro expired", billingPlan: includedPlan, included: null, showLegacy: false },
+  { label: "included Free lifetime", billingPlan: includedFreePlan,
+    included: { period: "lifetime", creations: { limit: 1, used: 1, in_progress: 0, remaining: 0 }, edits: { limit: 1, used: 0, in_progress: 0, remaining: 1 }, period_start: null, period_end: null }, showLegacy: false },
+])("distinguishes the $label generation allowance from legacy free builds and wallet debits", async ({ billingPlan, included, showLegacy }) => {
+  usageResponse = { ...usage, plan: billingPlan, included_generations: included,
+    free_generations: { limit: 3, used: 0, left: 3, unlimited: false },
+    wallet: { ...usage.wallet, debited_rub: "0" } };
+  currentPlan = billingPlan;
+  const app = await mount("billing");
+  try {
+    const panel = () => app.container.querySelector('[aria-label="Расход за период"]')!;
+    await wait(() => expect(panel().textContent).toContain("Сборки приложений"));
+    const legacyRow = [...panel().querySelectorAll("dl > div")].find(row => row.querySelector("dt")?.textContent === "Бесплатные сборки");
+    if (showLegacy) {
+      expect(legacyRow?.textContent).toContain("осталось 3 из 3");
+      expect(panel().textContent).toContain("48,5 ₽ за модели");
+      expect(app.container.textContent).toContain("Пополнить баланс");
+    } else {
+      expect(legacyRow).toBeUndefined();
+      expect(app.container.textContent).not.toMatch(/баланс|кредит|₽/i);
+      expect(app.container.querySelector('a[href="/billing/transactions"]')).not.toBeNull();
+      if (included?.period === "lifetime") {
+        expect(panel().textContent).toContain("За всё время");
+        expect(panel().textContent).toContain("Лимит создания за всё время исчерпан");
+        expect(panel().textContent).not.toContain("следующем оплаченном периоде");
+      }
+    }
+  } finally { await app.close(); }
+});
+
 it.each([
   ["Подтверждено провайдером", 1, 0, 0, "0"],
   ["Оценочная стоимость", 0, 1, 0, "5"],
@@ -262,6 +429,50 @@ it("keeps every operation labelled and semantically tabular when mobile rows ref
     expect([...row.querySelectorAll('[role="cell"] > .account-operation-label')].map(label => label.textContent)).toEqual(["Дата", "Операция", "Сумма", "Статус"]);
     expect(row.querySelector('[headers="payment-amount"]')?.textContent).toContain("777");
     expect(row.querySelector('[headers="payment-status"]')?.textContent).toContain("Ожидает оплаты");
+  } finally { await app.close(); }
+});
+
+it.each([["succeeded", "Тариф подтверждён"], ["pending", "Ожидает подтверждения"]])("labels a zero-credit subscription %s without inventing a credit while preserving historical credits", async (status, label) => {
+  payments = [
+    { ...payment, id: "split-order", purpose: "subscription_initial", package_code: "pro", credit_rub: "0", status },
+    { ...payment, id: "legacy-order", purpose: "subscription_initial", package_code: "pro", credit_rub: "500", status: "succeeded" },
+  ];
+  const app = await mount("transactions");
+  try {
+    await wait(() => expect(app.container.querySelectorAll("tbody tr")).toHaveLength(2));
+    const rows = app.container.querySelectorAll("tbody tr");
+    expect(rows[0].textContent).toContain(label);
+    expect(rows[0].textContent).not.toMatch(/Кредит|Не зачислено/);
+    expect(rows[1].textContent).toContain("Кредит: 500 ₽");
+  } finally { await app.close(); }
+});
+
+it.each([false, true])("releases a definitively rejected topup and refreshes changed subscription terms (retry: %s)", async retry => {
+  if (retry) post = async () => { throw new Error("Outcome unknown"); };
+  else post = async () => {
+    currentPlan = includedPlan;
+    return Response.json({ error: { code: "wallet_topup_unavailable", message: "Пополнение недоступно на текущем тарифе" } }, { status: 409 });
+  };
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(button("Выбрать")).toBeDefined());
+    await click("Выбрать");
+    await click("Перейти к оплате в ЮKassa");
+    if (retry) {
+      await wait(() => expect(document.body.textContent).toContain("Outcome unknown"));
+      expect(localStorage.length).toBe(1);
+      post = async () => {
+        currentPlan = includedPlan;
+        return Response.json({ error: { code: "wallet_topup_unavailable", message: "Пополнение недоступно на текущем тарифе" } }, { status: 409 });
+      };
+      await click("Перейти к оплате в ЮKassa");
+    }
+    await wait(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
+    expect(localStorage.length).toBe(0);
+    expect(button("Продолжить незавершённую оплату")).toBeUndefined();
+    await wait(() => expect(app.container.textContent).not.toContain("Пополнить баланс"));
+    expect(app.container.textContent).toContain("Пополнение недоступно на текущем тарифе");
+    expect(requests).toHaveLength(retry ? 2 : 1);
   } finally { await app.close(); }
 });
 

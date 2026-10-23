@@ -9,7 +9,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import event, func, select
 
-from tests.account_fixture import register_verified_account
+from tests.account_fixture import register_legacy_wallet_account, register_verified_account
 from tests.test_subscription_lifecycle import _registered_billing_context
 from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
@@ -57,11 +57,16 @@ async def test_timeout_retry_recovers_original_checkout(
     purpose,
 ):
     calls, accepted = accepted_then_lost
-    await register_verified_account(client, "lost-checkout@example.com")
+    if purpose == "wallet_topup":
+        await register_legacy_wallet_account(client, db_session, "lost-checkout@example.com")
+    else:
+        await register_verified_account(client, "lost-checkout@example.com")
     path = "/api/payments/subscription" if purpose == "subscription_initial" else "/api/payments"
     body = {"idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be"}
     body.update(
-        {"plan_code": "pro"} if purpose == "subscription_initial" else {"package_code": "start"}
+        {"plan_code": "pro", "plan_version": 3}
+        if purpose == "subscription_initial"
+        else {"package_code": "start"}
     )
     first = await client.post(path, json=body)
     assert first.status_code == 503
@@ -102,6 +107,7 @@ async def test_verified_webhook_recovers_missing_provider_id_and_credits_once(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be",
         },
     )
@@ -122,16 +128,13 @@ async def test_verified_webhook_recovers_missing_provider_id_and_credits_once(
     assert local.status == "succeeded" and local.provider_payment_id == "accepted-1"
     active = await client.get("/api/billing/subscription")
     assert active.json()["plan"]["code"] == "pro"
-    assert (
-        await db_session.scalar(
-            select(func.count())
-            .select_from(WalletCharge)
-            .where(
-                WalletCharge.external_ref == f"subscription-credit:{local.id}",
-            )
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(WalletCharge)
+        .where(
+            WalletCharge.external_ref == f"subscription-credit:{local.id}",
         )
-        == 1
-    )
+    ) == (1 if local.credit_rub > 0 else 0)
 
 
 async def test_background_recovers_uncertain_checkout_but_never_reposts_after_24_hours(
@@ -145,6 +148,7 @@ async def test_background_recovers_uncertain_checkout_but_never_reposts_after_24
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be",
         },
     )
@@ -166,6 +170,7 @@ async def test_expired_uncertain_order_stays_open_without_a_new_charge(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be",
         },
     )
@@ -178,6 +183,7 @@ async def test_expired_uncertain_order_stays_open_without_a_new_charge(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "7f0e3500-7033-4080-917e-d8564fa30170",
         },
     )
@@ -239,16 +245,13 @@ async def test_lost_renewal_response_reuses_one_charge_and_one_credit(
     assert subscription.status == "active" and subscription.current_period_end > retry_at
     assert len(calls) == 2 and calls[0] == calls[1] and len(accepted) == 1
     assert await db_session.scalar(select(func.count()).select_from(Payment)) == 1
-    assert (
-        await db_session.scalar(
-            select(func.count())
-            .select_from(WalletCharge)
-            .where(
-                WalletCharge.external_ref == f"subscription-credit:{local.id}",
-            )
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(WalletCharge)
+        .where(
+            WalletCharge.external_ref == f"subscription-credit:{local.id}",
         )
-        == 1
-    )
+    ) == (1 if local.credit_rub > 0 else 0)
 
 
 @pytest.mark.parametrize("purpose", ["wallet_topup", "subscription_initial"])
@@ -260,11 +263,16 @@ async def test_late_success_cannot_resurrect_a_refunded_payment(
     purpose,
 ):
     _, accepted = accepted_then_lost
-    await register_verified_account(client, "refunded-order@example.com")
+    if purpose == "wallet_topup":
+        await register_legacy_wallet_account(client, db_session, "refunded-order@example.com")
+    else:
+        await register_verified_account(client, "refunded-order@example.com")
     path = "/api/payments/subscription" if purpose == "subscription_initial" else "/api/payments"
     body = {"idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be"}
     body.update(
-        {"plan_code": "pro"} if purpose == "subscription_initial" else {"package_code": "start"}
+        {"plan_code": "pro", "plan_version": 3}
+        if purpose == "subscription_initial"
+        else {"package_code": "start"}
     )
     await client.post(path, json=body)
     local = (await db_session.execute(select(Payment))).scalar_one()
@@ -284,16 +292,13 @@ async def test_late_success_cannot_resurrect_a_refunded_payment(
     assert replay.status_code == 200
     await db_session.refresh(local)
     assert local.status == "refunded"
-    assert (
-        await db_session.scalar(
-            select(func.count())
-            .select_from(WalletCharge)
-            .where(
-                WalletCharge.entry_type.in_(("subscription_credit", "payment")),
-            )
+    assert await db_session.scalar(
+        select(func.count())
+        .select_from(WalletCharge)
+        .where(
+            WalletCharge.entry_type.in_(("subscription_credit", "payment")),
         )
-        == 1
-    )
+    ) == (1 if purpose == "wallet_topup" else 0)
 
 
 async def test_rejected_retry_does_not_disprove_the_earlier_uncertain_charge(
@@ -303,7 +308,11 @@ async def test_rejected_retry_does_not_disprove_the_earlier_uncertain_charge(
     accepted_then_lost,
 ):
     await register_verified_account(client, "rejected-retry@example.com")
-    body = {"plan_code": "pro", "idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be"}
+    body = {
+        "plan_code": "pro",
+        "plan_version": 3,
+        "idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be",
+    }
     assert (await client.post("/api/payments/subscription", json=body)).status_code == 503
 
     async def rejected(*_args, **_kwargs):
@@ -318,6 +327,7 @@ async def test_rejected_retry_does_not_disprove_the_earlier_uncertain_charge(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "7f0e3500-7033-4080-917e-d8564fa30170",
         },
     )
@@ -330,7 +340,7 @@ async def test_manual_review_orders_do_not_starve_newer_recovery(
     accepted_then_lost,
 ):
     calls, _ = accepted_then_lost
-    await register_verified_account(client, "fair-recovery@example.com")
+    await register_legacy_wallet_account(client, db_session, "fair-recovery@example.com")
     await client.post(
         "/api/payments",
         json={
@@ -378,7 +388,10 @@ async def test_original_request_is_durable_in_the_first_order_commit(
     accepted_then_lost,
     purpose,
 ):
-    await register_verified_account(client, "atomic-order@example.com")
+    if purpose == "wallet_topup":
+        await register_legacy_wallet_account(client, db_session, "atomic-order@example.com")
+    else:
+        await register_verified_account(client, "atomic-order@example.com")
     committed_without_request = []
 
     def observe_commit(session):
@@ -394,7 +407,9 @@ async def test_original_request_is_durable_in_the_first_order_commit(
         )
         body = {"idempotency_key": "77dff9ba-29be-4876-9ea5-10bb7a3b69be"}
         body.update(
-            {"plan_code": "pro"} if purpose == "subscription_initial" else {"package_code": "start"}
+            {"plan_code": "pro", "plan_version": 3}
+            if purpose == "subscription_initial"
+            else {"package_code": "start"}
         )
         response = await client.post(path, json=body)
         assert response.status_code == 503
@@ -406,8 +421,9 @@ async def test_original_request_is_durable_in_the_first_order_commit(
 async def test_refund_is_blocked_until_manual_provider_and_entitlement_review(
     client,
     monkeypatch,
+    db_session,
 ):
-    await register_verified_account(client, "manual-refund@example.com")
+    await register_legacy_wallet_account(client, db_session, "manual-refund@example.com")
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
 
     async def immediate_payment(**kwargs):

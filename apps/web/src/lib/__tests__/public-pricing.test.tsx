@@ -30,6 +30,28 @@ it("uses changed prices from the API rather than a static marketing snapshot", a
   expect(renderToStaticMarkup(await PricingPage())).toMatch(/3\s210/);
 });
 
+it.each([
+  { code: "free", name: "Free", creations: 1, edits: 1, period: "lifetime", price: "0", label: "За всё время" },
+  { code: "pro", name: "Pro", creations: 2, edits: 25, period: "paid_month", price: "2990", label: "За оплаченный месяц" },
+  { code: "business", name: "Business", creations: 5, edits: 50, period: "paid_month", price: "6990", label: "За оплаченный месяц" },
+  { code: "pro", name: "Pro", creations: 3, edits: 40, period: "paid_month", price: "3210", label: "За оплаченный месяц" },
+])("renders $name split allowance from entitlements while keeping legacy Pro credit", async ({ code, name, creations, edits, period, price, label }) => {
+  const legacy = { ...plans[1], id: "legacy-pro", name: "Pro прежний" };
+  const included = { ...plans[1], id: "split-plan", code, name, version: 4, price_rub: price, included_credit_rub: "0", entitlements: { max_projects: 3, static_publish_slots: 3, included_creations: creations, included_edits: edits, generation_allowance_period: period } };
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json([included, legacy])));
+  const host = document.createElement("div");
+  host.innerHTML = renderToStaticMarkup(await PricingPage());
+  const cards = [...host.querySelectorAll("article")];
+  const newPro = cards.find(card => card.querySelector("h2")?.textContent === name)!;
+  const oldPro = cards.find(card => card.querySelector("h2")?.textContent === "Pro прежний")!;
+  expect(newPro.textContent).toContain(`Созданий приложений${creations}`);
+  expect(newPro.textContent).toContain(`Правок${edits}`);
+  expect(newPro.textContent).toContain(label);
+  expect(newPro.textContent).not.toMatch(/баланс|кредит/i);
+  expect(oldPro.textContent).toMatch(/500.*на баланс после/);
+  expect(oldPro.textContent).not.toContain("Созданий приложений");
+});
+
 it.each([new Response(null, { status: 503 }), Response.json([]), Response.json({ error: "bad" }), Response.json([{ code: "pro" }])])("shows honest unavailable state for failed or invalid catalog", async response => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response));
   const html = renderToStaticMarkup(await PricingPage());

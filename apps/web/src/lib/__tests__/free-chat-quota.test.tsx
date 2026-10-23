@@ -68,6 +68,20 @@ it.each(["Pro","Business","no-plan"])("%s null quota leaves ordinary manual alte
  await render();expect(container.textContent).not.toContain("Осталось сообщений");expect(button("Починить")).toBeDefined();expect(button("Повторить вручную")).toBeDefined();
  await draft("Новое пожелание");await act(async()=>button("Отправить")!.click());expect(mocks.submit).toHaveBeenCalledWith("Новое пожелание","topmix-v1",[],undefined);
 });
+
+it("split Free null message quota permits its creation and subsequent edit with server admission", async () => {
+  profile = { ...base, user_chat_messages_limit: null, user_chat_messages_remaining: null };
+  mocks.submit.mockImplementation(async () => { refreshOwnerAfterAcceptedPrompt(client); return true; });
+  await render();
+  await draft("Создай кофейню");
+  await act(async () => button("Отправить")!.click());
+  await draft("Измени заголовок");
+  expect(button("Отправить")?.disabled).toBe(false);
+  await act(async () => button("Отправить")!.click());
+  expect(mocks.submit).toHaveBeenCalledTimes(2);
+  expect(mocks.submit.mock.calls.map(call => call[0])).toEqual(["Создай кофейню", "Измени заголовок"]);
+  expect(container.textContent).not.toContain("Осталось сообщений");
+});
 it("Free0 permits explicit stable starter replay after unknown outcome and sends the same idempotency key",async()=>{
  profile={...profile,user_chat_messages_remaining:0};sessionStorage.setItem("omnia:max:starter:p","Сохранённое первое описание");window.history.replaceState(null,"","/max/p?starter=1");client.setQueryData(OWNER_PROFILE_QUERY_KEY,profile);
  await render();await act(async()=>{await vi.waitFor(()=>expect(mocks.submit).toHaveBeenCalledTimes(1));});

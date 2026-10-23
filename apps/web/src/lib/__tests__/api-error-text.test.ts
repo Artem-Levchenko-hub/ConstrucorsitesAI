@@ -30,6 +30,33 @@ describe("describeApiError", () => {
       .toBe("Тариф Free не включает: интеграций. Сменить тариф можно в разделе «Аккаунт → Тариф».");
   });
 
+  it.each([
+    ["included_creations", "созданий", 2], ["included_edits", "правок", 25],
+  ])("explains %s exhaustion using its paid bucket", (entitlement, label, limit) => {
+    const text = describeApiError(error("entitlement_exceeded", { entitlement, limit, used: limit, period: "paid_month", plan_code: "pro", plan_version: 4 }));
+    expect(text).toContain(`Лимит ${label}: ${limit}`);
+    expect(text).toContain("следующем оплаченном периоде");
+    expect(text).toContain("Запущенная генерация продолжится");
+    expect(text).not.toContain("Free");
+    expect(text).not.toContain("Сменить тариф");
+    expect(text).not.toContain("Пополните баланс");
+  });
+
+  it.each(["included_creations", "included_edits"])("requires a paid period for %s when the subscription is no longer active", entitlement => {
+    const text = describeApiError(error("subscription_entitlement_required", { entitlement, period: "paid_month", plan_code: "pro", plan_version: 4 }));
+    expect(text).toContain("оплатите следующий период");
+    expect(text).toContain("Аккаунт → Тариф");
+    expect(text).not.toContain("Free");
+  });
+
+  it.each([["included_creations", "создания"], ["included_edits", "правок"]])("does not promise a monthly reset for lifetime %s", (entitlement, label) => {
+    const text = describeApiError(error("entitlement_exceeded", { entitlement, limit: 1, used: 1, period: "lifetime", plan_code: "free", plan_version: 4 }));
+    expect(text).toContain(`Лимит ${label} за всё время исчерпан`);
+    expect(text).toContain("Pro или Business");
+    expect(text).not.toContain("следующем оплаченном периоде");
+    expect(text).not.toContain("одно сообщение");
+  });
+
   it("falls back to the server text plus the plan hint for an unknown entitlement", () => {
     expect(describeApiError(error("entitlement_exceeded", { entitlement: "mystery", limit: 2, used: 2 }, "Лимит исчерпан")))
       .toBe("Лимит исчерпан Сменить тариф можно в разделе «Аккаунт → Тариф».");

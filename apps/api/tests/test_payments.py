@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.account_fixture import register_verified_account
+from tests.account_fixture import register_legacy_wallet_account, register_verified_account
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import BillingPlan, Subscription
 from yleum_api.models.wallet_charge import WalletCharge
@@ -20,9 +20,10 @@ pytestmark = pytest.mark.asyncio
 async def test_payment_webhook_credits_wallet_exactly_once(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
 ) -> None:
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    await register_verified_account(client, "payer@example.com")
+    await register_legacy_wallet_account(client, db_session, "payer@example.com")
 
     async def fake_create_payment(**_kwargs) -> dict[str, object]:
         return {
@@ -85,7 +86,7 @@ async def test_payment_endpoint_is_closed_without_provider_configuration(
     assert response.json()["error"]["code"] == "payments_unavailable"
 
 
-async def test_subscription_payment_activates_plan_and_credit_exactly_once(
+async def test_subscription_payment_activates_plan_and_allowance_exactly_once(
     client: httpx.AsyncClient,
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
@@ -107,11 +108,11 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     idempotency_key = "421ba1e0-9677-4e1f-aee9-80dfd6970e62"
     created = await client.post(
         "/api/payments/subscription",
-        json={"plan_code": "pro", "idempotency_key": idempotency_key},
+        json={"plan_code": "pro", "plan_version": 3, "idempotency_key": idempotency_key},
     )
     duplicate = await client.post(
         "/api/payments/subscription",
-        json={"plan_code": "pro", "idempotency_key": idempotency_key},
+        json={"plan_code": "pro", "plan_version": 3, "idempotency_key": idempotency_key},
     )
     assert created.status_code == 201
     assert duplicate.status_code == 201
@@ -148,8 +149,10 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     active = await client.get("/api/billing/subscription")
     assert active.status_code == 200
     assert active.json()["plan"]["code"] == "pro"
-    assert active.json()["plan"]["version"] == 2
+    assert active.json()["plan"]["version"] == 3
     assert active.json()["plan"]["price_rub"] == "2990.00"
+    assert active.json()["plan"]["entitlements"]["included_creations"] == 2
+    assert active.json()["plan"]["entitlements"]["included_edits"] == 25
     assert active.json()["status"] == "active"
     assert active.json()["auto_renew"] is False
     assert active.json()["current_period_start"] is not None
@@ -157,14 +160,13 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
 
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
-    assert wallet.json()["balance_rub"] == "600.0000"
+    assert wallet.json()["balance_rub"] == "0.0000"
     subscription_entries = [
         entry
         for entry in wallet.json()["recent_charges"]
         if entry["entry_type"] == "subscription_credit"
     ]
-    assert len(subscription_entries) == 1
-    assert subscription_entries[0]["external_ref"] == f"subscription-credit:{payment_id}"
+    assert subscription_entries == []
 
     live_count = (
         await db_session.execute(
@@ -191,7 +193,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
             .where(WalletCharge.external_ref == f"subscription-credit:{payment_id}")
         )
     ).scalar_one()
-    assert ledger_count == 1
+    assert ledger_count == 0
     payment = await db_session.get(Payment, UUID(created.json()["id"]))
     assert payment is not None
     assert payment.purpose == "subscription_initial"
@@ -200,6 +202,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "2a28fcd6-b698-49bc-af68-4fae23025ff4",
         },
     )
@@ -226,6 +229,7 @@ async def test_only_one_subscription_checkout_can_wait_for_payment(
         "/api/payments/subscription",
         json={
             "plan_code": "pro",
+            "plan_version": 3,
             "idempotency_key": "57a4f44d-3307-4f0b-9cba-76bd2b3b4f2e",
         },
     )
@@ -233,6 +237,7 @@ async def test_only_one_subscription_checkout_can_wait_for_payment(
         "/api/payments/subscription",
         json={
             "plan_code": "business",
+            "plan_version": 3,
             "idempotency_key": "df8fa9a5-2a72-46bd-b4ba-00b5f071239c",
         },
     )
@@ -262,6 +267,7 @@ async def test_subscription_checkout_applies_immediate_provider_success(
         "/api/payments/subscription",
         json={
             "plan_code": "business",
+            "plan_version": 3,
             "idempotency_key": "7cd788e4-672f-4cbc-9306-b00cf17a8492",
         },
     )
@@ -271,8 +277,8 @@ async def test_subscription_checkout_applies_immediate_provider_success(
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "business"
-    assert subscription.json()["plan"]["version"] == 2
+    assert subscription.json()["plan"]["version"] == 3
     assert subscription.json()["plan"]["price_rub"] == "6990.00"
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
-    assert wallet.json()["balance_rub"] == "1600.0000"
+    assert wallet.json()["balance_rub"] == "0.0000"

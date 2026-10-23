@@ -29,9 +29,12 @@ FREE_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000001")
 FREE_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000004")
 PRO_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000002")
 BUSINESS_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000003")
-FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000005")
-PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
-BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000007")
+FREE_PLAN_V3_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000005")
+FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000010")
+PRO_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
+PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000008")
+BUSINESS_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000007")
+BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000009")
 
 # Entitlement keys the platform enforces. A numeric key set to ``null`` (or
 # missing) means "no limit"; a flag key missing means "allowed".
@@ -121,7 +124,7 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "is_active": False,
     },
     {
-        "id": FREE_PLAN_ID,
+        "id": FREE_PLAN_V3_ID,
         "code": "free",
         "version": 3,
         "name": "Free",
@@ -139,10 +142,33 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "preview_idle_minutes": 15,
         },
         "sort_order": 0,
+        "is_active": False,
+    },
+    {
+        "id": FREE_PLAN_ID,
+        "code": "free",
+        "version": 4,
+        "name": "Free",
+        "price_rub": Decimal("0.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "included_creations": 1,
+            "included_edits": 1,
+            "generation_allowance_period": "lifetime",
+            "custom_domains": 0,
+            "max_projects": 1,
+            "static_publish_slots": 1,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 15,
+        },
+        "sort_order": 0,
         "is_active": True,
     },
     {
-        "id": PRO_PLAN_ID,
+        "id": PRO_PLAN_V2_ID,
         "code": "pro",
         "version": 2,
         "name": "Pro",
@@ -159,10 +185,33 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "preview_idle_minutes": 60,
         },
         "sort_order": 10,
+        "is_active": False,
+    },
+    {
+        "id": PRO_PLAN_ID,
+        "code": "pro",
+        "version": 3,
+        "name": "Pro",
+        "price_rub": Decimal("2990.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "included_creations": 2,
+            "included_edits": 25,
+            "generation_allowance_period": "paid_month",
+            "custom_domains": 0,
+            "max_projects": 3,
+            "static_publish_slots": 3,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 60,
+        },
+        "sort_order": 10,
         "is_active": True,
     },
     {
-        "id": BUSINESS_PLAN_ID,
+        "id": BUSINESS_PLAN_V2_ID,
         "code": "business",
         "version": 2,
         "name": "Business",
@@ -170,6 +219,29 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "billing_interval": "month",
         "included_credit_rub": Decimal("1500.0000"),
         "entitlements": {
+            "custom_domains": 0,
+            "max_projects": 10,
+            "static_publish_slots": 10,
+            "always_on_slots": 1,
+            "team_seats": 5,
+            "integrations": True,
+            "preview_idle_minutes": 0,
+        },
+        "sort_order": 20,
+        "is_active": False,
+    },
+    {
+        "id": BUSINESS_PLAN_ID,
+        "code": "business",
+        "version": 3,
+        "name": "Business",
+        "price_rub": Decimal("6990.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "included_creations": 5,
+            "included_edits": 50,
+            "generation_allowance_period": "paid_month",
             "custom_domains": 0,
             "max_projects": 10,
             "static_publish_slots": 10,
@@ -194,9 +266,7 @@ class BillingAccount(Base):
 
     __tablename__ = "billing_accounts"
 
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     scope: Mapped[str] = mapped_column(
         Text, nullable=False, default="personal", server_default="personal"
     )
@@ -210,9 +280,7 @@ class BillingAccount(Base):
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True,
     )
-    currency: Mapped[str] = mapped_column(
-        Text, nullable=False, default="RUB", server_default="RUB"
-    )
+    currency: Mapped[str] = mapped_column(Text, nullable=False, default="RUB", server_default="RUB")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -257,9 +325,7 @@ class BillingPlan(Base):
     entitlements: Mapped[dict[str, object]] = mapped_column(
         JSONB, nullable=False, default=dict, server_default="{}"
     )
-    sort_order: Mapped[int] = mapped_column(
-        Integer, nullable=False, default=0, server_default="0"
-    )
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default="true"
     )
@@ -413,9 +479,7 @@ class Subscription(Base):
             "uq_subscriptions_account_live",
             "billing_account_id",
             unique=True,
-            postgresql_where=text(
-                "status IN ('trialing', 'active', 'past_due', 'paused')"
-            ),
+            postgresql_where=text("status IN ('trialing', 'active', 'past_due', 'paused')"),
         ),
         Index("ix_subscriptions_plan_status", "plan_id", "status"),
         Index("ix_subscriptions_next_charge", "next_charge_at", "status"),

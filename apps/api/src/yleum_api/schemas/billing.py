@@ -118,11 +118,27 @@ class EntitlementUsagePublic(BaseModel):
     exceeded: bool
 
 
+class GenerationAllowanceCounterPublic(BaseModel):
+    limit: int
+    used: int
+    in_progress: int
+    remaining: int
+
+
+class IncludedGenerationsPublic(BaseModel):
+    period: Literal["lifetime", "paid_month"]
+    period_start: datetime | None
+    period_end: datetime | None
+    creations: GenerationAllowanceCounterPublic
+    edits: GenerationAllowanceCounterPublic
+
+
 class BillingUsagePublic(BaseModel):
     period: UsagePeriodPublic
     plan: BillingPlanPublic | None
     subscription_status: str | None
     generations: UsageGenerationsPublic
+    included_generations: IncludedGenerationsPublic | None = None
     app_ai_answers: UsageAIBucketPublic
     other_ai: UsageAIBucketPublic
     publications: UsagePublicationsPublic

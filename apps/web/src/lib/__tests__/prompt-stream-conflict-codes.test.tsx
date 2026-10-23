@@ -240,3 +240,18 @@ it("Free entitlement402 keeps draft unaccepted, reports upgrade and does not aut
  expect(toast.info).not.toHaveBeenCalledWith("Генерация уже запущена",expect.anything());
  await act(async()=>vi.advanceTimersByTime(60000));expect(sendPrompt).toHaveBeenCalledOnce();
 });
+
+it.each([
+  ["entitlement_exceeded", "included_creations"], ["entitlement_exceeded", "included_edits"],
+  ["subscription_entitlement_required", "included_creations"], ["subscription_entitlement_required", "included_edits"],
+] as const)("split generation refusal %s/%s keeps the draft and refreshes quota without retrying", async (code, entitlement) => {
+  vi.mocked(sendPrompt).mockRejectedValue(new ApiError(402, { code, message: "server text", details: { entitlement, period: "paid_month", plan_code: "pro", plan_version: 4, limit: 2, used: 2 } }));
+  await mount();
+  const invalidate = vi.spyOn(client, "invalidateQueries");
+  await act(async () => { expect(await stream.submit("Добавь поле", "model")).toBe(false); });
+  expect(toast.error).toHaveBeenCalledWith("Генерация не запустилась", expect.objectContaining({ description: expect.stringContaining(code === "entitlement_exceeded" ? "следующем оплаченном периоде" : "оплатите следующий период") }));
+  expect(invalidate).toHaveBeenCalledWith({ queryKey: ["billing-usage"] });
+  expect(getLatestGeneration).not.toHaveBeenCalled();
+  await act(async () => vi.advanceTimersByTime(60000));
+  expect(sendPrompt).toHaveBeenCalledOnce();
+});

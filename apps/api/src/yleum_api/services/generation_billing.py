@@ -252,15 +252,15 @@ async def seal_terminal_locked(session: AsyncSession, run: GenerationRun) -> Non
             MAX_RELEASE_PROOF_CONTRACT_VERSION,
         )
 
-        eligible = bool(
+        accepted_build = bool(
             run.status == "completed"
-            and run.response_mode == "build"
-            and not policy.is_free
+            and run.response_mode in {"build", "edit"}
             and policy.version == POLICY_VERSION
             and isinstance(accepted, dict)
             and snapshot
             and snapshot.project_id == run.project_id
             and message
+            and message.project_id == run.project_id
             and message.snapshot_id == snapshot.id
             and accepted.get("commit_sha") == snapshot.commit_sha
             and (run.agent_state or {}).get("snapshot_id") == str(snapshot.id)
@@ -272,6 +272,13 @@ async def seal_terminal_locked(session: AsyncSession, run: GenerationRun) -> Non
                 for k in ("permit_digest", "proof_key", "artifact_digest")
             )
         )
+        from yleum_api.services.generation_allowance import settle_included_generation
+
+        await settle_included_generation(session, run, accepted=accepted_build)
+        # Preserve historical wallet contracts: only their original build path
+        # is billable. Included Pro creation and edits share the accepted proof,
+        # and their immutable free policy prevents any wallet debit.
+        eligible = accepted_build and not policy.is_free and run.response_mode == "build"
         usages = list(
             (
                 await session.scalars(

@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from tests.account_fixture import register_verified_account
+from tests.account_fixture import register_legacy_wallet_account
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
 from yleum_api.models.user import User
 
@@ -23,14 +23,20 @@ async def test_public_plan_catalog_is_versioned_and_ordered(
     assert response.status_code == 200
     plans = response.json()
     assert [plan["code"] for plan in plans] == ["free", "pro", "business"]
-    assert [plan["version"] for plan in plans] == [3, 2, 2]
+    assert [plan["version"] for plan in plans] == [4, 3, 3]
     assert [plan["price_rub"] for plan in plans] == ["0.00", "2990.00", "6990.00"]
     assert plans[0]["entitlements"]["max_projects"] == 1
     assert plans[0]["entitlements"]["static_publish_slots"] == 1
-    assert plans[0]["entitlements"]["generation_messages_lifetime"] == 1
+    assert plans[0]["entitlements"]["included_creations"] == 1
+    assert plans[0]["entitlements"]["included_edits"] == 1
+    assert plans[0]["entitlements"]["generation_allowance_period"] == "lifetime"
     assert plans[0]["entitlements"]["integrations"] is True
-    assert plans[1]["included_credit_rub"] == "500.0000"
-    assert plans[2]["included_credit_rub"] == "1500.0000"
+    assert plans[1]["included_credit_rub"] == "0.0000"
+    assert plans[1]["entitlements"]["included_creations"] == 2
+    assert plans[1]["entitlements"]["included_edits"] == 25
+    assert plans[2]["included_credit_rub"] == "0.0000"
+    assert plans[2]["entitlements"]["included_creations"] == 5
+    assert plans[2]["entitlements"]["included_edits"] == 50
     assert plans[2]["entitlements"]["always_on_slots"] == 1
 
 
@@ -38,8 +44,10 @@ async def test_historical_paid_plans_keep_original_contract_terms(
     db_session: AsyncSession,
 ) -> None:
     plans = (
-        await db_session.execute(select(BillingPlan).where(BillingPlan.version == 1))
-    ).scalars().all()
+        (await db_session.execute(select(BillingPlan).where(BillingPlan.version == 1)))
+        .scalars()
+        .all()
+    )
     paid = {plan.code: plan for plan in plans if plan.code != "free"}
     assert paid["pro"].price_rub == Decimal("1490.00")
     assert paid["pro"].included_credit_rub == Decimal("500.0000")
@@ -107,12 +115,13 @@ async def test_database_allows_only_one_live_subscription_per_account(
 async def test_payment_credit_appears_in_canonical_wallet_ledger(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    db_session: AsyncSession,
 ) -> None:
     from yleum_api.routers import payments as payments_router
     from yleum_api.services import yookassa
 
     monkeypatch.setattr(payments_router, "_configured", lambda: True)
-    await register_verified_account(client, "ledger@example.com")
+    await register_legacy_wallet_account(client, db_session, "ledger@example.com")
 
     async def fake_create_payment(**_kwargs: object) -> dict[str, object]:
         return {

@@ -59,6 +59,14 @@ async def topup_wallet(
             "Пополнение временно недоступно — идёт подключение оплаты.",
             403,
         )
+    from yleum_api.services.entitlements import has_generation_allowance_terms, load_plan_context
+
+    if has_generation_allowance_terms((await load_plan_context(session, current_user.id)).plan):
+        raise ApiError(
+            "wallet_topup_unavailable",
+            "Тариф включает создания и правки, без пополнения рублёвого баланса.",
+            409,
+        )
     new_balance = await topup_svc(
         session, current_user.id, payload.amount_rub, "Top-up (MVP stub)"
     )

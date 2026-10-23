@@ -9,7 +9,7 @@ from sqlalchemy import select
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import get_current_user
 from yleum_api.main import app
-from yleum_api.models.billing import FREE_PLAN_ID, BillingAccount, Subscription
+from yleum_api.models.billing import FREE_PLAN_V3_ID, BillingAccount, Subscription
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.project import Project
@@ -17,7 +17,7 @@ from yleum_api.models.user import User
 from yleum_api.services.generation import acceptance
 
 
-async def owner_projects(session, plan_id=FREE_PLAN_ID, count=2):
+async def owner_projects(session, plan_id=FREE_PLAN_V3_ID, count=2):
     owner = User(email=f"free-quota-{uuid4().hex}@example.com", password_hash="test-only")
     session.add(owner)
     await session.flush()
@@ -284,12 +284,12 @@ async def test_historical_free_run_message_or_success_counter_is_already_spent(d
 async def test_paid_pro_and_business_chat_allowance_and_billing_are_unchanged(
     client, db_session, monkeypatch
 ):
-    from yleum_api.models.billing import BUSINESS_PLAN_ID, PRO_PLAN_ID, BillingPlan
+    from yleum_api.models.billing import BUSINESS_PLAN_V2_ID, PRO_PLAN_V2_ID, BillingPlan
     from yleum_api.models.generation_billing import GenerationBillingPolicy
     from yleum_api.models.wallet import Wallet
     from yleum_api.services.entitlements import entitlement_limit
 
-    for plan_id, capacity in [(PRO_PLAN_ID, 3), (BUSINESS_PLAN_ID, 10)]:
+    for plan_id, capacity in [(PRO_PLAN_V2_ID, 3), (BUSINESS_PLAN_V2_ID, 10)]:
         owner, projects, account = await owner_projects(db_session, plan_id, count=2)
         owner.free_generations_used = 99
         db_session.add(
