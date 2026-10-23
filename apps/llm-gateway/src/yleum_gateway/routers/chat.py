@@ -38,6 +38,7 @@ from yleum_gateway.services import (
     generation_attempts,
     safety,
     streaming,
+    text_failover,
 )
 from yleum_gateway.services import model_router as router_module
 from yleum_gateway.services import provider_calls as provider_calls
@@ -49,6 +50,7 @@ from yleum_gateway.services.pricing import (
     read_reported_cost,
     resolve_request_cost,
 )
+from yleum_gateway.services.provider_receipt_cleanup import await_provider_receipt
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 from yleum_gateway.services.token_counter import count_message_tokens
 
@@ -147,6 +149,105 @@ def _remaining_provider_budget(request: Request, received_at: float, *, reserve:
     return remaining
 
 
+async def _finish_failed_provider(identity: Any, call_id: UUID, **receipt: Any) -> None:
+    try:
+        await generation_attempts.finish(identity, call_id, **receipt)
+    except GatewayError as exc:
+        raise _gateway_error_to_http(exc) from exc
+
+
+async def _dispatch_chat_provider(
+    req: ChatCompletionRequest, request: Request, *, identity: Any,
+    filtered_messages: list[dict[str, Any]], received_at: float,
+) -> tuple[dict[str, Any], UUID, str]:
+    meta = req.metadata or ChatMetadata()
+    provider_scope = await text_failover.select_scope(identity, req.model)
+    while True:
+        try:
+            call_id = await generation_attempts.dispatch(identity,
+                route="/v1/chat/completions", model=req.model, user_id=req.user,
+                project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
+                stage=meta.stage, free=meta.free, **text_failover.scope_options(provider_scope),
+            )
+        except GatewayError as exc:
+            raise _gateway_error_to_http(exc) from exc
+
+        transport_evidence: dict[str, Any] = {}
+        try:
+            completion: Callable[..., Awaitable[dict[str, Any]]] = router_module.acompletion
+            completion_options: dict[str, Any] = {}
+            if uses_provider_output_default(req.model, req.max_tokens):
+                remaining = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
+                completion = llmgw.acompletion
+                completion_options = {"response_budget": remaining, "evidence": transport_evidence}
+            else:
+                completion_options = {"user": str(req.user) if req.user else None}
+            if identity is not None:
+                completion = llmgw.acompletion
+                completion_options.pop("user", None)
+                completion_options["retry_preconnect"] = False
+                if not uses_provider_output_default(req.model, req.max_tokens):
+                    completion_options["timeout"] = min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
+            if provider_scope == "aitunnel":
+                completion = llmgw.acompletion
+                completion_options.pop("user", None)
+                completion_options.update(provider_scope="aitunnel", retry_preconnect=False)
+                completion_options["response_budget"] = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
+            response = await completion(
+                model=req.model,
+                messages=filtered_messages,
+                temperature=0.5 if req.temperature is None else req.temperature,
+                max_tokens=req.max_tokens,
+                **completion_options,
+            )
+        except BaseException as exc:
+            details = exc.details if isinstance(exc, GatewayError) else {}
+            retry_candidate = details.pop("_rate_limit_retry_candidate", None)
+            overload = details.pop("_overload_retry_candidate", None) if provider_scope == "llmgw" else None
+            status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
+            failure_type = provider_calls.classify_failure(exc)
+            reason = ("upstream_refused" if isinstance(overload, dict)
+                      else "rate_limit_refused" if isinstance(retry_candidate, dict)
+                      else "preconnect" if details.get("provider_failure_kind") == "preconnect" and status == "failed"
+                      else None)
+            failed_receipt = receipt_evidence({**transport_evidence, **details}, **text_failover.scope_options(provider_scope))
+            # One owner survives level cancellation and repeated Task.cancel().
+            await await_provider_receipt(_finish_failed_provider(
+                identity, call_id, reason=reason, status=status, error_type=failure_type, **failed_receipt,
+            ))
+            if isinstance(overload, dict) and status == "failed":
+                if identity is None:
+                    provider_scope = "aitunnel"
+                    continue
+                from yleum_gateway.services.generation_response_capture import (
+                    confirm_response_accounting,
+                )
+
+                confirm_response_accounting()
+                refusal = text_failover.ProviderRefusedError("Primary provider refused the request", details=overload)
+                raise _gateway_error_to_http(refusal) from exc
+            if isinstance(exc, GatewayError):
+                if status == "failed" and (isinstance(retry_candidate, dict) or details.get("provider_failure_kind") == "preconnect"):
+                    from yleum_gateway.services.generation_response_capture import (
+                        confirm_response_accounting,
+                    )
+
+                    confirm_response_accounting()
+                if status == "failed" and isinstance(retry_candidate, dict):
+                    exc.details.update(retry_candidate)
+                if identity is not None and status == "failed" and details.get("provider_failure_kind") == "preconnect":
+                    exc.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
+                exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
+                raise _gateway_error_to_http(exc) from exc
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            raise _gateway_error_to_http(BillingReconciliationRequiredError(
+                "Provider response requires reconciliation",
+                details={"provider_charge_ambiguous": True},
+            )) from None
+        return response, call_id, provider_scope
+
+
 async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -> Any:
     received_at = asyncio.get_running_loop().time()
     try:
@@ -194,10 +295,11 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         try:
             if not llmgw.is_llmgw_model(req.model):
                 raise ModelNotFoundError(f"Unknown model: {req.model}")
+            provider_scope = await text_failover.select_scope(identity, req.model)
             provider_call_id = await generation_attempts.dispatch(identity,
                 route="/v1/chat/completions", model=req.model, user_id=req.user,
                 project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
-                stage=meta.stage, free=meta.free,
+                stage=meta.stage, free=meta.free, **text_failover.scope_options(provider_scope),
             )
         except GatewayError as exc:
             raise _gateway_error_to_http(exc) from exc
@@ -205,6 +307,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
             streaming.stream_completion(
                 request=request,
                 provider_call_id=provider_call_id,
+                provider_scope=provider_scope,
                 generation_identity=identity,
                 provider_deadline=(received_at + min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
                                    if identity is not None else None),
@@ -275,82 +378,9 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
 
     if not llmgw.is_llmgw_model(req.model):
         raise _gateway_error_to_http(ModelNotFoundError(f"Unknown model: {req.model}"))
-    try:
-        call_id = await generation_attempts.dispatch(identity,
-            route="/v1/chat/completions", model=req.model, user_id=req.user,
-            project_id=meta.project_id, run_id=meta.run_id, message_id=meta.message_id,
-            stage=meta.stage, free=meta.free,
-        )
-    except GatewayError as exc:
-        raise _gateway_error_to_http(exc) from exc
-
-    transport_evidence: dict[str, Any] = {}
-    try:
-        completion: Callable[..., Awaitable[dict[str, Any]]] = router_module.acompletion
-        completion_options: dict[str, Any] = {}
-        if uses_provider_output_default(req.model, req.max_tokens):
-            remaining = _remaining_provider_budget(request, received_at, reserve=RECEIPT_RESERVE_SECONDS)
-            completion = llmgw.acompletion
-            completion_options = {"response_budget": remaining, "evidence": transport_evidence}
-        else:
-            completion_options = {"user": str(req.user) if req.user else None}
-        if identity is not None:
-            completion = llmgw.acompletion
-            completion_options.pop("user", None)
-            completion_options["retry_preconnect"] = False
-            if not uses_provider_output_default(req.model, req.max_tokens):
-                completion_options["timeout"] = min(240.0, _remaining_provider_budget(request, received_at, reserve=0))
-        response = await completion(
-            model=req.model,
-            messages=filtered_messages,
-            temperature=0.5 if req.temperature is None else req.temperature,
-            max_tokens=req.max_tokens,
-            **completion_options,
-        )
-    except BaseException as exc:
-        details = exc.details if isinstance(exc, GatewayError) else {}
-        retry_candidate = details.pop("_rate_limit_retry_candidate", None)
-        status = "failed" if details.get("provider_charge_ambiguous") is False else "ambiguous"
-        failure_type = provider_calls.classify_failure(exc)
-        async def finish_failed() -> None:
-            try:
-                await generation_attempts.finish(
-                    identity, call_id, reason=("rate_limit_refused" if isinstance(retry_candidate, dict)
-                        else "preconnect" if details.get("provider_failure_kind") == "preconnect"
-                        and status == "failed" else None), status=status, error_type=failure_type,
-                    **receipt_evidence({**transport_evidence, **details}),
-                )
-            except GatewayError as journal_error:
-                raise _gateway_error_to_http(journal_error) from journal_error
-        # One owner survives level cancellation and repeated Task.cancel().
-        receipt_task = asyncio.create_task(finish_failed())
-        with CancelScope(shield=True):
-            while True:
-                try:
-                    await asyncio.shield(receipt_task)
-                    break
-                except asyncio.CancelledError:
-                    if receipt_task.cancelled():
-                        raise
-        if isinstance(exc, GatewayError):
-            if status == "failed" and (isinstance(retry_candidate, dict) or details.get("provider_failure_kind") == "preconnect"):
-                from yleum_gateway.services.generation_response_capture import (
-                    confirm_response_accounting,
-                )
-
-                confirm_response_accounting()
-            if status == "failed" and isinstance(retry_candidate, dict):
-                exc.details.update(retry_candidate)
-            if identity is not None and status == "failed" and details.get("provider_failure_kind") == "preconnect":
-                exc.details.update(retry_safe=True, retry_policy="llmgw_preconnect_v1")
-            exc.details.setdefault("provider_charge_ambiguous", status == "ambiguous")
-            raise _gateway_error_to_http(exc) from exc
-        if isinstance(exc, asyncio.CancelledError):
-            raise
-        raise _gateway_error_to_http(BillingReconciliationRequiredError(
-            "Provider response requires reconciliation",
-            details={"provider_charge_ambiguous": True},
-        )) from None
+    response, call_id, provider_scope = await _dispatch_chat_provider(
+        req, request, identity=identity, filtered_messages=filtered_messages, received_at=received_at,
+    )
 
     async def settle_response() -> dict[str, Any]:
         from yleum_gateway.services.generation_response_capture import (
@@ -359,7 +389,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         )
 
         remember_json_response(response)
-        known_receipt = receipt_evidence(response)
+        known_receipt = receipt_evidence(response, **text_failover.scope_options(provider_scope))
         try:
             usage = response.get("usage") or {}
             tokens_in = int(usage.get("prompt_tokens", 0))
@@ -368,10 +398,12 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
             actual_model = llmgw.resolve_response_model(
                 response.get("model", ""), req.model, known_receipt["provider_request_id"],
             )
-            fallback_used = actual_model != req.model
+            if provider_scope == "aitunnel" and actual_model != req.model:
+                raise BillingReconciliationRequiredError("Backup returned an unexpected model")
+            fallback_used = actual_model != req.model or provider_scope == "aitunnel"
 
             cache_read, cache_write = _cache_token_counts(usage, tokens_in)
-            reported = read_reported_cost(response, response.pop("_provider_headers", {}))
+            reported = read_reported_cost(response, response.pop("_provider_headers", {}), **text_failover.scope_options(provider_scope))
             response_meta = response.setdefault("metadata", {})
             provider_request_id = known_receipt["provider_request_id"]
             cost_rub, provenance = await resolve_request_cost(
@@ -380,6 +412,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
                 cache_read_tokens=cache_read, cache_write_tokens=cache_write,
                 estimated_tokens=bool(response_meta.get("estimated_tokens")),
                 cache_write_factor=anthropic_cache_write_factor(actual_model, {"messages": filtered_messages}),
+                **text_failover.scope_options(provider_scope),
             )
 
         except Exception as exc:
@@ -400,7 +433,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
                 actual_model=actual_model, provider_request_id=provider_request_id,
                 tokens_in=tokens_in, tokens_out=tokens_out,
                 cache_read_tokens=cache_read, cache_write_tokens=cache_write,
-                calculated_cost_rub=Decimal(provenance["calculated_cost_rub"]),
+                calculated_cost_rub=(Decimal(provenance["calculated_cost_rub"]) if provenance["calculated_cost_rub"] is not None else None),
                 provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd,
                 cost_provenance=provenance,
             )
@@ -429,6 +462,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
                     provider_request_id=str(provider_request_id or "") or None,
                     provider_cost_usd=reported.cost_usd,
                     cost_provenance=provenance,
+                    **text_failover.scope_options(provider_scope),
                 )
             except WalletEmptyError as exc:
                 raise _gateway_error_to_http(exc) from exc

@@ -16,6 +16,9 @@ on ``asyncio.to_thread`` connects fast.
 R-01 (deep module): callers see ``is_llmgw_model()`` + ``acompletion()`` +
 ``astream()``. Transport quirks, chain-of-thought stripping, and error
 translation live entirely inside.
+
+The same transport can dispatch an explicitly admitted AI Tunnel Sonnet backup.
+Refusal routing, durable attempts and provider-specific prices remain outside it.
 """
 
 from __future__ import annotations
@@ -205,7 +208,12 @@ def _cached_tokens(usage: dict[str, Any]) -> int:
     )
 
 
-def _key_and_url() -> tuple[str, str]:
+def _key_and_url(provider_scope: str = "llmgw") -> tuple[str, str]:
+    if provider_scope != "llmgw":
+        from yleum_gateway.services.text_failover import credentials
+
+        key, base = credentials(provider_scope)
+        return key, f"{base.rstrip('/')}/chat/completions"
     settings = get_settings()
     if not settings.llmgw_api_key:
         raise UpstreamProviderError("LLMGW_API_KEY not configured")
@@ -223,10 +231,11 @@ def _receipt_headers(headers: Mapping[str, str]) -> dict[str, str]:
 def _failure_details(
     data: object, headers: object = None, *, receipt_failure: ReceiptFailure | None = None,
     transport_stage: str | None = None, upstream_http_status: int | None = None,
+    provider_scope: str = "llmgw",
 ) -> dict[str, Any]:
     # Error details cross the HTTP boundary. Keep only validated identity and
     # decimal text; the journal revalidates these scalars before persistence.
-    evidence = receipt_evidence(data, headers)
+    evidence = receipt_evidence(data, headers, provider_scope=provider_scope)
     details = {"provider_charge_ambiguous": True, **{
         key: str(value) if key.startswith("provider_cost_") and value is not None else value
         for key, value in evidence.items()
@@ -299,6 +308,7 @@ async def astream(
     timeout: float = _DEFAULT_TIMEOUT_S,  # noqa: ASYNC109 — handed to httpx.Client
     receipt: dict[str, Any] | None = None,
     retry_preconnect: bool = True,
+    provider_scope: str = "llmgw",
 ) -> AsyncGenerator[tuple[str, str], None]:
     """TRUE token streaming from llmgw — the page builds live in the preview.
 
@@ -314,7 +324,14 @@ async def astream(
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
-    key, url = _key_and_url()
+    def failure_details(data: object, headers: object = None, **details: Any) -> dict[str, Any]:
+        return _failure_details(data, headers, provider_scope=provider_scope, **details)
+
+    key, url = _key_and_url(provider_scope)
+    if provider_scope == "aitunnel":
+        if model != "claude-sonnet-5.5":
+            raise ValidationFailedError("Unsupported backup model")
+        slug = model
 
     budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
     payload: dict[str, Any] = {
@@ -340,7 +357,6 @@ async def astream(
     _DONE = object()
     stopped = threading.Event()
     receipt = receipt if receipt is not None else {}
-    await response_capture.begin_stream_capture()
 
     def enqueue(value: Any) -> None:
         if not retained:
@@ -376,11 +392,22 @@ async def astream(
                 ):
                     transport_stage = "headers"
                     if r.status_code >= 400:
-                        enqueue(("err", UpstreamProviderError(f"llmgw HTTP {r.status_code}",
-                            details=_failure_details({}, r.headers, transport_stage=transport_stage,
-                                upstream_http_status=r.status_code))))
+                        from yleum_gateway.services.text_failover import (
+                            overload_candidate,
+                            read_refusal_body,
+                        )
+
+                        details = failure_details({}, r.headers, transport_stage=transport_stage,
+                                                  upstream_http_status=r.status_code)
+                        bounded = read_refusal_body(r)
+                        candidate = overload_candidate(bounded, model) if provider_scope == "llmgw" and bounded is not None else None
+                        if candidate is not None:
+                            details["_overload_retry_candidate"] = candidate
+                            details["provider_charge_ambiguous"] = False
+                        enqueue(("err", UpstreamProviderError(f"{provider_scope} HTTP {r.status_code}", details=details)))
                         enqueue(_DONE)
                         return
+                    enqueue(("begin", None))
                     enqueue(("receipt", {
                         "headers": _receipt_headers(r.headers),
                         "provider_request_id": r.headers.get("x-llmgw-request-id"),
@@ -406,7 +433,7 @@ async def astream(
                             continue
                         if obj.get("error"):
                             raise UpstreamProviderError("llmgw stream returned an error", details=
-                                _failure_details({}, receipt_failure=ReceiptFailure.UPSTREAM_ERROR,
+                                failure_details({}, receipt_failure=ReceiptFailure.UPSTREAM_ERROR,
                                     transport_stage=transport_stage))
                         enqueue(("receipt", {
                             key: obj[key] for key in ("usage", "model", "id", "metadata")
@@ -425,7 +452,7 @@ async def astream(
                             enqueue(("delta", delta))
                 raise UpstreamProviderError(
                     "llmgw stream ended without completion",
-                    details=_failure_details({}, receipt_failure=ReceiptFailure.MISSING_COMPLETION,
+                    details=failure_details({}, receipt_failure=ReceiptFailure.MISSING_COMPLETION,
                         transport_stage=transport_stage),
                 )
             except httpx.HTTPError as exc:
@@ -457,6 +484,9 @@ async def astream(
             if item is _DONE:
                 break
             kind, val = item
+            if kind == "begin":
+                await response_capture.begin_stream_capture()
+                continue
             if kind == "raw":
                 await response_capture.receive_stream_event(val)
                 continue
@@ -499,6 +529,7 @@ async def acompletion(
     response_budget: float | None = None,
     evidence: dict[str, Any] | None = None,
     retry_preconnect: bool = True,
+    provider_scope: str = "llmgw",
 ) -> dict[str, Any]:
     """Call llmgw's chat surface and return an OpenAI-shaped completion dict.
 
@@ -509,7 +540,14 @@ async def acompletion(
     slug = _MODEL_SLUG.get(model)
     if slug is None:
         raise ValidationFailedError(f"unsupported llmgw model: {model}")
-    key, url = _key_and_url()
+    def failure_details(data: object, headers: object = None, **details: Any) -> dict[str, Any]:
+        return _failure_details(data, headers, provider_scope=provider_scope, **details)
+
+    key, url = _key_and_url(provider_scope)
+    if provider_scope == "aitunnel":
+        if model != "claude-sonnet-5.5":
+            raise ValidationFailedError("Unsupported backup model")
+        slug = model
 
     budget = output_tokens(model, max_tokens, fallback=_DEFAULT_MAX_TOKENS)
     payload: dict[str, Any] = {
@@ -549,7 +587,7 @@ async def acompletion(
                         evidence["transport_stage"] = "headers"
                         if type(r.status_code) is int and 400 <= r.status_code <= 599:
                             evidence["upstream_http_status"] = r.status_code
-                        evidence.update(receipt_evidence({}, _receipt_headers(r.headers)))
+                        evidence.update(receipt_evidence({}, _receipt_headers(r.headers), provider_scope=provider_scope))
                         r.read()
                     provider_headers = _receipt_headers(r.headers)
                     evidence["transport_stage"] = "body"
@@ -561,7 +599,7 @@ async def acompletion(
                     except (TypeError, ValueError):
                         raise UpstreamProviderError(
                             "llmgw: malformed response",
-                            details=_failure_details(evidence, provider_headers,
+                            details=failure_details(evidence, provider_headers,
                                 receipt_failure=ReceiptFailure.INVALID_RESPONSE,
                                 transport_stage=evidence.get("transport_stage")),
                         ) from None
@@ -579,6 +617,7 @@ async def acompletion(
         if uses_provider_output_default(model, max_tokens):
             response = await native_stream.collect_response(
                 url, payload, headers, budget_seconds=response_budget or timeout, evidence=evidence,
+                **({"provider_scope": provider_scope} if provider_scope != "llmgw" else {}),
             )
             response.raise_for_status()
             data = response.json()
@@ -586,7 +625,9 @@ async def acompletion(
         else:
             data = await asyncio.to_thread(_completion_sync)
     except httpx.HTTPStatusError as exc:
-        details = _failure_details(bounded_error_body(exc.response) or {},
+        from yleum_gateway.services.text_failover import overload_candidate
+
+        details = failure_details(bounded_error_body(exc.response) or {},
             _receipt_headers(exc.response.headers), upstream_http_status=exc.response.status_code)
         category = _refusal_category(exc.response)
         if category is not None:
@@ -595,6 +636,10 @@ async def acompletion(
         if candidate is not None:
             details["provider_charge_ambiguous"] = False
             details["_rate_limit_retry_candidate"] = candidate
+        overload = overload_candidate(exc.response, model) if provider_scope == "llmgw" else None
+        if overload is not None:
+            details["provider_charge_ambiguous"] = False
+            details["_overload_retry_candidate"] = overload
         raise UpstreamProviderError(
             f"llmgw HTTP {exc.response.status_code}",
             details=details,
@@ -604,7 +649,7 @@ async def acompletion(
         raise UpstreamProviderError(
             f"llmgw transport error: {type(exc).__name__}",
             details={
-                **_failure_details(evidence, transport_stage=evidence.get("transport_stage"),
+                **failure_details(evidence, transport_stage=evidence.get("transport_stage"),
                     upstream_http_status=evidence.get("upstream_http_status")),
                 "provider_charge_ambiguous": not safe,
                 "provider_failure_kind": "preconnect" if safe
@@ -614,14 +659,19 @@ async def acompletion(
     except (TimeoutError, native_stream.StreamReceiptError) as exc:
         raise UpstreamProviderError(
             "llmgw response receipt incomplete",
-            details=_failure_details(evidence,
+            details=failure_details(evidence,
                 receipt_failure=exc.reason if isinstance(exc, native_stream.StreamReceiptError) else None,
                 transport_stage=evidence.get("transport_stage"),
                 upstream_http_status=evidence.get("upstream_http_status")),
         ) from exc
 
-    safe_receipt = receipt_evidence(data)
-    error_receipt = _failure_details(data, transport_stage=evidence.get("transport_stage"))
+    if provider_scope == "aitunnel" and isinstance(data.get("usage"), dict):
+        # Provider account balance is not customer response data. The generic
+        # AI Tunnel cost field is RUB; cost_rub is its explicit receipt.
+        data["usage"].pop("balance", None)
+        data["usage"].pop("cost", None)
+    safe_receipt = receipt_evidence(data, provider_scope=provider_scope)
+    error_receipt = failure_details(data, transport_stage=evidence.get("transport_stage"))
     try:
         choice = (data.get("choices") or [])[0]
         content = (choice.get("message") or {}).get("content")

@@ -65,10 +65,20 @@ def _finite_cost(value: Any) -> Decimal | None:
 
 _RUB_SOURCES = ("header:x-llmgw-cost-rub", "header:x-cost-rub", "usage:cost_rub", "metadata:cost_rub")
 _USD_SOURCES = ("usage:cost_usd", "usage:cost", "metadata:cost_usd", "header:x-cost-usd")
+_AITUNNEL_TARIFF_SOURCE = "aitunnel-public-catalog-2026-10-23"
+_AITUNNEL_PRICE = ModelPrice(Decimal("0.4"), Decimal("2.0"), Decimal("0.1"))
 
 
-def read_reported_cost(data: Mapping[str, Any], headers: Mapping[str, Any]) -> ReportedCost:
+def _validate_provider_scope(provider_scope: str) -> None:
+    if provider_scope not in ("llmgw", "aitunnel"):
+        raise ValueError("Unknown provider scope")
+
+
+def read_reported_cost(
+    data: Mapping[str, Any], headers: Mapping[str, Any], *, provider_scope: str = "llmgw",
+) -> ReportedCost:
     """Only known finite monetary scalars, with the existing native precedence."""
+    _validate_provider_scope(provider_scope)
     usage = data.get("usage")
     usage = usage if isinstance(usage, dict) else {}
     metadata = data.get("metadata")
@@ -91,8 +101,10 @@ def read_reported_cost(data: Mapping[str, Any], headers: Mapping[str, Any]) -> R
                 return cost, source
         return None, None
 
-    rub, rub_source = first(_RUB_SOURCES)
-    usd, usd_source = first(_USD_SOURCES)
+    # AI Tunnel's generic usage.cost is RUB, not the legacy LLMGW USD field.
+    # Only explicitly denominated fields are monetary authority for this scope.
+    rub, rub_source = first(_RUB_SOURCES if provider_scope == "llmgw" else ("usage:cost_rub",))
+    usd, usd_source = first(_USD_SOURCES if provider_scope == "llmgw" else ("usage:cost_usd",))
     return ReportedCost(rub, usd, rub_source, usd_source)
 
 
@@ -153,15 +165,25 @@ def validate_cost_provenance(
             "reported_cost_rub", "provider_cost_usd", "rub_source", "usd_source",
             "tariff_revision", "tariff", "tokens_in", "tokens_out", "cache_read_tokens", "cache_write_tokens"}
     tariff_keys = {"rub_per_1k_in", "rub_per_1k_out", "cache_read_factor", "cache_write_factor", "quantum_rub"}
-    if set(evidence) != keys or type(evidence["schema_version"]) is not int or evidence["schema_version"] != 1:
+    version = evidence.get("schema_version")
+    if version == 2:
+        keys |= {"provider_scope", "tariff_source"}
+    if set(evidence) != keys or type(version) is not int or version not in {1, 2}:
         raise ValueError("Invalid cost provenance shape")
+    if version == 2 and (evidence["provider_scope"] != "aitunnel"
+                        or evidence["tariff_source"] != _AITUNNEL_TARIFF_SOURCE
+                        or evidence["rub_source"] not in (None, "usage:cost_rub")
+                        or evidence["usd_source"] not in (None, "usage:cost_usd")):
+        raise ValueError("Invalid provider cost provenance")
     if evidence["basis"] not in {"provider_reported_rub", "token_tariff", "local_token_estimate", "provider_catalog_estimate"}:
         raise ValueError("Invalid cost provenance basis")
     if evidence["rub_source"] not in (*_RUB_SOURCES, None) or evidence["usd_source"] not in (*_USD_SOURCES, None):
         raise ValueError("Invalid cost provenance source")
     for key in ("effective_cost_rub", "calculated_cost_rub", "reported_cost_rub", "provider_cost_usd"):
         value = evidence[key]
-        if value is None and key in {"reported_cost_rub", "provider_cost_usd"}:
+        if value is None and (key in {"reported_cost_rub", "provider_cost_usd"}
+                or (version == 2 and key == "calculated_cost_rub"
+                    and evidence["basis"] == "provider_reported_rub")):
             continue
         if not isinstance(value, str) or _finite_cost(value) is None or len(value) > 80:
             raise ValueError("Invalid cost provenance amount")
@@ -179,7 +201,9 @@ def validate_cost_provenance(
             raise ValueError("Invalid cost provenance tokens")
     tariff = evidence["tariff"]
     if not isinstance(tariff, dict) or set(tariff) != tariff_keys or any(
-        not isinstance(v, str) or len(v) > 80 or _finite_cost(v) is None for v in tariff.values()
+        (not isinstance(v, str) or len(v) > 80 or _finite_cost(v) is None)
+        and not (version == 2 and k == "cache_write_factor" and v is None)
+        for k, v in tariff.items()
     ):
         raise ValueError("Invalid cost provenance tariff")
     revision = evidence["tariff_revision"]
@@ -287,8 +311,14 @@ async def resolve_request_cost(
     cache_read_tokens: int = 0, cache_write_tokens: int = 0,
     reported: ReportedCost | None = None, estimated_tokens: bool = False,
     cache_write_factor: Decimal | None = None,
+    provider_scope: str = "llmgw",
 ) -> tuple[Decimal, dict[str, Any]]:
     """Select an actual receipt or a transparently identified immutable estimate."""
+    _validate_provider_scope(provider_scope)
+    if provider_scope == "aitunnel":
+        return _aitunnel_request_cost(model_id, tokens_in=tokens_in, tokens_out=tokens_out,
+            cache_read_tokens=cache_read_tokens, cache_write_tokens=cache_write_tokens,
+            reported=reported, estimated_tokens=estimated_tokens)
     # Anthropic documents 5m writes at 1.25x and 1h writes at 2x. The caller
     # selects a factor only from the cache controls actually sent upstream;
     # mixed/unknown policies do not acquire a fabricated current quote.
@@ -332,6 +362,54 @@ async def resolve_request_cost(
     return cost, validate_cost_provenance(evidence, cost_rub=cost)
 
 
+def _aitunnel_request_cost(
+    model_id: str, *, tokens_in: int, tokens_out: int, cache_read_tokens: int,
+    cache_write_tokens: int, reported: ReportedCost | None, estimated_tokens: bool,
+) -> tuple[Decimal, dict[str, Any]]:
+    """Snapshot of AI Tunnel's verified RUB catalog; no foreign catalog or FX."""
+    if model_id != "claude-sonnet-5.5":
+        raise ModelNotFoundError("Unsupported AI Tunnel text model")
+    if any(type(v) is not int or v < 0 for v in
+           (tokens_in, tokens_out, cache_read_tokens, cache_write_tokens)):
+        raise ValueError("token counts must be non-negative integers")
+    reported = reported or ReportedCost()
+    local = None
+    if cache_write_tokens:
+        if reported.cost_rub is None:
+            raise ValueError("AI Tunnel cache write tariff is unverified")
+    else:
+        local = _calculate_with_price(_AITUNNEL_PRICE, tokens_in, tokens_out,
+                                      cache_read_tokens, 0, cache_write_factor=Decimal(0))
+    effective = reported.cost_rub if reported.cost_rub is not None else local
+    if effective is None:
+        raise ValueError("AI Tunnel cost is unavailable")
+    tariff = {
+        "rub_per_1k_in": str(_AITUNNEL_PRICE.rub_per_1k_in),
+        "rub_per_1k_out": str(_AITUNNEL_PRICE.rub_per_1k_out),
+        "cache_read_factor": str(_AITUNNEL_PRICE.cache_read_factor),
+        "cache_write_factor": None,
+        "quantum_rub": str(_QUANT),
+    }
+    revision = {"source": _AITUNNEL_TARIFF_SOURCE, "provider_scope": "aitunnel",
+                "model": model_id, "tariff": tariff}
+    evidence = {
+        "schema_version": 2, "provider_scope": "aitunnel",
+        "tariff_source": _AITUNNEL_TARIFF_SOURCE,
+        "basis": "provider_reported_rub" if reported.cost_rub is not None else
+                 "local_token_estimate" if estimated_tokens else "provider_catalog_estimate",
+        "effective_cost_rub": str(effective),
+        "calculated_cost_rub": str(local) if local is not None else None,
+        "reported_cost_rub": str(reported.cost_rub) if reported.cost_rub is not None else None,
+        "provider_cost_usd": str(reported.cost_usd) if reported.cost_usd is not None else None,
+        "rub_source": reported.rub_source, "usd_source": reported.usd_source,
+        "tariff_revision": hashlib.sha256(json.dumps(revision, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest(), "tariff": tariff,
+        "tokens_in": tokens_in, "tokens_out": tokens_out,
+        "cache_read_tokens": cache_read_tokens, "cache_write_tokens": cache_write_tokens,
+    }
+    return effective, validate_cost_provenance(evidence, cost_rub=effective)
+
+
 def calculate_cost_rub(
     model_id: str,
     tokens_in: int,
@@ -352,6 +430,16 @@ def calculate_cost_rub(
         price = PRICE_TABLE[model_id]
     except KeyError as exc:
         raise ModelNotFoundError(f"Unknown model_id: {model_id}") from exc
+
+    return _calculate_with_price(price, tokens_in, tokens_out, cached_tokens,
+                                 cache_write_tokens, cache_write_factor=cache_write_factor)
+
+
+def _calculate_with_price(
+    price: ModelPrice, tokens_in: int, tokens_out: int, cached_tokens: int,
+    cache_write_tokens: int, *, cache_write_factor: Decimal,
+) -> Decimal:
+    """Shared arithmetic only; choosing a provider's tariff stays explicit."""
 
     # A cache hit is a subset of the prompt; never let a bad upstream count make
     # cached exceed the total in (which would underbill into negatives).

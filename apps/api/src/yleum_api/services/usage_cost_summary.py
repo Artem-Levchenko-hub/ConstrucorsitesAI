@@ -4,7 +4,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 from typing import Literal
 
-from sqlalchemy import Numeric, and_, case, cast, func
+from sqlalchemy import Numeric, and_, case, cast, func, or_
 from sqlalchemy.sql.elements import ColumnElement
 
 from yleum_api.models.usage import Usage
@@ -20,7 +20,11 @@ NONNEGATIVE_RUB = r"^(\+?([0-9]+(\.[0-9]*)?|\.[0-9]+)|-0+(\.0*)?)([eE][+-]?[0-9]
 def classify_cost(provenance: object, stored_cost: Decimal) -> CostKind:
     if not isinstance(provenance, dict) or type(provenance.get("schema_version")) is not int:
         return "unknown"
-    if provenance["schema_version"] != 1:
+    version = provenance["schema_version"]
+    if version not in {1, 2}:
+        return "unknown"
+    if version == 2 and (provenance.get("provider_scope") != "aitunnel"
+                        or provenance.get("tariff_source") != "aitunnel-public-catalog-2026-10-23"):
         return "unknown"
 
     def amount(key: str) -> Decimal | None:
@@ -34,7 +38,10 @@ def classify_cost(provenance: object, stored_cost: Decimal) -> CostKind:
     effective, calculated, reported = (
         amount(key) for key in ("effective_cost_rub", "calculated_cost_rub", "reported_cost_rub")
     )
-    if effective is None or calculated is None:
+    if effective is None or (calculated is None and not (
+        version == 2 and "calculated_cost_rub" in provenance
+        and provenance["calculated_cost_rub"] is None
+    )):
         return "unknown"
     with localcontext() as context:
         context.prec = 200
@@ -68,11 +75,15 @@ def cost_classification() -> ColumnElement[str]:
     effective, calculated, reported = (
         amount(key) for key in ("effective_cost_rub", "calculated_cost_rub", "reported_cost_rub")
     )
+    version = provenance["schema_version"].astext
+    provider_v2 = and_(version == "2", provenance["provider_scope"].astext == "aitunnel",
+                      provenance["tariff_source"].astext == "aitunnel-public-catalog-2026-10-23")
     supported = and_(
         func.jsonb_typeof(provenance) == "object",
         func.jsonb_typeof(provenance["schema_version"]) == "number",
-        provenance["schema_version"].astext == "1",
-        calculated.is_not(None),
+        or_(version == "1", provider_v2),
+        or_(calculated.is_not(None), and_(provider_v2,
+            func.jsonb_typeof(provenance["calculated_cost_rub"]) == "null")),
         func.round(effective, 4) == Usage.cost_rub,
     )
     return case(

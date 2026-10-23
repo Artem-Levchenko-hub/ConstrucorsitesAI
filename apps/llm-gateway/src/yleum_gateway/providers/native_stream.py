@@ -58,8 +58,9 @@ def _identity(value: Any) -> str:
 
 
 class _Collector:
-    def __init__(self, evidence: dict[str, Any]) -> None:
+    def __init__(self, evidence: dict[str, Any], *, provider_scope: str = "llmgw") -> None:
         self.evidence = evidence
+        self.provider_scope = provider_scope
         self.provider_header_id: str | None = None
         self.identity: dict[str, str] = {}
         self.text: list[str] = []
@@ -104,7 +105,7 @@ class _Collector:
             for key in ("cost_rub", "cost_usd"):
                 if key in metadata:
                     self.metadata[key] = metadata[key]
-        reported = read_reported_cost(event, {})
+        reported = read_reported_cost(event, {}, provider_scope=self.provider_scope)
         for field, reported_value in (("provider_cost_rub", reported.cost_rub),
                              ("provider_cost_usd", reported.cost_usd)):
             if reported_value is not None and self.evidence.get(field) is None:
@@ -197,7 +198,7 @@ class _Collector:
 
 async def collect_response(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
-    budget_seconds: float, evidence: dict[str, Any],
+    budget_seconds: float, evidence: dict[str, Any], provider_scope: str = "llmgw",
 ) -> httpx.Response:
     """One POST, bounded by wall time and idle time; never retries internally."""
     evidence.pop("upstream_http_status", None)
@@ -208,7 +209,7 @@ async def collect_response(
     maximum = payload.get("max_tokens")
     if type(maximum) is int and 1 <= maximum <= 2_000_000:
         evidence["requested_max_tokens"] = maximum
-    collector = _Collector(evidence)
+    collector = _Collector(evidence, provider_scope=provider_scope)
     request_headers = httpx.Headers(headers)
     request_headers["accept"] = "text/event-stream"
     async with asyncio.timeout(budget_seconds), httpx.AsyncClient(
@@ -232,7 +233,7 @@ async def collect_response(
                 # the completion supplies its canonical body ID; LLMGW's own header
                 # retains the existing chat receipt precedence.
                 evidence["provider_request_id"] = _identity(raw_id)
-            reported = read_reported_cost({}, response.headers)
+            reported = read_reported_cost({}, response.headers, provider_scope=provider_scope)
             evidence.update(provider_cost_rub=reported.cost_rub, provider_cost_usd=reported.cost_usd)
             raw = bytearray()
             wire_bytes = 0

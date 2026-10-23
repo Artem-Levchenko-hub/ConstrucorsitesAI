@@ -141,6 +141,15 @@ def remember_json_response(body: dict[str, Any]) -> None:
         capture.obtained = {"format": "json", "status": 200, "body": body}
 
 
+def remember_provider_refusal(body: dict[str, Any]) -> None:
+    """A fully read, durably accounted refusal has no provider SSE to retain."""
+    capture = _CURRENT.get()
+    if capture is not None:
+        if capture.stream_task is not None or capture.obtained is not None:
+            raise ResponseIndeterminate("provider refusal followed accepted output")
+        capture.obtained = {"format": "json", "status": 503, "body": body}
+
+
 async def begin_stream_capture() -> None:
     capture = _CURRENT.get()
     if capture is None:
@@ -307,8 +316,11 @@ async def run_retained(
                     if close is not None:
                         await close()
                 if capture.stream_task is None:
-                    raise ResponseIndeterminate("response stream lacks complete provider receipt")
-                await capture.stream_task
+                    if not capture.accounting_confirmed or capture.obtained is None:
+                        raise ResponseIndeterminate("response stream lacks complete provider receipt")
+                    await _store_obtained(writer, capture)
+                else:
+                    await capture.stream_task
                 if capture.accounting_confirmed:
                     await capture.ledger.reconciled()
                     if done:

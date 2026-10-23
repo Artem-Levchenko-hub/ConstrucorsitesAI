@@ -138,6 +138,7 @@ async def mark_attempt_dispatching(
     stage: str | None = None,
     free: bool = False,
     provider_call_id: UUID | None = None,
+    provider_scope: str = "llmgw",
 ) -> UUID:
     call = provider_call_id or uuid4()
     try:
@@ -162,6 +163,7 @@ async def mark_attempt_dispatching(
                 message_id=message_id,
                 stage=stage,
                 free=free,
+                provider_scope=provider_scope,
             )
             changed = await conn.execute(
                 "UPDATE generation_provider_attempts SET phase='dispatching',provider_call_id=$3,"
@@ -196,9 +198,11 @@ async def dispatch(identity: GenerationProviderIdentity | None, **kwargs: Any) -
 async def close_attempt(
     call_id: UUID,
     *,
-    reason: Literal["completed", "preconnect", "rate_limit_refused"] | None,
+    reason: Literal["completed", "preconnect", "rate_limit_refused", "upstream_refused"] | None,
 ) -> None:
     """Record control evidence only AFTER the existing financial receipt committed."""
+    if reason not in (None, "completed", "preconnect", "rate_limit_refused", "upstream_refused"):
+        raise AttemptConflict("generation terminal reason is unsupported")
     try:
         async with get_pool().acquire() as conn, conn.transaction():
             row = await conn.fetchrow(
@@ -232,7 +236,7 @@ async def finish(
     identity: GenerationProviderIdentity | None,
     call_id: UUID,
     *,
-    reason: Literal["preconnect", "rate_limit_refused"] | None = None,
+    reason: Literal["preconnect", "rate_limit_refused", "upstream_refused"] | None = None,
     **receipt: Any,
 ) -> None:
     """The existing journal commits first; only then may a safe retry be advertised."""

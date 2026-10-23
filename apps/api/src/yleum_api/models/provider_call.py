@@ -58,7 +58,7 @@ class ProviderCall(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (
-        CheckConstraint("provider_scope = 'llmgw'", name="ck_provider_calls_scope"),
+        CheckConstraint("provider_scope IN ('llmgw','aitunnel')", name="ck_provider_calls_scope"),
         CheckConstraint(
             "status IN ('started','completed','failed','ambiguous')",
             name="ck_provider_calls_status",

@@ -161,6 +161,8 @@ async def confirmed_provider_accounting(conn: Any, attempt: Any) -> bool:
     provenance, amounts = _journal_amounts(call)
     if not _journal_receipt_matches(call, provenance, amounts):
         return False
+    if attempt["terminal_reason"] == "upstream_refused":
+        return call["provider_scope"] == "llmgw" and call["status"] == "failed" and call["usage_id"] is None
     if attempt["terminal_reason"] in {"preconnect", "rate_limit_refused"}:
         return call["status"] == "failed" and call["usage_id"] is None
     if (

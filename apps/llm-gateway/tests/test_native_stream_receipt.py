@@ -457,3 +457,40 @@ async def test_route_cancel_owns_one_journal_task_without_orphan_post(
         assert receipt["provider_request_id"] == "header" and stream.closed
     if phase == "before_headers":
         assert receipt["provider_request_id"] is None
+
+
+@pytest.mark.parametrize("scope", ["aitunnel", "llmgw"])
+@pytest.mark.parametrize("failure", ["disconnect", "missing_done"])
+async def test_interrupted_receipt_preserves_provider_currency(monkeypatch, scope, failure):
+    evidence, posts = {}, []
+    stream = Chunks([encode([chunk(finish="stop", usage={
+        "prompt_tokens": 10, "completion_tokens": 2, "cost": 0.3, "cost_rub": 0.3,
+    })])], httpx.ReadTimeout("synthetic") if failure == "disconnect" else None)
+    def reply(request):
+        posts.append(request)
+        return httpx.Response(200, stream=stream)
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(reply))
+    options = {"provider_scope": scope} if scope == "aitunnel" else {}
+    with pytest.raises((httpx.ReadTimeout, native_stream.StreamReceiptError)):
+        await native_stream.collect_response("https://provider.test", {}, {},
+            budget_seconds=30, evidence=evidence, **options)
+    assert evidence["provider_cost_rub"] == Decimal("0.3")
+    assert evidence["provider_cost_usd"] == (None if scope == "aitunnel" else Decimal("0.3"))
+    assert evidence["transport_stage"] == "body"
+    assert len(posts) == 1 and stream.closed
+
+
+@pytest.mark.parametrize("scope", ["aitunnel", "llmgw"])
+async def test_lost_body_header_costs_use_actual_provider_scope(monkeypatch, scope):
+    evidence = {}
+    stream = Chunks([], httpx.ReadTimeout("synthetic"))
+    monkeypatch.setattr(httpx, "AsyncHTTPTransport", lambda **_: httpx.MockTransport(
+        lambda request: httpx.Response(200, stream=stream,
+            headers={"x-llmgw-cost-rub": "77", "x-cost-usd": "99"})))
+    options = {"provider_scope": scope} if scope == "aitunnel" else {}
+    with pytest.raises(httpx.ReadTimeout):
+        await native_stream.collect_response("https://provider.test", {}, {},
+            budget_seconds=30, evidence=evidence, **options)
+    assert evidence["provider_cost_rub"] == (None if scope == "aitunnel" else Decimal("77"))
+    assert evidence["provider_cost_usd"] == (None if scope == "aitunnel" else Decimal("99"))
+    assert stream.closed

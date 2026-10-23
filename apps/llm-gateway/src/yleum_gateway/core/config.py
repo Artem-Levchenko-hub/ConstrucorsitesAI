@@ -7,8 +7,8 @@ Text generation runs through **llmgw.ru** and its OpenAI-compatible API at
 `https://api.llmgw.ru/v1`. Omnia's native-agent endpoint adapts Anthropic-shaped
 tool turns to llmgw's documented OpenAI tool-calling contract.
 
-AITunnel remains isolated to optional image/video generation because those are
-separate media products, not LLM model routes. `proxyapi.ru` remains only for
+AITunnel text fallback has a separate credential and is disabled by default.
+Its optional image/video products retain their own key. `proxyapi.ru` remains only for
 speech-to-text (whisper) and the optional `gpt-image-1` model.
 """
 
@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     # statements cannot automatically confirm this call's organization.
     llmgw_organization_id: str | None = None
 
-    @field_validator("llmgw_organization_id", mode="before")
+    @field_validator("llmgw_organization_id", "aitunnel_text_organization_id", mode="before")
     @classmethod
     def empty_organization_is_unconfigured(cls, value: object) -> object:
         # Compose supplies an empty default for existing deployments.
@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     # --- aitunnel.ru — optional image/video upstream only ---
     aitunnel_api_key: SecretStr | None = None
     aitunnel_base_url: str = "https://api.aitunnel.ru/v1"
+
+    # Text fallback never borrows the media credential or organization.
+    aitunnel_text_api_key: SecretStr | None = None
+    aitunnel_text_fallback_enabled: bool = False
+    aitunnel_text_organization_id: str | None = None
 
     # --- proxyapi.ru — ONLY for whisper speech-to-text (+ legacy gpt-image) ---
     # Speech-to-text (whisper) + the optional gpt-image-1 image model. Same key +

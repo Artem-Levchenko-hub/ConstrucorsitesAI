@@ -11,7 +11,13 @@ import test_billing_settlement_postgres as fixture_source
 from alembic import command
 from alembic.config import Config
 from test_billing_settlement_postgres import ROOT, _owner
-from test_generation_billing_postgres import _finish, _prepare_accept, _reconcile, _run
+from test_generation_billing_postgres import (
+    _finish,
+    _make_outbox_due,
+    _prepare_accept,
+    _reconcile,
+    _run,
+)
 
 from yleum_gateway.services import billing, pricing
 
@@ -109,6 +115,7 @@ async def test_paid_accepted_aggregate_retains_reported_and_fallback_provenance(
         assert await conn.fetchval("SELECT balance_rub FROM wallets WHERE user_id=$1", user) == 100
     await _prepare_accept(database_url, (user, project, messages, run))
     assert await _finish(database_url, run) == "completed"
+    await _make_outbox_due(pool, run)
     await _reconcile(database_url)
     await _reconcile(database_url)
     async with pool.acquire() as conn:

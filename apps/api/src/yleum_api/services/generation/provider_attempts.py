@@ -206,15 +206,28 @@ async def require_closed_provider_parent(
     prior = (
         (await session.execute(
             text(
-                "SELECT a.* FROM generation_provider_attempts a "
+                "SELECT a.*,c.provider_scope, EXISTS (WITH RECURSIVE ancestors AS ("
+                "SELECT attempt_id,parent_attempt_id,terminal_reason "
+                "FROM generation_provider_attempts "
+                "WHERE attempt_id=a.parent_attempt_id UNION "
+                "SELECT p.attempt_id,p.parent_attempt_id,p.terminal_reason "
+                "FROM generation_provider_attempts p "
+                "JOIN ancestors x ON p.attempt_id=x.parent_attempt_id) "
+                "SELECT 1 FROM ancestors WHERE terminal_reason='upstream_refused') "
+                "AS prior_overload "
+                "FROM generation_provider_attempts a "
                 "JOIN provider_calls c "
                 "ON c.id=a.provider_call_id WHERE a.attempt_id=:id "
                 "AND a.phase='closed' "
-                "AND a.terminal_reason IN ('preconnect','rate_limit_refused') "
+                "AND a.terminal_reason IN ('preconnect','rate_limit_refused','upstream_refused') "
                 "AND c.status='failed' AND c.receipt_hash IS NOT NULL"
             ), {"id": parent.attempt_id},
         )).mappings().first()
     )
+    if (prior is not None and prior.get("terminal_reason") == "upstream_refused"
+            and (prior.get("provider_scope") != "llmgw"
+                 or prior.get("prior_overload") is not False)):
+        raise ValueError("provider fallback has no first primary refusal")
     if prior is None or any(
         prior[key] != getattr(identity, key)
         for key in ("run_id", "project_id", "user_id", "prompt_hash", "request_sha256")

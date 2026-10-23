@@ -62,9 +62,12 @@ def _isolate_settings(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     for var in (
         "LLMGW_API_KEY",
         "AITUNNEL_API_KEY",
+        "AITUNNEL_TEXT_API_KEY",
         "PROXYAPI_API_KEY",
     ):
         monkeypatch.setenv(var, "")
+    monkeypatch.setenv("AITUNNEL_TEXT_FALLBACK_ENABLED", "false")
+    monkeypatch.setenv("AITUNNEL_TEXT_ORGANIZATION_ID", "")
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@localhost:5432/test_omnia")
     monkeypatch.setenv("REDIS_URL", "redis://localhost:6379/15")
     monkeypatch.chdir(os.path.dirname(os.path.dirname(__file__)))

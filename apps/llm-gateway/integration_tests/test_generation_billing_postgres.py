@@ -192,6 +192,15 @@ async def _prepare_accept(database_url, data):
         await engine.dispose()
 
 
+async def _make_outbox_due(pool, run_id):
+    # Only scheduling is synthetic: app/DB wall clocks can differ on Windows/WSL.
+    async with pool.acquire() as conn:
+        assert await conn.execute(
+            "UPDATE generation_billing_outbox SET next_attempt_at=clock_timestamp()-interval '1 minute' "
+            "WHERE run_id=$1 AND settled_at IS NULL", run_id,
+        ) == "UPDATE 1"
+
+
 async def _reconcile(database_url):
     from yleum_api.services.generation_billing import reconcile_generation_billing
 
@@ -241,11 +250,7 @@ async def test_accepted_paid_aggregate_exactly_once_two_terminal_workers(pool, d
     ]
     # Exercise concurrent settlement of a due item, independently of skew
     # between the application's wall clock and PostgreSQL's scheduling clock.
-    async with pool.acquire() as conn:
-        assert await conn.execute(
-            "UPDATE generation_billing_outbox SET next_attempt_at=clock_timestamp()-interval '1 minute' "
-            "WHERE run_id=$1 AND settled_at IS NULL", r
-        ) == "UPDATE 1"
+    await _make_outbox_due(pool, r)
     await asyncio.gather(_reconcile(database_url), _reconcile(database_url))
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT balance_rub FROM wallets WHERE user_id=$1", u) == 95
@@ -282,6 +287,7 @@ async def test_late_provider_serializes_behind_seal_and_never_reprices(pool, dat
             await late
     finally:
         await engine.dispose()
+    await _make_outbox_due(pool, r)
     await _reconcile(database_url)
     async with pool.acquire() as conn:
         assert await conn.fetchval("SELECT balance_rub FROM wallets WHERE user_id=$1", u) == 98
@@ -307,9 +313,7 @@ async def test_insufficient_accepted_build_pending_retries_frozen_amount(pool, d
             == "billable"
         )
         await conn.execute("UPDATE wallets SET balance_rub=200 WHERE user_id=$1", u)
-        await conn.execute(
-            "UPDATE generation_billing_outbox SET next_attempt_at=now() WHERE run_id=$1", r
-        )
+    await _make_outbox_due(pool, r)
     await _reconcile(database_url)
     await _provider(u, p, m, r, "latecost-" + str(r), "99")
     await _reconcile(database_url)
@@ -482,6 +486,7 @@ async def test_billable_insert_failure_rolls_back_wallet_and_terminal_intent(poo
         )
     try:
         assert await _finish(database_url, r) == "completed"
+        await _make_outbox_due(pool, r)
         with pytest.raises(Exception, match="synthetic debit failure"):
             await _reconcile(database_url)
         async with pool.acquire() as conn:
@@ -926,6 +931,7 @@ async def test_actual_quiet_billing_tick_commits_debit_refund_and_outbox(pool, d
     await _provider(u, p, m, r, "quiet-" + str(r), "2")
     await _prepare_accept(database_url, data)
     assert await _finish(database_url, r) == "completed"
+    await _make_outbox_due(pool, r)
     old, op, om = await _owner(pool)
     oldrun = uuid4()
     async with pool.acquire() as conn:
@@ -970,6 +976,7 @@ async def test_actual_tick_downstream_failure_cannot_rollback_generation_payment
     await _provider(u, p, m, r, "downstream-" + str(r), "3")
     await _prepare_accept(database_url, (u, p, m, r))
     assert await _finish(database_url, r) == "completed"
+    await _make_outbox_due(pool, r)
 
     async def fail_downstream(*args, **kwargs):
         raise RuntimeError("synthetic downstream provider failure")
@@ -1058,6 +1065,7 @@ async def test_contradictory_billable_intent_stops_without_debit_or_waiver(pool,
     await _provider(u, p, m, r, "contradiction-" + str(r), "2")
     await _prepare_accept(database_url, (u, p, m, r))
     assert await _finish(database_url, r) == "completed"
+    await _make_outbox_due(pool, r)
     async with pool.acquire() as conn:
         await conn.execute("UPDATE generation_runs SET status='failed' WHERE id=$1", r)
     with pytest.raises(RuntimeError, match="reconciliation"):
@@ -1116,6 +1124,7 @@ async def test_real_manual_cancel_cannot_replace_locked_accepted_completion(
         await engine.dispose()
     signal.assert_not_awaited()
     event.assert_not_awaited()
+    await _make_outbox_due(pool, r)
     await _actual_tick(database_url)
     async with pool.acquire() as conn:
         assert (

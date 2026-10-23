@@ -4,7 +4,7 @@ The API agent speaks Anthropic Messages because its transcript uses
 ``tool_use`` / ``tool_result`` blocks. llmgw documents an OpenAI-compatible
 ``/chat/completions`` surface, including function calling. This adapter converts
 requests and responses at the gateway boundary so the agent loop remains stable
-while all LLM traffic uses llmgw.
+with LLMGW as primary and the separately admitted AI Tunnel backup.
 
 Thinking blocks from historical transcripts are intentionally omitted when
 building the OpenAI request: llmgw does not document Anthropic thinking
@@ -16,17 +16,19 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Coroutine
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
-import anyio
 import httpx
 import structlog
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
+from yleum_gateway.core.errors import (
+    BillingReconciliationRequiredError,
+    GatewayError,
+    WalletEmptyError,
+)
 from yleum_gateway.core.runner_auth import (
     RunnerAuthConfigError,
     RunnerAuthError,
@@ -39,7 +41,7 @@ from yleum_gateway.core.runner_auth import (
 )
 from yleum_gateway.providers import llmgw
 from yleum_gateway.providers.rate_limit import bounded_error_body, refusal_retry_candidate
-from yleum_gateway.services import billing, file_logger, generation_attempts
+from yleum_gateway.services import billing, file_logger, generation_attempts, text_failover
 from yleum_gateway.services import provider_calls as provider_calls
 from yleum_gateway.services.cache_pricing import anthropic_cache_write_factor
 from yleum_gateway.services.generation_identity import GenerationProviderIdentity
@@ -51,6 +53,9 @@ from yleum_gateway.services.pricing import (
     calculate_cost_rub,
     read_reported_cost,
     resolve_request_cost,
+)
+from yleum_gateway.services.provider_receipt_cleanup import (
+    await_provider_receipt as _await_provider_receipt,
 )
 from yleum_gateway.services.receipt_evidence import receipt_evidence
 
@@ -448,6 +453,7 @@ def _reported_cost(
 def _post_llmgw(
     url: str, payload: dict[str, Any], headers: dict[str, str], *,
     evidence: dict[str, Any] | None = None,
+    provider_scope: str = "llmgw",
 ) -> httpx.Response:
     from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
@@ -461,41 +467,14 @@ def _post_llmgw(
             return client.post(url, json=payload, headers=headers)
         with client.stream("POST", url, json=payload, headers=headers) as response:
             evidence["transport_stage"] = "headers"
-            evidence.update(receipt_evidence({}, response.headers))
+            evidence.update(receipt_evidence({}, response.headers, provider_scope=provider_scope))
             response.read()
             return response
 
 
-async def _await_provider_receipt[ReceiptResult](
-    operation: Coroutine[Any, Any, ReceiptResult],
-) -> ReceiptResult:
-    # Own one settlement task through repeated client cancellation. Never start
-    # the provider or its receipt write again while waiting for this task.
-    task = asyncio.create_task(operation)
-    try:
-        return await asyncio.shield(task)
-    except asyncio.CancelledError as cancelled:
-        if task.cancelled():
-            raise
-        # ASGI uses level cancellation: shield cleanup from the cancelled
-        # AnyIO scope, while still tolerating repeated direct task.cancel().
-        with anyio.CancelScope(shield=True):
-            while True:
-                try:
-                    await asyncio.shield(task)
-                    break
-                except asyncio.CancelledError:
-                    if task.cancelled():
-                        raise cancelled from None
-                except Exception as exc:
-                    log.warning("native_messages.provider_receipt_failed", error_type=type(exc).__name__)
-                    break
-        raise cancelled
-
-
 async def _finish_provider_call(
     call_id: UUID, *, identity: GenerationProviderIdentity | None = None,
-    reason: Literal["preconnect", "rate_limit_refused"] | None = None, **receipt: Any,
+    reason: Literal["preconnect", "rate_limit_refused", "upstream_refused"] | None = None, **receipt: Any,
 ) -> bool:
     try:
         await _await_provider_receipt(generation_attempts.finish(identity, call_id, reason=reason, **receipt))
@@ -505,14 +484,14 @@ async def _finish_provider_call(
     return True
 
 
-def _known_response_evidence(upstream: httpx.Response) -> dict[str, Any]:
+def _known_response_evidence(upstream: httpx.Response, provider_scope: str = "llmgw") -> dict[str, Any]:
     try:
         data = bounded_error_body(upstream) if upstream.status_code >= 400 else upstream.json()
     except (ValueError, UnicodeError):
         data = {}
     if not isinstance(data, dict):
         data = {}
-    reported = read_reported_cost(data, upstream.headers)
+    reported = read_reported_cost(data, upstream.headers, **text_failover.scope_options(provider_scope))
     raw_id = (data.get("id") or upstream.headers.get("x-llmgw-request-id")
               or upstream.headers.get("x-request-id"))
     request_id = raw_id if (
@@ -527,6 +506,7 @@ async def _settle_native_cost(
     call_id: UUID, actual_model: str, payload: dict[str, Any],
     receipt: dict[str, Any], reported: ReportedCost,
     identity: GenerationProviderIdentity | None = None,
+    provider_scope: str = "llmgw",
 ) -> tuple[Decimal, dict[str, Any]] | None:
     try:
         cost_rub, provenance = await resolve_request_cost(
@@ -534,8 +514,10 @@ async def _settle_native_cost(
             cache_read_tokens=receipt["cache_read_tokens"],
             cache_write_tokens=receipt["cache_write_tokens"], reported=reported,
             cache_write_factor=anthropic_cache_write_factor(actual_model, payload),
+            **text_failover.scope_options(provider_scope),
         )
-        calculated_cost_rub = Decimal(provenance["calculated_cost_rub"])
+        calculated_cost_rub = (Decimal(provenance["calculated_cost_rub"])
+                               if provenance["calculated_cost_rub"] is not None else None)
     except Exception as exc:
         await _finish_provider_call(call_id, identity=identity, status="ambiguous", **receipt,
                                     error_type=type(exc).__name__)
@@ -545,6 +527,137 @@ async def _settle_native_cost(
     ):
         return None
     return cost_rub, provenance
+
+
+async def _dispatch_native_provider(
+    *, identity: GenerationProviderIdentity | None, model: str, payload: dict[str, Any],
+    primary_route: tuple[str, str], dispatch_options: dict[str, Any], retry_count: int,
+) -> tuple[UUID, httpx.Response, str] | Response:
+    """Commit each upstream attempt independently before its network dispatch."""
+    provider_scope = await text_failover.select_scope(identity, model)
+    run_id, project_id = dispatch_options["run_id"], dispatch_options["project_id"]
+    message_id, stage = dispatch_options["message_id"], dispatch_options["stage"]
+    while True:
+        api_key, api_base = primary_route if provider_scope == "llmgw" else text_failover.credentials(provider_scope)
+        payload = {**payload, "model": llmgw.native_slug(model) if provider_scope == "llmgw" else model}
+        headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json", "accept": "application/json"}
+        try:
+            provider_call_id = await generation_attempts.dispatch(
+                identity, **dispatch_options, **text_failover.scope_options(provider_scope),
+            )
+        except Exception as exc:
+            log.warning("native_messages.provider_admission_failed", error_type=type(exc).__name__)
+            return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
+
+        transport_evidence: dict[str, Any] = {}
+        post_options: dict[str, Any] = text_failover.scope_options(provider_scope)
+        if identity is not None or provider_scope == "aitunnel":
+            post_options["evidence"] = transport_evidence
+        try:
+            upstream = await asyncio.to_thread(
+                _post_llmgw,
+                f"{api_base.rstrip('/')}/chat/completions",
+                payload,
+                headers,
+                **post_options,
+            )
+        except httpx.HTTPError as exc:
+            log.warning(
+                "native_messages.transport_error",
+                error_type=type(exc).__name__,
+                run_id=str(run_id) if run_id else None,
+                project_id=str(project_id) if project_id else None,
+                message_id=str(message_id) if message_id else None,
+                stage=stage if stage in {"build_plan", "native_agent", "verification"} else "unknown",
+                retry_count=retry_count,
+            )
+            safe_to_retry = (provider_scope == "llmgw" and isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
+                             and transport_evidence.get("transport_stage") != "headers")
+            recorded = await _finish_provider_call(
+                provider_call_id, identity=identity, status="failed" if safe_to_retry else "ambiguous",
+                reason="preconnect" if safe_to_retry else None,
+                error_type=type(exc).__name__, **receipt_evidence(transport_evidence),
+            )
+            if safe_to_retry and recorded:
+                # These failures occur before the request reaches the provider.
+                # Publish permission only after the failed attempt receipt commits.
+                from yleum_gateway.services.generation_response_capture import (
+                    confirm_response_accounting,
+                )
+
+                confirm_response_accounting()
+                return _err(502, "api_error", "Provider connection could not be established", details={
+                    "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
+                    "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
+                })
+            # Once a request may have been accepted, replay risks a second paid call.
+            # Deployed API callers already stop on this terminal billing error.
+            return _unconfirmed_provider_outcome()
+
+        known_evidence = _known_response_evidence(upstream, provider_scope)
+        if upstream.status_code >= 400:
+            overload = text_failover.overload_candidate(upstream, model) if provider_scope == "llmgw" else None
+            if overload is not None:
+                recorded = await _finish_provider_call(
+                    provider_call_id, identity=identity, status="failed", reason="upstream_refused",
+                    error_type="HTTPStatusError", **known_evidence,
+                )
+                if not recorded:
+                    return _unconfirmed_provider_outcome(upstream.status_code)
+                if identity is not None:
+                    from yleum_gateway.services.generation_response_capture import (
+                        confirm_response_accounting,
+                    )
+
+                    confirm_response_accounting()
+                    return Response(status_code=503, media_type="application/json", content=json.dumps({
+                        "type": "error", "error": {
+                            "type": "api_error", "code": "api_error",
+                            "message": "Primary provider refused the request", "details": overload,
+                        },
+                    }))
+                provider_scope = "aitunnel"
+                continue
+            retry_candidate = refusal_retry_candidate(upstream)
+            ambiguous = upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
+            recorded = await _finish_provider_call(
+                provider_call_id, identity=identity, status="ambiguous" if ambiguous else "failed",
+                reason="rate_limit_refused" if retry_candidate is not None else None,
+                error_type="HTTPStatusError", **known_evidence,
+            )
+            if upstream.status_code >= 500 or not recorded:
+                # A failed journal commit does not erase the locally observed HTTP
+                # status, and cannot turn an ambiguous outcome into a safe retry.
+                return _unconfirmed_provider_outcome(upstream.status_code)
+            if not ambiguous and retry_candidate is not None:
+                from yleum_gateway.services.generation_response_capture import (
+                    confirm_response_accounting,
+                )
+
+                confirm_response_accounting()
+            category = llmgw._refusal_category(upstream)
+            details: dict[str, Any] = {
+                "upstream_http_status": upstream.status_code,
+                "provider_charge_ambiguous": ambiguous,
+            }
+            err_type = "api_error"
+            if retry_candidate is not None:
+                details.update(retry_candidate)
+            message = "Provider rejected the request"
+            if category is not None:
+                details["provider_refusal_category"] = category
+                message = {
+                    "access": "Provider denied access to the request",
+                    "funds": "Provider reported insufficient funds",
+                    "rate_limit": "Provider rate limit exceeded",
+                }[category]
+            else:
+                request_error = _request_error_type(upstream)
+                if request_error is not None:
+                    err_type = request_error
+                    message = _REQUEST_ERROR_MESSAGES[request_error]
+            return _err(upstream.status_code, err_type, message, details=details)
+        return provider_call_id, upstream, provider_scope
 
 
 async def _native_messages_execute(
@@ -633,12 +746,6 @@ async def _native_messages_execute(
     if isinstance(body.get("temperature"), (int, float)):
         payload["temperature"] = body["temperature"]
 
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "content-type": "application/json",
-        "accept": "application/json",
-    }
-
     # Fail closed before the provider call. A native build must never keep
     # spending after the user's wallet floor or when accounting is unavailable.
     if user_id is not None and not free:
@@ -650,99 +757,18 @@ async def _native_messages_execute(
             log.exception("native_messages.precheck_failed", user_id=str(user_id))
             return _err(503, "billing_unavailable", "usage accounting is temporarily unavailable")
 
-    try:
-        provider_call_id = await generation_attempts.dispatch(identity,
-            route="/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
-            model=model, user_id=user_id, project_id=project_id, run_id=run_id,
-            message_id=message_id, stage=stage, free=free,
-        )
-    except Exception as exc:
-        log.warning("native_messages.provider_admission_failed", error_type=type(exc).__name__)
-        return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
-
-    transport_evidence: dict[str, Any] = {}
-    try:
-        upstream = await asyncio.to_thread(
-            _post_llmgw,
-            f"{api_base.rstrip('/')}/chat/completions",
-            payload,
-            headers,
-            **({"evidence": transport_evidence} if identity is not None else {}),
-        )
-    except httpx.HTTPError as exc:
-        log.warning(
-            "native_messages.transport_error",
-            error_type=type(exc).__name__,
-            run_id=str(run_id) if run_id else None,
-            project_id=str(project_id) if project_id else None,
-            message_id=str(message_id) if message_id else None,
-            stage=stage if stage in {"build_plan", "native_agent", "verification"} else "unknown",
-            retry_count=retry_count,
-        )
-        safe_to_retry = (isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout))
-                         and transport_evidence.get("transport_stage") != "headers")
-        recorded = await _finish_provider_call(
-            provider_call_id, identity=identity, status="failed" if safe_to_retry else "ambiguous",
-            reason="preconnect" if safe_to_retry else None,
-            error_type=type(exc).__name__, **receipt_evidence(transport_evidence),
-        )
-        if safe_to_retry and recorded:
-            # These failures occur before the request reaches the provider.
-            # Publish permission only after the failed attempt receipt commits.
-            from yleum_gateway.services.generation_response_capture import (
-                confirm_response_accounting,
-            )
-
-            confirm_response_accounting()
-            return _err(502, "api_error", "Provider connection could not be established", details={
-                "provider_failure_kind": "preconnect", "provider_charge_ambiguous": False,
-                "retry_safe": True, "retry_policy": "llmgw_preconnect_v1",
-            })
-        # Once a request may have been accepted, replay risks a second paid call.
-        # Deployed API callers already stop on this terminal billing error.
-        return _unconfirmed_provider_outcome()
-
-    known_evidence = _known_response_evidence(upstream)
-    if upstream.status_code >= 400:
-        retry_candidate = refusal_retry_candidate(upstream)
-        ambiguous = upstream.status_code >= 500 or (upstream.status_code == 429 and retry_candidate is None)
-        recorded = await _finish_provider_call(
-            provider_call_id, identity=identity, status="ambiguous" if ambiguous else "failed",
-            reason="rate_limit_refused" if retry_candidate is not None else None,
-            error_type="HTTPStatusError", **known_evidence,
-        )
-        if upstream.status_code >= 500 or not recorded:
-            # A failed journal commit does not erase the locally observed HTTP
-            # status, and cannot turn an ambiguous outcome into a safe retry.
-            return _unconfirmed_provider_outcome(upstream.status_code)
-        if not ambiguous and retry_candidate is not None:
-            from yleum_gateway.services.generation_response_capture import (
-                confirm_response_accounting,
-            )
-
-            confirm_response_accounting()
-        category = llmgw._refusal_category(upstream)
-        details: dict[str, Any] = {
-            "upstream_http_status": upstream.status_code,
-            "provider_charge_ambiguous": ambiguous,
-        }
-        err_type = "api_error"
-        if retry_candidate is not None:
-            details.update(retry_candidate)
-        message = "Provider rejected the request"
-        if category is not None:
-            details["provider_refusal_category"] = category
-            message = {
-                "access": "Provider denied access to the request",
-                "funds": "Provider reported insufficient funds",
-                "rate_limit": "Provider rate limit exceeded",
-            }[category]
-        else:
-            request_error = _request_error_type(upstream)
-            if request_error is not None:
-                err_type = request_error
-                message = _REQUEST_ERROR_MESSAGES[request_error]
-        return _err(upstream.status_code, err_type, message, details=details)
+    provider_result = await _dispatch_native_provider(
+        identity=identity, model=model, payload=payload, primary_route=(api_key, api_base),
+        retry_count=retry_count, dispatch_options={
+            "route": "/v1/project-cell/messages" if runner_claims is not None else "/v1/messages",
+            "model": model, "user_id": user_id, "project_id": project_id, "run_id": run_id,
+            "message_id": message_id, "stage": stage, "free": free,
+        },
+    )
+    if isinstance(provider_result, Response):
+        return provider_result
+    provider_call_id, upstream, provider_scope = provider_result
+    known_evidence = _known_response_evidence(upstream, provider_scope)
 
     try:
         upstream_data = upstream.json()
@@ -750,7 +776,7 @@ async def _native_messages_execute(
             raise ValueError("upstream response must be an object")
         reported_model = upstream_data.get("model")
         actual_model = slug_to_omnia(reported_model) if isinstance(reported_model, str) else None
-        if reported_model and (actual_model is None or not is_supported(actual_model)):
+        if reported_model and (actual_model is None or not is_supported(actual_model) or (provider_scope == "aitunnel" and actual_model != model)):
             if not await _finish_provider_call(
                 provider_call_id, identity=identity, status="ambiguous", error_type="ValidationFailedError",
                 **known_evidence,
@@ -762,7 +788,7 @@ async def _native_messages_execute(
                 "upstream model identity cannot be accounted for safely",
             )
         actual_model = actual_model or model
-        fallback_used = actual_model != model
+        fallback_used = actual_model != model or provider_scope == "aitunnel"
         adapted = _anthropic_response(upstream_data, actual_model)
     except _InvalidUsageReceipt:
         await _finish_provider_call(
@@ -789,7 +815,7 @@ async def _native_messages_execute(
     tokens_out = int(usage.get("output_tokens") or 0)
     cache_read = int(usage.get("cache_read_input_tokens") or 0)
     cache_write = int(usage.get("cache_creation_input_tokens") or 0)
-    reported = read_reported_cost(upstream_data, upstream.headers)
+    reported = read_reported_cost(upstream_data, upstream.headers, **text_failover.scope_options(provider_scope))
     provider_cost_usd = reported.cost_usd
     provider_request_id = known_evidence["provider_request_id"]
     settled = await _await_provider_receipt(_settle_native_cost(
@@ -797,7 +823,7 @@ async def _native_messages_execute(
             **known_evidence, "actual_model": actual_model,
             "tokens_in": tokens_in, "tokens_out": tokens_out,
             "cache_read_tokens": cache_read, "cache_write_tokens": cache_write,
-        }, reported, identity,
+        }, reported, identity, provider_scope,
     ))
     if settled is None:
         return _err(503, "billing_unavailable", "Provider accounting is temporarily unavailable")
@@ -825,6 +851,7 @@ async def _native_messages_execute(
                 provider_request_id=provider_request_id,
                 provider_cost_usd=provider_cost_usd,
                 cost_provenance=provenance,
+                **text_failover.scope_options(provider_scope),
             )
         except WalletEmptyError as exc:
             log.warning(
@@ -869,6 +896,7 @@ async def _native_messages_execute(
         }))
 
     adapted["metadata"] = {
+        "provider_scope": provider_scope,
         "requested_model": model,
         "actual_model": actual_model,
         "model_identity_confirmed": bool(reported_model),
@@ -951,6 +979,8 @@ async def _native_messages_impl(
         return await _native_messages_execute(request, runner_claims=runner_claims)
     except generation_attempts.AttemptConflict:
         return _err(409, "generation_attempt_unconfirmed", "Generation request binding is unconfirmed")
+    except GatewayError as exc:
+        return _err(exc.http_status, exc.code, exc.message, details=exc.details)
     except HTTPException as exc:
         if exc.status_code >= 500 or exc.status_code == 409:
             return _err(503, "billing_unavailable", "Generation response outcome is unconfirmed")

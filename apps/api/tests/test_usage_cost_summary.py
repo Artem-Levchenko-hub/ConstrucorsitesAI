@@ -12,6 +12,22 @@ def receipt(fields):
             "calculated_cost_rub": "0", "reported_cost_rub": None, **fields}
 
 
+@pytest.mark.parametrize("reported,calculated,expected", [
+    ("0.3", None, "confirmed"), ("0.3", "0.4", "confirmed"),
+    (None, "0.3", "estimated"), (None, None, "unknown"),
+])
+def test_ai_scope_v2_classifies_actual_rub_without_fabricated_cache_tariff(
+    reported, calculated, expected,
+):
+    proof = receipt({"schema_version": 2, "provider_scope": "aitunnel",
+        "tariff_source": "aitunnel-public-catalog-2026-10-23",
+        "basis": "provider_reported_rub" if reported is not None else "provider_catalog_estimate",
+        "effective_cost_rub": "0.3", "calculated_cost_rub": calculated,
+        "reported_cost_rub": reported})
+    assert classify_cost(proof, Decimal("0.3")) == expected
+    assert classify_cost({**proof, "provider_scope": "unknown"}, Decimal("0.3")) == "unknown"
+
+
 @pytest.mark.parametrize("provenance,expected", [
     ({"basis": "provider_reported_rub", "reported_cost_rub": "0"}, "confirmed"),
     ({"basis": "provider_reported_rub", "reported_cost_rub": "2.50"}, "confirmed"),

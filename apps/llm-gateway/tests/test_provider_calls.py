@@ -44,6 +44,7 @@ class Connection:
                 "stage",
                 "free",
                 "provider_organization_id",
+                "provider_scope",
             )
             self.rows[args[0]] = dict(zip(keys, args, strict=True)) | {
                 "status": "started",
@@ -84,6 +85,7 @@ class Connection:
                 r
                 for r in self.rows.values()
                 if r["provider_request_id"] == args[0] and r["id"] != args[1]
+                and r["provider_scope"] == args[2]
             ),
             None,
         )
@@ -118,6 +120,50 @@ async def finish(call_id, **kwargs):
     }
     values.update(kwargs)
     await provider_calls.finish_call(call_id, **values)
+
+
+async def test_same_server_id_in_distinct_providers_is_not_duplicate(connection, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(provider_calls, "get_settings", lambda: SimpleNamespace(
+        llmgw_organization_id="primary-org", aitunnel_text_organization_id="backup-org"))
+    first = await start()
+    second = await start(provider_scope="aitunnel")
+    await finish(first)
+    await finish(second)
+    assert connection.rows[first]["provider_scope"] == "llmgw"
+    assert connection.rows[first]["provider_organization_id"] == "primary-org"
+    assert connection.rows[second]["provider_scope"] == "aitunnel"
+    assert connection.rows[second]["provider_organization_id"] == "backup-org"
+    assert connection.rows[first]["status"] == connection.rows[second]["status"] == "completed"
+    duplicate = await start(provider_scope="aitunnel")
+    with pytest.raises(BillingReconciliationRequiredError):
+        await finish(duplicate)
+    assert connection.rows[duplicate]["status"] == "ambiguous"
+
+
+@pytest.mark.parametrize("scope", ["unknown", "", None, [], "LLMGW"])
+async def test_invalid_scope_fails_before_inserting_a_call(connection, scope):
+    with pytest.raises(BillingReconciliationRequiredError):
+        await start(provider_scope=scope)
+    assert not connection.writes
+
+
+async def test_foreign_provenance_cannot_be_attached_to_provider_call(connection):
+    from yleum_gateway.services import pricing
+
+    _, proof = await pricing.resolve_request_cost("claude-sonnet-5.5", tokens_in=1,
+        tokens_out=1, provider_scope="aitunnel")
+    call = await start()
+    with pytest.raises(BillingReconciliationRequiredError):
+        await finish(call, cost_provenance=proof)
+    assert connection.rows[call]["status"] == "started"
+    backup = await start(provider_scope="aitunnel")
+    legacy = pricing.cost_provenance("claude-sonnet-5.5", Decimal("0.1"),
+                                    tokens_in=1, tokens_out=1)
+    with pytest.raises(BillingReconciliationRequiredError):
+        await finish(backup, cost_provenance=legacy)
+    assert connection.rows[backup]["status"] == "started"
 
 
 @pytest.mark.parametrize("reason", list(provider_calls.ReceiptFailure))

@@ -187,10 +187,10 @@ async def _read_generation_response(
                 or (body["reconciliation_hold"] and not reconcile)
                 or attempt["phase"] != "closed"
                 or attempt["terminal_reason"]
-                not in {"completed", "preconnect", "rate_limit_refused"}
+                not in {"completed", "preconnect", "rate_limit_refused", "upstream_refused"}
             ):
                 raise ResponseIndeterminate("generation response is not confirmed")
-            if reconcile:
+            if reconcile or attempt["terminal_reason"] == "upstream_refused":
                 from yleum_gateway.services.billing import confirmed_provider_accounting
 
                 if not await confirmed_provider_accounting(conn, attempt):

@@ -158,6 +158,10 @@ services:
       # --- aitunnel.ru — optional image/video generation only ---
       AITUNNEL_API_KEY: ${AITUNNEL_API_KEY:-}
       AITUNNEL_BASE_URL: ${AITUNNEL_BASE_URL:-https://api.aitunnel.ru/v1}
+      # Separate text fallback account; disabled until explicitly configured.
+      AITUNNEL_TEXT_API_KEY: ${AITUNNEL_TEXT_API_KEY:-}
+      AITUNNEL_TEXT_FALLBACK_ENABLED: ${AITUNNEL_TEXT_FALLBACK_ENABLED:-false}
+      AITUNNEL_TEXT_ORGANIZATION_ID: ${AITUNNEL_TEXT_ORGANIZATION_ID:-}
       # --- proxyapi.ru — ONLY for whisper speech-to-text. ---
       PROXYAPI_API_KEY: ${PROXYAPI_API_KEY:-}
       PROXYAPI_OPENAI_BASE_URL: ${PROXYAPI_OPENAI_BASE_URL:-https://api.proxyapi.ru/openai/v1}

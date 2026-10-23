@@ -55,7 +55,7 @@ from yleum_api.services.generation.recovery_contract import (
 )
 from yleum_api.services.generation_failure import failure_for_error
 from yleum_api.services.integration_providers import PROVIDER_MAP
-from yleum_api.services.llm_client import rate_limit_retry_delay
+from yleum_api.services.llm_client import _overload_refusal_details, rate_limit_retry_delay
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 if TYPE_CHECKING:
@@ -214,6 +214,13 @@ def _gateway_preconnect_proven(response: httpx.Response, url: str) -> bool:
         and details["retry_safe"] is True
         and details["retry_policy"] == "llmgw_preconnect_v1"
     )
+
+
+def _gateway_overload_refused(response: httpx.Response, url: str) -> bool:
+    if response.status_code != 503:
+        return False
+    error = _gateway_native_error(response, url)
+    return error is not None and _overload_refusal_details(error)
 
 
 def _gateway_ambiguous_server_status(response: httpx.Response, url: str) -> int | None:
@@ -1136,6 +1143,7 @@ async def _call_messages(
     begin_provider_dispatch("native", allowance=_CALL_RETRIES, seconds=initial_window)
     generation_attempt = None
     retry_parent = None
+    overload_used = False
     generation_route = (
         "/v1/project-cell/messages" if url.rstrip("/").endswith("/v1/project-cell/messages")
         else "/v1/messages"
@@ -1185,12 +1193,14 @@ async def _call_messages(
                     generation_attempt, allow_provider_refusal=(
                         failure.retry_safe is True and failure.provider_charge_ambiguous is False
                         and (failure.code == "model_unavailable"
-                             or failure.retry_after_seconds is not None)
+                             or failure.retry_after_seconds is not None
+                             or failure.code == "upstream_refused")
                     ),
                 )
                 if resumed is None:
                     raise
                 attempt, provider_refusal = resumed
+                overload_used = failure.code == "upstream_refused"
                 remaining = provider_dispatch_remaining()
                 delay = min(45.0, 4.0 * (2 ** (attempt - 1)))
                 if failure.retry_after_seconds is not None:
@@ -1304,7 +1314,13 @@ async def _call_messages(
                 # Repeating the same rejected request cannot fix its contract.
                 # Keep only the HTTP class; never infer quota or expose its body.
                 raise _terminal_provider_error(f"provider_http_{r.status_code}")
-            if _gateway_preconnect_proven(r, url):
+            if _gateway_overload_refused(r, url):
+                if generation_attempt is None or overload_used:
+                    raise _terminal_provider_error("provider_request_failed")
+                overload_used = True
+                last = _terminal_provider_error("provider_request_failed")
+                retry_parent, generation_attempt = generation_attempt, None
+            elif _gateway_preconnect_proven(r, url):
                 last = _terminal_provider_error("provider_request_failed")
                 retry_parent, generation_attempt = generation_attempt, None
             elif r.status_code == 429 or category == "rate_limit":

@@ -23,7 +23,8 @@ _INITIAL = CHUNK_BYTES + MANIFEST_RESERVE + 2 * OBJECT_OVERHEAD
 CONFIRMED_TERMINAL_SQL = (
     "a.phase='closed' AND c.receipt_hash IS NOT NULL AND ("
     "(a.terminal_reason='completed' AND c.status='completed') OR "
-    "(a.terminal_reason IN ('preconnect','rate_limit_refused') AND c.status='failed'))"
+    "(a.terminal_reason IN ('preconnect','rate_limit_refused') AND c.status='failed') OR "
+    "(a.terminal_reason='upstream_refused' AND c.status='failed' AND c.provider_scope='llmgw'))"
 )
 
 

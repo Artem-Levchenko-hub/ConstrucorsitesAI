@@ -87,13 +87,17 @@ async def insert_call(
     conn: Any, call_id: UUID, *, route: str, model: str, user_id: UUID | None = None,
     project_id: UUID | None = None, run_id: UUID | None = None,
     message_id: UUID | None = None, stage: str | None = None, free: bool = False,
+    provider_scope: str = "llmgw",
 ) -> None:
     """Insert into the caller's transaction; this helper never commits or dispatches."""
-    if (route not in _ROUTES or not _model(model) or type(free) is not bool
+    if (not isinstance(provider_scope, str) or provider_scope not in {"llmgw", "aitunnel"}
+            or route not in _ROUTES or not _model(model) or type(free) is not bool
             or any(v is not None and not isinstance(v, UUID)
                    for v in (call_id, user_id, project_id, run_id, message_id))):
         raise _error(call_id, started=False)
-    organization = get_settings().llmgw_organization_id
+    settings = get_settings()
+    organization = (settings.llmgw_organization_id if provider_scope == "llmgw"
+                    else settings.aitunnel_text_organization_id)
     if organization is not None and (
         not isinstance(organization, str) or not 0 < len(organization) <= 512
         or organization != organization.strip()
@@ -104,10 +108,11 @@ async def insert_call(
         "INSERT INTO provider_calls "
         "(id,provider_scope,route,requested_model,expense_owner,user_id,project_id,"
         "run_id,message_id,stage,free,status,provider_organization_id) "
-        "VALUES($1,'llmgw',$2,$3,$4,$5,$6,$7,$8,$9,$10,'started',$11)",
+        "VALUES($1,$12,$2,$3,$4,$5,$6,$7,$8,$9,$10,'started',$11)",
         call_id, route, model, "user" if user_id is not None else "platform",
         user_id, project_id, run_id, message_id,
         stage if isinstance(stage, str) and stage in _STAGES else "unknown", free, organization,
+        provider_scope,
     )
 
 
@@ -115,6 +120,7 @@ async def start_call(
     *, route: str, model: str, user_id: UUID | None = None,
     project_id: UUID | None = None, run_id: UUID | None = None,
     message_id: UUID | None = None, stage: str | None = None, free: bool = False,
+    provider_scope: str = "llmgw",
 ) -> UUID:
     """Commit admission before upstream I/O. DB failure prevents a paid call."""
     call_id = uuid4()
@@ -122,7 +128,7 @@ async def start_call(
         async with get_pool().acquire() as conn, conn.transaction():
             await insert_call(conn, call_id, route=route, model=model, user_id=user_id,
                               project_id=project_id, run_id=run_id, message_id=message_id,
-                              stage=stage, free=free)
+                              stage=stage, free=free, provider_scope=provider_scope)
     except Exception:
         raise _error(call_id, started=False) from None
     return call_id
@@ -179,6 +185,11 @@ async def finish_call(
             row = await conn.fetchrow("SELECT * FROM provider_calls WHERE id=$1 FOR UPDATE", call_id)
             if row is None:
                 raise _error(call_id)
+            scope = row["provider_scope"]
+            if scope not in {"llmgw", "aitunnel"}:
+                raise _error(call_id)
+            if provenance is not None and provenance.get("provider_scope", "llmgw") != scope:
+                raise _error(call_id)
             if row["status"] != "started":
                 if row["receipt_hash"] != receipt_hash:
                     raise _error(call_id)
@@ -190,12 +201,12 @@ async def finish_call(
             if provider_request_id is not None:
                 # Serialize account-scoped receipt ownership, not customer billing.
                 await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext('llmgw:provider-call'), hashtext($1))",
-                    provider_request_id,
+                    "SELECT pg_advisory_xact_lock(hashtext($2), hashtext($1))",
+                    provider_request_id, scope + ":provider-call",
                 )
                 existing = await conn.fetchrow(
-                    "SELECT id FROM provider_calls WHERE provider_scope='llmgw' "
-                    "AND provider_request_id=$1 AND id<>$2", provider_request_id, call_id,
+                    "SELECT id FROM provider_calls WHERE provider_scope=$3 "
+                    "AND provider_request_id=$1 AND id<>$2", provider_request_id, call_id, scope,
                 )
                 if existing is not None:
                     duplicate = True

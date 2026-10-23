@@ -133,7 +133,11 @@ async def test_raw_sse_sink_bounds_handoff_and_preserves_single_provider_call(
         return httpx.Response(200, stream=Wire())
 
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **kwargs: httpx.MockTransport(reply))
-    monkeypatch.setattr(llmgw, "_key_and_url", lambda: ("synthetic", "http://provider.test"))
+    def provider_endpoint(provider_scope="llmgw"):
+        assert provider_scope == "llmgw"
+        return "synthetic", "http://provider.test"
+
+    monkeypatch.setattr(llmgw, "_key_and_url", provider_endpoint)
     owned = capture.Capture(IDENTITY, "/v1/chat/completions", objects=objects, ledger=ledger)
     context = capture._CURRENT.set(owned)
 

@@ -137,6 +137,17 @@ def provider_effect_scope(cursor: ProviderEffectCursor) -> Iterator[None]:
         _PROVIDER_EFFECT.reset(token)
 
 
+def _preserve_legacy_chat_allowance(
+    current: ProviderDispatchPlan, saved: ProviderDispatchPlan,
+) -> ProviderDispatchPlan:
+    # New Sonnet requests reserve a refusal-only second wire. Old cold calls
+    # retain their recorded one-wire policy, even when only reading a response.
+    if (current.kind == saved.kind == "chat"
+            and current.wire_allowance == 2 and saved.wire_allowance == 1):
+        return current.model_copy(update={"wire_allowance": 1})
+    return current
+
+
 def begin_provider_dispatch(
     kind: Literal["chat", "sse", "native"],
     *,
@@ -284,6 +295,7 @@ async def _latest_provider_identity(
                 await require_closed_provider_parent(session, previous, identity)
             if cursor.dispatch.plan is not None:
                 plan = _dispatch_plan(row.pre_binding)
+                cursor.dispatch.plan = _preserve_legacy_chat_allowance(cursor.dispatch.plan, plan)
                 if (
                     plan.kind != cursor.dispatch.plan.kind
                     or plan.wire_allowance != cursor.dispatch.plan.wire_allowance

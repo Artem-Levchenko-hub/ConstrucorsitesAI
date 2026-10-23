@@ -237,7 +237,74 @@ def rate_limit_retry_delay(details: object) -> int | None:
     return delay if type(delay) is int and 0 <= delay <= 86_400 else None
 
 
+def _overload_refusal_details(error: object) -> bool:
+    """Only the primary gateway's closed, committed refusal authorizes a child."""
+    from uuid import UUID
+
+    if (not isinstance(error, dict) or set(error) - {"type", "code", "message", "details"}
+            or error.get("code") != "api_error" or error.get("type", "api_error") != "api_error"):
+        return False
+    details = error.get("details")
+    required = {"provider_failure_kind", "provider_charge_ambiguous", "retry_safe",
+                "retry_policy", "upstream_http_status"}
+    if (not isinstance(details, dict) or not required <= set(details)
+            or set(details) - required - {"provider_call_id"}):
+        return False
+    if "provider_call_id" in details:
+        try:
+            value = details["provider_call_id"]
+            if not isinstance(value, str) or str(UUID(value)) != value:
+                return False
+        except ValueError:
+            return False
+    return (details["provider_failure_kind"] == "upstream_refused"
+            and details["provider_charge_ambiguous"] is False and details["retry_safe"] is True
+            and details["retry_policy"] == "llmgw_overload_v1"
+            and type(details["upstream_http_status"]) is int
+            and details["upstream_http_status"] == 502)
+
+
+def _refusal_document(raw: bytes | str) -> object:
+    def unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate refusal field")
+            value[key] = item
+        return value
+    try:
+        return json.loads(raw, object_pairs_hook=unique)
+    except (ValueError, RecursionError):
+        return None
+
+
+def _stream_overload_refused(raw: str) -> bool:
+    if len(raw.encode("utf-8")) > 16_384:
+        return False
+    body = _refusal_document(raw)
+    return (isinstance(body, dict) and set(body) == {"error"}
+            and _overload_refusal_details(body["error"]))
+
+
+def _response_overload_refused(response: httpx.Response) -> bool:
+    if response.status_code != 503 or len(response.content) > 16_384 or response.history:
+        return False
+    body = _refusal_document(response.content)
+    if not isinstance(body, dict):
+        return False
+    if set(body) == {"detail"}:
+        body = body["detail"]
+    if (not isinstance(body, dict) or set(body) - {"type", "error"}
+            or body.get("type", "error") != "error"):
+        return False
+    return _overload_refusal_details(body.get("error"))
+
+
 def _gateway_failure(response: httpx.Response) -> LLMError:
+    if _response_overload_refused(response):
+        return LLMError("Primary provider explicitly refused the request", code="upstream_refused",
+                        http_status=503, upstream_http_status=502,
+                        provider_charge_ambiguous=False, retry_safe=True)
     # Never forward provider messages, raw bodies, headers or URLs to the agent.
     error: dict[str, Any] = {}
     try:
@@ -342,7 +409,7 @@ async def stream_chat_completion(
     from yleum_api.services.generation.provider_attempts import prepare_generation_attempt
     from yleum_api.services.generation.recovery_reconciliation import begin_provider_dispatch
     deadline = asyncio.get_running_loop().time() + 300.0
-    begin_provider_dispatch("sse", allowance=_chat_attempt_allowance(payload), seconds=300.0)
+    begin_provider_dispatch("sse", allowance=_chat_dispatch_allowance(payload), seconds=300.0)
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
     try:
         async for data in _chat_stream_data(payload, url, identity, deadline):
@@ -408,18 +475,25 @@ async def _chat_stream_data(
     )
 
     start_attempt = 0
+    overload_used = False
     if provider_reconciliation_requested():
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
             resumed = await resume_generation_wire(identity, allow_provider_refusal=(
-                failure.code == "model_unavailable" and failure.retry_safe is True
+                (failure.code == "model_unavailable" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False
-                and failure.upstream_http_status is None
+                and failure.upstream_http_status is None)
+                or (failure.code == "upstream_refused" and failure.retry_safe is True
+                and failure.provider_charge_ambiguous is False)
             ))
             if resumed is None:
                 raise
             start_attempt, retry_parent = resumed
+            overload_used = failure.code == "upstream_refused"
+            if (failure.code != "upstream_refused"
+                    and start_attempt >= _chat_attempt_allowance(payload)):
+                raise
             remaining = provider_dispatch_remaining()
             if remaining is None or remaining <= 0.5:
                 raise
@@ -441,7 +515,9 @@ async def _chat_stream_data(
                 yield json.loads(event)
             return
 
-    allowance = _chat_attempt_allowance(payload) if identity is not None else 1
+    allowance = _chat_dispatch_allowance(payload) if identity is not None else 1
+    legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
+    overload_used = False
     outward_event = False
     accepted_headers = False
     async with asyncio.timeout_at(deadline if identity is not None else None):
@@ -476,8 +552,13 @@ async def _chat_stream_data(
                             if (
                                 identity is not None
                                 and attempt + 1 < allowance
-                                and _response_preconnect(response)
+                                and _http_child_refusal(
+                                    response, attempt, legacy_allowance, overload_used
+                                )
                             ):
+                                overload_used = (
+                                    overload_used or _response_overload_refused(response)
+                                )
                                 retry_parent = True
                             else:
                                 if identity is None:
@@ -508,8 +589,13 @@ async def _chat_stream_data(
                                     identity is not None
                                     and not outward_event
                                     and attempt + 1 < allowance
-                                    and _committed_preconnect(data)
+                                    and _stream_child_refusal(
+                                        data, chunk, attempt, legacy_allowance, overload_used
+                                    )
                                 ):
+                                    overload_used = (
+                                        overload_used or _stream_overload_refused(chunk)
+                                    )
                                     retry_parent = True
                                     break
                                 # Role/usage events count even if the UI mapper yields no text.
@@ -527,7 +613,7 @@ async def _chat_stream_data(
                 ):
                     raise
                 await confirm_generation_preconnect(wire, identity)
-                if attempt + 1 >= allowance:
+                if attempt + 1 >= legacy_allowance:
                     raise
             await asyncio.sleep(0.5)
             if retry_parent:
@@ -535,6 +621,27 @@ async def _chat_stream_data(
                     payload, "/v1/chat/completions", parent=identity
                 )
                 accepted_headers = False  # A verified closed parent permits a fresh attempt.
+
+
+def _http_child_refusal(
+    response: httpx.Response, attempt: int, legacy_allowance: int, overload_used: bool,
+) -> bool:
+    return ((_response_preconnect(response) and attempt + 1 < legacy_allowance)
+            or (_response_overload_refused(response) and not overload_used))
+
+
+def _stream_child_refusal(
+    data: object, raw: str, attempt: int, legacy_allowance: int, overload_used: bool,
+) -> bool:
+    return ((_committed_preconnect(data) and attempt + 1 < legacy_allowance)
+            or (_stream_overload_refused(raw) and not overload_used))
+
+
+def _chat_dispatch_allowance(payload: dict[str, Any]) -> int:
+    # Reserve one fallback slot for the native Sonnet adapter that formerly had
+    # only one wire. Ordinary connection retries still use its original limit.
+    allowance = _chat_attempt_allowance(payload)
+    return max(2, allowance) if payload.get("model") == "claude-sonnet-5.5" else allowance
 
 
 def _chat_attempt_allowance(payload: dict[str, Any]) -> int:
@@ -599,25 +706,32 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         begin_provider_dispatch,
         provider_dispatch_remaining,
     )
-    begin_provider_dispatch("chat", allowance=_chat_attempt_allowance(payload), seconds=budget)
+    begin_provider_dispatch("chat", allowance=_chat_dispatch_allowance(payload), seconds=budget)
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
     from yleum_api.services.generation.recovery_reconciliation import (
         provider_reconciliation_requested,
     )
 
     start_attempt = 0
+    overload_used = False
     if provider_reconciliation_requested():
         try:
             retained = await require_recovered_response(identity)
         except LLMError as failure:
             resumed = await resume_generation_wire(identity, allow_provider_refusal=(
-                failure.code == "model_unavailable" and failure.retry_safe is True
+                (failure.code == "model_unavailable" and failure.retry_safe is True
                 and failure.provider_charge_ambiguous is False
-                and failure.upstream_http_status is None
+                and failure.upstream_http_status is None)
+                or (failure.code == "upstream_refused" and failure.retry_safe is True
+                and failure.provider_charge_ambiguous is False)
             ))
             if resumed is None:
                 raise
             start_attempt, retry_parent = resumed
+            overload_used = failure.code == "upstream_refused"
+            if (failure.code != "upstream_refused"
+                    and start_attempt >= _chat_attempt_allowance(payload)):
+                raise
             remaining = provider_dispatch_remaining()
             if remaining is None or remaining <= 0.5:
                 raise
@@ -635,7 +749,8 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                     provider_charge_ambiguous=True,
                 )
             return httpx.Response(200, json=retained, request=httpx.Request("GET", url))
-    allowance = _chat_attempt_allowance(payload) if identity is not None else 1
+    allowance = _chat_dispatch_allowance(payload) if identity is not None else 1
+    legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     accepted_headers = False
     omitted_default = payload.get("max_tokens") is None and payload["model"] in {
         "claude-sonnet-5.5",
@@ -680,7 +795,7 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                     if accepted_headers:
                         raise
                     await confirm_generation_preconnect(wire, identity)
-                    if attempt + 1 >= allowance:
+                    if attempt + 1 >= legacy_allowance:
                         raise
                     await asyncio.sleep(0.5)
                     continue  # API-to-gateway transport: SAME committed identity.
@@ -689,8 +804,9 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                 if (
                     identity is not None
                     and attempt + 1 < allowance
-                    and _response_preconnect(response)
+                    and _http_child_refusal(response, attempt, legacy_allowance, overload_used)
                 ):
+                    overload_used = overload_used or _response_overload_refused(response)
                     await asyncio.sleep(0.5)
                     identity = await prepare_generation_attempt(
                         payload,

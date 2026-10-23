@@ -15,7 +15,7 @@ import asyncpg
 import pytest
 
 from yleum_gateway.core.errors import BillingReconciliationRequiredError, WalletEmptyError
-from yleum_gateway.services import billing, provider_calls
+from yleum_gateway.services import billing, provider_calls, text_failover
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -68,6 +68,7 @@ async def pool(database_url: str, monkeypatch: pytest.MonkeyPatch) -> AsyncItera
     connection_pool = await asyncpg.create_pool(database_url, min_size=1, max_size=5)
     monkeypatch.setattr(billing, "get_pool", lambda: connection_pool)
     monkeypatch.setattr(provider_calls, "get_pool", lambda: connection_pool)
+    monkeypatch.setattr(text_failover, "get_pool", lambda: connection_pool)
     try:
         yield connection_pool
     finally:

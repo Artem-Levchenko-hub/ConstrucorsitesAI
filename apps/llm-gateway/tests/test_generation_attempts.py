@@ -109,6 +109,7 @@ def test_identity_never_falls_through_when_disabled_or_commit_unknown(
     from yleum_gateway.providers import llmgw
     from yleum_gateway.routers import chat, messages_native
     from yleum_gateway.services import generation_attempts as attempts
+    from yleum_gateway.services import text_failover
 
     monkeypatch.setenv("GENERATION_PROVIDER_ATTEMPTS_ENABLED", str(enabled).lower())
     body = {
@@ -125,6 +126,8 @@ def test_identity_never_falls_through_when_disabled_or_commit_unknown(
         "project_id": str(identity.project_id),
         "generation_provider_identity": identity.to_wire(),
     }
+    scope = AsyncMock(return_value="llmgw")
+    monkeypatch.setattr(text_failover, "select_scope", scope)
     admission = AsyncMock(side_effect=attempts.AttemptConflict("commit unknown"))
     monkeypatch.setattr(attempts, "reserve_generation_attempt", admission)
     monkeypatch.setattr(
@@ -147,6 +150,7 @@ def test_identity_never_falls_through_when_disabled_or_commit_unknown(
     posts.assert_not_called()
     completion.assert_not_called()
     assert admission.await_count == int(enabled)
+    assert scope.await_count == int(enabled)
 
 
 @pytest.mark.parametrize("bad", [None, {}, {"version": 2}, {"version": True}])
@@ -252,7 +256,7 @@ def test_native_durable_late_connect_error_retains_receipt_without_retry(
 
     from yleum_gateway.main import create_app
     from yleum_gateway.services import generation_attempts as attempts
-    from yleum_gateway.services import provider_calls
+    from yleum_gateway.services import provider_calls, text_failover
 
     monkeypatch.setenv("GENERATION_PROVIDER_ATTEMPTS_ENABLED", "true")
     monkeypatch.setenv("LLMGW_API_KEY", "synthetic")
@@ -266,6 +270,7 @@ def test_native_durable_late_connect_error_retains_receipt_without_retry(
         "project_id": str(identity.project_id),
         "generation_provider_identity": identity.to_wire(),
     }
+    monkeypatch.setattr(text_failover, "select_scope", AsyncMock(return_value="llmgw"))
     monkeypatch.setattr(attempts, "dispatch", AsyncMock(return_value=uuid4()))
     closed = AsyncMock()
     monkeypatch.setattr(attempts, "close_attempt", closed)
