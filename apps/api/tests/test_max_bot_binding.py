@@ -292,7 +292,9 @@ async def test_racing_replacements_use_only_each_projects_previous_webhook(
     results = await asyncio.wait_for(asyncio.gather(attempt(0), attempt(1)), 10)
     assert all(not isinstance(result, ApiError) and result.connected for result in results)
     for identifier in ids:
-        saved = await db_session.get(MaxIntegration, identifier)
+        # Both writers committed in other sessions; do not reuse the retained
+        # fixture objects from this expire_on_commit=False identity map.
+        saved = await db_session.get(MaxIntegration, identifier, populate_existing=True)
         assert saved.bot_id == "fixture-bot" and saved.webhook_url is None
         assert decrypt_strong(saved.bot_token_enc) == TOKEN
     assert {
