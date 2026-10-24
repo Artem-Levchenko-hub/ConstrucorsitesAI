@@ -10,6 +10,8 @@
 
 **Ruling during implementation:** A new Sonnet chat/SSE dispatch reserves its ordinary wire allowance plus one refusal-only backup slot. Previously the shared two-wire ceiling could consume that slot on an ordinary connection retry. The ordinary LLMGW retry predicates and total deadline stay unchanged. Historical one/two-wire persisted plans keep their original caps, including the local loop's effective cap; cold recovery never refills a saved budget.
 
+**Ruling after full CI:** CI caught cold reconstruction treating the unused refusal-only slot as another ordinary connection attempt. Reproduce the existing PostgreSQL test unchanged, then pass the unchanged ordinary cap as transient dispatch state. Only a verified same-transport continuation uses `min(saved total, ordinary cap)`; a confirmed provider refusal retains its reserved slot. Preserve stored plans/deadlines and native defaults. Keep the old semantic assertions; derive subsequent fixture frames from their actual immutable saved total. Run the full related PG file and the new exact-SHA CI in parallel after focused checks and independent review, and require both before production deployment.
+
 ## One vertical slice
 
 - [x] Add regression tests first: all four statuses across classifier, sync/native/streaming routes and API retained continuation. Observe expected failures.

@@ -76,6 +76,7 @@ class _DispatchState:
     resume_authorized: bool = False
     history_plan: ProviderDispatchPlan | None = None
     outer_advanced: bool = False
+    preconnect_allowance: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,12 +167,18 @@ def begin_provider_dispatch(
     *,
     allowance: int,
     seconds: float,
+    preconnect_allowance: int | None = None,
 ) -> None:
     cursor = _PROVIDER_EFFECT.get()
     if cursor is None:
         return
     if cursor.dispatch.plan is not None:
         raise RecoveryContractError("dispatch arithmetic was already initialized")
+    if preconnect_allowance is not None and (
+        type(preconnect_allowance) is not int or not 1 <= preconnect_allowance <= allowance
+    ):
+        raise RecoveryContractError("ordinary preconnect allowance is invalid")
+    cursor.dispatch.preconnect_allowance = preconnect_allowance
     cursor.dispatch.plan = ProviderDispatchPlan(
         kind=kind,
         deadline=min(
@@ -895,7 +902,11 @@ async def authorize_cold_wire_continuation(
         )
         cursor.dispatch.outer_advanced = True
         cursor.dispatch.wire_used = used = 0
-    if used >= plan.wire_allowance:
+    continuation_cap = plan.wire_allowance
+    if same_transport and cursor.dispatch.preconnect_allowance is not None:
+        # The final refusal-only slot cannot replay an exhausted connection cycle.
+        continuation_cap = min(continuation_cap, cursor.dispatch.preconnect_allowance)
+    if used >= continuation_cap:
         if same_transport:
             from yleum_api.services.llm_client import LLMError
 

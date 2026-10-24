@@ -1834,15 +1834,18 @@ async def test_outer_transport_retry_keeps_root_and_distinct_wire_allowance(
                 assert restored.value.provider_charge_ambiguous is False
                 assert len(calls) == 2  # Reconstruct the result; no third inner HTTP.
                 reads.assert_awaited_once()
+            # Match the immutable total saved by the real adapter (including its
+            # refusal-only reserve); ordinary preconnect still stops after two.
+            saved_allowance = cursor.dispatch.plan.wire_allowance
             outer = replace(cursor, outer_attempt=1, dispatch=rec._DispatchState())
             with rec.provider_effect_scope(outer):
-                rec.begin_provider_dispatch("chat", allowance=2, seconds=30)
+                rec.begin_provider_dispatch("chat", allowance=saved_allowance, seconds=30)
                 same = await attempts.prepare_generation_attempt(body, "/v1/chat/completions")
                 assert same == identity
                 await attempts.reserve_generation_wire(same, wire_attempt=0)
             cold = replace(outer, reconcile_only=True, dispatch=rec._DispatchState())
             with rec.provider_effect_scope(cold):
-                rec.begin_provider_dispatch("chat", allowance=2, seconds=300)
+                rec.begin_provider_dispatch("chat", allowance=saved_allowance, seconds=300)
                 assert (
                     await attempts.prepare_generation_attempt(body, "/v1/chat/completions")
                     == identity
@@ -1869,8 +1872,9 @@ async def test_outer_transport_retry_keeps_root_and_distinct_wire_allowance(
 
 @pytest.mark.parametrize("frame_advanced", [False, True])
 @pytest.mark.parametrize("damage", [None, "expired", "unknown", "outward", "missing_clock"])
+@pytest.mark.parametrize("refusal_reserve", [False, True])
 async def test_cold_exhausted_inner_preserves_exact_outer_index(
-    db_session, test_engine, monkeypatch, frame_advanced, damage
+    db_session, test_engine, monkeypatch, frame_advanced, damage, refusal_reserve
 ):
     from dataclasses import replace
     from unittest.mock import AsyncMock
@@ -1919,7 +1923,9 @@ async def test_cold_exhausted_inner_preserves_exact_outer_index(
         )
         try:
             with rec.provider_effect_scope(cursor):
-                rec.begin_provider_dispatch("chat", allowance=2, seconds=30)
+                rec.begin_provider_dispatch(
+                    "chat", allowance=3 if refusal_reserve else 2, seconds=30,
+                )
                 identity = await attempts.prepare_generation_attempt(body, "/v1/chat/completions")
                 for index in range(2):
                     wire = await attempts.reserve_generation_wire(identity, wire_attempt=index)

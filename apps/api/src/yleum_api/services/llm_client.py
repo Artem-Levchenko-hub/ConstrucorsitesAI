@@ -415,7 +415,10 @@ async def stream_chat_completion(
     from yleum_api.services.generation.provider_attempts import prepare_generation_attempt
     from yleum_api.services.generation.recovery_reconciliation import begin_provider_dispatch
     deadline = asyncio.get_running_loop().time() + 300.0
-    begin_provider_dispatch("sse", allowance=_chat_dispatch_allowance(payload), seconds=300.0)
+    begin_provider_dispatch(
+        "sse", allowance=_chat_dispatch_allowance(payload), seconds=300.0,
+        preconnect_allowance=_chat_attempt_allowance(payload),
+    )
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
     try:
         async for data in _chat_stream_data(payload, url, identity, deadline):
@@ -720,7 +723,10 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
         begin_provider_dispatch,
         provider_dispatch_remaining,
     )
-    begin_provider_dispatch("chat", allowance=_chat_dispatch_allowance(payload), seconds=budget)
+    begin_provider_dispatch(
+        "chat", allowance=_chat_dispatch_allowance(payload), seconds=budget,
+        preconnect_allowance=_chat_attempt_allowance(payload),
+    )
     identity = await prepare_generation_attempt(payload, "/v1/chat/completions")
     from yleum_api.services.generation.recovery_reconciliation import (
         provider_reconciliation_requested,
