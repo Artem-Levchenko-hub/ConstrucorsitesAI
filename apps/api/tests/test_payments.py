@@ -17,7 +17,7 @@ from yleum_api.services import yookassa
 pytestmark = pytest.mark.asyncio
 
 
-async def test_payment_webhook_credits_wallet_exactly_once(
+async def test_payment_webhook_grants_edit_units_exactly_once(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -46,7 +46,7 @@ async def test_payment_webhook_credits_wallet_exactly_once(
         return {
             "id": "provider-payment-1",
             "status": "succeeded",
-            "amount": {"value": "490.00", "currency": "RUB"},
+            "amount": {"value": "1.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
         }
 
@@ -59,8 +59,10 @@ async def test_payment_webhook_credits_wallet_exactly_once(
 
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
-    assert wallet.json()["balance_rub"] == "600.0000"
+    assert wallet.json()["balance_rub"] == "100.0000"
 
+    credits = (await client.get("/api/billing/credits")).json()
+    assert credits["edit_only_units"] == 5 and credits["flexible_units"] == 0
     payments = await client.get("/api/payments")
     assert payments.status_code == 200
     assert payments.json()[0]["status"] == "succeeded"
@@ -117,7 +119,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     assert duplicate.status_code == 201
     assert duplicate.json()["id"] == created.json()["id"]
     assert len(provider_calls) == 1
-    assert provider_calls[0]["amount"] == "2990.00"
+    assert provider_calls[0]["amount"] == "1.00"
     metadata = provider_calls[0]["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["purpose"] == "subscription_initial"
@@ -131,7 +133,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
         return {
             "id": "provider-subscription-1",
             "status": "succeeded",
-            "amount": {"value": "2990.00", "currency": "RUB"},
+            "amount": {"value": "1.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
         }
 
@@ -148,8 +150,8 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     active = await client.get("/api/billing/subscription")
     assert active.status_code == 200
     assert active.json()["plan"]["code"] == "pro"
-    assert active.json()["plan"]["version"] == 2
-    assert active.json()["plan"]["price_rub"] == "2990.00"
+    assert active.json()["plan"]["version"] == 3
+    assert active.json()["plan"]["price_rub"] == "1.00"
     assert active.json()["status"] == "active"
     assert active.json()["auto_renew"] is False
     assert active.json()["current_period_start"] is not None
@@ -157,14 +159,16 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
 
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
-    assert wallet.json()["balance_rub"] == "600.0000"
+    assert wallet.json()["balance_rub"] == "100.0000"
     subscription_entries = [
         entry
         for entry in wallet.json()["recent_charges"]
         if entry["entry_type"] == "subscription_credit"
     ]
-    assert len(subscription_entries) == 1
-    assert subscription_entries[0]["external_ref"] == f"subscription-credit:{payment_id}"
+    assert subscription_entries == []
+    credit_view = (await client.get("/api/billing/credits")).json()
+    assert credit_view["included_generations_remaining"] == 2
+    assert credit_view["included_edits_remaining"] == 25
 
     live_count = (
         await db_session.execute(
@@ -191,7 +195,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
             .where(WalletCharge.external_ref == f"subscription-credit:{payment_id}")
         )
     ).scalar_one()
-    assert ledger_count == 1
+    assert ledger_count == 0
     payment = await db_session.get(Payment, UUID(created.json()["id"]))
     assert payment is not None
     assert payment.purpose == "subscription_initial"
@@ -271,8 +275,11 @@ async def test_subscription_checkout_applies_immediate_provider_success(
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "business"
-    assert subscription.json()["plan"]["version"] == 2
+    assert subscription.json()["plan"]["version"] == 3
     assert subscription.json()["plan"]["price_rub"] == "6990.00"
     wallet = await client.get("/api/wallet")
     assert wallet.status_code == 200
-    assert wallet.json()["balance_rub"] == "1600.0000"
+    assert wallet.json()["balance_rub"] == "100.0000"
+    credit_view = (await client.get("/api/billing/credits")).json()
+    assert credit_view["included_generations_remaining"] == 5
+    assert credit_view["included_edits_remaining"] == 50

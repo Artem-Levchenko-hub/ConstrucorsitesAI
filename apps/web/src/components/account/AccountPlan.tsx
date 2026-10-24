@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
 import type { PaymentJourney } from "./PaymentCheckout";
 import { date, money, QueryError } from "./account-presentation";
+import { planAllowanceDescription, planAllowanceRows, planPeriodDescription } from "@/lib/billing-allowances";
 // Historical plans can store `null` for "no limit"; a missing key is unknown.
 const limit = (value: unknown) => value === null ? "Без ограничений" : value === undefined ? "—" : String(value);
 export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
@@ -59,26 +60,21 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
               <dt>Мест в команде</dt>
               <dd>{limit(plan.entitlements.team_seats)}</dd>
             </div>
-            {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"], ["generation_messages_lifetime", "Сообщений для генерации за всё время"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
+            {([["static_publish_slots", "Публикаций"], ["always_on_slots", "Постоянно работающих приложений"]] as const).map(([key, label]) => plan.entitlements[key] !== undefined && <div key={key}>
               <dt>{label}</dt>
               <dd>{limit(plan.entitlements[key])}</dd>
             </div>)}
+            {planAllowanceRows(plan).map(row => <div key={row.key}><dt>{row.label}</dt><dd>{row.value}</dd></div>)}
             {typeof plan.entitlements.integrations === "boolean" && <div>
               <dt>Интеграции</dt>
               <dd>{plan.entitlements.integrations ? "Да" : "Нет"}</dd>
             </div>}
-            <div>
-              <dt>Включённый кредит на баланс</dt>
-              <dd>{money(plan.included_credit_rub)}</dd>
-            </div>
           </dl>
-          <p className="account-hint">{plan.code === "free"
-            ? "Лимит сообщений для генерации даётся один раз на аккаунт и не обновляется каждый месяц."
-            : "Включённый кредит поступает на баланс после каждой успешной ежемесячной оплаты тарифа."}</p>
-          {plan.code !== "free" && <Button variant={active ? "outline" : "primary"} disabled={active || !current || !j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "plan", code: plan.code, title: plan.name, price: plan.price_rub, credit: plan.included_credit_rub })}>{active ? "Текущий тариф" : `Выбрать ${plan.name}`}</Button>}</article>;
+          <p className="account-hint">{planPeriodDescription(plan)}</p>
+          {plan.code !== "free" && <Button variant={active ? "outline" : "primary"} disabled={active || !current || !j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "plan", code: plan.code, title: plan.name, price: plan.price_rub, credit: plan.included_credit_rub, allowance: planAllowanceDescription(plan) })}>{active ? "Текущий тариф" : `Выбрать ${plan.name}`}</Button>}</article>;
       })}</div>
       {j.config.data && !j.config.data.enabled && <p className="account-notice pending">{j.config.data.reason ?? "Платёжный сервис недоступен"}</p>}
-      <p className="account-hint">Тариф и включённый кредит активируются после подтверждения оплаты. Автопродление подключается только с отдельного согласия при проверке заказа.</p>
+      <p className="account-hint">Тариф и его лимиты активируются после подтверждения оплаты. Автопродление подключается только с отдельного согласия при проверке заказа.</p>
     </section>
   </>;
 }

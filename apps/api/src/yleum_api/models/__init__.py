@@ -28,6 +28,7 @@ from yleum_api.models.generation_billing import (
     GenerationBillingOutbox,
     GenerationBillingPolicy,
 )
+from yleum_api.models.generation_credits import GenerationCreditGrant, GenerationCreditReservation
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_provider_attempt import GenerationProviderAttempt
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
@@ -96,6 +97,8 @@ __all__ = [
     "GenerationBillingIntent",
     "GenerationBillingOutbox",
     "GenerationBillingPolicy",
+    "GenerationCreditGrant",
+    "GenerationCreditReservation",
     "GenerationEvent",
     "GenerationProviderAttempt",
     "GenerationRecoveryEffect",

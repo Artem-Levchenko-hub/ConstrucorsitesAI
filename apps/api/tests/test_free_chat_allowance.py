@@ -1,4 +1,4 @@
-"""Free accepts one owner-wide human message; no real generation dispatch."""
+"""Free reserves account-wide initial units; no real provider dispatch."""
 
 from decimal import Decimal
 from types import SimpleNamespace
@@ -89,8 +89,7 @@ async def test_free_second_human_message_other_project_is_denied_before_dispatch
             },
         )
         assert second.status_code == 402, second.text
-        assert second.json()["error"]["code"] == "entitlement_exceeded"
-        assert second.json()["error"]["details"]["entitlement"] == "free_chat_messages"
+        assert second.json()["error"]["code"] == "generation_credits_exhausted"
         await db_session.rollback()
         assert len(jobs) == 1
         assert len(list((await db_session.scalars(select(GenerationRun))).all())) == 1
@@ -142,8 +141,7 @@ async def test_independent_sessions_race_one_owner_only_one_admission(
                     ),
                 ).accept()
             except ApiError as error:
-                assert error.status_code == 402 and error.code == "entitlement_exceeded"
-                assert error.details["entitlement"] == "free_chat_messages"
+                assert error.status_code == 402 and error.code == "generation_credits_exhausted"
                 return None
 
     tasks = [asyncio.create_task(submit(index)) for index in range(2)]
@@ -152,7 +150,7 @@ async def test_independent_sessions_race_one_owner_only_one_admission(
     assert sum(result is not None for result in results) == 1 and len(jobs) == 1
     async with factory() as session:
         current = await session.get(User, owner_id)
-        assert current.free_chat_messages_used == 1
+        assert current.free_chat_messages_used == 0
         assert len(list((await session.scalars(select(GenerationRun))).all())) == 1
         assert (
             len(list((await session.scalars(select(Message).where(Message.role == "user"))).all()))
@@ -193,12 +191,12 @@ async def test_free_first_message_builds_without_mandatory_clarification(
         discovery.assert_not_awaited()
         deferred.assert_not_called()
         await db_session.refresh(owner)
-        assert owner.free_chat_messages_used == 1
+        assert owner.free_chat_messages_used == 0
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
 
-async def test_rejected_admission_does_not_spend_and_completed_or_cancelled_run_never_resets(
+async def test_rejected_admission_does_not_spend_and_cancelled_initial_releases_once(
     client, db_session, monkeypatch
 ):
     from yleum_api.services.generation_runs import load_generation_dispatch
@@ -232,8 +230,11 @@ async def test_rejected_admission_does_not_spend_and_completed_or_cancelled_run_
         for _ in range(3):
             assert load_generation_dispatch(run).user_id == owner_id
         run.status = "cancelled"
+        from yleum_api.services.generation_billing import seal_terminal_locked
+        await seal_terminal_locked(db_session, run)
+        await seal_terminal_locked(db_session, run)
         await db_session.commit()
-        # A completed/cancelled or deleted app cannot release the lifetime allowance.
+        # A cancelled build returns its initial hold exactly once, even after app deletion.
         await db_session.delete(await db_session.get(Project, project_id))
         await db_session.commit()
         denied = await client.post(
@@ -243,10 +244,10 @@ async def test_rejected_admission_does_not_spend_and_completed_or_cancelled_run_
                 "idempotency_key": "QA_AFTER_DELETE_HUMAN",
             },
         )
-        assert denied.status_code == 402 and len(jobs) == 1
+        assert denied.status_code == 202 and len(jobs) == 2
         await db_session.rollback()
         await db_session.refresh(owner)
-        assert owner.free_chat_messages_used == 1
+        assert owner.free_chat_messages_used == 0
     finally:
         app.dependency_overrides.pop(get_current_user, None)
 
@@ -284,7 +285,15 @@ async def test_historical_free_run_message_or_success_counter_is_already_spent(d
 async def test_paid_pro_and_business_chat_allowance_and_billing_are_unchanged(
     client, db_session, monkeypatch
 ):
-    from yleum_api.models.billing import BUSINESS_PLAN_ID, PRO_PLAN_ID, BillingPlan
+    from yleum_api.models.billing import (
+        BUSINESS_PLAN_V2_ID as BUSINESS_PLAN_ID,
+    )
+    from yleum_api.models.billing import (
+        PRO_PLAN_V2_ID as PRO_PLAN_ID,
+    )
+    from yleum_api.models.billing import (
+        BillingPlan,
+    )
     from yleum_api.models.generation_billing import GenerationBillingPolicy
     from yleum_api.models.wallet import Wallet
     from yleum_api.services.entitlements import entitlement_limit

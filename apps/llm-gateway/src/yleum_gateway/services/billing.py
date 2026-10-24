@@ -192,8 +192,16 @@ async def confirmed_provider_accounting(conn: Any, attempt: Any) -> bool:
     if original_cost is None or usage["cost_rub"] != _sql_amount(original_cost, 4):
         return False
     policy = await conn.fetchrow("SELECT version,is_free FROM generation_billing_policies WHERE run_id=$1", call["run_id"])
-    if policy is not None and policy["version"] != "accepted-build-v1":
+    if policy is not None and policy["version"] not in {"accepted-build-v1","accepted-units-v2"}:
         return False
+    if policy is not None and policy["version"]=="accepted-units-v2":
+        from yleum_gateway.services.generation_credit_guard import covered
+        identity=GenerationProviderIdentity(attempt["run_id"],attempt["project_id"],attempt["user_id"],attempt["attempt_id"],attempt["prompt_hash"],attempt["request_sha256"])
+        try:
+            if not await covered(conn,call["user_id"],call["project_id"],call["run_id"],call["stage"],identity,dispatch=False):
+                return False
+        except (BillingReconciliationRequiredError,ValueError,TypeError,KeyError):
+            return False
     free = bool(policy["is_free"]) if policy is not None else call["free"]
     if settlement["receipt_hash"] != settlement_receipt_hash(
         user_id=usage["user_id"], project_id=usage["project_id"], run_id=usage["run_id"],
@@ -231,6 +239,13 @@ async def get_balance(user_id: UUID) -> Decimal:
             user_id,
         )
     return Decimal(row["balance_rub"]) if row else Decimal("0")
+
+
+async def precheck_generation_units(user_id: UUID,project_id: UUID | None,run_id: UUID | None,stage: str | None,identity: GenerationProviderIdentity | None) -> bool:
+    from yleum_gateway.services.generation_credit_guard import covered
+
+    async with get_pool().acquire() as conn:
+        return await covered(conn, user_id, project_id, run_id, stage, identity)
 
 
 async def precheck_balance(user_id: UUID, estimated_cost_rub: Decimal) -> None:
@@ -347,8 +362,12 @@ async def charge(
                     "Generation billing message binding changed"
                 )
             if run["version"] is not None:
-                if run["version"] != "accepted-build-v1":
+                if run["version"] not in {"accepted-build-v1","accepted-units-v2"}:
                     raise BillingReconciliationRequiredError("Unknown generation billing policy")
+                if run["version"]=="accepted-units-v2":
+                    from yleum_gateway.services.generation_credit_guard import covered
+                    await covered(conn,user_id,project_id,run_id,stage,
+                                  provider_binding.identity if provider_binding is not None else None,dispatch=False)
                 free = bool(run["is_free"])
                 deferred = True
             else:

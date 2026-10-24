@@ -27,6 +27,9 @@ class PaymentPublic(BaseModel):
     package_code: str
     amount_rub: Decimal
     credit_rub: Decimal
+    edit_units: int = 0
+    edits_only: bool = False
+    package_version: int | None = None
     status: str
     confirmation_url: str | None
     paid_at: datetime | None
@@ -34,7 +37,17 @@ class PaymentPublic(BaseModel):
     created_at: datetime
 
 
+class PaymentPackagePublic(BaseModel):
+    code: str
+    price_rub: Decimal
+    credit_rub: Decimal
+    title: str
+    edit_units: int
+    edits_only: bool
+    package_version: int
+
+
 class PaymentConfigPublic(BaseModel):
     enabled: bool
-    packages: list[dict[str, str]]
+    packages: list[PaymentPackagePublic]
     reason: str | None = None

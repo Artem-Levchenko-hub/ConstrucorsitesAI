@@ -48,6 +48,12 @@ def prepare_submission(
         },
         "receipt": yookassa.payment_receipt(customer_email, title, amount),
     }
+    if payment.edit_units > 0:
+        arguments["metadata"].update(
+            edit_units=str(payment.edit_units),
+            edits_only="true" if payment.edits_only else "false",
+            package_version=str(payment.package_version),
+        )
     if payment_method_id is not None:
         arguments["payment_method_id"] = payment_method_id
         kind = "recurring"

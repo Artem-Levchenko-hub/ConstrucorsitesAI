@@ -44,6 +44,34 @@ beforeEach(() => {
 });
 afterEach(async()=>{await act(async()=>root.unmount());client.clear();container.remove();sessionStorage.clear();window.history.replaceState(null,"","/");});
 
+it("paid edit units unlock an exhausted Free chat without unlocking a new initial generation", async () => {
+ profile={...base,user_chat_messages_limit:1,user_chat_messages_remaining:0,generation_credit_units_available:5,generation_initials_available:0};
+ await render();await draft("Измени заголовок");
+ expect(button("Отправить")?.disabled).toBe(false);
+ await act(async()=>button("Отправить")!.click());
+ expect(mocks.submit).toHaveBeenCalledTimes(1);
+ expect(container.textContent).not.toContain("Осталось сообщений");
+ expect(container.textContent).toContain("Правок: 5");
+});
+
+it("edit-only credits keep new project creation blocked while existing apps remain accessible", async () => {
+ profile={...base,user_chat_messages_limit:1,user_chat_messages_remaining:0,generation_credit_units_available:5,generation_initials_available:0};
+ await render("studio");
+ expect(button("Создать приложение")?.disabled).toBe(true);
+ expect(container.querySelector('a[href="/max/p/dashboard"]')).not.toBeNull();
+ expect(mocks.create).not.toHaveBeenCalled();
+});
+
+it("new included generation and edit allowances replace the old human-message notice", async () => {
+ profile={...base,user_chat_messages_limit:1,user_chat_messages_remaining:0,generation_credit_units_available:1,generation_initials_available:1};
+ await render();
+ await draft("Создай приложение");
+ expect(button("Отправить")?.disabled).toBe(false);
+ expect(container.textContent).toContain("Генераций: 1");
+ expect(container.textContent).toContain("Правок: 1");
+ expect(container.textContent).not.toContain("Осталось сообщений");
+});
+
 it("shows the account-wide Free1 allowance, then accepted first send refreshes to0 and blocks button/Enter/global shortcut",async()=>{
  mocks.submit.mockImplementation(async()=>{profile={...profile,user_chat_messages_remaining:0};refreshOwnerAfterAcceptedPrompt(client);return true;});
  await render();expect(container.textContent).toContain("Осталось сообщений: 1 из 1 на весь аккаунт");

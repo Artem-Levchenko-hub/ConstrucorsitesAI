@@ -31,16 +31,31 @@ from yleum_api.services.billing_accounts import resolve_billing_account
 POLICY_VERSION = "accepted-build-v1"
 
 
-async def admit_policy(session: AsyncSession, run_id: UUID, *, is_free: bool) -> None:
+async def admit_policy(
+    session: AsyncSession, run_id: UUID, *, is_free: bool, unit_funded: bool = False
+) -> None:
     run = await session.get(GenerationRun, run_id, with_for_update=True)
     if run is None or run.status not in {"pending", "running", "queued_for_capacity"}:
         raise ValueError("Generation billing admission is not active")
+    version = "accepted-units-v2" if unit_funded else POLICY_VERSION
+    if unit_funded:
+        from yleum_api.models.generation_credits import GenerationCreditReservation
+
+        hold = await session.get(GenerationCreditReservation, run_id)
+        if (
+            is_free
+            or not hold
+            or hold.state != "held"
+            or hold.user_id != run.user_id
+            or hold.project_id != run.project_id
+        ):
+            raise ValueError("Unit policy requires a live bound hold")
     existing = await session.get(GenerationBillingPolicy, run_id)
     if existing is not None:
-        if existing.is_free != is_free or existing.version != POLICY_VERSION:
+        if existing.is_free != is_free or existing.version != version:
             raise ValueError("Generation billing policy is immutable")
         return
-    session.add(GenerationBillingPolicy(run_id=run_id, is_free=is_free, version=POLICY_VERSION))
+    session.add(GenerationBillingPolicy(run_id=run_id, is_free=is_free, version=version))
     await session.flush()
 
 
@@ -234,6 +249,27 @@ async def seal_terminal_locked(session: AsyncSession, run: GenerationRun) -> Non
     if policy is None:
         return  # Never retrocharge historical free/successful generations.
     intent = await session.get(GenerationBillingIntent, run.id)
+    if policy.version == "accepted-units-v2" and intent is not None:
+        from yleum_api.models.generation_credits import GenerationCreditReservation
+
+        hold = await session.get(GenerationCreditReservation, run.id)
+        if not hold or hold.state not in {"consumed", "released"}:
+            raise RuntimeError("Terminal unit settlement conflicts")
+        marker = (run.agent_state or {}).get("billing_accepted_candidate")
+        if (
+            hold.state == "released"
+            and run.status == "completed"
+            and run.response_mode in {"build", "edit"}
+            and marker
+        ):
+            raise RuntimeError("Late accepted build conflicts with released units")
+        if hold.state == "consumed" and (
+            run.status != "completed"
+            or not isinstance(marker,dict)
+            or str(hold.accepted_snapshot_id) != marker.get("snapshot_id")
+        ):
+            raise RuntimeError("Accepted unit proof changed")
+        return
     if intent is None:
         accepted = (run.agent_state or {}).get("billing_accepted_candidate")
         snapshot = None
@@ -254,9 +290,11 @@ async def seal_terminal_locked(session: AsyncSession, run: GenerationRun) -> Non
 
         eligible = bool(
             run.status == "completed"
-            and run.response_mode == "build"
+            and (run.response_mode == "build" or (
+                policy.version == "accepted-units-v2" and run.response_mode == "edit"
+            ))
             and not policy.is_free
-            and policy.version == POLICY_VERSION
+            and policy.version in {POLICY_VERSION, "accepted-units-v2"}
             and isinstance(accepted, dict)
             and snapshot
             and snapshot.project_id == run.project_id
@@ -286,6 +324,44 @@ async def seal_terminal_locked(session: AsyncSession, run: GenerationRun) -> Non
                 )
             ).all()
         )
+        if policy.version == "accepted-units-v2":
+            from yleum_api.services.generation_credits import settle_generation_units
+
+            await settle_generation_units(
+                session,
+                run,
+                accepted=eligible,
+                snapshot_id=snapshot.id if eligible and snapshot else None,
+            )
+            from yleum_api.models.generation_credits import GenerationCreditReservation
+            hold = await session.get(GenerationCreditReservation, run.id)
+            if hold is None:
+                raise RuntimeError("Unit settlement hold missing")
+            session.add(
+                GenerationBillingIntent(
+                    run_id=run.id,
+                    user_id=run.user_id,
+                    billing_account_id=hold.billing_account_id,
+                    outcome="waived",
+                    amount_rub=Decimal(0),
+                    usage_ids=[str(u.id) for u in usages],
+                    accepted_snapshot_id=snapshot.id if eligible and snapshot else None,
+                    receipt={
+                        "policy": "accepted-units-v2",
+                        "units": "consumed" if eligible else "released",
+                    },
+                )
+            )
+            await session.flush()
+            run.agent_state = {
+                **(run.agent_state or {}),
+                "generation_billing": {
+                    "policy": "accepted-units-v2",
+                    "units": "consumed" if eligible else "released",
+                    "amount_rub": "0",
+                },
+            }
+            return
         account = await resolve_billing_account(session, run.user_id) if eligible else None
         intent = GenerationBillingIntent(
             run_id=run.id,
@@ -323,6 +399,10 @@ async def seal_terminal_locked(session: AsyncSession, run: GenerationRun) -> Non
 
 async def _settle_terminal_locked(session: AsyncSession, run: GenerationRun) -> None:
     """Separate payment transaction; caller holds the same generation-row lock."""
+    policy = await session.get(GenerationBillingPolicy, run.id)
+    if policy and policy.version == "accepted-units-v2":
+        await seal_terminal_locked(session, run)
+        return
     existing = await session.get(GenerationBillingIntent, run.id)
     if existing is not None and existing.outcome == "billable":
         await _validate_billable_intent(session, run, existing)

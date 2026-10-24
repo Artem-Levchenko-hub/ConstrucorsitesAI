@@ -89,6 +89,11 @@ def run_real_pool_program(test_engine, *, role=None):
         "DATABASE_URL": dsn.render_as_string(hide_password=False),
         "PYTHONPATH": str(SCRIPT.parents[2] / "apps/llm-gateway/src"),
     }
+    # Windows socket/asyncio DLL loading needs its OS root even in this
+    # deliberately minimal environment. Never inherit provider credentials.
+    for name in ("SYSTEMROOT", "WINDIR", "PYTHONPYCACHEPREFIX"):
+        if name in os.environ:
+            environment[name] = os.environ[name]
     program = pool_program().replace(
         "http://127.0.0.1:8001/health", f"http://127.0.0.1:{server.server_port}/health"
     )
@@ -114,13 +119,43 @@ async def test_real_0074_migration_passes_actual_gateway_pool_gate(test_engine):
     assert result.returncode == 0, result.stderr
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("table", ["generation_credit_grants", "generation_credit_reservations"])
+async def test_gateway_rejects_missing_unit_billing_table(test_engine, table):
+    from sqlalchemy import text
+
+    await migrate_settlements(test_engine)
+    async with test_engine.begin() as connection:
+        await connection.execute(text("DROP TABLE " + table))
+    result = run_real_pool_program(test_engine)
+    assert result.returncode != 0, "Admission must remain closed without unit billing storage"
+    assert "gateway settlement schema unavailable" in result.stderr
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("constraint", ["unique-grant", "validated-positive-reservation"])
+async def test_gateway_rejects_missing_unit_financial_constraint(test_engine, constraint):
+    from sqlalchemy import text
+
+    await migrate_settlements(test_engine)
+    async with test_engine.begin() as connection:
+        if constraint == "unique-grant":
+            await connection.execute(text("ALTER TABLE generation_credit_grants DROP CONSTRAINT uq_generation_credit_grants_external_ref"))
+        else:
+            await connection.execute(text("ALTER TABLE generation_credit_reservations DROP CONSTRAINT ck_generation_credit_reservations_positive_units"))
+            await connection.execute(text("ALTER TABLE generation_credit_reservations ADD CONSTRAINT unvalidated_units CHECK (units > 0) NOT VALID"))
+    result = run_real_pool_program(test_engine)
+    assert result.returncode != 0, "Admission must remain closed without validated financial constraints"
+    assert "gateway settlement schema unavailable" in result.stderr
+
+
 SCRIPT = Path(__file__).resolve().parents[3] / "infra/release/deploy-prod.sh"
 OLD, NEW = "a" * 64, "b" * 64
 OLD_IMAGE, NEW_IMAGE = "sha256:" + "c" * 64, "sha256:" + "d" * 64
 
 
 def gate_code():
-    script = SCRIPT.read_text()
+    script = SCRIPT.read_text(encoding="utf-8")
     delimiter = "<<'GATEWAY_CUTOVER_PY'\n"
     assert delimiter in script, "Canonical release must contain an executable cutover gate"
     return script.split(delimiter, 1)[1].split("\nGATEWAY_CUTOVER_PY", 1)[0]
@@ -324,7 +359,7 @@ def test_failed_cutover_refuses_reopen(monkeypatch, capsys, case):
 
 
 def test_gateway_build_failure_is_not_hidden_by_log_filter():
-    build = next(line for line in SCRIPT.read_text().splitlines() if "build gateway 2>&1" in line)
+    build = next(line for line in SCRIPT.read_text(encoding="utf-8").splitlines() if "build gateway 2>&1" in line)
     assert "set -euo pipefail;" in build
     assert "{ grep -E 'Built|ERROR|error' || true; }" in build
 
@@ -466,7 +501,7 @@ def test_failed_real_shell_build_pipeline_never_reaches_gateway_replacement(tmp_
     import shlex
     import subprocess
 
-    line = next(line for line in SCRIPT.read_text().splitlines() if "build gateway 2>&1" in line)
+    line = next(line for line in SCRIPT.read_text(encoding="utf-8").splitlines() if "build gateway 2>&1" in line)
     capture = tmp_path / "remote-command"
     capture_ssh = 'ssh() { printf "%s" "$2" > ' + shlex.quote(str(capture)) + "; }; "
     captured = subprocess.run(["bash", "-c", capture_ssh + line], capture_output=True, text=True)

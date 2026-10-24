@@ -15,7 +15,7 @@ from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.user import User
 from yleum_api.schemas.message import PromptRequest
-from yleum_api.services import entitlements
+from yleum_api.services import generation_credits
 from yleum_api.services.generation import acceptance
 
 
@@ -29,19 +29,19 @@ async def test_free_concurrent_reserved_runs_do_not_deadlock(
     jobs = no_providers(monkeypatch, owner)
     await db_session.rollback()
     factory = async_sessionmaker(test_engine, expire_on_commit=False)
-    original = entitlements.admit_free_chat_message
+    original = generation_credits.reserve_generation_units
     arrived = 0
     all_reserved = asyncio.Event()
 
-    async def after_real_fk_reservation(session, **kwargs):
+    async def after_real_fk_reservation(session, run):
         nonlocal arrived
         arrived += 1
         if arrived == count:
             all_reserved.set()
         await all_reserved.wait()
-        return await original(session, **kwargs)
+        return await original(session, run)
 
-    monkeypatch.setattr(entitlements, "admit_free_chat_message", after_real_fk_reservation)
+    monkeypatch.setattr(generation_credits, "reserve_generation_units", after_real_fk_reservation)
 
     async def submit(index):
         async with factory() as session:
@@ -55,7 +55,7 @@ async def test_free_concurrent_reserved_runs_do_not_deadlock(
                 ).accept()
             except ApiError as error:
                 assert error.status_code == 402
-                assert error.details["entitlement"] == "free_chat_messages"
+                assert error.code == "generation_credits_exhausted"
                 return None
 
     try:
@@ -63,7 +63,7 @@ async def test_free_concurrent_reserved_runs_do_not_deadlock(
         assert sum(result is not None for result in results) == 1
         assert len(jobs) == 1
         async with factory() as session:
-            assert (await session.get(User, owner_id)).free_chat_messages_used == 1
+            assert (await session.get(User, owner_id)).free_chat_messages_used == 0
             assert await session.scalar(select(func.count()).select_from(GenerationRun)) == 1
             assert await session.scalar(
                 select(func.count()).select_from(Message).where(Message.role == "user")

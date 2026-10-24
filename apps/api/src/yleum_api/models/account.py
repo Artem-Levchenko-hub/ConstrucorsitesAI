@@ -3,10 +3,12 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
+    Integer,
     Numeric,
     Text,
     func,
@@ -117,6 +119,11 @@ class Payment(Base):
     package_code: Mapped[str] = mapped_column(Text, nullable=False)
     amount_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     credit_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
+    edit_units: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    edits_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    package_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(Text, nullable=False, server_default="pending")
     confirmation_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     provider_payload: Mapped[dict[str, object]] = mapped_column(

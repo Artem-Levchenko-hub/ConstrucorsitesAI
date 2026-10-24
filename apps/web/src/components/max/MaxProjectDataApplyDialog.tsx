@@ -99,7 +99,7 @@ export function MaxProjectDataApplyDialog({ config, onClose, onReturnFocus }: {
       </DialogHeader>
       <p className="text-sm text-fg-secondary">Доработка расходует баланс владельца. Результат появится в редакторе; для опубликованного приложения затем потребуется публикация.</p>
       <p className="text-sm text-fg-secondary">После привязки названия и каталог смогут обновляться из настроек. Изменение функций и дизайна каждый раз требует запуска доработки.</p>
-      <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
+      <OwnerChatQuotaNotice {...quota} />
       {start.error && <p role="alert" className="text-sm text-danger-fg">{describeApiError(start.error, "Не удалось передать задание. Повторите попытку.")}</p>}
       {terminalFailure && <p role="alert" className="text-sm text-danger-fg">Предыдущая доработка завершилась без результата. Можно запустить новую попытку по этим же данным; она расходует баланс.</p>}
       <div className="flex flex-wrap justify-end gap-3">

@@ -8,8 +8,9 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { createPayment, createSubscriptionCheckout, getPaymentConfig, listPayments } from "@/lib/api/account";
 import { ApiError } from "@/lib/api/client";
 import { money, paymentState } from "./account-presentation";
+import { refreshOwnerAllowances } from "@/lib/owner-chat-quota";
 
-export type CheckoutSelection = { kind: "topup" | "plan"; code: string; title: string; price: string; credit: string };
+export type CheckoutSelection = { kind: "topup" | "plan"; code: string; title: string; price: string; credit: string; allowance?: string };
 type Attempt = { key: string; selection: CheckoutSelection; autoRenew: boolean; paymentId?: string };
 function readAttempt(storageKey: string): Attempt | null {
   const value = localStorage.getItem(storageKey);
@@ -18,7 +19,7 @@ function readAttempt(storageKey: string): Attempt | null {
   if (!a.key || !a.selection || !["topup", "plan"].includes(a.selection.kind) ||
     !["start", "pro", "business"].includes(a.selection.code) ||
     typeof a.autoRenew !== "boolean" || !Number.isFinite(Number(a.selection.price)) ||
-    !Number.isFinite(Number(a.selection.credit))) throw new Error("Не удалось прочитать незавершённый заказ. Проверьте операции перед новой оплатой.");
+    !Number.isFinite(Number(a.selection.credit)) || (a.selection.allowance !== undefined && (typeof a.selection.allowance !== "string" || a.selection.allowance.length > 500))) throw new Error("Не удалось прочитать незавершённый заказ. Проверьте операции перед новой оплатой.");
   return a;
 }
 export function usePaymentJourney(email: string) {
@@ -61,6 +62,7 @@ export function usePaymentJourney(email: string) {
       confirmed.current.add(payment.id);
       void client.invalidateQueries({ queryKey: ["wallet"] });
       void client.invalidateQueries({ queryKey: ["billing-subscription"] });
+      refreshOwnerAllowances(client);
     }
     if (paymentState(payment.status).terminal && attempt?.paymentId === payment.id) {
       try {
@@ -172,8 +174,8 @@ export function PaymentCheckout({ journey: j }: { journey: PaymentJourney }) {
               <dd>{money(j.selection.price)}</dd>
             </div>
             <div>
-              <dt>Зачисление на баланс</dt>
-              <dd>{money(j.selection.credit)}</dd>
+              <dt>Включено</dt>
+              <dd>{j.selection.allowance ?? `По прежним условиям: ${money(j.selection.credit)}`}</dd>
             </div>
             <div>
               <dt>Период</dt>

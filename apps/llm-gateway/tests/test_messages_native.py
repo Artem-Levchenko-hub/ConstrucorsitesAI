@@ -458,6 +458,7 @@ def test_reported_rub_prefers_valid_balance_audit_header(headers, data, expected
 def test_native_endpoint_attributes_and_bills_actual_cached_usage(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, rub_headers, body_cost, expected_cost, provider_id,
 ) -> None:
+    monkeypatch.setattr(messages_native.billing,"precheck_generation_units",AsyncMock(return_value=False))
     user_id = "11111111-1111-1111-1111-111111111111"
     project_id = "22222222-2222-2222-2222-222222222222"
     run_id = "33333333-3333-3333-3333-333333333333"
@@ -629,6 +630,7 @@ def test_native_endpoint_accounts_for_actual_model(
 def test_native_endpoint_stops_before_provider_when_wallet_limit_is_reached(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setattr(messages_native.billing,"precheck_generation_units",AsyncMock(return_value=False))
     precheck = AsyncMock(side_effect=WalletEmptyError("Insufficient wallet balance for request"))
     upstream = pytest.fail
     monkeypatch.setattr(messages_native.billing, "precheck_balance", precheck)

@@ -75,7 +75,15 @@ async def apply_provider_state(
     state = provider_status(provider.get("status"))
     payment.provider_payload = provider
     if state == "succeeded" and payment.status != "succeeded":
-        if payment.purpose == "wallet_topup":
+        # Status and the granted entitlement share the caller's transaction.
+        # A failed grant must roll back both; never commit a partial payment.
+        payment.status = "succeeded"
+        payment.paid_at = datetime.now(UTC)
+        if payment.purpose == "wallet_topup" and payment.edit_units > 0:
+            from yleum_api.services.generation_credits import grant_payment_units
+
+            await grant_payment_units(session, payment)
+        elif payment.purpose == "wallet_topup":
             wallet = (
                 await session.execute(
                     select(Wallet)
@@ -95,8 +103,6 @@ async def apply_provider_state(
                     description=f"Пополнение через ЮKassa ({payment.package_code})",
                 )
             )
-        payment.status = "succeeded"
-        payment.paid_at = datetime.now(UTC)
     elif state == "cancelled" and payment.status not in {"succeeded", "refunded"}:
         payment.status = "cancelled"
         payment.cancelled_at = datetime.now(UTC)

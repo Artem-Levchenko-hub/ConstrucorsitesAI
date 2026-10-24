@@ -15,6 +15,7 @@ ErrorCode = Literal[
     "not_found",
     "rate_limited",
     "wallet_empty",
+    "generation_credits_exhausted",
     "model_unavailable",
     "advice_unavailable",
     "internal_error",

@@ -17,6 +17,9 @@ export type PaymentConfig = {
     code: "start" | "business" | "pro";
     price_rub: string;
     credit_rub: string;
+    edit_units?: number;
+    edits_only?: boolean;
+    package_version?: number;
     title: string;
   }>;
 };
@@ -28,6 +31,9 @@ export type Payment = {
   package_code: string;
   amount_rub: string;
   credit_rub: string;
+  edit_units?: number;
+  edits_only?: boolean;
+  package_version?: number;
   status: string;
   confirmation_url: string | null;
   created_at: string;
@@ -43,6 +49,24 @@ export type BillingPlan = {
   included_credit_rub: string;
   entitlements: Record<string, unknown>;
 };
+
+export type GenerationCredits = {
+  edit_only_units: number;
+  flexible_units: number;
+  reserved_units: number;
+  available_units: number;
+  initial_build_units: number;
+  edit_units: number;
+  included_generations_remaining: number;
+  included_edits_remaining: number;
+  included_generations_limit: number;
+  included_edits_limit: number;
+  period_end: string | null;
+};
+
+export function getGenerationCredits(): Promise<GenerationCredits> {
+  return apiFetch<GenerationCredits>("/api/billing/credits");
+}
 
 export type Subscription = {
   id: string;

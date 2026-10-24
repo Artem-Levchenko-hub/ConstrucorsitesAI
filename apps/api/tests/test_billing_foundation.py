@@ -23,14 +23,15 @@ async def test_public_plan_catalog_is_versioned_and_ordered(
     assert response.status_code == 200
     plans = response.json()
     assert [plan["code"] for plan in plans] == ["free", "pro", "business"]
-    assert [plan["version"] for plan in plans] == [3, 2, 2]
-    assert [plan["price_rub"] for plan in plans] == ["0.00", "2990.00", "6990.00"]
+    assert [plan["version"] for plan in plans] == [4, 3, 3]
+    assert [plan["price_rub"] for plan in plans] == ["0.00", "1.00", "6990.00"]
     assert plans[0]["entitlements"]["max_projects"] == 1
     assert plans[0]["entitlements"]["static_publish_slots"] == 1
-    assert plans[0]["entitlements"]["generation_messages_lifetime"] == 1
+    assert plans[0]["entitlements"]["initial_generations_lifetime"] == 1
+    assert plans[0]["entitlements"]["edits_lifetime"] == 1
     assert plans[0]["entitlements"]["integrations"] is True
-    assert plans[1]["included_credit_rub"] == "500.0000"
-    assert plans[2]["included_credit_rub"] == "1500.0000"
+    assert plans[1]["included_credit_rub"] == "0.0000"
+    assert plans[2]["included_credit_rub"] == "0.0000"
     assert plans[2]["entitlements"]["always_on_slots"] == 1
 
 
@@ -106,6 +107,7 @@ async def test_database_allows_only_one_live_subscription_per_account(
 
 async def test_payment_credit_appears_in_canonical_wallet_ledger(
     client: httpx.AsyncClient,
+    db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from yleum_api.routers import payments as payments_router
@@ -131,6 +133,14 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     )
     assert created.status_code == 201
     payment_id = created.json()["id"]
+    # Seed an immutable pre-unit quote, as an outstanding historical order.
+    from uuid import UUID
+
+    from yleum_api.models.account import Payment
+    historical = await db_session.get(Payment, UUID(payment_id))
+    historical.amount_rub, historical.credit_rub = Decimal("490.00"), Decimal("500.00")
+    historical.edit_units, historical.edits_only, historical.package_version = 0, False, None
+    await db_session.commit()
 
     async def fake_get_payment(_provider_id: str) -> dict[str, object]:
         return {
@@ -165,4 +175,4 @@ async def test_payment_credit_appears_in_canonical_wallet_ledger(
     subscription = await client.get("/api/billing/subscription")
     assert subscription.status_code == 200
     assert subscription.json()["plan"]["code"] == "free"
-    assert subscription.json()["plan"]["version"] == 3
+    assert subscription.json()["plan"]["version"] == 4

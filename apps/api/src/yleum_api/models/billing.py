@@ -29,9 +29,12 @@ FREE_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000001")
 FREE_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000004")
 PRO_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000002")
 BUSINESS_PLAN_V1_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000003")
-FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000005")
-PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
-BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000007")
+FREE_PLAN_V3_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000005")
+PRO_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000006")
+BUSINESS_PLAN_V2_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000007")
+FREE_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000008")
+PRO_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000009")
+BUSINESS_PLAN_ID: Final = uuid.UUID("00000000-0000-4000-8000-000000000010")
 
 # Entitlement keys the platform enforces. A numeric key set to ``null`` (or
 # missing) means "no limit"; a flag key missing means "allowed".
@@ -121,7 +124,7 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "is_active": False,
     },
     {
-        "id": FREE_PLAN_ID,
+        "id": FREE_PLAN_V3_ID,
         "code": "free",
         "version": 3,
         "name": "Free",
@@ -139,10 +142,10 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "preview_idle_minutes": 15,
         },
         "sort_order": 0,
-        "is_active": True,
+        "is_active": False,
     },
     {
-        "id": PRO_PLAN_ID,
+        "id": PRO_PLAN_V2_ID,
         "code": "pro",
         "version": 2,
         "name": "Pro",
@@ -159,10 +162,10 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
             "preview_idle_minutes": 60,
         },
         "sort_order": 10,
-        "is_active": True,
+        "is_active": False,
     },
     {
-        "id": BUSINESS_PLAN_ID,
+        "id": BUSINESS_PLAN_V2_ID,
         "code": "business",
         "version": 2,
         "name": "Business",
@@ -171,6 +174,72 @@ DEFAULT_BILLING_PLANS: Final[tuple[dict[str, object], ...]] = (
         "included_credit_rub": Decimal("1500.0000"),
         "entitlements": {
             "custom_domains": 0,
+            "max_projects": 10,
+            "static_publish_slots": 10,
+            "always_on_slots": 1,
+            "team_seats": 5,
+            "integrations": True,
+            "preview_idle_minutes": 0,
+        },
+        "sort_order": 20,
+        "is_active": False,
+    },
+    {
+        "id": FREE_PLAN_ID,
+        "code": "free",
+        "version": 4,
+        "name": "Free",
+        "price_rub": Decimal("0.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "custom_domains": 0,
+            "initial_generations_lifetime": 1,
+            "edits_lifetime": 1,
+            "max_projects": 1,
+            "static_publish_slots": 1,
+            "always_on_slots": 0,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 15,
+        },
+        "sort_order": 0,
+        "is_active": True,
+    },
+    {
+        "id": PRO_PLAN_ID,
+        "code": "pro",
+        "version": 3,
+        "name": "Pro",
+        "price_rub": Decimal("1.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "custom_domains": 0,
+            "initial_generations_monthly": 2,
+            "edits_monthly": 25,
+            "max_projects": 3,
+            "static_publish_slots": 3,
+            "always_on_slots": 1,
+            "team_seats": 1,
+            "integrations": True,
+            "preview_idle_minutes": 60,
+        },
+        "sort_order": 10,
+        "is_active": True,
+    },
+    {
+        "id": BUSINESS_PLAN_ID,
+        "code": "business",
+        "version": 3,
+        "name": "Business",
+        "price_rub": Decimal("6990.00"),
+        "billing_interval": "month",
+        "included_credit_rub": Decimal("0.0000"),
+        "entitlements": {
+            "custom_domains": 0,
+            "initial_generations_monthly": 5,
+            "edits_monthly": 50,
             "max_projects": 10,
             "static_publish_slots": 10,
             "always_on_slots": 1,

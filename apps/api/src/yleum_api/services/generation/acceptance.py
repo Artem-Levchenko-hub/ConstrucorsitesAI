@@ -119,19 +119,39 @@ class PromptAcceptance:
         if replay is not None:
             return replay
         from yleum_api.services.entitlements import admit_free_chat_message
+        from yleum_api.services.generation_credits import uses_unit_billing
 
-        self.free_chat_limited = await admit_free_chat_message(
-            self.session, user_id=self.current_user.id, run_id=self.generation_run.id
+        self.unit_billing = await uses_unit_billing(
+            self.session, self.current_user.id, run_id=self.generation_run.id
         )
+        self.free_chat_limited = (
+            False
+            if self.unit_billing
+            else await admit_free_chat_message(
+                self.session, user_id=self.current_user.id, run_id=self.generation_run.id
+            )
+        )
+        self.unit_free_first_build = False
+        if self.unit_billing:
+            from yleum_api.services.entitlements import load_plan_context
+            context = await load_plan_context(self.session, self.current_user.id)
+            self.unit_free_first_build = bool(context.plan and context.plan.code == "free")
         await self.prepare_adaptation()
         await self.check_admission()
         from yleum_api.services.generation_billing import admit_policy
         from yleum_api.services.llm_client import set_generation_billing_context
 
-        await admit_policy(self.session, self.generation_run.id, is_free=self.is_free)
+        if self.unit_billing:
+            from yleum_api.services.generation_credits import reserve_generation_units
+
+            await reserve_generation_units(self.session, self.generation_run)
+        await admit_policy(
+            self.session, self.generation_run.id,
+            is_free=self.is_free, unit_funded=self.unit_billing
+        )
         await self.session.commit()
         set_generation_billing_context(
-            self.generation_run.id, self.current_user.id, self.project_id
+            self.generation_run.id, self.current_user.id, self.project_id,
         )
         await self.route_existing_project()
         await self.conduct_interview()
@@ -315,9 +335,17 @@ class PromptAcceptance:
             )
 
             self.is_free = has_qa_unlimited_generations(
-                self.current_user, await load_plan_context(self.session, self.current_user.id),
+                self.current_user,
+                await load_plan_context(self.session, self.current_user.id),
             )
-        if not self.is_free and not self.credential_redirect and not self.explain_failed_build:
+        if getattr(self, "unit_billing", False):
+            self.is_free = False
+        if (
+            not self.is_free
+            and not getattr(self, "unit_billing", False)
+            and not self.credential_redirect
+            and not self.explain_failed_build
+        ):
             account = await resolve_billing_account(self.session, self.current_user.id)
             wallet = (
                 await self.session.execute(
@@ -376,6 +404,7 @@ class PromptAcceptance:
         interview_eligible = (
             self.is_first_build
             and not getattr(self, "free_chat_limited", False)
+            and not getattr(self, "unit_free_first_build", False)
             and not self.payload.skip_clarify
             and not self.selected_dump
             and not self.credential_redirect

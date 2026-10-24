@@ -13,7 +13,8 @@ from tests.account_fixture import register_verified_account
 from tests.test_subscription_lifecycle import _registered_billing_context
 from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
-from yleum_api.models.billing import PRO_PLAN_ID, BillingPaymentMethod, Subscription
+from yleum_api.models.billing import PRO_PLAN_V2_ID as PRO_PLAN_ID
+from yleum_api.models.billing import BillingPaymentMethod, Subscription
 from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.routers import payments as payments_router
 from yleum_api.services import yookassa
@@ -130,8 +131,13 @@ async def test_verified_webhook_recovers_missing_provider_id_and_credits_once(
                 WalletCharge.external_ref == f"subscription-credit:{local.id}",
             )
         )
-        == 1
+        == 0
     )
+
+
+    credits = (await client.get("/api/billing/credits")).json()
+    assert credits["included_generations_remaining"] == 2
+    assert credits["included_edits_remaining"] == 25
 
 
 async def test_background_recovers_uncertain_checkout_but_never_reposts_after_24_hours(
@@ -292,7 +298,7 @@ async def test_late_success_cannot_resurrect_a_refunded_payment(
                 WalletCharge.entry_type.in_(("subscription_credit", "payment")),
             )
         )
-        == 1
+        == 0
     )
 
 
@@ -414,7 +420,7 @@ async def test_refund_is_blocked_until_manual_provider_and_entitlement_review(
         return {
             "id": "paid-manual-refund",
             "status": "succeeded",
-            "amount": {"value": "490.00", "currency": "RUB"},
+            "amount": {"value": "1.00", "currency": "RUB"},
             "metadata": kwargs["metadata"],
         }
 
@@ -442,5 +448,5 @@ async def test_refund_is_blocked_until_manual_provider_and_entitlement_review(
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "refund_unavailable"
     assert calls == []
-    assert (await client.get("/api/wallet")).json()["balance_rub"] == "600.0000"
+    assert (await client.get("/api/wallet")).json()["balance_rub"] == "100.0000"
     assert (await client.get("/api/payments")).json()[0]["status"] == "succeeded"

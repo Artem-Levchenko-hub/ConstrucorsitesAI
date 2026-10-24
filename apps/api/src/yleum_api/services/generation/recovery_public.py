@@ -10,7 +10,8 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.errors import ApiError
-from yleum_api.models.generation_billing import GenerationBillingPolicy
+from yleum_api.models.generation_billing import GenerationBillingIntent, GenerationBillingPolicy
+from yleum_api.models.generation_credits import GenerationCreditReservation
 from yleum_api.models.generation_event import GenerationEvent
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
 from yleum_api.models.generation_run import GenerationRun
@@ -63,6 +64,8 @@ def _legacy_accepted(
     message: Message | None,
     snapshot: Snapshot | None,
     policy: GenerationBillingPolicy | None,
+    unit_hold: GenerationCreditReservation | None = None,
+    unit_intent: GenerationBillingIntent | None = None,
 ) -> bool:
     """Confirm a permit-backed build or edit, independently of its billing outcome."""
     state = run.agent_state if isinstance(run.agent_state, dict) else {}
@@ -71,7 +74,20 @@ def _legacy_accepted(
         run.response_mode in {"build", "edit"}
         and policy is not None
         and policy.run_id == run.id
-        and policy.version == POLICY_VERSION
+        and (policy.version == POLICY_VERSION or (
+            policy.version == "accepted-units-v2"
+            and not policy.is_free
+            and unit_hold is not None and unit_intent is not None
+            and unit_hold.run_id == run.id and unit_intent.run_id == run.id
+            and unit_hold.project_id == project.id and unit_hold.user_id == run.user_id
+            and unit_intent.user_id == run.user_id
+            and unit_hold.billing_account_id == unit_intent.billing_account_id
+            and unit_hold.state == "consumed" and unit_hold.settled_at is not None
+            and snapshot is not None and unit_hold.accepted_snapshot_id == snapshot.id
+            and unit_intent.accepted_snapshot_id == snapshot.id
+            and unit_intent.outcome == "waived" and unit_intent.amount_rub == 0
+            and unit_intent.receipt == {"policy": "accepted-units-v2", "units": "consumed"}
+        ))
         and isinstance(marker, dict)
         and set(marker)
         == {
@@ -113,6 +129,8 @@ async def project_loaded(
     user_id: UUID,
     latest_step: dict[str, Any] | None = None,
     terminal_events: object = NO_TERMINAL_EVENTS,
+    unit_hold: GenerationCreditReservation | None = None,
+    unit_intent: GenerationBillingIntent | None = None,
 ) -> GenerationRunPublic:
     if (
         project.owner_id != user_id
@@ -190,7 +208,9 @@ async def project_loaded(
         except (ValueError, TypeError, AttributeError):
             view.recovery_unavailable = True
     else:
-        confirmed = _legacy_accepted(run, project, message, snapshot, policy)
+        confirmed = _legacy_accepted(
+            run, project, message, snapshot, policy, unit_hold, unit_intent
+        )
         if confirmed and snapshot is not None:
             published_snapshot = snapshot.id
     if confirmed and view.recovery is not None:
@@ -240,6 +260,8 @@ async def project_generation_public(
             GenerationBillingPolicy,
             GenerationRecoveryEffect,
             GenerationEvent,
+            GenerationCreditReservation,
+            GenerationBillingIntent,
         )
         .select_from(Project)
         .outerjoin(GenerationRun, GenerationRun.id == target_id)
@@ -257,13 +279,17 @@ async def project_generation_public(
             ),
         )
         .outerjoin(GenerationEvent, GenerationEvent.id.in_(terminal_event_ids))
+        .outerjoin(
+            GenerationCreditReservation, GenerationCreditReservation.run_id == GenerationRun.id
+        )
+        .outerjoin(GenerationBillingIntent, GenerationBillingIntent.run_id == GenerationRun.id)
         .where(Project.id == project_id, Project.owner_id == user_id)
         .execution_options(populate_existing=True, autoflush=False)
     )
     rows = (await session.execute(query)).all()
     if not rows:
         raise ApiError("not_found", "project not found", 404)
-    project, run, message, snapshot, policy, _, _ = rows[0]
+    project, run, message, snapshot, policy, _, _, unit_hold, unit_intent = rows[0]
     if run is None:
         if run_id is not None:
             raise ApiError("not_found", "generation not found", 404)
@@ -277,7 +303,7 @@ async def project_generation_public(
         snapshot=snapshot,
         policy=policy,
         effects=list(effects.values()),
-        user_id=user_id,
+        user_id=user_id, unit_hold=unit_hold, unit_intent=unit_intent,
         terminal_events=(sorted(events.values(), key=lambda row: row.seq) if events
                          else NO_TERMINAL_EVENTS),
     )

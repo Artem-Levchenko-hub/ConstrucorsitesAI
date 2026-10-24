@@ -88,6 +88,22 @@ afterEach(async () => {
 });
 
 describe("prompt stream terminal reconciliation", () => {
+  it.each([
+    [{ type: "generation.cancelled", data: { run_id: "run-1", message_id: "message-1" } }, "cancelled"],
+    [{ type: "llm.error", data: { message_id: "message-1", error: "Build failed" } }, "failed"],
+    [{ type: "llm.done", data: { message_id: "message-1", tokens_in: 2, tokens_out: 4, cost_rub: 0 } }, "completed"],
+  ] as const)("refreshes spendable allowances only after durable %s", async (event, status) => {
+    vi.mocked(getLatestGeneration).mockResolvedValue(run("running"));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await act(async () => TestSocket.instances.at(-1)!.emit(event));
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["owner-profile"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["billing-credits"] });
+    vi.mocked(getLatestGeneration).mockResolvedValue(run(status));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["owner-profile"] });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["billing-credits"] });
+  });
+
   it("hydrates durable failure history after the error event wins the commit race", async () => {
     vi.mocked(getLatestGeneration).mockResolvedValueOnce(run("running")).mockResolvedValue(run("failed"));
     const invalidate = vi.spyOn(client, "invalidateQueries");

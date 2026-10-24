@@ -23,6 +23,7 @@ from yleum_api.models.billing import (
     FREE_PLAN_ID,
     FREE_PLAN_V1_ID,
     FREE_PLAN_V2_ID,
+    FREE_PLAN_V3_ID,
     BillingPlan,
 )
 from yleum_api.services import billing_usage, entitlements
@@ -65,21 +66,27 @@ def test_usage_exceeded_only_when_use_passes_the_limit() -> None:
     assert EntitlementUsage(key="max_projects", kind="limit", used=0, limit=1).label == "Приложений"
 
 
-def test_free_v3_is_the_active_free_plan_with_one_lifetime_generation() -> None:
+def test_free_v4_has_distinct_lifetime_initial_and_edit_allowances() -> None:
     free = {plan["code"]: plan for plan in DEFAULT_BILLING_PLANS if plan["is_active"]}["free"]
     assert free["id"] == FREE_PLAN_ID
-    assert free["version"] == 3
+    assert free["version"] == 4
     terms = cast(dict[str, object], free["entitlements"])
     assert terms["max_projects"] == 1
     assert terms["static_publish_slots"] == 1
-    assert terms["generation_messages_lifetime"] == 1
+    assert terms["initial_generations_lifetime"] == 1
+    assert terms["edits_lifetime"] == 1
     assert terms["integrations"] is True
     assert terms["always_on_slots"] == 0
     inactive_free = [
         plan for plan in DEFAULT_BILLING_PLANS if plan["code"] == "free" and not plan["is_active"]
     ]
-    assert [plan["id"] for plan in inactive_free] == [FREE_PLAN_V1_ID, FREE_PLAN_V2_ID]
-    original, previous = [cast(dict[str, object], plan["entitlements"]) for plan in inactive_free]
+    assert [plan["id"] for plan in inactive_free] == [
+        FREE_PLAN_V1_ID, FREE_PLAN_V2_ID, FREE_PLAN_V3_ID,
+    ]
+    original, previous, legacy = [
+        cast(dict[str, object], plan["entitlements"]) for plan in inactive_free
+    ]
+    assert legacy["generation_messages_lifetime"] == 1
     assert original["max_projects"] == 1
     assert original["static_publish_slots"] == 0
     assert original["integrations"] is False

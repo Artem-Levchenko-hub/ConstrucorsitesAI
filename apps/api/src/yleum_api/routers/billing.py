@@ -1,5 +1,5 @@
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Query, status
@@ -193,3 +193,12 @@ async def manage_subscription(
             and subscription.current_period_end > datetime.now(UTC)
         ),
     )
+
+
+@router.get("/credits")
+async def generation_credits(current_user: CurrentUserDep, session: SessionDep) -> dict[str,Any]:
+    from yleum_api.services.generation_credits import credits_view
+
+    result = await credits_view(session, current_user.id)
+    await session.commit()
+    return result

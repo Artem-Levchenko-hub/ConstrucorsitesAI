@@ -258,6 +258,9 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
     filtered_messages = safety.sanitize_messages(raw_messages)
 
     meta = req.metadata or ChatMetadata()
+    unit_covered = await billing.precheck_generation_units(req.user,meta.project_id,meta.run_id,meta.stage,identity) if req.user is not None and meta.run_id is not None else False
+    if unit_covered and meta.free:
+        raise _billing_unavailable()
 
     if meta.require_billing:
         if req.user is None or meta.free or req.stream:
@@ -281,7 +284,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
     if req.stream:
         # Pre-check balance before opening the SSE generator (cheap reject).
         # Free generations skip the floor check entirely.
-        if req.user is not None and not meta.free:
+        if req.user is not None and not meta.free and not unit_covered:
             try:
                 await billing.precheck_balance(
                     req.user, _estimate_cost(req.model, filtered_messages)
@@ -368,7 +371,7 @@ async def _chat_completions_impl(req: ChatCompletionRequest, request: Request) -
         return cached
 
     # Cache miss — pre-check balance (free generations skip the floor check).
-    if req.user is not None and not meta.free and not meta.require_billing:
+    if req.user is not None and not meta.free and not meta.require_billing and not unit_covered:
         try:
             await billing.precheck_balance(req.user, _estimate_cost(req.model, filtered_messages))
         except WalletEmptyError as exc:

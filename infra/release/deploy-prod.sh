@@ -271,6 +271,8 @@ if 'startup.postgres_unavailable' in logs:
 # Its live /health also verifies that the serving process has initialized a pool.
 program = '''import asyncio, json, urllib.request
 from yleum_gateway.core.db import init_pool, get_pool, close_pool
+async def table_constraints(connection, table):
+    return await connection.fetch("SELECT c.contype::text AS kind,c.convalidated AS validated,pg_get_constraintdef(c.oid) AS definition,ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum ORDER BY k.n) AS columns FROM pg_constraint c WHERE c.conrelid=$1::regclass", table)
 async def verify():
     try:
         with urllib.request.urlopen("http://127.0.0.1:8001/health", timeout=10) as response:
@@ -291,7 +293,7 @@ async def verify():
             await connection.fetch("SELECT cost_provenance FROM usage LIMIT 0")
             # Alembic's check naming convention expands explicitly named checks.
             # Require the actual validated definitions, independent of their names.
-            constraints = await connection.fetch("SELECT c.contype::text AS kind,c.convalidated AS validated,pg_get_constraintdef(c.oid) AS definition,ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum ORDER BY k.n) AS columns FROM pg_constraint c WHERE c.conrelid='public.usage_settlements'::regclass AND c.contype IN ('u','c')")
+            constraints = await table_constraints(connection, 'public.usage_settlements')
             receipt_unique = any(row['kind'] == 'u' and row['validated']
                 and sorted(row['columns']) == ['provider_request_id','provider_scope','user_id']
                 for row in constraints)
@@ -309,7 +311,7 @@ async def verify():
             for table, parent in [('generation_billing_policies','generation_runs'),
                                   ('generation_billing_intents','generation_runs'),
                                   ('generation_billing_outbox','generation_billing_intents')]:
-                rows = await connection.fetch("SELECT c.contype::text AS kind,c.convalidated AS validated,pg_get_constraintdef(c.oid) AS definition,ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum,n) JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.attnum ORDER BY k.n) AS columns FROM pg_constraint c WHERE c.conrelid=$1::regclass", table)
+                rows = await table_constraints(connection, table)
                 if not any(row['kind']=='p' and row['validated'] and row['columns']==['run_id'] for row in rows):
                     raise RuntimeError("generation settlement identity missing")
                 expected_fk = 'FOREIGN KEY (run_id) REFERENCES ' + parent + ('(run_id)' if parent=='generation_billing_intents' else '(id)') + ' ON DELETE CASCADE'
@@ -325,6 +327,63 @@ async def verify():
                             raise RuntimeError("generation settlement account binding missing")
             if await connection.fetchval("SELECT attnotnull FROM pg_attribute WHERE attrelid='generation_billing_intents'::regclass AND attname='billing_account_id'"):
                 raise RuntimeError("waived generation without wallet cannot be represented")
+            # Unit-funded calls require the actual gateway reader to see their
+            # immutable grants, reservations and prospective payment snapshots.
+            await connection.fetch("SELECT id,billing_account_id,bucket,scope,units,external_ref,payment_id,subscription_id,period_start,period_end FROM generation_credit_grants LIMIT 0")
+            await connection.fetch("SELECT run_id,billing_account_id,user_id,project_id,kind,state,units,allocations,accepted_snapshot_id,settled_at FROM generation_credit_reservations LIMIT 0")
+            await connection.fetch("SELECT edit_units,edits_only,package_version FROM payments LIMIT 0")
+            await connection.fetch("SELECT generation_initial_accepted FROM projects LIMIT 0")
+            column_specs = {
+                ('generation_credit_grants','units'): ('integer','NO'),
+                ('generation_credit_reservations','units'): ('integer','NO'),
+                ('generation_credit_reservations','allocations'): ('jsonb','NO'),
+                ('payments','edit_units'): ('integer','NO'),
+                ('payments','edits_only'): ('boolean','NO'),
+                ('payments','package_version'): ('integer','YES'),
+                ('projects','generation_initial_accepted'): ('boolean','NO'),
+            }
+            columns = await connection.fetch("SELECT table_name,column_name,data_type,is_nullable FROM information_schema.columns WHERE table_schema='public' AND table_name=ANY($1::text[])", sorted({table for table, _ in column_specs}))
+            actual_columns = {(row['table_name'],row['column_name']): (row['data_type'],row['is_nullable']) for row in columns}
+            if any(actual_columns.get(key) != value for key, value in column_specs.items()):
+                raise RuntimeError("unit billing column contract missing")
+            unit_tables = [
+                ('generation_credit_grants','id', {
+                    "CHECK ((units >= 0))",
+                    "CHECK ((bucket = ANY (ARRAY['initial'::text, 'edit'::text, 'edit_only'::text, 'flexible'::text])))",
+                    "CHECK ((scope = ANY (ARRAY['free'::text, 'period'::text, 'package'::text])))",
+                }, {
+                    'FOREIGN KEY (billing_account_id) REFERENCES billing_accounts(id) ON DELETE RESTRICT',
+                    'FOREIGN KEY (payment_id) REFERENCES payments(id) ON DELETE RESTRICT',
+                    'FOREIGN KEY (subscription_id) REFERENCES subscriptions(id) ON DELETE RESTRICT',
+                }),
+                ('generation_credit_reservations','run_id', {
+                    "CHECK ((units > 0))",
+                    "CHECK ((kind = ANY (ARRAY['initial'::text, 'edit'::text])))",
+                    "CHECK ((state = ANY (ARRAY['held'::text, 'consumed'::text, 'released'::text])))",
+                    "CHECK (((jsonb_typeof(allocations) = 'array'::text) AND (jsonb_array_length(allocations) > 0)))",
+                }, {
+                    'FOREIGN KEY (billing_account_id) REFERENCES billing_accounts(id) ON DELETE RESTRICT',
+                    'FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT',
+                }),
+            ]
+            for table, primary, expected, expected_fks in unit_tables:
+                rows = await table_constraints(connection, table)
+                if not any(row['kind']=='p' and row['validated'] and row['columns']==[primary] for row in rows):
+                    raise RuntimeError("unit billing identity missing")
+                checks = {row['definition'] for row in rows if row['kind']=='c' and row['validated']}
+                foreign_keys = {row['definition'] for row in rows if row['kind']=='f' and row['validated']}
+                if not expected.issubset(checks) or not expected_fks.issubset(foreign_keys):
+                    raise RuntimeError("unit billing financial constraints missing")
+                if table == 'generation_credit_grants':
+                    if not any(row['kind']=='u' and row['validated'] and row['columns']==['external_ref'] for row in rows):
+                        raise RuntimeError("unit grant idempotency missing")
+                    if not any(row['kind']=='c' and row['validated']
+                               and set(row['columns'])=={'scope','payment_id','subscription_id','period_start','period_end'}
+                               and 'period_end IS NOT NULL' in row['definition'] for row in rows):
+                        raise RuntimeError("unit grant source binding missing")
+                elif not any(row['kind']=='c' and row['validated']
+                             and set(row['columns'])=={'state','accepted_snapshot_id','settled_at'} for row in rows):
+                    raise RuntimeError("unit reservation terminal binding missing")
     except Exception:
         raise SystemExit("gateway settlement schema unavailable; admission remains fenced") from None
     finally:

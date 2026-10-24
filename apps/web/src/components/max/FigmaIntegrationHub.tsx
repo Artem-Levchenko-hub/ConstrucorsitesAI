@@ -491,7 +491,7 @@ export function FigmaIntegrationHub({ projectId, projectName, embedded = false, 
       <DetailTitle className="text-xl font-semibold">Добавить интеграцию в приложение</DetailTitle>
       <DetailDescription className="text-sm text-fg-secondary">Проверьте и при необходимости измените задание. ИИ начнёт доработку только после нажатия кнопки. Не вставляйте ключи и токены.</DetailDescription>
       <p className="text-sm text-fg-secondary">Оплата списывается после успешной сборки приложения. Результат появится в редакторе; затем потребуется публикация.</p>
-      <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
+      <OwnerChatQuotaNotice {...quota} />
       {implementationSummary && <IntegrationRequestCard request={implementationSummary} text={implementationPrompt} expandable={false} />}
       <Label htmlFor="integration-implementation-prompt">Задание для ИИ</Label>
       <Textarea id="integration-implementation-prompt" value={implementationPrompt} disabled={implement.isPending} onChange={(event) => {

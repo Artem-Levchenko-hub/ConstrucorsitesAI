@@ -748,9 +748,13 @@ async def _native_messages_execute(
 
     # Fail closed before the provider call. A native build must never keep
     # spending after the user's wallet floor or when accounting is unavailable.
-    if user_id is not None and not free:
+    if user_id is not None:
         try:
-            await billing.precheck_balance(user_id, _estimate_native_cost(model, payload))
+            unit_covered = await billing.precheck_generation_units(user_id,project_id,run_id,stage,identity) if run_id is not None else False
+            if unit_covered and free:
+                raise BillingReconciliationRequiredError("Unit policy cannot claim free billing")
+            if not free and not unit_covered:
+                await billing.precheck_balance(user_id, _estimate_native_cost(model, payload))
         except WalletEmptyError as exc:
             return _err(402, "wallet_empty", exc.message)
         except Exception:

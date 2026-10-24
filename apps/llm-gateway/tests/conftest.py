@@ -97,6 +97,7 @@ def neutralize_lifespan(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def neutralize_side_effects(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub cache / billing / file logging so chat router doesn't hit real I/O."""
+    monkeypatch.setattr("yleum_gateway.routers.chat.billing.precheck_generation_units",AsyncMock(return_value=False))
     monkeypatch.setattr("yleum_gateway.routers.chat.cache.get", AsyncMock(return_value=None))
     monkeypatch.setattr("yleum_gateway.routers.chat.cache.set", AsyncMock(return_value=None))
     monkeypatch.setattr(

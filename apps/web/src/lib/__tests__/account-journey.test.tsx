@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({ replace: vi.fn(), search: "" }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }), useSearchParams: () => new URLSearchParams(mocks.search) }));
 vi.mock("@/lib/api/wallet", () => ({ getWallet: async () => ({ balance_rub: 1234, recent_charges: [] }) }));
 vi.mock("@/lib/api/mocks", () => ({ USE_MOCKS: false }));
-const payment = { id: "pay-1", purpose: "wallet_topup", subscription_id: null, package_code: "start", amount_rub: "777", credit_rub: "888", status: "pending", confirmation_url: null, created_at: "2026-09-07T00:00:00Z" };
+const payment = { id: "pay-1", purpose: "wallet_topup", subscription_id: null, package_code: "start", amount_rub: "777", credit_rub: "888", edit_units: 5, edits_only: true, package_version: 2, status: "pending", confirmation_url: null, created_at: "2026-09-07T00:00:00Z" };
 const plan = { id: "pro-1", code: "pro", version: 1, name: "Pro", price_rub: "999", billing_interval: "month", included_credit_rub: "456", entitlements: { max_projects: 7, team_seats: 3, static_publish_slots: 5, always_on_slots: 2, integrations: false } };
 const freePlan = { id: "free-3", code: "free", version: 3, name: "Free", price_rub: "0.00", billing_interval: "month", included_credit_rub: "0", entitlements: { max_projects: 1, team_seats: 1, static_publish_slots: 1, always_on_slots: 0, integrations: true, generation_messages_lifetime: 1 } };
 let currentPlan = freePlan;
@@ -31,12 +31,13 @@ const usage = {
 let config: unknown, payments: unknown, post: (body: Record<string, unknown>) => Promise<Response>, requests: Record<string, unknown>[];
 let sessionError = false;
 let usageResponse: unknown = usage;
+let publicPlans: unknown = [freePlan, plan];
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   localStorage.clear(); mocks.search = ""; mocks.replace.mockReset(); sessionError = false; requests = [];
-  config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888" }] };
+  config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888", edit_units: 5, edits_only: true, package_version: 2 }] };
   payments = []; post = async () => Response.json(payment);
-  usageResponse = usage; currentPlan = freePlan;
+  usageResponse = usage; currentPlan = freePlan; publicPlans = [freePlan, plan];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
@@ -44,8 +45,9 @@ beforeEach(() => {
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
-    if (path === "/api/billing/plans") return Response.json([freePlan, plan]);
+    if (path === "/api/billing/plans") return Response.json(publicPlans);
     if (path === "/api/billing/usage") return Response.json(usageResponse);
+    if (path === "/api/billing/credits") return Response.json({ edit_only_units: 5, flexible_units: 15, available_units: 20, reserved_units: 1, initial_build_units: 5, edit_units: 1, included_generations_remaining: 2, included_edits_remaining: 24, included_generations_limit: 2, included_edits_limit: 25, period_end: "2026-11-24T00:00:00Z" });
     if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: currentPlan, status: "active", auto_renew: false, cancel_at_period_end: false });
     if (path === "/api/auth/sessions") return sessionError ? Promise.reject(new Error("Sessions offline")) : Response.json([{ id: "current", current: true, user_agent: "Macintosh", ip_address: "127.0.0.1", created_at: "2026-09-06", last_seen_at: "2026-09-07" }]);
     return new Response(null, { status: 204 });
@@ -63,6 +65,61 @@ const wait = async (check: () => void) => { await act(async () => { await vi.wai
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes(text))!;
 const click = async (text: string) => { await act(async () => button(text).click()); };
 
+it("shows actual package units and edit-only restriction without promising ruble credit", async () => {
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(button("Выбрать")).toBeDefined());
+    const pack = document.querySelector(".account-package")!;
+    expect(pack.textContent).toContain("5 правок");
+    expect(pack.textContent).toContain("существующих приложений");
+    expect(pack.textContent).not.toContain("888");
+    expect(document.body.textContent).not.toContain("Зачислим");
+    await click("Выбрать");
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Новые проекты не включены");
+  } finally { await app.close(); }
+});
+
+it("shows generation and edit allowances from the plan and no monetary included credit", async () => {
+  publicPlans = [
+    { ...freePlan, version: 4, entitlements: { ...freePlan.entitlements, generation_messages_lifetime: undefined, initial_generations_lifetime: 1, edits_lifetime: 1 } },
+    { ...plan, version: 3, price_rub: "1.00", included_credit_rub: "0", entitlements: { ...plan.entitlements, initial_generations_monthly: 2, edits_monthly: 25, always_on_slots: 1 } },
+  ];
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    const entries = [...document.querySelectorAll("article dl > div")].map(row => row.textContent);
+    expect(entries).toContain("Генераций за всё время1");
+    expect(entries).toContain("Правок за всё время1");
+    expect(entries).toContain("Генераций в месяц2");
+    expect(entries).toContain("Правок в месяц25");
+    expect(entries).toContain("Постоянно работающих приложений1");
+    expect(document.body.textContent).not.toContain("Включённый кредит");
+    await click("Выбрать Pro");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("2 генерации");
+    expect(dialog.textContent).toContain("25 правок");
+    expect(dialog.textContent).not.toContain("Зачисление на баланс");
+  } finally { await app.close(); }
+});
+
+it("preserves the original monetary benefit when reviewing a saved legacy order", async () => {
+  localStorage.setItem("max-checkout:qa@example.test", JSON.stringify({
+    key: "legacy-key", autoRenew: false,
+    selection: { kind: "topup", code: "start", title: "Прежний заказ", price: "123", credit: "321" },
+  }));
+  const app = await mount("billing");
+  try {
+    await wait(() => expect(button("Продолжить незавершённую оплату")).toBeDefined());
+    await click("Продолжить незавершённую оплату");
+    const dialog = document.querySelector('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("123");
+    expect(dialog.textContent).toContain("По прежним условиям: 321");
+    expect(dialog.textContent).not.toContain("5 правок");
+    expect(dialog.textContent).not.toContain("888");
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
+
 it("reviews server amounts before POST and prevents double submission while uncertain", async () => {
   let resolve!: (value: Response) => void; post = () => new Promise(r => { resolve = r; });
   const app = await mount("billing");
@@ -70,7 +127,7 @@ it("reviews server amounts before POST and prevents double submission while unce
     await wait(() => expect(button("Выбрать")).toBeDefined()); await click("Выбрать");
     expect(requests).toHaveLength(0);
     const dialog = document.querySelector('[role="dialog"]')!;
-    expect(dialog.textContent).toContain("777"); expect(dialog.textContent).toContain("888"); expect(dialog.textContent).toContain("Разовое");
+    expect(dialog.textContent).toContain("777"); expect(dialog.textContent).toContain("5 правок"); expect(dialog.textContent).not.toContain("888"); expect(dialog.textContent).not.toContain("Зачисление на баланс"); expect(dialog.textContent).toContain("Разовое");
     expect(dialog.hasAttribute("data-max-studio")).toBe(true);
     await click("Перейти к оплате в ЮKassa");
     expect(button("Перейти к оплате в ЮKassa").disabled).toBe(true);

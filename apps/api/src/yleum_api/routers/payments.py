@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID
@@ -19,6 +20,7 @@ from yleum_api.models.user import User
 from yleum_api.schemas.payments import (
     PaymentConfigPublic,
     PaymentCreate,
+    PaymentPackagePublic,
     PaymentPublic,
     SubscriptionCheckoutCreate,
 )
@@ -41,10 +43,19 @@ from yleum_api.services.subscription_lifecycle import provider_status as _provid
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
 
-PACKAGES: dict[str, tuple[Decimal, Decimal, str]] = {
-    "start": (Decimal("490.00"), Decimal("500.00"), "Стартовый пакет Yleum"),
-    "business": (Decimal("1490.00"), Decimal("1600.00"), "Бизнес-пакет Yleum"),
-    "pro": (Decimal("3990.00"), Decimal("4500.00"), "Профессиональный пакет Yleum"),
+@dataclass(frozen=True)
+class EditPackage:
+    price_rub: Decimal
+    edit_units: int
+    edits_only: bool
+    title: str
+    version: int = 2
+
+
+PACKAGES: dict[str, EditPackage] = {
+    "start": EditPackage(Decimal("1.00"), 5, True, "Стартовый пакет Yleum"),
+    "business": EditPackage(Decimal("1490.00"), 15, False, "Бизнес-пакет Yleum"),
+    "pro": EditPackage(Decimal("3990.00"), 40, False, "Профессиональный пакет Yleum"),
 }
 
 
@@ -152,13 +163,16 @@ async def get_payment_config() -> PaymentConfigPublic:
     return PaymentConfigPublic(
         enabled=enabled,
         packages=[
-            {
-                "code": code,
-                "price_rub": str(price),
-                "credit_rub": str(credit),
-                "title": title,
-            }
-            for code, (price, credit, title) in PACKAGES.items()
+            PaymentPackagePublic(
+                code=code,
+                price_rub=package.price_rub,
+                credit_rub=Decimal("0.00"),
+                title=package.title,
+                edit_units=package.edit_units,
+                edits_only=package.edits_only,
+                package_version=package.version,
+            )
+            for code, package in PACKAGES.items()
         ],
         reason=None if enabled else "Платежи включатся после подключения магазина ЮKassa",
     )
@@ -214,15 +228,18 @@ async def create_payment(
             raise ApiError("conflict", "idempotency key conflict", status.HTTP_409_CONFLICT)
         return await _resume_checkout(session=session, payment=existing)
 
-    price, credit, title = PACKAGES[payload.package_code]
+    package = PACKAGES[payload.package_code]
     payment = Payment(
         billing_account_id=account.id,
         user_id=current_user.id,
         idempotency_key=key,
         purpose="wallet_topup",
         package_code=payload.package_code,
-        amount_rub=price,
-        credit_rub=credit,
+        amount_rub=package.price_rub,
+        credit_rub=Decimal("0.00"),
+        edit_units=package.edit_units,
+        edits_only=package.edits_only,
+        package_version=package.version,
         status="pending",
     )
     session.add(payment)
@@ -230,7 +247,7 @@ async def create_payment(
         session=session,
         payment=payment,
         current_user=current_user,
-        title=title,
+        title=package.title,
         return_path="/account",
     )
 

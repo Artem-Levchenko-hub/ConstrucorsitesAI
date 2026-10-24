@@ -26,7 +26,7 @@ import {
 } from "@/lib/api/messages";
 import { ApiError } from "@/lib/api/client";
 import { describeApiError } from "@/lib/api/errors";
-import { isFreeChatRefusal, OWNER_PROFILE_QUERY_KEY, refreshOwnerAfterAcceptedPrompt } from "@/lib/owner-chat-quota";
+import { isFreeChatRefusal, OWNER_PROFILE_QUERY_KEY, refreshOwnerAfterAcceptedPrompt, refreshOwnerAllowances } from "@/lib/owner-chat-quota";
 import {
   isActiveGenerationForMessage,
   streamEventMessageId,
@@ -100,6 +100,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         if (entry.cancelled) return;
         if (!isActiveGenerationForMessage(generation, messageId)) {
           await qc.invalidateQueries({ queryKey: ["messages", projectId] });
+          refreshOwnerAllowances(qc);
           terminalHistoryPollsRef.current.delete(messageId);
           return;
         }
@@ -322,6 +323,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.invalidateQueries({ queryKey: ["project", projectId] });
           qc.invalidateQueries({ queryKey: ["generation", projectId] });
         }
+        refreshTerminalHistory(event.data.message_id);
         delete streamMetaRef.current[event.data.message_id];
         silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
@@ -529,6 +531,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
       if (event.type === "generation.cancelled") {
         void qc.invalidateQueries({ queryKey: ["project-versions", projectId] });
+        refreshTerminalHistory(event.data.message_id);
         updateMessage(event.data.message_id, (m) => ({
           ...m,
           content: m.content.includes("[Отменено пользователем]")
@@ -759,6 +762,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
 
         // The durable lifecycle is terminal (or another run superseded this
         // message). Hydrate the server truth and release local streaming state.
+        refreshOwnerAllowances(qc);
         streamingRef.current = false;
         terminalGenerationMessagesRef.current.add(messageId);
         activeSubmitSignatureRef.current = null;
@@ -1138,6 +1142,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         void getLatestGeneration(projectId)
           .then((generation) => {
             if (!isActiveGenerationForMessage(generation, last.id)) {
+              refreshOwnerAllowances(qc);
               terminalGenerationMessagesRef.current.add(last.id);
               qc.invalidateQueries({ queryKey: ["messages", projectId] });
               qc.invalidateQueries({ queryKey: ["generation", projectId] });
@@ -1227,6 +1232,8 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     }
 
     // 2) Рвём WS — backend уже получил cancellation signal.
+    if (messageId) refreshTerminalHistory(messageId);
+    else refreshOwnerAllowances(qc);
     cancelRef.current?.();
     cancelRef.current = null;
     sendRef.current = null;
@@ -1265,7 +1272,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     // 4) Сбрасываем очередь — Стоп = «всё, прекратить».
     pendingRef.current = null;
     setPendingPrompt(null);
-  }, [qc, projectId, updateMessage]);
+  }, [qc, projectId, updateMessage, refreshTerminalHistory]);
 
   const cancelPending = useCallback(() => {
     pendingRef.current = null;

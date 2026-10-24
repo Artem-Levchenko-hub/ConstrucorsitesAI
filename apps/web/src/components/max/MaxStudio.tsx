@@ -80,7 +80,7 @@ export function MaxStudio({ email }: { email: string }) {
 
   const create = useMutation({
     mutationFn: async () => {
-      if (quota.exhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
+      if (quota.initialExhausted) throw new Error(FREE_CHAT_UPGRADE_MESSAGE);
       const rawPrompt = buildMaxProjectPrompt({
         name,
         idea,
@@ -226,12 +226,12 @@ export function MaxStudio({ email }: { email: string }) {
               <h1>Мои приложения</h1>
               <p>Продолжите работу или запустите новую идею в MAX.</p>
             </div>
-            <Button size="lg" disabled={quota.exhausted} onClick={() => setDialogOpen(true)}>
+            <Button size="lg" disabled={quota.initialExhausted} onClick={() => setDialogOpen(true)}>
               <Plus className="size-4" /> Создать приложение
             </Button>
           </div>
 
-          <OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />
+          <OwnerChatQuotaNotice {...quota} initialOnly />
           <div className="max-projects-toolbar">
             <label className="max-projects-search">
               <Search className="size-4 shrink-0" aria-hidden="true" />
@@ -265,7 +265,7 @@ export function MaxStudio({ email }: { email: string }) {
               <FolderKanban className="mx-auto size-7 text-accent" />
               <h2>Первого приложения ещё нет</h2>
               <p>Опишите задачу своими словами — ИИ соберёт рабочее приложение внутри MAX. Или возьмите готовую идею ниже.</p>
-              <Button disabled={quota.exhausted} onClick={() => setDialogOpen(true)}>Описать свою идею</Button>
+              <Button disabled={quota.initialExhausted} onClick={() => setDialogOpen(true)}>Описать свою идею</Button>
             </section>
           ) : (
             <section className="max-projects-list" aria-label="Приложения">
@@ -287,8 +287,8 @@ export function MaxStudio({ email }: { email: string }) {
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         pending={create.isPending}
-        submitDisabled={quota.exhausted}
-        quotaNotice={<OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />}
+        submitDisabled={quota.initialExhausted}
+        quotaNotice={<OwnerChatQuotaNotice {...quota} initialOnly />}
         values={{ name, idea, appType, audience, primaryAction, features, style, brandColors }}
         onChange={(patch) => {
           if (patch.name !== undefined) setName(patch.name);

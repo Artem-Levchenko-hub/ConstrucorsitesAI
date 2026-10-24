@@ -290,10 +290,23 @@ async def me(current_user: CurrentUserDep, session: SessionDep) -> UserPublic:
     from yleum_api.services.entitlements import free_chat_allowance
 
     limit, remaining = await free_chat_allowance(session, current_user.id)
+    from yleum_api.services.generation_credits import credits_view, uses_unit_billing
+
+    units = {}
+    if await uses_unit_billing(session, current_user.id):
+        credits = await credits_view(session, current_user.id)
+        units = {
+            "generation_credit_units_available": credits["included_edits_remaining"]
+            + credits["available_units"],
+            "generation_initials_available": credits["included_generations_remaining"]
+            + credits["flexible_units"] // 5,
+        }
+        await session.commit()
     return UserPublic.model_validate(current_user).model_copy(
         update={
             "user_chat_messages_limit": limit,
             "user_chat_messages_remaining": remaining,
+            **units,
         }
     )
 

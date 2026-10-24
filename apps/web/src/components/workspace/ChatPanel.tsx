@@ -485,7 +485,7 @@ export function ChatPanel({
           contextVersion={currentConfig?.config_version}
           onSubmit={handleSubmit}
           sendDisabled={quota.exhausted || (quota.limited && isStreaming)}
-          quotaNotice={<OwnerChatQuotaNotice limited={quota.limited} remaining={quota.remaining} />}
+          quotaNotice={<OwnerChatQuotaNotice {...quota} />}
           onCancel={cancel}
           onCancelPending={cancelPending}
           isStreaming={isStreaming}

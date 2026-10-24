@@ -1,0 +1,75 @@
+{
+  "status": "passed",
+  "utc": "2026-10-24T09:18:12.762891+00:00",
+  "primary_attempts": 1,
+  "paid_ai_attempts": 1,
+  "database_removed": true,
+  "real_provider": true,
+  "sha": "d1d5535b4dbd6c541f4e95a93054bd3603f55884",
+  "forced_primary_status": 503,
+  "scope": "native_gateway_and_generation_billing_not_full_ui_or_api_child",
+  "finish_stages": [
+    {
+      "requested_status": "failed",
+      "success": true
+    },
+    {
+      "requested_status": "completed",
+      "success": true
+    }
+  ],
+  "primary_receipt_before_backup": true,
+  "ai_http_status": 200,
+  "ai_model": "claude-sonnet-5.5",
+  "ai_usage": {
+    "prompt_tokens": 413,
+    "completion_tokens": 66,
+    "total_tokens": 479,
+    "cost_rub": "0.3"
+  },
+  "pricing_completed": true,
+  "billing_completed": true,
+  "http_status": 200,
+  "expense_rows": 2,
+  "usage_rows": 1,
+  "wallet_charge_rows": 1,
+  "settlement_rows": 1,
+  "expenses": [
+    {
+      "provider_scope": "llmgw",
+      "status": "failed",
+      "reported_rub_present": false,
+      "reported_usd_present": false,
+      "calculated_rub_present": false,
+      "receipt_hash_present": true
+    },
+    {
+      "provider_scope": "aitunnel",
+      "status": "completed",
+      "reported_rub_present": true,
+      "reported_usd_present": false,
+      "calculated_rub_present": true,
+      "receipt_hash_present": true
+    }
+  ],
+  "initial_settlement": {
+    "usage_rows": 1,
+    "charge_rows": 0,
+    "states": [
+      "deferred"
+    ]
+  },
+  "outbox_due_before_override": false,
+  "generation_intent": {
+    "outcome": "billable",
+    "amount_rub": "0.3000"
+  },
+  "generation_outbox_settled": true,
+  "model": "claude-sonnet-5.5",
+  "tool_name": "add",
+  "stop_reason": "tool_use",
+  "cost_rub": "0.30000000",
+  "settlement_scope": "aitunnel",
+  "primary_failed": true,
+  "context_and_tools_preserved": true
+}

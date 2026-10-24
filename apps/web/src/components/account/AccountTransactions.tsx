@@ -2,8 +2,19 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { listPayments } from "@/lib/api/account";
+import { listPayments, type Payment } from "@/lib/api/account";
+import { allowanceCount } from "@/lib/billing-allowances";
 import { date, money, paymentState, QueryError } from "./account-presentation";
+
+function paymentBenefit(payment: Payment): string {
+  if (payment.status !== "succeeded") return "Не зачислено";
+  if (payment.purpose !== "wallet_topup") return "Тариф активирован";
+  if (typeof payment.edit_units === "number" && payment.edit_units > 0) {
+    return `Начислено: ${allowanceCount(payment.edit_units, "edits")}`;
+  }
+  return `Зачисление по прежним условиям: ${money(payment.credit_rub)}`;
+}
+
 export function AccountTransactions() {
   const payments = useQuery({ queryKey: ["payments"], queryFn: listPayments });
   const [filter, setFilter] = useState("all");
@@ -44,7 +55,7 @@ export function AccountTransactions() {
             <small>{p.package_code}</small>
           </td>
           <td role="cell" headers="payment-amount"><span className="account-operation-label" aria-hidden="true">Сумма</span>{money(p.amount_rub)}
-            <small>{p.status === "succeeded" ? `Кредит: ${money(p.credit_rub)}` : "Не зачислено"}</small>
+            <small>{paymentBenefit(p)}</small>
           </td>
           <td role="cell" headers="payment-status"><span className="account-operation-label" aria-hidden="true">Статус</span>
             <Link href={`/billing?payment=${encodeURIComponent(p.id)}`} className={`account-status ${paymentState(p.status).tone}`}>{paymentState(p.status).label}</Link>

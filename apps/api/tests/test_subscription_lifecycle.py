@@ -13,12 +13,14 @@ from tests.account_fixture import register_verified_account
 from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import (
-    PRO_PLAN_ID,
     PRO_PLAN_V1_ID,
     BillingAccount,
     BillingPaymentMethod,
     BillingPlan,
     Subscription,
+)
+from yleum_api.models.billing import (
+    PRO_PLAN_V2_ID as PRO_PLAN_ID,
 )
 from yleum_api.models.project import Project
 from yleum_api.models.user import User
@@ -96,14 +98,14 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
     )
     assert created.status_code == 201
     assert create_calls[0]["save_payment_method"] is True
-    assert create_calls[0]["amount"] == "2990.00"
+    assert create_calls[0]["amount"] == "1.00"
     payment_id = created.json()["id"]
 
     async def fake_get_payment(_provider_id: str) -> dict[str, object]:
         return {
             "id": "provider-saved-method",
             "status": "succeeded",
-            "amount": {"value": "2990.00", "currency": "RUB"},
+            "amount": {"value": "1.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
             "payment_method": {
                 "id": "saved-method-1",
@@ -148,7 +150,7 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
 @pytest.mark.parametrize(
     ("plan_id", "version", "amount"),
     [(PRO_PLAN_ID, 2, "2990.00"), (PRO_PLAN_V1_ID, 1, "1490.00")],
-    ids=["current-pro-v2", "legacy-inactive-pro-v1"],
+    ids=["legacy-inactive-pro-v2", "legacy-inactive-pro-v1"],
 )
 async def test_lifecycle_renews_and_credits_exactly_once(
     client: httpx.AsyncClient,
@@ -168,7 +170,7 @@ async def test_lifecycle_renews_and_credits_exactly_once(
     assert plan is not None
     assert plan.version == version
     assert plan.price_rub == Decimal(amount)
-    assert plan.is_active is (version == 2)
+    assert plan.is_active is False
     free.status = "expired"
     free.ended_at = now
     await db_session.flush()

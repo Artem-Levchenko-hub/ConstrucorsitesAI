@@ -60,6 +60,8 @@ class UserPublic(BaseModel):
     status: str = "active"
     role: Literal["user", "admin"] = "user"
     # Filled only for the authenticated owner by GET /api/auth/me.
+    generation_credit_units_available: int | None = Field(default=None,ge=0)
+    generation_initials_available: int | None = Field(default=None,ge=0)
     user_chat_messages_limit: int | None = Field(default=None, ge=0, le=1)
     user_chat_messages_remaining: int | None = Field(default=None, ge=0, le=1)
 
