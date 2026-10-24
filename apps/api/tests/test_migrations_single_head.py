@@ -535,14 +535,14 @@ def test_restoration_adaptation_migrations_roundtrip(
         "FOREIGN KEY (usage_id) REFERENCES usage(id) ON DELETE RESTRICT",
         "FOREIGN KEY (wallet_charge_id) REFERENCES wallet_charges(id) ON DELETE RESTRICT",
     }
-    # 0070/0084: the usage journal exists and Free v3 is the only active Free
+    # 0070/0084/0091: historical Free terms remain; only Free v4 is active
     assert database.fetchval("SELECT to_regclass('billing_usage_events')") is not None
     assert [
         tuple(row)
         for row in database.fetch(
             "SELECT version, is_active FROM billing_plans WHERE code = 'free' ORDER BY version"
         )
-    ] == [(1, False), (2, False), (3, True)]
+    ] == [(1, False), (2, False), (3, False), (4, True)]
     assert (
         database.fetchval(
             "SELECT entitlements->'max_projects' FROM billing_plans "
