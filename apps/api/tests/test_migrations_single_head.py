@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_CURRENT_HEAD = "0090_aitunnel_text_fallback"
+_CURRENT_HEAD = "0091_generation_credit_units"
 _RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
@@ -202,13 +202,14 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_aitunnel_fallback_is_the_only_head_after_shared_max_bots() -> None:
+def test_generation_units_extend_aitunnel_as_the_only_migration_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0089_shared_max_bots"
+    assert chain[_CURRENT_HEAD] == "0090_aitunnel_text_fallback"
+    assert chain["0090_aitunnel_text_fallback"] == "0089_shared_max_bots"
     assert chain["0089_shared_max_bots"] == _RECOVERY_REVISION
     assert chain[_RECOVERY_REVISION] == "0087_generation_responses"
     assert chain["0087_generation_responses"] == "0086_generation_provider_attempts"

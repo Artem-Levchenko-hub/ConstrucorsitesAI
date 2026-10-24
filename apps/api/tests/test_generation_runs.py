@@ -91,9 +91,11 @@ pytestmark = pytest.mark.asyncio
 async def _owner_and_project(
     session: AsyncSession,
 ) -> tuple[User, Project]:
-    owner = User(email=f"runs-{uuid.uuid4().hex[:8]}@example.com", password_hash="x")
-    session.add(owner)
-    await session.flush()
+    from yleum_api.services.accounts import create_account
+    owner = await create_account(
+        session, email=f"runs-{uuid.uuid4().hex[:8]}@example.com", password_hash="x",
+        email_verified_at=None, consent=None,
+    )
     project = Project(
         owner_id=owner.id,
         name="Single flight",

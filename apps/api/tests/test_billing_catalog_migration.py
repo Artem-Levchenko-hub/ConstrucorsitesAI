@@ -145,7 +145,10 @@ def test_catalog_upgrade_preserves_history_and_paid_contracts(
     assert [str(row["id"]) for row in active] == [f"{PREFIX}{n}" for n in (5, 6, 7)]
     from yleum_api.models.billing import DEFAULT_BILLING_PLANS
 
-    expected = [plan for plan in DEFAULT_BILLING_PLANS if plan["is_active"]]
+    # This fixture upgrades 0084, not today's catalog head. Compare the exact
+    # historical rows that 0084 introduced, even after newer versions activate.
+    historical = {str(plan["id"]): plan for plan in DEFAULT_BILLING_PLANS}
+    expected = [historical[str(row["id"])] for row in active]
     assert [json.loads(row["entitlements"]) for row in active] == [
         plan["entitlements"] for plan in expected
     ]

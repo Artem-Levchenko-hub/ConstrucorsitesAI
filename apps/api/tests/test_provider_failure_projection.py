@@ -211,7 +211,8 @@ def terminal_public_sqlite():
     from sqlalchemy.dialects.postgresql import JSONB
     from sqlalchemy.orm import Session
 
-    from yleum_api.models.generation_billing import GenerationBillingPolicy
+    from yleum_api.models.generation_billing import GenerationBillingIntent, GenerationBillingPolicy
+    from yleum_api.models.generation_credits import GenerationCreditReservation
     from yleum_api.models.generation_event import GenerationEvent
     from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
     from yleum_api.models.generation_run import GenerationRun
@@ -222,7 +223,8 @@ def terminal_public_sqlite():
     engine = create_engine('sqlite://')
     metadata = MetaData()
     for model in (Project, GenerationRun, Message, Snapshot, GenerationBillingPolicy,
-                  GenerationRecoveryEffect, GenerationEvent):
+                  GenerationRecoveryEffect, GenerationEvent, GenerationCreditReservation,
+                  GenerationBillingIntent):
         Table(model.__tablename__, metadata, *(Column(
             column.name, JSON() if isinstance(column.type, JSONB) else column.type,
             primary_key=column.primary_key,

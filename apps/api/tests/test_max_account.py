@@ -263,8 +263,7 @@ async def test_max_free_generation_limit_belongs_to_the_user(
         },
     )
     assert blocked.status_code == 402
-    assert blocked.json()["error"]["code"] == "entitlement_exceeded"
-    assert blocked.json()["error"]["details"]["entitlement"] == "free_chat_messages"
+    assert blocked.json()["error"]["code"] == "generation_credits_exhausted"
     # Match the production request-session rollback before retrying the same key.
     await db_session.rollback()
     retry = await client.post(
@@ -276,10 +275,12 @@ async def test_max_free_generation_limit_belongs_to_the_user(
         },
     )
     assert retry.status_code == 402
-    assert retry.json()["error"]["code"] == "entitlement_exceeded"
-    assert retry.json()["error"]["details"]["entitlement"] == "free_chat_messages"
+    assert retry.json()["error"]["code"] == "generation_credits_exhausted"
     await db_session.rollback()
     assert (await db_session.scalars(select(GenerationRun))).all() == []
+    credits = (await client.get("/api/billing/credits")).json()
+    assert credits["included_generations_remaining"] == 0
+    assert credits["included_edits_remaining"] == 1
 
 
 async def test_admin_access_flag_requires_the_admin_role(
