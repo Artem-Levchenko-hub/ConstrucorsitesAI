@@ -140,12 +140,29 @@ async def test_gateway_rejects_missing_unit_financial_constraint(test_engine, co
     await migrate_settlements(test_engine)
     async with test_engine.begin() as connection:
         if constraint == "unique-grant":
-            await connection.execute(text("ALTER TABLE generation_credit_grants DROP CONSTRAINT uq_generation_credit_grants_external_ref"))
+            await connection.execute(
+                text(
+                    "ALTER TABLE generation_credit_grants "
+                    "DROP CONSTRAINT uq_generation_credit_grants_external_ref"
+                )
+            )
         else:
-            await connection.execute(text("ALTER TABLE generation_credit_reservations DROP CONSTRAINT ck_generation_credit_reservations_positive_units"))
-            await connection.execute(text("ALTER TABLE generation_credit_reservations ADD CONSTRAINT unvalidated_units CHECK (units > 0) NOT VALID"))
+            await connection.execute(
+                text(
+                    "ALTER TABLE generation_credit_reservations "
+                    "DROP CONSTRAINT ck_generation_credit_reservations_positive_units"
+                )
+            )
+            await connection.execute(
+                text(
+                    "ALTER TABLE generation_credit_reservations "
+                    "ADD CONSTRAINT unvalidated_units CHECK (units > 0) NOT VALID"
+                )
+            )
     result = run_real_pool_program(test_engine)
-    assert result.returncode != 0, "Admission must remain closed without validated financial constraints"
+    assert result.returncode != 0, (
+        "Admission must remain closed without validated financial constraints"
+    )
     assert "gateway settlement schema unavailable" in result.stderr
 
 
@@ -257,7 +274,7 @@ def test_gate_runs_after_replacement_before_both_admission_reopens(tmp_path, gat
 
     # Keep identity capture, the gate launcher and the shared end real. Only
     # host/process boundaries are inert; no SSH, service or fence is touched.
-    program = '''set -euo pipefail
+    program = """set -euo pipefail
 SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 API=1 GW=1
 READER_NONCE=11111111-1111-4111-8111-111111111111
@@ -287,7 +304,7 @@ seq() { printf '1\\n'; }
 ingress_drain() { record "ingress-$1"; }
 quiescence_gate() { record physical; }
 reader_control() { record "$2-$1"; }
-'''
+"""
     program = program.replace("__OLD__", OLD).replace("__OLD_IMAGE__", OLD_IMAGE)
     program = program.replace("__GATE_EXIT__", str(gate_exit))
     for name in ("gateway_capture_identity", "gateway_cutover_gate", "finish_owned_release"):
@@ -359,7 +376,11 @@ def test_failed_cutover_refuses_reopen(monkeypatch, capsys, case):
 
 
 def test_gateway_build_failure_is_not_hidden_by_log_filter():
-    build = next(line for line in SCRIPT.read_text(encoding="utf-8").splitlines() if "build gateway 2>&1" in line)
+    build = next(
+        line
+        for line in SCRIPT.read_text(encoding="utf-8").splitlines()
+        if "build gateway 2>&1" in line
+    )
     assert "set -euo pipefail;" in build
     assert "{ grep -E 'Built|ERROR|error' || true; }" in build
 
@@ -501,7 +522,11 @@ def test_failed_real_shell_build_pipeline_never_reaches_gateway_replacement(tmp_
     import shlex
     import subprocess
 
-    line = next(line for line in SCRIPT.read_text(encoding="utf-8").splitlines() if "build gateway 2>&1" in line)
+    line = next(
+        line
+        for line in SCRIPT.read_text(encoding="utf-8").splitlines()
+        if "build gateway 2>&1" in line
+    )
     capture = tmp_path / "remote-command"
     capture_ssh = 'ssh() { printf "%s" "$2" > ' + shlex.quote(str(capture)) + "; }; "
     captured = subprocess.run(["bash", "-c", capture_ssh + line], capture_output=True, text=True)
