@@ -37,7 +37,8 @@ def refusal(native=True, changes=None, status=503):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("repeat", [False, True])
-async def test_native_primary_overload_creates_exactly_one_child(monkeypatch, repeat):
+@pytest.mark.parametrize("preconnect", [False, True])
+async def test_native_primary_overload_creates_exactly_one_child(monkeypatch, repeat, preconnect):
     root = GenerationProviderIdentity(*(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64)
     child = GenerationProviderIdentity(*(UUID(int=i) for i in (1, 2, 3, 5)), "a" * 64, "b" * 64)
     prepared, sent = [], []
@@ -48,8 +49,12 @@ async def test_native_primary_overload_creates_exactly_one_child(monkeypatch, re
 
     def reply(request):
         sent.append(json.loads(request.content))
-        if len(sent) == 1 or repeat:
-            return refusal()
+        if preconnect and len(sent) == 1:
+            raise httpx.ConnectError("synthetic", request=request)
+        if len(sent) == (2 if preconnect else 1) or repeat:
+            return refusal(changes={
+                "retry_policy": "llmgw_unavailable_v1", "upstream_http_status": 500,
+            })
         return httpx.Response(200, json={"content": [], "stop_reason": "end_turn"})
 
     monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", prepare)
@@ -60,10 +65,10 @@ async def test_native_primary_overload_creates_exactly_one_child(monkeypatch, re
                 await agent_native._call_messages(client, URL, [], "s")
         else:
             await agent_native._call_messages(client, URL, [], "s")
-    assert len(sent) == 2
+    assert len(sent) == (3 if preconnect else 2)
     assert sent[0]["metadata"]["generation_provider_identity"] == root.to_wire()
-    assert sent[1]["metadata"]["generation_provider_identity"] == child.to_wire()
-    assert prepared == [None, root]
+    assert sent[-1]["metadata"]["generation_provider_identity"] == child.to_wire()
+    assert prepared == ([None, None, root] if preconnect else [None, root])
 
 
 @pytest.mark.parametrize("changes", [{}, {"provider_call_id": str(UUID(int=9))}])
@@ -356,3 +361,202 @@ def test_legacy_chat_history_keeps_its_original_wire_budget():
         == 2
     )
     assert rec._preserve_legacy_chat_allowance(plan("chat", 3), saved).wire_allowance == 3
+
+@pytest.mark.parametrize("status", [500, 502, 503, 504])
+@pytest.mark.parametrize("native", [False, True])
+def test_new_temporary_refusal_shared_live_and_cold_reader(status, native):
+    response = refusal(
+        native=native,
+        changes={"retry_policy": "llmgw_unavailable_v1", "upstream_http_status": status},
+    )
+    assert llm_client._response_overload_refused(response)
+    failure = llm_client._gateway_failure(response)
+    assert failure.code == "upstream_refused" and failure.retry_safe
+    assert failure.upstream_http_status == status
+    if native:
+        assert agent_native._gateway_overload_refused(response, URL)
+    document = response.json()
+    error = document.get("detail", document)["error"]
+    assert llm_client._stream_overload_refused(json.dumps({"error": error}))
+
+
+@pytest.mark.parametrize(
+    "policy,status",
+    [
+        ("llmgw_overload_v1", 500),
+        ("llmgw_overload_v1", 503),
+        ("llmgw_overload_v1", 504),
+        ("llmgw_unavailable_v1", 501),
+        ("llmgw_unavailable_v1", 505),
+        ("llmgw_unavailable_v1", 599),
+    ],
+)
+def test_policy_status_pairs_fail_closed(policy, status):
+    response = refusal(changes={"retry_policy": policy, "upstream_http_status": status})
+    assert not llm_client._response_overload_refused(response)
+
+
+@pytest.mark.parametrize("policy", [[], {}, ["llmgw_unavailable_v1"], None, True])
+def test_malformed_policy_is_never_permission(policy):
+    assert not llm_client._response_overload_refused(refusal(changes={"retry_policy": policy}))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_preconnect_then_confirmed_refusal_keeps_last_backup_slot(monkeypatch, stream):
+    import asyncio
+
+    root = GenerationProviderIdentity(*(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64)
+    child = GenerationProviderIdentity(*(UUID(int=i) for i in (1, 2, 3, 5)), "a" * 64, "b" * 64)
+    parents = []
+
+    async def prepare(*args, parent=None, **kwargs):
+        parents.append(parent)
+        return child if parent else root
+
+    sent = []
+
+    def reply(request):
+        sent.append(json.loads(request.content))
+        if len(sent) == 1:
+            raise httpx.ConnectError("synthetic", request=request)
+        if len(sent) == 2:
+            return refusal(
+                native=False,
+                changes={"retry_policy": "llmgw_unavailable_v1", "upstream_http_status": 500},
+            )
+        return httpx.Response(
+            200,
+            text='data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n'
+            if stream
+            else "{}",
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(reply), **kw)
+    )
+    monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", prepare)
+    monkeypatch.setattr(llm_client.asyncio, "sleep", AsyncMock())
+    payload = {
+        "model": "claude-sonnet-5.5",
+        "messages": [],
+        "max_tokens": 128,
+        "stream": stream,
+        "metadata": {},
+    }
+    if stream:
+        result = [
+            event
+            async for event in llm_client._chat_stream_data(
+                payload, URL, root, asyncio.get_running_loop().time() + 30
+            )
+        ]
+        assert result[0]["choices"][0]["delta"]["content"] == "ok"
+    else:
+        assert (await llm_client._chat_post(payload, URL, 30)).status_code == 200
+    assert len(sent) == 3
+    assert len([parent for parent in parents if parent is not None]) == 1
+
+
+@pytest.mark.parametrize("kind", ["chat", "sse"])
+def test_previous_two_wire_plan_is_preserved_without_refill(kind):
+    from datetime import UTC, datetime, timedelta
+
+    from yleum_api.services.generation import recovery_reconciliation as rec
+
+    def plan(allowance):
+        return rec.ProviderDispatchPlan(
+            kind=kind,
+            deadline=datetime.now(UTC) + timedelta(seconds=30),
+            outer_attempt=0,
+            outer_allowance=1,
+            wire_allowance=allowance,
+        )
+
+    saved = plan(2)
+    assert rec._preserve_legacy_chat_allowance(plan(3), saved).wire_allowance == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_cold_preserved_budget_exhaustion_stops_before_dispatch(monkeypatch, stream):
+    import asyncio
+
+    from yleum_api.services.generation import recovery_reconciliation as rec
+
+    root = GenerationProviderIdentity(*(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64)
+    monkeypatch.setattr(
+        provider_attempts, "prepare_generation_attempt", AsyncMock(return_value=root)
+    )
+    monkeypatch.setattr(
+        provider_attempts, "resume_generation_wire", AsyncMock(return_value=(2, True))
+    )
+    monkeypatch.setattr(rec, "provider_reconciliation_requested", lambda: True)
+    monkeypatch.setattr(rec, "provider_dispatch_remaining", lambda: 20)
+    monkeypatch.setattr(rec, "provider_dispatch_wire_allowance", lambda: 2)
+    monkeypatch.setattr(
+        llm_client,
+        "require_recovered_response",
+        AsyncMock(side_effect=llm_client._gateway_failure(refusal())),
+    )
+    monkeypatch.setattr(llm_client.asyncio, "sleep", AsyncMock())
+    client = AsyncMock(side_effect=AssertionError("no remaining wire may dispatch"))
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+    payload = {
+        "model": "claude-sonnet-5.5",
+        "stream": stream,
+        "max_tokens": 128,
+        "messages": [],
+        "metadata": {},
+    }
+    with pytest.raises(llm_client.LLMError, match="budget is exhausted"):
+        if stream:
+            async for _ in llm_client._chat_stream_data(
+                payload, URL, root, asyncio.get_running_loop().time() + 30
+            ):
+                pass
+        else:
+            await llm_client._chat_post(payload, URL, 30)
+    client.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cold_stream_cannot_use_second_backup_child(monkeypatch):
+    import asyncio
+
+    from yleum_api.services.generation import recovery_reconciliation as rec
+
+    root = GenerationProviderIdentity(*(UUID(int=i) for i in range(1, 5)), "a" * 64, "b" * 64)
+    prepare = AsyncMock(return_value=root)
+    monkeypatch.setattr(provider_attempts, "prepare_generation_attempt", prepare)
+    monkeypatch.setattr(
+        provider_attempts, "resume_generation_wire", AsyncMock(return_value=(1, True))
+    )
+    monkeypatch.setattr(rec, "provider_reconciliation_requested", lambda: True)
+    monkeypatch.setattr(rec, "provider_dispatch_remaining", lambda: 20)
+    monkeypatch.setattr(
+        llm_client,
+        "require_recovered_response",
+        AsyncMock(side_effect=llm_client._gateway_failure(refusal())),
+    )
+    monkeypatch.setattr(llm_client.asyncio, "sleep", AsyncMock())
+    sent = []
+
+    def reply(request):
+        sent.append(request)
+        return refusal(
+            changes={"retry_policy": "llmgw_unavailable_v1", "upstream_http_status": 503}
+        )
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(reply), **kw)
+    )
+    payload = {"model": "claude-sonnet-5.5", "stream": True, "messages": [], "metadata": {}}
+    with pytest.raises(llm_client.LLMError):
+        async for _ in llm_client._chat_stream_data(
+            payload, URL, root, asyncio.get_running_loop().time() + 30
+        ):
+            pass
+    assert len(sent) == 1 and prepare.await_count == 1

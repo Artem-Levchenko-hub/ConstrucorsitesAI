@@ -15,7 +15,12 @@ from yleum_gateway.services.generation_identity import GenerationProviderIdentit
 
 PRIMARY_URL = "https://api.llmgw.ru/v1/chat/completions"
 MODEL = "claude-sonnet-5.5"
-POLICY = "llmgw_overload_v1"
+POLICY = "llmgw_unavailable_v1"
+_REFUSAL_TITLES = {
+    500: ("Internal Server Error",), 502: ("Bad Gateway",),
+    503: ("Service Unavailable", "Service Temporarily Unavailable"),
+    504: ("Gateway Timeout", "Gateway Time-out"),
+}
 _MONEY_HEADERS = {"x-llmgw-cost-rub", "x-cost-rub", "x-cost-usd", "x-llmgw-cost", "x-cost"}
 
 
@@ -65,8 +70,27 @@ def _contains_receipt(value: Any, depth: int = 0) -> bool:
     return isinstance(value, list) and any(_contains_receipt(item, depth + 1) for item in value)
 
 
+def _canonical_refusal_document(text: str, status: int) -> bool:
+    # Explicit status aliases include the standard nginx 503/504 documents.
+    for raw_title in _REFUSAL_TITLES[status]:
+        title = re.escape(raw_title)
+        status_title = str(status) + " " + title
+        plain = r"(?:" + str(status) + r"\s+)?" + title + r"[.]?"
+        nginx = (
+            r"<html>\s*<head><title>" + status_title + r"</title></head>\s*<body>\s*"
+            r"<center><h1>" + status_title + r"</h1></center>\s*<hr><center>nginx(?:/[0-9.]+)?</center>\s*"
+            r"</body>\s*</html>"
+        )
+        if any(re.fullmatch(pattern, text, re.IGNORECASE) for pattern in (plain, nginx)):
+            return True
+    return False
+
+
 def overload_candidate(response: httpx.Response, model: str) -> dict[str, Any] | None:
-    """LLMGW support confirms explicit 502 refusals are not charged (2026-10-23).
+    """Bounded refusals under the user-supplied 2026-10-23 LLMGW statement.
+
+    Support states non-200 responses are not charged. We permit only these
+    fully read temporary refusals, not arbitrary non-200 or uncertain outcomes.
 
     This permission applies only to the official endpoint and a fully read error
     response. A timeout, partial stream or reported expense never qualifies.
@@ -78,7 +102,7 @@ def overload_candidate(response: httpx.Response, model: str) -> dict[str, Any] |
         request, raw = response.request, response.content
     except (RuntimeError, httpx.ResponseNotRead):
         return None
-    if (response.status_code != 502 or request.method != "POST"
+    if (response.status_code not in _REFUSAL_TITLES or request.method != "POST"
             or str(request.url) != PRIMARY_URL or response.history
             or len(raw) > 16_384 or any(key in response.headers for key in _MONEY_HEADERS)):
         return None
@@ -102,18 +126,12 @@ def overload_candidate(response: httpx.Response, model: str) -> dict[str, Any] |
         if (not isinstance(body, dict) or not body.get("error")
                 or set(body) - {"error", "id", "request_id"} or _contains_receipt(body)):
             return None
-    elif not re.fullmatch(r"(?:502\s+)?bad gateway[.]?", text, re.IGNORECASE):
-        # A mixed SSE/JSON document containing the words Bad Gateway does not
-        # prove a refusal. Accept only the canonical nginx error document.
-        if not re.fullmatch(
-            r"<html>\s*<head><title>502 Bad Gateway</title></head>\s*<body>\s*"
-            r"<center><h1>502 Bad Gateway</h1></center>\s*<hr><center>nginx(?:/[0-9.]+)?</center>\s*"
-            r"</body>\s*</html>", text, re.IGNORECASE,
-        ):
-            return None
+    elif not _canonical_refusal_document(text, response.status_code):
+        # Only complete canonical documents, never mixed SSE/error text.
+        return None
     return {
         "provider_failure_kind": "upstream_refused", "provider_charge_ambiguous": False,
-        "retry_safe": True, "retry_policy": POLICY, "upstream_http_status": 502,
+        "retry_safe": True, "retry_policy": POLICY, "upstream_http_status": response.status_code,
     }
 
 

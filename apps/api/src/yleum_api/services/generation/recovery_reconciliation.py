@@ -140,12 +140,25 @@ def provider_effect_scope(cursor: ProviderEffectCursor) -> Iterator[None]:
 def _preserve_legacy_chat_allowance(
     current: ProviderDispatchPlan, saved: ProviderDispatchPlan,
 ) -> ProviderDispatchPlan:
-    # New Sonnet requests reserve a refusal-only second wire. Old cold calls
-    # retain their recorded one-wire policy, even when only reading a response.
-    if (current.kind == saved.kind == "chat"
-            and current.wire_allowance == 2 and saved.wire_allowance == 1):
-        return current.model_copy(update={"wire_allowance": 1})
+    # Historical cold calls retain their recorded cap; never refill their budget.
+    compatible = (
+        current.kind == saved.kind == "chat"
+        and (current.wire_allowance, saved.wire_allowance) == (2, 1)
+    ) or (
+        current.kind == saved.kind and current.kind in {"chat", "sse"}
+        and (current.wire_allowance, saved.wire_allowance) == (3, 2)
+    )
+    if compatible:
+        return current.model_copy(update={"wire_allowance": saved.wire_allowance})
     return current
+
+
+def provider_dispatch_wire_allowance() -> int | None:
+    """Effective persisted cap after prepare/reconciliation, without extending it."""
+    cursor = _PROVIDER_EFFECT.get()
+    if cursor is None or cursor.dispatch.plan is None:
+        return None
+    return cursor.dispatch.plan.wire_allowance
 
 
 def begin_provider_dispatch(

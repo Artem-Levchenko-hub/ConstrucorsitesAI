@@ -19,13 +19,14 @@ def client(neutralize_lifespan, neutralize_side_effects, monkeypatch):
         yield client
 
 
-def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charge(client, monkeypatch):
+@pytest.mark.parametrize("status", [500,502,503,504])
+def test_native_refusal_continues_same_tools_with_separate_expense_and_one_charge(client, monkeypatch,status):
     sent = []
 
     def post(url, payload, headers, **kwargs):
         sent.append((url, dict(payload)))
         if len(sent) == 1:
-            return httpx.Response(502, json={"error": "Bad gateway"}, request=httpx.Request("POST", url))
+            return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]}, request=httpx.Request("POST", url))
         return httpx.Response(200, request=httpx.Request("POST", url), json={
             "id": "backup-receipt", "model": "claude-sonnet-5.5",
             "usage": {"prompt_tokens": 10, "completion_tokens": 2, "cost_rub": 0.2},
@@ -68,7 +69,8 @@ def test_failed_primary_receipt_commit_stops_backup(client, monkeypatch):
     assert billing.charge.await_count == 0
 
 
-def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeypatch):
+@pytest.mark.parametrize("status", [500,502,503,504])
+def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeypatch,status):
     from types import SimpleNamespace
 
     from yleum_gateway.services import generation_attempts, text_failover
@@ -98,7 +100,7 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
     posts = []
     def reply(request):
         posts.append(request)
-        return httpx.Response(502, json={"error": "Bad gateway"})
+        return httpx.Response(status, json={"error": {500:"Internal Server Error",502:"Bad Gateway",503:"Service Unavailable",504:"Gateway Timeout"}[status]})
     monkeypatch.setattr(httpx, "HTTPTransport", lambda **_: httpx.MockTransport(reply))
     response = client.post("/v1/messages", json=body)
     assert response.status_code == 503, response.text
@@ -108,7 +110,7 @@ def test_durable_native_refusal_wire_matches_api_strict_contract(client, monkeyp
     assert error["type"] == error["code"] == "api_error"
     assert error["details"] == {
         "provider_failure_kind": "upstream_refused", "provider_charge_ambiguous": False,
-        "retry_safe": True, "retry_policy": "llmgw_overload_v1", "upstream_http_status": 502,
+        "retry_safe": True, "retry_policy": "llmgw_unavailable_v1", "upstream_http_status": status,
     }
     assert len(posts) == 1 and billing.charge.await_count == 0
     assert provider_calls.finish_call.await_args.kwargs["status"] == "failed"
@@ -134,3 +136,4 @@ def test_native_backup_model_mismatch_is_closed_without_charge(client, monkeypat
     assert response.status_code >= 400
     assert len(posts) == 2 and billing.charge.await_count == 0
     assert "llmgw_overload_v1" not in response.text
+    assert "llmgw_unavailable_v1" not in response.text

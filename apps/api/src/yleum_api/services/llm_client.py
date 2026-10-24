@@ -259,9 +259,12 @@ def _overload_refusal_details(error: object) -> bool:
             return False
     return (details["provider_failure_kind"] == "upstream_refused"
             and details["provider_charge_ambiguous"] is False and details["retry_safe"] is True
-            and details["retry_policy"] == "llmgw_overload_v1"
             and type(details["upstream_http_status"]) is int
-            and details["upstream_http_status"] == 502)
+            and isinstance(details["retry_policy"], str)
+            and details["upstream_http_status"] in {
+                "llmgw_overload_v1": {502},  # Retained pre-upgrade responses only.
+                "llmgw_unavailable_v1": {500, 502, 503, 504},
+            }.get(details["retry_policy"], set()))
 
 
 def _refusal_document(raw: bytes | str) -> object:
@@ -302,8 +305,11 @@ def _response_overload_refused(response: httpx.Response) -> bool:
 
 def _gateway_failure(response: httpx.Response) -> LLMError:
     if _response_overload_refused(response):
+        body = response.json()
+        refusal_error = body.get("detail", body)["error"]
         return LLMError("Primary provider explicitly refused the request", code="upstream_refused",
-                        http_status=503, upstream_http_status=502,
+                        http_status=503,
+                        upstream_http_status=refusal_error["details"]["upstream_http_status"],
                         provider_charge_ambiguous=False, retry_safe=True)
     # Never forward provider messages, raw bodies, headers or URLs to the agent.
     error: dict[str, Any] = {}
@@ -516,8 +522,11 @@ async def _chat_stream_data(
             return
 
     allowance = _chat_dispatch_allowance(payload) if identity is not None else 1
+    if start_attempt >= allowance:
+        raise LLMError("Stored provider dispatch budget is exhausted",
+                       code="generation_response_indeterminate", retry_safe=False,
+                       provider_charge_ambiguous=True)
     legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
-    overload_used = False
     outward_event = False
     accepted_headers = False
     async with asyncio.timeout_at(deadline if identity is not None else None):
@@ -638,10 +647,15 @@ def _stream_child_refusal(
 
 
 def _chat_dispatch_allowance(payload: dict[str, Any]) -> int:
-    # Reserve one fallback slot for the native Sonnet adapter that formerly had
-    # only one wire. Ordinary connection retries still use its original limit.
+    # The extra slot is refusal-only; ordinary retries keep their original cap.
+    from yleum_api.services.generation.recovery_reconciliation import (
+        provider_dispatch_wire_allowance,
+    )
     allowance = _chat_attempt_allowance(payload)
-    return max(2, allowance) if payload.get("model") == "claude-sonnet-5.5" else allowance
+    if payload.get("model") == "claude-sonnet-5.5":
+        allowance += 1
+    saved = provider_dispatch_wire_allowance()
+    return min(allowance, saved) if saved is not None else allowance
 
 
 def _chat_attempt_allowance(payload: dict[str, Any]) -> int:
@@ -750,6 +764,10 @@ async def _chat_post(payload: dict[str, Any], url: str, budget: float) -> httpx.
                 )
             return httpx.Response(200, json=retained, request=httpx.Request("GET", url))
     allowance = _chat_dispatch_allowance(payload) if identity is not None else 1
+    if start_attempt >= allowance:
+        raise LLMError("Stored provider dispatch budget is exhausted",
+                       code="generation_response_indeterminate", retry_safe=False,
+                       provider_charge_ambiguous=True)
     legacy_allowance = _chat_attempt_allowance(payload) if identity is not None else 1
     accepted_headers = False
     omitted_default = payload.get("max_tokens") is None and payload["model"] in {
