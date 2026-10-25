@@ -1,5 +1,7 @@
 import importlib.util
 import io
+import json
+from email.message import Message
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 
@@ -22,8 +24,13 @@ def drain(tmp_path, monkeypatch):
     return module
 
 
-def _http_error(status: int, body: bytes = b"") -> HTTPError:
-    return HTTPError("https://yleum.ru/", status, "test", {}, io.BytesIO(body))
+def _http_error(
+    status: int, body: bytes = b"", content_types: tuple[str, ...] = ("application/json",)
+) -> HTTPError:
+    headers = Message()
+    for content_type in content_types:
+        headers["Content-Type"] = content_type
+    return HTTPError("https://yleum.ru/", status, "test", headers, io.BytesIO(body))
 
 
 def test_probe_retries_401_then_accepts_only_exact_drain_response(drain, monkeypatch):
@@ -105,6 +112,47 @@ def test_wrong_or_malformed_503_fails_immediately_and_closes_response(drain, mon
 
 
 @pytest.mark.parametrize(
+    "content_types",
+    [
+        (),
+        ("application/octet-stream",),
+        ("text/plain",),
+        ("text/html",),
+        ("application/json", "application/json"),
+        ("application/json, application/json",),
+    ],
+    ids=["missing", "old-octet-stream", "plain", "html", "duplicate", "combined-duplicate"],
+)
+def test_valid_drain_json_with_wrong_mime_is_not_accepted(drain, monkeypatch, content_types):
+    error = _http_error(503, b'{"error":{"code":"generation_draining"}}', content_types)
+    monkeypatch.setattr(
+        drain.urllib.request, "urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error)
+    )
+    with pytest.raises(RuntimeError, match="not confirmed"):
+        drain.unstubbed_probe()
+    assert error.fp.closed
+
+
+@pytest.mark.parametrize("content_type", ["application/json", "Application/JSON; charset=utf-8"])
+def test_drain_json_accepts_single_json_mime_with_optional_charset(drain, content_type):
+    error = _http_error(503, b'{"error":{"code":"generation_draining"}}', (content_type,))
+    try:
+        assert drain.is_drain_response(error)
+    finally:
+        error.close()
+
+
+def test_rendered_barrier_sets_json_mime_in_location_scope_without_duplicate_header(drain):
+    rendered = drain.render_vhost(drain.VHOST.read_bytes())
+    location = rendered.split(b"location /api/ {", 1)[1]
+    before_if, after_if = location.split(b"if ($yleum_generation_drain) {", 1)
+    assert b"types { }" in before_if
+    assert b"default_type application/json;" in before_if
+    assert b"default_type" not in after_if
+    assert b"add_header" not in rendered
+
+
+@pytest.mark.parametrize(
     "response, expected_error",
     [
         ("ok", RuntimeError),
@@ -143,6 +191,28 @@ def test_owned_barrier_roundtrip_restores_exact_vhost_and_keeps_backup(drain):
     assert drain.VHOST.read_bytes() == original
     assert not drain.MAP.exists()
     assert (drain.STATE / ("a" * 40 + ".original.conf")).read_bytes() == original
+
+
+def test_end_restores_legacy_owned_barrier_without_rewriting_its_checksum(drain):
+    release = "a" * 40
+    original = drain.VHOST.read_bytes()
+    drain.begin(release)
+    state_path = drain.STATE / "active.json"
+    legacy = drain.VHOST.read_bytes().replace(
+        b"        types { }\n        default_type application/json;\n", b""
+    )
+    drain.VHOST.write_bytes(legacy)
+    state = json.loads(state_path.read_text())
+    state["blocked_sha"] = drain.digest(legacy)
+    state_path.write_text(json.dumps(state))
+    assert drain.owned(release)["blocked_sha"] == drain.digest(legacy)
+
+    drain.end(release)
+
+    assert drain.VHOST.read_bytes() == original
+    assert not drain.MAP.exists()
+    assert not state_path.exists()
+    assert (drain.STATE / (release + ".original.conf")).read_bytes() == original
 
 
 def test_validation_failure_restores_before_any_reload(drain, monkeypatch):

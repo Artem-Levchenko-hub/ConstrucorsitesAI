@@ -29,6 +29,11 @@ MAP_BODY = b"""map "$request_method:$uri" $yleum_generation_drain {
 """
 RULE = (
     b"\n        " + MARKER + b"\n"
+    # These directives must be in location scope, not inside nginx's rewrite if.
+    # Empty types prevents URI extensions from overriding the JSON error MIME;
+    # upstream responses still supply their own Content-Type normally.
+    b"        types { }\n"
+    b"        default_type application/json;\n"
     b"        if ($yleum_generation_drain) {\n"
     b'            return 503 \'{"error":{"code":"generation_draining",'
     b'"message":"Generation admission is temporarily paused"}}\';\n'
@@ -66,9 +71,27 @@ def command(*args: str) -> None:
     subprocess.run(args, check=True, capture_output=True, timeout=30)
 
 
+def is_drain_response(response: urllib.error.HTTPError) -> bool:
+    if response.code != 503:
+        return False
+    content_types = response.headers.get_all("Content-Type", [])
+    if (
+        len(content_types) != 1
+        or content_types[0].split(";", 1)[0].strip().lower() != "application/json"
+    ):
+        return False
+    try:
+        raw = response.read(8193)
+        body = json.loads(raw) if len(raw) <= 8192 else None
+    except (ValueError, UnicodeDecodeError):
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    return isinstance(error, dict) and error.get("code") == "generation_draining"
+
+
 def probe() -> None:
     # Unauthenticated impossible-project request cannot create paid work even
-    # if the barrier is absent. Only the nginx 503/code is accepted as evidence.
+    # if the barrier is absent. Require the code and MIME consumed by the web UI.
     request = urllib.request.Request(
         "https://yleum.ru/api/projects/00000000-0000-0000-0000-000000000000/prompt",
         data=b"{}",
@@ -81,19 +104,8 @@ def probe() -> None:
                 pass
         except urllib.error.HTTPError as exc:
             try:
-                if exc.code == 503:
-                    try:
-                        raw = exc.read(8193)
-                        body = json.loads(raw) if len(raw) <= 8192 else None
-                    except (ValueError, UnicodeDecodeError):
-                        body = None
-                    if isinstance(body, dict):
-                        error = body.get("error")
-                        if (
-                            isinstance(error, dict)
-                            and error.get("code") == "generation_draining"
-                        ):
-                            return
+                if is_drain_response(exc):
+                    return
                 retry = exc.code == 401 and attempt < 4
             finally:
                 exc.close()

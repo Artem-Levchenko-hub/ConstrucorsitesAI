@@ -3,9 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { ApiError, apiFetch, postBlob } from "@/lib/api/client";
 
 /**
- * Characterisation of how the two request helpers read a response. Frozen BEFORE
- * `apiFetch` and `postBlob` shared one reader, unchanged AFTER: JSON vs text by
- * content type, the `{error}` envelope, the generic fallback, the 204 quirk.
+ * Both request helpers share response handling, including proxy error envelopes
+ * with missing/wrong MIME, generic fallbacks, and their existing 204 differences.
  */
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), {
@@ -60,6 +59,35 @@ describe.each(Object.entries(callers))("%s response reading", (_name, run) => {
       "slug already exists",
       { a: 1 },
     ]);
+  });
+
+  it.each(["application/octet-stream", "text/plain", undefined])(
+    "preserves the maintenance refusal when the proxy content type is %s",
+    async (contentType) => {
+      respondWith(new Response(JSON.stringify({ error: {
+        code: "generation_draining", message: "Generation admission is temporarily paused",
+        details: { retry_after: 30 },
+      } }), { status: 503, headers: contentType ? { "content-type": contentType } : {} }));
+      const error = await failure(run);
+      expect([error.status, error.code, error.details]).toEqual([
+        503, "generation_draining", { retry_after: 30 },
+      ]);
+    },
+  );
+
+  it.each([null, "generation_draining", { code: "generation_draining" }, { code: 503, message: "no" }])(
+    "rejects malformed proxy error envelopes without losing the HTTP status: %j",
+    async (error) => {
+      respondWith(json(503, { error }));
+      const result = await failure(run);
+      expect([result.status, result.code, result.message]).toEqual([503, "internal_error", "HTTP 503"]);
+    },
+  );
+
+  it("does not interpret a non-JSON success as an error envelope", async () => {
+    const body = JSON.stringify({ error: { code: "generation_draining", message: "data" } });
+    respondWith(text(200, body));
+    await expect(run()).resolves.toBe(body);
   });
 
   it("falls back to internal_error with the text body", async () => {

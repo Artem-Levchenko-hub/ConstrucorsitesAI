@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { usePromptStream } from "@/hooks/usePromptStream";
-import { ApiError } from "@/lib/api/client";
+import { ApiError, apiFetch } from "@/lib/api/client";
 import { cancelGeneration, getLatestGeneration, sendPrompt } from "@/lib/api/messages";
 import type { GenerationRun, Message, WsEvent } from "@/lib/api/types";
 import { isChatMessageStreaming } from "@/lib/chat-message-status";
@@ -246,6 +246,26 @@ describe("message cache update contracts", () => {
     expect(last).toMatchObject({ content: "[Ошибка: Не удалось отправить запрос. Проверьте соединение и попробуйте ещё раз.]", tokens_in: 0, tokens_out: 0 });
     expect(JSON.stringify(vi.mocked(toast.error).mock.calls)).not.toContain("SECRET_VALUE");
     expect(last.generation_status).toBeUndefined();
+  });
+
+  it("shows maintenance for the actual octet-stream ingress response without retrying the prompt", async () => {
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: {
+      code: "generation_draining", message: "Generation admission is temporarily paused",
+    } }), { status: 503, headers: { "content-type": "application/octet-stream" } }));
+    vi.stubGlobal("fetch", fetch);
+    vi.mocked(sendPrompt).mockImplementationOnce(() => apiFetch("/api/projects/project-1/prompt", {
+      method: "POST", json: { prompt: "Follow up" },
+    }));
+    await act(async () => { await stream.submit("Follow up", "model"); });
+    await act(async () => TestSocket.instances.at(-1)!.emit({ type: "llm.done", data: {
+      message_id: "message-1", tokens_in: 1, tokens_out: 2, cost_rub: 0,
+    } }));
+    await act(async () => vi.advanceTimersByTime(0));
+    const last = client.getQueryData<Message[]>(["messages", "project-1"])!.at(-1)!;
+    expect(last.content).toContain("Сервис обновляется");
+    expect(last.content).not.toContain("Проверьте соединение");
+    expect(last.generation_status).toBeUndefined();
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("never copies an error event secret into partial text or toast", async () => {

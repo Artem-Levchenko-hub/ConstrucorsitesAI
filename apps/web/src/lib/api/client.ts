@@ -42,7 +42,23 @@ export class ApiError extends Error {
   }
 }
 
-/** Body by content type; a non-2xx becomes the `{error}` envelope or a generic `ApiError`. */
+/** Proxies may return our JSON error envelope without a JSON content type. */
+function errorEnvelope(payload: unknown): ApiErrorBody["error"] | null {
+  if (typeof payload === "string") {
+    try {
+      payload = JSON.parse(payload) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof payload !== "object" || payload === null || !("error" in payload)) return null;
+  const error = payload.error;
+  if (typeof error !== "object" || error === null || !("code" in error) || !("message" in error)) return null;
+  if (typeof error.code !== "string" || typeof error.message !== "string") return null;
+  return error as ApiErrorBody["error"];
+}
+
+/** Successful bodies follow their content type; failures preserve a typed error envelope. */
 async function readPayload<T>(response: Response): Promise<T> {
   const contentType = response.headers.get("content-type") ?? "";
   const payload: unknown = contentType.includes("application/json")
@@ -50,9 +66,8 @@ async function readPayload<T>(response: Response): Promise<T> {
     : await response.text();
 
   if (!response.ok) {
-    if (typeof payload === "object" && payload !== null && "error" in payload) {
-      throw new ApiError(response.status, (payload as ApiErrorBody).error);
-    }
+    const error = errorEnvelope(payload);
+    if (error) throw new ApiError(response.status, error);
     throw new ApiError(response.status, {
       code: "internal_error",
       message: typeof payload === "string" ? payload : `HTTP ${response.status}`,
