@@ -610,6 +610,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         "prepare_stack_prompt": stack,
         "prepare_agent_prompt": (plan, None),
         "stage_max_starter": ({"src/core.ts": "trusted"}, None),
+        "stage_owner_fonts": {},
         "_load_turn_reference_images": [],
     }
     for name, value in phases.items():
@@ -656,6 +657,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         "prepare_stack_prompt",
         "prepare_agent_prompt",
         "stage_max_starter",
+        "stage_owner_fonts",
     ):
         assert getattr(agent_pipeline, name).await_count == int(not prepared)
     assert agent_pipeline.prepare_agent_runtime.await_count == 1  # Rebind live owned handle.

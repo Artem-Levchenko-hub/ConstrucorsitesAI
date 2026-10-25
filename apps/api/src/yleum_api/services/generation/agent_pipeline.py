@@ -50,7 +50,11 @@ from yleum_api.services.generation.agent_runtime import (
     prepare_agent_runtime,
     require_named_behavior_readiness,
 )
-from yleum_api.services.generation.agent_seed import render_current_max_starter, stage_max_starter
+from yleum_api.services.generation.agent_seed import (
+    render_current_max_starter,
+    stage_max_starter,
+    stage_owner_fonts,
+)
 from yleum_api.services.generation.agent_verification import (
     apply_legacy_design_and_result_text,
     check_backend_and_normalize_css,
@@ -544,8 +548,6 @@ async def run_agent_generation(
             "human": "Восстанавливаю сохранённый черновик и продолжаю проверку", "ok": None,
         })
     if prepared_entry is None and completed_turn is None:
-        from yleum_api.services.generation.agent_seed import stage_owner_fonts
-
         owner_font_files = await run_bootstrap_stage(
             continuation, 'font_apply', lambda: stage_owner_fonts(
                 factory=factory, ids=ids, baseline=baseline, runtime=runtime,
