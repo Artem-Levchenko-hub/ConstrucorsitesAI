@@ -8,10 +8,13 @@ ApiError taxonomy so the public response shape stays consistent.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
+import struct
 from asyncio import sleep
+from asyncio import timeout as asyncio_timeout
 from collections.abc import Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
@@ -1611,6 +1614,144 @@ async def _base_url(path: str, host: str | None) -> str:
         return registry().get(name).url
     except OrchestratorHostError as exc:
         raise OrchestratorUnavailable(str(exc)) from exc
+
+
+_FONT_INPUT_LIMIT = 8 * 1024 * 1024
+_FONT_RESPONSE_LIMIT = 2 * 1024 * 1024
+_FONT_FACE_LIMIT = 1024 * 1024
+_FONT_FACE_KEYS = frozenset({
+    "family", "data", "weight", "style", "unicode_range", "license_text",
+    "has_cyrillic", "has_ruble",
+})
+
+
+def _font_unavailable() -> OrchestratorUnavailable:
+    return OrchestratorUnavailable("Проверка шрифта временно недоступна. Повторите загрузку.")
+
+
+def _validated_font_face(value: object) -> dict[str, Any]:
+    """Validate the bounded wire envelope without parsing font tables in the API."""
+    if not isinstance(value, dict) or set(value) != _FONT_FACE_KEYS:
+        raise ValueError("font response shape")
+    family, license_text = value["family"], value["license_text"]
+    if (
+        not isinstance(family, str) or not 1 <= len(family) <= 100 or not family.strip()
+        or any(ord(char) < 32 or ord(char) == 127 for char in family)
+        or not isinstance(license_text, str) or len(license_text) > 30000
+        or any((ord(char) < 32 and char not in "\n\r\t") or ord(char) == 127
+               for char in license_text)
+        or value["style"] not in ("normal", "italic")
+        or type(value["has_cyrillic"]) is not bool or type(value["has_ruble"]) is not bool
+    ):
+        raise ValueError("font metadata")
+    weight = value["weight"]
+    if type(weight) is int:
+        if not 1 <= weight <= 1000:
+            raise ValueError("font weight")
+    elif isinstance(weight, str) and len(weight) <= 32 and re.fullmatch(
+        r"[0-9]+(?:\.[0-9]+)? [0-9]+(?:\.[0-9]+)?", weight,
+    ):
+        low, high = map(float, weight.split())
+        if not 1 <= low <= high <= 1000:
+            raise ValueError("font weight range")
+    else:
+        raise ValueError("font weight type")
+    ranges = value["unicode_range"]
+    if not isinstance(ranges, str) or not 1 <= len(ranges) <= 30000:
+        raise ValueError("font coverage length")
+    previous = -1
+    for token in ranges.split(","):
+        match = re.fullmatch(r"U\+([0-9A-F]{1,6})(?:-([0-9A-F]{1,6}))?", token)
+        if match is None:
+            raise ValueError("font coverage syntax")
+        first, last = int(match[1], 16), int(match[2] or match[1], 16)
+        if not previous < first <= last <= 0x10FFFF:
+            raise ValueError("font coverage range")
+        previous = last
+    encoded = value["data"]
+    if not isinstance(encoded, str) or not 1 <= len(encoded) <= 4 * ((_FONT_FACE_LIMIT + 2) // 3):
+        raise ValueError("font data length")
+    raw = base64.b64decode(encoded, validate=True)
+    if (
+        not 48 <= len(raw) <= _FONT_FACE_LIMIT
+        or base64.b64encode(raw).decode("ascii") != encoded
+    ):
+        raise ValueError("font data encoding")
+    (signature, flavor, length, tables, reserved, expanded, compressed, _major, _minor,
+     meta_offset, meta_length, meta_original, private_offset, private_length) = struct.unpack_from(
+        ">4s4sIHHIIHHIIIII", raw,
+    )
+    if (
+        signature != b"wOF2" or flavor not in (b"\0\1\0\0", b"OTTO")
+        or length != len(raw) or not 1 <= tables <= 100 or reserved != 0
+        or not 1 <= expanded <= 16 * 1024 * 1024 or not 1 <= compressed <= len(raw) - 48
+    ):
+        raise ValueError("font header")
+    for offset, size in ((meta_offset, meta_length), (private_offset, private_length)):
+        if (offset == 0 and size != 0) or (
+            offset != 0 and not 48 <= offset < offset + size <= length
+        ):
+            raise ValueError("font auxiliary block")
+    if (meta_offset == 0) != (meta_original == 0) or meta_original > 16 * 1024 * 1024:
+        raise ValueError("font metadata block")
+    return value
+
+
+async def validate_font(raw: bytes) -> dict[str, Any]:
+    """Send one binary face to Core; never retry or run a local parser fallback."""
+    if not 0 < len(raw) <= _FONT_INPUT_LIMIT:
+        raise ApiError("validation_failed", "Допустимы TTF, OTF, WOFF и WOFF2 до 8 МБ", 422)
+    settings = get_settings()
+    token = (
+        settings.orchestrator_internal_token.get_secret_value()
+        if settings.orchestrator_internal_token else ""
+    )
+    if not token:
+        raise _font_unavailable()
+    path = "/internal/font-validation"
+    try:
+        async with asyncio_timeout(30.0):
+            url = f"{await _base_url(path, 'core')}{path}"
+            async with httpx.AsyncClient(
+                timeout=30.0, trust_env=False, follow_redirects=False,
+            ) as client, client.stream(
+                "POST", url, content=raw,
+                headers={"X-Internal-Token": token, "Content-Type": "application/octet-stream",
+                         "Accept": "application/json", "Accept-Encoding": "identity"},
+            ) as response:
+                if response.status_code == 422:
+                    raise ApiError(
+                        "validation_failed",
+                        "Шрифт повреждён, не поддерживается или превышает лимит обработки. "
+                        "Загрузите другой TTF, OTF, WOFF или WOFF2.", 422,
+                    )
+                if response.status_code != 200:
+                    raise _font_unavailable()
+                if (
+                    response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    != "application/json"
+                    or response.headers.get("content-encoding", "identity").lower() != "identity"
+                ):
+                    raise ValueError("font response encoding")
+                length = response.headers.get("content-length")
+                if length is not None and (
+                    not length.isascii() or not length.isdecimal()
+                    or int(length) > _FONT_RESPONSE_LIMIT
+                ):
+                    raise ValueError("font response length")
+                body = bytearray()
+                async for chunk in response.aiter_bytes(chunk_size=65536):
+                    if len(body) + len(chunk) > _FONT_RESPONSE_LIMIT:
+                        raise ValueError("font response budget")
+                    body.extend(chunk)
+                if length is not None and len(body) != int(length):
+                    raise ValueError("font response truncated")
+                return _validated_font_face(json.loads(body))
+    except (
+        OrchestratorUnavailable, httpx.HTTPError, TimeoutError,
+        ValueError, TypeError, RecursionError,
+    ):
+        raise _font_unavailable() from None
 
 
 _READER_RETRY_SECONDS = 30.0

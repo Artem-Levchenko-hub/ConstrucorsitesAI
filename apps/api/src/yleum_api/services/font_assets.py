@@ -5,10 +5,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import os
-import subprocess
-import sys
-import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -23,6 +19,7 @@ from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.models.task_board import TaskBoardAttachmentCleanup
 from yleum_api.schemas.message import FontSelection
+from yleum_api.services import orchestrator_client
 from yleum_api.services.font_catalog_sources import family_id, fetch_family
 from yleum_api.services.owner_fonts_source import apply_owner_fonts, requested_font_names
 from yleum_api.services.private_attachment_quota import (
@@ -37,37 +34,9 @@ MAX_BUNDLE = 4 * 1024 * 1024
 MAX_TOTAL = 12 * 1024 * 1024
 
 
-def _validate(raw: bytes) -> dict[str, Any]:
-    if not 0 < len(raw) <= MAX_BYTES:
-        raise ApiError("validation_failed", "Допустимы TTF, OTF, WOFF и WOFF2 до 8 МБ", 422)
-    # The parser has no API credentials, inherited handles, home or network
-    # configuration. OTS and FontTools run with process-local resource budgets.
-    environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
-    if os.name == "nt":
-        environment["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
-    try:
-        with tempfile.TemporaryDirectory(prefix="yleum-font-run-") as directory:
-            result = subprocess.run(
-                [sys.executable, "-I", str(Path(__file__).with_name("font_validation_worker.py"))],
-                input=raw,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=18,
-                check=False,
-                env=environment,
-                cwd=directory,
-                close_fds=True,
-            )
-        if result.returncode or len(result.stdout) > 2 * 1024 * 1024:
-            raise ValueError("font validation")
-        return dict(json.loads(result.stdout))
-    except (subprocess.SubprocessError, ValueError, OSError, TypeError):
-        raise ApiError(
-            "validation_failed",
-            "Шрифт повреждён, не поддерживается или превышает лимит обработки. "
-            "Загрузите другой TTF, OTF, WOFF или WOFF2.",
-            422,
-        ) from None
+async def _validate(raw: bytes) -> dict[str, Any]:
+    # Parsing runs in a controller-owned sandbox, never inside a serving reader cgroup.
+    return await orchestrator_client.validate_font(raw)
 
 
 def public_font(row: FontAsset) -> dict[str, Any]:
@@ -151,11 +120,11 @@ async def _save(
 async def create_font(
     session: AsyncSession, project_id: UUID, user_id: UUID, raw: bytes, filename: str
 ) -> FontAsset:
-    face = await asyncio.to_thread(_validate, raw)
+    face = await _validate(raw)
     metadata = {
         "source": "upload",
         "license": None,
-        "weight": int(str(face["weight"]).split()[0]),
+        "weight": int(float(str(face["weight"]).split()[0])),
         "style": face["style"],
     }
     bundle = {
@@ -187,7 +156,7 @@ async def resolve_named_font(
     package = await asyncio.to_thread(fetch_family, name)
     faces = []
     for original in package["faces"]:
-        face = await asyncio.to_thread(_validate, original["raw"])
+        face = await _validate(original["raw"])
         face.pop("family")
         face.pop("license_text")
         face["unicode_range"] = original["unicode_range"]

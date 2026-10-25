@@ -22,7 +22,12 @@
 Загрузка ограничена 8 MiB исходного файла, 1 MiB нормализованного face, 6
 выборами в одном сообщении; действуют отдельная пользовательская квота и
 общая квота приватного хранилища. OTS и FontTools работают в отдельном
-процессе без окружения приложения, с ограничениями времени/CPU/RAM/output.
+контейнере без сети, секретов и project mounts, с ограничениями времени/CPU/RAM/output.
+API передаёт бинарные данные в Core controller; parser не запускается внутри
+API или orchestrator reader cgroup и не мешает параллельным генерациям.
+Контроллер выбирает immutable ID образа текущего релиза, фиксированную команду,
+read-only root и ограниченный tmpfs. Неподтверждённое удаление контейнера закрывает
+новый запуск до сверки exact identity; исходная проверка reader inventory не ослаблена.
 Сервер проверяет владельца, проект и digest. Принятые шрифты не истекают вместе
 с черновиками. Смена файла или роли под прежним idempotency key отклоняется.
 
@@ -36,5 +41,7 @@ receipts, что и starter; cold resume использует принятые p
 `test_font_assets_api.py`, `test_owner_font_bootstrap.py`,
 `test_owner_font_migration.py` и web `prompt-font-attachments.test.tsx`.
 Linux release gate устанавливает OTS и выполняет реальные PG/OTS проверки.
+RPC, изоляция, отмена/unknown cleanup и совместимость с реальным reader classifier
+покрыты `test_font_validation_client.py` и orchestrator `test_font_validation*.py`.
 Заморозка зависимостей и реальная Next-сборка проверены для всех 230 core faces.
 Prata не содержит ₽: цены и числовые роли используют читаемое основное семейство.

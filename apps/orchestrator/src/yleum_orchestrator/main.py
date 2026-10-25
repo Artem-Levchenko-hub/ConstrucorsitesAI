@@ -26,6 +26,7 @@ from yleum_orchestrator.core.sentry import init_sentry
 from yleum_orchestrator.routers import (
     cell_publication,
     code_restorations,
+    font_validation,
     health,
     ingress,
     publication_artifacts,
@@ -170,6 +171,7 @@ def create_app() -> FastAPI:
     app.add_exception_handler(Exception, unhandled_error_handler)
 
     app.include_router(health.router)
+    app.include_router(font_validation.router)
     app.include_router(runtime.router)
     app.include_router(ingress.router)
     app.include_router(workspace.router)

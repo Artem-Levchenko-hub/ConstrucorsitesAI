@@ -7,7 +7,11 @@ import json
 import os
 import shutil
 import string
+import subprocess
+import sys
+import tempfile
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -23,7 +27,7 @@ from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
 from yleum_api.models.user import User
 from yleum_api.schemas.message import FontSelection
-from yleum_api.services import font_assets
+from yleum_api.services import font_assets, font_validation_worker, orchestrator_client
 from yleum_api.services.font_validation_worker import normalize
 
 
@@ -77,8 +81,21 @@ def fixture_font(family="Yleum Test Font"):
 
 
 def ots_available():
-    # _validate intentionally replaces PATH, so match its actual execution path.
+    # Match the isolated worker test's deliberately minimal PATH.
     return shutil.which("ots-sanitize", path=os.defpath) is not None
+
+
+def run_worker(raw):
+    """Test-only worker entrypoint; serving API code must never spawn this process."""
+    environment = {"PATH": os.defpath, "LANG": "C.UTF-8"}
+    if os.name == "nt":
+        environment["SYSTEMROOT"] = os.environ.get("SYSTEMROOT", r"C:\Windows")
+    with tempfile.TemporaryDirectory(prefix="yleum-font-test-") as directory:
+        return subprocess.run(
+            [sys.executable, "-I", str(Path(font_validation_worker.__file__).resolve())],
+            input=raw, capture_output=True,
+            timeout=18, check=False, env=environment, cwd=directory, close_fds=True,
+        )
 
 
 @pytest.fixture
@@ -100,23 +117,31 @@ def font_storage(monkeypatch):
 
     monkeypatch.setattr(font_assets, "_store", store)
     monkeypatch.setattr(font_assets, "_storage", lambda: (Storage(), "isolated-font-tests"))
-    if not ots_available():
-        # Windows has no OTS. Still use real FontTools parsing/WOFF2 encoding;
-        # CI with OTS exercises the unchanged isolated production subprocess.
-        monkeypatch.setattr(font_assets, "_validate", lambda raw: normalize(raw, sanitize=False))
+
+    async def controller(raw):
+        # Mock the remote boundary, retaining real OTS/FontTools bytes in Linux CI.
+        # Windows's pure parser fixture is test-only, never a runtime fallback.
+        if ots_available():
+            result = run_worker(raw)
+            if result.returncode:
+                raise ApiError("validation_failed", "Invalid test font", 422)
+            return json.loads(result.stdout)
+        return normalize(raw, sanitize=False)
+
+    monkeypatch.setattr(orchestrator_client, "validate_font", controller)
     return objects
 
 
 def test_runtime_worker_real_ots():
     if not ots_available():
         pytest.skip("ots-sanitize absent from isolated worker PATH; required in Linux CI")
-    face = font_assets._validate(fixture_font())
+    result = run_worker(fixture_font())
+    assert result.returncode == 0
+    face = json.loads(result.stdout)
     assert face["family"] == "Yleum Test Font"
     assert face["has_cyrillic"] is True and face["has_ruble"] is True
     assert base64.b64decode(face["data"]).startswith(b"wOF2")
-    with pytest.raises(ApiError) as error:
-        font_assets._validate(b"not a font")
-    assert error.value.code == "validation_failed"
+    assert run_worker(b"not a font").returncode != 0
 
 
 async def test_uncommitted_font_admission_expires_but_message_binding_is_retained(
