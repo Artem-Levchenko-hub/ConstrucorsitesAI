@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -179,9 +178,11 @@ async def arm_diagnostic_output_budget(
         or assistant.project_id != project_id
         or user_message.role != "user"
         or assistant.role != "assistant"
-        or hashlib.sha256(user_message.content.encode()).hexdigest() != run.prompt_hash
     ):
         raise ValueError("diagnostic admission message binding conflicts")
+    from yleum_api.services.generation.request_binding import bound_message_request
+
+    bound_message_request(run, user_message, project_id=project_id, run_id=run_id)
     now = datetime.now(UTC)
     run.agent_state = {
         **run.agent_state,

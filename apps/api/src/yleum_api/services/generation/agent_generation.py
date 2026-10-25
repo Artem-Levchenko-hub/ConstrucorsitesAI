@@ -371,6 +371,7 @@ async def execute_agent_turn(
     prompt_text: str,
     runtime: GenerationRuntime,
     plan: AgentPromptPlan,
+    reference_images: list[dict[str, Any]] | None = None,
     operations: AgentOperations,
     source_checkpoint: Callable[[agent_builder.AgentResult], Awaitable[None]] | None = None,
     workspace_context_files: dict[str, str] | None = None,
@@ -548,6 +549,7 @@ async def execute_agent_turn(
         try:
             _agent_res = await agent_native.run_native_build(
                 model=plan.model,
+                reference_images=reference_images,
                 system=agent_native.native_system_prompt(plan.stack_guide or "", plan.skills),
                 task=resume_instruction + plan.user + (
                     _native_edit_entry_context(current_source)
@@ -595,6 +597,7 @@ async def execute_agent_turn(
     elif _agent_res is None:
         _agent_res = await agent_builder.run_agent_build(
             system_prompt=plan.system,
+            reference_images=reference_images,
             user_prompt=resume_instruction + plan.user + (
                 _legacy_portable_edit_context(current_source)
                 if (_is_edit or workspace_context_files is not None)

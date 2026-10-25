@@ -64,9 +64,16 @@ def test_max_contract_persists_secret_free_design_memory() -> None:
     assert "@maxhub/max-ui@0.2.0" in result.design_markdown
     assert "sk-test-secret" not in result.design_markdown
 
-    seeded = seed_design_memory({"package.json": "{}"}, result)
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_project_kit import render_max_starter_files
+
+    starter = render_max_starter_files(
+        MaxProjectConfigPayload(app_name="Test", app_type="custom", summary="Test"),
+    )
+    seeded = seed_design_memory(starter, result)
     assert seeded["DESIGN.md"] == result.design_markdown
-    assert seeded["package.json"] == "{}"
+    assert "typography.json" in seeded
+    assert "sk-test-secret" not in seeded["typography.json"]
 
 
 def test_contract_is_single_pass_and_carries_quality_floor() -> None:

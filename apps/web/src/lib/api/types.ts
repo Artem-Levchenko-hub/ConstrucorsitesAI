@@ -129,6 +129,16 @@ export type SelectedElement = {
  * by `usePromptStream` from the `llm.done` event payload — not persisted in
  * the DB row (the wallet charge persists separately). Optional because
  * historical messages predating this field have no value. */
+export type ReferenceImage = {
+  id: Uuid;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  width: number;
+  height: number;
+  url: string;
+};
+
 export type Message = {
   id: Uuid;
   project_id: Uuid;
@@ -142,6 +152,7 @@ export type Message = {
   cost_rub?: number | null;
   /** Select-mode context attached to a user message (for chat-history chips). */
   selected_elements?: SelectedElement[] | null;
+  reference_images?: ReferenceImage[] | null;
   /** Persisted agentic transcript — hydrated into the ["agent-steps",…] cache on
    *  history load so AgentTranscript re-renders after a reload. */
   agent_steps?: AgentStep[] | null;
@@ -497,6 +508,7 @@ export type ApiErrorCode =
   | "unauthorized"
   | "forbidden"
   | "not_found"
+  | "reference_images_expired"
   | "rate_limited"
   | "wallet_empty"
   | "generation_draining"

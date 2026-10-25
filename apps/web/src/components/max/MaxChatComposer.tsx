@@ -63,7 +63,7 @@ export function MaxChatComposer({ projectId, snapshotId, contextVersion, draftRe
     if (draftRef.current?.insertDraft(item.prompt)) setOpen(false);
   };
 
-  return <PromptInput {...props} className={cn(props.className, "max-chat-composer")} draftRef={draftRef} toolbarAction={
+  return <PromptInput {...props} projectId={projectId} className={cn(props.className, "max-chat-composer")} draftRef={draftRef} toolbarAction={
     <div className="max-chat-advice-anchor" ref={panelRef}>
       <Button ref={triggerRef} type="button" variant="secondary" size="sm"
         className="max-chat-advice-trigger" aria-expanded={open} aria-controls={open ? panelId : undefined}

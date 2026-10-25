@@ -47,6 +47,19 @@ class GenerationFailure(BaseModel):
     diagnostics: GenerationFailureDiagnostics | None = None
 
 
+class ReferenceImagePublic(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    filename: str
+    mime_type: Literal["image/jpeg", "image/png", "image/webp"]
+    size_bytes: int
+    width: int
+    height: int
+    sha256: str
+    url: str
+
+
 class MessagePublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -59,6 +72,7 @@ class MessagePublic(BaseModel):
     tokens_in: int | None = None
     tokens_out: int | None = None
     selected_elements: list[SelectedElement] | None = None
+    reference_images: list[ReferenceImagePublic] | None = None
     # Persisted agentic transcript (agent.step events) so the chat re-renders the
     # step list after a reload. NULL for non-agent replies. Loose dicts — the
     # frontend AgentStep type validates the shape.
@@ -104,6 +118,7 @@ class RestorationAdaptationReference(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=30_000)
+    reference_image_ids: list[UUID] = Field(default_factory=list, max_length=4)
     # Stable identity of one UI submit. Retrying the same HTTP request with the
     # same key replays the original response and never starts another generation.
     # Optional for backward compatibility; new clients always send it.

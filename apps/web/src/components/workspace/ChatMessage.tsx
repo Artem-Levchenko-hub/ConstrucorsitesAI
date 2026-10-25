@@ -30,6 +30,7 @@ import {
   type AppErrorCategory,
 } from "@/lib/parse-assistant";
 import { SelectedChips } from "./SelectedChips";
+import { ReferenceImageThumbnail } from "./ReferenceImageThumbnail";
 import { PassProgressBar } from "./PassProgressBar";
 import { AgentTranscript } from "./AgentTranscript";
 import { RemixRecapCard } from "./RemixRecapCard";
@@ -151,6 +152,9 @@ export function ChatMessage({
             <GenerationFailureCard failure={message.generation_failure} onRetry={onRetry} />
           )}
 
+          {isUser && !!message.reference_images?.length && <div className="flex flex-wrap gap-2" aria-label="Изображения в сообщении">
+            {message.reference_images.map((image) => <ReferenceImageThumbnail key={image.id} projectId={message.project_id} image={image} />)}
+          </div>}
           {isUser ? (
             quiz ? (
               <QuizSummary idea={quiz.idea} items={quiz.items} />

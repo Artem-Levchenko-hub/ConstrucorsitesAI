@@ -13,7 +13,7 @@ describe("MAX credential ingress routing", () => {
   it("routes every MAX composer path through one credential guard", () => {
     expect(chatPanel).toContain("const submitWithCredentialIntake = useCallback(");
     expect(chatPanel).toContain(
-      "submitWithCredentialIntake(text, selections)",
+      "submitWithCredentialIntake(text, selections, references ? {",
     );
     const manualSubmit = chatPanel.slice(
       chatPanel.indexOf("const handleSubmit ="), chatPanel.indexOf("const handleFix ="),
@@ -37,7 +37,7 @@ describe("MAX credential ingress routing", () => {
 
   it("keeps the key in the composer when verification fails", () => {
     expect(promptInput).toContain("const submitted = await onSubmit");
-    expect(promptInput).toContain("if (submitted) {");
+    expect(promptInput).toContain("if (submitted === true) {");
     expect(promptStream).toContain("Promise<boolean>");
     expect(promptStream).toContain("return false;");
     expect(promptStream).toContain("return true;");

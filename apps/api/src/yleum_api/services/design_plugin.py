@@ -15,13 +15,16 @@ Design DNA. Upstream scripts are never executed and generation adds no network.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+import json
+import re
+from dataclasses import asdict, dataclass, replace
 
 from yleum_api.services import skill_library
 from yleum_api.services.design_dna import design_mood_directive
 from yleum_api.services.design_presets import PRESETS
 from yleum_api.services.design_tokens import DesignTokens, tokens_for_project
 from yleum_api.services.preset_classifier import classify_preset_sync
+from yleum_api.services.typography import TypographyDecision, choose_typography, seed_typography
 
 PLUGIN_ID = "omnia-design-pro"
 PLUGIN_VERSION = "1.1.1"
@@ -174,7 +177,7 @@ def _max_token_directive(tokens: DesignTokens) -> str:
   --app-border: {palette.border}; --app-brand: {palette.primary};
   --app-accent: {palette.accent}.
 • Типографика продукта: display — {tokens.display_font}; body — {tokens.body_font}.
-  Подключение: {tokens.google_fonts_url} (CSS `@import` ставь до Tailwind).
+  Подключение: локальный `src/app/typography.css`, зависимости закреплены в lockfile.
 • В `globals.css` объяви эти `--app-*` переменные и используй их для продуктовых
   композиций. Не переопределяй внутренние semantic tokens MAX UI и не добавляй
   `@theme`: контролы уже получают тему от существующего `MaxAppProvider`.
@@ -205,7 +208,7 @@ def _render_design_markdown(
 | `--app-accent` | `{palette.accent}` |
 | Display font | `{tokens.display_font}` |
 | Body font | `{tokens.body_font}` |
-| Font source | `{tokens.google_fonts_url}` |
+| Font source | `typography.json` / `src/app/typography.css` |
 """.strip()
         max_ui_lines = """
 ## MAX UI
@@ -369,7 +372,12 @@ def build_design_contract(
         mobile=mobile,
         brief=brief,
     )
+    typography = choose_typography(project_id, brief=brief, preset_id=preset_id) if mobile else None
     tokens = tokens_for_project(project_id, industry_hint=brief) if mobile else None
+    if tokens is not None and typography is not None:
+        tokens = replace(
+            tokens, display_font=typography.heading, body_font=typography.body, google_fonts_url=""
+        )
     mood = (
         _max_token_directive(tokens)
         if tokens is not None
@@ -381,6 +389,16 @@ def build_design_contract(
         nav_rule=nav_rule,
         tokens=tokens,
     )
+    if typography is not None:
+        mood += "\n" + typography.prompt()
+        design_markdown += "\n\n## Typography decision\n\n" + typography.prompt()
+        # Preserve the existing durable DesignContract wire shape. The versioned
+        # decision travels inside source memory, including cold continuations.
+        design_markdown += (
+            "\n\n<!-- typography-decision-v1\n"
+            + json.dumps(asdict(typography), ensure_ascii=False)
+            + "\n-->\n"
+        )
     visual_direction = (
         f"{preset.name}. Это направление, а не второй набор токенов: точная палитра "
         "ниже и постоянный `DESIGN.md` имеют приоритет."
@@ -438,7 +456,18 @@ def seed_design_memory(files: dict[str, str], contract: DesignContract | None) -
     """Attach persistent design memory to an initial seed without another pass."""
     if contract is None:
         return files
-    return {**files, "DESIGN.md": contract.design_markdown}
+    if "typography.json" in files or "DESIGN.md" in files:
+        return files
+    result = {**files, "DESIGN.md": contract.design_markdown}
+    decision = re.search(
+        r"<!-- typography-decision-v1\n([^\n]+)\n-->",
+        contract.design_markdown,
+    )
+    if decision is not None:
+        raw = json.loads(decision[1])
+        raw["families"] = tuple(raw["families"])
+        result = seed_typography(result, TypographyDecision(**raw))
+    return result
 
 
 __all__ = [

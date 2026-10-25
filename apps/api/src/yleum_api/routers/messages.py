@@ -4,7 +4,7 @@ from collections.abc import Sequence
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, Query, Response, UploadFile, status
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -28,6 +28,7 @@ from yleum_api.schemas.message import (
     MessagePublic,
     PromptRequest,
     PromptResponse,
+    ReferenceImagePublic,
 )
 from yleum_api.services import (
     app_errors,
@@ -50,6 +51,40 @@ async def _ensure_owner(session: SessionDep, project_id: UUID, user_id: UUID) ->
     if project is None or project.owner_id != user_id:
         raise ApiError("not_found", "project not found", status.HTTP_404_NOT_FOUND)
     return project
+
+
+@router.post(
+    "/{project_id}/reference-images", status_code=201, response_model=ReferenceImagePublic,
+    dependencies=[Depends(rate_limit_prompt)],
+)
+async def upload_reference_image(
+    project_id: UUID, file: UploadFile, session: SessionDep, current_user: CurrentUserDep,
+) -> dict[str, object]:
+    from yleum_api.services.reference_images import MAX_BYTES, create_image, public_image
+
+    await _ensure_owner(session, project_id, current_user.id)
+    try:
+        raw = await file.read(MAX_BYTES + 1)
+    finally:
+        await file.close()
+    row = await create_image(session, project_id, current_user.id, raw,
+                             file.content_type or "", file.filename or "reference")
+    await session.commit()
+    return public_image(row)
+
+
+@router.get("/{project_id}/reference-images/{image_id}")
+async def download_reference_image(
+    project_id: UUID, image_id: UUID, session: SessionDep, current_user: CurrentUserDep,
+) -> Response:
+    from yleum_api.services.reference_images import image_bytes, resolve_images
+
+    await _ensure_owner(session, project_id, current_user.id)
+    row, = await resolve_images(session, project_id, current_user.id, [image_id])
+    return Response(await image_bytes(row), media_type=row.mime_type, headers={
+        "Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff",
+        "Content-Disposition": "inline", "Content-Security-Policy": "default-src 'none'",
+    })
 
 
 @router.post(

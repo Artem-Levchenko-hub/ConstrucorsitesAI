@@ -11,6 +11,7 @@ import type {
   Message,
   PassProgress,
   SelectedElement,
+  ReferenceImage,
   Snapshot,
   StreamBrief,
   WalletState,
@@ -58,6 +59,9 @@ export type PromptSubmitOptions = {
   /** Stable for one logical submit so an F5 replay cannot create a new run. */
   idempotencyKey?: string;
   restorationAdaptation?: RestorationAdaptationReference;
+  referenceImages?: ReferenceImage[];
+  /** Only a definitive pre-acceptance refusal may replace uploaded image IDs. */
+  onReferenceImagesExpired?: () => void;
 };
 
 export function usePromptStream(projectId: string, projectSlug: string) {
@@ -132,6 +136,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     modelId: string;
     selections?: SelectedElement[];
     opts?: PromptSubmitOptions;
+    resolve?: (accepted: boolean) => void;
   } | null>(null);
   const [pendingPrompt, setPendingPrompt] = useState<string | null>(null);
   // submitRef нужен, потому что fireQueued вызывается из apply (стабильный
@@ -164,7 +169,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
     // setTimeout, чтобы не вызвать submit изнутри обработчика событий react-query
     // и дать React закоммитить текущий рендер.
     setTimeout(
-      () => submitRef.current?.(p.text, p.modelId, p.selections, p.opts),
+      () => { void submitRef.current?.(p.text, p.modelId, p.selections, p.opts).then((accepted) => p.resolve?.(accepted), () => p.resolve?.(false)); },
       0,
     );
   }, []);
@@ -804,13 +809,18 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       if (streamingRef.current) {
         if (activeSubmitSignatureRef.current === submitSignature) {
           // For adaptation only the accepted POST may clear its attachment.
-          return !opts?.restorationAdaptation;
+          return !opts?.restorationAdaptation && !opts?.referenceImages?.length;
         }
         if (opts?.restorationAdaptation) {
           // Its historical source is bound to the reviewed HEAD. A volatile
           // browser queue must not acknowledge/clear the durable attachment.
           toast.info("Дождитесь текущей генерации и снова отправьте запрос на адаптацию.");
           return false;
+        }
+        pendingRef.current?.resolve?.(false);
+        if (opts?.referenceImages?.length) {
+          setPendingPrompt(promptText);
+          return new Promise<boolean>((resolve) => { pendingRef.current = { text: promptText, modelId, selections, opts, resolve }; });
         }
         pendingRef.current = { text: promptText, modelId, selections, opts };
         setPendingPrompt(promptText);
@@ -840,6 +850,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           tokens_in: 0,
           tokens_out: 0,
           selected_elements: selections ?? null,
+          reference_images: opts?.referenceImages ?? null,
           created_at: new Date().toISOString(),
         } as Message,
         {
@@ -976,6 +987,11 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           qc.setQueryData(["onboarding-survey", projectId], resp.survey);
         }
       } catch (e) {
+        if (e instanceof ApiError && e.status === 404 && e.code === "reference_images_expired" && opts?.referenceImages?.length) {
+          _failPrompt("Срок хранения неотправленных изображений истёк. Загрузите их повторно и отправьте запрос ещё раз.", false);
+          opts.onReferenceImagesExpired?.();
+          return false;
+        }
         if (isFreeChatRefusal(e)) {
           void qc.invalidateQueries({ queryKey: OWNER_PROFILE_QUERY_KEY });
           _failPrompt(describeApiError(e), false);
@@ -1042,7 +1058,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             toast.info("Генерация уже запущена", {
               description: "Показываю текущую сборку — повтор не отправлен.",
             });
-            return true;
+            return !opts?.referenceImages?.length;
           }
           // The run ended between the refusal and the probe: nothing streams, so
           // the composer must not stay in streaming mode.
@@ -1206,6 +1222,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       }
     }
 
+    pendingRef.current?.resolve?.(false);
     pendingRef.current = null;
     setPendingPrompt(null);
     if (!generation) {
@@ -1269,12 +1286,10 @@ export function usePromptStream(projectId: string, projectSlug: string) {
       });
     }
 
-    // 4) Сбрасываем очередь — Стоп = «всё, прекратить».
-    pendingRef.current = null;
-    setPendingPrompt(null);
   }, [qc, projectId, updateMessage, refreshTerminalHistory]);
 
   const cancelPending = useCallback(() => {
+    pendingRef.current?.resolve?.(false);
     pendingRef.current = null;
     setPendingPrompt(null);
   }, []);

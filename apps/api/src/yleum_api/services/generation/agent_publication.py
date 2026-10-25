@@ -277,13 +277,23 @@ async def _begin_publication(
         or state.identity.project_id != ids.project_id
         or state.identity.user_id != ids.user_id
         or baseline.snapshot_id != state.identity.accepted_snapshot_id
-        or hashlib.sha256(prompt_text.encode()).hexdigest() != state.identity.prompt_hash
     ):
         raise RecoveryContractError("publication source or original scope changed")
     effect_id = _publication_id(ids.run_id)
     seq = state.execution.logical_step_seq + 1
     async with driver.factory() as session:
         run, _ = await _publication_owner(session, driver)
+        from yleum_api.services.generation.request_binding import bound_message_request
+
+        message = await session.get(Message, run.user_message_id, populate_existing=True)
+        try:
+            request = bound_message_request(run, message, project_id=ids.project_id,
+                                            run_id=ids.run_id)
+            assert message is not None  # validated by bound_message_request
+            if prompt_text not in {request.text, message.content}:
+                raise ValueError("publication original text changed")
+        except ValueError:
+            raise RecoveryContractError("publication original scope changed") from None
         seal = await require_current_acceptance(session, run_id=run.id,
             project_id=run.project_id, binding=state.binding)
         if seal is None:

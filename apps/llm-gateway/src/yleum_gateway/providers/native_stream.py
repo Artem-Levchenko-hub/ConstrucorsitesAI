@@ -212,6 +212,10 @@ async def collect_response(
     collector = _Collector(evidence, provider_scope=provider_scope)
     request_headers = httpx.Headers(headers)
     request_headers["accept"] = "text/event-stream"
+    from yleum_gateway.services.payload_limits import require_provider_payload_size
+
+    wire_payload = {**payload, "stream": True, "stream_options": {"include_usage": True}}
+    require_provider_payload_size(wire_payload)
     async with asyncio.timeout(budget_seconds), httpx.AsyncClient(
         timeout=httpx.Timeout(IDLE_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS),
         trust_env=False, transport=httpx.AsyncHTTPTransport(retries=0),
@@ -219,8 +223,7 @@ async def collect_response(
         from yleum_gateway.services.generation_response_capture import verify_dispatch_capacity
 
         verify_dispatch_capacity()
-        async with client.stream("POST", url, json={**payload, "stream": True,
-            "stream_options": {"include_usage": True}},
+        async with client.stream("POST", url, json=wire_payload,
             headers=request_headers) as response:
             evidence["transport_stage"] = "headers"
             if type(response.status_code) is int and 400 <= response.status_code <= 599:

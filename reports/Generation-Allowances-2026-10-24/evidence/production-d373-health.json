@@ -1,0 +1,28 @@
+{
+  "sha": "d3737b0ffccc128863685159c5e3e6bcc43f4870",
+  "checks": {
+    "checkout": true,
+    "api_workers_health_revision": true,
+    "core_controller": true,
+    "commerce_controller": true,
+    "migration0091": true,
+    "gateway_health": true,
+    "web_health_revision": true,
+    "public_web_revision": true,
+    "public_plan_allowances": true,
+    "public_edit_packages": true,
+    "gateway_immutable_image_source": true,
+    "credential_presence_models": true
+  },
+  "gateway_image_id": "sha256:e7c5bc6ad2400a744f3c9cf26670f1a8dec9225509931144ac038b16e3482d5e",
+  "gateway_source_sha256": "c865e9af8ba94ede0c35219f0857282c6191483353dceb7da4d8e23237aae979",
+  "credential_presence_and_models": {
+    "LLMGW_API_KEY": true,
+    "AITUNNEL_API_KEY": false,
+    "AITUNNEL_TEXT_API_KEY": true,
+    "flag": false,
+    "models200": true,
+    "sonnet55": true
+  },
+  "ok": true
+}

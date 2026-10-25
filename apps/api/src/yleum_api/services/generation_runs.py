@@ -363,6 +363,7 @@ class GenerationDispatch:
     is_free: bool
     orchestrate: bool
     selected_elements: list[dict[str, object]] | None
+    reference_images: list[dict[str, str]] | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -380,6 +381,7 @@ class GenerationDispatch:
             "is_free": self.is_free,
             "orchestrate": self.orchestrate,
             "selected_elements": self.selected_elements,
+            **({"reference_images": self.reference_images} if self.reference_images else {}),
         }
 
 
@@ -405,7 +407,7 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
     }
     # Runs dispatched before business profiles were retired still carry the
     # `free_business_id` key; it is accepted and ignored.
-    if set(raw) - {"free_business_id"} != expected:
+    if set(raw) - {"free_business_id", "reference_images"} != expected:
         raise ValueError("generation dispatch must contain exact keys")
     if (
         type(raw.get("schema_version")) is not int
@@ -436,6 +438,21 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
     if not 1 <= len(prompt_text) <= 30_000 or not model_id:
         raise ValueError("generation dispatch text fields are invalid")
     selected = raw.get("selected_elements")
+    references = raw.get("reference_images")
+    if references is not None:
+        if (type(references) is not list or not 1 <= len(references) <= 4
+                or any(type(item) is not dict or set(item) != {"id", "sha256"}
+                       or type(item["id"]) is not str or type(item["sha256"]) is not str
+                       or len(item["sha256"]) != 64
+                       or any(char not in "0123456789abcdef" for char in item["sha256"])
+                       for item in references)):
+            raise ValueError("generation dispatch reference images are invalid")
+        try:
+            reference_ids = [UUID(item["id"]) for item in references]
+        except ValueError:
+            raise ValueError("generation dispatch reference image ID is invalid") from None
+        if len(set(reference_ids)) != len(reference_ids):
+            raise ValueError("generation dispatch reference image IDs repeat")
     if selected is not None:
         if any(type(item) is not dict for item in selected):
             raise ValueError("generation dispatch selected elements are invalid")
@@ -461,6 +478,7 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
             is_free=bool(raw["is_free"]),
             orchestrate=bool(raw["orchestrate"]),
             selected_elements=selected,
+            reference_images=references,
         )
     except ValueError as exc:
         raise ValueError("generation dispatch UUID is invalid") from exc

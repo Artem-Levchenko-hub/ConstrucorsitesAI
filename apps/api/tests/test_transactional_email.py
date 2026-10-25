@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import smtplib
+import socket
 import ssl
+import traceback
+from datetime import UTC, datetime, timedelta
+from email import policy
 from email.message import EmailMessage
+from email.parser import BytesParser
+from email.utils import parsedate_to_datetime
 from types import SimpleNamespace
 
 import pytest
 from pydantic import SecretStr
+from structlog.testing import capture_logs
 
 from yleum_api.services import transactional_email as email_service
 
@@ -102,3 +109,128 @@ async def test_incomplete_smtp_configuration_does_not_open_connection(
         await email_service.send_transactional_email(
             recipient="recipient@example.com", subject="Code", text="Verification message"
         )
+
+
+@pytest.mark.asyncio
+async def test_outbound_messages_have_utc_date_and_unique_private_message_ids(
+    monkeypatch: pytest.MonkeyPatch, mail_settings: SimpleNamespace
+) -> None:
+    smtp = SMTPStub()
+    monkeypatch.setattr(smtplib, "SMTP", lambda *args, **kwargs: smtp)
+    monkeypatch.setattr(socket, "getfqdn", lambda: "private-machine.internal")
+    before = datetime.now(UTC) - timedelta(seconds=1)
+    with capture_logs() as logs:
+        for _ in range(2):
+            await email_service.send_transactional_email(
+                recipient="recipient@example.com", subject="Code", text="private-token-123456"
+            )
+    after = datetime.now(UTC)
+
+    ids = []
+    for sent in smtp.messages:
+        message = BytesParser(policy=policy.default).parsebytes(sent.as_bytes())
+        assert message["Date"] is not None
+        date = parsedate_to_datetime(str(message["Date"]))
+        assert date.utcoffset() == timedelta(0)
+        assert before <= date <= after
+        assert len(message.get_all("Date", [])) == 1
+        assert len(message.get_all("Message-ID", [])) == 1
+        message_id = str(message["Message-ID"])
+        assert message_id.startswith("<") and message_id.endswith(">")
+        assert message_id.count("@") == 1
+        assert not message["Message-ID"].defects
+        assert not any(
+            private in message_id
+            for private in ("private-machine", "recipient", "private-token", "sender")
+        )
+        assert message.get_content().strip() == "private-token-123456"
+        ids.append(message_id)
+    assert len(ids) == len(set(ids)) == 2
+    assert logs == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "category", "smtp_code"),
+    [
+        (ssl.SSLCertVerificationError("private-server-reply"), "tls_certificate", None),
+        (ssl.SSLError("private-server-reply"), "tls", None),
+        (smtplib.SMTPAuthenticationError(535, b"private-server-reply"), "authentication", 535),
+        (
+            smtplib.SMTPRecipientsRefused(
+                {"private-address@example.com": (550, b"private-server-reply")}
+            ),
+            "recipient_refused",
+            550,
+        ),
+        (
+            smtplib.SMTPSenderRefused(553, b"private-server-reply", "private-address@example.com"),
+            "sender_refused",
+            553,
+        ),
+        (smtplib.SMTPDataError(554, b"private-server-reply"), "data_rejected", 554),
+        (smtplib.SMTPConnectError(421, b"private-server-reply"), "connection", 421),
+        (smtplib.SMTPHeloError(501, b"private-server-reply"), "greeting", 501),
+        (smtplib.SMTPNotSupportedError("private-server-reply"), "unsupported", None),
+        (smtplib.SMTPServerDisconnected("private-server-reply"), "disconnected", None),
+        (TimeoutError("private-server-reply"), "timeout", None),
+        (ConnectionRefusedError("private-server-reply"), "network", None),
+        (smtplib.SMTPResponseException(450, b"private-server-reply"), "smtp", 450),
+        (smtplib.SMTPException("private-server-reply"), "smtp", None),
+        (
+            smtplib.SMTPResponseException("private-server-reply", b"private-server-reply"),
+            "smtp",
+            None,
+        ),
+        (
+            smtplib.SMTPRecipientsRefused(
+                {
+                    "first-private@example.com": (450, b"private-server-reply"),
+                    "second-private@example.com": (550, b"private-server-reply"),
+                }
+            ),
+            "recipient_refused",
+            None,
+        ),
+    ],
+)
+async def test_delivery_failure_logs_only_category_and_numeric_smtp_code(
+    monkeypatch: pytest.MonkeyPatch,
+    mail_settings: SimpleNamespace,
+    failure: Exception,
+    category: str,
+    smtp_code: int | None,
+) -> None:
+    attempts = 0
+
+    def reject_connection(*args: object, **kwargs: object) -> None:
+        nonlocal attempts
+        attempts += 1
+        raise failure
+
+    monkeypatch.setattr(smtplib, "SMTP", reject_connection)
+    with capture_logs() as logs:
+        with pytest.raises(email_service.EmailDeliveryFailed) as caught:
+            await email_service.send_transactional_email(
+                recipient="private-address@example.com",
+                subject="private-subject",
+                text="private-token-123456",
+            )
+
+    assert logs == [
+        {
+            "event": "transactional_email_delivery_failed",
+            "log_level": "warning",
+            "category": category,
+            "smtp_code": smtp_code,
+        }
+    ]
+    assert attempts == 1
+    assert str(caught.value) == "SMTP delivery failed"
+    assert caught.value.__cause__ is None
+    assert caught.value.__suppress_context__ is True
+    # Do not include this test's own frame/source lines in the diagnostic traceback.
+    rendered = "".join(
+        traceback.TracebackException(type(caught.value), caught.value, None).format(chain=True)
+    )
+    assert "private-" not in rendered

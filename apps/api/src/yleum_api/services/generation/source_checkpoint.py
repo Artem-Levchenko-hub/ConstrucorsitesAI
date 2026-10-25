@@ -317,13 +317,13 @@ def _unmarked_checkpoint_state(run: GenerationRun) -> bool:
 
 async def _explicit_checkpoint_source(
     session: AsyncSession, previous: GenerationRun, ids: GenerationIds, baseline: SourceBaseline,
-    *, current: GenerationRun,
+    *, current: GenerationRun, resume_only: bool = False,
 ) -> GenerationRun | None:
     """Resolve the existing explicit object reference without loosening its chain."""
     state = _checkpoint_state(previous)
     if state is None:
         return None
-    if "source_checkpoint" in state:
+    if "source_checkpoint" in state and not resume_only:
         return previous  # An invalid nearest checkpoint is a hard barrier below.
     inherited = _resume_reference(previous, baseline.sha)
     if inherited is None:
@@ -371,6 +371,43 @@ async def _explicit_checkpoint_source(
     if not isinstance(checkpoint, dict) or checkpoint.get("digest") != inherited["digest"]:
         return None
     return source
+
+
+async def checkpoint_reference_message(
+    session: AsyncSession, *, ids: GenerationIds, baseline: SourceBaseline,
+) -> UUID:
+    """Follow only the already verified retry chain to the admitted visual turn.
+
+    A retry can save its own source checkpoint while its images still belong to
+    an older admitted request. Re-prove each link and each message hash on cold
+    loads; never search unrelated history for an image or trust a client URL.
+    """
+    from yleum_api.services.generation.request_binding import bound_message_request
+
+    current = await session.get(GenerationRun, ids.run_id)
+    if (current is None or current.project_id != ids.project_id
+            or current.user_id != ids.user_id or current.user_message_id != ids.user_message_id):
+        raise ValueError("reference continuation owner conflicts")
+    visited: set[UUID] = set()
+    for _ in range(20):
+        if current.id in visited:
+            raise ValueError("reference continuation cycle")
+        visited.add(current.id)
+        message = await session.get(Message, current.user_message_id)
+        bound_message_request(current, message, project_id=ids.project_id, run_id=current.id)
+        assert message is not None
+        if (message.reference_images
+                or "source_checkpoint_resume" not in (current.agent_state or {})):
+            return message.id
+        source = await _explicit_checkpoint_source(
+            session, current, ids, baseline, current=current, resume_only=True,
+        )
+        checkpoint = (source.agent_state or {}).get("source_checkpoint") if source else None
+        if (source is None or not isinstance(checkpoint, dict)
+                or checkpoint.get("baseline_sha") != baseline.sha):
+            raise ValueError("reference continuation provenance conflicts")
+        current = source
+    raise ValueError("reference continuation chain exceeded")
 
 
 def _admitted_checkpoint_baseline(run: GenerationRun, baseline: SourceBaseline) -> bool:

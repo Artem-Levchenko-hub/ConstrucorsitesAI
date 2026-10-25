@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_CURRENT_HEAD = "0091_generation_credit_units"
+_CURRENT_HEAD = "0092_reference_images"
 _RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —

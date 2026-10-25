@@ -19,6 +19,10 @@ log = structlog.get_logger(__name__)
 # remember a failed load and use the existing character heuristic instead.
 _ENCODER: tiktoken.Encoding | None = None
 _ENCODER_UNAVAILABLE = False
+# Conservative wallet estimate for the agent's vision route, never a billed
+# receipt. Claude's documented high-resolution ceiling; actual usage settles.
+# https://platform.claude.com/docs/en/build-with-claude/vision
+IMAGE_TOKEN_ESTIMATE = 4784
 
 
 def _encoder() -> tiktoken.Encoding | None:
@@ -58,9 +62,8 @@ def _content_text(content: object) -> str:
     """Flatten chat-message content to plain text for token estimation.
 
     Multimodal content is a list of blocks ({"type":"text","text":...} /
-    {"type":"image_url",...}). We count only the text parts; image bytes are
-    billed separately by the provider, so ignoring them here keeps the
-    pre-flight estimate from crashing on list content (Phase 11 vision audit).
+    {"type":"image_url",...}). This helper extracts text only; the message
+    estimator adds a visual-token budget separately instead of counting base64.
     """
     if isinstance(content, str):
         return content
@@ -84,5 +87,11 @@ def count_message_tokens(
     """
     total = 0
     for m in messages:
-        total += count_text_tokens(model_id, _content_text(m.get("content", ""))) + 4
+        content = m.get("content", "")
+        total += count_text_tokens(model_id, _content_text(content)) + 4
+        if isinstance(content, list):
+            total += IMAGE_TOKEN_ESTIMATE * sum(
+                isinstance(block, dict) and block.get("type") in {"image_url", "image"}
+                for block in content
+            )
     return total + 2  # priming overhead per OpenAI spec

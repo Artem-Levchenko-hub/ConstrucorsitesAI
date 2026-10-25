@@ -133,7 +133,8 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
     llmgw accepts OpenAI content arrays. LiteLLM-compatible Anthropic routes read
     ``cache_control`` from those text blocks, so flattening them to a string (the
     old behaviour) silently disabled provider prefix caching on every agent turn.
-    Non-text blocks are intentionally omitted; tool turns are adapted separately.
+    Private reference images use validated inline bytes; remote URLs are refused.
+    Tool turns are adapted separately.
     """
     if isinstance(content, str):
         return content
@@ -141,6 +142,29 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
         return ""
     blocks: list[dict[str, Any]] = []
     for block in content:
+        if isinstance(block, dict) and block.get("type") == "image":
+            import base64
+            import binascii
+
+            source = block.get("source")
+            if (not isinstance(source, dict) or source.get("type") != "base64"
+                    or source.get("media_type") not in {"image/png", "image/jpeg", "image/webp"}
+                    or not isinstance(source.get("data"), str)
+                    or not 0 < len(source["data"]) <= 6_990_508):
+                raise ValueError("invalid reference image source")
+            try:
+                decoded = base64.b64decode(source["data"], validate=True)
+            except (ValueError, binascii.Error):
+                raise ValueError("invalid reference image encoding") from None
+            if not 0 < len(decoded) <= 5 * 1024 * 1024:
+                raise ValueError("reference image exceeds size limit")
+            adapted_image: dict[str, Any] = {"type": "image_url", "image_url": {
+                "url": f"data:{source['media_type']};base64,{source['data']}",
+            }}
+            if isinstance(block.get("cache_control"), dict):
+                adapted_image["cache_control"] = dict(block["cache_control"])
+            blocks.append(adapted_image)
+            continue
         if not isinstance(block, dict) or block.get("type") != "text":
             continue
         text = str(block.get("text") or "")
@@ -152,7 +176,7 @@ def _openai_text_content(content: Any) -> str | list[dict[str, Any]]:
         blocks.append(adapted)
     if not blocks:
         return ""
-    if any("cache_control" in block for block in blocks):
+    if any("cache_control" in block or block["type"] == "image_url" for block in blocks):
         return blocks
     return "\n".join(str(block["text"]) for block in blocks)
 
@@ -389,12 +413,31 @@ def _non_negative_int(value: Any) -> int:
 def _estimate_native_cost(model: str, payload: dict[str, Any]) -> Decimal:
     """Conservative enough to stop before the wallet floor, without reserving
     the entire output ceiling on every tool turn."""
+    image_count = 0
+    messages = []
+    for message in payload.get("messages") or []:
+        content = message.get("content")
+        if isinstance(content, list):
+            clean = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    image_count += 1
+                    clean.append({"type": "image_url"})
+                else:
+                    clean.append(block)
+            message = {**message, "content": clean}
+        messages.append(message)
     serialized = json.dumps(
-        {"messages": payload.get("messages"), "tools": payload.get("tools")},
+        {"messages": messages, "tools": payload.get("tools")},
         ensure_ascii=False,
         separators=(",", ":"),
     )
-    estimated_input = max(1, len(serialized) // 4)
+    # Wallet precheck only: use Claude's documented high-resolution ceiling,
+    # never tokenize base64. Settlement still uses actual provider usage.
+    # https://platform.claude.com/docs/en/build-with-claude/vision
+    from yleum_gateway.services.token_counter import IMAGE_TOKEN_ESTIMATE
+
+    estimated_input = max(1, len(serialized) // 4) + image_count * IMAGE_TOKEN_ESTIMATE
     requested_output = _non_negative_int(payload.get("max_tokens"))
     if uses_provider_output_default(model, payload.get("max_tokens")):
         # Estimate only: retain the prior 128k-request wallet check without
@@ -540,6 +583,13 @@ async def _dispatch_native_provider(
     while True:
         api_key, api_base = primary_route if provider_scope == "llmgw" else text_failover.credentials(provider_scope)
         payload = {**payload, "model": llmgw.native_slug(model) if provider_scope == "llmgw" else model}
+        from yleum_gateway.core.errors import ValidationFailedError
+        from yleum_gateway.services.payload_limits import require_provider_payload_size
+
+        try:
+            require_provider_payload_size(payload)
+        except ValidationFailedError:
+            return _err(400, "invalid_request_error", "Provider request exceeds size limit")
         headers = {"Authorization": f"Bearer {api_key}", "content-type": "application/json", "accept": "application/json"}
         try:
             provider_call_id = await generation_attempts.dispatch(

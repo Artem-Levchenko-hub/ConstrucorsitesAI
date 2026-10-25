@@ -83,6 +83,30 @@ from yleum_api.services.generation_runs import record_generation_product_failure
 _log = logging.getLogger("yleum_api.routers.messages")
 
 
+async def _load_turn_reference_images(
+    factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
+    baseline: SourceBaseline | None = None,
+) -> list[dict[str, Any]]:
+    from yleum_api.services.reference_images import message_images
+
+    # Message identity already lives in the durable dispatch. Resolve its
+    # immutable image bindings again on cold resume, never from browser URLs.
+    async with factory() as session:
+        from yleum_api.services.generation.source_checkpoint import checkpoint_reference_message
+
+        if baseline is None:
+            from yleum_api.models.project import Project
+            from yleum_api.models.snapshot import Snapshot
+
+            project = await session.get(Project, ids.project_id)
+            snapshot = (await session.get(Snapshot, project.current_snapshot_id)
+                        if project is not None and project.current_snapshot_id else None)
+            baseline = SourceBaseline(snapshot.id if snapshot else None,
+                                      snapshot.commit_sha if snapshot else None, {})
+        message_id = await checkpoint_reference_message(session, ids=ids, baseline=baseline)
+        return await message_images(session, ids.project_id, ids.user_id, message_id)
+
+
 async def resume_agent_generation(claim: ContinuationClaim) -> None:
     """Enter the saved logical stage, without admission or original dispatch."""
     from yleum_api.models.generation_run import GenerationRun
@@ -599,6 +623,7 @@ async def run_agent_generation(
             prompt_text=prompt_text,
             runtime=runtime,
             plan=_prompt_plan,
+            reference_images=await _load_turn_reference_images(factory, ids, baseline),
             operations=_operations,
             source_checkpoint=save_source_checkpoint,
             workspace_context_files=(

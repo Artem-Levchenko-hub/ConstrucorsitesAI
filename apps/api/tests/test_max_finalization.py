@@ -252,41 +252,49 @@ async def _new_harness(
     session: AsyncSession,
     engine: AsyncEngine,
     *,
+    admitted_run: GenerationRun | None = None,
     build_green: bool = True,
     build_detail: str = "TS2322",
     toolchain_digest: str = "6" * 64,
 ) -> _Harness:
-    owner = User(
-        email=f"finalization-{uuid.uuid4().hex}@example.com",
-        password_hash="x",
-    )
-    session.add(owner)
-    await session.flush()
-    project = Project(
-        owner_id=owner.id,
-        name="Finalization",
-        slug=f"finalization-{uuid.uuid4().hex}",
-        template="max_miniapp",
-    )
-    session.add(project)
-    await session.flush()
-    # The durable run and original user message share an actual request identity.
-    # Later synthetic repair/adaptation context recovers this authoritative turn.
-    original_prompt = "Build tracker"
-    user_message = Message(project_id=project.id, role="user", content=original_prompt)
-    session.add(user_message)
-    await session.flush()
-    run = GenerationRun(
-        project_id=project.id,
-        user_id=owner.id,
-        idempotency_key=f"finalization:{uuid.uuid4().hex}",
-        prompt_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
-        user_message_id=user_message.id,
-        status="running",
-        agent_state={},
-    )
-    session.add(run)
-    await session.flush()
+    if admitted_run is not None:
+        run = admitted_run
+        owner = await session.get(User, run.user_id)
+        project = await session.get(Project, run.project_id)
+        run.status = "running"
+        assert owner is not None and project is not None
+    else:
+        owner = User(
+            email=f"finalization-{uuid.uuid4().hex}@example.com",
+            password_hash="x",
+        )
+        session.add(owner)
+        await session.flush()
+        project = Project(
+            owner_id=owner.id,
+            name="Finalization",
+            slug=f"finalization-{uuid.uuid4().hex}",
+            template="max_miniapp",
+        )
+        session.add(project)
+        await session.flush()
+        # The durable run and original user message share an actual request identity.
+        # Later synthetic repair/adaptation context recovers this authoritative turn.
+        original_prompt = "Build tracker"
+        user_message = Message(project_id=project.id, role="user", content=original_prompt)
+        session.add(user_message)
+        await session.flush()
+        run = GenerationRun(
+            project_id=project.id,
+            user_id=owner.id,
+            idempotency_key=f"finalization:{uuid.uuid4().hex}",
+            prompt_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
+            user_message_id=user_message.id,
+            status="running",
+            agent_state={},
+        )
+        session.add(run)
+        await session.flush()
     workspace = ProjectCellWorkspace(
         project_id=project.id,
         owner_id=owner.id,

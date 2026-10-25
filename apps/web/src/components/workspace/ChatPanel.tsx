@@ -21,7 +21,7 @@ import type {
   SurveyQuestion,
 } from "@/lib/api/types";
 import { ChatMessage } from "./ChatMessage";
-import { PromptInput, type PromptInputHandle } from "./PromptInput";
+import { PromptInput, type PromptInputHandle, type PromptReferenceSubmit, type PromptInputSubmitResult } from "./PromptInput";
 import { DiscoveryChips } from "./DiscoveryChips";
 import { DiscoveryFrame } from "./DiscoveryFrame";
 import { OnboardingSurvey } from "./OnboardingSurvey";
@@ -228,8 +228,14 @@ export function ChatPanel({
     [modelId, projectId, qc, submit, quota.exhausted, quota.limited],
   );
 
-  const handleSubmit = (text: string, selections: SelectedElement[]) =>
-    submitWithCredentialIntake(text, selections);
+  const handleSubmit = async (text: string, selections: SelectedElement[], references?: PromptReferenceSubmit): Promise<PromptInputSubmitResult> => {
+    let referencesExpired = false;
+    const accepted = await submitWithCredentialIntake(text, selections, references ? {
+      ...references,
+      onReferenceImagesExpired: () => { referencesExpired = true; },
+    } : undefined);
+    return referencesExpired ? { accepted: false, reason: "reference_images_expired" } : accepted;
+  };
 
   // Only an explicit button calls this handle. Restoring its durable attachment
   // on mount never sends a model request and never replaces the user's draft.
@@ -479,6 +485,7 @@ export function ChatPanel({
           </Button>
         </div>}
         <Composer
+          key={projectId}
           draftRef={draftRef}
           projectId={projectId}
           snapshotId={adviceSnapshotId}

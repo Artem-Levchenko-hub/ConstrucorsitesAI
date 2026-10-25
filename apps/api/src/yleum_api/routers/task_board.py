@@ -25,16 +25,20 @@ from yleum_api.schemas.task_board import (
     TaskBoardTaskUpdate,
 )
 from yleum_api.services import task_board_attachments as attachment_storage
+from yleum_api.services.private_attachment_quota import (
+    PRIVATE_BUCKET_BYTES_LIMIT,
+    lock_private_attachment_quota,
+    private_attachment_bytes,
+)
 
 router = APIRouter(prefix="/api/task-board/tasks", tags=["task-board"])
 log = logging.getLogger(__name__)
 
 _BOARD_TASK_LIMIT = 500
 _BOARD_LOCK_KEY = "omnia-task-board"
-_BOARD_ATTACHMENT_QUOTA_LOCK_KEY = "omnia-task-board-attachment-quota"
 _MAX_ATTACHMENTS_PER_TASK = 10
 _MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
-_BOARD_ATTACHMENT_BYTES_LIMIT = 1024 * 1024 * 1024
+_BOARD_ATTACHMENT_BYTES_LIMIT = PRIVATE_BUCKET_BYTES_LIMIT
 
 _store_attachment = attachment_storage.store_attachment
 _load_attachment = attachment_storage.load_attachment
@@ -102,10 +106,7 @@ async def _lock_task_attachments(session: SessionDep, task_id: UUID) -> None:
 
 
 async def _lock_board_attachment_quota(session: SessionDep) -> None:
-    await session.execute(
-        text("SELECT pg_advisory_xact_lock(hashtext(:attachment_key))"),
-        {"attachment_key": _BOARD_ATTACHMENT_QUOTA_LOCK_KEY},
-    )
+    await lock_private_attachment_quota(session)
 
 
 def _enqueue_attachment_cleanup(
@@ -300,14 +301,7 @@ async def upload_task_board_attachment(
             "В задаче уже максимальное количество вложений",
             status.HTTP_409_CONFLICT,
         )
-    board_attachment_bytes = (
-        await session.execute(select(func.coalesce(func.sum(TaskBoardAttachment.size), 0)))
-    ).scalar_one()
-    # Pending cleanup bytes remain charged until object deletion succeeds.
-    pending_cleanup_bytes = (
-        await session.execute(select(func.coalesce(func.sum(TaskBoardAttachmentCleanup.size), 0)))
-    ).scalar_one()
-    if board_attachment_bytes + pending_cleanup_bytes + len(raw) > _BOARD_ATTACHMENT_BYTES_LIMIT:
+    if await private_attachment_bytes(session) + len(raw) > _BOARD_ATTACHMENT_BYTES_LIMIT:
         raise ApiError(
             "conflict",
             "Хранилище доски заполнено. Удалите ненужные вложения",

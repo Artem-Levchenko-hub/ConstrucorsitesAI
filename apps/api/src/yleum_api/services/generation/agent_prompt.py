@@ -38,6 +38,12 @@ async def prepare_agent_prompt(
     force_model: str | None,
 ) -> tuple[AgentPromptPlan, BuildPlan | None]:
     _seed_block = stack.seed_context
+    if (_is_edit or _is_continue) and runtime.handle is not None:
+        from yleum_api.services.typography import existing_typography_context
+
+        _seed_block = existing_typography_context(
+            _seed_block, await runtime.handle.snapshot_files(),
+        )
     _build_plan = None
     if _is_continue:
         # Resume: finish the partial app the agent left in the live
@@ -177,7 +183,11 @@ async def prepare_agent_prompt(
             "typography roles and the main screen's layout hierarchy. Follow the "
             "owner's supplied visual brief; make choices specific to this product "
             "rather than adding decorative sections or a generic dashboard. Use system or "
-            "bundled local fonts by default; do not introduce network font imports or font "
+            "bundled local fonts by default. When typography.json exists, preserve its "
+            "versioned decision, pinned dependencies and typography.css on ordinary edits "
+            "and restoration; an explicit owner redesign may change them together. "
+            "A custom font request is allowed, but do not claim unavailable assets are installed. "
+            "Do not introduce network font imports or font "
             "CDN dependencies unless the owner explicitly requests them, and retain a local "
             "fallback in that case. Preserve required MAX SDK loading. On edits preserve the "
             "existing style, working features and existing business records unless the "

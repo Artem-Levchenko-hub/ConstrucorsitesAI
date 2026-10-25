@@ -6,6 +6,7 @@ Ordinary prose is unresolved until an actual whole-request acceptance exists.
 from __future__ import annotations
 
 import hashlib
+import json
 import weakref
 from collections.abc import Sequence
 from dataclasses import replace
@@ -58,11 +59,25 @@ def _need(condition: object, message: str) -> None:
 
 def freeze_requirements(
     prompt: str, spec: FidelitySpec, named: behavior.NamedBehaviorContract | None,
+    *, semantic_prompt: str | None = None,
 ) -> tuple[RecoveryRequirement, ...]:
     """Preserve full scope without treating conservative selectors as exhaustive."""
     origin = hashlib.sha256(prompt.encode()).hexdigest()
+    semantic = prompt if semantic_prompt is None else semantic_prompt
+    if semantic != prompt:
+        from yleum_api.services.reference_images import request_identity
+
+        try:
+            envelope = json.loads(prompt)
+            _need(set(envelope) == {"prompt", "reference_images"}
+                  and envelope["prompt"] == semantic
+                  and request_identity(semantic, envelope["reference_images"]) == prompt,
+                  "semantic request differs from admission identity")
+        except (ValueError, TypeError, KeyError):
+            raise RecoveryContractError("invalid semantic request binding") from None
     if named is not None:
-        _need(named == behavior.required_contract(prompt, template=named.template),
+        _need(named == behavior.required_contract(
+            semantic, template=named.template, request_sha256=origin),
               "frozen named contract differs from original request")
     canonical = (
         prompt in _CANONICAL and named is not None and named.capabilities == (prompt,)
@@ -92,6 +107,7 @@ def freeze_requirements(
 def _manifest(
     run: GenerationRun, prompt: str, spec: FidelitySpec,
     named: behavior.NamedBehaviorContract | None,
+    *, semantic_prompt: str | None = None,
 ) -> dict[str, Any]:
     _need(hashlib.sha256(prompt.encode()).hexdigest() == run.prompt_hash,
           "requirements must use original admission prompt")
@@ -102,8 +118,11 @@ def _manifest(
         "original_prompt": prompt, "spec": spec.to_dict(),
         "named": named.to_json() if named is not None else None,
         "requirements": [r.model_dump(mode="json")
-                         for r in freeze_requirements(prompt, spec, named)],
+                         for r in freeze_requirements(
+                             prompt, spec, named, semantic_prompt=semantic_prompt)],
     }
+    if semantic_prompt is not None and semantic_prompt != prompt:
+        payload["semantic_prompt"] = semantic_prompt
     return {**payload, "manifest_sha256": behavior.digest(payload)}
 
 
@@ -128,16 +147,17 @@ def superseded_run_id(run: GenerationRun) -> UUID | None:
 def store_frozen_requirements(
     run: GenerationRun, prompt: str, spec: FidelitySpec,
     named: behavior.NamedBehaviorContract | None,
+    *, semantic_prompt: str | None = None,
 ) -> tuple[RecoveryRequirement, ...]:
     """Initialize once; never repair/replace a different or corrupt manifest."""
-    expected = _manifest(run, prompt, spec, named)
+    expected = _manifest(run, prompt, spec, named, semantic_prompt=semantic_prompt)
     root = dict(run.agent_state or {})
     if STATE_KEY in root:
         _need(root[STATE_KEY] == expected, "frozen requirements changed or are corrupt")
     else:
         root[STATE_KEY] = expected
         run.agent_state = root
-    return freeze_requirements(prompt, spec, named)
+    return freeze_requirements(prompt, spec, named, semantic_prompt=semantic_prompt)
 
 
 def frozen_requirements(run: GenerationRun) -> tuple[RecoveryRequirement, ...]:
@@ -148,9 +168,11 @@ def frozen_requirements(run: GenerationRun) -> tuple[RecoveryRequirement, ...]:
         assert isinstance(raw, dict)
         named = behavior.contract_from_json(raw["named"]) if raw["named"] is not None else None
         spec = FidelitySpec.from_dict(raw["spec"])
-        expected = _manifest(run, raw["original_prompt"], spec, named)
+        expected = _manifest(run, raw["original_prompt"], spec, named,
+                             semantic_prompt=raw.get("semantic_prompt"))
         _need(raw == expected, "frozen requirements changed or are corrupt")
-        return freeze_requirements(raw["original_prompt"], spec, named)
+        return freeze_requirements(raw["original_prompt"], spec, named,
+                                   semantic_prompt=raw.get("semantic_prompt"))
     except (KeyError, TypeError, ValueError, behavior.BehaviorProofError) as exc:
         raise RecoveryContractError("invalid frozen requirements") from exc
 
@@ -166,16 +188,19 @@ async def freeze_for_run(
           and run.project_id == project_id and run.user_id == user_id,
           "BEHAVIOR_REQUEST_BINDING_INVALID")
     assert run is not None and project is not None
-    original = await behavior.original_request(session, run, prompt,
-                                               project_id=project_id, run_id=run_id)
+    from yleum_api.services.generation.request_binding import original_request_binding
+
+    request = await original_request_binding(session, run, prompt,
+                                            project_id=project_id, run_id=run_id)
     if STATE_KEY in (run.agent_state or {}):
         # Discovery/project context may evolve after initialization; the saved
         # contract remains authoritative, rather than recompiling it on retry.
         frozen_requirements(run)
         return
     spec = FidelitySpec.from_dict(project.discovery_spec)
-    store_frozen_requirements(run, original, spec,
-                              behavior.required_contract(original, template=template))
+    store_frozen_requirements(run, request.identity, spec,
+        behavior.required_contract(request.text, template=template, request_sha256=run.prompt_hash),
+        semantic_prompt=request.text)
     await session.commit()
 
 

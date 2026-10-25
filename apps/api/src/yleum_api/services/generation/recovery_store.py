@@ -150,9 +150,12 @@ async def _baseline_sha(
 ) -> str | None:
     identity = state.identity
     dispatch = load_generation_dispatch(run)
+    from yleum_api.services.reference_images import request_identity
+
     if (
         identity.prompt_hash != run.prompt_hash
-        or prompt_hash(dispatch.prompt_text) != run.prompt_hash
+        or prompt_hash(request_identity(dispatch.prompt_text, dispatch.reference_images or []))
+        != run.prompt_hash
         or dispatch.current_snapshot_id != identity.accepted_snapshot_id
         or project.current_snapshot_id != identity.accepted_snapshot_id
     ):

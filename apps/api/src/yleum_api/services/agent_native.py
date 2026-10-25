@@ -1385,6 +1385,7 @@ async def _run_native_segment(
     model: str = _MODEL,
     system: str,
     task: str,
+    reference_images: list[dict[str, Any]] | None = None,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
     user_id: Any = None,
     project_id: Any = None,
@@ -1420,7 +1421,11 @@ async def _run_native_segment(
     settings = get_settings()
     url = messages_url or f"{settings.llm_gateway_url.rstrip('/')}/v1/messages"
 
-    convo: list[dict[str, Any]] = [{"role": "user", "content": task}]
+    from yleum_api.services.reference_images import user_content
+
+    convo: list[dict[str, Any]] = [
+        {"role": "user", "content": user_content(task, reference_images, native=True)},
+    ]
     baseline_files = dict(initial_files or {})
     repair_read_paths = {
         canonical for path in baseline_files
@@ -2689,6 +2694,7 @@ async def run_native_build(
     model: str = _MODEL,
     system: str,
     task: str,
+    reference_images: list[dict[str, Any]] | None = None,
     execute: Callable[[Action], Awaitable[dict[str, Any]]],
     user_id: Any = None,
     project_id: Any = None,
@@ -2731,6 +2737,7 @@ async def run_native_build(
             model=model,
             system=system,
             task=segment_task,
+            reference_images=reference_images,
             execute=execute,
             user_id=user_id,
             project_id=project_id,

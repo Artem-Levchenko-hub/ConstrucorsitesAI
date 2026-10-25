@@ -322,6 +322,7 @@ async def run_agent_build(
     *,
     system_prompt: str,
     user_prompt: str,
+    reference_images: list[dict[str, Any]] | None = None,
     model: str,
     execute: Executor,
     escalate_model: str | None = None,
@@ -435,6 +436,7 @@ async def run_agent_build(
             }
         result = await _run_agent_segment(
             system_prompt=system_prompt, user_prompt=task, model=model,
+            reference_images=reference_images,
             execute=execute, escalate_model=escalate_model, max_steps=max_steps,
             emit=segment_emit if emit is not None else None, complete=complete,
             user_id=user_id, project_id=project_id, max_tokens=max_tokens,
@@ -511,6 +513,7 @@ async def _run_agent_segment(
     *,
     system_prompt: str,
     user_prompt: str,
+    reference_images: list[dict[str, Any]] | None = None,
     model: str,
     execute: Executor,
     escalate_model: str | None = None,
@@ -546,9 +549,11 @@ async def _run_agent_segment(
     # injected completers and other callers retain their existing budgets.
     uses_gateway = complete is None
     complete = complete or partial(llm_client.complete_chat, timeout_seconds=300.0)
+    from yleum_api.services.reference_images import user_content
+
     convo: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_prompt},
+        {"role": "user", "content": user_content(user_prompt, reference_images, native=False)},
     ]
     written: dict[str, str] = dict(initial_written or {})
     stalls = 0

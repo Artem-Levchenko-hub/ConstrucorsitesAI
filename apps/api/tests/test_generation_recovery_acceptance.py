@@ -236,7 +236,8 @@ async def test_missing_action_and_forged_compiler_green_are_not_acceptance(recei
     assert not check_requirement_acceptance(c.requirements, [witness], binding=c.binding).ready
 
 
-async def _canonical(db_session, test_engine, monkeypatch, *, version=2, prompt="task_density_v1"):
+async def _canonical(db_session, test_engine, monkeypatch, *, version=2,
+                     prompt="task_density_v1", admitted_run=None):
     import hashlib
     from datetime import UTC, datetime, timedelta
     from uuid import uuid4
@@ -258,19 +259,26 @@ async def _canonical(db_session, test_engine, monkeypatch, *, version=2, prompt=
 
     install_healthy_reader_inventory(monkeypatch, refresh=True)
     _install_exact_release_probe(monkeypatch)
-    harness = await _new_harness(db_session, test_engine, toolchain_digest="5" * 64)
+    harness = await _new_harness(db_session, test_engine, toolchain_digest="5" * 64,
+                                 admitted_run=admitted_run)
     coordinator = harness.coordinator
     coordinator.behavior_driver, calls = driver(None)
     run = await db_session.get(GenerationRun, coordinator.generation_run_id)
-    user_message = await db_session.get(Message, run.user_message_id)
-    user_message.content = prompt
-    run.prompt_hash = hashlib.sha256(user_message.content.encode()).hexdigest()
-    message = Message(project_id=run.project_id, role="assistant", content="")
-    db_session.add(message)
-    await db_session.flush()
-    run.assistant_message_id = message.id
-    named = behavior.required_contract(user_message.content, template="max_miniapp")
-    requirements = store_frozen_requirements(run, user_message.content, FidelitySpec(), named)
+    if admitted_run is not None:
+        message = await db_session.get(Message, run.assistant_message_id)
+        await rr.freeze_for_run(db_session, run_id=run.id, project_id=run.project_id,
+                                user_id=run.user_id, prompt=prompt, template="max_miniapp")
+        requirements = rr.frozen_requirements(run)
+    else:
+        user_message = await db_session.get(Message, run.user_message_id)
+        user_message.content = prompt
+        run.prompt_hash = hashlib.sha256(user_message.content.encode()).hexdigest()
+        message = Message(project_id=run.project_id, role="assistant", content="")
+        db_session.add(message)
+        await db_session.flush()
+        run.assistant_message_id = message.id
+        named = behavior.required_contract(user_message.content, template="max_miniapp")
+        requirements = store_frozen_requirements(run, user_message.content, FidelitySpec(), named)
     physical = await coordinator.executor.current_identity()
     binding = recovery_binding(physical)
     raw = _bootstrap_wait(run)

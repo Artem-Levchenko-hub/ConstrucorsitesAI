@@ -343,6 +343,9 @@ async def astream(
         # The final chunk is the provider's usage receipt, including cache/reasoning.
         "stream_options": {"include_usage": True},
     }
+    from yleum_gateway.services.payload_limits import require_provider_payload_size
+
+    require_provider_payload_size(payload)
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
@@ -563,6 +566,9 @@ async def acompletion(
         "Accept": "application/json",
     }
 
+    from yleum_gateway.services.payload_limits import require_provider_payload_size
+
+    require_provider_payload_size(payload)
     evidence = evidence if evidence is not None else {}
     evidence.pop("upstream_http_status", None)
 

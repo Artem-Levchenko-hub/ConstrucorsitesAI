@@ -98,7 +98,9 @@ class NamedBehaviorContract:
         return result
 
 
-def required_contract(prompt: str, *, template: str) -> NamedBehaviorContract | None:
+def required_contract(
+    prompt: str, *, template: str, request_sha256: str | None = None,
+) -> NamedBehaviorContract | None:
     """Conservative named-intent selection, never an acceptance proof.
 
     Unknown templates/requests stay on their existing path. Explicit API-only
@@ -151,7 +153,7 @@ def required_contract(prompt: str, *, template: str) -> NamedBehaviorContract | 
         version=CONTRACT_VERSION,
         template=template,
         scope="ui",
-        request_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+        request_sha256=request_sha256 or hashlib.sha256(prompt.encode()).hexdigest(),
         capabilities=tuple(caps),
         probe_version=PROBE_VERSION,
         probe_sha256=PROBE_SHA256,
@@ -740,53 +742,16 @@ def _validate_saved_receipt(
 async def original_request(
     session: Any, run: Any, prompt: str, *, project_id: UUID, run_id: UUID,
 ) -> str:
-    """Recover exact immutable admission text, never synthesized runtime context."""
-    from yleum_api.models.message import Message
+    """Recover verified semantic text, never the reference identity envelope."""
+    from yleum_api.services.generation.request_binding import original_request_binding
 
-    original = prompt
-    if hashlib.sha256(original.encode()).hexdigest() != run.prompt_hash:
-        message = (
-            await session.get(Message, run.user_message_id, populate_existing=True)
-            if run.user_message_id else None
+    try:
+        request = await original_request_binding(
+            session, run, prompt, project_id=project_id, run_id=run_id,
         )
-        if (
-            message is not None
-            and message.project_id == project_id
-            and message.role == "user"
-        ):
-            original = message.content
-            if hashlib.sha256(original.encode()).hexdigest() != run.prompt_hash:
-                # Adaptation admission hashes the canonical user request plus
-                # its typed operation/snapshot reference, while Message stores
-                # raw user text. Recover that exact existing admission format;
-                # historical files and synthesized model context are not intent.
-                from yleum_api.schemas.message import RestorationAdaptationReference
-                from yleum_api.services.restoration_adaptation import (
-                    adaptation_reservation_prompt,
-                )
-
-                raw = run.agent_state.get("restoration_adaptation")
-                try:
-                    if (
-                        isinstance(raw, dict)
-                        and raw.get("version") in {1, 2}
-                        and raw.get("project_id") == str(project_id)
-                        and raw.get("owner_id") == str(run.user_id)
-                        and raw.get("adaptation_run_id") == str(run_id)
-                    ):
-                        reference = RestorationAdaptationReference(
-                            operation_id=UUID(raw["operation_id"]),
-                            expected_draft_snapshot_id=UUID(raw["base_draft_snapshot_id"]),
-                        )
-                        original = adaptation_reservation_prompt(original, reference)
-                except Exception:
-                    raise BehaviorProofError("BEHAVIOR_REQUEST_BINDING_INVALID") from None
-    need(
-        hashlib.sha256(original.encode()).hexdigest() == run.prompt_hash,
-        "BEHAVIOR_REQUEST_BINDING_INVALID",
-        "NEEDS_REVIEW",
-    )
-    return original
+    except ValueError:
+        raise BehaviorProofError("BEHAVIOR_REQUEST_BINDING_INVALID", "NEEDS_REVIEW") from None
+    return request.text
 
 
 async def freeze_for_turn(
@@ -799,7 +764,7 @@ async def freeze_for_turn(
             session, run, prompt, project_id=coordinator.project_id,
             run_id=coordinator.generation_run_id,
         )
-        selected = required_contract(original, template=template)
+        selected = required_contract(original, template=template, request_sha256=run.prompt_hash)
         root = dict(run.agent_state)
         saved = root.get(STATE_KEY)
         if selected is None and saved is None:

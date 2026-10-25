@@ -7,7 +7,7 @@ from typing import Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import status
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from yleum_api.core.config import (
@@ -161,15 +161,59 @@ class PromptAcceptance:
         return await self.present_response()
 
     async def reserve_or_replay(self) -> PromptResponse | None:
+        from yleum_api.services.reference_images import (
+            public_image,
+            request_identity,
+            resolve_images,
+        )
+
         idempotency_key = self.payload.idempotency_key or str(uuid4())
+        # Serialize receipt lookup with reservation before resolving expiring
+        # drafts. Only a definitely unaccepted request may ask the UI to reupload.
+        await self.session.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:project_id))"),
+            {"project_id": str(self.project_id)},
+        )
+        existing = await self.session.scalar(select(GenerationRun).where(
+            GenerationRun.project_id == self.project_id,
+            GenerationRun.idempotency_key == idempotency_key,
+        ).execution_options(populate_existing=True))
+        message = (
+            await self.session.get(Message, existing.user_message_id)
+            if existing is not None and existing.user_message_id else None
+        )
+        if existing is not None and message is not None:
+            # Display text may be intentionally credential-redacted. Replay
+            # verifies the incoming original text plus saved immutable image
+            # identity against the run hash below, never a hash of display text.
+            self.reference_images = message.reference_images or []
+            self.reference_rows = []
+            if (existing.user_id != self.current_user.id
+                    or message.project_id != self.project_id or message.role != "user"
+                    or [item["id"] for item in self.reference_images]
+                    != [str(image_id) for image_id in self.payload.reference_image_ids]):
+                raise ApiError("idempotency_conflict", "Request identity conflicts", 409)
+        else:
+            try:
+                references = await resolve_images(
+                    self.session, self.project_id, self.current_user.id,
+                    self.payload.reference_image_ids, bind=True,
+                )
+            except ApiError as exc:
+                if exc.status_code == 404 and existing is None:
+                    raise ApiError("reference_images_expired",
+                                   "Загрузите изображения повторно", 404) from None
+                raise
+            self.reference_images = [public_image(row) for row in references]
+            self.reference_rows = references
         self.generation_run, replayed = await reserve_generation_run(
             self.session,
             project_id=self.project_id,
             user_id=self.current_user.id,
             idempotency_key=idempotency_key,
-            prompt=adaptation_reservation_prompt(
+            prompt=request_identity(adaptation_reservation_prompt(
                 self.payload.prompt, self.payload.restoration_adaptation
-            ),
+            ), self.reference_images),
             supersedes_run_id=self.payload.supersedes_run_id,
         )
         if replayed:
@@ -406,6 +450,7 @@ class PromptAcceptance:
             and not getattr(self, "free_chat_limited", False)
             and not getattr(self, "unit_free_first_build", False)
             and not self.payload.skip_clarify
+            and not self.payload.reference_image_ids
             and not self.selected_dump
             and not self.credential_redirect
             and not self.explain_failed_build
@@ -529,6 +574,10 @@ class PromptAcceptance:
         )
 
     async def persist_messages(self) -> None:
+        # The earlier timestamp is a bounded admission lease. Only committing
+        # the chat message makes retention permanent; failed admission expires.
+        for image in self.reference_rows:
+            image.is_bound = True
         _now = datetime.now(UTC)
         self.user_msg = Message(
             project_id=self.project_id,
@@ -540,6 +589,7 @@ class PromptAcceptance:
             ),
             model_id=None,  # user turns have no model
             selected_elements=self.selected_dump,
+            reference_images=self.reference_images or None,
             created_at=_now,
         )
         self.assistant_msg = Message(
@@ -669,6 +719,8 @@ class PromptAcceptance:
                     is_free=self.is_free,
                     orchestrate=self.orchestrate,
                     selected_elements=self.selected_dump,
+                    reference_images=[{"id": str(image["id"]), "sha256": str(image["sha256"])}
+                                      for image in self.reference_images] or None,
                 ),
             )
             capacity_dispatch_token = uuid4()

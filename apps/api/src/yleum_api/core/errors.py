@@ -37,6 +37,7 @@ ErrorCode = Literal[
     "topup_disabled",
     "too_large",
     "upload_failed",
+    "reference_images_expired",
     "no_snapshot",
     # Проект без своей ячейки: среды приложения не существует.
     "runtime_unavailable",

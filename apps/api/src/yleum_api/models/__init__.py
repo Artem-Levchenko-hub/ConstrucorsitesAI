@@ -66,6 +66,7 @@ from yleum_api.models.provider_ledger import (
     ProviderLedgerConflict,
     ProviderLedgerEntry,
 )
+from yleum_api.models.reference_image import ReferenceImage
 from yleum_api.models.restoration import Restoration
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.models.task_board import (
@@ -135,6 +136,7 @@ __all__ = [
     "ProviderLedgerConfirmation",
     "ProviderLedgerConflict",
     "ProviderLedgerEntry",
+    "ReferenceImage",
     "Restoration",
     "Snapshot",
     "Subscription",

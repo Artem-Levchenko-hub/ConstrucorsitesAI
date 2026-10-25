@@ -1,0 +1,445 @@
+{
+  "version": 1,
+  "source": "https://registry.npmjs.org",
+  "fonts": {
+    "onest": {
+      "family": "Onest",
+      "package": "@fontsource/onest",
+      "version": "5.3.1",
+      "integrity": "sha512-2uA9HUzQHBB8H7T2R6inmrnqPofB6+svATHM/huIG640duJr4rm+uanmAIheTTlbZvRC0ujMtf2T4U4RX51oEQ==",
+      "license": "OFL-1.1",
+      "license_sha256": "a2a09da98a3d0d1ec79fc2d6deeac748b20a8153e26699552e7b59b5a40b63a3",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/onest/cyrillic-400.css",
+        "@fontsource/onest/latin-400.css",
+        "@fontsource/onest/cyrillic-500.css",
+        "@fontsource/onest/latin-500.css",
+        "@fontsource/onest/cyrillic-600.css",
+        "@fontsource/onest/latin-600.css",
+        "@fontsource/onest/cyrillic-700.css",
+        "@fontsource/onest/latin-700.css"
+      ],
+      "assets": {
+        "onest-cyrillic-400-normal.woff2": {
+          "sha256": "51adb4c8c5dc00b8a1974b32754665e5cc7522de621fdd3cb233e6834d98b480",
+          "bytes": 6680
+        },
+        "onest-latin-400-normal.woff2": {
+          "sha256": "93dfb945d217bb541c46e5cdef85bb86095009522fcede783215827e7ca14439",
+          "bytes": 14748
+        },
+        "onest-cyrillic-500-normal.woff2": {
+          "sha256": "a345dcbda6c18991c6efeebce60452eae57c29d5f659e0a1d8b615fb49808c49",
+          "bytes": 6868
+        },
+        "onest-latin-500-normal.woff2": {
+          "sha256": "83c1e1616618edcbcf5aa77155d4e4aa3b84d772df33fb4f2f10fba919d863f3",
+          "bytes": 15348
+        },
+        "onest-cyrillic-600-normal.woff2": {
+          "sha256": "73984d20ad8db2d013e42e345c3d9cf92192677f3a3b12e57b15d767ccf9f957",
+          "bytes": 6840
+        },
+        "onest-latin-600-normal.woff2": {
+          "sha256": "a56e6d2dcc2d24fe160cbc8c08adbca5a9da776237460704f6f24e1b5f7cba36",
+          "bytes": 15412
+        },
+        "onest-cyrillic-700-normal.woff2": {
+          "sha256": "0fcb8fa2565065c753c08d487b8208914323cd40a92c05e1306ea74953ddaa5e",
+          "bytes": 6800
+        },
+        "onest-latin-700-normal.woff2": {
+          "sha256": "d48e1aee8027a82b7b156b734ff2efa1e8839e4365a305f0323f5e0b41a230fb",
+          "bytes": 15488
+        }
+      },
+      "license_text": "Copyright 2021 The Onest Project Authors (https://github.com/simpals/onest)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "manrope": {
+      "family": "Manrope",
+      "package": "@fontsource/manrope",
+      "version": "5.3.0",
+      "integrity": "sha512-obJ1Dv3+uCA6HlHgW8u4BGYxJR9In2HW7gjJhlflEvkrj1X1iSEwu0fToL+JYGC/FEKFfIz1sBuPduvcL2gIAA==",
+      "license": "OFL-1.1",
+      "license_sha256": "d826ab6583b12c26807d8716a545bdbbb672df04f48608a364ba9efdbe501c30",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/manrope/cyrillic-400.css",
+        "@fontsource/manrope/latin-400.css",
+        "@fontsource/manrope/cyrillic-500.css",
+        "@fontsource/manrope/latin-500.css",
+        "@fontsource/manrope/cyrillic-600.css",
+        "@fontsource/manrope/latin-600.css",
+        "@fontsource/manrope/cyrillic-700.css",
+        "@fontsource/manrope/latin-700.css"
+      ],
+      "assets": {
+        "manrope-cyrillic-400-normal.woff2": {
+          "sha256": "5a987d1484070f1ea54de7c10ebfa4057a18e379361dbe5fd5c4fa4c2d95ef39",
+          "bytes": 7840
+        },
+        "manrope-latin-400-normal.woff2": {
+          "sha256": "849290ef12a2eeb9af5c11924120d11aa4ae8b435ed3347d7fc8bc240c293ca3",
+          "bytes": 14108
+        },
+        "manrope-cyrillic-500-normal.woff2": {
+          "sha256": "ab67a6d3a3fc134b74e966f10de67b1ae07c1c29fd7ebb6cb0705488f1128e22",
+          "bytes": 7872
+        },
+        "manrope-latin-500-normal.woff2": {
+          "sha256": "19874318747181a650eda439c37955220b849d9c4797c9e0718ee67d4bf929bc",
+          "bytes": 14044
+        },
+        "manrope-cyrillic-600-normal.woff2": {
+          "sha256": "80b86efbef1c9fb66557cc4cc7b6db42db2fd631f1a9b8735f3bbefbb5128799",
+          "bytes": 7872
+        },
+        "manrope-latin-600-normal.woff2": {
+          "sha256": "f7ac6258da20ab7541939b59851155753d1d24f1b30cbcb949077a3faa3d1593",
+          "bytes": 14172
+        },
+        "manrope-cyrillic-700-normal.woff2": {
+          "sha256": "2ad647b9159d27d27f4999b30598f92e60449fb20d80803bc7b85afafbb446d5",
+          "bytes": 7852
+        },
+        "manrope-latin-700-normal.woff2": {
+          "sha256": "d2a12c85a831e4b5db341767d0347fa3d1361d22a1fcb3e361a16b6c90080f71",
+          "bytes": 14212
+        }
+      },
+      "license_text": "Copyright 2019 The Manrope Project Authors (https://github.com/sharanda/manrope)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "golos-text": {
+      "family": "Golos Text",
+      "package": "@fontsource/golos-text",
+      "version": "5.3.0",
+      "integrity": "sha512-R+gM4qOZSrge4TtEGps0zTpU8X4e7e32L+3yy0J/2LnVB/IERlidEpXPWSZVGzTaL5QnPRVmoebRXSuVtjUIVg==",
+      "license": "OFL-1.1",
+      "license_sha256": "54dcae300688bccf111e43c818a6ee2261d10fc8d7eb5b9c9aa2a1e9b03189c9",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/golos-text/cyrillic-400.css",
+        "@fontsource/golos-text/latin-400.css",
+        "@fontsource/golos-text/cyrillic-500.css",
+        "@fontsource/golos-text/latin-500.css",
+        "@fontsource/golos-text/cyrillic-600.css",
+        "@fontsource/golos-text/latin-600.css",
+        "@fontsource/golos-text/cyrillic-700.css",
+        "@fontsource/golos-text/latin-700.css"
+      ],
+      "assets": {
+        "golos-text-cyrillic-400-normal.woff2": {
+          "sha256": "15a5cbadfc1aa7a541651600b757bf7b67bce4e145b3239de072db5427889605",
+          "bytes": 6960
+        },
+        "golos-text-latin-400-normal.woff2": {
+          "sha256": "c8246f55dbddb17ceab94b8de2dbcf326dc189f3bc5a8c13d7b14ad05d7d1d81",
+          "bytes": 11992
+        },
+        "golos-text-cyrillic-500-normal.woff2": {
+          "sha256": "22337b726df83521c7f6b2709e4717116eb53106c6140b45d751f36910191ecc",
+          "bytes": 7044
+        },
+        "golos-text-latin-500-normal.woff2": {
+          "sha256": "779e46588bc6f5f18918dcdf87d609a8053e1c925abd9e94d2b46b0254f36b24",
+          "bytes": 12032
+        },
+        "golos-text-cyrillic-600-normal.woff2": {
+          "sha256": "1df9c46f33069094b4769bd2f5f04c5c37e4ce74c77bf062f3bb476d93cc3c2b",
+          "bytes": 7140
+        },
+        "golos-text-latin-600-normal.woff2": {
+          "sha256": "ecd56e7dae8376b32caffd25e5c5e1b37cc400ee6d4d838383cff9454d4e9a48",
+          "bytes": 12300
+        },
+        "golos-text-cyrillic-700-normal.woff2": {
+          "sha256": "42db867ddf4b8b025cb2681a796c8c34633e14f77077c5c5ad950383e357a6f5",
+          "bytes": 7108
+        },
+        "golos-text-latin-700-normal.woff2": {
+          "sha256": "1ac7742b82900b38b483fb65691e8fb786ba16f6c5cae677aa63a128286ce853",
+          "bytes": 12380
+        }
+      },
+      "license_text": "Copyright 2019 The Golos Text Project Authors (https://github.com/googlefonts/golos-text)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "lora": {
+      "family": "Lora",
+      "package": "@fontsource/lora",
+      "version": "5.3.0",
+      "integrity": "sha512-OK1g1z01rHVPqO5aw/FOIoDqc46KKYZdgL3NOLkxLWDk6QhDHhdr/h2BV1cke6gTvR1tzpDfdKyUkGsC+sQLeQ==",
+      "license": "OFL-1.1",
+      "license_sha256": "948aed765160f7b974105606c21994715a171f89fca48e57bf1e0a23aca0bef1",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/lora/cyrillic-400.css",
+        "@fontsource/lora/latin-400.css",
+        "@fontsource/lora/cyrillic-500.css",
+        "@fontsource/lora/latin-500.css",
+        "@fontsource/lora/cyrillic-600.css",
+        "@fontsource/lora/latin-600.css",
+        "@fontsource/lora/cyrillic-700.css",
+        "@fontsource/lora/latin-700.css"
+      ],
+      "assets": {
+        "lora-cyrillic-400-normal.woff2": {
+          "sha256": "d1f41090bba5100d2857cf974e2ae542d4be61556febbb2b5afd072c2e42fdea",
+          "bytes": 11480
+        },
+        "lora-latin-400-normal.woff2": {
+          "sha256": "ac079950fd9885261c0f73d9e87233f31b5427333ce0eb20e26c119458493c40",
+          "bytes": 21148
+        },
+        "lora-cyrillic-500-normal.woff2": {
+          "sha256": "b1693c55066ecf7c2b60a74c7761169256c8c1b7bcfe829fc0dc4f18306ee334",
+          "bytes": 11916
+        },
+        "lora-latin-500-normal.woff2": {
+          "sha256": "03bcdff46fdcba0524c012d0392a5459023955e517d185c95a038e1f1e350523",
+          "bytes": 21900
+        },
+        "lora-cyrillic-600-normal.woff2": {
+          "sha256": "b3ba5dad180e78000d8c3f3aec5f589fb05e3a83d8486caea70449179d522cd2",
+          "bytes": 12056
+        },
+        "lora-latin-600-normal.woff2": {
+          "sha256": "7bbfe9f3c9e9d6d07e17da4d5229a42b042cc2e16024993cb687dc08cc762557",
+          "bytes": 21916
+        },
+        "lora-cyrillic-700-normal.woff2": {
+          "sha256": "f0550b4dae0b9c17427d61f42edd6b5f44b1b7b0aca53788505fe1dce5c3a022",
+          "bytes": 11388
+        },
+        "lora-latin-700-normal.woff2": {
+          "sha256": "c05fd5289492ed310ed882259b944ca5287e76e572a65d92d3941f9f44f0342a",
+          "bytes": 21044
+        }
+      },
+      "license_text": "Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora-Cyrillic), with Reserved Font Name \"Lora\". Lora-Italic[wght].ttf: Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora-Cyrillic), with Reserved Font Name \"Lora\".\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "prata": {
+      "family": "Prata",
+      "package": "@fontsource/prata",
+      "version": "5.3.0",
+      "integrity": "sha512-8f3WPCd930Cv1QoP1dSX/b86psNNIWd/8R7Dd1HmWn95Am5X795bqkEpinPJofcTBxPfleszkM5c0vc2amg2Ew==",
+      "license": "OFL-1.1",
+      "license_sha256": "e64944abf1756debf967a589d31f3b7d5ad933bc7c55a053fb742b3b02b1723e",
+      "weights": [
+        400
+      ],
+      "imports": [
+        "@fontsource/prata/cyrillic-400.css",
+        "@fontsource/prata/latin-400.css"
+      ],
+      "assets": {
+        "prata-cyrillic-400-normal.woff2": {
+          "sha256": "3392de5a383deac60effcad2beb8b847f40eb0eb200ffd4888c3e13d6e40845f",
+          "bytes": 13132
+        },
+        "prata-latin-400-normal.woff2": {
+          "sha256": "1b85a8c794709747c9f689b791984c430a2d9716a5cf9440d955bd7d20dad9d0",
+          "bytes": 19224
+        }
+      },
+      "license_text": "Copyright 2011 The Prata Project Authors (contact@cyreal.org)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "rubik": {
+      "family": "Rubik",
+      "package": "@fontsource/rubik",
+      "version": "5.3.0",
+      "integrity": "sha512-Nks2mn7vlE1jZVHuVgoKU2Ejqjvd+GJzLRdraCjo1xc79oo7O6vJ8pcvSfmKPGX3/Ln7nt09XWFzPeu2jWf0xQ==",
+      "license": "OFL-1.1",
+      "license_sha256": "46a250495a963b0b84f2736c0185d0e3af8df9d23427bd425b92a8ece020283c",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/rubik/cyrillic-400.css",
+        "@fontsource/rubik/latin-400.css",
+        "@fontsource/rubik/cyrillic-500.css",
+        "@fontsource/rubik/latin-500.css",
+        "@fontsource/rubik/cyrillic-600.css",
+        "@fontsource/rubik/latin-600.css",
+        "@fontsource/rubik/cyrillic-700.css",
+        "@fontsource/rubik/latin-700.css"
+      ],
+      "assets": {
+        "rubik-cyrillic-400-normal.woff2": {
+          "sha256": "4f4b1a2159b1f9fb224e1718f14a4c8777eb34b46e9f54c5f1a03e462338bb6e",
+          "bytes": 7872
+        },
+        "rubik-latin-400-normal.woff2": {
+          "sha256": "82ac0e78285c43d0cd203427c57ab30fb07b18f8e6166045f729442eb1abfa26",
+          "bytes": 18936
+        },
+        "rubik-cyrillic-500-normal.woff2": {
+          "sha256": "b74a7558403ff0e9bad2348860fe7549339d414ba7839e5195265322d20e9c09",
+          "bytes": 7920
+        },
+        "rubik-latin-500-normal.woff2": {
+          "sha256": "54ad302324aa8000449efd8643186deb46777f0ca4d97f10deb9333536933613",
+          "bytes": 19036
+        },
+        "rubik-cyrillic-600-normal.woff2": {
+          "sha256": "84604665a094b20dbd48e8987cd028e5cf7d973c9cb65c168a8303e2217c6519",
+          "bytes": 7900
+        },
+        "rubik-latin-600-normal.woff2": {
+          "sha256": "6182043a20faf3fe1a8f0e2c7c964009e11de5e09852617fef3517cbf3c35513",
+          "bytes": 19060
+        },
+        "rubik-cyrillic-700-normal.woff2": {
+          "sha256": "e82a4d4fd1f282f0790679eb52212c7a1102b77d871c5e47d42220ad5565b691",
+          "bytes": 7900
+        },
+        "rubik-latin-700-normal.woff2": {
+          "sha256": "e423f8ae1668156addf5e32f1056d5b22b5b113a9a23afd364df84a6fa88602d",
+          "bytes": 19112
+        }
+      },
+      "license_text": "Copyright 2015 The Rubik Project Authors (https://github.com/googlefonts/rubik) Rubik-Italic[wght].ttf: Copyright 2015 The Rubik Project Authors (https://github.com/googlefonts/rubik)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "exo-2": {
+      "family": "Exo 2",
+      "package": "@fontsource/exo-2",
+      "version": "5.3.0",
+      "integrity": "sha512-jVI6qXPPuV1Fne7m2Hpyc9rTt4O7ZIo+wsUZZzAW+u/iHem4CyWXXCGUoSw3utZUW82/bsGVQO9yO+hDsjZH8A==",
+      "license": "OFL-1.1",
+      "license_sha256": "7644b74e07215f62af4ebbfcf2b0f06a428d70d32c41e751fba93763a683c3f5",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/exo-2/cyrillic-400.css",
+        "@fontsource/exo-2/latin-400.css",
+        "@fontsource/exo-2/cyrillic-500.css",
+        "@fontsource/exo-2/latin-500.css",
+        "@fontsource/exo-2/cyrillic-600.css",
+        "@fontsource/exo-2/latin-600.css",
+        "@fontsource/exo-2/cyrillic-700.css",
+        "@fontsource/exo-2/latin-700.css"
+      ],
+      "assets": {
+        "exo-2-cyrillic-400-normal.woff2": {
+          "sha256": "fa7e0b05b08b8279a7390d43e3b93d3b814006b949ec8c5ea009372c7fed72dc",
+          "bytes": 7852
+        },
+        "exo-2-latin-400-normal.woff2": {
+          "sha256": "49c9cd329161f5c5feed3ae80a788199f2dce127c00828e027a61261cf602491",
+          "bytes": 16720
+        },
+        "exo-2-cyrillic-500-normal.woff2": {
+          "sha256": "8ed23b777072f55597385dfaf72d596168598e432d6b7b6bda2ff02b8c11b145",
+          "bytes": 8000
+        },
+        "exo-2-latin-500-normal.woff2": {
+          "sha256": "78b3f89f94236f0298cbb49ef6839627430f3aac63a00c75f468a60477742e03",
+          "bytes": 17192
+        },
+        "exo-2-cyrillic-600-normal.woff2": {
+          "sha256": "d72828a4750f26f473cbe1c925c057bce2646608cb1067dd7cfc3867ff1d867d",
+          "bytes": 7972
+        },
+        "exo-2-latin-600-normal.woff2": {
+          "sha256": "fd2112e53440975a4885179f3d09058787b97b711e7e141c55fcaecaf48fbcb6",
+          "bytes": 17264
+        },
+        "exo-2-cyrillic-700-normal.woff2": {
+          "sha256": "bdfbd0f946816b0feb1aeb4d869dd885e427f81dd598e0d3c18e03c74059a84d",
+          "bytes": 8012
+        },
+        "exo-2-latin-700-normal.woff2": {
+          "sha256": "96c87b1597aed754e0ad45970883774e851a390788e7fba7b3f49f8d1f6e5a6b",
+          "bytes": 17220
+        }
+      },
+      "license_text": "Copyright 2013 The Exo 2 Project Authors (https://github.com/googlefonts/Exo-2.0) Exo2-Italic[wght].ttf: Copyright 2013 The Exo 2 Project Authors (https://github.com/googlefonts/Exo-2.0)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    },
+    "unbounded": {
+      "family": "Unbounded",
+      "package": "@fontsource/unbounded",
+      "version": "5.3.0",
+      "integrity": "sha512-pPD6hsTnjoQRr6pCsqMHbHBfauB4LZygCNQEUJHu+CO2wzDFHqELEFSG7sTwo5Z5Gr4q3OK0fIILOXBJDv6lcw==",
+      "license": "OFL-1.1",
+      "license_sha256": "48a780bc857729859e54d1e691b05792894a26634edc1c4b5dbeabffe6941758",
+      "weights": [
+        400,
+        500,
+        600,
+        700
+      ],
+      "imports": [
+        "@fontsource/unbounded/cyrillic-400.css",
+        "@fontsource/unbounded/latin-400.css",
+        "@fontsource/unbounded/cyrillic-500.css",
+        "@fontsource/unbounded/latin-500.css",
+        "@fontsource/unbounded/cyrillic-600.css",
+        "@fontsource/unbounded/latin-600.css",
+        "@fontsource/unbounded/cyrillic-700.css",
+        "@fontsource/unbounded/latin-700.css"
+      ],
+      "assets": {
+        "unbounded-cyrillic-400-normal.woff2": {
+          "sha256": "31c19470c8a693349096bb2a4edb6bcad23d2c73b1af03178a738c7699cef001",
+          "bytes": 12208
+        },
+        "unbounded-latin-400-normal.woff2": {
+          "sha256": "b0a91553c77f72f04eb4e8756003d926a0414c1710236caeb42fa4854bf6217e",
+          "bytes": 19980
+        },
+        "unbounded-cyrillic-500-normal.woff2": {
+          "sha256": "22c6ac3bf08e4d8bc627f2bc466038f97e87add08f634c535e12556697154596",
+          "bytes": 12500
+        },
+        "unbounded-latin-500-normal.woff2": {
+          "sha256": "be65bb9b1a340d1647024392fe3fbf3c21e595eda0395da3138932a01e6a183a",
+          "bytes": 20740
+        },
+        "unbounded-cyrillic-600-normal.woff2": {
+          "sha256": "59a9e6e0927fa85035046eda050bbb7f44383c48cf18c00f1388cb201c635ddd",
+          "bytes": 12516
+        },
+        "unbounded-latin-600-normal.woff2": {
+          "sha256": "616878858361f1a4c44fc62b69e2391793a4dc063283cf225f5fc872dfdecdc8",
+          "bytes": 20952
+        },
+        "unbounded-cyrillic-700-normal.woff2": {
+          "sha256": "fdc2a84527e81dd450c7476e982306ac083d72a800018716073cf3526d453641",
+          "bytes": 12812
+        },
+        "unbounded-latin-700-normal.woff2": {
+          "sha256": "477fa23002517a32f232316d859e7b672a044f20073babec8ed3dbcfdb8e041a",
+          "bytes": 21092
+        }
+      },
+      "license_text": "Copyright 2022 The Unbounded Project Authors (https://github.com/googlefonts/unbounded)\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1.\nThis license is copied below, and is also available with a FAQ at:\nhttp://scripts.sil.org/OFL\n\n\n-----------------------------------------------------------\nSIL OPEN FONT LICENSE Version 1.1 - 26 February 2007\n-----------------------------------------------------------\n\nPREAMBLE\nThe goals of the Open Font License (OFL) are to stimulate worldwide\ndevelopment of collaborative font projects, to support the font creation\nefforts of academic and linguistic communities, and to provide a free and\nopen framework in which fonts may be shared and improved in partnership\nwith others.\n\nThe OFL allows the licensed fonts to be used, studied, modified and\nredistributed freely as long as they are not sold by themselves. The\nfonts, including any derivative works, can be bundled, embedded,\nredistributed and/or sold with any software provided that any reserved\nnames are not used by derivative works. The fonts and derivatives,\nhowever, cannot be released under any other type of license. The\nrequirement for fonts to remain under this license does not apply\nto any document created using the fonts or their derivatives.\n\nDEFINITIONS\n\"Font Software\" refers to the set of files released by the Copyright\nHolder(s) under this license and clearly marked as such. This may\ninclude source files, build scripts and documentation.\n\n\"Reserved Font Name\" refers to any names specified as such after the\ncopyright statement(s).\n\n\"Original Version\" refers to the collection of Font Software components as\ndistributed by the Copyright Holder(s).\n\n\"Modified Version\" refers to any derivative made by adding to, deleting,\nor substituting -- in part or in whole -- any of the components of the\nOriginal Version, by changing formats or by porting the Font Software to a\nnew environment.\n\n\"Author\" refers to any designer, engineer, programmer, technical\nwriter or other person who contributed to the Font Software.\n\nPERMISSION & CONDITIONS\nPermission is hereby granted, free of charge, to any person obtaining\na copy of the Font Software, to use, study, copy, merge, embed, modify,\nredistribute, and sell modified and unmodified copies of the Font\nSoftware, subject to the following conditions:\n\n1) Neither the Font Software nor any of its individual components,\nin Original or Modified Versions, may be sold by itself.\n\n2) Original or Modified Versions of the Font Software may be bundled,\nredistributed and/or sold with any software, provided that each copy\ncontains the above copyright notice and this license. These can be\nincluded either as stand-alone text files, human-readable headers or\nin the appropriate machine-readable metadata fields within text or\nbinary files as long as those fields can be easily viewed by the user.\n\n3) No Modified Version of the Font Software may use the Reserved Font\nName(s) unless explicit written permission is granted by the corresponding\nCopyright Holder. This restriction only applies to the primary font name as\npresented to the users.\n\n4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font\nSoftware shall not be used to promote, endorse or advertise any\nModified Version, except to acknowledge the contribution(s) of the\nCopyright Holder(s) and the Author(s) or with their explicit written\npermission.\n\n5) The Font Software, modified or unmodified, in part or in whole,\nmust be distributed entirely under this license, and must not be\ndistributed under any other license. The requirement for fonts to\nremain under this license does not apply to any document created\nusing the Font Software.\n\nTERMINATION\nThis license becomes null and void if any of the above conditions are\nnot met.\n\nDISCLAIMER\nTHE FONT SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND,\nEXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF\nMERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT\nOF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE\nCOPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,\nINCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL\nDAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING\nFROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM\nOTHER DEALINGS IN THE FONT SOFTWARE.\n"
+    }
+  }
+}
