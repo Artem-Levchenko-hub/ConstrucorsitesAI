@@ -106,3 +106,28 @@ def test_reapplying_font_preserves_later_owner_design_notes():
     updated = apply_owner_fonts(old, [(binding, bundle)])
     assert "Owner colours" in updated["DESIGN.md"]
     assert "Keep owner notes." in updated["DESIGN.md"]
+
+
+@pytest.mark.parametrize("role", ["all", "heading", "body", "ui", "accent", "code"])
+def test_manifest_roles_match_the_actual_owner_override(role):
+    binding = {"family": "Owner Font", "role": role, "sha256": "a" * 64}
+    bundle = {
+        "faces": [{"data": "AAAA", "weight": 400, "style": "normal", "unicode_range": "U+0041"}]
+    }
+    before = {
+        "src/app/globals.css": "",
+        "typography.json": json.dumps(
+            {
+                "version": 1,
+                "heading": "Manrope",
+                "body": "Onest",
+                "ui": "Onest",
+                "accent": "Caveat",
+                "code": "IBM Plex Mono",
+            }
+        ),
+    }
+    out = apply_owner_fonts(before, [(binding, bundle)])
+    manifest = json.loads(out["typography.json"])
+    for selected in ("heading", "body", "ui") if role == "all" else (role,):
+        assert manifest[selected] == manifest["owner_roles"][selected]["family"] == "Owner Font"

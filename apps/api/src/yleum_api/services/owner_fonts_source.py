@@ -119,8 +119,7 @@ def apply_owner_fonts(
         selected_roles = ("heading", "body", "ui") if role == "all" else (role,)
         for selected in selected_roles:
             roles[selected] = {"family": family, "alias": alias}
-            if selected in {"heading", "body"}:
-                manifest[selected] = family
+            manifest[selected] = family
         for face in bundle["faces"]:
             # Opaque source files are independently addressable text snapshots.
             payload = face["data"]
