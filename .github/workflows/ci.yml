@@ -76,6 +76,18 @@ jobs:
       - name: Install the locked API environment
         working-directory: apps/api
         run: uv sync --frozen
+      - name: Install the font sanitizer used in production
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends opentype-sanitizer
+      - name: Verify typography and private font delivery
+        working-directory: apps/api
+        run: >-
+          uv run --frozen pytest -q
+          tests/test_semantic_typography.py
+          tests/test_owner_fonts.py
+          tests/test_owner_font_bootstrap.py
+          tests/test_owner_font_migration.py
+          tests/test_font_assets_api.py
+          tests/test_reference_images.py
       - name: Lint and typecheck API
         working-directory: apps/api
         run: uv run ruff check . && uv run mypy src

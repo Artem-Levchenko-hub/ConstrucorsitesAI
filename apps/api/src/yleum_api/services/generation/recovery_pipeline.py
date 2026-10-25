@@ -54,7 +54,7 @@ class BootstrapPreparation(BaseModel):
 
 
 _BOOTSTRAP_STAGES = frozenset({
-    "stack_prepare", "prompt_prepare", "starter_apply", "adjacent_apply",
+    "stack_prepare", "prompt_prepare", "starter_apply", "adjacent_apply", "font_apply",
 })
 
 
@@ -62,6 +62,12 @@ def _bootstrap_output(name: str, value: Any, *, encode: bool) -> Any:
     """Serialize only the existing typed preparation result, never capabilities."""
     if name == "stack_prepare":
         return value._asdict() if encode else _record(StackPrompt, value)
+    if name == 'font_apply':
+        if type(value) is not dict or any(
+            type(k) is not str or type(v) is not str for k, v in value.items()
+        ):
+            raise RecoveryContractError('invalid font source preparation')
+        return value
     if name == "prompt_prepare":
         if encode:
             plan, build_plan = value
@@ -120,7 +126,7 @@ async def run_bootstrap_stage(
         driver.state.execution.logical_step_seq + (0 if cold else 1),
         f"bootstrap:{name}", reconcile_only=cold,
     )
-    substep = "starter_apply" if name == "adjacent_apply" else name
+    substep = "starter_apply" if name in {"adjacent_apply", 'font_apply'} else name
     if cold:
         if (driver.state.execution.substep != substep
             or driver.state.execution.pending_effect_id != cursor.root_effect_id):

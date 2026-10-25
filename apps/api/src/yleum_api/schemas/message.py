@@ -60,6 +60,35 @@ class ReferenceImagePublic(BaseModel):
     url: str
 
 
+FontRole = Literal['all', 'heading', 'body', 'accent', 'ui', 'code']
+
+
+class FontSelection(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    asset_id: UUID
+    role: FontRole = 'all'
+
+
+class FontAssetPublic(BaseModel):
+    id: UUID
+    family: str
+    filename: str
+    sha256: str
+    size_bytes: int
+    weight: int
+    style: Literal['normal', 'italic']
+    source: Literal['upload', 'fontsource']
+    license: str | None = None
+
+
+class FontSelectionPublic(FontAssetPublic):
+    role: FontRole
+
+
+class FontResolveRequest(BaseModel):
+    family_name: str = Field(min_length=1, max_length=300)
+
+
 class MessagePublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -73,6 +102,7 @@ class MessagePublic(BaseModel):
     tokens_out: int | None = None
     selected_elements: list[SelectedElement] | None = None
     reference_images: list[ReferenceImagePublic] | None = None
+    font_selections: list[FontSelectionPublic] | None = None
     # Persisted agentic transcript (agent.step events) so the chat re-renders the
     # step list after a reload. NULL for non-agent replies. Loose dicts — the
     # frontend AgentStep type validates the shape.
@@ -119,6 +149,7 @@ class RestorationAdaptationReference(BaseModel):
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=30_000)
     reference_image_ids: list[UUID] = Field(default_factory=list, max_length=4)
+    font_selections: list[FontSelection] = Field(default_factory=list, max_length=6)
     # Stable identity of one UI submit. Retrying the same HTTP request with the
     # same key replays the original response and never starts another generation.
     # Optional for backward compatibility; new clients always send it.

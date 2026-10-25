@@ -69,9 +69,11 @@ def freeze_requirements(
 
         try:
             envelope = json.loads(prompt)
-            _need(set(envelope) == {"prompt", "reference_images"}
+            _need(set(envelope) in ({'prompt', 'reference_images'},
+                                   {'prompt', 'reference_images', 'font_selections'})
                   and envelope["prompt"] == semantic
-                  and request_identity(semantic, envelope["reference_images"]) == prompt,
+                  and request_identity(semantic, envelope["reference_images"],
+                                       envelope.get('font_selections', [])) == prompt,
                   "semantic request differs from admission identity")
         except (ValueError, TypeError, KeyError):
             raise RecoveryContractError("invalid semantic request binding") from None

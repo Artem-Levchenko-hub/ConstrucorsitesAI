@@ -36,6 +36,8 @@ class Message(Base):
     # после перезагрузки. NULL у старых строк и у сообщений без выделений.
     selected_elements: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     reference_images: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    font_selections: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
+    resolved_fonts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB, nullable=True)
     # Agentic transcript: the accumulated `agent.step` events for this assistant
     # reply, persisted so the chat history re-renders "what the agent did" (with
     # drill-in detail) after a reload. NULL for non-agent replies (edits, text

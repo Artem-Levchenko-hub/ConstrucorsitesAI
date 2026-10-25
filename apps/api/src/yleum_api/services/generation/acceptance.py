@@ -161,6 +161,7 @@ class PromptAcceptance:
         return await self.present_response()
 
     async def reserve_or_replay(self) -> PromptResponse | None:
+        from yleum_api.services.font_assets import pin_named_request, resolve_selections
         from yleum_api.services.reference_images import (
             public_image,
             request_identity,
@@ -187,12 +188,18 @@ class PromptAcceptance:
             # verifies the incoming original text plus saved immutable image
             # identity against the run hash below, never a hash of display text.
             self.reference_images = message.reference_images or []
+            self.font_selections = message.font_selections or []
+            self.resolved_fonts = message.resolved_fonts or []
             self.reference_rows = []
             if (existing.user_id != self.current_user.id
                     or message.project_id != self.project_id or message.role != "user"
                     or [item["id"] for item in self.reference_images]
                     != [str(image_id) for image_id in self.payload.reference_image_ids]):
                 raise ApiError("idempotency_conflict", "Request identity conflicts", 409)
+            if ([{'asset_id': item['id'], 'role': item['role']} for item in self.font_selections]
+                != [{'asset_id': str(item.asset_id), 'role': item.role}
+                    for item in self.payload.font_selections]):
+                raise ApiError('idempotency_conflict', 'Request font identity conflicts', 409)
         else:
             try:
                 references = await resolve_images(
@@ -206,6 +213,13 @@ class PromptAcceptance:
                 raise
             self.reference_images = [public_image(row) for row in references]
             self.reference_rows = references
+            self.font_selections = await resolve_selections(
+                self.session, self.project_id, self.current_user.id,
+                self.payload.font_selections, bind=True,
+            )
+            self.resolved_fonts = ([] if self.font_selections else await pin_named_request(
+                self.session, self.project_id, self.current_user.id, self.payload.prompt,
+            ))
         self.generation_run, replayed = await reserve_generation_run(
             self.session,
             project_id=self.project_id,
@@ -213,7 +227,7 @@ class PromptAcceptance:
             idempotency_key=idempotency_key,
             prompt=request_identity(adaptation_reservation_prompt(
                 self.payload.prompt, self.payload.restoration_adaptation
-            ), self.reference_images),
+            ), self.reference_images, self.font_selections),
             supersedes_run_id=self.payload.supersedes_run_id,
         )
         if replayed:
@@ -451,6 +465,8 @@ class PromptAcceptance:
             and not getattr(self, "unit_free_first_build", False)
             and not self.payload.skip_clarify
             and not self.payload.reference_image_ids
+            and not self.font_selections
+            and not self.resolved_fonts
             and not self.selected_dump
             and not self.credential_redirect
             and not self.explain_failed_build
@@ -561,7 +577,8 @@ class PromptAcceptance:
             appify_enabled=self.settings.use_followup_appification,
         )
         self.orchestrate = (
-            intent == ORCHESTRATE and not self.credential_redirect and not self.explain_failed_build
+            (intent == ORCHESTRATE or bool(self.font_selections or self.resolved_fonts))
+            and not self.credential_redirect and not self.explain_failed_build
         )
 
         # Model choice is server-side — the user never picks. `force_model` is the
@@ -590,6 +607,8 @@ class PromptAcceptance:
             model_id=None,  # user turns have no model
             selected_elements=self.selected_dump,
             reference_images=self.reference_images or None,
+            font_selections=self.font_selections or None,
+            resolved_fonts=self.resolved_fonts or None,
             created_at=_now,
         )
         self.assistant_msg = Message(
@@ -721,6 +740,8 @@ class PromptAcceptance:
                     selected_elements=self.selected_dump,
                     reference_images=[{"id": str(image["id"]), "sha256": str(image["sha256"])}
                                       for image in self.reference_images] or None,
+                    font_selections=[{key: str(font[key]) for key in ('id', 'sha256', 'role')}
+                                     for font in self.font_selections] or None,
                 ),
             )
             capacity_dispatch_token = uuid4()

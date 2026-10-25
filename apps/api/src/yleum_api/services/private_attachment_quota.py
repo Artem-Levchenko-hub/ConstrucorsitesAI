@@ -3,6 +3,7 @@
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from yleum_api.models.font_asset import FontAsset
 from yleum_api.models.reference_image import ReferenceImage
 from yleum_api.models.task_board import TaskBoardAttachment, TaskBoardAttachmentCleanup
 
@@ -31,4 +32,6 @@ async def private_attachment_bytes(session: AsyncSession) -> int:
     )
     # Use one MVCC snapshot: cleanup may move bytes between the metadata and
     # outbox concurrently, so separate SELECTs could miss both representations.
-    return int(await session.scalar(select(board + cleanup + references)) or 0)
+    fonts = (select(func.coalesce(func.sum(FontAsset.size_bytes), 0))
+             .where(FontAsset.status != 'deleting').scalar_subquery())
+    return int(await session.scalar(select(board + cleanup + references + fonts)) or 0)

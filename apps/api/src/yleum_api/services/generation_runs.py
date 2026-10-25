@@ -364,6 +364,7 @@ class GenerationDispatch:
     orchestrate: bool
     selected_elements: list[dict[str, object]] | None
     reference_images: list[dict[str, str]] | None = None
+    font_selections: list[dict[str, str]] | None = None
 
     def to_json(self) -> dict[str, object]:
         return {
@@ -382,6 +383,7 @@ class GenerationDispatch:
             "orchestrate": self.orchestrate,
             "selected_elements": self.selected_elements,
             **({"reference_images": self.reference_images} if self.reference_images else {}),
+            **({'font_selections': self.font_selections} if self.font_selections else {}),
         }
 
 
@@ -407,7 +409,7 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
     }
     # Runs dispatched before business profiles were retired still carry the
     # `free_business_id` key; it is accepted and ignored.
-    if set(raw) - {"free_business_id", "reference_images"} != expected:
+    if set(raw) - {"free_business_id", "reference_images", "font_selections"} != expected:
         raise ValueError("generation dispatch must contain exact keys")
     if (
         type(raw.get("schema_version")) is not int
@@ -438,6 +440,18 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
     if not 1 <= len(prompt_text) <= 30_000 or not model_id:
         raise ValueError("generation dispatch text fields are invalid")
     selected = raw.get("selected_elements")
+    fonts = raw.get('font_selections')
+    if fonts is not None:
+        from yleum_api.schemas.message import FontSelection
+
+        if type(fonts) is not list or not 1 <= len(fonts) <= 6:
+            raise ValueError('invalid font dispatch')
+        for font in fonts:
+            if (type(font) is not dict or set(font) != {'id', 'sha256', 'role'}
+                or not isinstance(font['sha256'], str)
+                or re.fullmatch(r'[a-f0-9]{64}', font['sha256']) is None):
+                raise ValueError('invalid font dispatch binding')
+            FontSelection(asset_id=UUID(font['id']), role=font['role'])
     references = raw.get("reference_images")
     if references is not None:
         if (type(references) is not list or not 1 <= len(references) <= 4
@@ -479,6 +493,7 @@ def load_generation_dispatch(run: GenerationRun) -> GenerationDispatch:
             orchestrate=bool(raw["orchestrate"]),
             selected_elements=selected,
             reference_images=references,
+            font_selections=fonts,
         )
     except ValueError as exc:
         raise ValueError("generation dispatch UUID is invalid") from exc

@@ -396,7 +396,8 @@ async def checkpoint_reference_message(
         message = await session.get(Message, current.user_message_id)
         bound_message_request(current, message, project_id=ids.project_id, run_id=current.id)
         assert message is not None
-        if (message.reference_images
+        if (message.reference_images or getattr(message, 'font_selections', None)
+                or getattr(message, 'resolved_fonts', None)
                 or "source_checkpoint_resume" not in (current.agent_state or {})):
             return message.id
         source = await _explicit_checkpoint_source(

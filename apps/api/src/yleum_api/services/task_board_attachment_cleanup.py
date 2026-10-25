@@ -10,6 +10,7 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from yleum_api.core.config import get_settings
+from yleum_api.models.font_asset import FontAsset
 from yleum_api.models.reference_image import ReferenceImage
 from yleum_api.models.task_board import TaskBoardAttachmentCleanup
 from yleum_api.services import task_board_attachments as attachment_storage
@@ -44,6 +45,8 @@ async def drain_attachment_cleanup_batch(
     from yleum_api.services.reference_images import enqueue_expired_reference_images
 
     await enqueue_expired_reference_images(session, limit)
+    from yleum_api.services.font_assets import enqueue_expired_fonts
+    await enqueue_expired_fonts(session, limit)
 
     pending = list(
         (
@@ -69,6 +72,9 @@ async def drain_attachment_cleanup_batch(
     now = datetime.now(UTC)
     for cleanup, error_name in zip(pending, errors, strict=True):
         if error_name is None:
+            await session.execute(delete(FontAsset).where(
+                FontAsset.object_key == cleanup.object_key, FontAsset.status == 'deleting',
+            ))
             await session.execute(delete(ReferenceImage).where(
                 ReferenceImage.object_key == cleanup.object_key,
                 ReferenceImage.status == "deleting",

@@ -6,6 +6,7 @@ import type {
   PromptResponse,
   SelectedElement,
   ReferenceImage,
+  MessageFontSelection,
 } from "./types";
 
 export type RestorationAdaptationReference = {
@@ -55,6 +56,7 @@ export async function sendPrompt(
     maxConfigVersion?: number;
     restorationAdaptation?: RestorationAdaptationReference;
     referenceImages?: ReferenceImage[];
+    fontSelections?: MessageFontSelection[];
   },
 ): Promise<PromptResponse> {
   if (USE_MOCKS) {
@@ -88,6 +90,7 @@ export async function sendPrompt(
       prompt,
       idempotency_key: idempotencyKey,
       ...(opts?.referenceImages?.length ? { reference_image_ids: opts.referenceImages.map((image) => image.id) } : {}),
+      ...(opts?.fontSelections?.length ? { font_selections: opts.fontSelections.map((font) => ({ asset_id: font.id, role: font.role })) } : {}),
       ...(opts?.restorationAdaptation
         ? { restoration_adaptation: opts.restorationAdaptation } : {}),
       ...(opts?.maxConfigVersion !== undefined ? { max_config_version: opts.maxConfigVersion } : {}),

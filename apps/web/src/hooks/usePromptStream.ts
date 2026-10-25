@@ -12,6 +12,7 @@ import type {
   PassProgress,
   SelectedElement,
   ReferenceImage,
+  MessageFontSelection,
   Snapshot,
   StreamBrief,
   WalletState,
@@ -60,6 +61,7 @@ export type PromptSubmitOptions = {
   idempotencyKey?: string;
   restorationAdaptation?: RestorationAdaptationReference;
   referenceImages?: ReferenceImage[];
+  fontSelections?: MessageFontSelection[];
   /** Only a definitive pre-acceptance refusal may replace uploaded image IDs. */
   onReferenceImagesExpired?: () => void;
 };
@@ -553,6 +555,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         silenceNoticeRef.current.delete(event.data.message_id);
         streamingRef.current = false;
         activeSubmitSignatureRef.current = null;
+        pendingRef.current?.resolve?.(false);
         pendingRef.current = null;
         setPendingPrompt(null);
         cancelRef.current?.();
@@ -804,12 +807,13 @@ export function usePromptStream(projectId: string, projectSlug: string) {
         selections: selections ?? [],
         opts: opts ?? {},
       });
+      const hasAttachments = !!(opts?.referenceImages?.length || opts?.fontSelections?.length);
       // Стрим в процессе — кладём в очередь (один слот, новый замещает старый).
       // Выделения переносим вместе с текстом, чтобы отложенный промпт сохранил контекст.
       if (streamingRef.current) {
         if (activeSubmitSignatureRef.current === submitSignature) {
           // For adaptation only the accepted POST may clear its attachment.
-          return !opts?.restorationAdaptation && !opts?.referenceImages?.length;
+          return !opts?.restorationAdaptation && !hasAttachments;
         }
         if (opts?.restorationAdaptation) {
           // Its historical source is bound to the reviewed HEAD. A volatile
@@ -818,7 +822,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           return false;
         }
         pendingRef.current?.resolve?.(false);
-        if (opts?.referenceImages?.length) {
+        if (hasAttachments) {
           setPendingPrompt(promptText);
           return new Promise<boolean>((resolve) => { pendingRef.current = { text: promptText, modelId, selections, opts, resolve }; });
         }
@@ -851,6 +855,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
           tokens_out: 0,
           selected_elements: selections ?? null,
           reference_images: opts?.referenceImages ?? null,
+          font_selections: opts?.fontSelections ?? null,
           created_at: new Date().toISOString(),
         } as Message,
         {
@@ -1058,7 +1063,7 @@ export function usePromptStream(projectId: string, projectSlug: string) {
             toast.info("Генерация уже запущена", {
               description: "Показываю текущую сборку — повтор не отправлен.",
             });
-            return !opts?.referenceImages?.length;
+            return !hasAttachments;
           }
           // The run ended between the refusal and the probe: nothing streams, so
           // the composer must not stay in streaming mode.

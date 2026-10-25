@@ -13,6 +13,7 @@ from yleum_api.services.generation.contracts import (
     GenerationIds,
     GenerationRuntime,
     ProjectGenerationFacts,
+    SourceBaseline,
 )
 from yleum_api.services.generation.runtime import (
     _apply_project_cell_preview_files,
@@ -22,6 +23,42 @@ from yleum_api.services.generation.runtime import (
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
 _log = logging.getLogger("yleum_api.routers.messages")
+
+
+async def stage_owner_fonts(*, factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
+                            baseline: SourceBaseline, runtime: GenerationRuntime) -> dict[str, str]:
+    from yleum_api.models.message import Message
+    from yleum_api.services.font_assets import apply_owner_fonts, message_font_bundles
+    from yleum_api.services.generation.source_checkpoint import checkpoint_reference_message
+
+    async with factory() as session:
+        current = await session.get(Message, ids.user_message_id)
+        if current is None:
+            raise ValueError('font request message missing')
+        if not (getattr(current, 'font_selections', None)
+                or getattr(current, 'resolved_fonts', None)):
+            from yleum_api.models.generation_run import GenerationRun
+            run = await session.get(GenerationRun, ids.run_id)
+            if run is None or 'source_checkpoint_resume' not in (run.agent_state or {}):
+                return {}
+        message_id = await checkpoint_reference_message(session, ids=ids, baseline=baseline)
+        bundles = await message_font_bundles(session, ids.project_id, ids.user_id, message_id)
+    if not bundles:
+        return {}
+    if runtime.handle is None:
+        raise ApiError('font_target_unavailable',
+                       'Для выбранных шрифтов требуется рабочее приложение', 422)
+    before = await runtime.handle.snapshot_files()
+    after = apply_owner_fonts(before, bundles)
+    changed = {path: content for path, content in after.items() if before.get(path) != content}
+    if changed:
+        await runtime.handle.stage_patch(changed, ())
+    # Full materialized font source is retained in prepared entry on cold resume,
+    # even when this idempotent retry did not need another physical write.
+    return {path: content for path, content in after.items() if (
+        path.startswith('src/app/fonts/') or path.startswith('public/fonts/licenses/owner-')
+        or path in {'src/app/typography.css', 'src/app/globals.css', 'typography.json', 'DESIGN.md'}
+    )}
 
 
 async def render_current_max_starter(

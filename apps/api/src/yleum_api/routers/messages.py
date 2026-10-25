@@ -24,6 +24,8 @@ from yleum_api.models.message import Message
 from yleum_api.models.project import Project
 from yleum_api.schemas.message import (
     ClientErrorReport,
+    FontAssetPublic,
+    FontResolveRequest,
     GenerationRunPublic,
     MessagePublic,
     PromptRequest,
@@ -71,6 +73,35 @@ async def upload_reference_image(
                              file.content_type or "", file.filename or "reference")
     await session.commit()
     return public_image(row)
+
+
+@router.post('/{project_id}/font-assets', status_code=201, response_model=FontAssetPublic,
+             dependencies=[Depends(rate_limit_prompt)])
+async def upload_font_asset(project_id: UUID, file: UploadFile,
+                            session: SessionDep, current_user: CurrentUserDep) -> dict[str, object]:
+    from yleum_api.services.font_assets import MAX_BYTES, create_font, public_font
+
+    await _ensure_owner(session, project_id, current_user.id)
+    try:
+        raw = await file.read(MAX_BYTES + 1)
+    finally:
+        await file.close()
+    row = await create_font(session, project_id, current_user.id, raw,
+                            file.filename or 'font')
+    return public_font(row)
+
+
+@router.post('/{project_id}/font-assets/resolve', status_code=201, response_model=FontAssetPublic,
+             dependencies=[Depends(rate_limit_prompt)])
+async def resolve_font_asset(
+    project_id: UUID, payload: FontResolveRequest,
+    session: SessionDep, current_user: CurrentUserDep,
+) -> dict[str, object]:
+    from yleum_api.services.font_assets import public_font, resolve_named_font
+
+    await _ensure_owner(session, project_id, current_user.id)
+    row = await resolve_named_font(session, project_id, current_user.id, payload.family_name)
+    return public_font(row)
 
 
 @router.get("/{project_id}/reference-images/{image_id}")

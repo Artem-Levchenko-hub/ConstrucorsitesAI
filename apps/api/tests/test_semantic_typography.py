@@ -133,7 +133,7 @@ def test_catalogue_only_verified_selected_dependencies():
     from yleum_api.services.typography import font_catalogue
 
     fonts = font_catalogue()["fonts"]
-    assert len(fonts) == 8
+    assert len(fonts) == 20
     for row in fonts.values():
         assert row["integrity"].startswith("sha512-")
         assert row["license"] == "OFL-1.1"
@@ -288,3 +288,184 @@ def test_unknown_custom_font_is_honest_and_not_fetched():
 def test_explicit_preset_style_before_niche():
     d = choose_typography("p", brief="fitness tracker", preset_id="editorial-luxury")
     assert d.heading in ("Prata", "Lora")
+
+
+def test_catalogue_covers_approved_pool_and_actual_verified_subsets():
+    from yleum_api.services.typography import font_catalogue
+
+    fonts = font_catalogue()["fonts"]
+    assert {row["family"] for row in fonts.values()} >= {
+        "Source Sans 3",
+        "Source Serif 4",
+        "Literata",
+        "IBM Plex Sans",
+        "IBM Plex Mono",
+        "Geologica",
+        "Commissioner",
+        "Cormorant Garamond",
+        "Vollkorn",
+        "Nunito",
+        "Oswald",
+        "Caveat",
+    }
+    for row in fonts.values():
+        assert len(row["assets"]) <= 16
+        assert row["verification"]["russian_letters"] == 66
+        assert row["verification"]["latin_letters_digits"] == 62
+        # Prata 5.3.0 has neither a ruble glyph nor a latin-ext face upstream.
+        assert row["verification"]["ruble"] is (row["family"] != "Prata")
+        if row["family"] != "Prata":
+            assert any("latin-ext" in path for path in row["imports"])
+
+
+def test_approved_recipes_have_24_candidates_and_six_distinct_triples():
+    from yleum_api.services.typography import font_catalogue
+
+    catalogue = font_catalogue()
+    recipes = catalogue["recipes"]
+    assert len(recipes) == 24
+    assert len({recipe["id"] for recipe in recipes}) == 24
+    assert sum(len(set(recipe["roles"].values())) == 3 for recipe in recipes) == 6
+    available = {font["family"] for font in catalogue["fonts"].values()}
+    assert all(set(recipe["roles"].values()) <= available for recipe in recipes)
+
+
+@pytest.mark.parametrize(
+    "brief,expected",
+    [
+        ("Фитнес в мягком минималистичном стиле", "Commissioner"),
+        ("Кофейня с индустриальными узкими плакатными заголовками", "Oswald"),
+        ("Приложение с современной геометрией", "Geologica"),
+        ("Спокойное длинное чтение", "Literata"),
+        ("Ремесленный основательный характер", "Vollkorn"),
+        ("Воздушная книжная элегантность", "Cormorant Garamond"),
+    ],
+)
+def test_style_selects_distinct_new_families_before_niche(brief, expected):
+    assert choose_typography("p", brief=brief).heading == expected
+
+
+def test_explicit_three_roles_and_long_family_names_are_retained():
+    decision = choose_typography(
+        "p", brief="Lora для заголовков, Onest для текста и Caveat для акцентов"
+    )
+    assert (decision.heading, decision.body, decision.accent) == ("Lora", "Onest", "Caveat")
+    assert len(decision.dependencies) == 3
+    decision = choose_typography(
+        "p", brief="Source Serif 4 для текста, IBM Plex Sans для заголовков, IBM Plex Mono для кода"
+    )
+    assert decision.body == "Source Serif 4" and decision.code == "IBM Plex Mono"
+    assert len(decision.dependencies) == 3
+
+
+def test_semantic_third_role_requires_a_real_function_and_respects_negation():
+    with_code = choose_typography("p", brief="Технологичный интерфейс с блоками кода")
+    assert with_code.code == "IBM Plex Mono" and len(with_code.families) == 3
+    ordinary = choose_typography(
+        "p", brief="Технологичный интерфейс без кода и рукописных акцентов"
+    )
+    assert ordinary.code is None and ordinary.accent is None
+    assert len(ordinary.families) <= 2
+    no_serifs = choose_typography("p", brief="Брутальная кофейня без засечек")
+    assert no_serifs.heading == "Unbounded"
+
+
+def test_owner_font_beats_soft_style_exclusion_and_body_only_keeps_display_safe():
+    explicit = choose_typography("p", brief="Без брутализма, но шрифт Unbounded для заголовков")
+    assert explicit.heading == "Unbounded"
+    excluded = choose_typography("p", brief="Без Unbounded, брутальный интерфейс")
+    assert excluded.heading != "Unbounded"
+
+
+def test_triple_seed_exports_scoped_role_variables_and_ordinary_edits_freeze_all_roles():
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_project_kit import render_max_starter_files
+    from yleum_api.services.typography import existing_typography_context
+
+    decision = choose_typography("p", brief="Технологичный интерфейс с блоками кода")
+    files = seed_typography(
+        render_max_starter_files(
+            MaxProjectConfigPayload(app_name="Test", app_type="custom", summary="Test")
+        ),
+        decision,
+    )
+    assert "--font-code: 'IBM Plex Mono'" in files["src/app/typography.css"]
+    assert "code, pre" in files["src/app/typography.css"]
+    assert json.loads(files["typography.json"])["code"] == "IBM Plex Mono"
+    assert "IBM Plex Mono" in existing_typography_context("Seed", files)
+    assert seed_typography(files, choose_typography("p", brief="уютная кофейня")) == files
+
+
+def test_legacy_typography_decision_still_decodes_without_optional_roles():
+    from pydantic import TypeAdapter
+
+    from yleum_api.services.typography import TypographyDecision
+
+    decision = TypographyDecision(
+        **{
+            "version": 1,
+            "style": "scandinavian",
+            "heading": "Manrope",
+            "body": "Manrope",
+            "families": ("manrope",),
+            "custom_request": None,
+        }
+    )
+    assert decision.accent is None and decision.ui is None and decision.code is None
+    old_wire = json.dumps(
+        {
+            "version": 1,
+            "style": "scandinavian",
+            "heading": "Manrope",
+            "body": "Manrope",
+            "families": ["manrope"],
+            "custom_request": None,
+        }
+    )
+    assert TypeAdapter(TypographyDecision).validate_json(old_wire, strict=True) == decision
+
+
+def test_sans_constraint_filters_inferred_serifs_but_explicit_owner_font_wins():
+    inferred = choose_typography("p", brief="Редакционная кофейня без засечек")
+    assert inferred.heading not in {"Lora", "Prata", "Source Serif 4"}
+    explicit = choose_typography("p", brief="Шрифт Lora для заголовков, стиль без засечек")
+    assert explicit.heading == "Lora"
+
+
+@pytest.mark.parametrize(
+    "brief",
+    [
+        "Scandinavian style. A cozy coffee shop",
+        "Scandinavian style for a craft workshop",
+        "Скандинавский стиль. Уютная ремесленная кофейня",
+    ],
+)
+def test_explicit_scandinavian_style_beats_warm_or_craft_context(brief):
+    decision = choose_typography("p", brief=brief)
+    assert decision.heading == "Manrope" and decision.recipe_id == "R01"
+
+
+@pytest.mark.parametrize("brief", ["A cozy coffee shop", "A craft workshop"])
+def test_explicit_scandinavian_preset_beats_warm_or_craft_context(brief):
+    decision = choose_typography("p", brief=brief, preset_id="scandinavian")
+    assert decision.heading == "Manrope" and decision.recipe_id == "R01"
+
+
+def test_seed_keeps_subset_ranges_so_latin_does_not_replace_cyrillic():
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.max_project_kit import render_max_starter_files
+    from yleum_api.services.typography import font_catalogue
+
+    decision = choose_typography("p", brief="шрифт Onest")
+    files = seed_typography(
+        render_max_starter_files(
+            MaxProjectConfigPayload(app_name="Test", app_type="custom", summary="Test")
+        ),
+        decision,
+    )
+    css = files["src/app/typography.css"]
+    for filename, asset in font_catalogue()["fonts"]["onest"]["assets"].items():
+        assert f"url('~@fontsource/onest/files/{filename}')" in css
+        assert f"unicode-range: {asset['unicode_range']}" in css
+    assert "font-display: swap" in css
+    assert '@import "@fontsource/onest/latin-' not in css

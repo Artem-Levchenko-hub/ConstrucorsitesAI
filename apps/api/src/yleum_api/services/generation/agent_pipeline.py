@@ -543,6 +543,27 @@ async def run_agent_generation(
         await _agent_emit("agent.continuation", {
             "human": "Восстанавливаю сохранённый черновик и продолжаю проверку", "ok": None,
         })
+    if prepared_entry is None and completed_turn is None:
+        from yleum_api.services.generation.agent_seed import stage_owner_fonts
+
+        owner_font_files = await run_bootstrap_stage(
+            continuation, 'font_apply', lambda: stage_owner_fonts(
+                factory=factory, ids=ids, baseline=baseline, runtime=runtime,
+            ), handle=runtime.handle,
+        )
+        if owner_font_files:
+            _max_seed_files = {**_max_seed_files, **owner_font_files}
+            runtime.migration_baseline = {**baseline.files, **_max_seed_files}
+            metadata = json.loads(owner_font_files['typography.json'])
+            font_context = ('\n\nЯвный выбор шрифтов владельца УЖЕ применён и имеет приоритет: '
+                            + json.dumps(metadata.get('owner_roles', {}), ensure_ascii=False)
+                            + '. Сохрани typography.json, src/app/typography.css и opaque '
+                            'src/app/fonts/*.css. Не читай/переписывай base64. '
+                            'Не заменяй выбранные шрифты style utility/inline font-family. '
+                            'Новый акцент применяется через .font-accent '
+                            'или data-font-role=accent; '
+                            'прочий текст остаётся читаемым.')
+            _prompt_plan = replace(_prompt_plan, user=_prompt_plan.user + font_context)
     edit_deadline = (
         prepared_entry.edit_deadline if prepared_entry is not None else
         (await runtime.coordinator.source_edit_deadline()

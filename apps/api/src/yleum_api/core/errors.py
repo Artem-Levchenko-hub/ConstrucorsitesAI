@@ -38,6 +38,8 @@ ErrorCode = Literal[
     "too_large",
     "upload_failed",
     "reference_images_expired",
+    "font_unavailable",
+    "font_target_unavailable",
     "no_snapshot",
     # Проект без своей ячейки: среды приложения не существует.
     "runtime_unavailable",

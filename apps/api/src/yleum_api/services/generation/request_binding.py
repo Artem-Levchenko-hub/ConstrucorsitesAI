@@ -23,7 +23,8 @@ def bound_message_request(
         raise ValueError("admission message binding conflicts")
     text = message.content
     references = getattr(message, "reference_images", None) or []
-    identity = request_identity(text, references)
+    fonts = getattr(message, 'font_selections', None) or []
+    identity = request_identity(text, references, fonts)
     if hashlib.sha256(identity.encode()).hexdigest() != run.prompt_hash:
         from yleum_api.schemas.message import RestorationAdaptationReference
         from yleum_api.services.restoration_adaptation import adaptation_reservation_prompt
@@ -42,7 +43,7 @@ def bound_message_request(
                 expected_draft_snapshot_id=UUID(raw["base_draft_snapshot_id"]),
             )
             text = adaptation_reservation_prompt(text, reference)
-            identity = request_identity(text, references)
+            identity = request_identity(text, references, fonts)
         except (KeyError, TypeError, ValueError):
             raise ValueError("admission adaptation binding conflicts") from None
     if hashlib.sha256(identity.encode()).hexdigest() != run.prompt_hash:

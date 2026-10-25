@@ -139,6 +139,21 @@ export type ReferenceImage = {
   url: string;
 };
 
+export type FontRole = "all" | "heading" | "body" | "accent" | "ui" | "code";
+export type FontAssetPublic = {
+  id: Uuid;
+  family: string;
+  filename: string;
+  sha256: string;
+  size_bytes: number;
+  weight: number;
+  style: "normal" | "italic";
+  source: "upload" | "fontsource";
+  license: string | null;
+};
+export type FontSelection = { asset_id: Uuid; role: FontRole };
+export type MessageFontSelection = FontAssetPublic & { role: FontRole };
+
 export type Message = {
   id: Uuid;
   project_id: Uuid;
@@ -153,6 +168,7 @@ export type Message = {
   /** Select-mode context attached to a user message (for chat-history chips). */
   selected_elements?: SelectedElement[] | null;
   reference_images?: ReferenceImage[] | null;
+  font_selections?: MessageFontSelection[] | null;
   /** Persisted agentic transcript — hydrated into the ["agent-steps",…] cache on
    *  history load so AgentTranscript re-renders after a reload. */
   agent_steps?: AgentStep[] | null;

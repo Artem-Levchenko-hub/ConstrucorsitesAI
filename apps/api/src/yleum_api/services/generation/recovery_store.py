@@ -154,7 +154,8 @@ async def _baseline_sha(
 
     if (
         identity.prompt_hash != run.prompt_hash
-        or prompt_hash(request_identity(dispatch.prompt_text, dispatch.reference_images or []))
+        or prompt_hash(request_identity(dispatch.prompt_text, dispatch.reference_images or [],
+                                        dispatch.font_selections or []))
         != run.prompt_hash
         or dispatch.current_snapshot_id != identity.accepted_snapshot_id
         or project.current_snapshot_id != identity.accepted_snapshot_id

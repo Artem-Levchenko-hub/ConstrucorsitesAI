@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import type { Message } from "@/lib/api/types";
+import { FONT_ROLE_LABELS } from "@/lib/api/font-assets";
 import { EASE_OUT, fadeUp } from "@/lib/motion";
 import { formatRelativeTime, cn } from "@/lib/utils";
 import {
@@ -155,6 +156,11 @@ export function ChatMessage({
           {isUser && !!message.reference_images?.length && <div className="flex flex-wrap gap-2" aria-label="Изображения в сообщении">
             {message.reference_images.map((image) => <ReferenceImageThumbnail key={image.id} projectId={message.project_id} image={image} />)}
           </div>}
+          {isUser && !!message.font_selections?.length && <ul className="flex flex-wrap gap-2" aria-label="Шрифты в сообщении">
+            {message.font_selections.map((font) => <li key={`${font.id}:${font.role}`} className="max-w-full break-words rounded-lg border border-border-subtle px-3 py-2 text-xs text-fg-secondary">
+              <strong className="text-fg-primary">{font.family}</strong> · {FONT_ROLE_LABELS[font.role]}
+            </li>)}
+          </ul>}
           {isUser ? (
             quiz ? (
               <QuizSummary idea={quiz.idea} items={quiz.items} />

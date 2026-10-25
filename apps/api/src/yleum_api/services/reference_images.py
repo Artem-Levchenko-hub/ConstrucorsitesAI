@@ -255,8 +255,9 @@ async def image_bytes(row: ReferenceImage) -> bytes:
         raise ApiError("upload_failed", "Изображение временно недоступно", 503) from None
 
 
-def request_identity(prompt: str, references: Sequence[Mapping[str, object]]) -> str:
-    if not references:
+def request_identity(prompt: str, references: Sequence[Mapping[str, object]],
+                     fonts: Sequence[Mapping[str, object]] = ()) -> str:
+    if not references and not fonts:
         return prompt  # Preserve existing text-only replay hashes.
     return json.dumps(
         {
@@ -264,6 +265,9 @@ def request_identity(prompt: str, references: Sequence[Mapping[str, object]]) ->
             "reference_images": [
                 {"id": image["id"], "sha256": image["sha256"]} for image in references
             ],
+            **({'font_selections': [
+                {key: font[key] for key in ('id', 'sha256', 'role')} for font in fonts
+            ]} if fonts else {}),
         },
         sort_keys=True,
         ensure_ascii=False,

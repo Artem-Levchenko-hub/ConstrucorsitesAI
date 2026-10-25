@@ -1,23 +1,31 @@
 "use client";
 
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type ReactNode, type Ref } from "react";
+import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState, type ComponentProps, type ReactNode, type Ref } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Clock, ImagePlus, Loader2, Mic, Send, Square, StopCircle, X } from "lucide-react";
+import { Clock, ImagePlus, Loader2, Mic, Send, Square, StopCircle, Type, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useVoiceInput } from "@/hooks/useVoiceInput";
 import { EASE_OUT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import type { ReferenceImage, SelectedElement } from "@/lib/api/types";
+import type { MessageFontSelection, ReferenceImage, SelectedElement } from "@/lib/api/types";
 import { useReferenceImages } from "@/hooks/useReferenceImages";
+import { useFontAttachments } from "@/hooks/useFontAttachments";
+import { FONT_LIMITS, isFontFile } from "@/lib/api/font-assets";
 import { REFERENCE_IMAGE_ACCEPT, REFERENCE_IMAGE_LIMITS } from "@/lib/api/reference-images";
 import { useInspectorStore } from "@/store/inspector";
 import { SelectedChips } from "./SelectedChips";
+import { FontAttachmentChips, FontAttachmentPanel } from "./FontAttachments";
 
 export type PromptInputHandle = { insertDraft: (text: string) => boolean };
-export type PromptReferenceSubmit = { referenceImages: ReferenceImage[]; idempotencyKey: string };
+export type PromptReferenceSubmit = { referenceImages: ReferenceImage[]; fontSelections?: MessageFontSelection[]; idempotencyKey: string };
 export type PromptInputSubmitResult = boolean | { accepted: false; reason: "reference_images_expired" };
 
-export function PromptInput({
+export function PromptInput(props: ComponentProps<typeof ProjectPromptInput>) {
+  // A project switch owns a new draft and upload lifecycle, including pending sends.
+  return <ProjectPromptInput key={props.projectId ?? "no-project"} {...props} />;
+}
+
+function ProjectPromptInput({
   onSubmit,
   onCancel,
   onCancelPending,
@@ -65,8 +73,25 @@ export function PromptInput({
   const sendLockRef = useRef(false);
   const filesRef = useRef<HTMLInputElement>(null);
   const references = useReferenceImages(projectId);
+  const fonts = useFontAttachments(projectId);
+  const [fontPanelOpen, setFontPanelOpen] = useState(false);
+  const fontPanelId = useId();
+  const submissionEpoch = useRef(0);
   const retryIdentity = useRef<{ signature: string; key: string } | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const attachmentsBlocked = references.busy || fonts.busy
+    || references.items.some(item => !item.image) || fonts.items.some(item => !item.asset);
+  const hasAttachments = references.items.length > 0 || fonts.items.length > 0;
+
+  useEffect(() => () => { submissionEpoch.current += 1; }, []);
+
+  const addAttachments = (files: File[]) => {
+    if (isSubmitting) return;
+    const fontFiles = files.filter(isFontFile);
+    const imageFiles = files.filter(file => !isFontFile(file));
+    if (imageFiles.length) void references.add(imageFiles);
+    if (fontFiles.length) void fonts.addFiles(fontFiles);
+  };
 
   useImperativeHandle(draftRef, () => ({
     insertDraft(text) {
@@ -98,7 +123,7 @@ export function PromptInput({
   }, [value, ref]);
 
   const send = useCallback(async () => {
-    if (sendLockRef.current || sendDisabled || references.busy || references.items.some((item) => !item.image)) return;
+    if (sendLockRef.current || sendDisabled || attachmentsBlocked) return;
     const text = value.trim();
     // Fresh from the store — the global Ctrl+Enter handler can be a stale closure.
     const picks = useInspectorStore.getState().selections;
@@ -109,20 +134,30 @@ export function PromptInput({
       text ||
       (wire.length
         ? "Внеси правки по выделенным элементам — что сделать, написано в комментарии к каждому."
-        : references.items.length ? "Используй прикреплённые изображения как визуальный референс для приложения." : "");
+        : fonts.items.length
+          ? references.items.length ? "Примени приложенные шрифты и используй изображения как визуальный референс приложения." : "Примени приложенные шрифты к приложению."
+          : references.items.length ? "Используй прикреплённые изображения как визуальный референс для приложения." : "");
     if (!finalText) return;
     sendLockRef.current = true;
     setIsSubmitting(true);
     setSubmitError(null);
+    const epoch = submissionEpoch.current;
     const images = references.items.flatMap((item) => item.image ? [item.image] : []);
-    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id)]);
+    const fontSelections = fonts.items.flatMap(item => item.asset ? [{ ...item.asset, role: item.role }] : []);
+    const signature = JSON.stringify([finalText, wire, images.map((image) => image.id), fontSelections.map(font => [font.id, font.role])]);
     if (retryIdentity.current?.signature !== signature) retryIdentity.current = { signature, key: crypto.randomUUID() };
     try {
-      const submitted = await onSubmit(finalText, wire, images.length ? { referenceImages: images, idempotencyKey: retryIdentity.current.key } : undefined);
+      const submitted = await onSubmit(finalText, wire, images.length || fontSelections.length ? {
+        referenceImages: images,
+        ...(fontSelections.length ? { fontSelections } : {}),
+        idempotencyKey: retryIdentity.current.key,
+      } : undefined);
+      if (submissionEpoch.current !== epoch) return;
       if (submitted === true) {
         setValue("");
         clearSelections();
         references.clear();
+        fonts.clear();
         retryIdentity.current = null;
       } else if (submitted && submitted.reason === "reference_images_expired") {
         // Never renew IDs for timeouts/network failures: the old request may
@@ -132,16 +167,16 @@ export function PromptInput({
         setSubmitError("Срок хранения вложений истёк. Проверьте повторную загрузку и отправьте запрос ещё раз.");
       }
     } catch {
-      setSubmitError("Не удалось подтвердить отправку. Повторите попытку — вложения сохранены.");
+      if (submissionEpoch.current === epoch) setSubmitError("Не удалось подтвердить отправку. Повторите попытку — вложения сохранены.");
     } finally {
-      setIsSubmitting(false);
+      if (submissionEpoch.current === epoch) setIsSubmitting(false);
       // Keep the latch through the current browser event turn. A legitimate
       // later submit uses the freshly-rendered value and is not blocked.
       queueMicrotask(() => {
-        sendLockRef.current = false;
+        if (submissionEpoch.current === epoch) sendLockRef.current = false;
       });
     }
-  }, [clearSelections, onSubmit, sendDisabled, value, references]);
+  }, [attachmentsBlocked, clearSelections, onSubmit, sendDisabled, value, references, fonts]);
 
   // Cmd/Ctrl+Enter from anywhere submits — даже во время стрима (отправка
   // в этом случае ставится в очередь хуком).
@@ -160,14 +195,14 @@ export function PromptInput({
       if (
         (e.metaKey || e.ctrlKey) &&
         e.key === "Enter" &&
-        (value.trim() || references.items.length || useInspectorStore.getState().selections.length)
+        (value.trim() || hasAttachments || useInspectorStore.getState().selections.length)
       ) {
         void send();
       }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [send, value, references.items.length]);
+  }, [send, value, hasAttachments]);
 
   const onKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -184,7 +219,7 @@ export function PromptInput({
       onDrop={(event) => {
         if (!projectId || !event.dataTransfer.files.length) return;
         event.preventDefault(); event.stopPropagation();
-        if (!isSubmitting) void references.add(Array.from(event.dataTransfer.files));
+        addAttachments(Array.from(event.dataTransfer.files));
       }}
       className={cn(
         "bg-surface-panel-dark p-3 space-y-2",
@@ -192,7 +227,9 @@ export function PromptInput({
       )}
     >
       {quotaNotice}
-      {(references.error || submitError) && <p role="alert" className="text-xs text-danger">{references.error || submitError}</p>}
+      {(references.error || fonts.error || submitError) && <p role="alert" className="text-xs text-danger">{references.error || fonts.error || submitError}</p>}
+      {projectId && fontPanelOpen && <div id={fontPanelId}><FontAttachmentPanel key={projectId} fonts={fonts} disabled={isSubmitting} /></div>}
+      <FontAttachmentChips fonts={fonts} disabled={isSubmitting} />
       {!!references.items.length && <ul aria-label="Изображения к запросу" className="flex flex-wrap gap-2">
         {references.items.map((item) => <li key={item.key} className="relative w-28 rounded-lg border border-border-subtle p-1">
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -248,10 +285,11 @@ export function PromptInput({
           onKeyDown={onKeyDown}
           onPaste={(event) => {
             if (!projectId) return;
-            const files = Array.from(event.clipboardData.items).filter((item) => item.kind === "file" && item.type.startsWith("image/")).flatMap((item) => { const file = item.getAsFile(); return file ? [file] : []; });
+            const files = Array.from(event.clipboardData.items).filter(item => item.kind === "file")
+              .flatMap(item => { const file = item.getAsFile(); return file && (file.type.startsWith("image/") || isFontFile(file)) ? [file] : []; });
             if (!files.length) return;
             event.preventDefault(); event.stopPropagation();
-            if (!isSubmitting) void references.add(files);
+            addAttachments(files);
           }}
           placeholder={
             isStreaming
@@ -265,13 +303,17 @@ export function PromptInput({
         />
 
         <div className="flex items-center justify-between px-2.5 pb-2.5 gap-2">
-          <div className="flex min-w-0 items-center gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
           {projectId && <><input ref={filesRef} type="file" multiple accept={REFERENCE_IMAGE_ACCEPT} className="sr-only" tabIndex={-1} aria-label="Выбрать изображения"
             onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; void references.add(files); }} />
             <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить изображения" title={`PNG, JPEG, WebP · до ${REFERENCE_IMAGE_LIMITS.count} файлов по ${REFERENCE_IMAGE_LIMITS.bytes / 1024 / 1024} МБ`} className="h-11 px-2.5 sm:h-8"
               disabled={isSubmitting || references.busy || references.items.length >= REFERENCE_IMAGE_LIMITS.count} onClick={() => filesRef.current?.click()}>
               {references.busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImagePlus className="h-4 w-4" />}
             </Button></>}
+          {projectId && <Button type="button" variant="secondary" size="sm" aria-label="Прикрепить шрифт" title="Выбрать шрифт или загрузить файл"
+            aria-expanded={fontPanelOpen} aria-controls={fontPanelOpen ? fontPanelId : undefined}
+            disabled={isSubmitting || fonts.busy || fonts.items.length >= FONT_LIMITS.count}
+            onClick={() => setFontPanelOpen(open => !open)} className="h-11 px-2.5 sm:h-8"><Type aria-hidden="true" className="h-4 w-4" /></Button>}
           {toolbarAction}
           {voice.state === "recording" ? (
             <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-danger">
@@ -350,7 +392,7 @@ export function PromptInput({
                 void send();
               }}
               disabled={
-                sendDisabled || isSubmitting || references.busy || references.items.some((item) => !item.image) || (!value.trim() && selections.length === 0 && references.items.length === 0)
+                sendDisabled || isSubmitting || attachmentsBlocked || (!value.trim() && selections.length === 0 && !hasAttachments)
               }
               className="h-11 gap-1.5 rounded-full px-3.5 sm:h-8"
               title={

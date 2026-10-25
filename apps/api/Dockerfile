@@ -30,6 +30,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     ffmpeg \
+    opentype-sanitizer \
     libglib2.0-0 \
     libnss3 \
     libnspr4 \
