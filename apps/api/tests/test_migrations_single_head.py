@@ -202,13 +202,14 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_generation_units_extend_aitunnel_as_the_only_migration_head() -> None:
+def test_reference_images_extend_generation_units_as_the_only_migration_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0090_aitunnel_text_fallback"
+    assert chain[_CURRENT_HEAD] == "0091_generation_credit_units"
+    assert chain["0091_generation_credit_units"] == "0090_aitunnel_text_fallback"
     assert chain["0090_aitunnel_text_fallback"] == "0089_shared_max_bots"
     assert chain["0089_shared_max_bots"] == _RECOVERY_REVISION
     assert chain[_RECOVERY_REVISION] == "0087_generation_responses"

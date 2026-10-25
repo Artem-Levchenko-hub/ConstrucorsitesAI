@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
 import pytest
@@ -30,6 +30,7 @@ async def test_prompt_preserves_all_requested_clauses_without_expanding_scope(
     handle = Mock(capabilities={"portable_machine": True}) if portable else None
     if handle is not None:
         handle.is_portable.return_value = True
+        handle.snapshot_files = AsyncMock(return_value={})
     plan, build_plan = await prepare_agent_prompt(
         stack=StackPrompt("existing context", "max-miniapp-nextjs", "guide", None, "system", False),
         factory=factory,

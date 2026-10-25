@@ -23,6 +23,7 @@ async def _plan(monkeypatch, *, configured, native=False, capable=True, selected
     monkeypatch.setattr(agent_prompt, "model_for_role", lambda role, override=None: "test-model")
     handle = Mock(capabilities={"portable_machine": capable})
     handle.is_portable.return_value = selected
+    handle.snapshot_files = AsyncMock(return_value={})
     factory = Mock(side_effect=AssertionError("planning must not add work or retries"))
     plan, build_plan = await agent_prompt.prepare_agent_prompt(
         stack=StackPrompt("existing source", template, "guide", None, "system", False),

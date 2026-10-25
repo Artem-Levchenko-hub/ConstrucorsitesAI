@@ -120,6 +120,7 @@ async def test_exact_f11_prompt_preserves_edit_plan_and_baseline_at_model(monkey
     )
     runtime = GenerationRuntime(handle=SimpleNamespace(
         is_portable=lambda: True, capabilities={"portable_machine": True},
+        snapshot_files=AsyncMock(return_value=dict(FILES)),
     ))
     history = AsyncMock()
     history.__aenter__.return_value = history

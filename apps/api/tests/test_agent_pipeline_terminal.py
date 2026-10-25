@@ -610,6 +610,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         "prepare_stack_prompt": stack,
         "prepare_agent_prompt": (plan, None),
         "stage_max_starter": ({"src/core.ts": "trusted"}, None),
+        "_load_turn_reference_images": [],
     }
     for name, value in phases.items():
         monkeypatch.setattr(agent_pipeline, name, AsyncMock(return_value=value))
@@ -626,6 +627,7 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
         assert isinstance(kwargs["operations"].continuation, ex.ExecutionDriver)
         assert kwargs["plan"] == plan
         assert kwargs["_max_seed_files"] == {"src/core.ts": "trusted"}
+        assert kwargs["reference_images"] == []
         raise ObservedTurn()
 
     monkeypatch.setattr(agent_pipeline, "execute_agent_turn", turn)
@@ -657,5 +659,6 @@ async def test_v2_pipeline_enters_actual_turn_with_saved_preparation_and_driver(
     ):
         assert getattr(agent_pipeline, name).await_count == int(not prepared)
     assert agent_pipeline.prepare_agent_runtime.await_count == 1  # Rebind live owned handle.
+    assert agent_pipeline._load_turn_reference_images.await_count == 1
     if not prepared:
         assert saves[-1]["completed"]["agent_entry"] == entry

@@ -1745,6 +1745,7 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
     import hashlib
 
     from yleum_api.models.generation_run import GenerationRun
+    from yleum_api.models.message import Message
 
     ids = GenerationIds(*(uuid4() for _ in range(5)))
     run_row = GenerationRun(
@@ -1754,6 +1755,10 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
         status="running", agent_state={},
     )
     request_locks = []
+    request_message = Message(
+        id=ids.user_message_id, project_id=ids.project_id, role="user",
+        content=prompt, reference_images=[],
+    )
 
     class RequestSession:
         async def __aenter__(self):
@@ -1762,8 +1767,10 @@ async def test_contextual_edit_bounds_discovery_before_unchanged_full_export(
         async def __aexit__(self, *_args):
             return False
 
-        async def get(self, *_args):
-            pytest.fail("matching durable request hash must not require message recovery")
+        async def get(self, model, key, *, populate_existing=False):
+            assert model is Message and key == ids.user_message_id
+            assert populate_existing is True
+            return request_message
 
         async def commit(self):
             pytest.fail("this ordinary contextual edit has no named behavior contract")
@@ -2707,6 +2714,10 @@ async def test_runner_attempt_auth_contract_matches_gateway_validation_and_repla
 async def test_native_build_defaults_to_legacy_messages_endpoint_without_headers(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from yleum_api.core.config import get_settings
+
+    monkeypatch.delenv("LLM_GATEWAY_URL", raising=False)
+    get_settings.cache_clear()
     calls: list[dict[str, Any]] = []
 
     async def fake_call(
