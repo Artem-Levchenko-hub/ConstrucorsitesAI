@@ -32,6 +32,7 @@ async def test_font_apply_lost_ack_cold_retry_snapshot_and_ordinary_edit(
     bindings = await font_assets.resolve_selections(
         db_session, project.id, user.id, [FontSelection(asset_id=asset.id, role="all")], bind=True
     )
+    await font_assets.bind_message_fonts(db_session, project.id, user.id, bindings)
     message = Message(
         project_id=project.id, role="user", content="Apply font", font_selections=bindings
     )

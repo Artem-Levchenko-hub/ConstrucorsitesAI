@@ -591,6 +591,10 @@ class PromptAcceptance:
         )
 
     async def persist_messages(self) -> None:
+        from yleum_api.services.font_assets import bind_message_fonts
+
+        await bind_message_fonts(self.session, self.project_id, self.current_user.id,
+                                 self.font_selections + self.resolved_fonts)
         # The earlier timestamp is a bounded admission lease. Only committing
         # the chat message makes retention permanent; failed admission expires.
         for image in self.reference_rows:

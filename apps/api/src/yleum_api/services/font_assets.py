@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -232,10 +232,29 @@ async def resolve_selections(
     result = []
     for item in selections:
         row = rows[item.asset_id]
-        if bind:
-            row.is_bound = True
+        if bind and not row.is_bound:
+            row.bound_at = datetime.now(UTC)
         result.append({**public_font(row), "role": item.role})
     return result
+
+
+async def bind_message_fonts(
+    session: AsyncSession,
+    project_id: UUID,
+    user_id: UUID,
+    bindings: list[dict[str, Any]],
+) -> None:
+    """Permanent retention belongs to the same transaction as the user Message."""
+    if not bindings:
+        return
+    selected = [FontSelection(asset_id=UUID(item["id"]), role=item["role"]) for item in bindings]
+    current = await resolve_selections(session, project_id, user_id, selected, bind=True)
+    for binding, actual in zip(bindings, current, strict=True):
+        if binding["sha256"] != actual["sha256"]:
+            raise ApiError("conflict", "Шрифт изменился до сохранения сообщения", 409)
+        row = await session.get(FontAsset, UUID(binding["id"]))
+        assert row is not None
+        row.is_bound = True
 
 
 async def pin_named_request(
@@ -299,7 +318,10 @@ async def enqueue_expired_fonts(session: AsyncSession, limit: int) -> None:
                         or_(
                             FontAsset.project_id.is_(None),
                             FontAsset.uploader_id.is_(None),
-                            and_(FontAsset.is_bound.is_(False), FontAsset.created_at < stale),
+                            and_(
+                                FontAsset.is_bound.is_(False),
+                                func.coalesce(FontAsset.bound_at, FontAsset.created_at) < stale,
+                            ),
                         ),
                     ),
                 )
@@ -316,6 +338,7 @@ async def enqueue_expired_fonts(session: AsyncSession, limit: int) -> None:
 
 __all__ = [
     "apply_owner_fonts",
+    "bind_message_fonts",
     "create_font",
     "enqueue_expired_fonts",
     "message_font_bundles",

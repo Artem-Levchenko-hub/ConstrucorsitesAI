@@ -119,6 +119,56 @@ def test_runtime_worker_real_ots():
     assert error.value.code == "validation_failed"
 
 
+async def test_uncommitted_font_admission_expires_but_message_binding_is_retained(
+    db_session,
+    monkeypatch,
+    font_storage,
+):
+    from datetime import UTC, datetime, timedelta
+
+    from yleum_api.services import task_board_attachment_cleanup as cleanup
+
+    owner, project = await reference_owner(db_session)
+    owner_id, project_id = owner.id, project.id
+    assets = [
+        await font_assets.create_font(
+            db_session, project_id, owner_id, fixture_font(), f"{index}.ttf"
+        )
+        for index in range(2)
+    ]
+    bindings = await font_assets.resolve_selections(
+        db_session,
+        project_id,
+        owner_id,
+        [FontSelection(asset_id=row.id, role="all") for row in assets],
+        bind=True,
+    )
+    await db_session.commit()  # Same boundary as policy admission, before Message.
+    assert all(row.is_bound is False and row.bound_at is not None for row in assets)
+    await font_assets.bind_message_fonts(db_session, project_id, owner_id, bindings[1:])
+    await db_session.rollback()  # Message transaction never committed.
+    for row in assets:
+        await db_session.refresh(row)
+    assert all(row.is_bound is False for row in assets)
+    await font_assets.bind_message_fonts(db_session, project_id, owner_id, bindings[:1])
+    db_session.add(
+        Message(
+            project_id=project_id, role="user", content="Accepted", font_selections=bindings[:1]
+        )
+    )
+    await db_session.commit()
+    for row in assets:
+        row.created_at = row.bound_at = datetime.now(UTC) - timedelta(hours=48)
+    await db_session.commit()
+    await font_assets.enqueue_expired_fonts(db_session, 20)
+    await db_session.commit()
+    assert assets[0].status == "ready" and assets[0].is_bound is True
+    assert assets[1].status == "deleting" and assets[1].is_bound is False
+    monkeypatch.setattr(cleanup, "_delete_attachment", lambda key: font_storage.pop(key))
+    assert await cleanup.drain_attachment_cleanup_batch(db_session) == 1
+    assert await db_session.get(FontAsset, assets[0].id) is not None
+
+
 def test_synthetic_font_fixture_uses_real_woff2_and_cyrillic():
     face = normalize(fixture_font(), sanitize=False)
     assert face["has_cyrillic"] is True and face["has_ruble"] is True

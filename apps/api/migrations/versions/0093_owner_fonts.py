@@ -24,6 +24,7 @@ def upgrade() -> None:
         sa.Column("metadata_json", postgresql.JSONB(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False, server_default="pending"),
         sa.Column("is_bound", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column("bound_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
         ),
