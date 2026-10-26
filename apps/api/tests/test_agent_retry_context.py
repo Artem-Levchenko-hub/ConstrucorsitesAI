@@ -4,6 +4,7 @@ Only storage is adapted: an in-memory SQLite schema uses portable column types
 and a synchronous session behind the async interface. No provider is contacted.
 """
 
+import hashlib
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -15,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.message import Message
+from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.services.generation.agent_preparation import classify_agent_turn
 from yleum_api.services.generation.agent_prompt import prepare_agent_prompt
@@ -25,13 +27,17 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
     StackPrompt,
 )
+from yleum_api.services.generation_runs import GenerationDispatch, store_generation_dispatch
+from yleum_api.services.reference_images import request_identity
+
+BASE = "a" * 40
 
 
 @pytest.fixture
 def history():
     engine = create_engine("sqlite://")
     metadata = MetaData()
-    for model in (GenerationRun, Message, Snapshot):
+    for model in (GenerationRun, Message, Snapshot, Project):
         Table(
             model.__tablename__, metadata,
             *(
@@ -55,8 +61,14 @@ def history():
         async def __aexit__(self, *_args):
             return None
 
-        async def get(self, *args):
-            return session.get(*args)
+        async def get(self, *args, **kwargs):
+            return session.get(*args, **kwargs)
+
+        async def execute(self, statement):
+            return session.execute(statement)
+
+        async def commit(self):
+            session.commit()
 
         async def scalar(self, statement):
             return session.scalar(statement)
@@ -64,32 +76,75 @@ def history():
         async def scalars(self, statement):
             return session.scalars(statement)
 
-    def add(text, *, status="failed", mode="build", project=None, user=None, at=None):
+    snapshot = Snapshot(
+        id=uuid4(), project_id=project_id, prompt_text="Original app", commit_sha=BASE,
+    )
+    session.add(snapshot)
+    session.commit()
+    baseline = SourceBaseline(snapshot.id, BASE, {"src/page.tsx": "existing"})
+
+    def ensure_project():
+        project = session.get(Project, project_id)
+        if project is None:
+            project = Project(
+                id=project_id, owner_id=user_id, name="Fixture", slug="fixture",
+                template="max_miniapp", current_snapshot_id=snapshot.id,
+            )
+            session.add(project)
+            session.commit()
+        return project
+
+    def ids(run):
+        return GenerationIds(
+            run.id, project_id, user_id, run.user_message_id, run.assistant_message_id,
+        )
+
+    def add(text, *, status="failed", mode="build", project=None, user=None, at=None,
+            references=None, fonts=None):
         nonlocal moment
         moment += timedelta(seconds=1)
         message = Message(
             id=uuid4(), project_id=project or project_id, role="user", content=text,
             created_at=at or moment,
+            reference_images=references, font_selections=fonts,
+        )
+        assistant = Message(
+            id=uuid4(), project_id=message.project_id, role="assistant", content="",
+            created_at=message.created_at,
         )
         run = GenerationRun(
             id=uuid4(), project_id=project or project_id, user_id=user or user_id,
             user_message_id=message.id, status=status, response_mode=mode,
-            idempotency_key=str(uuid4()), prompt_hash="fixture", created_at=at or moment,
+            assistant_message_id=assistant.id, idempotency_key=str(uuid4()),
+            prompt_hash=hashlib.sha256(
+                request_identity(text, references or [], fonts or []).encode()
+            ).hexdigest(), created_at=at or moment,
         )
-        session.add_all([message, run])
+        store_generation_dispatch(run, GenerationDispatch(
+            schema_version=1, project_id=run.project_id, user_id=run.user_id,
+            user_message_id=message.id, assistant_message_id=assistant.id,
+            current_snapshot_id=snapshot.id, prompt_text=text, model_id="test-no-provider",
+            force_model=None, is_free=False, orchestrate=mode == "build", selected_elements=None,
+            reference_images=[{key: item[key] for key in ("id", "sha256")}
+                              for item in references] if references else None,
+            font_selections=[{key: item[key] for key in ("id", "sha256", "role")}
+                             for item in fonts] if fonts else None,
+        ))
+        session.add_all([message, assistant, run])
         session.commit()
         return run
 
     async def classify(run):
+        ensure_project()
         message = session.get(Message, run.user_message_id)
-        ids = GenerationIds(run.id, project_id, user_id, message.id, uuid4())
+        current_ids = ids(run)
         facts = ProjectGenerationFacts(
             "max_miniapp", "fixture", "Fixture", None, None, False, "ru", False, "", ""
         )
         result = await classify_agent_turn(
-            baseline=SourceBaseline(uuid4(), "baseline", {"src/page.tsx": "existing"}),
+            baseline=baseline,
             factory=AsyncSession,
-            ids=ids,
+            ids=current_ids,
             orchestrate=False,
             project_info=facts,
             prompt_text=message.content,
@@ -97,7 +152,7 @@ def history():
         plan, _ = await prepare_agent_prompt(
             stack=StackPrompt("", None, None, None, "fixture", False),
             factory=AsyncSession,
-            ids=ids,
+            ids=current_ids,
             project_info=facts,
             prompt_text=result.prompt,
             runtime=GenerationRuntime(),
@@ -109,9 +164,10 @@ def history():
         )
         return result, plan.user, message.content
 
-    session.add(Snapshot(id=uuid4(), project_id=project_id, prompt_text="Original app"))
-    session.commit()
-    yield SimpleNamespace(add=add, classify=classify, session=session)
+    yield SimpleNamespace(
+        add=add, classify=classify, session=session, factory=AsyncSession, baseline=baseline,
+        ids=ids, ensure_project=ensure_project, snapshot=snapshot,
+    )
     session.close()
     engine.dispose()
 

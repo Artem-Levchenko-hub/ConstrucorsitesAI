@@ -27,22 +27,14 @@ _log = logging.getLogger("yleum_api.routers.messages")
 
 async def stage_owner_fonts(*, factory: async_sessionmaker[AsyncSession], ids: GenerationIds,
                             baseline: SourceBaseline, runtime: GenerationRuntime) -> dict[str, str]:
-    from yleum_api.models.message import Message
     from yleum_api.services.font_assets import apply_owner_fonts, message_font_bundles
-    from yleum_api.services.generation.source_checkpoint import checkpoint_reference_message
+    from yleum_api.services.generation.retry_request import resolve_request_source
 
     async with factory() as session:
-        current = await session.get(Message, ids.user_message_id)
-        if current is None:
-            raise ValueError('font request message missing')
-        if not (getattr(current, 'font_selections', None)
-                or getattr(current, 'resolved_fonts', None)):
-            from yleum_api.models.generation_run import GenerationRun
-            run = await session.get(GenerationRun, ids.run_id)
-            if run is None or 'source_checkpoint_resume' not in (run.agent_state or {}):
-                return {}
-        message_id = await checkpoint_reference_message(session, ids=ids, baseline=baseline)
-        bundles = await message_font_bundles(session, ids.project_id, ids.user_id, message_id)
+        source = await resolve_request_source(session, ids=ids, baseline=baseline)
+        bundles = await message_font_bundles(
+            session, ids.project_id, ids.user_id, source.message_id,
+        )
     if not bundles:
         return {}
     if runtime.handle is None:

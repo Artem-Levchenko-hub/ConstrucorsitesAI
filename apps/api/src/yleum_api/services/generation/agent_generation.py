@@ -18,6 +18,12 @@ from yleum_api.services.generation.contracts import (
     SourceBaseline,
 )
 from yleum_api.services.generation.file_transforms import _merge_seeded_agent_files
+from yleum_api.services.generation.source_intent import (
+    requested_source_edit as requested_source_edit,
+)
+from yleum_api.services.generation.source_intent import (
+    source_change_required,
+)
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 _log = logging.getLogger("yleum_api.routers.messages")
@@ -257,104 +263,51 @@ def _legacy_portable_edit_context(files: Mapping[str, str]) -> str:
     return prefix + _encode_edit_source(payload) + suffix
 
 
-def requested_source_edit(prompt: str) -> bool:
-    """Recognize unquoted change commands, including after context/preservation clauses.
-
-    This is a conservative write requirement, not an intent classifier: an
-    explanation, investigation or continuation stays optional. An explicit
-    desired product state can require a write without an imperative verb.
-    """
-    text = re.sub(
-        r'```.*?```|`[^`]*`|«[^»]*»|“[^”]*”|"[^"]*"|(?<!\w)\'[^\']*\'',
-        " ", prompt, flags=re.DOTALL,
-    ).lower()
-    # Normalize every analysis object, including a second request after "и".
-    text = re.sub(
-        r"\bсделай\s+(?:(?:краткий|подробный)\s+)?(?:обзор|анализ|ревью)\b",
-        "проанализируй", text,
-    )
-    for clause in re.split(r"[.!;\n]", text):
-        if re.search(
-            r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
-            r"(?:do\s+not|don't)\s+(?:change|modify|edit)\s+"
-            r"(?:anything\b|(?:files|code)(?=\s*(?:$|,)))",
-            clause,
-        ) and not re.search(r"\b(?:больше|кроме|else|except)\b", clause):
-            return False
-    commands = re.compile(
-        r"\b(?:добавь|исправь|измени|поменяй|замени|удали|убери|устрани|реализуй|"
-        r"сделай|обнови|доработай|"
-        r"fix|add|change|modify|edit|replace|remove|delete|implement|update)\b"
-    )
-    # Nominal requests ("Нужно поле даты", "Нужна сортировка") are ordinary
-    # change requests too. Keep their entire clause so commas/colons do not
-    # detach the requirement from its analysis or preservation scope.
-    for clause in re.split(r"[.!?;\n]", text):
-        need = re.search(r"\bнуж(?:но|на|ен|ны)\s*,?\s*", clause)
-        if need is None:
-            continue
-        prefix, requirement = clause[:need.start()], clause[need.end():]
-        if re.search(
-            r"\b(?:не|как|почему|объясни|расскажи|проверь|исследуй|проанализируй|"
-            r"продолжи|обзор|анализ|ревью|review|inspect|continue|explain|investigate|"
-            r"check|analy[sz]e|how|why|whether)\b", prefix,
-        ) or re.match(
-            r"(?:только\s+)?(?:(?:провести|сделать|выполнить)\s+)?"
-            r"(?:обзор|анализ|ревью|проверка|проверку|исследование|объяснение)\b",
-            requirement,
-        ) or re.match(
-            r"(?:только\s+)?(?:не|ли|объяснить|рассказать|проверить|исследовать|понять|"
-            r"узнать|оценить|изучить|сохранить|сохранение)\b", requirement,
-        ) or re.search(
-            r"^чтобы\b.*\bне\s+(?:менял\w*|изменял\w*|менять|изменять)\b",
-            requirement,
-        ):
-            continue
-        if re.search(
-            r"\b(?:интерфейс\w*|поле|поля|кноп\w*|дата|даты|дату|карточ\w*|"
-            r"сортиров\w*|фильтр\w*|форм\w*|бейдж\w*|цвет\w*|сч[её]тчик\w*)\b",
-            requirement,
-        ):
-            return True
-    for clause in re.split(r"[.!?;,:\n]|\b(?:затем|then)\b", text):
-        clause = re.sub(
-            r"^\s*(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?",
-            "", clause,
-        )
-        # Change verbs can describe an analysis request ("сделай обзор кода").
-        # Only a separate imperative ("inspect ... and fix ...") exits that scope.
-        if re.match(
-            r"\s*(?:please\s+)?(?:review|inspect|continue|explain|investigate|check|"
-            r"analy[sz]e|проверь|объясни|расскажи|исследуй|проанализируй|продолжи)\b",
-            clause,
-        ):
-            edit_clause = re.search(r"\b(?:and|и)\s+(?=" + commands.pattern + ")", clause)
-            if edit_clause is None or re.match(
-                r"\s*(?:please\s+)?(?:explain|объясни|расскажи)\b", clause,
-            ):
-                continue
-            clause = clause[edit_clause.end():]
-        for match in commands.finditer(clause):
-            prefix = clause[:match.start()]
-            # English verbs are also nouns: require an actual leading imperative,
-            # not a keyword somewhere in contextual prose. Russian imperatives
-            # retain contextual matching (e.g. "В текущем приложении устрани ...").
-            if match.group().isascii() and prefix.strip():
-                continue
-            if re.search(r"\b(?:не|not|never|don't)\s+(?:\w+\s+){0,2}$", prefix):
-                continue
-            if re.search(r"\b(?:как|почему|how|why|whether|explain|investigate)\b", prefix):
-                continue
-            return True
-    return False
-
-
 def _primary_provider_failure(result: agent_builder.AgentResult) -> str | None:
     if result.stop_reason == "provider_error":
         return result.summary
     if result.stop_reason == "output_limit" and not result.needs_finalization:
         return "Provider response rejected (output_limit); unverified changes were not published."
     return None
+
+
+async def _observe_source_changes(
+    handle: Any, baseline: SourceBaseline,
+    execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]],
+) -> tuple[Callable[[agent_builder.Action], Awaitable[dict[str, Any]]], Callable[[], bool]]:
+    """Observe the real tree, including restored drafts, before granting proof."""
+    from yleum_api.services.generation.agent_finalization import (
+        unchanged_candidate_before_finalization,
+        validate_edit_source_change,
+    )
+    from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
+
+    patch = await handle.export_files()
+    snapshotter = getattr(handle, 'snapshot_files', None)
+    snapshot = await snapshotter() if callable(snapshotter) else None
+
+    def changed() -> bool:
+        if snapshot is not None:
+            return unchanged_candidate_before_finalization(
+                baseline_files=baseline.files, workspace_files=snapshot,
+                requires_source_change=True, message='',
+            ) is None
+        product_patch = {path: content for path, content in patch.items()
+                         if path not in MAX_SECURITY_LOCKED_FILES}
+        verdict = validate_edit_source_change(
+            requires_source_change=True, baseline_files=baseline.files,
+            candidate_files=product_patch, exact_tree=False, message='',
+        )
+        return bool(product_patch) and verdict.failure is None
+
+    async def observed(action: agent_builder.Action) -> dict[str, Any]:
+        nonlocal patch, snapshot
+        result = await execute(action)
+        patch = await handle.export_files()
+        snapshot = await snapshotter() if callable(snapshotter) else None
+        return result
+
+    return observed, changed
 
 
 async def execute_agent_turn(
@@ -405,6 +358,14 @@ async def execute_agent_turn(
             candidate.stop_reason = "checkpoint_error"
             candidate.summary = _SOURCE_CHECKPOINT_FAILURE
             _agent_res = candidate
+    if _agent_res is None:
+        observed_execute = operations.execute
+        if ((_is_edit or _max_has_generated_snapshot) and runtime.handle is not None
+                and getattr(runtime.handle, 'prove_restoration_adaptation', None) is None
+                and source_change_required(prompt_text)):
+            observed_execute, edit_source_changed = await _observe_source_changes(
+                runtime.handle, baseline, operations.execute,
+            )
     if _agent_res is None and get_settings().use_native_agent:
         # Native tool-use path (owner «как Claude Code, только на сервере»): one
         # GenerationRun/Project Cell, with bounded fresh provider segments
@@ -459,49 +420,10 @@ async def execute_agent_turn(
 
             _completion_check = _max_completion_check
 
-        _change_requested = requested_source_edit(prompt_text)
-        _native_execute: Callable[[agent_builder.Action], Awaitable[dict[str, Any]]]
-        if (_is_edit or _max_has_generated_snapshot) and _change_requested and runtime.handle:
-            from yleum_api.services.generation.agent_finalization import (
-                unchanged_candidate_before_finalization,
-                validate_edit_source_change,
-            )
-
+        _native_execute = observed_execute
+        if edit_source_changed is not None:
+            source_changed = edit_source_changed
             _product_completion_check = _completion_check
-            _edit_patch: dict[str, str] = {}
-            _edit_snapshot: dict[str, str] | None = None
-
-            def _edit_source_changed() -> bool:
-                from yleum_api.services.max_project_kit import MAX_SECURITY_LOCKED_FILES
-
-                if _edit_snapshot is not None:
-                    return unchanged_candidate_before_finalization(
-                        baseline_files=baseline.files, workspace_files=_edit_snapshot,
-                        requires_source_change=True, message="",
-                    ) is None
-                product_patch = {
-                    path: content for path, content in _edit_patch.items()
-                    if path not in MAX_SECURITY_LOCKED_FILES
-                }
-                verdict = validate_edit_source_change(
-                    requires_source_change=True, baseline_files=baseline.files,
-                    candidate_files=product_patch, exact_tree=False, message="",
-                )
-                return bool(product_patch) and verdict.failure is None
-
-            edit_source_changed = _edit_source_changed
-
-            async def _execute_edit_action(action: agent_builder.Action) -> dict[str, Any]:
-                nonlocal _edit_patch, _edit_snapshot
-                result = await operations.execute(action)
-                assert runtime.handle is not None
-                # Export is the executor's in-memory diff, including deletion
-                # tombstones; model-reported cumulative files are not that diff.
-                _edit_patch = await runtime.handle.export_files()
-                snapshot = getattr(runtime.handle, "snapshot_files", None)
-                if callable(snapshot):
-                    _edit_snapshot = await snapshot()
-                return result
 
             def _edit_completion_check(
                 written: Mapping[str, str], evidence: Mapping[str, int]
@@ -510,7 +432,7 @@ async def execute_agent_turn(
                 # the agent can still apply the requested change. Passing the
                 # existing tree below also prevents edits from being treated
                 # as a first build that must rewrite the product entry page.
-                if not _edit_source_changed():
+                if not source_changed():
                     return (
                         "The requested edit has not changed the source tree. "
                         "Apply the requested code change in this workspace, "
@@ -521,9 +443,6 @@ async def execute_agent_turn(
                 return None
 
             _completion_check = _edit_completion_check
-            _native_execute = _execute_edit_action
-        else:
-            _native_execute = operations.execute
 
         # Even a model that skips build must receive the same migration contract
         # as final verification while it still has a chance to repair this run.
@@ -609,7 +528,8 @@ async def execute_agent_turn(
             ),
             model=plan.model,
             escalate_model=plan.escalate_model,
-            execute=operations.execute,
+            execute=observed_execute,
+            edit_source_changed=edit_source_changed,
             snapshot_files=operations.snapshot_files,
             max_steps=plan.steps,
             emit=operations.emit,

@@ -64,6 +64,7 @@ async def _capture(monkeypatch, files, *, native=False, edit=True, portable=True
             prompt_text="Add a date to the workout screen.",
             runtime=GenerationRuntime(handle=SimpleNamespace(
                 is_portable=lambda: portable, capabilities={"portable_machine": capable},
+                export_files=snapshot, snapshot_files=snapshot,
             )),
             plan=SimpleNamespace(system="system", user="requested edit", model="model",
                                  escalate_model=None, steps=30, bare_stack=False,
@@ -120,6 +121,7 @@ async def test_exact_f11_prompt_preserves_edit_plan_and_baseline_at_model(monkey
     )
     runtime = GenerationRuntime(handle=SimpleNamespace(
         is_portable=lambda: True, capabilities={"portable_machine": True},
+        export_files=AsyncMock(return_value=dict(FILES)),
         snapshot_files=AsyncMock(return_value=dict(FILES)),
     ))
     history = AsyncMock()

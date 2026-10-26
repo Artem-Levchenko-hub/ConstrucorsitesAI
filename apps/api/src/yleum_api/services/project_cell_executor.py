@@ -8,7 +8,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from dataclasses import field as dataclass_field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from pathlib import PurePosixPath
 from time import monotonic
@@ -646,6 +646,76 @@ async def _release_generation_lease(
         await session.commit()
 
 
+async def _wait_for_previous_cell_reconciliation(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    project_id: UUID,
+    user_id: UUID,
+    run_id: UUID,
+    workspace_id: UUID,
+    previous_run_id: UUID,
+    emit: Callable[[dict[str, object]], Awaitable[None]] | None,
+) -> None:
+    """Wait for an already dispatched dependency, without taking over its effect.
+
+    Admission stays pending: the supervisor owns this prequeue execution. Each
+    observation releases its transaction before waiting, allowing the old
+    dispatcher to finish. Unknown/terminal effects still use the fenced reclaimer.
+    """
+    deadline: datetime | None = None
+    last_emitted_at: float | None = None
+    while True:
+        async with session_factory() as session:
+            project = await session.get(Project, project_id)
+            run = await session.get(GenerationRun, run_id)
+            workspace = await session.get(ProjectCellWorkspace, workspace_id)
+            if (
+                project is None
+                or run is None
+                or workspace is None
+                or project.owner_id != user_id
+                or run.user_id != user_id
+                or run.project_id != project_id
+                or workspace.owner_id != user_id
+                or workspace.project_id != project_id
+                or workspace.generation_run_id not in {None, previous_run_id}
+            ):
+                raise ProjectCellOwnershipError("Project Cell admission ownership changed")
+            if run.status == "cancel_requested" or run.status not in ACTIVE_GENERATION_STATUSES:
+                raise ProjectCellStateConflict("Generation is no longer active")
+            if deadline is None:
+                deadline = run.created_at + timedelta(
+                    seconds=get_settings().project_cell_capacity_wait_seconds
+                )
+            running_operation = await session.scalar(
+                select(ProjectCellOperation.id)
+                .where(
+                    ProjectCellOperation.workspace_id == workspace_id,
+                    ProjectCellOperation.generation_run_id == previous_run_id,
+                    ProjectCellOperation.kind.in_(("ensure", "reconcile")),
+                    ProjectCellOperation.status == "running",
+                )
+                .limit(1)
+            )
+        remaining = (deadline - datetime.now(UTC)).total_seconds()
+        if remaining <= 0:
+            raise TimeoutError("Project Cell capacity queue deadline exceeded")
+        if running_operation is None:
+            return
+        # Bound even slow progress delivery by the original admission deadline.
+        async with asyncio.timeout(remaining):
+            now = monotonic()
+            if emit is not None and (last_emitted_at is None or now - last_emitted_at >= 15):
+                await emit({
+                    "action": "Подготовка среды",
+                    "detail": "Ожидаю завершения предыдущей операции подготовки среды",
+                    "status": "running",
+                    "capacity_reason": "previous_cell_reconciliation_running",
+                })
+                last_emitted_at = now
+            await asyncio.sleep(min(1.0, remaining))
+
+
 async def maybe_create_project_cell_executor(
     *,
     project_id: UUID,
@@ -740,6 +810,15 @@ async def maybe_create_project_cell_executor(
                     # lease. Reclaim another idle cell just as admission does;
                     # otherwise all retries fail before reaching that queue.
                     for _attempt in range(4):
+                        await _wait_for_previous_cell_reconciliation(
+                            session_factory,
+                            project_id=project_id,
+                            user_id=user_id,
+                            run_id=generation_run_id,
+                            workspace_id=workspace.id,
+                            previous_run_id=previous_run.id,
+                            emit=agent_emit,
+                        )
                         if await release_one_stale_generation_lease(
                             session_factory,
                             requesting_run_id=run.id,

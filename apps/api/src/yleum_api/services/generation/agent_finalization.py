@@ -22,6 +22,12 @@ from yleum_api.services.generation.contracts import (
 )
 from yleum_api.services.generation.runtime import _restore_project_cell_source
 from yleum_api.services.generation.source_error_classification import SourceFailure
+from yleum_api.services.generation.source_intent import (
+    explicitly_readonly_request as explicitly_readonly_request,
+)
+from yleum_api.services.generation.source_intent import (
+    source_change_required,
+)
 from yleum_api.services.max_finalization import ProofBundle
 from yleum_api.services.project_cell_errors import raise_if_terminal_cell_error
 
@@ -47,14 +53,6 @@ class EditSourceChangeVerdict(NamedTuple):
 def source_change_allows_partial_save(verdict: EditSourceChangeVerdict) -> bool:
     """Suppress the partial-save CTA after an explicit no-source-change failure."""
     return verdict.failure is None
-
-
-def explicitly_readonly_request(prompt: str) -> bool:
-    return re.fullmatch(
-        r"ничего\s+не\s+(?:меняй|изменяй|трогай)|"
-        r"(?:do\s+not|don't)\s+(?:change|modify|edit)\s+(?:anything|files|code)",
-        prompt.strip().rstrip(".!"), flags=re.IGNORECASE,
-    ) is not None
 
 
 def _is_edit_source_path(path: str) -> bool:
@@ -290,7 +288,7 @@ async def finalize_max_candidate(
             unchanged = unchanged_candidate_before_finalization(
                 baseline_files=baseline.files,
                 workspace_files=await runtime.handle.snapshot_files(),
-                requires_source_change=not explicitly_readonly_request(prompt_text),
+                requires_source_change=source_change_required(prompt_text),
                 message=accumulated,
             )
             if unchanged is not None:

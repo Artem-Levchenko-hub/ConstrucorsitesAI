@@ -96,7 +96,7 @@ async def _load_turn_reference_images(
     # Message identity already lives in the durable dispatch. Resolve its
     # immutable image bindings again on cold resume, never from browser URLs.
     async with factory() as session:
-        from yleum_api.services.generation.source_checkpoint import checkpoint_reference_message
+        from yleum_api.services.generation.retry_request import resolve_request_source
 
         if baseline is None:
             from yleum_api.models.project import Project
@@ -107,8 +107,8 @@ async def _load_turn_reference_images(
                         if project is not None and project.current_snapshot_id else None)
             baseline = SourceBaseline(snapshot.id if snapshot else None,
                                       snapshot.commit_sha if snapshot else None, {})
-        message_id = await checkpoint_reference_message(session, ids=ids, baseline=baseline)
-        return await message_images(session, ids.project_id, ids.user_id, message_id)
+        source = await resolve_request_source(session, ids=ids, baseline=baseline)
+        return await message_images(session, ids.project_id, ids.user_id, source.message_id)
 
 
 async def resume_agent_generation(claim: ContinuationClaim) -> None:

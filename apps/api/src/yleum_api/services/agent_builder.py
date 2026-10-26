@@ -156,6 +156,15 @@ _KNOWN_ACTIONS = frozenset(
 _VERIFY_ACTIONS = frozenset(
     {"build", "read_logs", "runtime_check", "probe", "verify_isolation"}
 )
+_SOURCE_PROOF_ACTIONS = frozenset(
+    {"build", "runtime_check", "probe", "verify_isolation", "done"}
+)
+_SOURCE_CHANGE_REQUIRED = (
+    "The requested modification has not changed the actual application source. "
+    "Apply the requested change with edit_file, write_file or an authorized shell edit first. "
+    "Reading files, a clean build of the old application and a completion claim are not changes. "
+    "Preserve existing features and data; then build and call done."
+)
 
 # Caps so one fat observation can't blow the context window.
 _MAX_OBS_CHARS = 6_000
@@ -247,13 +256,17 @@ def _window_messages(
     return convo[:head] + convo[-keep_last:]
 
 
-def _progress_note(written: dict[str, str], last_build_ok: bool | None) -> str:
+def _progress_note(
+    written: dict[str, str], last_build_ok: bool | None, *, source_change_pending: bool = False,
+) -> str:
     """A compact live-state reminder injected into the system slot of EVERY model
     call. The sliding window (keep_last) drops the middle of a long build, so the
     model forgets which files it already wrote and re-writes them on a loop (the
     #1 cause of the cycle/exploring aborts). Telling it the current state every
     turn — what exists, whether the last build was clean — kills that amnesia.
     """
+    if source_change_pending:
+        return "\n\n[PROGRESS — actual application source is unchanged]\n" + _SOURCE_CHANGE_REQUIRED
     parts: list[str] = []
     if written:
         listing = "\n".join(f"  - {p}" for p in sorted(written))
@@ -338,6 +351,7 @@ async def run_agent_build(
     edit_mode: bool = False,
     bare_mode: bool = False,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    edit_source_changed: Callable[[], bool] | None = None,
     max_segments: int | None = 1,
     checkpoint: Callable[[AgentResult], Awaitable[None]] | None = None,
     edit_deadline: datetime | None = None,
@@ -444,6 +458,7 @@ async def run_agent_build(
             coordinator_handoff=coordinator_handoff,
             ship_green_on_abort=ship_green_on_abort,
             edit_mode=edit_mode, bare_mode=bare_mode, snapshot_files=snapshot_files,
+            edit_source_changed=edit_source_changed,
             initial_written=cumulative_files,
             response_recovery=response_recovery, take_verified_progress=take_verified_progress,
             on_progress=segment_progress,
@@ -529,6 +544,7 @@ async def _run_agent_segment(
     edit_mode: bool = False,
     bare_mode: bool = False,
     snapshot_files: Callable[[], Awaitable[dict[str, str]]] | None = None,
+    edit_source_changed: Callable[[], bool] | None = None,
     initial_written: dict[str, str] | None = None,
     response_recovery: ResponseRecovery | None = None,
     take_verified_progress: ProgressReader | None = None,
@@ -670,6 +686,9 @@ async def _run_agent_segment(
             }
         )
 
+    def _source_change_pending() -> bool:
+        return edit_source_changed is not None and not edit_source_changed()
+
     async def _nudge_exploration(step: int) -> None:
         green = (
             fast_check_fresh
@@ -683,7 +702,9 @@ async def _run_agent_segment(
             {
                 "role": "user",
                 "content": (
-                    "FAST_CHECK is current and clean. Call done to HAND OFF to the "
+                    _SOURCE_CHANGE_REQUIRED
+                    if _source_change_pending()
+                    else "FAST_CHECK is current and clean. Call done to HAND OFF to the "
                     "server coordinator; do not rewrite source for deferred runtime proof."
                     if green and coordinator_handoff
                     else _DONE_WHEN_GREEN_NUDGE
@@ -719,14 +740,14 @@ async def _run_agent_segment(
                 )
 
     def _ship_green_or(fallback: AgentResult, step_no: int, reason: str) -> AgentResult:
-        """A loop-abort is about to discard the run — but if the LAST build was
-        green the app already compiles, so SHIP it as a success instead of telling
-        the user «Сборка прервана» about a working app (owner's exact complaint:
-        the messenger built green at step 15, then the model fussed re-reading
-        layout and the cycle-guard threw the green app away). Honest: the `done`
-        gate itself only requires a clean build (see `require_green_before_done`),
-        so a green abort meets the same bar. Falls through to the original abort
-        when there is no green build to rescue."""
+        """Rescue a verified changed candidate without promoting unchanged source.
+
+        A bounded loop can stop after a real successful build. The existing
+        coordinator still owns acceptance; an old clean tree never proves a
+        required modification, regardless of why the loop stopped.
+        """
+        if _source_change_pending():
+            return fallback
         if ship_green_on_abort and not pending_truncation and fast_check_fresh and (
             coordinator_handoff or not require_green_before_done
             or (last_runtime_ok is True and not wrote_since_check)
@@ -768,6 +789,7 @@ async def _run_agent_segment(
         # stops re-writing existing files (the root cycle/exploring cause).
         _note = _progress_note(
             written, last_build_ok if not coordinator_handoff or fast_check_fresh else None,
+            source_change_pending=_source_change_pending(),
         )
         if coordinator_handoff:
             _note += (
@@ -1054,6 +1076,16 @@ async def _run_agent_segment(
             convo.append({"role": "user", "content": _NO_ACTION_NUDGE})
             continue
         stalls = 0
+
+        if action.name in _SOURCE_PROOF_ACTIONS and _source_change_pending():
+            await _skip_action(action, step, _SOURCE_CHANGE_REQUIRED)
+            if no_write_streak >= _NO_WRITE_ABORT_AT:
+                return AgentResult(
+                    done=False, summary=_SOURCE_CHANGE_REQUIRED, files=written,
+                    steps=step + 1, transcript=convo, stop_reason="no_progress",
+                )
+            await _nudge_exploration(step)
+            continue
 
         if action.name == "done":
             if pending_truncation:
