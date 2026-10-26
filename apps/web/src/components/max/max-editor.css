@@ -161,7 +161,7 @@
   [data-max-editor] .max-editor-advice { margin-inline: 16px; }
 }
 @media (max-width: 1023px) and (max-height: 600px) {
-  .max-editor-section-heading { padding-block: 8px; }
+  .max-editor-section-heading { padding-block: 0; }
   .max-editor-section-heading p { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .max-editor-drawer, .max-editor-launch-drawer { animation: none; } }
