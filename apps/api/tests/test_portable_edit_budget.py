@@ -90,15 +90,17 @@ async def test_both_runners_receive_the_planned_budget_once(
     ))
     monkeypatch.setattr(max_behavior_proof, "freeze_for_turn", AsyncMock())
     deadline = object()
+    snapshot = AsyncMock(return_value={"src/app/page.tsx": "old screen"})
     coordinator = SimpleNamespace(source_edit_deadline=AsyncMock(return_value=deadline))
     runtime = GenerationRuntime(
-        handle=SimpleNamespace(is_portable=lambda: True), coordinator=coordinator,
+        handle=SimpleNamespace(
+            is_portable=lambda: True, export_files=snapshot, snapshot_files=snapshot,
+        ), coordinator=coordinator,
     )
 
     class RunnerReached(Exception):
         pass
 
-    snapshot = AsyncMock(return_value={"src/app/page.tsx": "old screen"})
     legacy_runner = AsyncMock(side_effect=RunnerReached)
     native_runner = AsyncMock(side_effect=RunnerReached)
     monkeypatch.setattr(agent_builder, "run_agent_build", legacy_runner)
