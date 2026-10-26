@@ -5,7 +5,7 @@ import { MaxStudioHeader } from "@/components/max/MaxStudioHeader";
 import { getSession } from "@/lib/auth-mock";
 import { safeReturnPath } from "@/lib/auth-return";
 
-export default async function MaxOnboardingPage({ searchParams }: { searchParams?: Promise<{ next?: string }> } = {}) {
+export default async function MaxOnboardingPage({ searchParams }: { searchParams?: Promise<{ next?: string }> }) {
   const session = await getSession();
   if (!session || session.isAnon) redirect("/max/register");
   const next = safeReturnPath((await searchParams)?.next) ?? "/max";

@@ -38,3 +38,7 @@ mail outage independence from billing. Existing branch/worktree reused at4ee95c1
 - Independent review found no remaining P1/P2. SMS Aero support inquiry accepted
   by SMTP; mandatory phone flag remains disabled until an approved sender and
   immediate code delivery are available. No paid sender or contract accepted.
+- First exact-SHA CI exposed Next PageProps defaults (unit/typecheck alone did
+  not generate route contracts) and an incomplete payment quote user double.
+  Removed whole-props defaults, ran next typegen plus tsc and 12 auth UI tests;
+  quote test now uses a real phone-verified User, six quote tests passed.

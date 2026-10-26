@@ -10,7 +10,7 @@ import { safeReturnPath } from "@/lib/auth-return";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 
-export default async function MaxRegisterPage({ searchParams }: { searchParams?: Promise<{ next?: string }> } = {}) {
+export default async function MaxRegisterPage({ searchParams }: { searchParams?: Promise<{ next?: string }> }) {
   const next = safeReturnPath((await searchParams)?.next) ?? "/max";
   const session = await getSession();
   const providers = await listOAuthProviders();

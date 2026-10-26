@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 from uuid import uuid4
 
 from yleum_api.models.billing import DEFAULT_BILLING_PLANS
+from yleum_api.models.user import User
 from yleum_api.routers import payments
 from yleum_api.schemas.payments import PaymentCreate
 from yleum_api.services import payment_state, payment_submission
@@ -58,8 +59,9 @@ async def test_order_freezes_count_quote_and_replay_uses_saved_order(monkeypatch
         add=saved.append,
         execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: None)),
     )
-    user = SimpleNamespace(
-        id=uuid4(), email="synthetic@example.invalid", email_verified_at=datetime.now(UTC)
+    user = User(
+        id=uuid4(), email="synthetic@example.invalid", is_anon=False, status="active",
+        phone_e164="+79991234567", phone_verified_at=datetime.now(UTC),
     )
     payload = PaymentCreate(package_code="start", idempotency_key=uuid4())
 

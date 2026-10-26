@@ -42,7 +42,7 @@ it("preserves credentials, phone and chosen legal consents when signup is reject
 });
 
 it("keeps the cookie-updated registration page available to its client action state", async () => {
-  const page = await MaxRegisterPage();
+  const page = await MaxRegisterPage({});
   expect(renderToStaticMarkup(page)).toContain("Открываем аккаунт");
 });
 
