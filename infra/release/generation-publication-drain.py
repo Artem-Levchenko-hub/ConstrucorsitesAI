@@ -837,14 +837,18 @@ def _command_absence_sample(client, state_parent, container):
     }
     services, _ = _machine_execs(state_parent, labels)
     fresh_exec_ids = attrs.get("ExecIDs")
-    # Docker serializes an empty exec store as null. Accept that representation
-    # only for stopped containers, still requiring the full kernel absence proof.
+    # Docker serializes an empty exec store as null. A running idle container
+    # may use that representation only without recorded service execs. Both
+    # branches still require their full kernel proof and an identical second sample.
     _kernel_need(
         "ExecIDs" in attrs
         and (
             type(fresh_exec_ids) is list
             or fresh_exec_ids is None
-            and state.get("Status") == "exited"
+            and (
+                state.get("Status") == "exited"
+                or state.get("Status") == "running" and not services
+            )
         ),
         "fresh_exec_inventory",
     )

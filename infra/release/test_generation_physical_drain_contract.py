@@ -438,6 +438,84 @@ class PhysicalContractTests(unittest.TestCase):
                         with self.assertRaises(self.module.PhysicalDrainError):
                             self.module.require_physical_writers_drained(state, client)
 
+    def test_running_idle_null_exec_inventory_requires_complete_repeated_absence(self):
+        for damage in (
+            None,
+            "service",
+            "unknown_process",
+            "reparented_process",
+            "missing",
+            "wrong_type",
+            "manifest",
+            "late_created",
+            "representation_drift",
+        ):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                parent = {
+                    "unknown_process": 100,
+                    "reparented_process": 999,
+                }.get(damage)
+                state, proc, groups, client, container, _exec = self.kernel_fixture(
+                    Path(tmp), service=damage == "service", extra_parent=parent,
+                )
+                container.attrs["ExecIDs"] = None
+                if damage == "missing":
+                    del container.attrs["ExecIDs"]
+                elif damage == "wrong_type":
+                    container.attrs["ExecIDs"] = {}
+                elif damage == "manifest":
+                    path = state / "project-machines" / WORKSPACE / "docker.json"
+                    metadata = json.loads(path.read_text())
+                    metadata.pop("manifest")
+                    path.write_text(json.dumps(metadata))
+
+                sample = self.module._command_absence_sample
+                samples, inspected = [], []
+                previous = client.api.exec_inspect
+
+                def inspect(exec_id):
+                    inspected.append(exec_id)
+                    if exec_id == "d" * 64:
+                        return {
+                            "ContainerID": container.id,
+                            "Running": False,
+                            "ExitCode": None,
+                        }
+                    return previous(exec_id)
+
+                def sampled(*args):
+                    result = sample(*args)
+                    samples.append(result)
+                    if len(samples) == 1:
+                        if damage == "late_created":
+                            container.attrs["ExecIDs"] = ["d" * 64]
+                        elif damage == "representation_drift":
+                            container.attrs["ExecIDs"] = []
+                    return result
+
+                client.api.exec_inspect = inspect
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    patch.object(
+                        self.module, "_command_absence_sample", side_effect=sampled
+                    ),
+                ):
+                    if damage is None:
+                        self.module.require_physical_writers_drained(state, client)
+                        self.assertEqual(len(samples), 2)
+                        self.assertTrue(all(value["exec_ids"] is None for value in samples))
+                        self.assertEqual(samples[0], samples[1])
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(state, client)
+                        if damage == "late_created":
+                            self.assertIn("d" * 64, inspected)
+                        elif damage == "representation_drift":
+                            self.assertEqual(len(samples), 2)
+                            self.assertIsNone(samples[0]["exec_ids"])
+                            self.assertEqual(samples[1]["exec_ids"], [])
+
     def test_stopped_null_exec_inventory_requires_complete_repeated_absence(self):
         for damage in (
             None,
