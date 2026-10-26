@@ -70,7 +70,9 @@ _PORTABLE_QUIESCENCE_SOURCES = {
 }
 # The initial reviewed producer contract remains valid on live b781. The only
 # reviewed successor (6e5fa4f7) adds a pre-effect missing-draft rejection and its
-# typed route response. These two modules must come from the SAME bundle; an
+# typed route response. The 641c6eed successor adds only a fenced read-only
+# source snapshot route, with no new producer or lock semantics.
+# These two modules must come from the SAME bundle; an
 # independently allowed hash per module would also trust unreviewed mixed code.
 _PORTABLE_QUIESCENCE_PAIRED_SOURCES = ("services.machine_adapter", "routers.workspace")
 _PORTABLE_QUIESCENCE_SOURCE_PAIRS = (
@@ -81,6 +83,10 @@ _PORTABLE_QUIESCENCE_SOURCE_PAIRS = (
     (
         "944528d2805e971120b32336d42adc6544538043fc60ff4c6219de10aabc2611",
         "f82e0bb183f1258cccf393d58e9ee047a6b15cf74b2c3ffdb98fd9111c525e29",
+    ),
+    (
+        "944528d2805e971120b32336d42adc6544538043fc60ff4c6219de10aabc2611",
+        "25a841e7d4b4f9535c0fe2f415bac0172874ad2bf1fce83b82b7c28792db5213",
     ),
 )
 

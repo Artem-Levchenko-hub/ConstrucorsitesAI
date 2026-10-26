@@ -1,6 +1,7 @@
 """Root filesystem/flock and typed controller-state contracts, no Docker daemon."""
 
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -41,6 +42,10 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                 "routers.workspace": "f82e0bb183f1258cccf393d58e9ee047a6b15cf74b2c3ffdb98fd9111c525e29",
             }
         )
+        self.snapshot = {
+            **self.new,
+            "routers.workspace": "25a841e7d4b4f9535c0fe2f415bac0172874ad2bf1fce83b82b7c28792db5213",
+        }
 
     def test_live_and_reviewed_successor_are_complete_supported_bundles(self):
         self.assertEqual(len(self.old), 9)
@@ -54,26 +59,37 @@ class PortableQuiescenceSourcesTests(unittest.TestCase):
                 "4ad3af972da6e73af3e15eb407cff041f15321cf9af83466502c14c2f6dd0dc6",
             ),
         )
-        for sources in (self.old, self.new):
+        for sources in (self.old, self.new, self.snapshot):
             with self.subTest(sources=sources):
                 before = copy.deepcopy(sources)
                 self.checker._require_reviewed_portable_sources(sources)
                 self.assertEqual(sources, before)
         # Receipts continue binding the actual observed bundle, not a common alias.
         self.assertNotEqual(self.checker._digest(self.old), self.checker._digest(self.new))
+        self.assertNotEqual(self.checker._digest(self.new), self.checker._digest(self.snapshot))
+
+    def test_readonly_snapshot_bundle_matches_exact_current_source(self):
+        root = Path(__file__).resolve().parents[2] / "apps/orchestrator/src/yleum_orchestrator"
+        for name in self.checker._PORTABLE_QUIESCENCE_PAIRED_SOURCES:
+            source = root.joinpath(*name.split(".")).with_suffix(".py").read_bytes()
+            # Git checkouts on Windows may materialize CRLF; live Linux bytes
+            # and the authority table remain exact LF source, never normalized.
+            actual = hashlib.sha256(source.replace(b"\r\n", b"\n")).hexdigest()
+            self.assertEqual(actual, self.snapshot[name])
 
     def test_mixed_live_and_successor_modules_are_never_reviewed(self):
-        for changed in ("services.machine_adapter", "routers.workspace"):
-            sources = dict(self.old)
-            sources[changed] = self.new[changed]
-            with self.subTest(changed=changed):
-                with self.assertRaisesRegex(
-                    self.checker.PhysicalDrainError, "quiescence_unsupported_source"
-                ):
-                    self.checker._require_reviewed_portable_sources(sources)
+        for successor in (self.new, self.snapshot):
+            for changed in ("services.machine_adapter", "routers.workspace"):
+                sources = dict(self.old)
+                sources[changed] = successor[changed]
+                with self.subTest(changed=changed, successor=successor):
+                    with self.assertRaisesRegex(
+                        self.checker.PhysicalDrainError, "quiescence_unsupported_source"
+                    ):
+                        self.checker._require_reviewed_portable_sources(sources)
 
     def test_every_unknown_source_hash_is_denied_for_both_bundles(self):
-        for original in (self.old, self.new):
+        for original in (self.old, self.new, self.snapshot):
             for changed in original:
                 sources = dict(original)
                 sources[changed] = "0" * 64
