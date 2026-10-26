@@ -11,21 +11,21 @@ vi.mock("sonner", () => ({ toast: { message: vi.fn() } }));
 const ticket = { id: "11111111-1111-4111-8111-111111111111", reference: "SUP-101", subject: "Не работает публикация", status: "new", version: 1, requester_email: "guest@example.test", created_at: "2026-10-26T10:00:00Z", updated_at: "2026-10-26T10:00:00Z", resolved_at: null, archived: false, source_path: "/max", assigned_admin_email: null, message_count: 1, last_message_preview: "Помогите", messages: [{ id: "message1", author: "customer", body: "Помогите", created_at: "2026-10-26T10:00:00Z" }] };
 class TestSocket {
   static OPEN = 1; static instances: TestSocket[] = []; readyState = 1; onopen: (() => void) | null = null; onmessage: ((event: { data: string }) => void) | null = null; onclose: ((event: { code: number }) => void) | null = null;
-  constructor() { TestSocket.instances.push(this); } close() {} send() {}
+  constructor() { TestSocket.instances.push(this); } close = vi.fn(); send() {}
   event(payload: unknown) { this.onmessage?.({ data: JSON.stringify(payload) }); }
 }
 let root: Root, host: HTMLDivElement, client: QueryClient;
 let identity: { user_id: string | null; email: string | null; is_admin: boolean };
 let posts: Record<string, unknown>[], failPost: boolean, paths: string[];
-let patches: Record<string, unknown>[], conflict: boolean, newCount: number;
+let patches: Record<string, unknown>[], conflict: boolean, newCount: number, failContext: boolean;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, "", "/max");
-  identity = { user_id: null, email: null, is_admin: false }; posts = []; paths = []; failPost = false; patches = []; conflict = false; newCount = 1; TestSocket.instances = []; vi.clearAllMocks();
+  identity = { user_id: null, email: null, is_admin: false }; posts = []; paths = []; failPost = false; patches = []; conflict = false; failContext = false; newCount = 1; TestSocket.instances = []; vi.clearAllMocks();
   vi.stubGlobal("WebSocket", TestSocket);
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const parsed = new URL(url, window.location.origin); paths.push(parsed.pathname + parsed.search);
-    if (parsed.pathname === "/api/support/context") return Response.json(identity);
+    if (parsed.pathname === "/api/support/context") { if (failContext) throw new Error("Context temporarily unavailable"); return Response.json(identity); }
     if (init?.method === "PATCH") { patches.push(JSON.parse(String(init.body))); return conflict ? Response.json({ error: { code: "conflict", message: "Changed" } }, { status: 409 }) : Response.json({ ...ticket, ...patches.at(-1), version: 2 }); }
     if (init?.method === "POST") { posts.push(JSON.parse(String(init.body))); if (failPost) throw new Error("offline"); return Response.json(ticket); }
     if (parsed.pathname.endsWith(ticket.id)) return Response.json(ticket);
@@ -158,4 +158,38 @@ it("revalidates the same authenticated identity after a policy close and restore
   await act(async () => TestSocket.instances[0].onclose?.({ code: 1008 }));
   await wait(() => expect(paths.filter(path => path === "/api/support/context").length).toBeGreaterThan(before));
   await act(async () => { await vi.waitFor(() => expect(TestSocket.instances).toHaveLength(2), { timeout: 4_000 }); });
+});
+
+it("retains an unsubmitted draft across a failed context refresh while hiding private UI and stopping updates", async () => {
+  identity = { user_id: "owner1", email: "owner@example.test", is_admin: false }; await open();
+  await fill("Тема обращения", "Неотправленная тема"); await fill("Сообщение", "Неотправленное сообщение");
+  const socket = TestSocket.instances[0];
+  failContext = true;
+  await act(async () => { await client.invalidateQueries({ queryKey: ["support-context"] }); });
+  await wait(() => expect(document.body.textContent).toContain("Не удалось подключиться"));
+  expect(document.querySelector('[aria-label="Тема обращения"]')).toBeNull();
+  expect(document.body.textContent).not.toContain(ticket.subject);
+  expect(socket.close).toHaveBeenCalledTimes(1);
+  const historyReads = paths.filter(path => path.startsWith("/api/support/tickets?")).length;
+  await act(async () => { await client.invalidateQueries({ queryKey: ["support"] }); });
+  expect(paths.filter(path => path.startsWith("/api/support/tickets?"))).toHaveLength(historyReads);
+  failContext = false; await click("Повторить");
+  await wait(() => expect(document.querySelector('[aria-label="Тема обращения"]')).not.toBeNull());
+  expect((document.querySelector('[aria-label="Тема обращения"]') as HTMLInputElement).value).toBe("Неотправленная тема");
+  expect((document.querySelector('[aria-label="Сообщение"]') as HTMLTextAreaElement).value).toBe("Неотправленное сообщение");
+  expect(posts).toHaveLength(0);
+  expect(sessionStorage.getItem("yleum-support-pending")).toBeNull();
+});
+it("discards the previous principal's unsubmitted inputs when identity changes after a context outage", async () => {
+  identity = { user_id: "owner1", email: "owner@example.test", is_admin: false }; await open();
+  await fill("Тема обращения", "Private owner1 subject"); await fill("Сообщение", "Private owner1 message");
+  failContext = true;
+  await act(async () => { await client.invalidateQueries({ queryKey: ["support-context"] }); });
+  await wait(() => expect(document.querySelector('[aria-label="Тема обращения"]')).toBeNull());
+  identity = { user_id: "owner2", email: "second@example.test", is_admin: false };
+  failContext = false; await click("Повторить");
+  await wait(() => expect(document.querySelector('[aria-label="Тема обращения"]')).not.toBeNull());
+  expect((document.querySelector('[aria-label="Тема обращения"]') as HTMLInputElement).value).toBe("");
+  expect((document.querySelector('[aria-label="Сообщение"]') as HTMLTextAreaElement).value).toBe("");
+  expect(document.body.textContent).not.toContain("Private owner1");
 });

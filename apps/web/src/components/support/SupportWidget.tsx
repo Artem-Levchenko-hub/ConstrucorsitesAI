@@ -37,13 +37,13 @@ export function SupportWidget() {
     return () => { mounted = false; window.removeEventListener("focus", verify); };
   }, [pathname, client]);
   return <Dialog open={open} onOpenChange={setOpen}>
-    <DialogTrigger asChild><button type="button" className="support-launcher" data-max-studio aria-label="Открыть поддержку" title="Поддержка Yleum">?{context.data?.is_admin && !context.isFetching && !!adminCount.data?.new_count && <span className="support-badge" aria-label={`${adminCount.data.new_count} новых обращений`}>{adminCount.data.new_count}</span>}</button></DialogTrigger>
-    {context.data && !context.isError && <SupportSession key={identity} context={context.data} open={open} checking={checking} newCount={adminCount.data?.new_count ?? 0} />}
+    <DialogTrigger asChild><button type="button" className="support-launcher" data-max-studio aria-label="Открыть поддержку" title="Поддержка Yleum">?{context.data?.is_admin && !context.isError && !context.isFetching && !!adminCount.data?.new_count && <span className="support-badge" aria-label={`${adminCount.data.new_count} новых обращений`}>{adminCount.data.new_count}</span>}</button></DialogTrigger>
+    {context.data && <SupportSession key={identity} context={context.data} available={!context.isError} open={open} checking={checking} newCount={adminCount.data?.new_count ?? 0} />}
     {open && (context.isError || !context.data) && <DialogContent data-max-studio className="support-dialog"><DialogTitle>Поддержка Yleum</DialogTitle><DialogDescription>Напишите нам — сохраним обращение и ответим.</DialogDescription>{context.isError ? <p role="alert">Не удалось подключиться. <button onClick={() => void context.refetch()}>Повторить</button></p> : <p role="status">Подключаем поддержку…</p>}</DialogContent>}
   </Dialog>;
 }
 
-function SupportSession({ context, open, checking, newCount }: { context: SupportContext; open: boolean; checking: boolean; newCount: number }) {
+function SupportSession({ context, available, open, checking, newCount }: { context: SupportContext; available: boolean; open: boolean; checking: boolean; newCount: number }) {
   const client = useQueryClient();
   const scope = context.user_id ?? "guest";
   const [draft] = useState(() => readSupportDraft(scope));
@@ -63,10 +63,11 @@ function SupportSession({ context, open, checking, newCount }: { context: Suppor
   const active = useRef(true);
   useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
   const selectedGuest = guests.find(item => item.id === selected);
-  useSupportEvents(context.user_id, context.is_admin, selectedGuest);
-  const history = useQuery({ queryKey: ["support", scope, "history", offset], queryFn: ({ signal }) => listSupport(`limit=50&offset=${offset}`, false, signal), enabled: open && !!context.user_id && !checking, retry: false });
+  // Keep unsent form state through transient context failures, but grant no UI or live access.
+  useSupportEvents(available ? context.user_id : null, available && context.is_admin, available ? selectedGuest : undefined);
+  const history = useQuery({ queryKey: ["support", scope, "history", offset], queryFn: ({ signal }) => listSupport(`limit=50&offset=${offset}`, false, signal), enabled: available && open && !!context.user_id && !checking, retry: false });
   async function submit() {
-    if (busy.current || !subject.trim() || !message.trim() || (!context.user_id && (!email.trim() || !consent))) return;
+    if (!available || busy.current || !subject.trim() || !message.trim() || (!context.user_id && (!email.trim() || !consent))) return;
     busy.current = true; setPending(true); setError("");
     const content = { subject: subject.trim(), message: message.trim(), source_path: window.location.pathname.slice(0, 512), website, ...(!context.user_id ? { email: email.trim(), privacy_accepted: consent } : {}) };
     // Retain an identical retry's key and guest capability even when delivery is ambiguous.
@@ -87,7 +88,7 @@ function SupportSession({ context, open, checking, newCount }: { context: Suppor
     } catch { setError("Не удалось отправить. Черновик сохранён — попробуйте ещё раз."); }
     finally { busy.current = false; setPending(false); }
   }
-  if (!open) return null;
+  if (!open || !available) return null;
   return <DialogContent data-max-studio className="support-dialog">
     <DialogTitle>Поддержка Yleum</DialogTitle><DialogDescription>Опишите, что произошло. Ответим здесь и уведомим по email.</DialogDescription>
     {context.is_admin && <a className="support-admin-link" href="/admin/max?tab=support">Обращения пользователей{newCount ? ` · ${newCount} новых` : ""}</a>}
