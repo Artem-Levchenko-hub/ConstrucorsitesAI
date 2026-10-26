@@ -163,6 +163,10 @@ def source_change_required(prompt: str) -> bool:
     if not clauses:
         return False
     text = ". ".join(clauses)
+    # A bare continuation is not a new modification request. The established
+    # product/checkpoint completion contract still governs what it may finish.
+    if text.rstrip("!?") in {"продолжи", "продолжай", "continue"}:
+        return False
     # A whole later instruction can revoke an earlier change. A preservation
     # clause about data must not erase a separate request to change the UI.
     directive: bool | None = None
@@ -180,7 +184,10 @@ def source_change_required(prompt: str) -> bool:
         r"(?:обзор|анализ|ревью)\b|"
         r"нуж(?:ен|на|но|ны)\s+(?:только\s+)?"
         r"(?:анализ|обзор|ревью|проверка|проверить|исследование|исследовать|"
-        r"объяснить|рассказать)\b",
+        r"объяснить|рассказать)\b|"
+        r"continue\s+(?:reviewing|inspecting|analy[sz]ing|investigating|checking)\b|"
+        r"(?:продолжи|продолжай)\s+(?:исследование|анализ|обзор|ревью|проверку)\b|"
+        r"this\s+is\s+(?:a\s+)?read-only\s+(?:review|analysis|inspection)\b",
         text,
     )
     return analysis is None

@@ -33,6 +33,14 @@ from yleum_api.services.generation.source_intent import source_change_required
     ("Добавь дату. Ничего не меняй", False),
     ("Используй референс для дизайна этот", True),
     ("Макет должен выглядеть как на прикреплённом фото", True),
+    ("продолжи", False),
+    ("Пожалуйста, продолжай!", False),
+    ("Continue", False),
+    ("Продолжи. Добавь дату", True),
+    ("Continue reviewing the latest update.", False),
+    ("Продолжи исследование текущего кода", False),
+    ("This is a read-only review of the latest change.", False),
+    ("Continue reviewing the code and fix the date input", True),
 ])
 def test_source_requirement_distinguishes_request_scope_from_literals(prompt, expected):
     assert source_change_required(prompt) is expected
