@@ -15,7 +15,7 @@ export default async function MaxStudioPage() {
   const session = await getSession();
   if (!session) return null;
   if (session.isAnon) redirect("/max/register");
-  if (!session.emailVerifiedAt) redirect("/max/onboarding");
+  if (session.registrationVerificationReason) redirect("/max/onboarding");
   const access = await getMaxAccessServer();
   if (!access?.can_create_project) redirect("/max/onboarding");
 

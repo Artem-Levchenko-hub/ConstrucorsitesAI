@@ -16,6 +16,7 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from sqlalchemy.exc import SQLAlchemyError
 
+from yleum_api.core.config import get_settings
 from yleum_api.core.db import get_session
 from yleum_api.core.deps import CurrentUserDep
 from yleum_api.core.errors import (
@@ -73,6 +74,10 @@ def site(monkeypatch):
         async def scalar(self, _statement):
             return None
 
+        async def scalars(self, _statement):
+            version = _statement.compile().params.get("document_version_1")
+            return app.state.legal_documents.get(version, [])
+
         async def delete(self, row):
             app.state.deleted.append(row)
 
@@ -93,6 +98,7 @@ def site(monkeypatch):
     app = FastAPI()
     app.state.qa_run = run
     app.state.deleted = []
+    app.state.legal_documents = {}
     app.add_exception_handler(ApiError, api_error_handler)
     app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.include_router(auth.router)
@@ -114,12 +120,14 @@ def site(monkeypatch):
     return app, user, login, project, token
 
 
-async def test_legacy_account_can_manage_only_its_existing_integration_without_max_admission(
+async def test_phone_verified_account_can_manage_integrations_without_max_legal_admission(
     site,
     monkeypatch,
 ):
     app, user, _login, project, token = site
-    user.email_verified_at = datetime.now(UTC)  # Historical hint, no positive verification receipt.
+    monkeypatch.setattr(get_settings(), "phone_verification_enabled", True)
+    user.phone_e164 = "+79991234567"
+    user.phone_verified_at = datetime.now(UTC)
     binding = ProjectIntegrationBinding(id=uuid4(), project_id=project.id, provider="aitunnel")
     lookup = AsyncMock(return_value=binding)
     monkeypatch.setattr(app_integrations, "_binding", lookup)
@@ -130,7 +138,7 @@ async def test_legacy_account_can_manage_only_its_existing_integration_without_m
     ) as client:
         denied = await client.post("/api/projects", json={"name": "Cannot bypass admission"})
         assert denied.status_code == 403
-        assert denied.json()["error"]["code"] == "email_verification_required"
+        assert denied.json()["error"]["code"] == "legal_acceptance_required"
         managed = await client.delete(f"/api/projects/{project.id}/app-integrations/aitunnel")
         assert managed.status_code == 204
         assert app.state.deleted == [binding]
@@ -146,6 +154,7 @@ async def test_legacy_account_can_manage_only_its_existing_integration_without_m
 
 async def test_new_unverified_registration_cannot_manage_integrations(site, monkeypatch):
     app, user, _login, project, token = site
+    monkeypatch.setattr(get_settings(), "phone_verification_enabled", True)
     user.email_verified_at = None
     lookup = AsyncMock()
     monkeypatch.setattr(app_integrations, "_binding", lookup)
@@ -156,9 +165,47 @@ async def test_new_unverified_registration_cannot_manage_integrations(site, monk
     ) as client:
         denied = await client.delete(f"/api/projects/{project.id}/app-integrations/aitunnel")
     assert denied.status_code == 403
-    assert denied.json()["error"]["code"] == "email_verification_required"
+    assert denied.json()["error"]["code"] == "phone_verification_required"
     lookup.assert_not_awaited()
     assert app.state.deleted == []
+
+
+async def test_phone_sms_requires_current_persisted_legal_acceptance_before_claim(
+    site, monkeypatch,
+):
+    app, _user, _login, _project, token = site
+    settings = get_settings()
+    monkeypatch.setattr(settings, "legal_document_version", "2026-10-26")
+    docs = ["terms", "privacy", "personal_data"]
+    app.state.legal_documents["2026-10-11"] = docs
+    claim = AsyncMock(return_value={"accepted": True, "expires_in": 600, "resend_after": 60})
+    monkeypatch.setattr(auth, "request_phone_code", claim)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://qa",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        denied = await client.post("/api/auth/phone/request", json={"phone": "+79991234567"})
+        assert denied.status_code == 403
+        assert denied.json()["error"]["code"] == "legal_acceptance_required"
+        claim.assert_not_awaited()
+        app.state.legal_documents[settings.legal_document_version] = docs
+        accepted = await client.post("/api/auth/phone/request", json={"phone": "+79991234567"})
+    assert accepted.status_code == 202
+    assert claim.await_count == 1
+
+
+async def test_studio_prioritizes_current_legal_acceptance_before_phone_verification(
+    site, monkeypatch,
+):
+    app, _user, _login, _project, token = site
+    monkeypatch.setattr(get_settings(), "phone_verification_enabled", True)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://qa",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        denied = await client.post("/api/projects", json={"name": "Current legal first"})
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "legal_acceptance_required"
 
 
 @pytest.mark.parametrize("product", [None, "general"])
@@ -198,6 +245,36 @@ async def test_registration_cannot_self_certify_email_before_persisting_account(
     assert len(persisted) == 1 and persisted[0]["email_verified_at"] is None
     assert "role" not in persisted[0] and registered.json()["role"] == "user"
     assert registered.json()["email_verified_at"] is None
+
+
+@pytest.mark.parametrize("enabled,verified_phone,reason", [
+    (False, False, "email_verification_required"),
+    (True, False, "phone_verification_required"),
+    (False, True, None),
+    (True, True, None),
+])
+async def test_me_exposes_canonical_rollout_reason_without_inventing_email_proof(
+    site, monkeypatch, enabled, verified_phone, reason,
+):
+    from yleum_api.services import entitlements, generation_credits
+
+    app, user, _login, _project, token = site
+    monkeypatch.setattr(get_settings(), "phone_verification_enabled", enabled)
+    monkeypatch.setattr(get_settings(), "smsaero_email", None)
+    monkeypatch.setattr(entitlements, "free_chat_allowance", AsyncMock(return_value=(1, 1)))
+    monkeypatch.setattr(generation_credits, "uses_unit_billing", AsyncMock(return_value=False))
+    if verified_phone:
+        user.phone_e164 = "+79991234567"
+        user.phone_verified_at = datetime.now(UTC)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://qa",
+        headers={"Authorization": f"Bearer {token}"},
+    ) as client:
+        response = await client.get("/api/auth/me")
+    assert response.status_code == 200
+    assert response.json()["registration_verification_reason"] == reason
+    assert response.json()["phone_verification_required"] is (enabled and not verified_phone)
+    assert response.json()["email_verified_at"] is None
 
 
 class Socket:

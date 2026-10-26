@@ -59,6 +59,7 @@ async def export_personal_account_data(session: AsyncSession, user: User) -> dic
         "account": {
             "id": user.id, "email": user.email, "created_at": user.created_at,
             "last_login_at": user.last_login_at, "email_verified_at": user.email_verified_at,
+            "phone_e164": user.phone_e164, "phone_verified_at": user.phone_verified_at,
             "status": user.status, "default_language": user.default_language,
             "github_login": user.github_login, "github_connected_at": user.github_connected_at,
             "deletion_requested_at": user.deletion_requested_at, "delete_after": user.delete_after,

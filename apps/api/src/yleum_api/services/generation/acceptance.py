@@ -115,6 +115,15 @@ class PromptAcceptance:
         self.project = project
 
     async def accept(self) -> PromptResponse:
+        from yleum_api.services.phone_verification import (
+            phone_verification_required,
+            require_verified_phone,
+        )
+
+        # Admission must precede reservations, credits and any model work. An
+        # already accepted worker run continues independently of this UI gate.
+        if phone_verification_required(self.current_user):
+            require_verified_phone(self.current_user)
         replay = await self.reserve_or_replay()
         if replay is not None:
             return replay

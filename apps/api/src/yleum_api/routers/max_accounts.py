@@ -12,10 +12,14 @@ from yleum_api.schemas.user import LegalAcceptanceRequest
 from yleum_api.services.account_sessions import request_ip, request_user_agent
 from yleum_api.services.accounts import (
     LegalConsent,
+    has_verified_email,
     record_legal_acceptance,
     require_current_legal_acceptance,
 )
 from yleum_api.services.max_access import max_studio_access_reason
+from yleum_api.services.phone_verification import phone_verification_required
+from yleum_api.services.registration_verification import registration_verification_reason
+from yleum_api.services.smsaero import sms_delivery_configured
 from yleum_api.services.transactional_email import email_delivery_configured
 
 router = APIRouter(prefix="/api/max/account", tags=["max-account"])
@@ -31,8 +35,16 @@ async def get_access(current_user: CurrentUserDep, session: SessionDep) -> MaxAc
     settings = get_settings()
     reason = await max_studio_access_reason(session, current_user)
     return MaxAccessPublic(
-        email_verified=reason not in {"max_registration_required", "email_verification_required"},
+        email_verified=await has_verified_email(session, current_user),
         email_delivery_configured=email_delivery_configured(),
+        phone_verified=bool(current_user.phone_e164 and current_user.phone_verified_at),
+        phone_verification_required=phone_verification_required(current_user),
+        phone_verification_available=sms_delivery_configured(),
+        # Legal admission is shown first, while this separate field remains the
+        # canonical identity decision used by the authenticated account UI.
+        registration_verification_reason=await registration_verification_reason(
+            session, current_user,
+        ),
         can_create_project=reason is None,
         reason=reason,
         legal_document_version=settings.legal_document_version,

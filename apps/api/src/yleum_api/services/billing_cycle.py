@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from yleum_api.core.config import get_settings
 from yleum_api.services.payment_state import reconcile_pending_payments
 from yleum_api.services.readiness import WORKER_HEARTBEAT_KEY, write_worker_heartbeat
+from yleum_api.services.subscription_email import run_subscription_email_loop
 from yleum_api.services.subscription_lifecycle import process_subscription_cycle
 
 log = structlog.get_logger(__name__)
@@ -169,9 +170,12 @@ async def run_billing_cycles_forever(
         reconcile_after_minutes=settings.billing_payment_reconcile_after_minutes,
         heartbeat_key=heartbeat_key,
     )
+    email_task = asyncio.create_task(run_subscription_email_loop(factory, poll_seconds=poll))
     try:
         await run_billing_loop(tick, poll_seconds=poll, state=current_state, heartbeat=heartbeat)
     finally:
+        email_task.cancel()
+        await asyncio.gather(email_task, return_exceptions=True)
         await engine.dispose()
 
 

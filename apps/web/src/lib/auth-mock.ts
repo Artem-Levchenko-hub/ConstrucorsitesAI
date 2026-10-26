@@ -15,6 +15,9 @@ export type SessionUser = {
   email: string;
   isAnon: boolean;
   emailVerifiedAt: string | null;
+  phoneVerifiedAt: string | null;
+  phoneVerificationRequired: boolean;
+  registrationVerificationReason: "phone_verification_required" | "email_verification_required" | null;
   status: string;
 };
 
@@ -39,6 +42,9 @@ export async function getSession(): Promise<SessionUser | null> {
       email: "demo@omnia.ai",
       isAnon: false,
       emailVerifiedAt: new Date().toISOString(),
+      phoneVerifiedAt: new Date().toISOString(),
+      phoneVerificationRequired: false,
+      registrationVerificationReason: null,
       status: "active",
     };
   }
@@ -59,6 +65,10 @@ export async function getSession(): Promise<SessionUser | null> {
       email: string | null;
       is_anon?: boolean;
       email_verified_at?: string | null;
+      phone_verified_at?: string | null;
+      phone_e164?: string | null;
+      phone_verification_required?: boolean;
+      registration_verification_reason?: SessionUser["registrationVerificationReason"];
       status?: string;
     };
     return {
@@ -66,6 +76,15 @@ export async function getSession(): Promise<SessionUser | null> {
       email: user.email ?? "",
       isAnon: user.is_anon ?? false,
       emailVerifiedAt: user.email_verified_at ?? null,
+      phoneVerifiedAt: user.phone_verified_at ?? null,
+      phoneVerificationRequired: user.phone_verification_required ?? false,
+      registrationVerificationReason: user.registration_verification_reason !== undefined
+        ? user.registration_verification_reason
+        : user.phone_verification_required
+          ? "phone_verification_required"
+          : (user.phone_e164 && user.phone_verified_at) || user.email_verified_at
+            ? null
+            : "email_verification_required",
       status: user.status ?? "active",
     };
   } catch {

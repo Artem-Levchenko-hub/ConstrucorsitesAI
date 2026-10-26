@@ -16,6 +16,10 @@ from yleum_api.schemas.restoration import (
 )
 from yleum_api.schemas.snapshot import SnapshotPublic
 from yleum_api.services import restorations
+from yleum_api.services.phone_verification import (
+    phone_verification_required,
+    require_verified_phone,
+)
 from yleum_api.services.restoration_runtime import HttpRestorationRuntime
 
 router = APIRouter(prefix="/api/projects", tags=["restorations"])
@@ -68,6 +72,8 @@ async def prepare_restoration(
     current_user: CurrentUserDep,
 ) -> RestoreOperation:
     await _enabled_owned(session, project_id, current_user.id)
+    if phone_verification_required(current_user):
+        require_verified_phone(current_user)
     operation = await restorations.create_restoration(
         session,
         project_id,
@@ -105,6 +111,8 @@ async def apply_restoration(
     current_user: CurrentUserDep,
 ) -> RestoreOperation:
     await _enabled_owned(session, project_id, current_user.id)
+    if phone_verification_required(current_user):
+        require_verified_phone(current_user)
     operation = await restorations.apply_restoration(
         session,
         project_id,

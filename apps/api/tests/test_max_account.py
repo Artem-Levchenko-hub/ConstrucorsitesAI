@@ -24,6 +24,7 @@ MAX_REGISTRATION = {
     "email": "owner@example.com",
     "password": "secret123",
     "product": "max",
+    "phone": "+79991234567",
     "terms_accepted": True,
     "privacy_accepted": True,
     "personal_data_accepted": True,
@@ -56,7 +57,7 @@ async def test_max_registration_requires_separate_legal_acceptances(
     assert response.json()["error"]["code"] == "legal_acceptance_required"
 
 
-async def test_max_project_requires_verified_email_only(
+async def test_max_project_requires_phone_and_email_verification_remains_optional(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -66,6 +67,20 @@ async def test_max_project_requires_verified_email_only(
         verification_tokens.append(raw_token)
 
     monkeypatch.setattr(auth_router, "_send_verification", capture_verification)
+    monkeypatch.setattr(get_settings(), "phone_verification_enabled", True)
+    from pydantic import SecretStr
+
+    from yleum_api.services import phone_verification
+
+    monkeypatch.setattr(get_settings(), "smsaero_email", "qa@example.com")
+    monkeypatch.setattr(get_settings(), "smsaero_api_key", SecretStr("qa-key"))
+    codes = []
+
+    async def capture_sms(_phone, code):
+        codes.append(code)
+        return "qa-message"
+
+    monkeypatch.setattr(phone_verification, "send_verification_sms", capture_sms)
     registration = await client.post("/api/auth/register", json=MAX_REGISTRATION)
     assert registration.status_code == 201
     assert registration.json()["email_verified_at"] is None
@@ -76,12 +91,13 @@ async def test_max_project_requires_verified_email_only(
         json={"name": "Blocked MAX", "template": "max_miniapp"},
     )
     assert blocked.status_code == 403
-    assert blocked.json()["error"]["code"] == "email_verification_required"
+    assert blocked.json()["error"]["code"] == "phone_verification_required"
 
-    verified = await client.post(
-        "/api/auth/email/verify",
-        json={"token": verification_tokens[0]},
+    requested = await client.post(
+        "/api/auth/phone/request", json={"phone": MAX_REGISTRATION["phone"]},
     )
+    assert requested.status_code == 202
+    verified = await client.post("/api/auth/phone/verify", json={"code": codes[0]})
     assert verified.status_code == 200
 
     _stub_project_creation(monkeypatch)
@@ -89,12 +105,14 @@ async def test_max_project_requires_verified_email_only(
         "/api/projects",
         json={"name": "No requisites", "template": "max_miniapp"},
     )
-    assert project.status_code == 201
+    assert project.status_code == 201, project.text
 
     access = await client.get("/api/max/account/access")
     assert access.status_code == 200
     assert access.json()["can_create_project"] is True
-    assert access.json()["email_verified"] is True
+    assert access.json()["email_verified"] is False
+    assert access.json()["phone_verified"] is True
+    assert (await client.get("/api/auth/me")).json()["email_verified_at"] is None
     assert "business" not in access.json()
 
 
@@ -123,6 +141,10 @@ async def test_account_never_accepts_owner_requisites(
         "authenticated",
         "email_verified",
         "email_delivery_configured",
+        "phone_verified",
+        "phone_verification_required",
+        "phone_verification_available",
+        "registration_verification_reason",
         "can_create_project",
         "reason",
         "legal_document_version",
@@ -131,7 +153,7 @@ async def test_account_never_accepts_owner_requisites(
 
 
 @pytest.mark.parametrize("product", [None, "general"])
-async def test_general_registration_cannot_bypass_max_email_and_consents(
+async def test_general_registration_cannot_bypass_max_consents(
     client: httpx.AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     product: str | None,
@@ -149,7 +171,7 @@ async def test_general_registration_cannot_bypass_max_email_and_consents(
         json={"name": "No duplicate legal form", "template": "max_miniapp"},
     )
     assert project.status_code == 403
-    assert project.json()["error"]["code"] == "email_verification_required"
+    assert project.json()["error"]["code"] == "legal_acceptance_required"
 
 
 async def test_general_owner_can_explicitly_complete_max_onboarding(

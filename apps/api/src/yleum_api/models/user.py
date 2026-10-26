@@ -35,6 +35,11 @@ class User(Base):
     email_verified_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    # Only proven ownership is unique; pending challenges never reserve identity.
+    phone_e164: Mapped[str | None] = mapped_column(Text, nullable=True, unique=True)
+    phone_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     session_version: Mapped[int] = mapped_column(
         Integer, nullable=False, server_default="0", default=0
     )
@@ -97,4 +102,10 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("free_chat_messages_used IN (0, 1)", name="free_chat_messages_used"),
+        CheckConstraint(
+            "(phone_e164 IS NULL AND phone_verified_at IS NULL) OR "
+            "(phone_e164 IS NOT NULL AND phone_e164 ~ '^\\+79[0-9]{9}$' "
+            "AND phone_verified_at IS NOT NULL)",
+            name="phone_verified_identity",
+        ),
     )

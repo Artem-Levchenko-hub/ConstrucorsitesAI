@@ -159,13 +159,23 @@ class Settings(BaseSettings):
     smtp_from: str = Field(default="Yleum <noreply@yleum.ru>")
     smtp_starttls: bool = Field(default=True)
 
+    # Explicit rollout policy. Missing credentials never turn an enabled gate off.
+    phone_verification_enabled: bool = Field(default=False)
+    smsaero_email: str | None = Field(default=None)
+    smsaero_api_key: SecretStr | None = Field(default=None)
+    smsaero_sign: str = Field(default="SMS Aero")
+    sms_phone_daily_limit: int = Field(default=5, ge=1, le=20)
+    sms_user_daily_limit: int = Field(default=5, ge=1, le=20)
+    sms_ip_daily_limit: int = Field(default=20, ge=1, le=100)
+    sms_global_daily_limit: int = Field(default=100, ge=1, le=10000)
+
     # Legal identity shown in policies. Paid checkout stays unavailable until
     # both operator identity and YooKassa credentials are configured.
     legal_operator_name: str | None = Field(default=None)
     legal_operator_inn: str | None = Field(default=None)
     legal_operator_address: str | None = Field(default=None)
     legal_support_email: str = Field(default="support@yleum.ru")
-    legal_document_version: str = Field(default="2026-10-11")
+    legal_document_version: str = Field(default="2026-10-26")
     admin_emails: str = Field(default="")
 
     yookassa_shop_id: str | None = Field(default=None)

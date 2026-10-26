@@ -2,13 +2,15 @@
 
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
+import { safeReturnPath } from "@/lib/auth-return";
+import type { AuthFormState } from "@/lib/auth-action-recovery";
 
 import {
   sanitizeReferrerProjectId,
   sanitizeSignupSource,
 } from "@/lib/signup-provenance";
 
-type FormState = { error: string | null };
+type FormState = AuthFormState;
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const COOKIE_NAME = "omnia_session";
@@ -56,11 +58,7 @@ function sessionCookieDomain(): string | undefined {
 
 /** Same safety rules as middleware.ts:safeNext — only same-origin paths. */
 function safeNext(raw: FormDataEntryValue | null): string | null {
-  if (typeof raw !== "string" || !raw) return null;
-  if (!raw.startsWith("/")) return null;
-  if (raw.startsWith("//")) return null;
-  if (raw.includes("\\")) return null;
-  return raw;
+  return safeReturnPath(raw);
 }
 
 /**
@@ -207,10 +205,12 @@ export async function maxRegisterAction(
   formData: FormData,
 ): Promise<FormState> {
   const email = String(formData.get("email") ?? "").trim();
+  const phone = String(formData.get("phone") ?? "").trim();
   const password = String(formData.get("password") ?? "");
   const confirm = String(formData.get("confirm") ?? "");
   const validationError = validateCredentials(email, password);
   if (validationError) return { error: validationError };
+  if (!phone) return { error: "Введите телефон с кодом страны" };
   if (password !== confirm) return { error: "Пароли не совпадают" };
   if (
     formData.get("terms_accepted") !== "on" ||
@@ -222,6 +222,7 @@ export async function maxRegisterAction(
 
   const error = await callAuth("register", {
     email,
+    phone,
     password,
     product: "max",
     terms_accepted: true,
@@ -229,10 +230,10 @@ export async function maxRegisterAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-10-11",
+      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-26",
   });
   if (error) return { error };
-  redirect("/max/onboarding");
+  return { error: null, registered: { phone, email, next: safeNext(formData.get("next")) ?? DEFAULT_LANDING } };
 }
 
 /**
@@ -264,7 +265,7 @@ export async function oauthCompleteAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-11",
+      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-26",
   });
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);

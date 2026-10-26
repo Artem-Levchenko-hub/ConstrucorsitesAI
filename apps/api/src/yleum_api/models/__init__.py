@@ -23,6 +23,7 @@ from yleum_api.models.billing_usage_event import BillingUsageEvent
 from yleum_api.models.custom_domain import CustomDomain
 from yleum_api.models.deploy_target import DeployTarget
 from yleum_api.models.deployment_drain import DeploymentDrain
+from yleum_api.models.email_notification import EmailNotification
 from yleum_api.models.font_asset import FontAsset
 from yleum_api.models.generation_billing import (
     GenerationBillingIntent,
@@ -50,6 +51,7 @@ from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.message import Message
 from yleum_api.models.moysklad import MoyskladInstallation, MoyskladVendorReceipt
 from yleum_api.models.oauth_login import OAuthLoginState, UserIdentity
+from yleum_api.models.phone import PhoneChallenge
 from yleum_api.models.project import Project
 from yleum_api.models.project_cell import (
     ProjectCellActivityLease,
@@ -96,6 +98,7 @@ __all__ = [
     "CustomDomain",
     "DeployTarget",
     "DeploymentDrain",
+    "EmailNotification",
     "FontAsset",
     "GenerationBillingIntent",
     "GenerationBillingOutbox",
@@ -124,6 +127,7 @@ __all__ = [
     "MoyskladVendorReceipt",
     "OAuthLoginState",
     "Payment",
+    "PhoneChallenge",
     "Project",
     "ProjectCellActivityLease",
     "ProjectCellCandidate",

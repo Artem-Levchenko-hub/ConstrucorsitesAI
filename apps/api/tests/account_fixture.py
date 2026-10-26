@@ -29,6 +29,7 @@ async def register_verified_account(
                 "privacy_accepted": True,
                 "personal_data_accepted": True,
                 "document_version": get_settings().legal_document_version,
+                "phone": "+79991234567",
             }
         )
     with patch.object(auth, "_send_verification", capture):

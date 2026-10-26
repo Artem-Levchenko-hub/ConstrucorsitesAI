@@ -60,7 +60,8 @@ describe("/oauth/complete", () => {
     expect(html).toContain("Создать аккаунт");
     // Обещание о минимуме данных проверяется здесь: под кнопками входа его
     // больше нет, а человек принимает его именно на этом экране.
-    expect(html).toContain("храним только email");
+    expect(html).toContain("Телефон");
+    expect(html).toContain("подтверждается один раз");
   }, SLOW_FIRST_IMPORT);
 
   it("explains an expired or used ticket and offers the usual ways in", async () => {

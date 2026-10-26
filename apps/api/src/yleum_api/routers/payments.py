@@ -39,6 +39,7 @@ from yleum_api.services.payment_submission import (
     require_manual_review,
     send_saved_payment,
 )
+from yleum_api.services.registration_verification import require_registration_verification
 from yleum_api.services.subscription_lifecycle import provider_status as _provider_status
 
 router = APIRouter(prefix="/api/payments", tags=["payments"])
@@ -208,12 +209,7 @@ async def create_payment(
             "Платежи ещё не подключены",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    if current_user.email is None or current_user.email_verified_at is None:
-        raise ApiError(
-            "email_verification_required",
-            "Подтвердите email перед оплатой",
-            status.HTTP_403_FORBIDDEN,
-        )
+    await require_registration_verification(session, current_user)
     account = await resolve_billing_account(session, current_user.id)
     key = str(payload.idempotency_key)
     existing = (
@@ -268,12 +264,7 @@ async def create_subscription_checkout(
             "Платежи ещё не подключены",
             status.HTTP_503_SERVICE_UNAVAILABLE,
         )
-    if current_user.email is None or current_user.email_verified_at is None:
-        raise ApiError(
-            "email_verification_required",
-            "Подтвердите email перед оплатой",
-            status.HTTP_403_FORBIDDEN,
-        )
+    await require_registration_verification(session, current_user)
     settings = get_settings()
     if payload.auto_renew and payload.consent_version != settings.legal_document_version:
         raise ApiError(

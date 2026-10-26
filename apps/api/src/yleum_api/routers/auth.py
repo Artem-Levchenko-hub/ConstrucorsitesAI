@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from yleum_api.core.config import get_settings
 from yleum_api.core.deps import CurrentUserDep, SessionDep, extract_access_claims
 from yleum_api.core.errors import ApiError
-from yleum_api.core.ratelimit import rate_limit_auth, rate_limit_email
+from yleum_api.core.ratelimit import _client_ip, rate_limit_auth, rate_limit_email
 from yleum_api.core.security import consume_dummy_verify, hash_password, verify_password
 from yleum_api.models.account import AuthSession, AuthToken
 from yleum_api.models.user import User
@@ -24,6 +24,8 @@ from yleum_api.schemas.user import (
     EmailTokenConsume,
     EmailTokenRequest,
     PasswordResetConsume,
+    PhoneCodeConsume,
+    PhoneCodeRequest,
     SessionPublic,
     UserCreate,
     UserLogin,
@@ -36,11 +38,19 @@ from yleum_api.services.account_sessions import (
     request_user_agent,
 )
 from yleum_api.services.accounts import (
+    REQUIRED_LEGAL_DOCUMENTS,
     LegalConsent,
+    accepted_legal_documents,
     create_account,
     has_verified_email,
     require_current_legal_acceptance,
 )
+from yleum_api.services.phone_verification import (
+    normalize_phone,
+    request_phone_code,
+    verify_phone_code,
+)
+from yleum_api.services.registration_verification import registration_verification_reason
 from yleum_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
@@ -48,6 +58,12 @@ from yleum_api.services.transactional_email import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+
+
+async def _public_user(session: SessionDep, user: User) -> UserPublic:
+    return UserPublic.model_validate(user).model_copy(update={
+        "registration_verification_reason": await registration_verification_reason(session, user),
+    })
 
 
 def _token_hash(raw: str) -> str:
@@ -160,18 +176,15 @@ async def _deliver(letter: Awaitable[None]) -> None:
 
 
 async def _send_verification(user: User, raw_token: str) -> None:
+    from yleum_api.services.email_templates import verification_email
+
     settings = get_settings()
     link = f"{settings.web_base_url.rstrip('/')}/max/verify-email?token={raw_token}"
     code = _verification_code(user.id, raw_token)
+    mail = verification_email(code=code, link=link)
     await send_transactional_email(
         recipient=str(user.email),
-        subject="Подтвердите email для Yleum",
-        text=(
-            "Подтвердите email, чтобы продолжить создание MAX Mini App:\n\n"
-            f"Код: {code}\nКод действует 10 минут.\n\n"
-            f"Или откройте ссылку: {link}\n\n"
-            "Ссылка действует 24 часа. Если это были не вы, ничего не делайте."
-        ),
+        subject=mail.subject, text=mail.text, html=mail.html,
     )
 
 
@@ -186,10 +199,15 @@ async def register(
     request: Request,
     response: Response,
     session: SessionDep,
-) -> User:
+) -> UserPublic:
     settings = get_settings()
     if payload.product == "max":
         require_current_legal_acceptance(payload)
+        if payload.phone is None:
+            raise ApiError("phone_invalid", "Укажите мобильный телефон")
+    if payload.phone is not None:
+        # Validation does not reserve the number; only a successful OTP can.
+        normalize_phone(payload.phone)
 
     pwd_hash = await hash_password(payload.password)
     consent = (
@@ -234,7 +252,36 @@ async def register(
             # Account creation must be durable even when delivery credentials
             # are being configured. The onboarding endpoint exposes readiness.
             pass
-    return user
+    return await _public_user(session, user)
+
+
+@router.post("/phone/request", status_code=status.HTTP_202_ACCEPTED,
+             dependencies=[Depends(rate_limit_auth)])
+async def request_phone_verification(
+    payload: PhoneCodeRequest, request: Request,
+    current_user: CurrentUserDep, session: SessionDep,
+) -> dict[str, bool | int]:
+    accepted = await accepted_legal_documents(
+        session, current_user.id, get_settings().legal_document_version,
+    )
+    if not set(REQUIRED_LEGAL_DOCUMENTS).issubset(accepted):
+        raise ApiError(
+            "legal_acceptance_required",
+            "Примите актуальные документы Yleum перед отправкой SMS",
+            status.HTTP_403_FORBIDDEN,
+        )
+    # Reuse the trusted nginx X-Real-IP policy; never the first forwarded hop.
+    return await request_phone_code(
+        session, current_user, payload.phone, ip_address=_client_ip(request),
+    )
+
+
+@router.post("/phone/verify", dependencies=[Depends(rate_limit_auth)])
+async def verify_phone_verification(
+    payload: PhoneCodeConsume, current_user: CurrentUserDep, session: SessionDep,
+) -> dict[str, bool]:
+    await verify_phone_code(session, current_user, payload.code)
+    return {"verified": True}
 
 
 @router.post("/login", response_model=UserPublic, dependencies=[Depends(rate_limit_auth)])
@@ -243,7 +290,7 @@ async def login(
     request: Request,
     response: Response,
     session: SessionDep,
-) -> User:
+) -> UserPublic:
     result = await session.execute(select(User).where(User.email == payload.email))
     user = result.scalar_one_or_none()
     if user is None or user.password_hash is None:
@@ -258,7 +305,7 @@ async def login(
     await session.commit()
     await session.refresh(user)
     attach_session_cookie(response, user, auth_session)
-    return user
+    return await _public_user(session, user)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -302,7 +349,7 @@ async def me(current_user: CurrentUserDep, session: SessionDep) -> UserPublic:
             + credits["flexible_units"] // 5,
         }
         await session.commit()
-    return UserPublic.model_validate(current_user).model_copy(
+    return (await _public_user(session, current_user)).model_copy(
         update={
             "user_chat_messages_limit": limit,
             "user_chat_messages_remaining": remaining,

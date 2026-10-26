@@ -35,6 +35,7 @@ REGISTRATION = {
     "email": EMAIL,
     "password": PASSWORD,
     "product": "max",
+    "phone": "+79991234567",
     "terms_accepted": True,
     "privacy_accepted": True,
     "personal_data_accepted": True,
@@ -55,7 +56,9 @@ class Outbox:
         self.failure: Exception | None = None
         monkeypatch.setattr(auth_router, "send_transactional_email", self.send)
 
-    async def send(self, *, recipient: str, subject: str, text: str) -> None:
+    async def send(
+        self, *, recipient: str, subject: str, text: str, html: str | None = None,
+    ) -> None:
         if self.failure is not None:
             raise self.failure
         self.letters.append({"recipient": recipient, "subject": subject, "text": text})

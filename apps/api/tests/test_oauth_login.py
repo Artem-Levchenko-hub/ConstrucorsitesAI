@@ -40,6 +40,7 @@ MAX_REGISTRATION = {
     "email": "owner@example.com",
     "password": "secret123",
     "product": "max",
+    "phone": "+79991234567",
     **CONSENT,
 }
 

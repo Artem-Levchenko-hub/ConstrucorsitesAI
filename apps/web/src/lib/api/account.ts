@@ -182,7 +182,7 @@ export function createSubscriptionCheckout(
       idempotency_key: idempotencyKey,
       auto_renew: autoRenew,
       consent_version: autoRenew
-        ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-10-11"
+        ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-26"
         : null,
     },
   });
@@ -197,7 +197,7 @@ export function manageSubscription(
       action,
       consent_version:
         action === "restore"
-          ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-10-11"
+          ? process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-26"
           : null,
     },
   });

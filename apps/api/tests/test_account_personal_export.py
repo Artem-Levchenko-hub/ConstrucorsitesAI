@@ -21,6 +21,7 @@ async def test_export_uses_current_owner_and_never_serializes_auth_secrets(clien
     owners = [User(
         id=uuid4(), email=f"export-{uuid4().hex}@example.com",
         password_hash=f"private-password-hash-{i}", github_token_enc=f"private-github-token-{i}",
+        phone_e164=f"+7999123456{i}", phone_verified_at=now,
     ) for i in range(2)]
     db_session.add_all(owners)
     await db_session.flush()
@@ -60,6 +61,10 @@ async def test_export_uses_current_owner_and_never_serializes_auth_secrets(clien
     data = response.json()
     assert data["account"]["id"] == str(owners[0].id)
     assert data["account"]["email"] == owners[0].email
+    assert data["account"]["phone_e164"] == owners[0].phone_e164
+    assert data["account"]["phone_verified_at"] is not None
+    assert owners[1].phone_e164 not in response.text
+    assert "code_hash" not in response.text and "phone_challenges" not in data
     assert [x["provider_user_id"] for x in data["identities"]] == ["own-login-0"]
     assert "own-login-1" not in response.text
     assert [x["name"] for x in data["projects"]] == ["Personal project 0"]

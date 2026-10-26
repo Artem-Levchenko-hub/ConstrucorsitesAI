@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { AccountControlCenter } from "@/components/account/AccountControlCenter";
+import { createSubscriptionCheckout, manageSubscription } from "@/lib/api/account";
 
 const mocks = vi.hoisted(() => ({ replace: vi.fn(), search: "" }));
 vi.mock("next/navigation", () => ({ useRouter: () => ({ replace: mocks.replace }), useSearchParams: () => new URLSearchParams(mocks.search) }));
@@ -41,7 +42,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
-    if (path === "/api/max/account/access") return Response.json({ authenticated: true, email_verified: true, email_delivery_configured: true, can_create_project: true, reason: null, legal_document_version: "2026-07-30", payments_configured: true });
+    if (path === "/api/max/account/access") return Response.json({ authenticated: true, email_verified: true, email_delivery_configured: true, can_create_project: true, reason: null, legal_document_version: "2026-10-26", payments_configured: true });
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
@@ -53,7 +54,7 @@ beforeEach(() => {
     return new Response(null, { status: 204 });
   }));
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 async function mount(view: React.ComponentProps<typeof AccountControlCenter>["view"], email = "qa@example.test") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
   const invalidate = vi.spyOn(client, "invalidateQueries");
@@ -194,13 +195,36 @@ it("does not trust a terminal checkout response before a confirming GET", async 
   try { await wait(() => expect(button("Выбрать")).toBeDefined()); await click("Выбрать"); await click("Перейти к оплате в ЮKassa"); await wait(() => expect(document.body.textContent).toContain("Ожидает оплаты")); expect(document.body.textContent).not.toContain("Оплата подтверждена"); } finally { await app.close(); }
 });
 it("includes current legal consent only after explicit renewal opt-in", async () => {
+  vi.stubEnv("NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION", "");
   const app = await mount("plan");
   try {
     await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro");
     await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
     await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1));
-    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION ?? "2026-10-11" });
+    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: "2026-10-26" });
   } finally { await app.close(); }
+});
+it.each([
+  [undefined, "2026-10-26"],
+  ["", "2026-10-26"],
+  ["2026-11-01", "2026-11-01"],
+])("sends the renewal consent version for checkout and restore (%s)", async (configured, expected) => {
+  vi.stubEnv("NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION", configured);
+  const sent: Array<{ path: string; method: string | undefined; body: unknown }> = [];
+  vi.stubGlobal("fetch", vi.fn(async (path: string, init?: RequestInit) => {
+    sent.push({ path, method: init?.method, body: JSON.parse(String(init?.body)) });
+    return Response.json({});
+  }));
+  await createSubscriptionCheckout("pro", true, "renewal-test");
+  await manageSubscription("restore");
+  await createSubscriptionCheckout("pro", false, "manual-test");
+  await manageSubscription("cancel");
+  expect(sent).toEqual([
+    { path: "/api/payments/subscription", method: "POST", body: { plan_code: "pro", idempotency_key: "renewal-test", auto_renew: true, consent_version: expected } },
+    { path: "/api/billing/subscription", method: "PATCH", body: { action: "restore", consent_version: expected } },
+    { path: "/api/payments/subscription", method: "POST", body: { plan_code: "pro", idempotency_key: "manual-test", auto_renew: false, consent_version: null } },
+    { path: "/api/billing/subscription", method: "PATCH", body: { action: "cancel", consent_version: null } },
+  ]);
 });
 it("filters real ledger statuses without treating pending payments as credited", async () => {
   payments = [payment, { ...payment, id: "paid", status: "succeeded", amount_rub: "555" }];

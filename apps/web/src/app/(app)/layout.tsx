@@ -15,6 +15,10 @@ export default async function AppLayout({
     const ownerPreviewReturn = target && isMaxOwnerPreviewPath(target);
     redirect(accountReturn || ownerPreviewReturn ? `/login?next=${encodeURIComponent(target!)}` : "/login");
   }
+  const target = (await headers()).get("x-omnia-return-to");
+  if (session.registrationVerificationReason && target && /^\/billing(?:[/?]|$)/.test(target)) {
+    redirect(`/max/onboarding?next=${encodeURIComponent(target)}`);
+  }
 
   // h-dvh (а не min-h-svh) — фиксируем высоту обёртки = viewport. Без этого
   // child-grid в Workspace растёт под content, h-full в ChatPanel перестаёт

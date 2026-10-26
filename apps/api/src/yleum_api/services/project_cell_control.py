@@ -10,6 +10,7 @@ from yleum_api.services.orchestrator_client import get_project_cell_capabilities
 from yleum_api.services.project_cell_access import (
     decide_project_cell_access,
     decide_project_cell_selection,
+    has_project_cell_identity_proof,
 )
 
 
@@ -56,7 +57,7 @@ async def inspect_project_cell_control(
     # unverified account to start a generation. Stay selected and fail closed.
     if user.status != "active" or user.is_anon:
         return _selected_failure("account_ineligible")
-    if user.email is None or user.email_verified_at is None:
+    if not has_project_cell_identity_proof(user):
         return _selected_failure("email_unverified")
 
     try:

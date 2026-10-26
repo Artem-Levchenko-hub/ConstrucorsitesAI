@@ -115,6 +115,52 @@ def _capability(
     return payload
 
 
+async def test_assigned_control_accepts_verified_phone_without_email_verification(monkeypatch):
+    owner = _user()
+    owner.email_verified_at = None
+    owner.phone_e164 = "+79991234567"
+    owner.phone_verified_at = datetime.now(UTC)
+    project_id = uuid4()
+    calls = []
+
+    async def capability(selected_project_id):
+        calls.append(selected_project_id)
+        return _capability(project_id, ready=True, state="ready")
+
+    monkeypatch.setattr(project_cell_control, "get_project_cell_capabilities", capability)
+    readiness = await inspect_project_cell_control(owner, project_id, project_cell_enabled=True)
+    assert readiness.ready is True and readiness.reason == "ready"
+    assert calls == [project_id]
+    assert owner.email_verified_at is None
+
+
+@pytest.mark.parametrize("field,value,reason", [
+    ("phone_e164", None, "email_unverified"),
+    ("phone_verified_at", None, "email_unverified"),
+    ("email", None, "email_unverified"),
+    ("status", "suspended", "account_ineligible"),
+    ("is_anon", True, "account_ineligible"),
+])
+async def test_phone_control_preserves_account_boundaries_before_network(
+    monkeypatch, field, value, reason,
+):
+    owner = _user()
+    owner.email_verified_at = None
+    owner.phone_e164 = "+79991234567"
+    owner.phone_verified_at = datetime.now(UTC)
+    setattr(owner, field, value)
+
+    async def forbidden_network_call(_project_id):
+        raise AssertionError("ineligible account must fail before provider I/O")
+
+    monkeypatch.setattr(
+        project_cell_control, "get_project_cell_capabilities", forbidden_network_call,
+    )
+    readiness = await inspect_project_cell_control(owner, uuid4(), project_cell_enabled=True)
+    assert readiness.selected is True and readiness.ready is False
+    assert readiness.reason == reason
+
+
 async def test_control_inspection_skips_orchestrator_for_legacy_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -28,7 +28,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "registration",
         title: "Регистрация и вход",
-        detail: "Email, пароль, защищённая сессия, восстановление доступа и выход со всех устройств.",
+        detail: "Email, телефон для однократного подтверждения, пароль, защищённая сессия и восстановление доступа по email.",
         status: "done",
         completedAt: "30 июля 2026",
       },
@@ -41,7 +41,7 @@ export const mvpChecklist: MvpChecklistSection[] = [
       {
         id: "business-profile",
         title: "Аккаунт без реквизитов",
-        detail: "Аккаунт — это email и пароль. Бизнес-проверка проходит в MAX Partner; ИНН, ОГРН, ФИО и телефон Yleum не собирает и не хранит.",
+        detail: "Бизнес-проверка проходит в MAX Partner; ИНН, ОГРН и ФИО для первого проекта не нужны. Телефон аккаунта используется для однократного подтверждения по SMS.",
         status: "done",
         completedAt: "23 сентября 2026",
       },

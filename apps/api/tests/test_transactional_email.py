@@ -234,3 +234,47 @@ async def test_delivery_failure_logs_only_category_and_numeric_smtp_code(
         traceback.TracebackException(type(caught.value), caught.value, None).format(chain=True)
     )
     assert "private-" not in rendered
+
+
+@pytest.mark.parametrize(
+    ("failure", "retry_safe"),
+    [
+        (TimeoutError("private-server-reply"), False),
+        (smtplib.SMTPServerDisconnected("private-server-reply"), False),
+        (smtplib.SMTPException("private-server-reply"), False),
+        (smtplib.SMTPDataError(554, b"private-server-reply"), True),
+        (smtplib.SMTPRecipientsRefused({"private@example.test": (550, b"reply")}), True),
+    ],
+)
+async def test_only_definitive_rejection_is_retry_safe_after_submission_starts(
+    monkeypatch: pytest.MonkeyPatch,
+    mail_settings: SimpleNamespace,
+    failure: Exception,
+    retry_safe: bool,
+) -> None:
+    class SubmissionFailure(SMTPStub):
+        def send_message(self, message: EmailMessage) -> None:
+            raise failure
+
+    monkeypatch.setattr(smtplib, "SMTP", lambda *args, **kwargs: SubmissionFailure())
+    with pytest.raises(email_service.EmailDeliveryFailed) as caught:
+        await email_service.send_transactional_email(
+            recipient="recipient@example.test", subject="Code", text="Verification message"
+        )
+    assert caught.value.retry_safe is retry_safe
+
+
+async def test_failed_quit_after_confirmed_acceptance_does_not_trigger_retry(
+    monkeypatch: pytest.MonkeyPatch,
+    mail_settings: SimpleNamespace,
+) -> None:
+    class QuitFailure(SMTPStub):
+        def __exit__(self, *args: object) -> None:
+            raise smtplib.SMTPServerDisconnected("private-server-reply")
+
+    smtp = QuitFailure()
+    monkeypatch.setattr(smtplib, "SMTP", lambda *args, **kwargs: smtp)
+    await email_service.send_transactional_email(
+        recipient="recipient@example.test", subject="Code", text="Verification message"
+    )
+    assert len(smtp.messages) == 1

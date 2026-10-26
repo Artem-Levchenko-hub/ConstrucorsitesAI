@@ -335,7 +335,7 @@ async def complete_registration(
     request: Request,
     response: Response,
     session: SessionDep,
-) -> User:
+) -> UserPublic:
     """Создать аккаунт по билету — только после явного принятия документов."""
     settings = get_settings()
     if not (payload.terms_accepted and payload.privacy_accepted and payload.personal_data_accepted):
@@ -394,4 +394,6 @@ async def complete_registration(
             "Аккаунт с этим email уже есть — войдите через провайдера ещё раз",
             status.HTTP_409_CONFLICT,
         ) from exc
-    return user
+    from yleum_api.routers.auth import _public_user
+
+    return await _public_user(session, user)

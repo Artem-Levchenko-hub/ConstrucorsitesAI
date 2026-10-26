@@ -67,6 +67,54 @@ def test_general_availability_rejects_ineligible_new_admission(changes):
     assert access.admit_new_project_cell(user(**changes), settings) is False
 
 
+def test_general_availability_accepts_verified_phone_without_email_verification():
+    owner = user(
+        email_verified_at=None, phone_e164="+79991234567", phone_verified_at=datetime.now(UTC),
+    )
+    assert access.admit_new_project_cell(owner, Settings()) is True
+    assert owner.email_verified_at is None
+
+
+@pytest.mark.parametrize("changes", [
+    {"phone_e164": None},
+    {"phone_verified_at": None},
+    {"email": None},
+    {"status": "suspended"},
+    {"is_anon": True},
+])
+def test_verified_phone_admission_preserves_identity_and_account_boundaries(changes):
+    profile = {
+        "email_verified_at": None, "phone_e164": "+79991234567",
+        "phone_verified_at": datetime.now(UTC),
+    }
+    assert access.admit_new_project_cell(user(**(profile | changes)), Settings()) is False
+
+
+def test_verified_phone_does_not_bypass_disabled_general_availability():
+    owner = user(
+        email_verified_at=None, phone_e164="+79991234567", phone_verified_at=datetime.now(UTC),
+    )
+    settings = Settings(project_cell_general_availability_enabled=False)
+    assert access.admit_new_project_cell(owner, settings) is False
+
+
+def test_verified_phone_canary_keeps_feature_and_allowlist_boundaries():
+    owner = user(
+        email_verified_at=None, phone_e164="+79991234567", phone_verified_at=datetime.now(UTC),
+    )
+    enabled = Settings(
+        project_cell_docker_canary_enabled=True,
+        project_cell_canary_emails=owner.email,
+    )
+    assert access.decide_project_cell_access(owner, enabled).reason == "owner_canary"
+    assert access.decide_project_cell_access(owner, Settings()).reason == "feature_disabled"
+    stranger = Settings(
+        project_cell_docker_canary_enabled=True,
+        project_cell_canary_emails="other@example.test",
+    )
+    assert access.decide_project_cell_access(owner, stranger).reason == "account_not_allowlisted"
+
+
 @pytest.mark.parametrize("marker,workspace", [(True, False), (False, True)])
 def test_assigned_provider_survives_admission_switch_rollback(marker, workspace):
     result = access.decide_project_cell_selection(

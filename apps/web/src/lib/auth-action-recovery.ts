@@ -1,4 +1,8 @@
-export type AuthFormState = { error: string | null; refreshRequired?: boolean };
+export type AuthFormState = {
+  error: string | null;
+  refreshRequired?: boolean;
+  registered?: { phone: string; email: string; next: string };
+};
 type AuthAction = (previous: AuthFormState, data: FormData) => Promise<AuthFormState>;
 
 /** A stale page may reference an action removed by a new web deployment.

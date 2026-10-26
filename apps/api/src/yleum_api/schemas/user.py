@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, computed_field, field_validator
 
 # Bounded set of viral-funnel signup sources (V4.2b). A closed enum is the
 # teeth: an attacker (or a buggy client) cannot stuff arbitrary strings into the
@@ -25,6 +25,7 @@ class LegalAcceptanceRequest(BaseModel):
 
 class UserCreate(LegalAcceptanceRequest):
     email: EmailStr
+    phone: str | None = Field(default=None, min_length=7, max_length=40)
     password: str = Field(min_length=8, max_length=128)
     # Viral-funnel provenance (V4.2b return-edge), both optional → organic signup
     # leaves them NULL. Validated: `source` against the closed SignupSource enum
@@ -57,6 +58,11 @@ class UserPublic(BaseModel):
     created_at: datetime
     last_login_at: datetime | None = None
     email_verified_at: datetime | None = None
+    phone_e164: str | None = None
+    phone_verified_at: datetime | None = None
+    registration_verification_reason: Literal[
+        "phone_verification_required", "email_verification_required",
+    ] | None = None
     status: str = "active"
     role: Literal["user", "admin"] = "user"
     # Filled only for the authenticated owner by GET /api/auth/me.
@@ -64,6 +70,31 @@ class UserPublic(BaseModel):
     generation_initials_available: int | None = Field(default=None,ge=0)
     user_chat_messages_limit: int | None = Field(default=None, ge=0, le=1)
     user_chat_messages_remaining: int | None = Field(default=None, ge=0, le=1)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def phone_verification_required(self) -> bool:
+        from yleum_api.core.config import get_settings
+
+        return bool(
+            get_settings().phone_verification_enabled and not self.is_anon
+            and not (self.phone_e164 and self.phone_verified_at)
+        )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def phone_verification_available(self) -> bool:
+        from yleum_api.services.smsaero import sms_delivery_configured
+
+        return sms_delivery_configured()
+
+
+class PhoneCodeRequest(BaseModel):
+    phone: str = Field(min_length=7, max_length=40)
+
+
+class PhoneCodeConsume(BaseModel):
+    code: str = Field(pattern=r"^[0-9]{6}$")
 
 
 class EmailTokenRequest(BaseModel):

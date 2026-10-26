@@ -12,13 +12,26 @@ class ProjectCellAccessDecision:
     reason: str
 
 
+def has_project_cell_identity_proof(user: User) -> bool:
+    """Provider eligibility after canonical admission; never manufacture email proof.
+
+    Keep existing email eligibility for legacy assignments while accepting the
+    server-owned verified phone pair. Request admission separately enforces the
+    active rollout policy and canonical email receipts where required.
+    """
+    return bool(
+        user.email is not None
+        and (user.email_verified_at is not None or (user.phone_e164 and user.phone_verified_at))
+    )
+
+
 def admit_new_project_cell(user: User, settings: Settings | None = None) -> bool:
     """New-project admission only; never use a rollout flag to classify old data."""
     config = settings or get_settings()
     return (
         config.project_cell_general_availability_enabled is True
         and user.status == "active" and not user.is_anon
-        and user.email is not None and user.email_verified_at is not None
+        and has_project_cell_identity_proof(user)
     )
 
 
@@ -50,7 +63,7 @@ def decide_project_cell_access(
         return ProjectCellAccessDecision(False, "legacy", "feature_disabled")
     if user.status != "active" or user.is_anon:
         return ProjectCellAccessDecision(False, "legacy", "account_ineligible")
-    if user.email is None or user.email_verified_at is None:
+    if user.email is None or not has_project_cell_identity_proof(user):
         return ProjectCellAccessDecision(False, "legacy", "email_unverified")
     if user.email.strip().casefold() not in config.project_cell_canary_email_set:
         return ProjectCellAccessDecision(False, "legacy", "account_not_allowlisted")

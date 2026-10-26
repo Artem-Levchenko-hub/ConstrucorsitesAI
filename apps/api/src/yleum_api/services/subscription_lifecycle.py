@@ -308,11 +308,16 @@ async def apply_subscription_provider_state(
         payment.status = "succeeded"
         payment.paid_at = current_time
         from yleum_api.services.generation_credits import grant_subscription_units
-        subscription=await session.get(Subscription,payment.subscription_id)
+        from yleum_api.services.subscription_email import enqueue_paid_email
+
+        subscription = await session.get(Subscription, payment.subscription_id)
         if subscription is None:
-            raise ApiError("invalid_webhook","Subscription disappeared",409)
-        plan=await session.get(BillingPlan,subscription.plan_id)
-        await grant_subscription_units(session,subscription,payment,plan)
+            raise ApiError("invalid_webhook", "Subscription disappeared", 409)
+        plan = await session.get(BillingPlan, subscription.plan_id)
+        if plan is None:
+            raise ApiError("invalid_webhook", "Subscription plan disappeared", 409)
+        await grant_subscription_units(session, subscription, payment, plan)
+        await enqueue_paid_email(session, payment, subscription, plan)
     elif status_value == "cancelled" and payment.status not in {"succeeded", "refunded"}:
         payment.status = "cancelled"
         payment.cancelled_at = current_time

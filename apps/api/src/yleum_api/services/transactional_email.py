@@ -6,7 +6,8 @@ import ssl
 from datetime import UTC, datetime
 from email.message import EmailMessage
 from email.utils import format_datetime
-from uuid import uuid4
+from pathlib import Path
+from uuid import UUID, uuid4
 
 import structlog
 
@@ -20,7 +21,10 @@ class EmailDeliveryNotConfigured(RuntimeError):
 
 
 class EmailDeliveryFailed(RuntimeError):
-    pass
+    def __init__(self, message: str, *, retry_safe: bool = False, category: str = "unknown"):
+        super().__init__(message)
+        self.retry_safe = retry_safe
+        self.category = category
 
 
 def email_delivery_configured() -> bool:
@@ -69,7 +73,14 @@ def _failure_details(exc: OSError) -> tuple[str, int | None]:
     return "network", code
 
 
-async def send_transactional_email(*, recipient: str, subject: str, text: str) -> None:
+async def send_transactional_email(
+    *,
+    recipient: str,
+    subject: str,
+    text: str,
+    html: str | None = None,
+    message_id: UUID | None = None,
+) -> None:
     settings = get_settings()
     smtp_host = settings.smtp_host
     # Проверка на сам хост оставлена отдельно: она же сужает тип для smtplib.
@@ -82,10 +93,27 @@ async def send_transactional_email(*, recipient: str, subject: str, text: str) -
     message["Subject"] = subject
     message["Date"] = format_datetime(datetime.now(UTC))
     # Public namespace; never derive the ID from hostnames, users or auth tokens.
-    message["Message-ID"] = f"<{uuid4().hex}@yleum.ru>"
+    message["Message-ID"] = f"<{(message_id or uuid4()).hex}@yleum.ru>"
     message.set_content(text)
+    if html is not None:
+        message.add_alternative(html, subtype="html")
+        logo = Path(__file__).parent.parent / "assets" / "email" / "technical-logo.png"
+        body = message.get_body(preferencelist=("html",))
+        assert body is not None
+        body.add_related(
+            logo.read_bytes(),
+            maintype="image",
+            subtype="png",
+            cid="<yleum-logo>",
+            disposition="inline",
+            filename="yleum.png",
+        )
+
+    submission_started = False
+    accepted = False
 
     def _send() -> None:
+        nonlocal submission_started, accepted
         with smtplib.SMTP(smtp_host, settings.smtp_port, timeout=15) as smtp:
             if settings.smtp_starttls:
                 smtp.starttls(context=ssl.create_default_context())
@@ -94,13 +122,25 @@ async def send_transactional_email(*, recipient: str, subject: str, text: str) -
                     settings.smtp_user,
                     settings.smtp_password.get_secret_value(),
                 )
+            submission_started = True
             smtp.send_message(message)
+            accepted = True
 
     try:
         await asyncio.to_thread(_send)
     except OSError as exc:  # SMTPException is also an OSError.
         category, smtp_code = _failure_details(exc)
+        if accepted:
+            # A failed QUIT cannot undo a confirmed DATA acceptance.
+            return
         log.warning("transactional_email_delivery_failed", category=category, smtp_code=smtp_code)
         # Server replies can contain addresses or credentials. Keep them out of
         # both structured logs and the public exception's formatted chain.
-        raise EmailDeliveryFailed("SMTP delivery failed") from None
+        definitive = isinstance(
+            exc, (smtplib.SMTPRecipientsRefused, smtplib.SMTPSenderRefused, smtplib.SMTPDataError)
+        )
+        raise EmailDeliveryFailed(
+            "SMTP delivery failed",
+            retry_safe=not submission_started or definitive,
+            category=category,
+        ) from None

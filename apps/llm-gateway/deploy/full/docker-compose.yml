@@ -358,11 +358,20 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-Yleum <noreply@yleum.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
+      # Enable mandatory phone proof only after the SMS channel passes acceptance.
+      PHONE_VERIFICATION_ENABLED: ${PHONE_VERIFICATION_ENABLED:-false}
+      SMSAERO_EMAIL: ${SMSAERO_EMAIL:-}
+      SMSAERO_API_KEY: ${SMSAERO_API_KEY:-}
+      SMSAERO_SIGN: ${SMSAERO_SIGN:-SMS Aero}
+      SMS_PHONE_DAILY_LIMIT: ${SMS_PHONE_DAILY_LIMIT:-5}
+      SMS_USER_DAILY_LIMIT: ${SMS_USER_DAILY_LIMIT:-5}
+      SMS_IP_DAILY_LIMIT: ${SMS_IP_DAILY_LIMIT:-20}
+      SMS_GLOBAL_DAILY_LIMIT: ${SMS_GLOBAL_DAILY_LIMIT:-100}
       LEGAL_OPERATOR_NAME: ${LEGAL_OPERATOR_NAME:-}
       LEGAL_OPERATOR_INN: ${LEGAL_OPERATOR_INN:-}
       LEGAL_OPERATOR_ADDRESS: ${LEGAL_OPERATOR_ADDRESS:-}
       LEGAL_SUPPORT_EMAIL: ${LEGAL_SUPPORT_EMAIL:-support@yleum.ru}
-      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-11}
+      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-26}
       ADMIN_EMAILS: ${ADMIN_EMAILS:-}
       AUTH_RATE_LIMIT: ${AUTH_RATE_LIMIT:-30/minute}
       AUTH_IP_RATE_LIMIT: ${AUTH_IP_RATE_LIMIT:-120/hour}
@@ -482,6 +491,10 @@ services:
     environment:
       <<: *api_environment
       GENERATION_RECOVERY_READER_ROLE: generation-worker
+      # SMS authentication secrets belong to the HTTP API only.
+      SMSAERO_EMAIL: ""
+      SMSAERO_API_KEY: ""
+      SMSAERO_SIGN: ""
       # Capacity admin assertions belong to API and gateway only.
       GENERATION_RESPONSE_CAPACITY_SIGNING_SECRET: ""
       # Only the HTTP API serves encrypted off-host backup reads.
@@ -589,7 +602,7 @@ services:
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       SMTP_FROM: ${SMTP_FROM:-Yleum <noreply@yleum.ru>}
       SMTP_STARTTLS: ${SMTP_STARTTLS:-true}
-      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-11}
+      LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-26}
       YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
       YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
       YOOKASSA_VAT_CODE: ${YOOKASSA_VAT_CODE:-1}
@@ -692,7 +705,7 @@ services:
         # the same image runs under any domain. Do not add URL build args here —
         # infra/release/test-compose-policy.sh rejects them.
         NEXT_PUBLIC_USE_MOCKS: "false"
-        NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-11}
+        NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-26}
     image: ${WEB_IMAGE:-omnia-web:prod}
     container_name: yleum-prod-web
     depends_on:
@@ -711,7 +724,7 @@ services:
       NEXTAUTH_URL: ${PUBLIC_ORIGIN:-https://constructor.lead-generator.ru}
       NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in .env}
       NODE_ENV: production
-      NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-11}
+      NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION: ${LEGAL_DOCUMENT_VERSION:-2026-10-26}
     ports:
       - "127.0.0.1:${WEB_HOST_PORT:-3100}:3000"
     restart: unless-stopped

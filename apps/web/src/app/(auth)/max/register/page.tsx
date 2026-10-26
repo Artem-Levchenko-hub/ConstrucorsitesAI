@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 
 import { OAuthButtons } from "@/components/auth/OAuthButtons";
 import { BrandMark } from "@/components/marketing/BrandMark";
@@ -7,12 +6,13 @@ import { MaxRegisterForm } from "@/components/max/MaxRegisterForm";
 import { MarketingEvents } from "@/components/marketing/MarketingEvents";
 import { getSession } from "@/lib/auth-mock";
 import { listOAuthProviders } from "@/lib/oauth-login-server";
+import { safeReturnPath } from "@/lib/auth-return";
 import "@/components/max/max-studio.css";
 import "@/components/marketing/max-public.css";
 
-export default async function MaxRegisterPage() {
+export default async function MaxRegisterPage({ searchParams }: { searchParams?: Promise<{ next?: string }> } = {}) {
+  const next = safeReturnPath((await searchParams)?.next) ?? "/max";
   const session = await getSession();
-  if (session && !session.isAnon) redirect("/max/onboarding");
   const providers = await listOAuthProviders();
 
   return (
@@ -35,10 +35,9 @@ export default async function MaxRegisterPage() {
           {/* Оставлена одна фраза с фактом: бесплатна регистрация, а не генерация.
               Остальное человек и так понимает или прочтёт на витрине. */}
           <p>Без карты. Генерация расходует баланс, публикация зависит от тарифа.</p>
-          <MaxRegisterForm />
-          <div className="mt-6">
-            <OAuthButtons providers={providers} next="/max" />
-          </div>
+          <MaxRegisterForm next={next} existingSession={Boolean(session && !session.isAnon)}>
+            <div className="mt-6"><OAuthButtons providers={providers} next={next} /></div>
+          </MaxRegisterForm>
         </section>
       </div>
     </main>

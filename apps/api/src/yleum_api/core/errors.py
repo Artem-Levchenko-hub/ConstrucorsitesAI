@@ -96,6 +96,11 @@ ErrorCode = Literal[
     # Yleum account, legal and payment lifecycle.
     "max_registration_required",
     "email_verification_required",
+    "phone_verification_required",
+    "phone_invalid",
+    "phone_delivery_unavailable",
+    "phone_rate_limited",
+    "phone_already_registered",
     "legal_acceptance_required",
     "legal_version_outdated",
     "account_unavailable",
