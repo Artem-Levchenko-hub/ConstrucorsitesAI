@@ -776,6 +776,28 @@ def _stopped_kernel_absence(container_id: str):
     return {"boot": boot, "stopped_absent": True}
 
 
+def _missing_service_execs(client, services: set[str]) -> tuple[str, ...]:
+    """Current exact Docker404 only; never infer a service's historical outcome."""
+    from docker.errors import NotFound
+
+    _kernel_need(
+        all(type(value) is str and re.fullmatch(r"[0-9a-f]{64}", value) for value in services),
+        "service_exec_id",
+    )
+    missing = tuple(sorted(services))
+    for exec_id in missing:
+        try:
+            client.api.exec_inspect(exec_id)
+        except Exception as exc:
+            _kernel_need(
+                type(exc) is NotFound and exc.status_code == 404,
+                "service_exec_absence_unconfirmed",
+            )
+        else:
+            raise PhysicalDrainError("service_exec_absence_unconfirmed")
+    return missing
+
+
 def _command_absence_sample(client, state_parent, container):
     from yleum_orchestrator.services.docker_machine_backend import (
         _SERVICE_WRAPPER,
@@ -837,18 +859,15 @@ def _command_absence_sample(client, state_parent, container):
     }
     services, _ = _machine_execs(state_parent, labels)
     fresh_exec_ids = attrs.get("ExecIDs")
-    # Docker serializes an empty exec store as null. A running idle container
-    # may use that representation only without recorded service execs. Both
-    # branches still require their full kernel proof and an identical second sample.
+    # Docker serializes an empty exec store as null. A running container must
+    # still prove every recorded service missing and have only its idle init;
+    # no result is inferred for historical execs. Preserve raw null for comparison.
     _kernel_need(
         "ExecIDs" in attrs
         and (
             type(fresh_exec_ids) is list
             or fresh_exec_ids is None
-            and (
-                state.get("Status") == "exited"
-                or state.get("Status") == "running" and not services
-            )
+            and state.get("Status") in {"exited", "running"}
         ),
         "fresh_exec_inventory",
     )
@@ -911,8 +930,15 @@ def _command_absence_sample(client, state_parent, container):
         ]
         for name, record in metadata["services"].items()
     }
+    live_services = services
+    missing_services = ()
+    if fresh_exec_ids is None and services:
+        common["daemon"] = _daemon_identity(client)
+        missing_services = _missing_service_execs(client, services)
+        common["missing_service_execs"] = missing_services
+        live_services = set()
     execs, roots = {}, set()
-    for exec_id in services:
+    for exec_id in live_services:
         _kernel_need(re.fullmatch(r"[0-9a-f]{64}", exec_id), "service_exec_id")
         execution = client.api.exec_inspect(exec_id)
         process = execution.get("ProcessConfig") or {}
@@ -954,6 +980,12 @@ def _command_absence_sample(client, state_parent, container):
         "container_cgroup_identity",
     )
     _service_forest(snapshot, roots, pid)
+    if missing_services:
+        _kernel_need(
+            _missing_service_execs(client, services) == missing_services
+            and _daemon_identity(client) == common["daemon"],
+            "service_absence_binding_changed",
+        )
     return {**common, "metadata": metadata, "execs": execs, "kernel": snapshot}
 
 

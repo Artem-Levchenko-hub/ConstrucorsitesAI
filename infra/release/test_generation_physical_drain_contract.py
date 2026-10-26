@@ -348,6 +348,7 @@ class PhysicalContractTests(unittest.TestCase):
         client = SimpleNamespace(
             containers=SimpleNamespace(list=lambda **kwargs: [container]),
             api=SimpleNamespace(exec_inspect=inspect),
+            info=lambda: {"ID": "fixture-daemon", "CgroupDriver": "systemd", "CgroupVersion": "2"},
         )
         return state, proc, groups, client, container, service_exec
 
@@ -515,6 +516,177 @@ class PhysicalContractTests(unittest.TestCase):
                             self.assertEqual(len(samples), 2)
                             self.assertIsNone(samples[0]["exec_ids"])
                             self.assertEqual(samples[1]["exec_ids"], [])
+
+    def test_running_idle_historical_service_404_requires_current_absence_not_an_outcome(self):
+        from docker.errors import APIError, NotFound
+        from requests import Response
+
+        for damage in (
+            None,
+            "missing_status",
+            "wrong_status",
+            "generic_404",
+            "generic_500",
+            "timeout",
+            "live_service",
+            "terminal_service",
+            "foreign_service",
+            "unknown_response",
+            "unknown_process",
+            "reparented_process",
+            "thread",
+            "namespace",
+            "security",
+            "manifest",
+            "epoch",
+            "service_id",
+            "missing_inventory",
+            "wrong_inventory_type",
+            "late_exec",
+            "representation_drift",
+            "daemon_drift",
+            "daemon_sample_drift",
+            "daemon_unknown",
+            "metadata_drift",
+            "container_drift",
+            "pid_reuse",
+            "service_revives",
+        ):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                parent = {
+                    "unknown_process": 100,
+                    "reparented_process": 999,
+                }.get(damage)
+                state, proc, groups, client, container, _exec = self.kernel_fixture(
+                    Path(tmp), service=False, extra_parent=parent,
+                )
+                container.attrs["ExecIDs"] = None
+                metadata_path = state / "project-machines" / WORKSPACE / "docker.json"
+                metadata = json.loads(metadata_path.read_text())
+                metadata["manifest"]["services"] = [
+                    {"name": "web", "argv": ["node", "server.js"], "cwd": ".",
+                     "restart": "never"}
+                ]
+                metadata["services"]["web"] = {
+                    "exec_id": "b" * 64, "log": "/run/service.log", "epoch": 7,
+                }
+                if damage == "manifest":
+                    metadata["manifest"]["services"][0].pop("restart")
+                elif damage == "epoch":
+                    metadata["services"]["web"]["epoch"] = 8
+                elif damage == "service_id":
+                    metadata["services"]["web"]["exec_id"] = "malformed"
+                metadata_path.write_text(json.dumps(metadata))
+                journals = {
+                    path: path.read_bytes() for path in (
+                        metadata_path, metadata_path.with_name("machine.json"),
+                    )
+                }
+                if damage == "missing_inventory":
+                    del container.attrs["ExecIDs"]
+                elif damage == "wrong_inventory_type":
+                    container.attrs["ExecIDs"] = False
+                elif damage == "thread":
+                    (groups / container.id / "cgroup.threads").write_text("100\n999\n")
+                elif damage == "namespace":
+                    path = proc / "100/ns/pid"
+                    path.unlink()
+                    os.link(proc / "1/ns/pid", path)
+                elif damage == "security":
+                    container.attrs["HostConfig"]["CapAdd"] = ["SYS_ADMIN"]
+
+                sample = self.module._command_absence_sample
+                samples, inspected, daemon_reads = [], [], []
+                previous = client.api.exec_inspect
+
+                def info():
+                    daemon_reads.append(True)
+                    if damage == "daemon_unknown":
+                        return {"ID": None}
+                    changed = (
+                        damage == "daemon_drift" and len(daemon_reads) > 1
+                        or damage == "daemon_sample_drift" and len(daemon_reads) > 2
+                    )
+                    return {
+                        "ID": "other-daemon" if changed else "fixture-daemon",
+                        "CgroupDriver": "systemd", "CgroupVersion": "2",
+                    }
+
+                def inspect(exec_id):
+                    inspected.append(exec_id)
+                    if exec_id == "d" * 64:
+                        return {"ContainerID": container.id, "Running": False, "ExitCode": None}
+                    if exec_id == "b" * 64:
+                        if damage in {"missing_status", "wrong_status", "generic_404",
+                                      "generic_500"}:
+                            if damage == "missing_status":
+                                raise NotFound("unconfirmed status")
+                            response = Response()
+                            response.status_code = 500 if damage in {
+                                "wrong_status", "generic_500",
+                            } else 404
+                            error = APIError if damage.startswith("generic") else NotFound
+                            raise error("private SDK detail", response=response)
+                        if damage == "timeout":
+                            raise TimeoutError("unconfirmed service inventory")
+                        if damage == "unknown_response":
+                            return None
+                        if damage in {"live_service", "terminal_service", "foreign_service"} or (
+                            damage == "service_revives" and samples
+                        ):
+                            return {
+                                "ContainerID": "f" * 64 if damage == "foreign_service"
+                                else container.id,
+                                "Running": damage != "terminal_service",
+                                "ExitCode": 0 if damage == "terminal_service" else None,
+                                "Pid": 101,
+                            }
+                    return previous(exec_id)
+
+                def sampled(*args):
+                    result = sample(*args)
+                    samples.append(result)
+                    if len(samples) == 1:
+                        if damage == "late_exec":
+                            container.attrs["ExecIDs"] = ["d" * 64]
+                        elif damage == "representation_drift":
+                            container.attrs["ExecIDs"] = []
+                        elif damage == "metadata_drift":
+                            metadata["services"]["web"]["log"] = "/run/changed.log"
+                            metadata_path.write_text(json.dumps(metadata))
+                            journals[metadata_path] = metadata_path.read_bytes()
+                        elif damage == "container_drift":
+                            container.attrs["State"]["StartedAt"] = "different-start"
+                        elif damage == "pid_reuse":
+                            path = proc / "100/stat"
+                            path.write_text(path.read_text().replace("1100", "2100"))
+                    return result
+
+                client.info, client.api.exec_inspect = info, inspect
+                with (
+                    patch.object(self.module, "_PROC_ROOT", proc),
+                    patch.object(self.module, "_CGROUP_ROOT", groups),
+                    patch.object(self.module, "_command_absence_sample", side_effect=sampled),
+                ):
+                    if damage is None:
+                        self.module.require_physical_writers_drained(state, client)
+                        self.assertEqual(len(samples), 2)
+                        self.assertEqual(samples[0], samples[1])
+                        self.assertIsNone(samples[0]["exec_ids"])
+                        self.assertEqual(samples[0]["missing_service_execs"], ("b" * 64,))
+                        self.assertEqual(samples[0]["daemon"]["ID"], "fixture-daemon")
+                        self.assertEqual(samples[0]["execs"], {})
+                        self.assertGreaterEqual(inspected.count("b" * 64), 4)
+                        self.assertEqual(len(daemon_reads), 4)
+                    else:
+                        with self.assertRaises(self.module.PhysicalDrainError):
+                            self.module.require_physical_writers_drained(state, client)
+                        if damage == "late_exec":
+                            self.assertIn("d" * 64, inspected)
+                        if damage in {"representation_drift", "daemon_sample_drift",
+                                      "metadata_drift", "container_drift", "pid_reuse"}:
+                            self.assertTrue(samples)
+                self.assertEqual({path: path.read_bytes() for path in journals}, journals)
 
     def test_stopped_null_exec_inventory_requires_complete_repeated_absence(self):
         for damage in (
