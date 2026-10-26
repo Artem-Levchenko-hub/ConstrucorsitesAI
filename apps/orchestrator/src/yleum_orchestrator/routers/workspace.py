@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, NoReturn
 from uuid import UUID
 
-from fastapi import APIRouter, Header, Response
+from fastapi import APIRouter, Header, Query, Response
 
 from yleum_orchestrator.core.cell_resources import (
     CellCapacityUnavailable,
@@ -331,6 +331,43 @@ async def get_workspace_resources(
             status_code=503,
         ) from exc
     return await _resource_response(status, provider=provider)
+
+
+@router.get(
+    "/workspaces/{workspace_id}/agent/snapshot",
+    response_model=WorkspaceAgentBootstrapResponse,
+    response_model_exclude_defaults=True,
+)
+async def snapshot_workspace_agent(
+    workspace_id: UUID,
+    generation_run_id: UUID,
+    fencing_epoch: Annotated[int, Query(gt=0)],
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> WorkspaceAgentBootstrapResponse:
+    """Inspect source under its current lease without reseeding an empty tree."""
+    verify_internal_token(x_internal_token)
+    provider = _workspace_provider(workspace_id)
+    manager = _require_docker_resource_manager(provider)
+    async with manager.operation_lock.hold(workspace_id):
+        state, volume_name = await _workspace_volume_identity(manager, workspace_id)
+        generation_run_id, fencing_epoch = _require_generation_lease_match(
+            state,
+            generation_run_id=generation_run_id,
+            fencing_epoch=fencing_epoch,
+        )
+        files = await _read_agent_workspace_files(manager, volume_name)
+        workspace_revision = _workspace_revision(files)
+        capabilities = (
+            manager.machine_runtime.capabilities() if manager.machine_runtime else {}
+        )
+    return WorkspaceAgentBootstrapResponse(
+        files=files,
+        seeded_from_project=False,
+        generation_run_id=generation_run_id,
+        fencing_epoch=fencing_epoch,
+        workspace_revision=workspace_revision,
+        capabilities=capabilities,
+    )
 
 
 @router.post(

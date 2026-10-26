@@ -7,9 +7,11 @@ from uuid import UUID
 from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
 PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED = "protected_environment_recovery_required"
+PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE = "protected_source_verification_unavailable"
 TERMINAL_PROJECT_CELL_CODES = frozenset(
     {
         PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+        PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE,
         "migration_apply_failed",
         "migration_reconciliation_required",
     }
@@ -42,5 +44,8 @@ def terminal_cell_error(
 
 def raise_if_terminal_cell_error(error: Exception, *, operation_id: UUID | None = None) -> None:
     terminal = terminal_cell_error(error, operation_id=operation_id)
+    if terminal is error:
+        # Already sanitized: keep its private cause across agent-loop boundaries.
+        raise error
     if terminal is not None:
         raise terminal from None

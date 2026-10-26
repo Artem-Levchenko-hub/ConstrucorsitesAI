@@ -45,6 +45,7 @@ from yleum_api.services.orchestrator_client import (
     project_cell_agent_exec,
     project_cell_agent_identity,
     project_cell_agent_operation_status,
+    project_cell_agent_snapshot,
     project_cell_agent_write_files,
     project_cell_apply_draft,
     project_cell_create_preview_session,
@@ -1475,7 +1476,7 @@ async def maybe_create_project_cell_executor(
 
     async def _refresh_workspace_from_cell() -> dict[str, str]:
         nonlocal dirty, fencing_epoch, workspace_revision
-        refreshed = await project_cell_agent_bootstrap(
+        refreshed = await project_cell_agent_snapshot(
             agent_workspace_id,
             generation_run_id=leased_run_id,
             fencing_epoch=fencing_epoch,

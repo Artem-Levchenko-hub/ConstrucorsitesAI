@@ -900,6 +900,7 @@ async def _prepare_executor(
         "project_cell_agent_bootstrap",
         fake_bootstrap,
     )
+    monkeypatch.setattr(project_cell_executor, "project_cell_agent_snapshot", fake_bootstrap)
     monkeypatch.setattr(
         project_cell_executor,
         "project_cell_prepare_restoration_adaptation",

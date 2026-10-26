@@ -285,6 +285,7 @@ async def _setup(monkeypatch, session, engine, *, create=True):
     monkeypatch.setattr(executor, "project_cell_prepare_restoration_adaptation", controller.prepare)
     monkeypatch.setattr(executor, "project_cell_cleanup_restoration_adaptation", controller.cleanup)
     monkeypatch.setattr(executor, "project_cell_agent_bootstrap", controller.bootstrap)
+    monkeypatch.setattr(executor, "project_cell_agent_snapshot", controller.bootstrap)
     monkeypatch.setattr(executor, "project_cell_agent_identity", controller.identity)
     monkeypatch.setattr(recovery_store, "project_cell_agent_identity", controller.identity)
     monkeypatch.setattr(client, "_request", controller.wire)

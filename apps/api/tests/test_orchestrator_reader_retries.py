@@ -87,7 +87,7 @@ async def test_lifecycle_denial_is_classified_without_transport_replay(transport
     assert transport.pauses == []
 
 
-@pytest.mark.parametrize("operation", ["identity", "write-files"])
+@pytest.mark.parametrize("operation", ["identity", "snapshot", "write-files"])
 async def test_transient_denial_preserves_fenced_request_and_host(transport, operation):
     binding = envelope()
     body = {**binding, "expected_revision": "a" * 64, "files": {"app.ts": "one"}}
@@ -105,15 +105,15 @@ async def test_transient_denial_preserves_fenced_request_and_host(transport, ope
     transport.install(respond)
     path = f"/internal/workspaces/{uuid4()}/agent/{operation}"
     result = await client._request(
-        "GET" if operation == "identity" else "POST",
+        "POST" if operation == "write-files" else "GET",
         path,
-        params=binding if operation == "identity" else None,
+        params=binding if operation != "write-files" else None,
         json=body if operation == "write-files" else None,
     )
     assert result == {"ready": True}
     assert transport.pauses == [1]
     assert len(transport.requests) == 2
-    if operation == "identity":
+    if operation != "write-files":
         assert [r.url.params["fencing_epoch"] for r in transport.requests] == ["7", "7"]
     else:
         assert [json.loads(r.content) for r in transport.requests] == [original, original]
@@ -122,13 +122,18 @@ async def test_transient_denial_preserves_fenced_request_and_host(transport, ope
 
 
 @pytest.mark.parametrize("message", sorted(client._READER_RETRY_MESSAGES))
-async def test_every_known_temporary_inventory_denial_can_recover(transport, message):
+@pytest.mark.parametrize("operation", ["identity", "snapshot", "write-files"])
+async def test_every_known_temporary_inventory_denial_can_recover(transport, message, operation):
     async def respond(_request):
         return denied(message) if len(transport.requests) == 1 else httpx.Response(200, json={})
 
     transport.install(respond)
+    binding = envelope()
     await client._request(
-        "GET", f"/internal/workspaces/{uuid4()}/agent/identity", params=envelope()
+        "POST" if operation == "write-files" else "GET",
+        f"/internal/workspaces/{uuid4()}/agent/{operation}",
+        params=binding if operation != "write-files" else None,
+        json={**binding, "expected_revision": "a" * 64} if operation == "write-files" else None,
     )
     assert len(transport.requests) == 2
 
@@ -258,3 +263,60 @@ async def test_expired_budget_after_scheduler_delay_does_not_send_another_reques
             "GET", f"/internal/workspaces/{uuid4()}/agent/identity", params=envelope(),
         )
     assert len(transport.requests) == 1
+
+
+@pytest.mark.parametrize("shell_failed", [False, True])
+async def test_post_shell_source_guard_waits_for_reader_without_repeating_shell(
+    transport, shell_failed,
+):
+    from tests.test_max_substrate_compatibility import _execute, _handle
+    from yleum_api.schemas.max_studio import MaxProjectConfigPayload
+    from yleum_api.services.agent_builder import Action
+    from yleum_api.services.max_project_kit import render_max_starter_files
+
+    workspace_id, run_id = uuid4(), uuid4()
+    tree = render_max_starter_files(
+        MaxProjectConfigPayload(app_name="QA", app_type="custom", summary="QA"),
+        uuid4(), portable=True,
+    )
+    shell_error = RuntimeError("original shell failure")
+
+    async def shell(_action):
+        tree["src/app/page.tsx"] = "product change"
+        if shell_failed:
+            raise shell_error
+        return {"ok": True, "detail": "executed once"}
+
+    async def respond(request):
+        assert request.method == "GET"
+        assert request.url.path == f"/internal/workspaces/{workspace_id}/agent/snapshot"
+        assert request.url.params["generation_run_id"] == str(run_id)
+        assert request.url.params["fencing_epoch"] == "7"
+        if len(transport.requests) == 1:
+            return denied("reader readiness is unavailable")
+        return httpx.Response(200, json={
+            "files": dict(tree), "seeded_from_project": False,
+            "generation_run_id": str(run_id), "fencing_epoch": 7,
+            "workspace_revision": "a" * 64,
+        })
+
+    async def refresh():
+        result = await client.project_cell_agent_snapshot(
+            workspace_id, generation_run_id=run_id, fencing_epoch=7,
+        )
+        return result.files
+
+    transport.install(respond)
+    handle = _handle(tree, shell)
+    handle.refresh_snapshot_files.side_effect = refresh
+    if shell_failed:
+        with pytest.raises(RuntimeError) as caught:
+            await _execute(handle, Action("bash", {"cmd": "once"}))
+        assert caught.value is shell_error
+    else:
+        result = await _execute(handle, Action("bash", {"cmd": "once"}))
+        assert result == {"ok": True, "detail": "executed once"}
+    handle.execute.assert_awaited_once()
+    handle.stage_patch.assert_not_awaited()
+    assert len(transport.requests) == 2
+    assert transport.pauses == [1]

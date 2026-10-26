@@ -45,6 +45,30 @@ def test_provider_timeout_is_not_reported_as_a_failed_build_check():
     assert "synthetic-private" not in failure.model_dump_json()
 
 
+@pytest.mark.parametrize("code,message", [
+    ("protected_source_verification_unavailable", "не смог проверить"),
+    ("protected_environment_recovery_required", "подтвердить восстановление"),
+])
+def test_protected_source_failure_distinguishes_read_outage_from_recovery(code, message):
+    failure = public_generation_failure(SimpleNamespace(
+        status="failed", error=code + " private-secret", agent_state={},
+    ))
+    assert failure.code == "runtime_unavailable"
+    assert failure.retryable is False
+    assert message in failure.message
+    assert "private-secret" not in failure.model_dump_json()
+
+
+@pytest.mark.parametrize("prefix", [
+    "protected_source_verification_unavailable", "protected_environment_recovery_required",
+])
+def test_similar_text_cannot_claim_a_classified_source_failure(prefix):
+    failure = public_generation_failure(SimpleNamespace(
+        status="failed", error=prefix + "_extra", agent_state={},
+    ))
+    assert failure.code == "verification"
+
+
 def test_platform_wallet_exhaustion_is_not_provider_funds_exhaustion():
     failure = public_generation_failure(SimpleNamespace(
         status="failed", error="PLATFORM_WALLET_EMPTY: private-key", agent_state={},

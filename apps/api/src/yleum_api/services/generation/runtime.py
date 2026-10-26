@@ -315,10 +315,6 @@ async def _execute_trusted_max_db_action(
         max_db_compatibility_error,
         max_db_compatibility_violations,
     )
-    from yleum_api.services.project_cell_errors import (
-        PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
-        ProjectCellInfrastructureError,
-    )
 
     candidate = dict(before)
     if action.name in {"write_file", "edit_file"}:
@@ -346,31 +342,61 @@ async def _execute_trusted_max_db_action(
             return {"ok": False, "error": max_db_compatibility_error(violations)}
         return await handle.execute(action)
 
-    # Shell output can omit files, include only part of the diff, or report a
-    # failed command after it has already changed source. Read the actual tree.
+    # Failure/cancellation can arrive after shell effects. Verify under the
+    # same lease before releasing it; never replay the command itself.
     try:
         result = await handle.execute(action)
     finally:
-        try:
-            refresh = handle.refresh_snapshot_files or handle.snapshot_files
-            after = await refresh()
-            violations = max_db_compatibility_violations(after)
-            changed = tuple(path for path in violations if before.get(path) != after.get(path))
-            if changed:
-                await handle.stage_patch(
-                    {path: before[path] for path in changed if path in before},
-                    tuple(path for path in changed if path not in before),
-                )
-                restored = await refresh()
-                if any(restored.get(path) != before.get(path) for path in changed):
-                    raise RuntimeError("protected source rollback was not applied")
-        except Exception:
-            # Never invite the model to continue building a workspace whose
-            # protected source could not be restored. Do not expose cause text.
-            raise ProjectCellInfrastructureError(PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED) from None
+        violations = await _verify_trusted_max_db_source(handle, before)
     if violations:
         return {"ok": False, "error": max_db_compatibility_error(violations)}
     return result
+
+
+async def _inspect_trusted_max_db_source(
+    handle: ProjectCellExecutorHandle,
+) -> tuple[dict[str, str], tuple[str, ...]]:
+    from yleum_api.services.max_substrate_compatibility import max_db_compatibility_violations
+    from yleum_api.services.project_cell_errors import (
+        PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE,
+        ProjectCellInfrastructureError,
+    )
+
+    try:
+        refresh = handle.refresh_snapshot_files or handle.snapshot_files
+        files = await refresh()
+        return files, max_db_compatibility_violations(files)
+    except ProjectCellInfrastructureError:
+        raise
+    except Exception as exc:
+        # Unknown integrity still stops all tools/model calls. A failed read is
+        # not evidence of damaged source. Preserve its cause in private logs.
+        raise ProjectCellInfrastructureError(PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE) from exc
+
+
+async def _verify_trusted_max_db_source(
+    handle: ProjectCellExecutorHandle, before: dict[str, str],
+) -> tuple[str, ...]:
+    from yleum_api.services.project_cell_errors import (
+        PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED,
+        ProjectCellInfrastructureError,
+    )
+
+    after, violations = await _inspect_trusted_max_db_source(handle)
+    changed = tuple(path for path in violations if before.get(path) != after.get(path))
+    if not changed:
+        return violations
+    try:
+        await handle.stage_patch(
+            {path: before[path] for path in changed if path in before},
+            tuple(path for path in changed if path not in before),
+        )
+    except Exception as exc:
+        raise ProjectCellInfrastructureError(PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED) from exc
+    restored, _ = await _inspect_trusted_max_db_source(handle)
+    if any(restored.get(path) != before.get(path) for path in changed):
+        raise ProjectCellInfrastructureError(PROTECTED_ENVIRONMENT_RECOVERY_REQUIRED)
+    return violations
 
 
 async def _abort_unsafe_max_backend(

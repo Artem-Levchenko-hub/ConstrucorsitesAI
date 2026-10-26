@@ -1757,6 +1757,7 @@ async def validate_font(raw: bytes) -> dict[str, Any]:
 _READER_RETRY_SECONDS = 30.0
 _READER_RETRY_ATTEMPTS = 31
 _READER_RETRY_MESSAGES = frozenset({
+    "reader readiness is unavailable",
     "reader inventory is incompatible or stale",
     "reader epoch changed",
     "inventory changed during validation",
@@ -1767,16 +1768,18 @@ def _replayable_reader_request(
     method: str, path: str, payload: dict[str, Any] | None,
     params: dict[str, Any] | None,
 ) -> bool:
-    """Only fenced identity reads and revision-CAS source writes are replayable.
+    """Only fenced reads and revision-CAS source writes are replayable.
 
     A fresh HTTP request reacquires the controller lock and checks the current
     generation lease, epoch and revision. Commands and lifecycle effects must
     keep their own reconciliation protocol; a 503 is not proof of no effects.
     """
-    route = re.fullmatch(r"/internal/workspaces/([^/]+)/agent/(identity|write-files)", path)
+    route = re.fullmatch(
+        r"/internal/workspaces/([^/]+)/agent/(identity|snapshot|write-files)", path,
+    )
     if route is None:
         return False
-    if route[2] == "identity":
+    if route[2] in {"identity", "snapshot"}:
         envelope = params if method == "GET" else None
     else:
         envelope = payload if method == "POST" else None
@@ -1983,6 +1986,24 @@ async def project_cell_agent_bootstrap(
         },
     )
     return ProjectCellAgentWorkspaceSnapshot.from_json(payload)
+
+
+async def project_cell_agent_snapshot(
+    workspace_id: UUID, *, generation_run_id: UUID, fencing_epoch: int,
+) -> ProjectCellAgentWorkspaceSnapshot:
+    """Read physical source under its current lease; never seed an empty tree."""
+    _validate_fencing_epoch(fencing_epoch)
+    payload = await _request(
+        "GET", f"/internal/workspaces/{workspace_id}/agent/snapshot",
+        params={"generation_run_id": str(generation_run_id), "fencing_epoch": fencing_epoch},
+    )
+    snapshot = ProjectCellAgentWorkspaceSnapshot.from_json(payload)
+    if (
+        snapshot.generation_run_id != generation_run_id
+        or snapshot.fencing_epoch != fencing_epoch or snapshot.seeded_from_project
+    ):
+        raise OrchestratorUnavailable("Orchestrator returned a mismatched source snapshot")
+    return snapshot
 
 
 async def project_cell_prepare_restoration_adaptation(

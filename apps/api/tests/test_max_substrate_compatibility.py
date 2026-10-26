@@ -1,3 +1,4 @@
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import uuid4
@@ -8,6 +9,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.agent_builder import Action
 from yleum_api.services.generation import runtime
 from yleum_api.services.max_project_kit import render_max_starter_files
+from yleum_api.services.orchestrator_client import OrchestratorUnavailable
 from yleum_api.services.project_cell_errors import ProjectCellInfrastructureError
 
 
@@ -192,6 +194,76 @@ async def test_shell_unconfirmed_restore_is_terminal(substrate):
         ProjectCellInfrastructureError, match="protected_environment_recovery_required",
     ):
         await _execute(handle, Action("bash", {"cmd": "generator"}))
+
+
+@pytest.mark.parametrize("after_rollback", [False, True])
+async def test_shell_snapshot_outage_is_not_reported_as_protected_source_damage(
+    substrate, after_rollback,
+):
+    before = dict(substrate)
+
+    async def shell(_action):
+        substrate["src/app/page.tsx"] = "product edit"
+        if after_rollback:
+            substrate["src/lib/db/index.ts"] = "broken"
+        return {"ok": True}
+
+    handle = _handle(substrate, shell)
+    outage = OrchestratorUnavailable("Orchestrator returned 503")
+    handle.refresh_snapshot_files.side_effect = (
+        [dict(substrate, **{"src/lib/db/index.ts": "broken"}), outage]
+        if after_rollback else outage
+    )
+    with pytest.raises(ProjectCellInfrastructureError) as caught:
+        await _execute(handle, Action("bash", {"cmd": "generator"}))
+    assert caught.value.code == "protected_source_verification_unavailable"
+    assert caught.value.__cause__ is outage
+    handle.execute.assert_awaited_once()
+    assert handle.stage_patch.await_count == int(after_rollback)
+    if after_rollback:
+        assert substrate["src/lib/db/index.ts"] == before["src/lib/db/index.ts"]
+
+
+async def test_shell_cancellation_restores_protected_source_before_preserving_cancellation(
+    substrate,
+):
+    before = dict(substrate)
+
+    async def shell(_action):
+        substrate.pop("src/lib/db/index.ts")
+        substrate["src/app/page.tsx"] = "product change"
+        raise asyncio.CancelledError
+
+    handle = _handle(substrate, shell)
+    with pytest.raises(asyncio.CancelledError):
+        await _execute(handle, Action("bash", {"cmd": "generator"}))
+    assert substrate["src/lib/db/index.ts"] == before["src/lib/db/index.ts"]
+    assert substrate["src/app/page.tsx"] == "product change"
+    assert handle.refresh_snapshot_files.await_count == 2
+    handle.stage_patch.assert_awaited_once()
+    handle.execute.assert_awaited_once()
+
+
+async def test_shell_policy_validation_outage_is_terminal_and_keeps_its_cause(
+    substrate, monkeypatch,
+):
+    from yleum_api.services import max_substrate_compatibility
+
+    outage = OSError("private platform-template read failure")
+
+    def failed_validation(_files):
+        raise outage
+
+    handle = _handle(substrate)
+    monkeypatch.setattr(
+        max_substrate_compatibility, "max_db_compatibility_violations", failed_validation,
+    )
+    with pytest.raises(ProjectCellInfrastructureError) as caught:
+        await _execute(handle, Action("bash", {"cmd": "once"}))
+    assert caught.value.code == "protected_source_verification_unavailable"
+    assert caught.value.__cause__ is outage
+    handle.execute.assert_awaited_once()
+    handle.stage_patch.assert_not_awaited()
 
 
 async def test_build_refuses_existing_schema_damage_with_attested_index(substrate):

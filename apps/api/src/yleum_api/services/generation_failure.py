@@ -219,6 +219,21 @@ def failure_for_error(raw_error: object, *, restoration: bool = False) -> Genera
                 "Требуется дождаться восстановления доступности модели."
             ),
         }[category]
+    elif re.match(r"\Aprotected_source_verification_unavailable(?:$|[\s:(])", error):
+        code = "runtime_unavailable"
+        retryable = False
+        message = (
+            "Сервис временно не смог проверить защищённые файлы приложения. "
+            "Новая версия не принята, дальнейшие вызовы модели остановлены. "
+            "Повторите запрос после восстановления проверки."
+        )
+    elif re.match(r"\Aprotected_environment_recovery_required(?:$|[\s:(])", error):
+        code = "runtime_unavailable"
+        retryable = False
+        message = (
+            "Не удалось подтвердить восстановление защищённых файлов приложения. "
+            "Новая версия не принята. Требуется восстановление среды на стороне сервиса."
+        )
     elif "behavior_readiness_unavailable:" in error:
         code = "runtime_unavailable"
         retryable = False

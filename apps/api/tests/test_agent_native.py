@@ -2827,8 +2827,11 @@ def test_generate_media_returns_url_in_model_visible_field() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("code", [
+    "protected_environment_recovery_required", "protected_source_verification_unavailable",
+])
 async def test_classified_protected_environment_failure_stops_before_another_tool_or_model(
-    monkeypatch,
+    monkeypatch, code,
 ):
     from yleum_api.services.orchestrator_client import OrchestratorBadRequest
 
@@ -2843,12 +2846,40 @@ async def test_classified_protected_environment_failure_stops_before_another_too
         raise OrchestratorBadRequest(
             "private diagnostic must not be copied",
             status_code=409,
-            upstream_code="protected_environment_recovery_required",
+            upstream_code=code,
         )
 
     monkeypatch.setattr(agent_native, "_call_messages", provider)
-    with pytest.raises(RuntimeError, match="protected_environment_recovery_required"):
+    with pytest.raises(RuntimeError, match=code):
         await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=40)
+    assert calls == ["model", "read_file"]
+
+
+async def test_native_terminal_source_read_outage_keeps_private_cause_without_paid_replay(
+    monkeypatch,
+):
+    from yleum_api.services.orchestrator_client import OrchestratorUnavailable
+    from yleum_api.services.project_cell_errors import (
+        PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE,
+        ProjectCellInfrastructureError,
+    )
+
+    calls = []
+    cause = OrchestratorUnavailable("Orchestrator returned 503", {"upstream_body": "PRIVATE"})
+
+    async def provider(*args, **kwargs):
+        calls.append("model")
+        return _turn(("read_file", {"path": "a.ts"}), ("list_dir", {"path": "."}))
+
+    async def execute(action):
+        calls.append(action.name)
+        raise ProjectCellInfrastructureError(PROTECTED_SOURCE_VERIFICATION_UNAVAILABLE) from cause
+
+    monkeypatch.setattr(agent_native, "_call_messages", provider)
+    with pytest.raises(ProjectCellInfrastructureError) as caught:
+        await agent_native.run_native_build(system="s", task="t", execute=execute, max_steps=40)
+    assert caught.value.__cause__ is cause
+    assert "PRIVATE" not in str(caught.value)
     assert calls == ["model", "read_file"]
 
 
