@@ -72,6 +72,13 @@ from yleum_api.models.provider_ledger import (
 from yleum_api.models.reference_image import ReferenceImage
 from yleum_api.models.restoration import Restoration
 from yleum_api.models.snapshot import Snapshot
+from yleum_api.models.support import (
+    SupportAudit,
+    SupportEmailOutbox,
+    SupportMessage,
+    SupportRateBucket,
+    SupportTicket,
+)
 from yleum_api.models.task_board import (
     TaskBoardAttachment,
     TaskBoardAttachmentCleanup,
@@ -146,6 +153,11 @@ __all__ = [
     "Restoration",
     "Snapshot",
     "Subscription",
+    "SupportAudit",
+    "SupportEmailOutbox",
+    "SupportMessage",
+    "SupportRateBucket",
+    "SupportTicket",
     "TaskBoardAttachment",
     "TaskBoardAttachmentCleanup",
     "TaskBoardTask",

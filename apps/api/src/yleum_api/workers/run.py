@@ -3,7 +3,7 @@
 Он не обслуживает очередь задач — очередь ушла вместе с отложенным рендером
 превью конструктора сайтов. Остались долгоживущие циклы, которым нужен процесс
 рядом с API: сердцебиение воркера (его видит `/api/health`), тик подписок,
-уборка вложений доски задач и досведение незавершённых восстановлений версий.
+уборка вложений доски задач, письма поддержки и досведение восстановлений версий.
 Удаление приложений также завершается здесь после закрытия браузера.
 Процесс держится на этих потоках и завершается только по сигналу.
 """
@@ -18,6 +18,7 @@ from yleum_api.services.project_deletion import run_project_deletion_forever
 from yleum_api.services.readiness import run_worker_heartbeat_forever
 from yleum_api.services.restoration_reconciliation import run_restoration_reconciliation_forever
 from yleum_api.services.subscription_lifecycle import run_subscription_lifecycle_forever
+from yleum_api.services.support_email import run_support_email_forever
 from yleum_api.services.task_board_attachment_cleanup import run_attachment_cleanup_forever
 
 
@@ -33,6 +34,10 @@ def _run_attachment_cleanup() -> None:
     asyncio.run(run_attachment_cleanup_forever())
 
 
+def _run_support_email() -> None:
+    asyncio.run(run_support_email_forever())
+
+
 def _run_restoration_reconciliation() -> None:
     from yleum_api.services.generation.recovery_readers import wait_for_readers
 
@@ -46,28 +51,21 @@ def _run_project_deletion() -> None:
 
 
 def _start_workers() -> None:
+    workers = [
+        ("task-board-attachment-cleanup", _run_attachment_cleanup),
+        # AV19.1: restoration cancel/apply/prepare finish without a client GET.
+        ("restoration-reconciliation", _run_restoration_reconciliation),
+        ("project-deletion", _run_project_deletion),
+        ("support-email", _run_support_email),
+    ]
     if get_settings().billing_lifecycle_enabled:
+        workers.insert(0, ("subscription-lifecycle", _run_billing_lifecycle))
+    for name, target in workers:
         threading.Thread(
-            target=_run_billing_lifecycle,
-            name="subscription-lifecycle",
+            target=target,
+            name=name,
             daemon=True,
         ).start()
-    threading.Thread(
-        target=_run_attachment_cleanup,
-        name="task-board-attachment-cleanup",
-        daemon=True,
-    ).start()
-    # AV19.1: restoration cancel/apply/prepare finish without a client GET.
-    threading.Thread(
-        target=_run_restoration_reconciliation,
-        name="restoration-reconciliation",
-        daemon=True,
-    ).start()
-    threading.Thread(
-        target=_run_project_deletion,
-        name="project-deletion",
-        daemon=True,
-    ).start()
 
 
 async def _run() -> None:

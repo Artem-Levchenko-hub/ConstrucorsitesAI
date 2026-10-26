@@ -5,6 +5,7 @@ import { MotionConfig } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Toaster, toast, useSonner } from "sonner";
 import "./notifications.css";
+import { SupportWidget } from "@/components/support/SupportWidget";
 
 function Notifications() {
   const { toasts } = useSonner();
@@ -54,6 +55,7 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <MotionConfig reducedMotion="user">
         {children}
         <Notifications />
+        <SupportWidget />
       </MotionConfig>
     </QueryClientProvider>
   );

@@ -127,6 +127,11 @@ jobs:
         working-directory: apps/api
         run: >-
           uv run pytest -q
+          tests/test_support_unit.py
+          tests/test_support_integration.py
+          tests/test_support_migration.py
+          tests/test_main_lifespan.py
+          tests/test_project_deletion_worker_startup.py
           tests/test_deploy_gate_defaults.py
           tests/test_release_identity.py
           tests/test_readiness.py

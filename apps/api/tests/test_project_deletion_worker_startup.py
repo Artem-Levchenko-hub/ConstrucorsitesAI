@@ -27,6 +27,19 @@ def test_worker_startup_registers_project_deletion_executor(monkeypatch):
     run._start_workers()
     assert ("project-deletion", run._run_project_deletion) in started
     assert sum(name == "project-deletion" for name, _ in started) == 1
+    assert ("support-email", run._run_support_email) in started
+    assert sum(name == "support-email" for name, _ in started) == 1
+
+
+def test_support_email_worker_runs_its_own_async_lifecycle(monkeypatch):
+    received = []
+
+    async def executor():
+        received.append(True)
+
+    monkeypatch.setattr(run, "run_support_email_forever", executor)
+    run._run_support_email()
+    assert received == [True]
 
 
 def test_deletion_worker_waits_for_current_reader_readiness(monkeypatch):

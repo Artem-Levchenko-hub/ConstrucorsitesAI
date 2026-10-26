@@ -32,7 +32,7 @@ const copy: Record<AccountView, { eyebrow: string; title: string; lead: string }
   billing: { eyebrow: "10 / Billing", title: "Баланс и пополнение", lead: "Пакеты использования и безопасная оплата на стороне ЮKassa." },
   transactions: { eyebrow: "10 / Billing", title: "Операции", lead: "История платежей, начислений и статусов." },
   plan: { eyebrow: "10 / Billing", title: "Управление тарифом", lead: "Режим эксплуатации приложения и доступные лимиты." },
-  admin: { eyebrow: "Admin / Control", title: "Админ-центр", lead: "Аккаунты, роли и журнал административных изменений." },
+  admin: { eyebrow: "Admin / Control", title: "Админ-центр", lead: "Аккаунты, обращения в поддержку и журнал административных изменений." },
 };
 
 export async function AccountShell({

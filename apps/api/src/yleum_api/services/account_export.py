@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yleum_api.models.account import AuthSession, LegalAcceptance, Payment
 from yleum_api.models.oauth_login import UserIdentity
 from yleum_api.models.project import Project
+from yleum_api.models.support import SupportMessage, SupportTicket
 from yleum_api.models.user import User
 from yleum_api.models.wallet import Wallet
 from yleum_api.models.wallet_charge import WalletCharge
@@ -51,6 +52,19 @@ async def export_personal_account_data(session: AsyncSession, user: User) -> dic
             WalletCharge.id, WalletCharge.entry_type, WalletCharge.amount_rub,
             WalletCharge.balance_after_rub, WalletCharge.created_at,
         ).where(WalletCharge.user_id == user.id).order_by(WalletCharge.created_at, WalletCharge.id),
+        "support_tickets": select(
+            SupportTicket.id, SupportTicket.number, SupportTicket.subject, SupportTicket.status,
+            SupportTicket.requester_email, SupportTicket.created_at, SupportTicket.updated_at,
+            SupportTicket.resolved_at, SupportTicket.source_path,
+        ).where(SupportTicket.owner_id == user.id).order_by(
+            SupportTicket.created_at, SupportTicket.id,
+        ),
+        "support_messages": select(
+            SupportMessage.id, SupportMessage.ticket_id, SupportMessage.author,
+            SupportMessage.body, SupportMessage.created_at,
+        ).join(SupportTicket, SupportTicket.id == SupportMessage.ticket_id).where(
+            SupportTicket.owner_id == user.id,
+        ).order_by(SupportMessage.created_at, SupportMessage.id),
     }
     result: dict[str, object] = {
         "format_version": 1,

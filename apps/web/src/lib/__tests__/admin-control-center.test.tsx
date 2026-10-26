@@ -13,6 +13,7 @@ let people: AdminUser[], auditEvents: AdminAuditEvent[], requests: { path: strin
 let respondMutation: (path: string, body: Record<string, unknown>) => Promise<Response>;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+  window.history.replaceState({}, "", "/admin/max");
   people = [self, person]; requests = []; auditError = false;
   auditEvents = [event];
   respondMutation = async (path, body) => {

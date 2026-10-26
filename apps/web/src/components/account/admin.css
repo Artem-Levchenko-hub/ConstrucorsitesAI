@@ -1,5 +1,5 @@
 .admin-center { color: var(--color-fg-primary); font-size: 13px; }
-.admin-tabs { display: flex; gap: 26px; border-bottom: 1px solid var(--color-border-default); margin-bottom: 24px; }
+.admin-tabs { display: flex; flex-wrap: wrap; column-gap: 22px; row-gap: 4px; border-bottom: 1px solid var(--color-border-default); margin-bottom: 24px; }
 .admin-tabs button { display: inline-flex; align-items: center; gap: 8px; min-height: 48px; border-bottom: 3px solid transparent; padding: 0 2px 12px; color: var(--color-fg-secondary); font-weight: 500; }
 .admin-tabs svg { width: 17px; height: 17px; }
 .admin-tabs button[aria-selected="true"] { border-bottom-color: var(--color-accent); color: var(--color-accent-secondary); }

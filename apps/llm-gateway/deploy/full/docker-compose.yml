@@ -542,6 +542,9 @@ services:
     environment:
       GENERATION_RECOVERY_INVENTORY_DIR: /run/yleum-generation-readers
       GENERATION_RECOVERY_READER_ROLE: worker
+      # Support mail rechecks the same administrator allowlist and canonical URLs as API.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      WEB_BASE_URL: ${WEB_BASE_URL:-https://constructor.lead-generator.ru}
       GENERATION_RECOVERY_MODE: ${GENERATION_RECOVERY_MODE:-off}
       GENERATION_RECOVERY_EXECUTION_ENABLED: ${GENERATION_RECOVERY_EXECUTION_ENABLED:-false}
       GENERATION_RECOVERY_CANARY_PROJECT_IDS: ${GENERATION_RECOVERY_CANARY_PROJECT_IDS:-}

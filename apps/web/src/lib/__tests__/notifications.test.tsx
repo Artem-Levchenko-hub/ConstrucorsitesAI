@@ -10,6 +10,7 @@ async function tick(ms: number) { await act(async () => { await vi.advanceTimers
 beforeEach(async () => {
   (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   vi.useFakeTimers();
+  vi.stubGlobal("fetch", vi.fn(async () => Response.json({ user_id: null, email: null, is_admin: false })));
   vi.stubGlobal("matchMedia", () => ({ matches: false, addListener() {}, removeListener() {}, addEventListener() {}, removeEventListener() {} }));
   container = document.createElement("div"); document.body.append(container); root = createRoot(container);
   await act(async () => { root.render(<Providers><div>Workspace</div></Providers>); });

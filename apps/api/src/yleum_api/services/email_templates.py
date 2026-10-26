@@ -174,3 +174,22 @@ def reminder_email(
         note=note,
         footer="Актуальный статус подписки всегда доступен в личном кабинете.",
     )
+
+
+def support_email(
+    *, reference: str, subject: str, body: str, url: str, staff: bool
+) -> EmailContent:
+    """Render untrusted support text as escaped text inside the shared brand shell."""
+    title = "Сообщение в поддержку" if staff else "Ответ поддержки Yleum"
+    return _content(
+        subject=f"Yleum · {reference} · {title}",
+        eyebrow=f"ПОДДЕРЖКА · {reference}",
+        title=title,
+        lead=subject,
+        panel=f'<div style="white-space:pre-wrap;overflow-wrap:anywhere">{escape(body)}</div>',
+        panel_text=body,
+        button="Открыть обращение" if staff else "Открыть Yleum",
+        url=url,
+        note="Ответьте в чате поддержки на сайте. Ответы на это письмо не обрабатываются.",
+        footer="Вы получили это письмо по обращению в поддержку Yleum.",
+    )

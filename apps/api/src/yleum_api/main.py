@@ -49,6 +49,7 @@ from yleum_api.routers import restorations as restorations_router
 from yleum_api.routers import rollback as rollback_router
 from yleum_api.routers import runtime as runtime_router
 from yleum_api.routers import snapshots as snapshots_router
+from yleum_api.routers import support as support_router
 from yleum_api.routers import task_board as task_board_router
 from yleum_api.routers import transcribe as transcribe_router
 from yleum_api.routers import wallet as wallet_router
@@ -59,6 +60,7 @@ from yleum_api.services.generation_runs import recover_interrupted_generation_ru
 from yleum_api.services.project_cell_capacity import advance_terminal_generation_cleanup
 from yleum_api.services.project_cell_runtime import advance_owner_wake_operations
 from yleum_api.services.project_cells import recover_interrupted_cell_operations
+from yleum_api.services.support_realtime import support_hub
 from yleum_api.services.ws_hub import hub
 
 logger = logging.getLogger(__name__)
@@ -146,6 +148,7 @@ async def _background_services(
                 extra={"project_cell_operation_count": recovered_cells},
             )
         await hub.start_listener()
+        await support_hub.start()
         await _reader_compatibility_gate()
         resumed = await resume_capacity_queued_generations()
         if resumed:
@@ -176,6 +179,7 @@ async def _background_services(
                     with suppress(asyncio.CancelledError):
                         await task
                 await hub.stop_listener()
+                await support_hub.stop()
                 await dispose_redis()
                 await dispose_engine()
 
@@ -247,6 +251,7 @@ def create_app() -> FastAPI:
     app.include_router(backups_router.router)
     app.include_router(billing_router.router)
     app.include_router(admin_router.router)
+    app.include_router(support_router.router)
     app.include_router(account_router.router)
     app.include_router(app_integrations_router.router)
     app.include_router(amocrm_router.router)
