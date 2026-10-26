@@ -20,6 +20,7 @@ from yleum_api.core.deps import get_current_user, get_optional_user
 from yleum_api.core.errors import ApiError, api_error_handler
 from yleum_api.core.security import decode_access_claims
 from yleum_api.models.project import Project
+from yleum_api.models.user import User
 from yleum_api.routers import moysklad_vendor
 
 COOKIE = "__Host-moysklad-return"
@@ -36,7 +37,7 @@ def native(monkeypatch):
         web_base_url="https://yleum.ru",
     )
     monkeypatch.setattr(moysklad_vendor, "get_settings", lambda: settings)
-    user = SimpleNamespace(
+    user = User(
         id=uuid4(),
         session_version=4,
         status="active",
@@ -163,7 +164,7 @@ def test_return_cannot_route_into_invalid_or_foreign_project(native, monkeypatch
     elif fault == "expired":
         monkeypatch.setattr(moysklad_vendor.time, "time", lambda: 4102444800)
     elif fault == "foreign_owner":
-        state.user = SimpleNamespace(**{**vars(state.user), "id": uuid4()})
+        state.user.id = uuid4()
     elif fault == "session_rotated":
         state.user.session_version += 1
     elif fault == "project_transferred":

@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from yleum_api.core.db import get_session
 from yleum_api.core.deps import get_current_user, get_optional_user
 from yleum_api.core.errors import ApiError, api_error_handler
+from yleum_api.models.user import User
 from yleum_api.routers import moysklad_vendor
 
 CONNECT = "/api/integrations/moysklad/connect"
@@ -18,11 +19,12 @@ CONNECT = "/api/integrations/moysklad/connect"
 
 @pytest.fixture
 def bridge(monkeypatch):
-    user = SimpleNamespace(
+    user = User(
         id=uuid4(),
         session_version=3,
         email="qa-owner@example.invalid",
         is_anon=False,
+        status="active",
         email_verified_at=datetime.now(UTC),
     )
     own = SimpleNamespace(
