@@ -134,6 +134,9 @@
 [data-max-editor] .max-editor-advice > summary { display: inline-flex; min-height: 44px; align-items: center; padding: 8px 14px; border: 1px solid #c5cede; border-radius: 6px; background: #fff; color: #244f9d; cursor: pointer; font-size: 13px; }
 @keyframes max-editor-enter { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 1023px) {
+  /* Reserve the fixed support launcher inside viewport-height editor/preview roots.
+     Border-box keeps the footer space from expanding their 100% height. */
+  .max-editor, main[data-product-shell][data-max-editor] { box-sizing: border-box; padding-bottom: calc(80px + env(safe-area-inset-bottom)); }
   .max-editor-workspace { grid-template-columns: minmax(0, 1fr); }
   .max-editor-desktop-preview { display: none; }
   .max-editor-mobile-preview-trigger { display: inline-flex; }
