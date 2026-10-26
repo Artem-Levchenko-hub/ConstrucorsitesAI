@@ -21,6 +21,7 @@ const ENTITLEMENT_NAMES: Record<string, { one: string; many: string }> = {
 };
 
 const PLAN_HINT = "Сменить тариф можно в разделе «Аккаунт → Тариф».";
+const NETWORK_ERROR_MESSAGE = "Сервис временно недоступен. Проверьте соединение и повторите попытку.";
 
 type EntitlementDetails = {
   entitlement?: unknown;
@@ -62,13 +63,14 @@ export function describeEntitlementError(
 /** Text for any thrown value; `fallback` covers non-API failures. */
 export function describeApiError(error: unknown, fallback = "Попробуйте ещё раз."): string {
   if (error instanceof ApiError) {
+    if (error.status === 0) return NETWORK_ERROR_MESSAGE;
     if (error.code === "entitlement_exceeded" || error.code === "subscription_entitlement_required") {
       return describeEntitlementError(error.code, error.details, error.message);
     }
     return error.message || fallback;
   }
   if (error instanceof TypeError && /fetch/i.test(error.message)) {
-    return "Сервис временно недоступен. Проверьте соединение и повторите попытку.";
+    return NETWORK_ERROR_MESSAGE;
   }
   return error instanceof Error && error.message ? error.message : fallback;
 }

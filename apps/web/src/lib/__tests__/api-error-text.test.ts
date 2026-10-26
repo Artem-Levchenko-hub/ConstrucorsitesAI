@@ -11,6 +11,19 @@ const error = (code: ApiError["code"], details?: Record<string, unknown>, messag
   new ApiError(402, { code, message, details });
 
 describe("describeApiError", () => {
+  it.each(["Failed to fetch", "Network error"])(
+    "explains a network error wrapped by the API client (%s)",
+    (message) => {
+      expect(describeApiError(new ApiError(0, { code: "internal_error", message })))
+        .toBe("Сервис временно недоступен. Проверьте соединение и повторите попытку.");
+    },
+  );
+
+  it.each([402, 403, 409])("preserves the server explanation for HTTP %s", (status) => {
+    const message = "Действие недоступно: сначала выполните необходимые условия";
+    expect(describeApiError(new ApiError(status, { code: "conflict", message }))).toBe(message);
+  });
+
   it("spells out a used-up numeric plan limit with the plan and the numbers", () => {
     const text = describeApiError(
       error("entitlement_exceeded", { entitlement: "max_projects", limit: 3, used: 3, plan_code: "pro" }),
