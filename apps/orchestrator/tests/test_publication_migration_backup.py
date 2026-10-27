@@ -13,6 +13,45 @@ def implementation():
     return importlib.import_module(name)
 
 
+def test_sandbox_keeps_bootstrap_and_controller_sockets_inside_owned_tmpfs(monkeypatch):
+    from types import SimpleNamespace
+
+    import docker
+
+    from tests.test_publication_migration_backup_docker import configure_isolated_settings
+
+    configure_isolated_settings(monkeypatch)
+    image = "postgres@sha256:" + "a" * 64
+
+    class CapturedCreate(Exception):
+        pass
+
+    def absent(name):
+        raise docker.errors.NotFound("owned test name absent")
+
+    def create(received_image, command, **options):
+        assert received_image == image
+        # Official entrypoint clears PGHOST for bootstrap psql. It needs the
+        # default socket, while controller commands deliberately use /tmp.
+        assert "unix_socket_directories=/tmp,/var/run/postgresql" in command
+        assert "listen_addresses=" in command
+        assert options["network_mode"] == "none" and options["read_only"] is True
+        assert options["user"] == "70:70" and options["cap_drop"] == ["ALL"]
+        assert options["privileged"] is False
+        assert options["security_opt"] == ["no-new-privileges:true"]
+        for path in ("/tmp", "/var/run/postgresql"):
+            assert "uid=70,gid=70,mode=0700" in options["tmpfs"][path]
+        assert options["auto_remove"] is True
+        raise CapturedCreate
+
+    client = SimpleNamespace(
+        images=SimpleNamespace(get=lambda _: SimpleNamespace(attrs={"RepoDigests": [image]})),
+        containers=SimpleNamespace(get=absent, create=create),
+    )
+    with pytest.raises(CapturedCreate):
+        implementation().RestoreSandbox(client, uuid4(), uuid4(), image).__enter__()
+
+
 @pytest.fixture(autouse=True)
 def directory_fsync_on_windows(monkeypatch):
     # Production Linux fsync remains mandatory; Windows has no O_DIRECTORY.

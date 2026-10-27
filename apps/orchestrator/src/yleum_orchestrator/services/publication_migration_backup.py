@@ -294,7 +294,9 @@ class RestoreSandbox(AbstractContextManager[DockerPG]):
                 "-c",
                 "listen_addresses=",
                 "-c",
-                "unix_socket_directories=/tmp",
+                # Bootstrap psql clears PGHOST and uses the default socket;
+                # controller commands use /tmp. Both are private owned tmpfs.
+                "unix_socket_directories=/tmp,/var/run/postgresql",
                 "-c",
                 "shared_buffers=16MB",
                 "-c",
