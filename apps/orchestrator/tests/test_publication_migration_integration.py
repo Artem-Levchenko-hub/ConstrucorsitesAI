@@ -114,10 +114,26 @@ class FaultSession:
     def sql(self, sql, **kwargs):
         if "omnia:project:migrations:v1" in sql:
             self.migration = True
-        result = self.session.sql(sql, **kwargs)
+            self.target.stages.add("migration_begin_dispatched")
+        ddl = self.migration and sql.startswith("ALTER TABLE")
+        commit = self.migration and sql == "COMMIT;"
+        if ddl:
+            self.target.stages.add("ddl_dispatched")
+        if commit:
+            self.target.stages.add("commit_dispatched")
+        try:
+            result = self.session.sql(sql, **kwargs)
+        except Exception as exc:
+            self.target.sql_error_type = type(exc).__name__
+            raise
+        if ddl:
+            self.target.stages.add("ddl_returned")
+        if commit:
+            self.target.stages.add("commit_returned")
         if self.migration and sql.startswith("ALTER TABLE") and self.target.fault == "rows":
             self.target.fault = None
             self.session.sql("UPDATE public.orders SET amount=1 WHERE id=1;")
+            self.target.stages.add("row_fault_applied")
         if self.migration and sql == "COMMIT;" and self.target.fault == "commit_ack":
             self.target.fault = None
             self.target.lost_acks += 1
@@ -140,6 +156,8 @@ class OwnedTarget:
         }
         self.fault = None
         self.lost_acks = 0
+        self.stages = set()
+        self.sql_error_type = None
 
     def session(self):
         return FaultSession(self)
@@ -214,6 +232,28 @@ def real_migration(tmp_path, monkeypatch):
     from yleum_orchestrator.services.published_machine_backend import data_contract_digest
 
     configure_isolated_settings(monkeypatch)
+    failed_require_codes = []
+    # Observe static guard codes without substituting their outcomes or SQL.
+    from yleum_orchestrator.services import (
+        publication_migration_backup,
+        publication_migration_io,
+        publication_migration_pg,
+    )
+
+    def observe_require(original):
+        def checked(ok, code):
+            if not ok and re.fullmatch(r"migration_[a-z_]{1,80}", code):
+                failed_require_codes.append(code)
+            return original(ok, code)
+
+        return checked
+
+    for module in (
+        publication_migration_backup,
+        publication_migration_io,
+        publication_migration_pg,
+    ):
+        monkeypatch.setattr(module, "require", observe_require(module.require))
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock", timeout=20)
     diagnose_first_empty_sandbox(monkeypatch, client)
     source_sandbox = target_sandbox = None
@@ -264,11 +304,17 @@ def real_migration(tmp_path, monkeypatch):
                     return target, active
 
             saved = {}
+            persist_status = {"writes": 0, "error_type": None}
             journal = tmp_path / "controller" / "integration-intent.json"
 
             def persist(patch):
                 saved.update(deepcopy(patch))
-                write_controller_json(journal, saved)
+                try:
+                    write_controller_json(journal, saved)
+                    persist_status["writes"] += 1
+                except Exception as exc:
+                    persist_status["error_type"] = type(exc).__name__
+                    raise
 
             yield SimpleNamespace(
                 io=IO(service),
@@ -283,6 +329,8 @@ def real_migration(tmp_path, monkeypatch):
                 journal=journal,
                 active=active,
                 image=image,
+                failed_require_codes=failed_require_codes,
+                persist_status=persist_status,
             )
         assert source_sandbox.cleaned and target_sandbox.cleaned
         # Include verifier containers created by the production prepare path.
@@ -307,6 +355,26 @@ async def prepare(case):
     assert prepared["sandbox_after_sha256"] == case.source.full_schema()
     assert len(prepared["public_fields"]) == 3
     return prepared
+
+
+def safe_fault_summary(case, outcome):
+    """Only static codes/phase flags; no prepared source, rows or identifiers."""
+    return json.dumps(
+        {
+            "state": outcome.get("state"),
+            "error_code": outcome.get("error_code"),
+            "effect_possible": outcome.get("effect_possible"),
+            "outcome_proof_kind": outcome.get("outcome_proof", {}).get("kind"),
+            "intent_present": bool(case.saved.get("intent_xid")),
+            "precommit_verified": case.saved.get("precommit_verified") is True,
+            "stages": sorted(case.target.stages),
+            "lost_acks": case.target.lost_acks,
+            "sql_error_type": case.target.sql_error_type,
+            "guard_codes": case.failed_require_codes,
+            "persist": case.persist_status,
+        },
+        sort_keys=True,
+    )
 
 
 async def test_real_prepare_apply_preserves_old_rows_and_concurrent_insert(real_migration):
@@ -379,11 +447,15 @@ async def test_real_postcondition_failure_rolls_back_columns_and_changed_rows(re
     original = row_proofs(case.live, tables)
     case.target.fault = "rows"
     outcome = await case.io.apply(case.request, prepared, case.persist)
+    assert "row_fault_applied" in case.target.stages, safe_fault_summary(case, outcome)
     deadline = time.monotonic() + 8
     while outcome["effect_possible"] and time.monotonic() < deadline:
         await asyncio.sleep(0.1)
         outcome = await case.new_io().reconcile(case.saved)
     assert outcome["state"] == "failed" and outcome["effect_possible"] is False
+    assert outcome.get("outcome_proof", {}).get("kind") == "xid_aborted", safe_fault_summary(
+        case, outcome
+    )
     assert case.saved["intent_xid"] and not case.saved["precommit_verified"]
     assert case.live.full_schema() == prepared["binding"]["live_schema_sha256"]
     assert row_proofs(case.live, tables) == original
@@ -394,7 +466,9 @@ async def test_real_lost_commit_ack_recovers_exact_xid_and_rejects_incomplete_pr
     prepared = await prepare(case)
     case.target.fault = "commit_ack"
     outcome = await case.io.apply(case.request, prepared, case.persist)
-    assert case.target.lost_acks == 1 and outcome["state"] == "applied"
+    assert case.target.lost_acks == 1 and outcome["state"] == "applied", safe_fault_summary(
+        case, outcome
+    )
     persisted = json.loads(case.journal.read_text())
     xid = persisted["intent_xid"]
     assert re.fullmatch(r"[0-9]{1,20}", xid)
