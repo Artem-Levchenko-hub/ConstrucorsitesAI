@@ -420,7 +420,7 @@ async def test_refund_is_blocked_until_manual_provider_and_entitlement_review(
         return {
             "id": "paid-manual-refund",
             "status": "succeeded",
-            "amount": {"value": "1.00", "currency": "RUB"},
+            "amount": {"value": "490.00", "currency": "RUB"},
             "metadata": kwargs["metadata"],
         }
 

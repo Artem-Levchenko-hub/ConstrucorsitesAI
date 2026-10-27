@@ -183,15 +183,15 @@ async def test_two_projects_cannot_reserve_same_last_five_flexible_units(db_sess
 async def test_only_verified_paid_period_grants_and_expiry_never_refills(db_session, monkeypatch):
     from datetime import UTC, datetime, timedelta
 
-    from yleum_api.models.billing import PRO_PLAN_ID, BillingPlan
+    from yleum_api.models.billing import PRO_PLAN_V3_ID, BillingPlan
 
     user, account = await owner(db_session)
     sub = await db_session.scalar(select(Subscription).where(Subscription.user_id == user.id))
-    sub.plan_id = PRO_PLAN_ID
+    sub.plan_id = PRO_PLAN_V3_ID
     start = datetime.now(UTC)
     sub.current_period_start = start
     sub.current_period_end = start + timedelta(days=30)
-    plan = await db_session.get(BillingPlan, PRO_PLAN_ID)
+    plan = await db_session.get(BillingPlan, PRO_PLAN_V3_ID)
     value = Payment(
         billing_account_id=account.id,
         user_id=user.id,
