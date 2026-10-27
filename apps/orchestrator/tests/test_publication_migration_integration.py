@@ -204,6 +204,35 @@ def assert_isolated(sandbox):
     assert set(host["Tmpfs"]) == {"/var/lib/postgresql/data", "/tmp", "/var/run/postgresql"}
 
 
+def persist_private_intent(journal, saved, patch):
+    from yleum_orchestrator.services.project_database_schema_proof import _sync_directory
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    candidate = {**deepcopy(saved), **deepcopy(patch)}
+    write_controller_json(journal, candidate)
+    _sync_directory(journal)
+    saved.clear()
+    saved.update(candidate)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="requires real POSIX directory permissions/fsync")
+def test_fault_journal_uses_private_directory_and_preserves_mode_guard(tmp_path):
+    from yleum_orchestrator.services.project_machine import write_controller_json
+
+    shared_root = tmp_path / "controller"
+    shared_root.mkdir(mode=0o755)
+    # Deliberately unsafe fresh test directory; never repair or weaken its guard.
+    shared_root.chmod(0o755)
+    with pytest.raises(RuntimeError, match="unsafe directory mode"):
+        write_controller_json(shared_root / "unsafe.json", {"intent_xid": "42"})
+    saved = {}
+    journal = tmp_path / "private-intent" / "integration-intent.json"
+    persist_private_intent(journal, saved, {"intent_xid": "42", "effect_possible": True})
+    assert journal.parent.stat().st_mode & 0o777 == 0o700
+    assert json.loads(journal.read_text()) == saved == {"intent_xid": "42", "effect_possible": True}
+    assert not (shared_root / "unsafe.json").exists()
+
+
 @pytest.fixture
 def real_migration(tmp_path, monkeypatch):
     # Validate explicit local-only authority before opening Docker or importing POSIX code.
@@ -225,7 +254,6 @@ def real_migration(tmp_path, monkeypatch):
     )
     from yleum_orchestrator.core.project_machine import MachineManifest
     from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
-    from yleum_orchestrator.services.project_machine import write_controller_json
     from yleum_orchestrator.services.publication_migration import PublicationMigrationService
     from yleum_orchestrator.services.publication_migration_backup import RestoreSandbox
     from yleum_orchestrator.services.publication_migration_io import PublicationMigrationIO
@@ -305,12 +333,13 @@ def real_migration(tmp_path, monkeypatch):
 
             saved = {}
             persist_status = {"writes": 0, "error_type": None}
-            journal = tmp_path / "controller" / "integration-intent.json"
+            # Direct IO.prepare may create service.root through fingerprint_key
+            # with default permissions. Journals require their own private leaf.
+            journal = tmp_path / "private-intent" / "integration-intent.json"
 
             def persist(patch):
-                saved.update(deepcopy(patch))
                 try:
-                    write_controller_json(journal, saved)
+                    persist_private_intent(journal, saved, patch)
                     persist_status["writes"] += 1
                 except Exception as exc:
                     persist_status["error_type"] = type(exc).__name__
@@ -457,6 +486,7 @@ async def test_real_postcondition_failure_rolls_back_columns_and_changed_rows(re
         case, outcome
     )
     assert case.saved["intent_xid"] and not case.saved["precommit_verified"]
+    assert case.persist_status == {"writes": 1, "error_type": None}
     assert case.live.full_schema() == prepared["binding"]["live_schema_sha256"]
     assert row_proofs(case.live, tables) == original
 
@@ -469,6 +499,7 @@ async def test_real_lost_commit_ack_recovers_exact_xid_and_rejects_incomplete_pr
     assert case.target.lost_acks == 1 and outcome["state"] == "applied", safe_fault_summary(
         case, outcome
     )
+    assert case.persist_status == {"writes": 2, "error_type": None}
     persisted = json.loads(case.journal.read_text())
     xid = persisted["intent_xid"]
     assert re.fullmatch(r"[0-9]{1,20}", xid)
