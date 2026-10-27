@@ -15,8 +15,8 @@ from yleum_api.services import payment_state, payment_submission
 
 def test_new_plan_versions_preserve_prior_contracts():
     latest = {plan["code"]: plan for plan in DEFAULT_BILLING_PLANS if plan["is_active"]}
-    assert [latest[code]["version"] for code in ("free", "pro", "business")] == [4, 3, 3]
-    assert latest["pro"]["price_rub"] == Decimal("1.00")
+    assert [latest[code]["version"] for code in ("free", "pro", "business")] == [4, 4, 3]
+    assert latest["pro"]["price_rub"] == Decimal("2990.00")
     assert all(plan["included_credit_rub"] == 0 for plan in latest.values())
     assert latest["free"]["entitlements"]["initial_generations_lifetime"] == 1
     assert latest["free"]["entitlements"]["edits_lifetime"] == 1
@@ -35,6 +35,11 @@ def test_new_plan_versions_preserve_prior_contracts():
     assert old["price_rub"] == Decimal("2990.00")
     assert old["included_credit_rub"] == Decimal("500.0000")
     assert old["is_active"] is False
+    prior_count_plan = next(
+        plan for plan in DEFAULT_BILLING_PLANS if plan["code"] == "pro" and plan["version"] == 3
+    )
+    assert prior_count_plan["price_rub"] == Decimal("1.00")
+    assert prior_count_plan["is_active"] is False
 
 
 async def test_package_config_reports_real_units_and_restrictions(monkeypatch):
@@ -44,10 +49,11 @@ async def test_package_config_reports_real_units_and_restrictions(monkeypatch):
     assert [
         (by_code[code]["price_rub"], by_code[code]["edit_units"], by_code[code]["edits_only"])
         for code in ("start", "business", "pro")
-    ] == [("1.00", 5, True), ("1490.00", 15, False), ("3990.00", 40, False)]
+    ] == [("490.00", 5, True), ("1490.00", 15, False), ("3990.00", 40, False)]
     assert all(
-        row["credit_rub"] == "0.00" and row["package_version"] == 2 for row in by_code.values()
+        row["credit_rub"] == "0.00" for row in by_code.values()
     )
+    assert [by_code[code]["package_version"] for code in ("start", "business", "pro")] == [3, 2, 2]
 
 
 async def test_order_freezes_count_quote_and_replay_uses_saved_order(monkeypatch):
@@ -76,12 +82,34 @@ async def test_order_freezes_count_quote_and_replay_uses_saved_order(monkeypatch
         order.edit_units,
         order.edits_only,
         order.package_version,
-    ) == (Decimal("1.00"), Decimal("0.00"), 5, True, 2)
+    ) == (Decimal("490.00"), Decimal("0.00"), 5, True, 3)
     session.execute.return_value = SimpleNamespace(scalar_one_or_none=lambda: order)
     monkeypatch.setattr(payments, "PACKAGES", {})
     monkeypatch.setattr(payments, "_resume_checkout", send)
     assert await payments.create_payment(payload, user, session) is order
     assert len(saved) == 1
+
+
+async def test_pre_cutover_starter_checkout_replays_its_one_ruble_quote(monkeypatch):
+    monkeypatch.setattr(payments, "_configured", lambda: True)
+    order = quote()
+    monkeypatch.setattr(
+        payments, "resolve_billing_account", AsyncMock(return_value=SimpleNamespace(
+            id=order.billing_account_id,
+        )),
+    )
+    monkeypatch.setattr(payments, "_resume_checkout", AsyncMock(return_value=order))
+    user = User(
+        id=order.user_id, email="synthetic@example.invalid", is_anon=False, status="active",
+        phone_e164="+79991234567", phone_verified_at=datetime.now(UTC),
+    )
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(scalar_one_or_none=lambda: order)),
+    )
+    result = await payments.create_payment(
+        PaymentCreate(package_code="start", idempotency_key=order.idempotency_key), user, session,
+    )
+    assert (result.amount_rub, result.package_version, result.edit_units) == (Decimal("1.00"), 2, 5)
 
 
 def quote(**changes):

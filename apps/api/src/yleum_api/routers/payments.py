@@ -54,7 +54,7 @@ class EditPackage:
 
 
 PACKAGES: dict[str, EditPackage] = {
-    "start": EditPackage(Decimal("1.00"), 5, True, "Стартовый пакет Yleum"),
+    "start": EditPackage(Decimal("490.00"), 5, True, "Стартовый пакет Yleum", version=3),
     "business": EditPackage(Decimal("1490.00"), 15, False, "Бизнес-пакет Yleum"),
     "pro": EditPackage(Decimal("3990.00"), 40, False, "Профессиональный пакет Yleum"),
 }

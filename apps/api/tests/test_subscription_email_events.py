@@ -8,7 +8,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from yleum_api.models.account import Payment
-from yleum_api.models.billing import PRO_PLAN_ID, BillingAccount, BillingPlan, Subscription
+from yleum_api.models.billing import PRO_PLAN_V3_ID, BillingAccount, BillingPlan, Subscription
 from yleum_api.models.user import User
 from yleum_api.services import transactional_email
 
@@ -30,7 +30,9 @@ async def setup_paid(session, *, hours=72):
     sub = Subscription(
         user_id=user.id,
         billing_account_id=account.id,
-        plan_id=PRO_PLAN_ID,
+        # This fixture deliberately represents the accepted one-ruble contract.
+        # New catalog prices must not rewrite its payment or notification terms.
+        plan_id=PRO_PLAN_V3_ID,
         status="active",
         auto_renew=False,
         current_period_start=NOW - timedelta(days=27),

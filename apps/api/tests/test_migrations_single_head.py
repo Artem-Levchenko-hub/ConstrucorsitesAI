@@ -31,7 +31,7 @@ from yleum_api.core.config import get_settings
 
 _VERSIONS = Path(__file__).resolve().parent.parent / "migrations" / "versions"
 _API_ROOT = Path(__file__).resolve().parents[1]
-_CURRENT_HEAD = "0096_support_tickets"
+_CURRENT_HEAD = "0097_public_prices"
 _RECOVERY_REVISION = "0088_generation_recovery_effects"
 # Migrations use either bare (`revision = "x"`) or annotated
 # (`revision: str = "x"`, `down_revision: Union[str, None] = "x"`) declarations —
@@ -208,7 +208,8 @@ def test_owner_fonts_extend_reference_images_as_the_only_migration_head() -> Non
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0095_phone_verification"
+    assert chain[_CURRENT_HEAD] == "0096_support_tickets"
+    assert chain["0096_support_tickets"] == "0095_phone_verification"
     assert chain["0095_phone_verification"] == "0094_email_notifications"
     assert chain["0094_email_notifications"] == "0093_owner_fonts"
     assert chain["0093_owner_fonts"] == "0092_reference_images"

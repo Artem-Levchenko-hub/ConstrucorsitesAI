@@ -40,13 +40,14 @@ async def test_payment_webhook_grants_edit_units_exactly_once(
         },
     )
     assert created.status_code == 201
+    assert created.json()["amount_rub"] == "490.00"
     payment_id = created.json()["id"]
 
     async def fake_get_payment(_provider_id: str) -> dict[str, object]:
         return {
             "id": "provider-payment-1",
             "status": "succeeded",
-            "amount": {"value": "1.00", "currency": "RUB"},
+            "amount": {"value": "490.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
         }
 
@@ -119,7 +120,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     assert duplicate.status_code == 201
     assert duplicate.json()["id"] == created.json()["id"]
     assert len(provider_calls) == 1
-    assert provider_calls[0]["amount"] == "1.00"
+    assert provider_calls[0]["amount"] == "2990.00"
     metadata = provider_calls[0]["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["purpose"] == "subscription_initial"
@@ -133,7 +134,7 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
         return {
             "id": "provider-subscription-1",
             "status": "succeeded",
-            "amount": {"value": "1.00", "currency": "RUB"},
+            "amount": {"value": "2990.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
         }
 
@@ -150,8 +151,8 @@ async def test_subscription_payment_activates_plan_and_credit_exactly_once(
     active = await client.get("/api/billing/subscription")
     assert active.status_code == 200
     assert active.json()["plan"]["code"] == "pro"
-    assert active.json()["plan"]["version"] == 3
-    assert active.json()["plan"]["price_rub"] == "1.00"
+    assert active.json()["plan"]["version"] == 4
+    assert active.json()["plan"]["price_rub"] == "2990.00"
     assert active.json()["status"] == "active"
     assert active.json()["auto_renew"] is False
     assert active.json()["current_period_start"] is not None
