@@ -3,7 +3,7 @@ import { maxRegisterAction, loginAction } from "@/app/(auth)/actions";
 import MaxStudioPage from "@/app/(app)/max/page";
 import AppLayout from "@/app/(app)/layout";
 
-const state = vi.hoisted(() => ({ session: { id: "owner", email: "owner@example.com", isAnon: false, emailVerifiedAt: null as string | null, phoneVerifiedAt: "2026-10-26T10:00:00Z" as string | null, phoneVerificationRequired: false, registrationVerificationReason: null as string | null, status: "active" }, target: "/max" }));
+const state = vi.hoisted(() => ({ session: { id: "owner", email: "owner@example.com", isAnon: false, emailVerifiedAt: null as string | null, phoneVerifiedAt: "2026-10-27T10:00:00Z" as string | null, phoneVerificationRequired: false, registrationVerificationReason: null as string | null, status: "active" }, target: "/max" }));
 const cookieSet = vi.hoisted(() => vi.fn());
 vi.mock("next/headers", () => ({ cookies: async () => ({ get: () => undefined, set: cookieSet }), headers: async () => new Headers({ "x-omnia-return-to": state.target }) }));
 vi.mock("next/navigation", () => ({ redirect: (path: string) => { throw new Error(`redirect:${path}`); } }));
@@ -17,7 +17,7 @@ function registration(phone = "+79991234567", next = "/max") {
 }
 beforeEach(() => {
   vi.stubEnv("NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION", "");
-  state.session.phoneVerificationRequired = false; state.session.registrationVerificationReason = null; state.session.phoneVerifiedAt = "2026-10-26T10:00:00Z"; state.session.emailVerifiedAt = null; state.target = "/max";
+  state.session.phoneVerificationRequired = false; state.session.registrationVerificationReason = null; state.session.phoneVerifiedAt = "2026-10-27T10:00:00Z"; state.session.emailVerifiedAt = null; state.target = "/max";
   vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { headers: { "set-cookie": "omnia_session=durable-session; Path=/; HttpOnly" } })));
 });
 afterEach(() => { vi.unstubAllEnvs(); vi.unstubAllGlobals(); vi.clearAllMocks(); });
@@ -26,7 +26,7 @@ it("retains phone and recovery email after durable signup without replaying sign
   const result = await maxRegisterAction({ error: null }, registration("+7 999 123-45-67", "/billing/plan"));
   expect(result).toEqual({ error: null, registered: { phone: "+7 999 123-45-67", email: "owner@example.com", next: "/billing/plan" } });
   expect(fetch).toHaveBeenCalledTimes(1);
-  expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body))).toMatchObject({ phone: "+7 999 123-45-67", email: "owner@example.com", product: "max", terms_accepted: true, privacy_accepted: true, personal_data_accepted: true, document_version: "2026-10-26" });
+  expect(JSON.parse(String(vi.mocked(fetch).mock.calls[0]?.[1]?.body))).toMatchObject({ phone: "+7 999 123-45-67", email: "owner@example.com", product: "max", terms_accepted: true, privacy_accepted: true, personal_data_accepted: true, document_version: "2026-10-27" });
   expect(cookieSet).toHaveBeenCalledWith(expect.objectContaining({ name: "omnia_session", value: "durable-session", httpOnly: true, secure: true, sameSite: "lax" }));
 });
 it("rejects missing phone before signup", async () => {

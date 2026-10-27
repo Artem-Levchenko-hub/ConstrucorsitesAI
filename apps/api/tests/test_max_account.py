@@ -72,8 +72,10 @@ async def test_max_project_requires_phone_and_email_verification_remains_optiona
 
     from yleum_api.services import phone_verification
 
-    monkeypatch.setattr(get_settings(), "smsaero_email", "qa@example.com")
-    monkeypatch.setattr(get_settings(), "smsaero_api_key", SecretStr("qa-key"))
+    monkeypatch.setattr(get_settings(), "sms_provider", "greensms")
+    monkeypatch.setattr(get_settings(), "greensms_token", SecretStr("qa-key"))
+    monkeypatch.setattr(get_settings(), "smsaero_email", None)
+    monkeypatch.setattr(get_settings(), "smsaero_api_key", None)
     codes = []
 
     async def capture_sms(_phone, code):
@@ -85,6 +87,9 @@ async def test_max_project_requires_phone_and_email_verification_remains_optiona
     assert registration.status_code == 201
     assert registration.json()["email_verified_at"] is None
     assert len(verification_tokens) == 1
+    assert registration.json()["phone_verification_available"] is True
+    availability = await client.get("/api/max/account/access")
+    assert availability.json()["phone_verification_available"] is True
 
     blocked = await client.post(
         "/api/projects",

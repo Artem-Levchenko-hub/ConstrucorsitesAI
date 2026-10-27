@@ -84,7 +84,7 @@ class UserPublic(BaseModel):
     @computed_field  # type: ignore[prop-decorator]
     @property
     def phone_verification_available(self) -> bool:
-        from yleum_api.services.smsaero import sms_delivery_configured
+        from yleum_api.services.sms_delivery import sms_delivery_configured
 
         return sms_delivery_configured()
 

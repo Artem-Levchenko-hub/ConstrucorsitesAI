@@ -15,7 +15,7 @@ from yleum_api.core.config import get_settings
 from yleum_api.core.errors import ApiError
 from yleum_api.models.phone import PhoneChallenge
 from yleum_api.models.user import User
-from yleum_api.services.smsaero import (
+from yleum_api.services.sms_delivery import (
     SmsDeliveryAmbiguous,
     SmsDeliveryFailed,
     send_verification_sms,

@@ -14,7 +14,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.models.phone import PhoneChallenge
 from yleum_api.models.user import User
 from yleum_api.services import phone_verification as phone
-from yleum_api.services.smsaero import SmsDeliveryAmbiguous
+from yleum_api.services.sms_delivery import SmsDeliveryAmbiguous, SmsDeliveryFailed
 
 NUMBER = "+79991234567"
 
@@ -22,8 +22,8 @@ NUMBER = "+79991234567"
 @pytest.fixture
 def outbox(monkeypatch):
     settings = get_settings()
-    monkeypatch.setattr(settings, "smsaero_email", "qa@example.com")
-    monkeypatch.setattr(settings, "smsaero_api_key", SecretStr("qa-key"))
+    monkeypatch.setattr(settings, "sms_provider", "greensms")
+    monkeypatch.setattr(settings, "greensms_token", SecretStr("qa-key"))
     monkeypatch.setattr(settings, "phone_verification_enabled", True)
     codes = []
 
@@ -224,3 +224,78 @@ async def test_expired_claim_retention_preserves_recent_cost_admission(db_sessio
     remaining = set(await db_session.scalars(select(PhoneChallenge.id)))
     assert old_id not in remaining
     assert recent_id in remaining
+
+
+async def test_provider_rejection_is_durable_counts_budget_and_cannot_confirm(
+    db_session, outbox, monkeypatch,
+):
+    user = await account(db_session)
+    captured = []
+
+    async def rejected(_number, code):
+        captured.append(code)
+        raise SmsDeliveryFailed("SMS delivery rejected")
+
+    monkeypatch.setattr(phone, "send_verification_sms", rejected)
+    with pytest.raises(ApiError) as caught:
+        await phone.request_phone_code(db_session, user, NUMBER, ip_address="qa")
+    assert caught.value.code == "phone_delivery_unavailable"
+    claim = (await db_session.scalars(select(PhoneChallenge))).one()
+    assert claim.delivery_status == "failed"
+    with pytest.raises(ApiError) as caught:
+        await phone.verify_phone_code(db_session, user, captured[0])
+    assert caught.value.code == "code_invalid"
+    with pytest.raises(ApiError) as caught:
+        await phone.request_phone_code(db_session, user, NUMBER, ip_address="qa")
+    assert caught.value.code == "phone_rate_limited"
+    assert len(captured) == 1
+
+
+@pytest.mark.parametrize("scope", ["user", "phone", "ip", "global"])
+async def test_each_daily_budget_independently_blocks_another_paid_send(
+    db_session, outbox, monkeypatch, scope,
+):
+    first = await account(db_session)
+    second = await account(db_session, "other-budget@example.com")
+    await phone.request_phone_code(db_session, first, NUMBER, ip_address="same-ip")
+    claim = (await db_session.scalars(select(PhoneChallenge))).one()
+    claim.created_at -= timedelta(seconds=61)
+    await db_session.commit()
+    monkeypatch.setattr(get_settings(), f"sms_{scope}_daily_limit", 1)
+    user = first if scope == "user" else second
+    number = NUMBER if scope == "phone" else "+79991234568"
+    ip = "same-ip" if scope == "ip" else "different-ip"
+    with pytest.raises(ApiError) as caught:
+        await phone.request_phone_code(db_session, user, number, ip_address=ip)
+    assert caught.value.code == "phone_rate_limited"
+    assert len(outbox) == 1
+
+
+async def test_permitted_resend_invalidates_old_code_and_confirms_only_new_code(
+    db_session, outbox, monkeypatch,
+):
+    values = iter([123456, 654321])
+    monkeypatch.setattr(phone.secrets, "randbelow", lambda _maximum: next(values))
+    user = await account(db_session)
+    await phone.request_phone_code(db_session, user, NUMBER, ip_address="qa")
+    claim = (await db_session.scalars(select(PhoneChallenge))).one()
+    claim.created_at -= timedelta(seconds=61)
+    await db_session.commit()
+    await phone.request_phone_code(db_session, user, NUMBER, ip_address="qa")
+    assert [code for _, code in outbox] == ["123456", "654321"]
+    with pytest.raises(ApiError) as caught:
+        await phone.verify_phone_code(db_session, user, "123456")
+    assert caught.value.code == "code_invalid"
+    await phone.verify_phone_code(db_session, user, "654321")
+    assert user.phone_e164 == NUMBER
+
+
+async def test_verified_same_number_never_sends_again_and_change_is_rejected(db_session, outbox):
+    user = await account(db_session)
+    await phone.request_phone_code(db_session, user, NUMBER, ip_address="qa")
+    await phone.verify_phone_code(db_session, user, outbox[0][1])
+    assert (await phone.request_phone_code(db_session, user, NUMBER, ip_address="qa"))["accepted"]
+    with pytest.raises(ApiError) as caught:
+        await phone.request_phone_code(db_session, user, "+79991234568", ip_address="qa")
+    assert caught.value.code == "forbidden"
+    assert len(outbox) == 1
