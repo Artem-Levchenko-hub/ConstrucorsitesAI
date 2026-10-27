@@ -388,7 +388,7 @@ jobs:
       - name: Verify real isolated publication migration backup and commit recovery
         working-directory: apps/orchestrator
         run: >-
-          uv run --frozen pytest -q -o faulthandler_timeout=180 --durations=10
+          uv run --frozen pytest -q --maxfail=1 -o faulthandler_timeout=180 --durations=10
           tests/test_publication_migration_backup_docker.py
           tests/test_publication_migration_integration.py
           tests/test_publication_migration_pg_postgres.py

@@ -1,5 +1,6 @@
 """Explicit CI-only, new network-none tmpfs PG16; never attaches existing data."""
 
+import json
 import os
 import re
 from urllib.parse import urlsplit
@@ -39,6 +40,124 @@ def configure_isolated_settings(monkeypatch):
     return settings
 
 
+def startup_diagnostic_codes(output):
+    """Return fixed classifications only; never expose arbitrary PostgreSQL text."""
+    patterns = {
+        "permission_denied": b"permission denied",
+        "read_only_filesystem": b"read-only file system",
+        "no_space": b"no space left",
+        "cannot_allocate_memory": b"cannot allocate memory",
+        "invalid_configuration": b"unrecognized configuration parameter",
+        "invalid_parameter_value": b"invalid value for parameter",
+        "socket_missing": b"no such file or directory",
+        "connection_refused": b"connection refused",
+        "role_missing": b'role "postgres" does not exist',
+        "timeout_usage": b"usage: timeout",
+        "ready": b"database system is ready to accept connections",
+    }
+    lowered = output.lower()
+    return sorted(name for name, pattern in patterns.items() if pattern in lowered)
+
+
+def diagnose_first_empty_sandbox(monkeypatch, client):
+    """Keep bounded startup evidence for only the first, still-empty QA container."""
+    import docker
+
+    from yleum_orchestrator.services.publication_migration_backup import DockerPG
+    from yleum_orchestrator.services.publication_migration_pg import psql_command
+
+    collection_type = type(client.containers)
+    create = collection_type.create
+    cleanup = RestoreSandbox.__exit__
+    sql = DockerPG.sql
+    owned = {}
+
+    def probe_sql(pg, statement, **kwargs):
+        try:
+            return sql(pg, statement, **kwargs)
+        except Exception as exc:
+            if pg.container.id == owned.get("id") and statement == "SELECT 1;":
+                owned["probe_error_type"] = type(exc).__name__
+                code = str(exc)
+                if re.fullmatch(r"migration_[a-z_]{1,80}", code):
+                    owned["probe_error_code"] = code
+            raise
+
+    def create_empty(collection, *args, **kwargs):
+        if collection.client is not client:
+            return create(collection, *args, **kwargs)
+        if not owned:
+            assert kwargs["labels"]["omnia.resource_kind"] == "publication-migration-verifier"
+            kwargs["log_config"] = docker.types.LogConfig(
+                type="json-file", config={"max-size": "64k", "max-file": "1"}
+            )
+            # Retain crash diagnostics until the normal exact-owned cleanup below.
+            kwargs["auto_remove"] = False
+        container = create(collection, *args, **kwargs)
+        if not owned:
+            owned["id"] = container.id
+        return container
+
+    def cleanup_with_diagnostic(sandbox, *args):
+        report = None
+        # Production calls __exit__() without args only on failed __enter__.
+        # Normal context exits (including after rows exist) have three args.
+        if not args and sandbox.container is not None and sandbox.container.id == owned.get("id"):
+            report = {"stage": "empty_sandbox_startup"}
+            report.update(
+                {
+                    key: owned[key]
+                    for key in ("probe_error_type", "probe_error_code")
+                    if key in owned
+                }
+            )
+            try:
+                container = client.containers.get(owned["id"])
+                assert container.attrs["Config"]["Labels"] == sandbox.labels
+                state = container.attrs["State"]
+                report.update(
+                    running=state.get("Running") is True,
+                    oom_killed=state.get("OOMKilled") is True,
+                    exit_code=int(state.get("ExitCode", -1)),
+                )
+                report["startup_codes"] = startup_diagnostic_codes(
+                    container.logs(tail=200)[-65536:]
+                )
+                if state.get("Running") is True:
+                    argv = [*psql_command(seconds=5), "-c", "SELECT 1;"]
+                    outcome = container.exec_run(argv, user="postgres", demux=True)
+                    stdout, stderr = outcome.output
+                    report["direct_exec_exit_code"] = int(outcome.exit_code)
+                    report["direct_select_one"] = (stdout or b"").strip() == b"1"
+                    report["direct_error_codes"] = startup_diagnostic_codes(stderr or b"")
+                    report["sqlstates"] = sorted(
+                        set(
+                            item.decode("ascii")
+                            for item in re.findall(
+                                rb"(?m)^(?:ERROR|FATAL):\s+([0-9A-Z]{5})\s*$", stderr or b""
+                            )
+                        )
+                    )
+            except Exception as exc:
+                report["diagnostic_error_type"] = type(exc).__name__
+        try:
+            cleanup(sandbox, *args)
+        finally:
+            if report is not None and sandbox.cleaned:
+                report["cleanup_verified"] = True
+                pytest.fail(json.dumps(report, sort_keys=True), pytrace=False)
+
+    monkeypatch.setattr(collection_type, "create", create_empty)
+    monkeypatch.setattr(DockerPG, "sql", probe_sql)
+    monkeypatch.setattr(RestoreSandbox, "__exit__", cleanup_with_diagnostic)
+
+
+def test_startup_diagnostics_never_return_arbitrary_log_text():
+    private = b"untrusted arbitrary payload must stay private"
+    assert startup_diagnostic_codes(private) == []
+    assert startup_diagnostic_codes(private + b" Permission denied") == ["permission_denied"]
+
+
 def test_isolated_dispatch_settings_ignore_dotenv_and_keep_real_guard(monkeypatch, tmp_path):
     from yleum_orchestrator.services import generation_reader_inventory
 
@@ -73,6 +192,7 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
     assert re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
     configure_isolated_settings(monkeypatch)
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock", timeout=20)
+    diagnose_first_empty_sandbox(monkeypatch, client)
     project = uuid4()
     source = RestoreSandbox(client, project, uuid4(), image)
     restored = RestoreSandbox(client, project, uuid4(), image)

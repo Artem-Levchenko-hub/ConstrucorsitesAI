@@ -201,7 +201,10 @@ def real_migration(tmp_path, monkeypatch):
 
     from tests.test_cell_publication import request
     from tests.test_project_machine_manifest import payload
-    from tests.test_publication_migration_backup_docker import configure_isolated_settings
+    from tests.test_publication_migration_backup_docker import (
+        configure_isolated_settings,
+        diagnose_first_empty_sandbox,
+    )
     from yleum_orchestrator.core.project_machine import MachineManifest
     from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
     from yleum_orchestrator.services.project_machine import write_controller_json
@@ -212,6 +215,7 @@ def real_migration(tmp_path, monkeypatch):
 
     configure_isolated_settings(monkeypatch)
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock", timeout=20)
+    diagnose_first_empty_sandbox(monkeypatch, client)
     source_sandbox = target_sandbox = None
     try:
         assert client.ping() and client.info()["OSType"] == "linux"
