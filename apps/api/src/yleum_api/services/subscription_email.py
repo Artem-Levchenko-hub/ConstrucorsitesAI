@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import UTC, datetime, timedelta
 
 import structlog
@@ -32,6 +33,10 @@ from yleum_api.services.transactional_email import (
 log = structlog.get_logger(__name__)
 _CLAIM_TIMEOUT = timedelta(minutes=10)
 _RETRY_AFTER = timedelta(minutes=5)
+_DELIVERY_POLL_SECONDS = 3
+_FAST_RETRY_CATEGORIES = frozenset({"disconnected", "timeout", "network", "connection"})
+_FAST_RETRY_CLAIMS = 3
+_OUTAGE_RETRY_AFTER = timedelta(seconds=60)
 
 
 def reminder_days(period_end: datetime, now: datetime) -> int | None:
@@ -270,10 +275,12 @@ async def deliver_one(
             event.status = "sending"
             event.claimed_at = current
             event.attempts += 1
+            attempts = event.attempts
             event_id = event.id
         # sending is visible to other workers before the first SMTP operation.
         recipient, message = content
         status, category = "sent", None
+        retry_after = _RETRY_AFTER
         try:
             await send_transactional_email(
                 recipient=recipient,
@@ -287,9 +294,17 @@ async def deliver_one(
         except EmailDeliveryFailed as exc:
             status = "pending" if exc.retry_safe else "uncertain"
             category = exc.category
+            if exc.retry_safe and category in _FAST_RETRY_CATEGORIES:
+                retry_after = (
+                    timedelta(seconds=_DELIVERY_POLL_SECONDS)
+                    if attempts <= _FAST_RETRY_CLAIMS else _OUTAGE_RETRY_AFTER
+                )
         except Exception:
             # Unexpected failures can happen after delivery; err on no duplicate.
             status, category = "uncertain", "unexpected"
+        # SMTP may take longer than the retry interval. Never schedule from the
+        # claim's old timestamp; explicit `now` remains a deterministic test clock.
+        completed = now or datetime.now(UTC)
         async with session.begin():
             await session.execute(
                 update(EmailNotification)
@@ -300,8 +315,8 @@ async def deliver_one(
                 .values(
                     status=status,
                     failure_category=category,
-                    available_at=current + _RETRY_AFTER,
-                    sent_at=datetime.now(UTC) if status == "sent" else None,
+                    available_at=completed + retry_after,
+                    sent_at=completed if status == "sent" else None,
                 )
             )
         return True
@@ -312,10 +327,18 @@ async def run_subscription_email_loop(
     *,
     poll_seconds: int,
 ) -> None:
+    next_reminder_scan = 0.0
     while True:
+        if time.monotonic() >= next_reminder_scan:
+            try:
+                async with factory() as session, session.begin():
+                    await enqueue_reminders(session)
+            except Exception:
+                # Discovery must not prevent delivery of already committed mail.
+                log.warning("subscription.email_reminder_cycle_failed")
+            finally:
+                next_reminder_scan = time.monotonic() + poll_seconds
         try:
-            async with factory() as session, session.begin():
-                await enqueue_reminders(session)
             # Bound each pass so a full outbox cannot starve reminder discovery.
             for _ in range(100):
                 if not await deliver_one(factory):
@@ -323,4 +346,4 @@ async def run_subscription_email_loop(
         except Exception:
             # Billing health is independent from this optional delivery channel.
             log.warning("subscription.email_cycle_failed")
-        await asyncio.sleep(poll_seconds)
+        await asyncio.sleep(min(poll_seconds, _DELIVERY_POLL_SECONDS))
