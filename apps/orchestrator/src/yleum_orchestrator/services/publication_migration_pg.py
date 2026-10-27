@@ -564,7 +564,7 @@ SELECT json_build_object(
  'database',current_database(),
  'database_oid',(SELECT oid::text FROM pg_catalog.pg_database WHERE datname=current_database()),
  'server_version_num',current_setting('server_version_num'),
- 'pg_version',trim(pg_catalog.pg_read_file(current_setting('data_directory')||'/PG_VERSION')),
+ 'pg_version',pg_catalog.pg_read_file(current_setting('data_directory')||'/PG_VERSION'),
  'timeline',(SELECT timeline_id FROM pg_catalog.pg_control_checkpoint()),
  'previous_timeline',(SELECT prev_timeline_id FROM pg_catalog.pg_control_checkpoint()),
  'history',(SELECT CASE WHEN timeline_id=1 THEN '' ELSE
@@ -576,6 +576,10 @@ SELECT json_build_object(
   WHERE NOT datistemplate),
  'tablespaces',(SELECT json_agg(spcname ORDER BY spcname) FROM pg_catalog.pg_tablespace));
 """)
+    # PG_VERSION is a line-oriented file. SQL trim(text) removes spaces only.
+    pg_version = result.get("pg_version")
+    if isinstance(pg_version, str):
+        result["pg_version"] = pg_version.strip()
     require(
         result.get("database") == "postgres"
         and result.get("databases") == ["postgres"]

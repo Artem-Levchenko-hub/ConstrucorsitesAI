@@ -14,6 +14,26 @@ def implementation():
     return importlib.import_module(name)
 
 
+@pytest.mark.parametrize(
+    "file_contents, accepted",
+    [("16\n", True), ("16\r\n", True), ("16", True),
+     ("17\n", False), ("16\n17\n", False), (16, False)],
+)
+def test_pg_identity_normalizes_version_file_line_endings(file_contents, accepted):
+    m = implementation()
+    payload = {
+        "database": "postgres", "databases": ["postgres"],
+        "tablespaces": ["pg_default", "pg_global"], "recovery": False,
+        "server_version_num": "160015", "pg_version": file_contents,
+    }
+    session = SimpleNamespace(json=lambda sql: dict(payload))
+    if accepted:
+        assert m.pg_identity(session)["pg_version"] == "16"
+    else:
+        with pytest.raises(m.MigrationIOError, match="migration_pg_context_unsupported"):
+            m.pg_identity(session)
+
+
 def test_incomplete_sql_response_is_unknown_and_closed():
     m = implementation()
 
