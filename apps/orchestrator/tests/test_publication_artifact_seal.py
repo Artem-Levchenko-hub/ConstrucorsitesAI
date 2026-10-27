@@ -14,10 +14,11 @@ import pytest
 from tests.test_machine_environment import ArchiveBackend
 from tests.test_project_machine_manifest import payload
 from tests.test_publication_early_preflight import Captured, build, release_for
-from yleum_orchestrator.core.cell_resources import CellIdentityConflict, CellResourceError
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.services import machine_adapter as adapter_module
 from yleum_orchestrator.services.machine_environment import (
+    EnvironmentIntegrityError,
     MachineEnvironmentRef,
     MachineEnvironmentStore,
     VolumeEnvironmentRef,
@@ -313,7 +314,7 @@ async def test_later_epoch_corrupt_seal_fails_without_live_capture(tmp_path, mon
     changed = (b"x" if raw[:1] != b"x" else b"y") + raw[1:]
     archive.write_bytes(changed if corrupt == "hash" else raw + b"x")
     before = service._read(value.project_id)
-    with pytest.raises(CellResourceError):
+    with pytest.raises(EnvironmentIntegrityError, match="digest mismatch"):
         await service._prepare_locked(value, str(uuid4()))
     assert service._read(value.project_id) == before
     assert adapter.checkpoints == [] and adapter.resumed == 0

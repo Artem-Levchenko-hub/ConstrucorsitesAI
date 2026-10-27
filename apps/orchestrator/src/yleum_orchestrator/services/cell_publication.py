@@ -591,17 +591,21 @@ class CellPublicationService:
             ):
                 raise CellIdentityConflict("publication source identity or fence changed")
             machine, source = adapter.parts(source_state)
-            expected_epoch = request.accepted_fencing_epoch or request.fencing_epoch
-            if machine.state().get("epoch") != expected_epoch:
-                raise CellIdentityConflict("publication accepted machine epoch changed")
+            machine_state = machine.state()
             files = await _read_agent_workspace_files(manager, source.workspace_volume)
             if _workspace_revision(files) != request.source_revision:
                 raise CellIdentityConflict("publication source revision changed")
             self._verify_restoration_source(request, source)
-            manifest = MachineManifest.model_validate(machine.state()["manifest"])
+            manifest = MachineManifest.model_validate(machine_state["manifest"])
             seeded = self._data_seeded(self._read(request.project_id))
             source_roles_installed = source._metadata().get("project_database_role_protocol") == 1
             sealed = self._checkpoint_seal(request, source, adapter, manifest) if seeded else None
+            # A failed edit can restore this exact accepted source at a later
+            # runtime epoch. Only its validated immutable warm archive may cross
+            # that boundary; live capture and first data seeding still cannot.
+            expected_epoch = request.accepted_fencing_epoch or request.fencing_epoch
+            if sealed is None and machine_state.get("epoch") != expected_epoch:
+                raise CellIdentityConflict("publication accepted machine epoch changed")
             if sealed is not None:
                 # P12: the accepted version was packaged at finalization; the
                 # editor is not stopped, woken or touched for this publication.
