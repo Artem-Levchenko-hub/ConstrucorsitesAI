@@ -22,6 +22,9 @@
 #     --finalize-owned-release NONCE --control-revision SHA --no-web
 #                         завершить уже заменённый точный target под прежним владельцем;
 #                         только исправленный publication gate берётся из control SHA
+#     --resume-owned-release NONCE --control-revision SHA
+#                         продолжить полный rollout прежнего target с существующими barriers/captures;
+#                         только publication gate берётся из проверенного control SHA
 #
 # Замок: /opt/omnia/.deploy.lock на core — вторая выкатка одновременно не начнётся. Если
 # сценарий умер и замок остался — посмотреть его содержимое (кто, когда, что) и удалить руками.
@@ -37,6 +40,7 @@ REPAIR=3600
 GW=0
 BOOTSTRAP=0
 FINALIZE_NONCE=""
+RESUME_NONCE=""
 CONTROL_SHA=""
 REPAIR_OVERRIDE=0
 while [ $# -gt 0 ]; do
@@ -48,21 +52,27 @@ while [ $# -gt 0 ]; do
     --gateway) GW=1 ;;
     --bootstrap-admission) BOOTSTRAP=1 ;;
     --finalize-owned-release) FINALIZE_NONCE="${2:?}"; shift ;;
+    --resume-owned-release) RESUME_NONCE="${2:?}"; shift ;;
     --control-revision) CONTROL_SHA="${2:?}"; shift ;;
     *) echo "неизвестный аргумент: $1" >&2; exit 2 ;;
   esac
   shift
 done
-if [ -n "$FINALIZE_NONCE" ] || [ -n "$CONTROL_SHA" ]; then
-  if [ -z "$FINALIZE_NONCE" ] || [ -z "$CONTROL_SHA" ] || [ "$WEB" != 0 ] \
-    || [ "$API" != 1 ] || [ "$GW" != 0 ] || [ "$BOOTSTRAP" != 0 ] \
+if [ -n "$FINALIZE_NONCE" ] || [ -n "$RESUME_NONCE" ] || [ -n "$CONTROL_SHA" ]; then
+  if [ -z "$CONTROL_SHA" ] || [ "$API" != 1 ] || [ "$GW" != 0 ] || [ "$BOOTSTRAP" != 0 ] \
     || [ -n "$LEGAL" ] || [ "$REPAIR_OVERRIDE" != 0 ]; then
-    echo "finalize requires both owner/control flags and --no-web, without rollout overrides" >&2
+    echo "owned continuation requires owner/control flags without rollout overrides" >&2
     exit 2
   fi
+  if { [ -n "$FINALIZE_NONCE" ] && [ -z "$RESUME_NONCE" ] && [ "$WEB" = 0 ]; } \
+    || { [ -n "$RESUME_NONCE" ] && [ -z "$FINALIZE_NONCE" ] && [ "$WEB" = 1 ]; }; then
+    :
+  else
+    echo "choose finalize with --no-web, or resume with full API/web rollout" >&2; exit 2
+  fi
   [[ "$CONTROL_SHA" =~ ^[0-9a-f]{40}$ ]] \
-    && [[ "$FINALIZE_NONCE" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
-    echo "finalize requires a full control SHA and canonical existing owner UUID" >&2; exit 2;
+    && [[ "${FINALIZE_NONCE:-$RESUME_NONCE}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+    echo "owned continuation requires a full control SHA and canonical existing owner UUID" >&2; exit 2;
   }
 fi
 if [ "$API" = 0 ] && { [ "$GW" = 1 ] || [ "$BOOTSTRAP" = 1 ]; }; then
@@ -131,12 +141,12 @@ reader_prepare_retry() {
   local core_owner commerce_owner
   core_owner=$(reader_control core prepare-owner --release "$SHA") || return
   commerce_owner=$(reader_control commerce prepare-owner --release "$SHA") || return
-  READER_NONCE=$(python3 - "$SHA" "$core_owner" "$commerce_owner" <<'READER_OWNER'
+  READER_NONCE=$(python3 - "$SHA" "${RESUME_NONCE:-}" "$core_owner" "$commerce_owner" <<'READER_OWNER'
 import json, re, sys
 from uuid import UUID
 target = sys.argv[1]
 owners = []
-for raw in sys.argv[2:]:
+for raw in sys.argv[3:]:
     value = json.loads(raw)
     assert set(value) == {"owner"}
     owner = value["owner"]
@@ -147,9 +157,13 @@ for raw in sys.argv[2:]:
         assert str(UUID(owner["owner_nonce"])) == owner["owner_nonce"]
         owners.append(owner)
 assert not owners or all(value == owners[0] for value in owners)
+assert not sys.argv[2] or len(owners) == 2, "resume requires both existing owners"
 print(owners[0]["owner_nonce"] if owners else "")
 READER_OWNER
   ) || return
+  if [ -n "${RESUME_NONCE:-}" ] && [ "$READER_NONCE" != "$RESUME_NONCE" ]; then
+    echo "resume owner changed; captures retained" >&2; return 75
+  fi
   READER_RETRY=0
   if [ -n "$READER_NONCE" ]; then
     # An interrupted first capture may lack its peer; never overwrite an
@@ -396,7 +410,14 @@ GATEWAY_CUTOVER_PY
 }
 
 control_preflight() {
-  local committed actual ci
+  local committed actual ci checkout_status
+  [ "$(git -C "$REPO" rev-parse --verify HEAD)" = "$CONTROL_SHA" ] || {
+    echo "control checkout HEAD differs from reviewed revision" >&2; return 75;
+  }
+  checkout_status=$(git -C "$REPO" status --porcelain=v1 --untracked-files=all --ignored) || return
+  [ -z "$checkout_status" ] || {
+    echo "control checkout is not clean; use an isolated exact checkout" >&2; return 75;
+  }
   git -C "$REPO" merge-base --is-ancestor "$SHA" "$CONTROL_SHA"
   git -C "$REPO" merge-base --is-ancestor "$CONTROL_SHA" origin/main
   committed=$(git -C "$REPO" show "$CONTROL_SHA:infra/release/deploy-prod.sh" \
@@ -408,6 +429,7 @@ control_preflight() {
 allowed = {b"infra/release/deploy-prod.sh", b"infra/release/generation-publication-drain.py",
            b"infra/release/test_generation_reader_deploy.py", b"infra/release/test_machine_quiescence_contract.py",
            b"infra/release/test_owned_release_finalize_contract.py",
+           b"infra/release/test_generation_physical_drain_contract.py",
            b"apps/orchestrator/tests/test_inspector_upstream_contract.py",
            b"apps/api/tests/test_gateway_billing_cutover_release.py",
            b"infra/release/generation-drain.md"}
@@ -606,6 +628,19 @@ print("billing target digest and single ready runtime confirmed")
 BILLING_RUNTIME
 }
 
+resume_owned_preflight() {
+  git -C "$REPO" merge-base --is-ancestor "$API_RUNTIME_SHA" "$SHA" || {
+    echo "resume API runtime is not an ancestor of the owning target" >&2; return 75;
+  }
+  READER_NONCE="$RESUME_NONCE"
+  READER_RETRY=1
+  # Observe complete existing authority before any begin, prepare-owner or capture.
+  ingress_drain check
+  reader_control core verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_control commerce verify-owner --release "$SHA" --owner-nonce "$READER_NONCE"
+  reader_resume_check
+}
+
 finalize_preflight() {
   [ "$API_RUNTIME_SHA" = "$SHA" ] || { echo "finalize API runtime differs from target" >&2; return 75; }
   READER_NONCE="$FINALIZE_NONCE"
@@ -669,7 +704,7 @@ PY
 say "выкатка $SHA api=$API web=$WEB gateway=$GW legal=${LEGAL:-по умолчанию образа} repair=$REPAIR"
 git -C "$REPO" fetch -q origin
 git -C "$REPO" merge-base --is-ancestor "$SHA" origin/main || { echo "ревизия $SHORT не лежит в origin/main — выкатываем только то, что в main" >&2; exit 2; }
-if [ -n "$FINALIZE_NONCE" ]; then
+if [ -n "$CONTROL_SHA" ]; then
   control_preflight
 fi
 
@@ -685,6 +720,9 @@ if [ -n "$FINALIZE_NONCE" ]; then
   finish_owned_release
   say "готово: завершён прежний релиз $SHORT, control ${CONTROL_SHA:0:8}"
   exit 0
+fi
+if [ -n "${RESUME_NONCE:-}" ]; then
+  resume_owned_preflight
 fi
 
 if [ "$API" = 1 ]; then

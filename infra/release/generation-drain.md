@@ -97,6 +97,45 @@ Fresh inventory
 is an observation of the managed topology, not instantaneous exclusion of
 out-of-band privileged processes.
 
+### Resuming an owned full rollout with a repaired operator gate
+
+If a physical gate fails before API replacement or during a partial rollout,
+retain the original target and owner. After inspecting that terminal result and
+reviewing the repaired control revision, use its exact committed driver from an
+isolated, clean checkout:
+
+```bash
+infra/release/deploy-prod.sh "$OWNING_TARGET_SHA" \
+  --resume-owned-release "$EXISTING_OWNER_NONCE" \
+  --control-revision "$REVIEWED_CONTROL_SHA"
+```
+
+This is a full API **and web** rollout of the original target. It rejects
+`--no-web`, `--web-only`, finalize, gateway, bootstrap, legal-version and
+repair-window overrides. It does not take over a different target. The control
+checkout HEAD must equal the control SHA and contain no modified, untracked or
+ignored files. The exact-driver, complete-diff, main ancestry and latest exact
+green CI checks described below apply before entering the deployment mutex.
+
+Under that mutex, before any ingress/SQL begin, owner preparation, capture,
+build or restart, the driver requires the existing ingress barrier, both hosts'
+matching durable/runtime inhibits, both original captures and the read-only SQL
+resume check. The actual API revision must be the original target or its Git
+ancestor. Missing or conflicting authority fails closed; this mode cannot
+reconstruct a missing peer or derive a new nonce. The normal retry path then
+requires both owners again and compares their nonce with the explicit argument
+before either capture call. Existing captures remain immutable.
+
+The remaining sequence is the normal full deployment of the owning target,
+including fresh physical checks before and after service replacement and the
+shared final health/retirement/ending checks. All API, ingress and reader helpers
+come from that target; only the standalone publication/physical gate comes from
+control. Other local deployment helpers/assets must be unchanged across the
+complete allowlisted target-to-control diff. No installed source overlay,
+gate bypass, manual ending or unknown-lock removal is permitted. After this
+owned release finishes, deploy the control revision through a separate normal
+full release to align every runtime with the final pushed revision.
+
 ### Finalizing an already replaced target with a repaired operator gate
 
 An exact target can be fully running while its final read-only physical gate
@@ -112,8 +151,10 @@ infra/release/deploy-prod.sh "$OWNING_TARGET_SHA" --no-web \
 Run the exact committed driver from the control revision in its repository
 checkout, after independent review. Both revisions are full 40-character
 pushed main SHAs; the owning target must be an ancestor of the control revision.
-The script verifies its own bytes, restricts the complete target-to-control diff
-to the release driver, publication gate, their three release test files, the
+The script requires that exact control HEAD and a completely clean checkout
+(including untracked and ignored files), verifies its own bytes, and restricts
+the complete target-to-control diff to the release driver, publication gate,
+their four release test files, the
 orchestrator's inspector relay and API's gateway billing deployment contract
 tests, and this runbook. It queries GitHub for the latest exact control revision's push-to-main
 `CI` run. Missing, queued, failed or mismatched CI denies continuation. The

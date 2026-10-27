@@ -178,6 +178,99 @@ class OwnedReleaseFinalizationTests(unittest.TestCase):
                 self.assertEqual(result.returncode, 2, result.stderr)
                 self.assertNotIn("should-not-run", result.stdout)
 
+    def test_owned_resume_requires_full_rollout_and_paired_authority(self):
+        prefix = self.source().split('REPO="', 1)[0]
+        base = [self.target, "--resume-owned-release", self.nonce,
+                "--control-revision", self.control]
+        result = self.shell(prefix + '\nprintf "%s:%s:%s:%s" "$RESUME_NONCE" "$CONTROL_SHA" "$API" "$WEB"\n', *base)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, self.nonce + ":" + self.control + ":1:1")
+        for extra in (["--no-web"], ["--web-only"], ["--gateway"], ["--bootstrap-admission"],
+                      ["--legal-version", "2026-09-25"], ["--repair-window", "3600"],
+                      ["--finalize-owned-release", self.nonce]):
+            with self.subTest(extra=extra):
+                result = self.shell(prefix + '\nprintf forbidden\n', *base, *extra)
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertNotIn("forbidden", result.stdout)
+        for arguments in ([self.target, "--resume-owned-release", self.nonce],
+                          [self.target, "--resume-owned-release", "invalid", "--control-revision", self.control]):
+            result = self.shell(prefix, *arguments)
+            self.assertEqual(result.returncode, 2, result.stderr)
+
+    def test_resume_preflight_preserves_authority_before_any_mutation(self):
+        functions = self.function("resume_owned_preflight") + self.function("reader_resume_check")
+        for failure in ("", "ancestor", "ingress", "owner-core", "owner-commerce",
+                        "capture-core", "capture-commerce", "capture-owner", "capture-hash", "sql"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                owner = {"version": 1, "release_sha": self.target, "owner_nonce": self.nonce}
+                for host in ("core", "commerce"):
+                    context = {"owner": dict(owner), "capture_sha256": "c" * 64}
+                    if host == "commerce" and failure == "capture-owner":
+                        context["owner"]["owner_nonce"] = "22222222-2222-4222-8222-222222222222"
+                    if host == "commerce" and failure == "capture-hash":
+                        context["capture_sha256"] = "invalid"
+                    (root / host).write_text(json.dumps(context))
+                script = '''set -euo pipefail
+SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+API_RUNTIME_SHA=cccccccccccccccccccccccccccccccccccccccc
+RESUME_NONCE=11111111-1111-4111-8111-111111111111
+REPO=.
+record() { printf '%s\\n' "$1" >> calls; [ "$1" != "$FAILURE" ]; }
+git() {
+ case " $* " in
+  *" merge-base "*) [ "${@: -2}" = "$API_RUNTIME_SHA $SHA" ]; record ancestor ;;
+  *" show "*|*" archive "*) [ "$4" = "$SHA:infra/release/generation-reader-resume.py" ] || [ "$5" = "$SHA" ]; : ;;
+  *) return 99 ;;
+ esac
+}
+ingress_drain() { [ "$1" = check ]; record ingress; }
+reader_control() {
+ [ "$5" = --owner-nonce ] && [ "$6" = "$RESUME_NONCE" ];
+ case "$2" in
+  verify-owner) record "owner-$1" ;;
+  capture-context) record "capture-$1" && cat "$1" ;;
+  *) printf forbidden >> calls; return 99 ;;
+ esac
+}
+api_maintenance() { cat >/dev/null; record sql; }
+''' + functions + '\nresume_owned_preflight\nprintf "mutation:%s:%s\\n" "$READER_NONCE" "$READER_RETRY" >> calls\n'
+                result = self.shell('FAILURE=' + shlex.quote(failure) + '\n' + script, cwd=temp)
+                calls = (root / "calls").read_text()
+                self.assertNotIn("forbidden", calls)
+                if failure:
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn("mutation:", calls)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(calls.splitlines(), ["ancestor", "ingress", "owner-core", "owner-commerce",
+                                                         "capture-core", "capture-commerce", "sql",
+                                                         "mutation:" + self.nonce + ":1"])
+
+    def test_resume_retry_never_captures_missing_or_changed_owner(self):
+        functions = self.function("reader_prepare_retry")
+        owner = {"version": 1, "release_sha": self.target, "owner_nonce": self.nonce}
+        foreign = {**owner, "owner_nonce": "22222222-2222-4222-8222-222222222222"}
+        for left, right in ((owner, owner), (None, None), (owner, None), (None, owner),
+                            (foreign, foreign), (owner, foreign)):
+            with self.subTest(left=left, right=right), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                for host, value in (("core", left), ("commerce", right)):
+                    (root / host).write_text(json.dumps({"owner": value}))
+                script = 'set -euo pipefail\nSHA=' + self.target + '\nRESUME_NONCE=' + self.nonce + '\n' + '''
+reader_control() {
+ if [ "$2" = prepare-owner ]; then cat "$1"; else printf '%s\\n' "$*" >> captures; fi
+}
+''' + functions + '\nreader_prepare_retry\n'
+                result = self.shell(script, cwd=temp)
+                accepted = left == right == owner
+                self.assertEqual(result.returncode == 0, accepted, result.stderr)
+                self.assertEqual((root / "captures").exists(), accepted)
+                if accepted:
+                    self.assertEqual((root / "captures").read_text().splitlines(), [
+                        host + " capture --release " + self.target + " --owner-nonce " + self.nonce
+                        for host in ("core", "commerce")])
+
     def test_preflight_requires_existing_barriers_before_shared_ending(self):
         functions = self.function("finalize_preflight")
         for failure in ("", "ingress", "owner-commerce", "sql", "target", "expected", "billing"):
@@ -212,7 +305,8 @@ verify_billing_runtime() { record billing; }
         functions = self.function("control_preflight")
         for damage in (
             "", "same_commit", "empty", "same_commit_runtime", "same_commit_source", "same_commit_ci",
-            "inspector_contract", "gateway_contract", "gateway_neighbor", "source", "runtime",
+            "inspector_contract", "gateway_contract", "physical_contract", "gateway_neighbor", "source", "runtime",
+            "head", "dirty", "status_unknown",
             "renamed", "ancestry", "ci", "ci_sha",
         ):
             with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temp:
@@ -228,6 +322,8 @@ verify_billing_runtime() { record billing; }
                     changed = "apps/orchestrator/tests/test_inspector_upstream_contract.py"
                 elif damage == "gateway_contract":
                     changed = "apps/api/tests/test_gateway_billing_cutover_release.py"
+                elif damage == "physical_contract":
+                    changed = "infra/release/test_generation_physical_drain_contract.py"
                 elif damage == "gateway_neighbor":
                     changed = "apps/api/tests/test_gateway_billing_cutover_release_other.py"
                 script = 'set -euo pipefail\nSHA=' + self.target + '\nCONTROL_SHA=' + control + '\n' + '''REPO=.
@@ -235,6 +331,8 @@ RELEASE_DRIVER=driver
 git() {
  case " $* " in
   *" merge-base "*) [ "$DAMAGE" != ancestry ]; ;;
+  *" rev-parse "*) if [ "$DAMAGE" = head ]; then printf '%s' "$SHA"; else printf '%s' "$CONTROL_SHA"; fi ;;
+  *" status "*) [ "$DAMAGE" != status_unknown ] || return 1; if [ "$DAMAGE" = dirty ]; then printf '?? unreviewed'; fi ;;
   *" show "*) cat committed ;;
   *" diff "*) if [ "$EMPTY_DIFF" = 0 ]; then printf '%s\\0' "$CHANGED"; fi ;;
   *) return 99 ;;
@@ -251,7 +349,7 @@ gh() { cat ci.json; }
                 result = self.shell('DAMAGE=' + shlex.quote(damage) + '\nCHANGED=' + shlex.quote(changed)
                                     + '\nEMPTY_DIFF=' + ("1" if damage in {"empty", "same_commit", "same_commit_source", "same_commit_ci"} else "0")
                                     + '\n' + script, cwd=temp)
-                if damage not in {"", "same_commit", "inspector_contract", "gateway_contract"}:
+                if damage not in {"", "same_commit", "inspector_contract", "gateway_contract", "physical_contract"}:
                     self.assertNotEqual(result.returncode, 0)
                     self.assertNotIn("accepted", result.stdout)
                 else:
@@ -431,6 +529,65 @@ finish_owned_release() { printf 'finish\\n' >> calls; }
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(Path(temp, "calls").read_text().splitlines(),
                              ["control", "lock", "describe", "preflight", "finish", "unlock"])
+
+    def test_resume_main_preflight_precedes_normal_full_rollout_under_mutex(self):
+        main = self.source().split('say "выкатка ', 1)[1]
+        main = 'say "выкатка ' + main.split('say "core: ff-merge', 1)[0]
+        functions = self.function("resume_owned_preflight")
+        for failure in ("", "control", "ancestor", "ingress-check", "owner-core", "owner-commerce", "resume-check"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temp:
+                script = '''set -euo pipefail
+SHA=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+FINALIZE_NONCE=
+RESUME_NONCE=11111111-1111-4111-8111-111111111111
+CONTROL_SHA=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+SHORT=aaaaaaaa
+REPO=.
+API=1 WEB=1 GW=0 LEGAL= REPAIR=3600 BOOTSTRAP=0
+record() { printf '%s\\n' "$1" >> calls; [ "$1" != "$FAILURE" ]; }
+say() { :; }
+git() { case " $* " in
+ *" fetch "*) : ;;
+ *" merge-base "*) if [ "${@: -1}" != origin/main ]; then record ancestor; fi ;;
+ *) return 99;; esac; }
+control_preflight() { record control; }
+ssh() { case "$*" in
+ *noclobber*) record lock ;;
+ *"rm -f /opt/omnia/.deploy.lock"*) record unlock ;;
+ *) return 99;; esac; }
+api_maintenance() {
+ if [ "$1" = --describe-runtime ]; then record describe; printf '%s' "$SHA";
+ else [ "$3" = begin ] && [ "$4" = "$SHA" ]; record sql-begin; fi
+}
+ingress_drain() { record "ingress-$1"; }
+reader_control() { [ "$2" = verify-owner ]; record "owner-$1"; }
+reader_resume_check() { record resume-check; }
+reader_prepare_retry() { [ "$READER_NONCE" = "$RESUME_NONCE" ]; record prepare; }
+quiescence_gate() { [ "$CONTROL_SHA" = bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb ]; record physical; }
+reader_before() { [ "$READER_RETRY" = 1 ]; record before; }
+''' + functions + '\n' + main + '\nprintf "build:%s:%s:%s\\n" "$SHA" "$API" "$WEB" >> calls\n'
+                result = self.shell('FAILURE=' + shlex.quote(failure) + '\n' + script, cwd=temp)
+                calls = Path(temp, "calls").read_text().splitlines()
+                if failure:
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertFalse(set(calls) & {"ingress-begin", "prepare", "sql-begin", "before"})
+                    self.assertFalse(any(item.startswith("build:") for item in calls))
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(calls, ["control", "lock", "describe", "ancestor", "ingress-check",
+                                             "owner-core", "owner-commerce", "resume-check", "ingress-begin",
+                                             "prepare", "sql-begin", "physical", "before",
+                                             "build:" + self.target + ":1:1", "unlock"])
+
+    def test_control_only_supplies_standalone_gate_not_application_helpers(self):
+        publication = self.function("publication_drain")
+        self.assertIn('gate_revision="${CONTROL_SHA:-$SHA}"', publication)
+        self.assertIn('$gate_revision:infra/release/generation-publication-drain.py', publication)
+        for name in ("api_maintenance", "ingress_drain", "reader_control", "reader_resume_check"):
+            with self.subTest(name=name):
+                helper = self.function(name)
+                self.assertNotIn("CONTROL_SHA", helper)
+                self.assertIn('$SHA:', helper)
 
 
 class BillingRuntimeIdentityTests(unittest.TestCase):
