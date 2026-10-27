@@ -530,6 +530,8 @@ async def test_final_message_cannot_admit_next_prompt_while_run_still_active(
         "yleum_api.services.generation_deployment_drain.require_generation_admission", AsyncMock(),
     )
     monkeypatch.setattr("yleum_api.services.restorations.assert_no_active_restoration", AsyncMock())
+    migration_status = AsyncMock()
+    monkeypatch.setattr("yleum_api.services.publication_migrations.get_status", migration_status)
     with pytest.raises(ApiError) as rejected:
         await generation_runs.reserve_generation_run(
             store.factory(), project_id=store.project.id, user_id=store.run.user_id,
@@ -538,6 +540,7 @@ async def test_final_message_cannot_admit_next_prompt_while_run_still_active(
     assert rejected.value.status_code == 409 and rejected.value.code == "generation_active"
     assert store.run.status == expected_status and not store.added
     store.billing.assert_not_awaited()
+    migration_status.assert_not_awaited()
 
 
 @pytest.mark.parametrize("mismatch", [

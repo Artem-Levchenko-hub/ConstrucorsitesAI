@@ -59,6 +59,26 @@ def ready_source_resources(monkeypatch):
     monkeypatch.setattr(project_cell_runtime, "_get_cell_resources", resources)
 
 
+@pytest.fixture
+def no_publication_migration(monkeypatch):
+    """Only the external migration-status RPC is substituted for these scenarios."""
+    from unittest.mock import AsyncMock
+
+    from yleum_api.services import orchestrator_client
+
+    rpc = AsyncMock(return_value={"migration": None})
+    monkeypatch.setattr(orchestrator_client, "get_publication_migration", rpc)
+    return rpc
+
+
+async def test_no_migration_fixture_uses_real_status_contract(no_publication_migration):
+    from yleum_api.services.publication_migrations import get_status
+
+    project_id, owner_id = uuid4(), uuid4()
+    assert await get_status(project_id, owner_id) is None
+    no_publication_migration.assert_awaited_once_with(project_id, owner_id)
+
+
 def test_prepare_does_not_move_head_and_activation_replays():
     project, operation = uuid4(), uuid4()
     old = repo.init_from_files(project, {"page.txt": "old", "empty.txt": ""}, "seed")
@@ -1353,7 +1373,9 @@ def test_restore_source_symlink_is_rejected_without_activation():
 
 
 @pytest.mark.parametrize("consumer", ["generation", "preview", "publication", "deletion"])
-async def test_db_active_restoration_blocks_real_mutating_consumers(db_session, consumer):
+async def test_db_active_restoration_blocks_real_mutating_consumers(
+    db_session, consumer, no_publication_migration
+):
     from yleum_api.core.errors import ApiError
     from yleum_api.services import restorations as service
     from yleum_api.services.cell_publication import submit_publication
@@ -1365,6 +1387,7 @@ async def test_db_active_restoration_blocks_real_mutating_consumers(db_session, 
     workspace.provider = "docker_owner_canary"
     await db_session.commit()
     await service.create_restoration(db_session, project.id, owner.id, request, FakeRuntime())
+    no_publication_migration.assert_awaited_once_with(project.id, owner.id)
     with pytest.raises(ApiError) as error:
         if consumer == "generation":
             await reserve_generation_run(
@@ -1753,7 +1776,9 @@ async def test_db_source_lost_wake_reuses_durable_operation(db_session, monkeypa
     assert result.state == "ready" and len(wake_ids) == 2 and wake_ids[0] == wake_ids[1]
 
 
-async def test_db_restored_publication_loads_real_version_without_generation(db_session):
+async def test_db_restored_publication_loads_real_version_without_generation(
+    db_session, no_publication_migration
+):
     from yleum_api.schemas.restoration import RestoreApplyRequest
     from yleum_api.services import restorations as service
     from yleum_api.services.cell_publication import load_publication_evidence
@@ -1763,6 +1788,7 @@ async def test_db_restored_publication_loads_real_version_without_generation(db_
     await db_session.commit()
     runtime = FakeRuntime()
     operation = await service.create_restoration(db_session, project.id, owner.id, request, runtime)
+    no_publication_migration.assert_awaited_once_with(project.id, owner.id)
     result = await service.apply_restoration(
         db_session,
         project.id,

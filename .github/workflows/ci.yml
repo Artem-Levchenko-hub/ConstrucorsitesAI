@@ -380,15 +380,28 @@ jobs:
           docker pull postgres:16-alpine
           migration_image=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')
           test -n "$migration_image"
-          echo "QA_MIGRATION_DOCKER_IMAGE=$migration_image" >> "$GITHUB_ENV"
-          echo "QA_PUBLICATION_MIGRATION_PG_IMAGE=$migration_image" >> "$GITHUB_ENV"
-          echo "QA_PUBLICATION_MIGRATION_DOCKER=1" >> "$GITHUB_ENV"
-      - name: Verify orchestrator and real isolated publication migrations
+          {
+            echo "QA_MIGRATION_DOCKER_IMAGE=$migration_image"
+            echo "QA_PUBLICATION_MIGRATION_PG_IMAGE=$migration_image"
+            echo "QA_PUBLICATION_MIGRATION_DOCKER=1"
+          } >> "$GITHUB_ENV"
+      - name: Verify real isolated publication migration backup and commit recovery
+        working-directory: apps/orchestrator
+        run: >-
+          uv run --frozen pytest -q -o faulthandler_timeout=180 --durations=10
+          tests/test_publication_migration_backup_docker.py
+          tests/test_publication_migration_integration.py
+          tests/test_publication_migration_pg_postgres.py
+      - name: Run orchestrator tests
         working-directory: apps/orchestrator
         # A test that hangs longer than four minutes dumps every thread's stack into the
         # log (pytest's built-in faulthandler), so a stuck run names the test instead of
         # silently eating the job timeout. The slowest tests are listed for sizing.
-        run: uv run pytest -q -o faulthandler_timeout=240 --durations=15
+        run: >-
+          uv run pytest -q -o faulthandler_timeout=240 --durations=15
+          --ignore=tests/test_publication_migration_backup_docker.py
+          --ignore=tests/test_publication_migration_integration.py
+          --ignore=tests/test_publication_migration_pg_postgres.py
       - name: Run isolated P01 PostgreSQL volume probe
         working-directory: apps/orchestrator
         env:

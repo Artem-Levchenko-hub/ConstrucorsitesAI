@@ -187,7 +187,7 @@ def assert_isolated(sandbox):
 
 
 @pytest.fixture
-def real_migration(tmp_path):
+def real_migration(tmp_path, monkeypatch):
     # Validate explicit local-only authority before opening Docker or importing POSIX code.
     image = os.environ.get("QA_PUBLICATION_MIGRATION_PG_IMAGE", "")
     assert re.fullmatch(r"(?:(?:docker\.io/)?library/)?postgres@sha256:[0-9a-f]{64}", image), (
@@ -201,6 +201,7 @@ def real_migration(tmp_path):
 
     from tests.test_cell_publication import request
     from tests.test_project_machine_manifest import payload
+    from tests.test_publication_migration_backup_docker import configure_isolated_settings
     from yleum_orchestrator.core.project_machine import MachineManifest
     from yleum_orchestrator.services.cell_lock import WorkspaceOperationLock
     from yleum_orchestrator.services.project_machine import write_controller_json
@@ -209,6 +210,7 @@ def real_migration(tmp_path):
     from yleum_orchestrator.services.publication_migration_io import PublicationMigrationIO
     from yleum_orchestrator.services.published_machine_backend import data_contract_digest
 
+    configure_isolated_settings(monkeypatch)
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock", timeout=20)
     source_sandbox = target_sandbox = None
     try:
