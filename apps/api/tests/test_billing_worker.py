@@ -152,5 +152,9 @@ def test_stale_payment_cutoffs_follow_settings(monkeypatch: pytest.MonkeyPatch) 
     reread_before, abandon_before = payment_state.stale_payment_cutoffs(T0)
     assert reread_before == T0 - timedelta(minutes=10)
     assert abandon_before == T0 - timedelta(hours=24)
-    assert payment_state.RECONCILED_PURPOSES == ("wallet_topup", "subscription_initial")
+    assert payment_state.RECONCILED_PURPOSES == (
+        "wallet_topup",
+        "subscription_initial",
+        "payment_test",
+    )
     assert payment_state.OPEN_PAYMENT_STATUSES == ("pending", "waiting_for_capture")
