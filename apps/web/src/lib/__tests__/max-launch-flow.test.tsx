@@ -9,6 +9,7 @@ import type { DeployStatus } from "@/lib/api/types";
 
 const policy = vi.hoisted(() => ({ versioning: false }));
 vi.mock("@/lib/max-product-policy", () => ({ get MAX_CUSTOMER_VERSIONING() { return policy.versioning; } }));
+vi.mock("@/lib/api/mocks", async original => ({ ...await original<object>(), USE_MOCKS: false }));
 
 const deploy = (phase: DeployStatus["phase"], run_id: string | null): DeployStatus => ({
   phase, run_id, started_at: null, finished_at: null, prod_url: null,
@@ -27,6 +28,7 @@ let postDeploy: (() => DeployStatus) | undefined;
 let stallDeployRead: boolean;
 let headSha: string;
 let restoring: boolean;
+let appliedMigration: boolean;
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -38,6 +40,7 @@ beforeEach(() => {
   stallDeployRead = false;
   headSha = "a".repeat(40);
   restoring = false;
+  appliedMigration = false;
   policy.versioning = false;
   status = deploy("queued", null);
   window.localStorage.clear();
@@ -54,6 +57,9 @@ beforeEach(() => {
     if (path.endsWith("/max/readiness")) {
       if (pendingReadiness) return pendingReadiness;
       response = { ready_to_launch: false, progress: 67, items: ["legal", "build", "bot", "publish", "max_url"].map(id => ({ id, done: !["publish", "max_url"].includes(id), blocking: true, label: id, action: null })) };
+    } else if (path.endsWith("/max/publication-migrations")) {
+      response = appliedMigration ? { project_id: projectId, snapshot_id: "current", state: "applied",
+        backup_verified: true, effect_possible: false, plan_sha256: "a".repeat(64) } : null;
     } else if (path.endsWith("/restorations")) {
       response = { enabled: true, items: restoring ? [{ state: "applying" }] : [] };
     } else if (path.endsWith("/snapshots")) {
@@ -296,4 +302,17 @@ it("blocks manual and resumed publication on explicit migration evidence for the
   await click();
   expect(posts()).toHaveLength(0);
   expect(calls.some(call => call.path.endsWith("/activate"))).toBe(false);
+});
+
+it("publishes through the ordinary runner after a confirmed current migration", async () => {
+  projectId = crypto.randomUUID();
+  appliedMigration = true;
+  status = { ...deploy("failed", "migration-release"), snapshot_id: "current", reason_code: "migration_required" };
+  await mount();
+  await flush(50);
+  await flush(50);
+  expect(button().disabled).toBe(false);
+  await click();
+  expect(posts()).toHaveLength(1);
+  expect(calls.some(call => call.path.endsWith("/activate"))).toBe(true);
 });

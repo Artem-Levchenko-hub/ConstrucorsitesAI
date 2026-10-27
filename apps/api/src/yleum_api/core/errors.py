@@ -25,6 +25,7 @@ ErrorCode = Literal[
     "generation_active",
     "generation_draining",
     "restoration_active",
+    "publication_migration_active",
     "idempotency_conflict",
     "source_changed",
     # V2: orchestrator-proxy errors surfaced through apps/api/services/orchestrator_client.

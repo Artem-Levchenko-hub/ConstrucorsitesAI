@@ -20,6 +20,7 @@ import { getMaxPublicationState } from "@/lib/max-publication-state";
 import { MAX_STATUS_COPY, MAX_UNKNOWN_LABEL } from "@/lib/max-status-copy";
 import { useWorkspaceStore } from "@/store/workspace";
 import { MaxLaunchButton } from "./MaxLaunchButton";
+import { MaxDataMigration } from "./MaxDataMigration";
 import { MaxPublicationRequirements, PUBLICATION_REQUIREMENTS } from "./MaxPublicationRequirements";
 import "./max-studio.css";
 import "./max-project-workspace.css";
@@ -108,11 +109,7 @@ export function MaxLaunchPanel({ project, onClose, standalone = false }: {
           {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "already_current" && <p className="max-launch-notice" data-testid="max-launch-noop">Приложение уже опубликовано — повторная сборка не потребовалась.</p>}
           {!busyDeploy && !stateError && deploy.data?.phase === "done" && deploy.data.detail === "config_only" && <p className="max-launch-notice" data-testid="max-launch-noop">Обновлены только настройки — приложение не пересобиралось.</p>}
           {failed && <div role="alert" className="text-sm text-danger-fg"><p>{failure.title}</p>{failure.detail && <p className="max-launch-failure-detail">{failure.detail}</p>}</div>}
-          {migrationPending && migrationReviewOpen && <section data-testid="max-migration-review" role="status" className="max-launch-notice">
-            <h3>Проверка перед миграцией</h3>
-            <p>Нужны точная схема опубликованной базы, изменения полей текущей версии и проверенная резервная копия. Применение изменений пока недоступно.</p>
-            <p>Проверка должна подтвердить сохранение записей, связей и файлов. После этого будет доступно отдельное подтверждение изменений для этой версии.</p>
-          </section>}
+          {migrationPending && migrationReviewOpen && <MaxDataMigration projectId={project.id} snapshotId={effectiveReadiness?.publication_migration?.snapshot_id ?? deploy.data?.snapshot_id ?? null} />}
           {busyDeploy && <p className="text-sm">Можно закрыть окно — процесс выполняется на сервере.</p>}
           <div className="max-launch-primary-action">
             {stateError ? <Button onClick={() => { void readiness.refetch(); void deploy.refetch(); }}>{MAX_STATUS_COPY.readiness.retry}</Button>

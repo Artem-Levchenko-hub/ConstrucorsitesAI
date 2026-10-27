@@ -20,8 +20,10 @@ dependencies = [
     "sentry-sdk[fastapi]>=2.18,<3.0",
     "redis>=5.0,<6.0",
     "asyncssh>=2.21,<3.0",
-    "kubernetes>=31,<34",
+    "kubernetes==33.1.0",
+    "websocket-client>=1.9.2,<2",
     "pglast>=8.4,<9",
+    "cryptography>=50,<51",
 ]
 
 [dependency-groups]

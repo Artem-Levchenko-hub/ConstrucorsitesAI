@@ -5,6 +5,7 @@ import type {
   MaxPreviewSession,
   MaxReadiness,
   MaxUsage,
+  PublicationMigration,
   Uuid,
 } from "./types";
 
@@ -67,4 +68,20 @@ export function createMaxPreviewSession(
 
 export function getMaxUsage(projectId: Uuid): Promise<MaxUsage> {
   return apiFetch<MaxUsage>(`${path(projectId)}/usage`);
+}
+
+export function getPublicationMigration(projectId: Uuid): Promise<PublicationMigration | null> {
+  return apiFetch(`${path(projectId)}/publication-migrations`, { timeoutMs: 15_000 });
+}
+
+export function preparePublicationMigration(projectId: Uuid, idempotencyKey: string): Promise<PublicationMigration> {
+  return apiFetch(`${path(projectId)}/publication-migrations`, {
+    method: "POST", json: { idempotency_key: idempotencyKey }, timeoutMs: 30_000,
+  });
+}
+
+export function confirmPublicationMigration(projectId: Uuid, operationId: string, plan: string): Promise<PublicationMigration> {
+  return apiFetch(`${path(projectId)}/publication-migrations/${operationId}/confirm`, {
+    method: "POST", json: { plan_sha256: plan, explicit_intent: true }, timeoutMs: 30_000,
+  });
 }

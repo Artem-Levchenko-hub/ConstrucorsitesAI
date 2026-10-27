@@ -1657,6 +1657,9 @@ async def create_restoration(
     from yleum_api.services.generation_deployment_drain import require_generation_admission
 
     await require_generation_admission(session)
+    from yleum_api.services.publication_migrations import assert_no_active_migration
+
+    await assert_no_active_migration(session, project_id)
     project = await lock_restoration_admission(session, project_id, owner_id)
     if project.template != "max_miniapp":
         raise ApiError("conflict", "This restoration flow requires a MAX project", 409)

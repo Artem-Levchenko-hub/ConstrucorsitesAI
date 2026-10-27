@@ -2675,6 +2675,30 @@ async def configure_published_cell(project_id: UUID, payload: dict[str, Any]) ->
     )
 
 
+async def get_publication_migration(project_id: UUID, owner_id: UUID) -> dict[str, Any]:
+    return await _request(
+        "GET", f"/internal/projects/{project_id}/publication-migrations",
+        params={"owner_id": str(owner_id)},
+    )
+
+
+async def prepare_publication_migration(
+    project_id: UUID, payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _request(
+        "POST", f"/internal/projects/{project_id}/publication-migrations", json=payload,
+    )
+
+
+async def confirm_publication_migration(
+    project_id: UUID, operation_id: UUID, payload: dict[str, Any],
+) -> dict[str, Any]:
+    return await _request(
+        "POST", f"/internal/projects/{project_id}/publication-migrations/{operation_id}/confirm",
+        json=payload,
+    )
+
+
 async def get_deploy(project_id: UUID) -> dict[str, Any]:
     """GET /internal/projects/<uuid>/deploy — last-known deploy record.
 

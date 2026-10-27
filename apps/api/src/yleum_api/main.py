@@ -46,6 +46,7 @@ from yleum_api.routers import product_advice as product_advice_router
 from yleum_api.routers import project_versions as project_versions_router
 from yleum_api.routers import projects as projects_router
 from yleum_api.routers import public as public_router
+from yleum_api.routers import publication_migrations as publication_migrations_router
 from yleum_api.routers import restorations as restorations_router
 from yleum_api.routers import rollback as rollback_router
 from yleum_api.routers import runtime as runtime_router
@@ -273,6 +274,7 @@ def create_app() -> FastAPI:
     app.include_router(max_integrations_router.router)
     app.include_router(max_accounts_router.router)
     app.include_router(max_studio_router.router)
+    app.include_router(publication_migrations_router.router)
     app.include_router(rollback_router.router)
     app.include_router(task_board_router.router)
     app.include_router(transcribe_router.router)

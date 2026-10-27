@@ -751,6 +751,9 @@ async def reserve_generation_run(
 
     await session.execute(select(Project.id).where(Project.id == project_id).with_for_update())
     await assert_no_active_restoration(session, project_id)
+    from yleum_api.services.publication_migrations import assert_no_active_migration
+
+    await assert_no_active_migration(session, project_id)
     if supersedes_run_id is not None:
         try:
             await require_quiesced_predecessor(session, project_id=project_id, user_id=user_id,

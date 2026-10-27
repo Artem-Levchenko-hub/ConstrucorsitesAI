@@ -220,6 +220,7 @@ class CellPublicationService:
 
     async def submit(self, request: CellDeployRequest) -> DeployResponse:
         async with self._submission_lock.hold(request.project_id):
+            self._require_no_migration(request.project_id)
             saved = self._read(request.project_id)
             if saved.get("disabled"):
                 raise CellIdentityConflict("publication disabled")
@@ -300,6 +301,13 @@ class CellPublicationService:
             self._tasks[run_id] = task
             task.add_done_callback(lambda _task: self._tasks.pop(run_id, None))
             return response
+
+    def _require_no_migration(self, project_id: UUID) -> None:
+        from yleum_orchestrator.services.publication_migration import (
+            get_publication_migration_service,
+        )
+
+        get_publication_migration_service(self).require_no_active(project_id)
 
     def _record_shortcut(
         self, request: CellDeployRequest, digest: str, detail: str, started: float
@@ -564,6 +572,7 @@ class CellPublicationService:
     async def _prepare_locked(
         self, request: CellDeployRequest, run_id: str, trace: PublicationTrace | None = None
     ) -> dict[str, Any]:
+        self._require_no_migration(request.project_id)
         from yleum_orchestrator.routers.runtime import _workspace_revision
         from yleum_orchestrator.routers.workspace import _read_agent_workspace_files
 
@@ -1045,6 +1054,7 @@ class CellPublicationService:
         release: dict[str, Any],
         trace: PublicationTrace | None = None,
     ) -> None:
+        self._require_no_migration(request.project_id)
         if self._read(request.project_id).get("disabled"):
             raise CellIdentityConflict("publication disabled")
         trace = trace or PublicationTrace()
@@ -1166,6 +1176,7 @@ class CellPublicationService:
         Failed cleanup remains retryable; recovery can never re-open the tombstone.
         """
         async with self._submission_lock.hold(project_id):
+            self._require_no_migration(project_id)
             if not self._project_path(project_id).exists():
                 return
             saved = self._read(project_id)
@@ -1276,6 +1287,7 @@ class CellPublicationService:
         business_config_version: int | None = None,
     ) -> dict[str, bool]:
         async with self._submission_lock.hold(project_id):
+            self._require_no_migration(project_id)
             applied = self._configure_locked(
                 project_id,
                 owner_id,
@@ -1434,6 +1446,7 @@ class CellPublicationService:
     async def _reconcile_project(self, path: Path) -> dict[str, str] | None:
         """Caller holds project lock, matching activation/configuration lock order."""
         project_id = UUID(path.parent.name)
+        self._require_no_migration(project_id)
         saved = self._read(project_id)
         if saved.get("disabled") or any(
             item["response"].get("run_id") in self._tasks for item in saved["history"]
@@ -2119,6 +2132,11 @@ def start_publication_recovery() -> asyncio.Task[None]:
         while True:
             try:
                 await asyncio.to_thread(readers.require_if_configured)
+                from yleum_orchestrator.services.publication_migration import (
+                    get_publication_migration_service,
+                )
+
+                await get_publication_migration_service(service).reconcile()
                 outcomes = await service.reconcile()
                 for outcome in outcomes:
                     if outcome["state"] != "ready":

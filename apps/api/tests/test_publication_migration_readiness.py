@@ -8,9 +8,11 @@ from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.models.project import Project
 from yleum_api.models.snapshot import Snapshot
 from yleum_api.routers import max_studio
+from yleum_api.schemas.publication_migrations import MigrationStatus
+from yleum_api.services import publication_migrations
 
 
-async def readiness(monkeypatch, deployment):
+async def readiness(monkeypatch, deployment, operation=None):
     owner = SimpleNamespace(id=UUID(int=1))
     snapshot = SimpleNamespace(
         id=UUID(int=3), commit_sha="a" * 40, created_at=datetime(2026, 1, 1, tzinfo=UTC)
@@ -42,7 +44,12 @@ async def readiness(monkeypatch, deployment):
     async def selection(*args, **kwargs):
         return SimpleNamespace(selected=False)
 
+    async def get_migration(project_id, owner_id):
+        assert project_id == project.id and owner_id == owner.id
+        return operation
+
     monkeypatch.setattr(max_studio.orchestrator_client, "get_deploy", get_deploy)
+    monkeypatch.setattr(publication_migrations, "get_status", get_migration)
     monkeypatch.setattr(
         max_studio.project_cell_runtime, "resolve_project_cell_public_selection", selection
     )
@@ -65,6 +72,20 @@ async def test_current_migration_failure_blocks_server_build_readiness_not_only_
     assert next(v for v in result.items if v.id == "build").done is False
     assert result.publication_migration.status == "verification_required"
     assert result.publication_migration.execution_available is False
+
+
+@pytest.mark.asyncio
+async def test_applied_current_verified_migration_allows_ordinary_publication(monkeypatch):
+    operation = MigrationStatus(
+        operation_id=UUID(int=4), project_id=UUID(int=2), snapshot_id=UUID(int=3),
+        state="applied", backup_verified=True, effect_possible=False, plan_sha256="f" * 64,
+    )
+    result = await readiness(monkeypatch, {
+        "phase": "failed", "reason_code": "migration_required",
+        "snapshot_id": str(UUID(int=3)), "commit_sha": "a" * 40,
+    }, operation)
+    assert next(v for v in result.items if v.id == "build").done is True
+    assert result.publication_migration is None
 
 
 @pytest.mark.asyncio

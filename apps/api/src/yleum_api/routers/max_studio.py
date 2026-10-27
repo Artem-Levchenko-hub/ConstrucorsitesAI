@@ -593,13 +593,19 @@ async def get_max_readiness(
                 and valid_revision
                 and deployment.get("commit_sha") == revision
             )
-            migration = MaxPublicationMigration(
-                status="verification_required" if confirmed else "identity_unconfirmed",
-                snapshot_id=current_snapshot.id if current_snapshot else None,
-                source_revision=revision if valid_revision else None,
-            )
-            build_ready = False
-            published = False
+            from yleum_api.services.publication_migrations import applied_to_snapshot, get_status
+
+            operation = await get_status(project.id, project.owner_id) if confirmed else None
+            if not applied_to_snapshot(
+                operation, project.id, current_snapshot.id if current_snapshot else None,
+            ):
+                migration = MaxPublicationMigration(
+                    status="verification_required" if confirmed else "identity_unconfirmed",
+                    snapshot_id=current_snapshot.id if current_snapshot else None,
+                    source_revision=revision if valid_revision else None,
+                )
+                build_ready = False
+                published = False
     # No owner requisites are asked for anywhere: a Yleum account is an email and
     # a way to sign in; the business behind a bot is verified by MAX itself.
     items = [

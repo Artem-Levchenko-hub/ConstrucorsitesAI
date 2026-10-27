@@ -1,4 +1,4 @@
-import type { DeployStatus, MaxReadiness, Project } from "@/lib/api/types";
+import type { DeployStatus, MaxReadiness, Project, PublicationMigration } from "@/lib/api/types";
 
 export type MaxPublicationGuard = "none" | "checking" | "migration_required";
 
@@ -7,9 +7,13 @@ export function getMaxPublicationGuard(
   deployment: DeployStatus | undefined,
   project: Pick<Project, "id" | "current_snapshot_id"> | undefined,
   projectId: string,
+  migration?: PublicationMigration | null,
 ): MaxPublicationGuard {
   if (deployment?.phase !== "failed" || deployment.reason_code !== "migration_required") return "none";
   if (!deployment.snapshot_id || !project?.current_snapshot_id || project.id !== projectId) return "checking";
+  if (migration?.project_id === projectId && migration.snapshot_id === project.current_snapshot_id &&
+    migration.state === "applied" && migration.backup_verified && !migration.effect_possible &&
+    /^[0-9a-f]{64}$/.test(migration.plan_sha256 ?? "")) return "none";
   return deployment.snapshot_id === project.current_snapshot_id ? "migration_required" : "none";
 }
 

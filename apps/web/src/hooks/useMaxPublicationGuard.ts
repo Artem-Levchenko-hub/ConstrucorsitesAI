@@ -1,6 +1,7 @@
 "use client";
 import { useQuery } from "@tanstack/react-query";
 import { getProject } from "@/lib/api/projects";
+import { getPublicationMigration } from "@/lib/api/max-studio";
 import type { DeployStatus } from "@/lib/api/types";
 import { getMaxPublicationGuard } from "@/lib/max-publication-guard";
 
@@ -8,5 +9,8 @@ export function useMaxPublicationGuard(projectId: string, deployment: DeployStat
   const needsIdentity = deployment?.phase === "failed" && deployment.reason_code === "migration_required";
   const project = useQuery({ queryKey: ["project", projectId], queryFn: () => getProject(projectId),
     enabled: needsIdentity, retry: false, refetchInterval: needsIdentity ? 10_000 : false });
-  return getMaxPublicationGuard(deployment, project.isSuccess ? project.data : undefined, projectId);
+  const migration = useQuery({ queryKey: ["publication-migration", projectId],
+    queryFn: () => getPublicationMigration(projectId), enabled: needsIdentity, retry: false });
+  return getMaxPublicationGuard(deployment, project.isSuccess ? project.data : undefined, projectId,
+    migration.isSuccess ? migration.data : undefined);
 }

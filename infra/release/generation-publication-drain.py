@@ -1191,6 +1191,12 @@ def require_physical_writers_drained(
         attrs = container.attrs
         labels = attrs.get("Config", {}).get("Labels") or {}
         kind = labels.get("omnia.resource_kind")
+        if kind == "publication-migration-verifier" or container.name.startswith(
+            "omnia-publication-migration-"
+        ):
+            # Even an exited verifier is unresolved until its exact-owned cleanup
+            # is confirmed. Never restart the controller around an orphan helper.
+            raise PhysicalDrainError("publication migration verifier cleanup is not confirmed")
         affected = (
             labels.get("omnia.helper") == "true"
             or labels.get("omnia.project_machine") == "true"
@@ -1333,9 +1339,37 @@ def require_physical_writers_drained(
     return {"affected_containers": len(by_name), "physical_journals": journals}
 
 
+def require_migrations_drained(root: Path) -> None:
+    """Durable exclusion also covers orphan journals and lost asyncio tasks."""
+    active = {"preparing", "applying", "reconciling"}
+    states = active | {"prepared", "applied", "failed", "stale", "blocked"}
+    for path in root.glob("*/migrations/*.json"):
+        try:
+            if any(item.is_symlink() for item in (path, path.parent, path.parent.parent)):
+                raise ValueError("unsafe migration journal")
+            if path.stat().st_size > 2 * 1024 * 1024:
+                raise ValueError("oversized migration journal")
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if (
+                value["version"] != 1
+                or value["project_id"] != path.parent.parent.name
+                or str(UUID(value["project_id"])) != value["project_id"]
+                or value["operation_id"] != path.stem
+                or str(UUID(value["operation_id"])) != path.stem
+                or value["state"] not in states
+                or type(value["effect_possible"]) is not bool
+                or value["effect_possible"]
+                or value["state"] in active
+            ):
+                raise ValueError("unfinished or unknown migration")
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise RuntimeError("migration journals are not quiescent") from exc
+
+
 def require_publications_drained(root: Path) -> int:
     if not root.parent.is_dir() or root.is_symlink():
         raise RuntimeError("publication storage authority is unavailable")
+    require_migrations_drained(root)
     count = 0
     for path in root.glob("*/publication.json"):
         try:

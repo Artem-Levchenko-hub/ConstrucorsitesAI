@@ -30,6 +30,7 @@ from yleum_orchestrator.routers import (
     health,
     ingress,
     publication_artifacts,
+    publication_migration,
     runtime,
     workspace,
 )
@@ -177,6 +178,7 @@ def create_app() -> FastAPI:
     app.include_router(workspace.router)
     app.include_router(cell_publication.router)
     app.include_router(publication_artifacts.router)
+    app.include_router(publication_migration.router)
     app.include_router(code_restorations.router)
 
     return app

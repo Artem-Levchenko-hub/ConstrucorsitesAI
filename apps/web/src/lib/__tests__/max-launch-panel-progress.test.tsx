@@ -6,8 +6,8 @@ import { MaxLaunchPanel } from "@/components/max/MaxLaunchPanel";
 import type { DeployStatus, MaxReadiness, Project } from "@/lib/api/types";
 import { formatElapsed, heartbeatStale, observeHeartbeat, publicationBytesLabel, publicationElapsedMs, publicationFailureText, publicationStageLabel } from "@/lib/max-publication-progress";
 
-const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn(), launch: vi.fn(), project: vi.fn() }));
-vi.mock("@/lib/api/max-studio", async (original) => ({ ...await original<object>(), getMaxReadiness: api.readiness }));
+const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn(), launch: vi.fn(), project: vi.fn(), migration: vi.fn() }));
+vi.mock("@/lib/api/max-studio", async (original) => ({ ...await original<object>(), getMaxReadiness: api.readiness, getPublicationMigration: api.migration }));
 vi.mock("@/lib/api/runtime", async (original) => ({ ...await original<object>(), getLastDeploy: api.deploy, getDeployHistory: api.history, getRuntime: api.runtime }));
 vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<object>(), getMaxIntegration: api.integration }));
 vi.mock("@/lib/api/projects", async (original) => ({ ...await original<object>(), getProject: api.project }));
@@ -27,6 +27,7 @@ beforeEach(() => {
   vi.useRealTimers();
   localStorage.clear();
   api.readiness.mockResolvedValue(readiness());
+  api.migration.mockResolvedValue(null);
   api.project.mockResolvedValue({ ...project, current_snapshot_id: "current-snapshot" });
   api.history.mockResolvedValue([]);
   api.runtime.mockResolvedValue({ state: "running", container_name: "preview", port: 3000, dev_url: "https://preview.example.com", last_active_at: null, hibernate_after_seconds: 600, keep_alive: false });

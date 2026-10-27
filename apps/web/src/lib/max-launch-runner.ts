@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { getMaxPublicationGuard } from "@/lib/max-publication-guard";
 import { PUBLICATION_REASON_LABELS } from "@/lib/max-publication-progress";
 import { MAX_CUSTOMER_VERSIONING } from "@/lib/max-product-policy";
+import { getPublicationMigration } from "@/lib/api/max-studio";
 
 const LAUNCH_TIMEOUT_MS = 20 * 60_000;
 const deadlineMessage = "Проверка публикации превысила время ожидания. Откройте статус публикации или повторите проверку.";
@@ -94,7 +95,10 @@ export async function finishMaxLaunch(projectId: string, onStatus: (status: Depl
     const active = isMaxDeployActive(deployment.phase, deployment.run_id);
     if (["new", "requesting"].includes(state.phase) && deployment.phase === "failed" && deployment.reason_code === "migration_required") {
       const project = await apiFetch<Project>(`/api/projects/${projectId}`, { signal });
-      const guard = getMaxPublicationGuard(deployment, project, projectId);
+      const migration = deployment.snapshot_id === project.current_snapshot_id
+        ? await getPublicationMigration(projectId) : null;
+      checkDeadline();
+      const guard = getMaxPublicationGuard(deployment, project, projectId, migration);
       if (guard !== "none") {
         discardCheckpoint = state.phase === "new";
         throw new Error(guard === "migration_required" ? PUBLICATION_REASON_LABELS.migration_required

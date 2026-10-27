@@ -1,8 +1,18 @@
 import { expect, it } from "vitest";
 import { getMaxPublicationGuard, guardedMaxReadiness } from "@/lib/max-publication-guard";
-import type { DeployStatus, MaxReadiness } from "@/lib/api/types";
+import type { DeployStatus, MaxReadiness, PublicationMigration } from "@/lib/api/types";
 
 const failure = { phase: "failed", reason_code: "migration_required", snapshot_id: "current" } as DeployStatus;
+it("releases only a confirmed migration for the current project and snapshot", () => {
+  const project = { id: "p", current_snapshot_id: "current" };
+  const receipt = { project_id: "p", snapshot_id: "current", state: "applied", backup_verified: true,
+    effect_possible: false, plan_sha256: "a".repeat(64) } as PublicationMigration;
+  expect(getMaxPublicationGuard(failure, project, "p", receipt)).toBe("none");
+  for (const changes of [{ project_id: "other" }, { snapshot_id: "older" }, { effect_possible: true },
+    { backup_verified: false }, { plan_sha256: null }, { state: "prepared" as const }]) {
+    expect(getMaxPublicationGuard(failure, project, "p", { ...receipt, ...changes })).toBe("migration_required");
+  }
+});
 it.each([
   { deployment: failure, project: { id: "p", current_snapshot_id: "current" }, expected: "migration_required" },
   { deployment: failure, project: { id: "p", current_snapshot_id: "newer" }, expected: "none" },

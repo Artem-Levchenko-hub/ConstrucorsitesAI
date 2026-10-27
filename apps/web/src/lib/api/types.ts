@@ -759,6 +759,19 @@ export type MaxReadiness = {
   }[];
 };
 
+export type PublicationMigration = {
+  operation_id: string;
+  project_id: string;
+  snapshot_id: string;
+  state: "preparing" | "prepared" | "applying" | "reconciling" | "applied" | "failed" | "stale" | "blocked";
+  plan_sha256: string | null;
+  fields: { table: string; name: string; type: string }[];
+  backup_verified: boolean;
+  error_code: string | null;
+  expires_at: string | null;
+  effect_possible: boolean;
+};
+
 export type MaxPreviewSession = {
   url: string;
   expires_at: IsoDateTime;

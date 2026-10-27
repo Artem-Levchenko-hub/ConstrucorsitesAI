@@ -156,6 +156,8 @@ jobs:
           tests/test_vk_email_diagnostics.py
           tests/test_agent_native.py
           tests/test_generation_runs.py
+          tests/test_publication_migrations.py
+          tests/test_publication_migration_readiness.py
           tests/test_generation_worker.py
           tests/test_generation_cleanup_faults.py
           tests/test_app_integrations_api.py
@@ -372,7 +374,16 @@ jobs:
         run: |
           uv run ruff check ../../infra/release/generation-publication-drain.py ../../infra/release/test_machine_quiescence_contract.py --select E4,E7,E9,F,I
           sudo env PYTHONPATH="$PWD/src" "$PWD/.venv/bin/python" -m unittest discover -s ../../infra/release -p 'test_*contract.py' -v
-      - name: Run orchestrator tests
+      - name: Provision the immutable isolated migration verifier image
+        working-directory: apps/orchestrator
+        run: |
+          docker pull postgres:16-alpine
+          migration_image=$(docker image inspect postgres:16-alpine --format '{{index .RepoDigests 0}}')
+          test -n "$migration_image"
+          echo "QA_MIGRATION_DOCKER_IMAGE=$migration_image" >> "$GITHUB_ENV"
+          echo "QA_PUBLICATION_MIGRATION_PG_IMAGE=$migration_image" >> "$GITHUB_ENV"
+          echo "QA_PUBLICATION_MIGRATION_DOCKER=1" >> "$GITHUB_ENV"
+      - name: Verify orchestrator and real isolated publication migrations
         working-directory: apps/orchestrator
         # A test that hangs longer than four minutes dumps every thread's stack into the
         # log (pytest's built-in faulthandler), so a stuck run names the test instead of
