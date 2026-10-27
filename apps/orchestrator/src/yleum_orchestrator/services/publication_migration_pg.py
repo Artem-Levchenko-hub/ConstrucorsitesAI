@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import ssl
 import time
-from contextlib import AbstractContextManager
+from collections.abc import Iterator
+from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
 from typing import Any, cast
 from urllib.parse import urlsplit
@@ -121,14 +123,77 @@ def websocket_options(configuration: Any, url: str, headers: dict[str, str]) -> 
     return options
 
 
+class _DeadlineSocket:
+    """Forward the connected TLS socket while sharing one absolute I/O deadline."""
+
+    def __init__(self, socket: Any, deadline: float) -> None:
+        self.socket = socket
+        self.deadline = deadline
+        self.send_attempted = False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.socket, name)
+
+    def gettimeout(self) -> float:
+        # websocket-client selects with this value after SSLWantRead/Write.
+        # Zero makes its direct recv/send enter our deadline guard, never wait.
+        return max(0, self.deadline - time.monotonic())
+
+    def _arm(self) -> None:
+        from websocket import WebSocketTimeoutException
+
+        remaining = self.gettimeout()
+        if remaining <= 0:
+            raise WebSocketTimeoutException("migration_exec_slice_expired")
+        self.socket.settimeout(remaining)
+
+    def recv(self, size: int, *args: Any, **kwargs: Any) -> Any:
+        self._arm()
+        return self.socket.recv(size, *args, **kwargs)
+
+    def send(self, data: Any, *args: Any, **kwargs: Any) -> Any:
+        self.send_attempted = True
+        self._arm()
+        return self.socket.send(data, *args, **kwargs)
+
+
+@contextmanager
+def _websocket_budget(websocket: Any, seconds: float) -> Iterator[_DeadlineSocket]:
+    raw = websocket.sock
+    require(raw is not None, "migration_exec_closed")
+    deadline = time.monotonic() + seconds
+    if isinstance(raw, _DeadlineSocket):
+        previous_deadline = raw.deadline
+        raw.deadline = min(previous_deadline, deadline)
+        try:
+            yield raw
+        finally:
+            raw.deadline = previous_deadline
+        return
+    ordinary_timeout = raw.gettimeout()
+    proxy = _DeadlineSocket(raw, deadline)
+    websocket.sock = proxy
+    try:
+        yield proxy
+    finally:
+        # A hard shutdown must never be undone by restoring a dead socket.
+        if websocket.sock is proxy:
+            websocket.sock = raw
+            try:
+                raw.settimeout(ordinary_timeout)
+            except OSError:
+                websocket.shutdown()
+                raise MigrationIOError("migration_exec_timeout_restore_failed") from None
+
+
 def _websocket_call(configuration: Any, method: str, url: str, **kwargs: Any) -> Any:
     """Per-instance official WSClient framing, pinned to its checked initialization contract.
 
     Upstream 33.1.0 create_websocket omits the connect timeout. Override only this
-    instance's connection creation, retaining official channels/exit parsing and
-    proxy authentication. Never alter module globals or a shared ApiClient.
+    instance's connection creation and bounded frame polling, retaining official
+    frame/channel/exit parsing and proxy authentication. No shared client mutation.
 
-    Initialization/TLS adaptation: Copyright 2018 The Kubernetes Authors,
+    Initialization/TLS/channel-routing adaptation: Copyright 2018 The Kubernetes Authors,
     Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0 .
     https://github.com/kubernetes-client/python/blob/v33.1.0/kubernetes/base/stream/ws_client.py
     Distributed AS IS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND.
@@ -138,6 +203,7 @@ def _websocket_call(configuration: Any, method: str, url: str, **kwargs: Any) ->
     from kubernetes.stream import ws_client
 
     require(kubernetes.__version__ == "33.1.0", "migration_sdk_version_unsupported")
+    require(websocket.__version__ == "1.9.2", "migration_websocket_version_unsupported")
     require(
         kwargs.get("_preload_content") is False and kwargs.get("binary") is True,
         "migration_stream_mode_unsupported",
@@ -169,6 +235,63 @@ def _websocket_call(configuration: Any, method: str, url: str, **kwargs: Any) ->
             self.sock = websocket.create_connection(endpoint, **options)
             self.sock.settimeout(5)
             self._connected = True
+
+        def _abort(self) -> None:
+            self._connected = False
+            # SDK immediate shutdown performs no close handshake/protocol writes.
+            self.sock.shutdown()  # type: ignore[no-untyped-call]
+
+        def update(self, timeout: float = 0) -> None:
+            if not self.is_open():
+                return
+            if not self.sock.connected:
+                self._connected = False
+                return
+            require(
+                isinstance(timeout, (int, float)) and math.isfinite(timeout) and timeout >= 0,
+                "migration_exec_timeout_required",
+            )
+            if timeout == 0:
+                return  # Buffered channel drains must not perform additional I/O.
+            with _websocket_budget(self.sock, min(timeout, 1)) as budget:
+                try:
+                    opcode, frame = self.sock.recv_data_frame(control_frame=True)
+                except websocket.WebSocketTimeoutException:
+                    if budget.send_attempted:
+                        self._abort()
+                        raise MigrationIOError("migration_exec_control_send_failed") from None
+                    return  # Real parser retains partial header/payload/continuation state.
+                except Exception:
+                    self._abort()
+                    raise MigrationIOError("migration_exec_read_failed") from None
+            if opcode == websocket.ABNF.OPCODE_CLOSE:
+                self._connected = False
+            elif opcode in (websocket.ABNF.OPCODE_BINARY, websocket.ABNF.OPCODE_TEXT):
+                data = frame.data
+                if len(data) > 1:
+                    channel, payload = data[0], data[1:]
+                    if channel in (ws_client.STDOUT_CHANNEL, ws_client.STDERR_CHANNEL):
+                        self._all.write(payload)
+                    self._channels[channel] = self._channels.get(channel, b"") + payload
+
+        def write_stdin(self, data: bytes) -> None:
+            try:
+                with _websocket_budget(self.sock, 5):
+                    # Exactly one dispatch; partial sends share the budget.
+                    super().write_stdin(data)
+            except Exception:
+                self._abort()
+                raise MigrationIOError("migration_exec_write_outcome_unknown") from None
+
+        def close(self, **kwargs: Any) -> None:
+            self._connected = False
+            try:
+                if self.sock.sock is not None:
+                    with _websocket_budget(self.sock, 3):
+                        self.sock.close(**kwargs)
+            finally:
+                # Upstream close skips raw cleanup after a peer CLOSE set connected=False.
+                self.sock.shutdown()  # type: ignore[no-untyped-call]
 
     return BoundedWSClient()
 

@@ -656,7 +656,7 @@ requires-dist = [
     { name = "sentry-sdk", extras = ["fastapi"], specifier = ">=2.18,<3.0" },
     { name = "structlog", specifier = ">=24.1,<25.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.30,<1.0" },
-    { name = "websocket-client", specifier = ">=1.9.2,<2" },
+    { name = "websocket-client", specifier = "==1.9.2" },
 ]
 
 [package.metadata.requires-dev]

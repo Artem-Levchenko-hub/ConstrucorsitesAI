@@ -14,6 +14,220 @@ def implementation():
     return importlib.import_module(name)
 
 
+def real_parser_transport(monkeypatch, chunks, *, recv_cost=0, send_cost=0, send_size=None):
+    """Real WebSocket/WSClient parsers over a threadless, finite fake TLS socket."""
+    import kubernetes
+    import websocket
+    from kubernetes.stream import ws_client
+
+    m = implementation()
+    clock = SimpleNamespace(now=100.0)
+
+    class TLS:
+        _closed = False
+        timeout = 5
+
+        def __init__(self):
+            self.chunks = list(chunks)
+            self.received_timeouts = []
+            self.sent_timeouts = []
+            self.sent = []
+
+        def gettimeout(self):
+            return self.timeout
+
+        def settimeout(self, timeout):
+            self.timeout = timeout
+
+        def fileno(self):
+            return 123
+
+        def pending(self):
+            return sum(len(chunk) for chunk in self.chunks if isinstance(chunk, bytes))
+
+        def spend(self, cost):
+            assert self.timeout is not None and self.timeout > 0
+            if cost > self.timeout:
+                clock.now += self.timeout
+                raise TimeoutError("synthetic timeout")
+            clock.now += cost
+
+        def recv(self, size):
+            self.received_timeouts.append(self.timeout)
+            if not self.chunks or self.chunks[0] is None:
+                if self.chunks:
+                    self.chunks.pop(0)
+                self.spend(self.timeout + 1)
+            self.spend(recv_cost)
+            chunk = self.chunks.pop(0)
+            result, remainder = chunk[:size], chunk[size:]
+            if remainder:
+                self.chunks.insert(0, remainder)
+            return result
+
+        def send(self, data):
+            self.sent_timeouts.append(self.timeout)
+            self.spend(send_cost)
+            count = len(data) if send_size is None else min(send_size, len(data))
+            self.sent.append(bytes(data[:count]))
+            return count
+
+        def close(self):
+            self._closed = True
+
+    tls = TLS()
+    real_ws = websocket.WebSocket(enable_multithread=False)
+    real_ws.sock = tls
+    real_ws.connected = True
+    real_ws.set_mask_key(lambda _: b"abcd")
+    monkeypatch.setattr(websocket, "create_connection", lambda *args, **kwargs: real_ws)
+    # Reproduce OS-not-readable while TLS already owns decrypted bytes.
+    monkeypatch.setattr(ws_client, "select", SimpleNamespace(select=lambda *args: ([], [], [])))
+    monkeypatch.setattr(m.time, "monotonic", lambda: clock.now)
+    config = kubernetes.client.Configuration()
+    config.host = "https://127.0.0.1"
+    stream = m._websocket_call(config, "GET", config.host + "/exec",
+                             binary=True, _preload_content=False, headers={})
+    return stream, real_ws, tls, clock
+
+
+def server_frame(payload, *, opcode=2, fin=1):
+    from websocket import ABNF
+
+    return ABNF(fin=fin, opcode=opcode, mask_value=0, data=payload).format()
+
+
+def test_real_parser_reads_tls_buffer_despite_empty_os_poll(monkeypatch):
+    stream, real_ws, tls, _ = real_parser_transport(monkeypatch, [
+        server_frame(b"\x01\xffstdout"), server_frame(b"\x02stderr"),
+        server_frame(b'\x03{"status":"Success"}'), server_frame(b"\x03\xe8", opcode=8)])
+    stream.update(timeout=1)
+    assert stream.read_stdout(timeout=0) == b"\xffstdout"
+    stream.update(timeout=1)
+    assert stream.read_stderr(timeout=0) == b"stderr"
+    stream.update(timeout=1)
+    assert stream._channels[3] == b'{"status":"Success"}'
+    stream.update(timeout=1)
+    assert not stream.is_open() and stream.returncode == 0
+    assert real_ws.sock is tls and tls.timeout == 5
+    assert tls.sent  # Real parser emitted the close acknowledgement.
+
+
+@pytest.mark.parametrize("split", [1, 3])
+def test_real_parser_retains_partial_header_or_payload_after_read_timeout(monkeypatch, split):
+    frame = server_frame(b"\x01preserved")
+    stream, _, tls, clock = real_parser_transport(monkeypatch, [frame[:split], None, frame[split:]])
+    stream.update(timeout=0.25)
+    assert clock.now == 100.25 and stream.read_stdout(timeout=0) == ""
+    assert stream.is_open() and tls.timeout == 5
+    stream.update(timeout=0.25)
+    assert stream.read_stdout(timeout=0) == b"preserved"
+
+
+def test_real_parser_fragmented_trickle_has_one_slice_deadline(monkeypatch):
+    frames = [server_frame(b"\x01a", fin=0)] + [server_frame(b"b", opcode=0, fin=0)] * 20
+    stream, _, tls, clock = real_parser_transport(monkeypatch, frames, recv_cost=0.1)
+    stream.update(timeout=0.5)
+    assert clock.now == pytest.approx(100.5)
+    assert stream.is_open() and stream.read_stdout(timeout=0) == ""
+    assert max(tls.received_timeouts) <= 0.5 and tls.timeout == 5
+    tls.chunks.append(server_frame(b"c", opcode=0))
+    for _ in range(30):
+        stream.update(timeout=0.5)
+        if stream._channels.get(1):
+            break
+    assert stream.read_stdout(timeout=0) == b"a" + b"b" * 20 + b"c"
+
+
+@pytest.mark.parametrize("opcode,payload", [(9, b"ping"), (8, b"\x03\xe8")])
+@pytest.mark.parametrize("recv_cost", [0, 0.1])
+def test_real_parser_control_partial_send_timeout_closes_without_sql_replay(
+    monkeypatch, opcode, payload, recv_cost
+):
+    m = implementation()
+    stream, real_ws, tls, clock = real_parser_transport(
+        monkeypatch, [server_frame(payload, opcode=opcode)], recv_cost=recv_cost,
+        send_cost=0.2, send_size=1)
+    with pytest.raises(m.MigrationIOError, match="migration_exec_control_send_failed"):
+        stream.update(timeout=0.5)
+    assert clock.now == pytest.approx(100.5)
+    assert not stream.is_open() and not real_ws.connected and tls._closed
+    assert len(tls.sent) == (2 if recv_cost == 0 else 1)
+    assert max(tls.sent_timeouts) <= 0.5 - 2 * recv_cost + 1e-10
+    calls = len(tls.sent_timeouts)
+    stream.update(timeout=1)
+    assert len(tls.sent_timeouts) == calls  # No re-emission of consumed control frame or SQL.
+
+
+def test_real_parser_stdin_partial_send_has_one_five_second_budget(monkeypatch):
+    from kubernetes.stream.ws_client import WSClient
+
+    m = implementation()
+    stream, real_ws, tls, clock = real_parser_transport(monkeypatch, [], send_cost=2, send_size=1)
+    original_write = WSClient.write_stdin
+    dispatches = []
+
+    def dispatch(self, data):
+        dispatches.append(data)
+        return original_write(self, data)
+
+    monkeypatch.setattr(WSClient, "write_stdin", dispatch)
+    with pytest.raises(m.MigrationIOError, match="migration_exec_write_outcome_unknown"):
+        stream.write_stdin(b"SELECT 1;\n")
+    assert dispatches == [b"SELECT 1;\n"]
+    assert clock.now == pytest.approx(105)
+    assert tls.sent_timeouts == [5, 3, 1] and len(tls.sent) == 2
+    assert tls._closed and not stream.is_open() and not real_ws.connected
+    with pytest.raises(m.MigrationIOError, match="migration_exec_write_outcome_unknown"):
+        stream.write_stdin(b"SELECT 1;\n")
+    assert len(dispatches) == 1  # Closed connection cannot redispatch even if a caller tries.
+
+
+def test_real_parser_stdin_success_preserves_binary_framing_and_timeout(monkeypatch):
+    import websocket
+
+    stream, real_ws, tls, _ = real_parser_transport(monkeypatch, [])
+    stream.write_stdin(b"SELECT 1;\n")
+    expected = websocket.ABNF.create_frame(b"\x00SELECT 1;\n", websocket.ABNF.OPCODE_BINARY)
+    expected.get_mask_key = lambda _: b"abcd"
+    assert b"".join(tls.sent) == expected.format()
+    assert real_ws.sock is tls and tls.timeout == 5
+
+
+def test_nested_socket_budgets_cannot_extend_outer_deadline(monkeypatch):
+    m = implementation()
+    _, real_ws, tls, clock = real_parser_transport(monkeypatch, [])
+    with m._websocket_budget(real_ws, 1) as outer:
+        clock.now += 0.25
+        with m._websocket_budget(real_ws, 5) as inner:
+            assert inner is outer and inner.gettimeout() == 0.75
+            assert inner.pending() == 0 and inner.fileno() == 123
+        assert outer.gettimeout() == 0.75
+    assert real_ws.sock is tls and tls.timeout == 5
+
+
+def test_zero_update_does_not_consume_tls_or_advance_clock(monkeypatch):
+    stream, _, tls, clock = real_parser_transport(monkeypatch, [server_frame(b"\x01data")])
+    stream.update(timeout=0)
+    assert not tls.received_timeouts and clock.now == 100
+
+
+def test_real_parser_explicit_close_is_bounded_across_partial_sends(monkeypatch):
+    stream, real_ws, tls, clock = real_parser_transport(monkeypatch, [], send_cost=2, send_size=1)
+    stream.close()
+    assert clock.now == pytest.approx(103)
+    assert tls.sent_timeouts == [3, 1]
+    assert tls._closed and not real_ws.connected and not stream.is_open()
+
+
+def test_received_close_cleanup_releases_raw_socket_without_another_frame(monkeypatch):
+    stream, _, tls, _ = real_parser_transport(monkeypatch, [server_frame(b"\x03\xe8", opcode=8)])
+    stream.update(timeout=1)
+    before = len(tls.sent_timeouts)
+    stream.close()
+    assert tls._closed and len(tls.sent_timeouts) == before
+
+
 @pytest.mark.parametrize("stdout,stderr", [(b"row", b""), (b"", b"error"),
                                             (b"", b""), (b"row", b"error")])
 @pytest.mark.parametrize("remaining,first_poll", [(-1, 0), (0.25, 0.25), (20, 1)])
@@ -308,6 +522,9 @@ def test_pinned_official_wsclient_accepts_bounded_socket_without_global_patch(mo
     sent = []
 
     class Socket:
+        def __init__(self):
+            self.sock = SimpleNamespace(gettimeout=lambda: 5, settimeout=lambda _: None)
+
         def settimeout(self, seconds):
             assert seconds == 5
 
@@ -316,6 +533,9 @@ def test_pinned_official_wsclient_accepts_bounded_socket_without_global_patch(mo
 
         def close(self, **kwargs):
             pass
+
+        def shutdown(self):
+            self.sock = None
 
     def connect(url, **options):
         assert url.startswith("wss://")
