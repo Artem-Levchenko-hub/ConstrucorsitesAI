@@ -358,7 +358,7 @@ async def test_green_phone_proof_survives_email_login_and_password_recovery_with
 @pytest.mark.parametrize(
     "failure", [EmailDeliveryNotConfigured("no smtp"), EmailDeliveryFailed("smtp said no")]
 )
-@pytest.mark.parametrize("path", ["/api/auth/email/verify/request", "/api/auth/password/forgot"])
+@pytest.mark.parametrize("path", ["/api/auth/email/verify/request"])
 async def test_undeliverable_letter_is_a_503_not_a_silent_success(client, outbox, path, failure):
     await _register(client)
     outbox.failure = failure

@@ -3,7 +3,8 @@
 Он не обслуживает очередь задач — очередь ушла вместе с отложенным рендером
 превью конструктора сайтов. Остались долгоживущие циклы, которым нужен процесс
 рядом с API: сердцебиение воркера (его видит `/api/health`), тик подписок,
-уборка вложений доски задач, письма поддержки и досведение восстановлений версий.
+уборка вложений доски задач, письма поддержки и безопасности аккаунта,
+досведение восстановлений версий.
 Удаление приложений также завершается здесь после закрытия браузера.
 Процесс держится на этих потоках и завершается только по сигналу.
 """
@@ -14,6 +15,7 @@ import asyncio
 import threading
 
 from yleum_api.core.config import get_settings
+from yleum_api.services.account_security_email import run_account_security_email_forever
 from yleum_api.services.project_deletion import run_project_deletion_forever
 from yleum_api.services.readiness import run_worker_heartbeat_forever
 from yleum_api.services.restoration_reconciliation import run_restoration_reconciliation_forever
@@ -38,6 +40,10 @@ def _run_support_email() -> None:
     asyncio.run(run_support_email_forever())
 
 
+def _run_account_security_email() -> None:
+    asyncio.run(run_account_security_email_forever())
+
+
 def _run_restoration_reconciliation() -> None:
     from yleum_api.services.generation.recovery_readers import wait_for_readers
 
@@ -57,6 +63,7 @@ def _start_workers() -> None:
         ("restoration-reconciliation", _run_restoration_reconciliation),
         ("project-deletion", _run_project_deletion),
         ("support-email", _run_support_email),
+        ("account-security-email", _run_account_security_email),
     ]
     if get_settings().billing_lifecycle_enabled:
         workers.insert(0, ("subscription-lifecycle", _run_billing_lifecycle))

@@ -22,10 +22,12 @@ from yleum_api.schemas.payments import (
     PaymentCreate,
     PaymentPackagePublic,
     PaymentPublic,
+    PaymentTestCheckoutCreate,
     SubscriptionCheckoutCreate,
 )
 from yleum_api.services import yookassa
 from yleum_api.services.billing_accounts import resolve_billing_account
+from yleum_api.services.billing_offers import prepare_offer_checkout, reserve_offer_payment
 from yleum_api.services.payment_state import (
     apply_provider_state as _apply_provider_state,
 )
@@ -365,6 +367,38 @@ async def create_subscription_checkout(
         title=f"Подписка Yleum {plan.name}, 1 месяц",
         return_path="/billing/plan",
         save_payment_method=payload.auto_renew,
+    )
+
+
+@router.post("/test", response_model=PaymentPublic, status_code=status.HTTP_201_CREATED)
+async def create_test_checkout(
+    payload: PaymentTestCheckoutCreate, current_user: CurrentUserDep, session: SessionDep
+) -> Payment:
+    """One granted test payment; never invoke subscription or credit fulfillment."""
+    if not _configured():
+        raise ApiError("payments_unavailable", "Платежи ещё не подключены", 503)
+    await require_registration_verification(session, current_user)
+    account = await resolve_billing_account(session, current_user.id)
+    key = str(payload.idempotency_key)
+    offer, reserved = await prepare_offer_checkout(
+        session, offer_id=payload.offer_id, user_id=current_user.id, account_id=account.id,
+        idempotency_key=key,
+    )
+    if reserved is not None:
+        # Settlement takes payment before offer. Release offer before taking
+        # the payment lock; concurrent retries must never invert that order.
+        await session.commit()
+        return await _resume_checkout(session=session, payment=reserved)
+    payment = Payment(
+        billing_account_id=account.id, user_id=current_user.id, idempotency_key=key,
+        purpose="payment_test", subscription_id=None, package_code="payment_test",
+        amount_rub=offer.amount_rub, credit_rub=Decimal("0"), status="pending",
+    )
+    session.add(payment)
+    await reserve_offer_payment(session, offer, payment)
+    return await _send_to_provider(
+        session=session, payment=payment, current_user=current_user,
+        title="Проверочная оплата Yleum", return_path="/billing/plan",
     )
 
 

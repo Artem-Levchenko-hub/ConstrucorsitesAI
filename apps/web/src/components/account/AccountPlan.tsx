@@ -1,7 +1,7 @@
 "use client";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
+import { getBillingPurchaseOffer, getSubscription, listBillingPlans, manageSubscription } from "@/lib/api/account";
 import type { PaymentJourney } from "./PaymentCheckout";
 import { date, money, QueryError } from "./account-presentation";
 import { planAllowanceDescription, planAllowanceRows, planPeriodDescription } from "@/lib/billing-allowances";
@@ -11,8 +11,10 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
   const client = useQueryClient();
   const plans = useQuery({ queryKey: ["billing-plans"], queryFn: listBillingPlans });
   const subscription = useQuery({ queryKey: ["billing-subscription"], queryFn: getSubscription });
+  const offer = useQuery({ queryKey: ["billing-purchase-offer", j.accountKey], queryFn: getBillingPurchaseOffer, staleTime: 0, gcTime: 0 });
   const manage = useMutation({ mutationFn: manageSubscription, onSuccess: updated => client.setQueryData(["billing-subscription"], updated) });
   const current = subscription.data;
+  const personal = !offer.isError ? offer.data : null;
   const historical = current && current.plan.code !== "free" && plans.data
     && !plans.data.some(plan => plan.id === current.plan.id);
   return <>
@@ -39,6 +41,13 @@ export function AccountPlan({ journey: j }: { journey: PaymentJourney }) {
     </section>}
     {current?.status === "past_due" && <p className="account-notice pending">Продление не прошло. Льготный период до {date(current.grace_period_ends_at)}.</p>}
     {current?.status === "paused" && <p className="account-notice pending">Подписка приостановлена.</p>}
+    <QueryError error={offer.error} retry={() => void offer.refetch()} />
+    {personal && <section className="account-panel">
+      <h2>Проверочная оплата</h2>
+      <p>Разовая оплата {money(personal.price_rub)} для проверки платежа и письма о подтверждении.</p>
+      <p>Действующая подписка, её срок, автопродление и пакеты не изменятся. Доступно до {date(personal.expires_at)}.</p>
+      <Button disabled={!j.config.data?.enabled || j.locked} onClick={() => j.choose({ kind: "test", code: "payment_test", title: "Проверочная оплата", price: personal.price_rub, offerId: personal.id, credit: "0" })}>Проверить оплату за {money(personal.price_rub)}</Button>
+    </section>}
     <section className="account-panel">
       <h2>Выберите подходящий тариф</h2>
       <QueryError error={plans.error} retry={() => void plans.refetch()} />

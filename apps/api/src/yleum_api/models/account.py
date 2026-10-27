@@ -141,11 +141,12 @@ class Payment(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "purpose IN ('wallet_topup', 'subscription_initial', 'subscription_renewal')",
+            "purpose IN ('wallet_topup', 'subscription_initial', "
+            "'subscription_renewal', 'payment_test')",
             name="ck_payments_purpose",
         ),
         CheckConstraint(
-            "(purpose = 'wallet_topup' AND subscription_id IS NULL) OR "
+            "(purpose IN ('wallet_topup', 'payment_test') AND subscription_id IS NULL) OR "
             "(purpose IN ('subscription_initial', 'subscription_renewal') "
             "AND subscription_id IS NOT NULL)",
             name="ck_payments_subscription_link",

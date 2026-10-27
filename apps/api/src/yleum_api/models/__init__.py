@@ -4,6 +4,7 @@ from yleum_api.models.account import (
     LegalAcceptance,
     Payment,
 )
+from yleum_api.models.account_security import AccountSecurityEmail, EmailChangeChallenge
 from yleum_api.models.admin_audit import AdminAuditEvent
 from yleum_api.models.app_integration import (
     AccountIntegration,
@@ -19,6 +20,7 @@ from yleum_api.models.billing import (
     BillingPlan,
     Subscription,
 )
+from yleum_api.models.billing_offer import BillingOfferPayment, BillingPurchaseOffer
 from yleum_api.models.billing_usage_event import BillingUsageEvent
 from yleum_api.models.custom_domain import CustomDomain
 from yleum_api.models.deploy_target import DeployTarget
@@ -92,6 +94,7 @@ from yleum_api.models.wallet_charge import WalletCharge
 
 __all__ = [
     "AccountIntegration",
+    "AccountSecurityEmail",
     "AdminAuditEvent",
     "AppIntegration",
     "Attestation",
@@ -99,12 +102,15 @@ __all__ = [
     "AuthToken",
     "Base",
     "BillingAccount",
+    "BillingOfferPayment",
     "BillingPaymentMethod",
     "BillingPlan",
+    "BillingPurchaseOffer",
     "BillingUsageEvent",
     "CustomDomain",
     "DeployTarget",
     "DeploymentDrain",
+    "EmailChangeChallenge",
     "EmailNotification",
     "FontAsset",
     "GenerationBillingIntent",

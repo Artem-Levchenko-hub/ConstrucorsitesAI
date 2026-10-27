@@ -22,6 +22,7 @@ from yleum_api.core.minio import reconcile_public_bucket_policies
 from yleum_api.core.redis import dispose_redis
 from yleum_api.core.release import normalize_release_sha
 from yleum_api.routers import account as account_router
+from yleum_api.routers import account_credentials as account_credentials_router
 from yleum_api.routers import admin as admin_router
 from yleum_api.routers import amocrm as amocrm_router
 from yleum_api.routers import app_integrations as app_integrations_router
@@ -124,7 +125,8 @@ _BACKGROUND_CLEANUP_SECONDS = 5
 
 @asynccontextmanager
 async def _background_services(
-    *, on_failure: Callable[[], None] | None = None,
+    *,
+    on_failure: Callable[[], None] | None = None,
 ) -> AsyncIterator[None]:
     initialized = False
     monitors: list[asyncio.Task[None]] = []
@@ -253,6 +255,7 @@ def create_app() -> FastAPI:
     app.include_router(admin_router.router)
     app.include_router(support_router.router)
     app.include_router(account_router.router)
+    app.include_router(account_credentials_router.router)
     app.include_router(app_integrations_router.router)
     app.include_router(amocrm_router.router)
     app.include_router(moysklad_vendor_router.router)

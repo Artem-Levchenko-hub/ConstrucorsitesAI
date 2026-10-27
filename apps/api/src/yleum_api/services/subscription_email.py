@@ -13,10 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from yleum_api.core.config import get_settings
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
+from yleum_api.models.billing_offer import BillingOfferPayment, BillingPurchaseOffer
 from yleum_api.models.email_notification import EmailNotification
 from yleum_api.models.user import User
 from yleum_api.services.accounts import has_verified_email
-from yleum_api.services.email_templates import EmailContent, paid_email, reminder_email
+from yleum_api.services.email_templates import (
+    EmailContent,
+    paid_email,
+    payment_test_email,
+    reminder_email,
+)
 from yleum_api.services.transactional_email import (
     EmailDeliveryFailed,
     EmailDeliveryNotConfigured,
@@ -139,18 +145,32 @@ async def enqueue_reminders(session: AsyncSession, *, now: datetime | None = Non
     return queued
 
 
+async def enqueue_payment_test_email(session: AsyncSession, payment: Payment) -> None:
+    """The test receipt shares the settlement transaction, without a subscription."""
+    if (payment.purpose != "payment_test" or payment.status != "succeeded"
+            or payment.subscription_id is not None or payment.refunded_at is not None):
+        return
+    await session.execute(
+        insert(EmailNotification).values(
+            event_key=f"payment_test:{payment.id}", event_type="payment_test",
+            user_id=payment.user_id, billing_account_id=payment.billing_account_id,
+            subscription_id=None, payment_id=payment.id, period_end=None,
+            plan_name="Проверочная оплата", amount_rub=payment.amount_rub,
+            available_at=payment.paid_at or datetime.now(UTC),
+        ).on_conflict_do_nothing(index_elements=[EmailNotification.event_key])
+    )
+
+
 async def _validated_content(
     session: AsyncSession,
     event: EmailNotification,
     now: datetime,
 ) -> tuple[str, EmailContent] | None:
-    subscription = await session.get(Subscription, event.subscription_id)
     account = await session.get(BillingAccount, event.billing_account_id)
     payment = await session.get(Payment, event.payment_id)
     user = await session.get(User, event.user_id)
     if (
-        subscription is None
-        or account is None
+        account is None
         or payment is None
         or user is None
         or user.status != "active"
@@ -158,17 +178,33 @@ async def _validated_content(
         or not user.email
         or account.scope != "personal"
         or account.personal_user_id != user.id
-        or subscription.user_id != user.id
-        or subscription.billing_account_id != account.id
         or payment.user_id != user.id
         or payment.billing_account_id != account.id
-        or payment.subscription_id != subscription.id
         or payment.status != "succeeded"
         or payment.refunded_at is not None
     ):
         return None
     verified_phone = bool(user.phone_e164 and user.phone_verified_at)
     if not verified_phone and not await has_verified_email(session, user):
+        return None
+    if event.event_type == "payment_test":
+        link = await session.get(BillingOfferPayment, payment.id)
+        offer = await session.get(BillingPurchaseOffer, link.offer_id) if link else None
+        if (payment.purpose != "payment_test" or payment.subscription_id is not None
+                or offer is None or offer.consumed_payment_id != payment.id
+                or offer.user_id != user.id or offer.billing_account_id != account.id
+                or event.amount_rub != payment.amount_rub):
+            return None
+        return str(user.email), payment_test_email(
+            amount_rub=event.amount_rub,
+            manage_url=get_settings().web_base_url.rstrip("/") + "/billing/transactions",
+        )
+    subscription = await session.get(Subscription, event.subscription_id) if (
+        event.subscription_id is not None
+    ) else None
+    if (subscription is None or event.period_end is None
+            or subscription.user_id != user.id or subscription.billing_account_id != account.id
+            or payment.subscription_id != subscription.id):
         return None
     manage_url = get_settings().web_base_url.rstrip("/") + "/billing/plan"
     if event.event_type == "paid":

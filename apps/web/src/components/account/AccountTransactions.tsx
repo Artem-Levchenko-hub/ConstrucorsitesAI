@@ -7,6 +7,7 @@ import { allowanceCount } from "@/lib/billing-allowances";
 import { date, money, paymentState, QueryError } from "./account-presentation";
 
 function paymentBenefit(payment: Payment): string {
+  if (payment.purpose === "payment_test") return "Подписка и пакеты без изменений";
   if (payment.status !== "succeeded") return "Не зачислено";
   if (payment.purpose !== "wallet_topup") return "Тариф активирован";
   if (typeof payment.edit_units === "number" && payment.edit_units > 0) {
@@ -51,8 +52,8 @@ export function AccountTransactions() {
         </thead>
         <tbody role="rowgroup">{rows?.map(p => <tr key={p.id} role="row">
           <td role="cell" headers="payment-date"><span className="account-operation-label" aria-hidden="true">Дата</span>{date(p.created_at)}</td>
-          <td role="cell" headers="payment-purpose"><span className="account-operation-label" aria-hidden="true">Операция</span>{p.purpose === "wallet_topup" ? "Пополнение баланса" : p.purpose === "subscription_renewal" ? "Продление тарифа" : "Покупка тарифа"}
-            <small>{p.package_code}</small>
+          <td role="cell" headers="payment-purpose"><span className="account-operation-label" aria-hidden="true">Операция</span>{p.purpose === "payment_test" ? "Проверочная оплата" : p.purpose === "wallet_topup" ? "Пополнение баланса" : p.purpose === "subscription_renewal" ? "Продление тарифа" : "Покупка тарифа"}
+            {p.purpose !== "payment_test" && <small>{p.package_code}</small>}
           </td>
           <td role="cell" headers="payment-amount"><span className="account-operation-label" aria-hidden="true">Сумма</span>{money(p.amount_rub)}
             <small>{paymentBenefit(p)}</small>

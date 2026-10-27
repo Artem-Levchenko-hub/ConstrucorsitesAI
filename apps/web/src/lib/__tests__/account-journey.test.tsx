@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -33,12 +33,13 @@ let config: unknown, payments: unknown, post: (body: Record<string, unknown>) =>
 let sessionError = false;
 let usageResponse: unknown = usage;
 let publicPlans: unknown = [freePlan, plan];
+let personalOffer: unknown = null;
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   localStorage.clear(); mocks.search = ""; mocks.replace.mockReset(); sessionError = false; requests = [];
   config = { enabled: true, reason: null, packages: [{ code: "start", title: "Серверный пакет", price_rub: "777", credit_rub: "888", edit_units: 5, edits_only: true, package_version: 2 }] };
   payments = []; post = async () => Response.json(payment);
-  usageResponse = usage; currentPlan = freePlan; publicPlans = [freePlan, plan];
+  usageResponse = usage; currentPlan = freePlan; publicPlans = [freePlan, plan]; personalOffer = null;
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
@@ -47,6 +48,7 @@ beforeEach(() => {
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
     if (path === "/api/billing/plans") return Response.json(publicPlans);
+    if (path === "/api/billing/purchase-offer") return Response.json(personalOffer);
     if (path === "/api/billing/usage") return Response.json(usageResponse);
     if (path === "/api/billing/credits") return Response.json({ edit_only_units: 5, flexible_units: 15, available_units: 20, reserved_units: 1, initial_build_units: 5, edit_units: 1, included_generations_remaining: 2, included_edits_remaining: 24, included_generations_limit: 2, included_edits_limit: 25, period_end: "2026-11-24T00:00:00Z" });
     if (path === "/api/billing/subscription") return Response.json({ id: "sub", plan: currentPlan, status: "active", auto_renew: false, cancel_at_period_end: false });
@@ -55,16 +57,158 @@ beforeEach(() => {
   }));
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
-async function mount(view: React.ComponentProps<typeof AccountControlCenter>["view"], email = "qa@example.test") {
+async function mount(view: React.ComponentProps<typeof AccountControlCenter>["view"], email = "qa@example.test", strict = false) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
   const invalidate = vi.spyOn(client, "invalidateQueries");
   const container = document.createElement("div"); document.body.append(container); const root = createRoot(container);
-  await act(async () => root.render(<QueryClientProvider client={client}><AccountControlCenter email={email} view={view} /></QueryClientProvider>));
-  return { client, invalidate, container, close: async () => { await act(async () => root.unmount()); client.clear(); container.remove(); } };
+  const content = (address: string) => {
+    const surface = <AccountControlCenter email={address} view={view} />;
+    return <QueryClientProvider client={client}>{strict ? <StrictMode>{surface}</StrictMode> : surface}</QueryClientProvider>;
+  };
+  await act(async () => root.render(content(email)));
+  return { client, invalidate, container,
+    rerender: async (nextEmail: string) => { await act(async () => root.render(content(nextEmail))); },
+    close: async () => { await act(async () => root.unmount()); client.clear(); container.remove(); } };
 }
 const wait = async (check: () => void) => { await act(async () => { await vi.waitFor(check); }); };
 const button = (text: string) => [...document.querySelectorAll<HTMLButtonElement>("button")].find(b => b.textContent?.includes(text))!;
 const click = async (text: string) => { await act(async () => button(text).click()); };
+
+it("quotes an independent personal payment test and preserves its offer on uncertain retry", async () => {
+  currentPlan = { ...freePlan, ...plan, entitlements: { ...freePlan.entitlements, ...plan.entitlements } };
+  personalOffer = { id: "personal-offer", price_rub: "1.00", currency: "RUB", expires_at: "2026-11-03T00:00:00Z", reserved_payment_id: null };
+  post = async () => { throw new Error("Lost response"); };
+  let app = await mount("plan");
+  try {
+    await wait(() => expect(button("Проверить оплату за 1")).toBeDefined());
+    expect(document.querySelector(".account-plans")?.textContent).toContain("999");
+    await click("Проверить оплату за 1");
+    expect(document.querySelector('[role="dialog"] input[type="checkbox"]')).toBeNull();
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Действующая подписка, её срок, автопродление и пакеты не изменятся");
+    expect(document.querySelector('[role="dialog"]')?.textContent).not.toContain("1 месяц");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual({ offer_id: "personal-offer", idempotency_key: expect.any(String) });
+  } finally { await app.close(); }
+  app = await mount("plan");
+  try {
+    await wait(() => expect(button("Продолжить незавершённую оплату")).toBeDefined());
+    await click("Продолжить незавершённую оплату");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(2));
+    expect(requests[1]).toEqual(requests[0]);
+  } finally { await app.close(); }
+});
+
+it("never sends subscription parameters from a stored payment test attempt", async () => {
+  localStorage.setItem("max-checkout:qa@example.test", JSON.stringify({
+    key: "personal-retry", autoRenew: true,
+    selection: { kind: "test", code: "payment_test", title: "Проверочная оплата", price: "1.00", credit: "0", offerId: "personal-offer" },
+  }));
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Продолжить незавершённую оплату")).toBeDefined());
+    await click("Продолжить незавершённую оплату");
+    expect(document.querySelector('[role="dialog"] input[type="checkbox"]')).toBeNull();
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toEqual({ offer_id: "personal-offer", idempotency_key: "personal-retry" });
+  } finally { await app.close(); }
+});
+
+it("releases a stale test intent only when the server proves no payment was created", async () => {
+  personalOffer = { id: "expired-offer", price_rub: "1.00", currency: "RUB", expires_at: "2026-11-03T00:00:00Z", reserved_payment_id: null };
+  post = async () => Response.json({ error: { code: "conflict", message: "Предложение истекло", details: { payment_test_not_created: true } } }, { status: 409 });
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(button("Проверить оплату за 1")).toBeDefined());
+    await click("Проверить оплату за 1");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(document.body.textContent).toContain("Предложение истекло"));
+    expect(localStorage.getItem("max-checkout:qa@example.test")).toBeNull();
+    expect(button("Продолжить незавершённую оплату")).toBeUndefined();
+  } finally { await app.close(); }
+});
+
+it("clears a personal checkout and cached quote when switching account in place", async () => {
+  personalOffer = { id: "only-account-a", price_rub: "1.00", currency: "RUB", expires_at: "2026-11-03T00:00:00Z", reserved_payment_id: null };
+  const app = await mount("plan", "account-a@example.test");
+  try {
+    await wait(() => expect(button("Проверить оплату за 1")).toBeDefined());
+    await click("Проверить оплату за 1");
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    personalOffer = null;
+    await app.rerender("account-b@example.test");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(button("Проверить оплату за 1")).toBeUndefined();
+    await wait(() => expect(app.client.getQueryData(["billing-purchase-offer", "account-b@example.test"])).toBeNull());
+    expect(document.body.textContent).not.toContain("Проверочная оплата");
+    expect(requests).toHaveLength(0);
+  } finally { await app.close(); }
+});
+
+it("labels a successful test payment without claiming activation or credits", async () => {
+  payments = [{ ...payment, purpose: "payment_test", package_code: "payment_test", status: "succeeded", amount_rub: "1.00", credit_rub: "0", edit_units: 0 }];
+  const app = await mount("transactions");
+  try {
+    await wait(() => expect(document.body.textContent).toContain("Проверочная оплата"));
+    expect(document.body.textContent).toContain("Подписка и пакеты без изменений");
+    expect(document.body.textContent).not.toContain("Тариф активирован");
+    expect(document.body.textContent).not.toContain("Покупка тарифа");
+  } finally { await app.close(); }
+});
+
+it("confirms a test receipt without refreshing product allowances or claiming plan changes", async () => {
+  mocks.search = "payment=pay-1";
+  payments = [{ ...payment, purpose: "payment_test", status: "succeeded", amount_rub: "1.00", credit_rub: "0", edit_units: 0 }];
+  const app = await mount("plan");
+  try {
+    await wait(() => expect(document.body.textContent).toContain("Подписка и пакеты не изменены"));
+    expect(document.body.textContent).not.toContain("Баланс и тариф обновляются");
+    const keys = app.invalidate.mock.calls.map(([arg]) => arg?.queryKey?.[0]);
+    expect(keys).toContain("billing-purchase-offer");
+    expect(keys).not.toContain("wallet");
+    expect(keys).not.toContain("billing-subscription");
+    expect(keys).not.toContain("generation-credits");
+  } finally { await app.close(); }
+});
+
+it("does not redirect another account when a previous checkout response arrives late", async () => {
+  let resolve!: (response: Response) => void;
+  post = () => new Promise(done => { resolve = done; });
+  const originalUrl = window.location.href;
+  const app = await mount("plan", "account-a@example.test");
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    await click("Выбрать Pro");
+    await click("Перейти к оплате в ЮKassa");
+    const saved = localStorage.getItem("max-checkout:account-a@example.test");
+    expect(saved).not.toBeNull();
+    await app.rerender("account-b@example.test");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    // Same-origin hash navigation exercises location.assign without a real
+    // provider/navigation: jsdom supports this observable navigation boundary.
+    await act(async () => {
+      resolve(Response.json({ ...payment, confirmation_url: originalUrl.split("#")[0] + "#old-account-payment" }));
+      await new Promise(done => setTimeout(done, 30));
+    });
+    expect(window.location.href).toBe(originalUrl);
+    expect(localStorage.getItem("max-checkout:account-a@example.test")).toBe(saved);
+    expect(localStorage.getItem("max-checkout:account-b@example.test")).toBeNull();
+    expect(requests).toHaveLength(1);
+  } finally { window.history.replaceState(null, "", originalUrl); await app.close(); }
+});
+
+it("accepts its own checkout response after StrictMode effect replay", async () => {
+  const app = await mount("plan", "qa@example.test", true);
+  try {
+    await wait(() => expect(button("Выбрать Pro")).toBeDefined());
+    await click("Выбрать Pro");
+    await click("Перейти к оплате в ЮKassa");
+    await wait(() => expect(JSON.parse(localStorage.getItem("max-checkout:qa@example.test")!).paymentId).toBe(payment.id));
+    expect(requests).toHaveLength(1);
+  } finally { await app.close(); }
+});
 
 it("shows actual package units and edit-only restriction without promising ruble credit", async () => {
   const app = await mount("billing");

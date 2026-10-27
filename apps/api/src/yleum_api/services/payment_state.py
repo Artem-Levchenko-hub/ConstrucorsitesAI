@@ -23,6 +23,7 @@ from yleum_api.models.billing import Subscription
 from yleum_api.models.wallet import Wallet
 from yleum_api.models.wallet_charge import WalletCharge
 from yleum_api.services import yookassa
+from yleum_api.services.billing_offers import consume_payment_offer
 from yleum_api.services.payment_submission import (
     PaymentSubmissionNeedsReview,
     bind_provider_payment,
@@ -41,7 +42,7 @@ log = structlog.get_logger(__name__)
 OPEN_PAYMENT_STATUSES: tuple[str, ...] = ("pending", "waiting_for_capture")
 # Only orders a person started in the cabinet are swept here; renewal charges
 # stay with the subscription lifecycle, which owns their retry schedule.
-RECONCILED_PURPOSES: tuple[str, ...] = ("wallet_topup", "subscription_initial")
+RECONCILED_PURPOSES: tuple[str, ...] = ("wallet_topup", "subscription_initial", "payment_test")
 _RECONCILE_BATCH = 50
 
 
@@ -79,7 +80,12 @@ async def apply_provider_state(
         # A failed grant must roll back both; never commit a partial payment.
         payment.status = "succeeded"
         payment.paid_at = datetime.now(UTC)
-        if payment.purpose == "wallet_topup" and payment.edit_units > 0:
+        if payment.purpose == "payment_test":
+            from yleum_api.services.subscription_email import enqueue_payment_test_email
+
+            await consume_payment_offer(session, payment=payment, now=payment.paid_at)
+            await enqueue_payment_test_email(session, payment)
+        elif payment.purpose == "wallet_topup" and payment.edit_units > 0:
             from yleum_api.services.generation_credits import grant_payment_units
 
             await grant_payment_units(session, payment)

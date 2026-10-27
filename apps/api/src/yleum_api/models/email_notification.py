@@ -25,13 +25,13 @@ class EmailNotification(Base):
     billing_account_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("billing_accounts.id", ondelete="CASCADE"), nullable=False
     )
-    subscription_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=False
+    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscriptions.id", ondelete="CASCADE"), nullable=True
     )
     payment_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("payments.id", ondelete="CASCADE"), nullable=False
     )
-    period_end: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     plan_name: Mapped[str] = mapped_column(Text, nullable=False)
     amount_rub: Mapped[Decimal] = mapped_column(Numeric(12, 2), nullable=False)
     status: Mapped[str] = mapped_column(Text, default="pending", server_default="pending")
@@ -47,7 +47,15 @@ class EmailNotification(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("event_type IN ('paid', 'ending_3', 'ending_1')", name="event_type"),
+        CheckConstraint(
+            "event_type IN ('paid', 'ending_3', 'ending_1', 'payment_test')", name="event_type"
+        ),
+        CheckConstraint(
+            "(event_type = 'payment_test' AND subscription_id IS NULL AND period_end IS NULL) OR "
+            "(event_type <> 'payment_test' AND subscription_id IS NOT NULL "
+            "AND period_end IS NOT NULL)",
+            name="subscription_shape",
+        ),
         CheckConstraint(
             "status IN ('pending', 'sending', 'sent', 'skipped', 'uncertain')", name="status"
         ),

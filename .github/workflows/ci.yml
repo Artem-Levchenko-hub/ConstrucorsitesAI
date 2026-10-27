@@ -132,6 +132,14 @@ jobs:
           tests/test_support_migration.py
           tests/test_main_lifespan.py
           tests/test_project_deletion_worker_startup.py
+          tests/test_account_credentials.py
+          tests/test_account_credential_boundaries.py
+          tests/test_account_security_templates.py
+          tests/test_account_security_offer_migration.py
+          tests/test_auth_email_tokens.py
+          tests/test_auth_transport_security.py
+          tests/test_account_sessions.py
+          tests/test_billing_purchase_offers.py
           tests/test_deploy_gate_defaults.py
           tests/test_release_identity.py
           tests/test_readiness.py

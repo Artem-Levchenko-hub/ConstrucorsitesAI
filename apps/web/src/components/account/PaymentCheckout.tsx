@@ -1,25 +1,29 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { createPayment, createSubscriptionCheckout, getPaymentConfig, listPayments } from "@/lib/api/account";
+import { createPayment, createSubscriptionCheckout, createTestPayment, getPaymentConfig, listPayments } from "@/lib/api/account";
 import { ApiError } from "@/lib/api/client";
 import { money, paymentState } from "./account-presentation";
 import { refreshOwnerAllowances } from "@/lib/owner-chat-quota";
 
-export type CheckoutSelection = { kind: "topup" | "plan"; code: string; title: string; price: string; credit: string; allowance?: string };
+export type CheckoutSelection = { kind: "topup" | "plan" | "test"; code: string; title: string; price: string; credit: string; allowance?: string; offerId?: string };
 type Attempt = { key: string; selection: CheckoutSelection; autoRenew: boolean; paymentId?: string };
 function readAttempt(storageKey: string): Attempt | null {
   const value = localStorage.getItem(storageKey);
   if (!value) return null;
-  const a = JSON.parse(value) as Attempt;
-  if (!a.key || !a.selection || !["topup", "plan"].includes(a.selection.kind) ||
-    !["start", "pro", "business"].includes(a.selection.code) ||
-    typeof a.autoRenew !== "boolean" || !Number.isFinite(Number(a.selection.price)) ||
-    !Number.isFinite(Number(a.selection.credit)) || (a.selection.allowance !== undefined && (typeof a.selection.allowance !== "string" || a.selection.allowance.length > 500))) throw new Error("Не удалось прочитать незавершённый заказ. Проверьте операции перед новой оплатой.");
+  const a = JSON.parse(value) as Attempt | null;
+  const selection = a?.selection;
+  const validProduct = selection?.kind === "test"
+    ? selection.code === "payment_test" && typeof selection.offerId === "string" && Boolean(selection.offerId)
+    : selection && ["topup", "plan"].includes(selection.kind) &&
+      ["start", "pro", "business"].includes(selection.code) && selection.offerId === undefined;
+  if (!a || !a.key || !selection || !validProduct ||
+    typeof a.autoRenew !== "boolean" || !Number.isFinite(Number(selection.price)) ||
+    !Number.isFinite(Number(selection.credit)) || (selection.allowance !== undefined && (typeof selection.allowance !== "string" || selection.allowance.length > 500))) throw new Error("Не удалось прочитать незавершённый заказ. Проверьте операции перед новой оплатой.");
   return a;
 }
 export function usePaymentJourney(email: string) {
@@ -36,8 +40,13 @@ export function usePaymentJourney(email: string) {
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const lock = useRef(false);
+  const activePrincipal = useRef<string | null>(email);
   const confirmed = useRef(new Set<string>());
   const config = useQuery({ queryKey: ["payment-config"], queryFn: getPaymentConfig });
+  useLayoutEffect(() => {
+    activePrincipal.current = email;
+    return () => { activePrincipal.current = null; };
+  }, [email]);
   useEffect(() => {
     const load = () => {
       try { setAttempt(readAttempt(storageKey)); setStorageError(null); }
@@ -60,9 +69,13 @@ export function usePaymentJourney(email: string) {
     if (!payment || payments.isError) return;
     if (payment.status === "succeeded" && !confirmed.current.has(payment.id)) {
       confirmed.current.add(payment.id);
-      void client.invalidateQueries({ queryKey: ["wallet"] });
-      void client.invalidateQueries({ queryKey: ["billing-subscription"] });
-      refreshOwnerAllowances(client);
+      if (payment.purpose === "payment_test") {
+        void client.invalidateQueries({ queryKey: ["billing-purchase-offer", email] });
+      } else {
+        void client.invalidateQueries({ queryKey: ["wallet"] });
+        void client.invalidateQueries({ queryKey: ["billing-subscription"] });
+        refreshOwnerAllowances(client);
+      }
     }
     if (paymentState(payment.status).terminal && attempt?.paymentId === payment.id) {
       try {
@@ -74,14 +87,14 @@ export function usePaymentJourney(email: string) {
         setSelection(null);
       } catch { setStorageError("Не удалось обновить сохранённый заказ. Проверьте операции перед новой оплатой."); }
     }
-  }, [payment, payments.isError, attempt, storageKey, client]);
+  }, [payment, payments.isError, attempt, storageKey, client, email]);
   function choose(next: CheckoutSelection) {
     if (!ready || storageError || attempt || !config.data?.enabled) return;
     setSelection(next); setAutoRenew(false); setError(null);
   }
   function resume() {
     if (!attempt) return;
-    setSelection(attempt.selection); setAutoRenew(attempt.autoRenew); setError(null);
+    setSelection(attempt.selection); setAutoRenew(attempt.selection.offerId ? false : attempt.autoRenew); setError(null);
   }
   async function pay() {
     if (lock.current || !selection || !config.data?.enabled || storageError) return;
@@ -93,16 +106,22 @@ export function usePaymentJourney(email: string) {
       // must never silently turn a retry into a fresh charge.
       const stored = readAttempt(storageKey);
       retrying = Boolean(stored);
-      if (stored && (stored.selection.kind !== selection.kind || stored.selection.code !== selection.code)) {
+      if (stored && (stored.selection.kind !== selection.kind || stored.selection.code !== selection.code || stored.selection.offerId !== selection.offerId)) {
         setAttempt(stored);
         throw new Error("Есть другой незавершённый заказ. Продолжите его перед новой оплатой.");
       }
-      const current = stored ?? { key: crypto.randomUUID(), selection, autoRenew };
+      const current = stored ?? { key: crypto.randomUUID(), selection, autoRenew: selection.offerId ? false : autoRenew };
       localStorage.setItem(storageKey, JSON.stringify(current)); setAttempt(current);
       submitted = current;
       const result = current.selection.kind === "topup"
         ? await createPayment(current.selection.code, current.key)
-        : await createSubscriptionCheckout(current.selection.code as "pro" | "business", current.autoRenew, current.key);
+        : current.selection.kind === "test"
+          ? await createTestPayment(current.selection.offerId!, current.key)
+          : await createSubscriptionCheckout(current.selection.code as "pro" | "business", current.autoRenew, current.key);
+      // The server order survives navigation. Only its original mounted owner
+      // may update the browser or follow its confirmation link; keep the saved
+      // idempotency key so that owner can recover it on their next visit.
+      if (activePrincipal.current !== email) return;
       const updated = { ...current, paymentId: result.id };
       setLastPaymentId(result.id);
       localStorage.setItem(storageKey, JSON.stringify(updated)); setAttempt(updated);
@@ -111,15 +130,19 @@ export function usePaymentJourney(email: string) {
       else if (!paymentState(result.status).terminal) setError("Сервер не вернул ссылку для оплаты. Проверяем статус заказа; повторный запрос использует тот же заказ.");
       else setSelection(null);
     } catch (e) {
-      // These 409 codes are emitted before creating a payment. The first two
-      // follow the existing-key lookup, so even a retry proves no such record.
+      if (activePrincipal.current !== email) return;
+      // Plan conflicts and the explicit test marker follow the existing-key
+      // lookup, so even a retry proves no payment exists for this intent.
       // Consent is checked BEFORE that lookup: a rejected retry could still
       // have an earlier payment, so its durable intent must remain frozen.
-      const rejectedBeforeCreation = submitted?.selection.kind === "plan" && !submitted.paymentId &&
+      const rejectedBeforeCreation = submitted && !submitted.paymentId &&
         e instanceof ApiError && e.status === 409 && (
-          e.code === "subscription_already_active" ||
-          e.code === "subscription_plan_not_purchasable" ||
-          (e.code === "subscription_consent_required" && !retrying)
+          (submitted.selection.kind === "plan" && (
+            e.code === "subscription_already_active" ||
+            e.code === "subscription_plan_not_purchasable" ||
+            (e.code === "subscription_consent_required" && !retrying)
+          )) ||
+          (submitted.selection.kind === "test" && e.code === "conflict" && e.details?.payment_test_not_created === true)
         );
       if (submitted && rejectedBeforeCreation) {
         try {
@@ -134,10 +157,10 @@ export function usePaymentJourney(email: string) {
       }
       setError(e instanceof Error ? e.message : "Не удалось начать оплату. Проверьте статус перед повтором.");
     }
-    finally { lock.current = false; setPending(false); }
+    finally { lock.current = false; if (activePrincipal.current === email) setPending(false); }
   }
   return {
-    config, attempt, selection, setSelection, autoRenew, setAutoRenew, pending, error, storageError,
+    accountKey: email, config, attempt, selection, setSelection, autoRenew, setAutoRenew, pending, error, storageError,
     paymentId, payment, payments, choose, resume, pay, locked: !ready || Boolean(storageError || attempt)
   };
 }
@@ -149,7 +172,7 @@ export function PaymentCheckout({ journey: j }: { journey: PaymentJourney }) {
     {j.paymentId && <section className={`account-payment-result account-notice ${j.payments.isError ? "error" : state.tone}`} aria-live="polite">
       <div>
         <h2>{j.payments.isError ? "Не удалось проверить оплату" : j.payments.isPending ? "Проверяем результат оплаты…" : !j.payment ? "Платёж не найден" : state.label}</h2>
-        <p>{j.payments.isError ? "Статус недоступен. Повторите проверку; новая оплата не требуется." : !j.payment && !j.payments.isPending ? "В последних 100 платежах аккаунта нет этого заказа. Его результат пока неизвестен." : j.payment?.status === "succeeded" ? `Сервер подтвердил платёж ${money(j.payment.amount_rub)}. Баланс и тариф обновляются.` : state.terminal ? "Результат получен с сервера. Подробности доступны в операциях." : "Дождитесь подтверждения сервера. Не оплачивайте заказ повторно."}</p>
+        <p>{j.payments.isError ? "Статус недоступен. Повторите проверку; новая оплата не требуется." : !j.payment && !j.payments.isPending ? "В последних 100 платежах аккаунта нет этого заказа. Его результат пока неизвестен." : j.payment?.status === "succeeded" ? `Сервер подтвердил платёж ${money(j.payment.amount_rub)}. ${j.payment.purpose === "payment_test" ? "Подписка и пакеты не изменены." : "Баланс и тариф обновляются."}` : state.terminal ? "Результат получен с сервера. Подробности доступны в операциях." : "Дождитесь подтверждения сервера. Не оплачивайте заказ повторно."}</p>
         <small>Заказ: {j.paymentId}</small>
       </div>
       <div className="account-actions">
@@ -175,18 +198,19 @@ export function PaymentCheckout({ journey: j }: { journey: PaymentJourney }) {
             </div>
             <div>
               <dt>Включено</dt>
-              <dd>{j.selection.allowance ?? `По прежним условиям: ${money(j.selection.credit)}`}</dd>
+              <dd>{j.selection.kind === "test" ? "Подписка и пакеты без изменений" : j.selection.allowance ?? `По прежним условиям: ${money(j.selection.credit)}`}</dd>
             </div>
             <div>
               <dt>Период</dt>
-              <dd>{j.selection.kind === "topup" ? "Разовое пополнение" : "1 месяц"}</dd>
+              <dd>{j.selection.kind === "test" ? "Разовая проверочная оплата" : j.selection.kind === "topup" ? "Разовое пополнение" : "1 месяц"}</dd>
             </div>
           </dl>
+          {j.selection.kind === "test" && <p className="account-notice">Действующая подписка, её срок, автопродление и пакеты не изменятся.</p>}
           {j.selection.kind === "plan" && <label className="account-consent">
             <input type="checkbox" checked={j.autoRenew} disabled={Boolean(j.attempt) || j.pending} onChange={e => j.setAutoRenew(e.target.checked)} />
             <span>Включить автопродление. Разрешаю ежемесячное списание стоимости тарифа с сохранённого способа оплаты. Согласие можно отозвать в разделе «Тариф».</span>
           </label>}
-          <p className="account-hint">Нажимая «Перейти к оплате», вы принимаете <Link href="/legal/offer" target="_blank" rel="noopener noreferrer">публичную оферту</Link>. {j.selection.kind === "topup" ? "Это разовое пополнение, без подписки." : "Тариф активируется после подтверждения оплаты."}</p>
+          <p className="account-hint">Нажимая «Перейти к оплате», вы принимаете <Link href="/legal/offer" target="_blank" rel="noopener noreferrer">публичную оферту</Link>. {j.selection.kind === "test" ? "Это разовая проверочная оплата." : j.selection.kind === "topup" ? "Это разовое пополнение, без подписки." : "Тариф активируется после подтверждения оплаты."}</p>
           {j.error && <p role="alert" className="account-notice error">{j.error}</p>}
           {!j.config.data?.enabled && <p className="account-notice pending">{j.config.data?.reason ?? "Платёжный сервис недоступен"}</p>}
           <Button disabled={j.pending || !j.config.data?.enabled || Boolean(j.storageError)} onClick={() => void j.pay()}>Перейти к оплате в ЮKassa{j.pending ? "…" : ""}</Button>

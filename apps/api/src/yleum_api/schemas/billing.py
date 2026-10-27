@@ -19,6 +19,14 @@ class BillingPlanPublic(BaseModel):
     entitlements: dict[str, object]
 
 
+class BillingPurchaseOfferPublic(BaseModel):
+    id: UUID
+    price_rub: Decimal
+    currency: Literal["RUB"]
+    expires_at: datetime
+    reserved_payment_id: UUID | None
+
+
 class SubscriptionPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -18,6 +18,11 @@ class SubscriptionCheckoutCreate(BaseModel):
     consent_version: str | None = None
 
 
+class PaymentTestCheckoutCreate(BaseModel):
+    offer_id: UUID
+    idempotency_key: UUID
+
+
 class PaymentPublic(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -1,5 +1,11 @@
+import type { Metadata } from "next";
 import { AuthCard } from "@/components/auth/AuthCard";
 import { PasswordResetForm } from "@/components/auth/PasswordResetForm";
+
+export const metadata: Metadata = {
+  referrer: "no-referrer",
+  robots: { index: false, follow: false },
+};
 
 export default async function ResetPasswordPage({
   searchParams,

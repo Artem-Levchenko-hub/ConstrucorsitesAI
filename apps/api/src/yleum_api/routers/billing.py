@@ -11,16 +11,33 @@ from yleum_api.core.errors import ApiError
 from yleum_api.models.billing import BillingPaymentMethod, BillingPlan, Subscription
 from yleum_api.schemas.billing import (
     BillingPlanPublic,
+    BillingPurchaseOfferPublic,
     BillingUsagePublic,
     SubscriptionAction,
     SubscriptionPublic,
 )
 from yleum_api.services.billing_accounts import resolve_billing_account
+from yleum_api.services.billing_offers import current_purchase_offer
 from yleum_api.services.billing_usage import build_usage_report
 
 router = APIRouter(prefix="/api/billing", tags=["billing"])
 
 LIVE_SUBSCRIPTION_STATUSES = ("trialing", "active", "past_due", "paused")
+
+
+@router.get("/purchase-offer", response_model=BillingPurchaseOfferPublic | None)
+async def get_purchase_offer(
+    current_user: CurrentUserDep, session: SessionDep
+) -> BillingPurchaseOfferPublic | None:
+    account = await resolve_billing_account(session, current_user.id)
+    offer = await current_purchase_offer(session, user_id=current_user.id, account_id=account.id)
+    if offer is None:
+        return None
+    return BillingPurchaseOfferPublic(
+        id=offer.id, price_rub=offer.amount_rub,
+        currency="RUB", expires_at=offer.expires_at,
+        reserved_payment_id=offer.reserved_payment_id,
+    )
 
 
 async def _active_subscription(

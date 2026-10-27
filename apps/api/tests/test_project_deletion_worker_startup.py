@@ -22,13 +22,17 @@ def test_worker_startup_registers_project_deletion_executor(monkeypatch):
 
     monkeypatch.setattr(run.threading, "Thread", Thread)
     monkeypatch.setattr(
-        run, "get_settings", lambda: SimpleNamespace(billing_lifecycle_enabled=False),
+        run,
+        "get_settings",
+        lambda: SimpleNamespace(billing_lifecycle_enabled=False),
     )
     run._start_workers()
     assert ("project-deletion", run._run_project_deletion) in started
     assert sum(name == "project-deletion" for name, _ in started) == 1
     assert ("support-email", run._run_support_email) in started
     assert sum(name == "support-email" for name, _ in started) == 1
+    assert "account-security-email" in [name for name, _ in started]
+    assert sum(name == "account-security-email" for name, _ in started) == 1
 
 
 def test_support_email_worker_runs_its_own_async_lifecycle(monkeypatch):
@@ -39,6 +43,19 @@ def test_support_email_worker_runs_its_own_async_lifecycle(monkeypatch):
 
     monkeypatch.setattr(run, "run_support_email_forever", executor)
     run._run_support_email()
+    assert received == [True]
+
+
+def test_account_security_email_worker_runs_its_own_async_lifecycle(monkeypatch):
+    target = getattr(run, "_run_account_security_email", None)
+    assert callable(target), "Completed account events need a running mail dispatcher"
+    received = []
+
+    async def executor():
+        received.append(True)
+
+    monkeypatch.setattr(run, "run_account_security_email_forever", executor)
+    target()
     assert received == [True]
 
 

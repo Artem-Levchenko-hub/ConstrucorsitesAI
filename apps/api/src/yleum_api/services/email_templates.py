@@ -193,3 +193,78 @@ def support_email(
         note="Ответьте в чате поддержки на сайте. Ответы на это письмо не обрабатываются.",
         footer="Вы получили это письмо по обращению в поддержку Yleum.",
     )
+
+
+def password_reset_email(*, link: str) -> EmailContent:
+    return _content(
+        subject="Сброс пароля Yleum",
+        eyebrow="БЕЗОПАСНОСТЬ АККАУНТА",
+        title="Задайте новый пароль.",
+        lead="Получен запрос на восстановление доступа к Yleum.",
+        panel="<p>Одноразовая ссылка действует <strong>30 минут</strong>.</p>",
+        panel_text="Одноразовая ссылка действует 30 минут.",
+        button="Задать новый пароль",
+        url=link,
+        note="После смены пароля все прежние сессии будут завершены.",
+        footer="Если вы не запрашивали восстановление, проигнорируйте это письмо. "
+        "Пароль не изменится.",
+    )
+
+
+def email_change_confirmation_email(
+    *, link: str, new_email: str, current_address: bool
+) -> EmailContent:
+    return _content(
+        subject="Подтвердите смену email в Yleum",
+        eyebrow="БЕЗОПАСНОСТЬ АККАУНТА",
+        title="Подтвердите смену адреса." if current_address else "Подтвердите новый адрес.",
+        lead="Получен запрос на смену email для входа в Yleum.",
+        panel=f"<p>Новый адрес: <strong>{escape(new_email)}</strong></p>",
+        panel_text=f"Новый адрес: {new_email}",
+        button="Подтвердить смену email",
+        url=link,
+        note="Подтвердите оба адреса: текущий и новый. Ссылки действуют 30 минут. "
+        "До двух подтверждений email для входа не изменится.",
+        footer="Если вы не меняете email, не подтверждайте запрос "
+        "и обратитесь в поддержку на сайте Yleum.",
+    )
+
+
+def account_security_email(*, kind: str, recovery_url: str) -> EmailContent:
+    titles = {
+        "password_changed": "Пароль изменён.",
+        "password_reset": "Пароль восстановлен.",
+        "email_changed": "Email для входа изменён.",
+    }
+    title = titles[kind]
+    return _content(
+        subject=f"Yleum · {title}",
+        eyebrow="БЕЗОПАСНОСТЬ АККАУНТА",
+        title=title,
+        lead="Изменение данных аккаунта завершено.",
+        panel="<p>Все прежние сессии завершены. Для входа используйте обновлённые данные.</p>",
+        panel_text="Все прежние сессии завершены. Для входа используйте обновлённые данные.",
+        button="Восстановить доступ",
+        url=recovery_url,
+        note="Если это были не вы, восстановите доступ и обратитесь в поддержку на сайте yleum.ru.",
+        footer="Это уведомление об изменении безопасности аккаунта. "
+        "Письмо не содержит паролей или одноразовых ссылок.",
+    )
+
+
+def payment_test_email(*, amount_rub: Decimal, manage_url: str) -> EmailContent:
+    amount = money(amount_rub)
+    unchanged = "Действующая подписка, её срок, автопродление и пакеты не изменились."
+    return _content(
+        subject="Проверочная оплата Yleum подтверждена",
+        eyebrow="ПРОВЕРОЧНАЯ ОПЛАТА",
+        title="Проверочная оплата подтверждена.",
+        lead="Платёжный сервис подтвердил проверочную оплату.",
+        panel=f'<p>Сумма: <strong>{escape(amount)}</strong></p>',
+        panel_text=f"Сумма: {amount}",
+        button="Открыть историю операций",
+        url=manage_url,
+        note=unchanged,
+        footer="Это уведомление о проверочной оплате. Кассовый чек, когда он предусмотрен, "
+        "приходит отдельно от платёжного сервиса.",
+    )

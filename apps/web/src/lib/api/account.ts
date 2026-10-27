@@ -26,7 +26,7 @@ export type PaymentConfig = {
 
 export type Payment = {
   id: string;
-  purpose: "wallet_topup" | "subscription_initial" | "subscription_renewal";
+  purpose: "wallet_topup" | "subscription_initial" | "subscription_renewal" | "payment_test";
   subscription_id: string | null;
   package_code: string;
   amount_rub: string;
@@ -164,6 +164,20 @@ export function createPayment(packageCode: string, idempotencyKey = crypto.rando
 
 export function listBillingPlans(): Promise<BillingPlan[]> {
   return apiFetch<BillingPlan[]>("/api/billing/plans");
+}
+
+export type BillingPurchaseOffer = {
+  id: string; price_rub: string; currency: "RUB";
+  expires_at: string; reserved_payment_id: string | null;
+};
+export function getBillingPurchaseOffer(): Promise<BillingPurchaseOffer | null> {
+  return apiFetch<BillingPurchaseOffer | null>("/api/billing/purchase-offer");
+}
+
+export function createTestPayment(offerId: string, idempotencyKey = crypto.randomUUID()): Promise<Payment> {
+  return apiFetch<Payment>("/api/payments/test", {
+    method: "POST", json: { offer_id: offerId, idempotency_key: idempotencyKey },
+  });
 }
 
 export function getSubscription(): Promise<Subscription> {

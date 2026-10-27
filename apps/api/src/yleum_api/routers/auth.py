@@ -8,12 +8,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from uuid import UUID
 
+import structlog
 from fastapi import APIRouter, Cookie, Depends, Header, Request, Response, status
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from yleum_api.core.config import get_settings
-from yleum_api.core.deps import CurrentUserDep, SessionDep, extract_access_claims
+from yleum_api.core.deps import CurrentUserDep, OptionalUserDep, SessionDep, extract_access_claims
 from yleum_api.core.errors import ApiError
 from yleum_api.core.ratelimit import _client_ip, rate_limit_auth, rate_limit_email
 from yleum_api.core.security import consume_dummy_verify, hash_password, verify_password
@@ -58,6 +59,7 @@ from yleum_api.services.transactional_email import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
+log = structlog.get_logger(__name__)
 
 
 async def _public_user(session: SessionDep, user: User) -> UserPublic:
@@ -88,9 +90,23 @@ async def _issue_email_token(
     purpose: str,
     *,
     ttl: timedelta,
+    requested_email: str | None = None,
 ) -> str:
-    # Serialize issuance and consumption for this account in the same order.
-    await session.execute(select(User.id).where(User.id == user.id).with_for_update())
+    # Bind issuance to the address requested before waiting on the owner lock.
+    expected_email = requested_email or user.email
+    locked_user = (
+        await session.execute(
+            select(User).where(User.id == user.id).with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    ).scalar_one_or_none()
+    if (
+        locked_user is None or locked_user.status != "active" or locked_user.is_anon
+        or not locked_user.email or not expected_email
+        or locked_user.email.lower() != expected_email.lower()
+    ):
+        raise ApiError("token_invalid", "Ссылка недействительна или истекла", 400)
+    user = locked_user
     now = datetime.now(UTC)
     await session.execute(
         update(AuthToken)
@@ -137,7 +153,10 @@ async def _consume_email_token(
             "token_invalid", "Ссылка недействительна или истекла", status.HTTP_400_BAD_REQUEST
         )
     user = (
-        await session.execute(select(User).where(User.id == candidate).with_for_update())
+        await session.execute(
+            select(User).where(User.id == candidate).with_for_update()
+            .execution_options(populate_existing=True)
+        )
     ).scalar_one_or_none()
     token = (
         await session.execute(
@@ -443,35 +462,53 @@ async def forgot_password(
     user = (
         await session.execute(select(User).where(User.email == payload.email))
     ).scalar_one_or_none()
-    if user is None:
+    if user is None or user.status != "active" or user.is_anon or not user.email:
         return {"accepted": True}
-    raw = await _issue_email_token(session, user, "reset_password", ttl=timedelta(minutes=30))
-    settings = get_settings()
-    link = f"{settings.web_base_url.rstrip('/')}/reset-password?token={raw}"
-    await _deliver(
-        send_transactional_email(
-            recipient=str(user.email),
-            subject="Сброс пароля Yleum",
-            text=(
-                f"Чтобы задать новый пароль, откройте ссылку:\n\n{link}\n\nОна действует 30 минут."
-            ),
+    from yleum_api.services.email_templates import password_reset_email
+
+    try:
+        raw = await _issue_email_token(
+            session, user, "reset_password", ttl=timedelta(minutes=30),
+            requested_email=str(payload.email),
         )
+    except ApiError as exc:
+        if exc.code != "token_invalid":
+            raise
+        return {"accepted": True}
+    settings = get_settings()
+    mail = password_reset_email(
+        link=f"{settings.web_base_url.rstrip('/')}/reset-password?token={raw}",
     )
+    try:
+        await send_transactional_email(
+            recipient=str(user.email), subject=mail.subject, text=mail.text, html=mail.html,
+        )
+    except (EmailDeliveryNotConfigured, EmailDeliveryFailed):
+        # Keep unknown/known addresses indistinguishable even during SMTP outages.
+        log.warning("auth_password_reset_delivery_unavailable")
     return {"accepted": True}
 
 
 @router.post("/password/reset", dependencies=[Depends(rate_limit_auth)])
-async def reset_password(payload: PasswordResetConsume, session: SessionDep) -> dict[str, bool]:
+async def reset_password(
+    payload: PasswordResetConsume, session: SessionDep, response: Response,
+    current_user: OptionalUserDep,
+) -> dict[str, bool]:
+    from yleum_api.services.account_credentials import apply_password_change
+
+    incoming_user_id = current_user.id if current_user is not None else None
     now = datetime.now(UTC)
     user = await _consume_email_token(session, payload.token, "reset_password", now)
-    user.password_hash = await hash_password(payload.password)
-    user.session_version += 1
-    await session.execute(
-        update(AuthSession)
-        .where(AuthSession.user_id == user.id, AuthSession.revoked_at.is_(None))
-        .values(revoked_at=now)
+    await apply_password_change(
+        session, user, await hash_password(payload.password), kind="password_reset",
     )
     await session.commit()
+    if incoming_user_id == user.id:
+        settings = get_settings()
+        response.delete_cookie(
+            key=settings.jwt_cookie_name, path="/", domain=settings.jwt_cookie_domain,
+        )
+    response.headers["Cache-Control"] = "no-store"
     return {"reset": True}
 
 
