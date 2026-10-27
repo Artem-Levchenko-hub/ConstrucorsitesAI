@@ -14,6 +14,34 @@ def implementation():
     return importlib.import_module(name)
 
 
+@pytest.mark.parametrize("stdout,stderr", [(b"row", b""), (b"", b"error"),
+                                            (b"", b""), (b"row", b"error")])
+@pytest.mark.parametrize("remaining,first_poll", [(-1, 0), (0.25, 0.25), (20, 1)])
+def test_real_sdk_channel_drain_never_waits_for_absent_stream(
+    monkeypatch, stdout, stderr, remaining, first_poll
+):
+    from kubernetes.stream.ws_client import STDERR_CHANNEL, STDOUT_CHANNEL, WSClient
+
+    m = implementation()
+    client = WSClient.__new__(WSClient)
+    client._connected = True
+    client._channels = {channel: data for channel, data in (
+        (STDOUT_CHANNEL, stdout), (STDERR_CHANNEL, stderr)) if data}
+    updates = []
+
+    def bounded_update(timeout=None):
+        assert timeout is not None, "real SDK absent channel requested an unbounded wait"
+        assert 0 <= timeout <= first_poll
+        updates.append(timeout)
+
+    monkeypatch.setattr(client, "update", bounded_update)
+    monkeypatch.setattr(m.time, "monotonic", lambda: 100)
+    # Keep the real SDK read_stdout/read_stderr/read_channel/peek_channel methods.
+    assert m._KubernetesChannel(client).read(100 + remaining) == (stdout, stderr, True)
+    assert updates == [first_poll] + [0] * (int(not stdout) + int(not stderr))
+    assert not client._channels
+
+
 def test_administrator_psql_uses_catalog_only_search_path_at_startup():
     import shlex
 

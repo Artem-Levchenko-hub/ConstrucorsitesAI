@@ -320,9 +320,11 @@ class _KubernetesChannel:
 
     def read(self, deadline: float) -> tuple[bytes, bytes, bool]:
         self.client.update(timeout=max(0, min(1, deadline - time.monotonic())))
+        # SDK stream readers default to an unbounded wait when their channel is empty.
+        # Only the initial poll may wait; draining either stream must stay nonblocking.
         return (
-            self.client.read_stdout() or b"",
-            self.client.read_stderr() or b"",
+            self.client.read_stdout(timeout=0) or b"",
+            self.client.read_stderr(timeout=0) or b"",
             self.client.is_open(),
         )
 
