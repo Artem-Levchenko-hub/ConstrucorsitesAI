@@ -14,9 +14,11 @@ import pytest
 from tests.test_machine_environment import ArchiveBackend
 from tests.test_project_machine_manifest import payload
 from tests.test_publication_early_preflight import Captured, build, release_for
+from yleum_orchestrator.core.cell_resources import CellIdentityConflict
 from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.services import machine_adapter as adapter_module
 from yleum_orchestrator.services.machine_environment import (
+    EnvironmentIntegrityError,
     MachineEnvironmentRef,
     MachineEnvironmentStore,
     VolumeEnvironmentRef,
@@ -236,3 +238,126 @@ async def test_checkpoint_seal_hands_over_only_the_warm_volumes(tmp_path, monkey
     assert sealed is not None and sealed["schema_digest"] == SEALED_SCHEMA
     assert [v.name for v in sealed["reference"].volumes] == ["stem-workspace", "stem-home"]
     assert all(isinstance(v, VolumeEnvironmentRef) for v in sealed["reference"].volumes)
+
+
+def _later_runtime(service, value, adapter):
+    """A failed edit restored the accepted source under a later machine epoch."""
+    state = service._manager(value.workspace_id).state_store.load(value.workspace_id)
+    state.fencing_epoch = value.fencing_epoch + 3
+    machine_state = {**adapter.machine.state(), "epoch": value.fencing_epoch + 2}
+    adapter.machine.state = lambda: machine_state
+    return value.model_copy(update={
+        "accepted_fencing_epoch": value.fencing_epoch,
+        "fencing_epoch": state.fencing_epoch,
+    })
+
+
+async def test_warm_accepted_seal_survives_later_failed_edit_epoch(tmp_path, monkeypatch):
+    service, value, adapter, _production, manifest = _sealed_build(tmp_path, monkeypatch)
+    _seal_source(service, value, adapter, manifest, revision=value.source_revision)
+    value = _later_runtime(service, value, adapter)
+    stages = []
+    trace = PublicationTrace()
+
+    def stage(name, **_kwargs):
+        stages.append(name)
+        if name == "prepare_target":
+            raise Captured()
+
+    trace.stage = stage
+    with pytest.raises(Captured):
+        await service._prepare_locked(value, str(uuid4()), trace)
+    assert "sealed_artifact" in stages
+    assert adapter.checkpoints == [] and adapter.resumed == 0
+
+
+@pytest.mark.parametrize("invalid", [
+    "missing_seal", "revision", "workspace", "manifest", "warm_volume", "archive", "role",
+])
+async def test_later_epoch_without_valid_seal_never_captures_live_machine(
+    tmp_path, monkeypatch, invalid,
+):
+    service, value, adapter, production, manifest = _sealed_build(tmp_path, monkeypatch)
+    reference = _seal_source(service, value, adapter, manifest, revision=value.source_revision)
+    value = _later_runtime(service, value, adapter)
+    source = adapter.source
+    if invalid == "missing_seal":
+        source.environment_ref = None
+    elif invalid == "revision":
+        source.metadata_extra["environment_revision"] = "f" * 64
+    elif invalid == "role":
+        source.metadata_extra["environment_project_db_role_protocol"] = 0
+    elif invalid == "archive":
+        (adapter.root / "artifacts" / str(value.workspace_id) / reference.artifact_ref).unlink()
+    else:
+        updates = {
+            "workspace": {"workspace_id": uuid4()},
+            "manifest": {"manifest_digest": "f" * 64},
+            "warm_volume": {"volumes": ()},
+        }[invalid]
+        source.environment_ref = reference.model_copy(update=updates).model_dump(mode="json")
+    before = service._read(value.project_id)
+    with pytest.raises(CellIdentityConflict, match="accepted machine epoch changed"):
+        await service._prepare_locked(value, str(uuid4()))
+    assert service._read(value.project_id) == before
+    assert production.schema_calls == 0
+    assert adapter.checkpoints == [] and adapter.resumed == 0
+
+
+@pytest.mark.parametrize("corrupt", ["hash", "size"])
+async def test_later_epoch_corrupt_seal_fails_without_live_capture(tmp_path, monkeypatch, corrupt):
+    service, value, adapter, _production, manifest = _sealed_build(tmp_path, monkeypatch)
+    reference = _seal_source(service, value, adapter, manifest, revision=value.source_revision)
+    value = _later_runtime(service, value, adapter)
+    archive = adapter.root / "artifacts" / str(value.workspace_id) / reference.artifact_ref
+    raw = archive.read_bytes()
+    changed = (b"x" if raw[:1] != b"x" else b"y") + raw[1:]
+    archive.write_bytes(changed if corrupt == "hash" else raw + b"x")
+    before = service._read(value.project_id)
+    with pytest.raises(EnvironmentIntegrityError, match="digest mismatch"):
+        await service._prepare_locked(value, str(uuid4()))
+    assert service._read(value.project_id) == before
+    assert adapter.checkpoints == [] and adapter.resumed == 0
+
+
+@pytest.mark.parametrize("field,value_", [
+    ("owner_id", UUID(int=99)), ("project_id", UUID(int=99)), ("fencing_epoch", 999),
+    ("active_generation_run_id", UUID(int=99)), ("phase", "running"),
+    ("bundle_state", "provisioning"),
+])
+async def test_valid_old_seal_cannot_bypass_current_workspace_state(
+    tmp_path, monkeypatch, field, value_,
+):
+    service, value, adapter, _production, manifest = _sealed_build(tmp_path, monkeypatch)
+    _seal_source(service, value, adapter, manifest, revision=value.source_revision)
+    value = _later_runtime(service, value, adapter)
+    state = service._manager(value.workspace_id).state_store.load(value.workspace_id)
+    setattr(state, field, value_)
+    with pytest.raises(CellIdentityConflict, match="source identity or fence changed"):
+        await service._prepare_locked(value, str(uuid4()))
+    assert adapter.checkpoints == [] and adapter.resumed == 0
+
+
+async def test_valid_old_seal_cannot_bypass_changed_source(tmp_path, monkeypatch):
+    service, value, adapter, _production, manifest = _sealed_build(tmp_path, monkeypatch)
+    _seal_source(service, value, adapter, manifest, revision=value.source_revision)
+    value = _later_runtime(service, value, adapter)
+    monkeypatch.setattr(
+        "yleum_orchestrator.routers.runtime._workspace_revision", lambda _: "f" * 64,
+    )
+    with pytest.raises(CellIdentityConflict, match="source revision changed"):
+        await service._prepare_locked(value, str(uuid4()))
+    assert adapter.checkpoints == [] and adapter.resumed == 0
+
+
+async def test_first_seed_cannot_use_historical_epoch_exception(tmp_path, monkeypatch):
+    service, value, adapter, production, manifest = _sealed_build(tmp_path, monkeypatch)
+    _seal_source(service, value, adapter, manifest, revision=value.source_revision)
+    value = _later_runtime(service, value, adapter)
+    saved = service._read(value.project_id)
+    saved.update(data_seeded=False, active_release=None)
+    service._write(value.project_id, saved)
+    with pytest.raises(CellIdentityConflict, match="accepted machine epoch changed"):
+        await service._prepare_locked(value, str(uuid4()))
+    assert production.schema_calls == 0
+    assert adapter.checkpoints == [] and adapter.resumed == 0
