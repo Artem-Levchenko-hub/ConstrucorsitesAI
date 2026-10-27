@@ -51,6 +51,17 @@ it.each([
   expect(api.confirm).not.toHaveBeenCalled();
 });
 
+it.each(["failed", "blocked"])("reports a %s preparation without an expiry as an unconfirmed check", async state => {
+  api.status.mockResolvedValue({ ...prepared, state, expires_at: null, backup_verified: false,
+    plan_sha256: null, fields: [] });
+  await mount();
+  await settle(() => expect(container.textContent).toContain("Проверку не удалось подтвердить. Опубликованная версия продолжает работать."));
+  expect(container.textContent).not.toContain("Версия или срок проверки изменились");
+  expect(container.textContent).toContain("Проверить и создать копию");
+  expect(api.prepare).not.toHaveBeenCalled();
+  expect(api.confirm).not.toHaveBeenCalled();
+});
+
 it("does not replay an uncertain confirmation and asks to observe its status", async () => {
   api.status.mockResolvedValue(prepared); api.confirm.mockRejectedValue(new Error("lost response"));
   await mount(); await settle(() => expect(container.textContent).toContain("Применить изменения данных"));

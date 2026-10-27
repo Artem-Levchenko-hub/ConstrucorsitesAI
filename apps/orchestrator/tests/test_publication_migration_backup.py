@@ -79,7 +79,17 @@ def test_sandbox_does_not_return_during_successful_bootstrap_server(monkeypatch)
     assert calls == ["argv", "argv", "select"]
 
 
-def test_sandbox_keeps_bootstrap_and_controller_sockets_inside_owned_tmpfs(monkeypatch):
+@pytest.mark.parametrize("requested,stored", [
+    ("postgres", "postgres"),
+    ("docker.io/library/postgres", "postgres"),
+    ("postgres", "docker.io/library/postgres"),
+    ("index.docker.io/library/postgres", "library/postgres"),
+    ("docker.io/postgres", "index.docker.io/postgres"),
+    ("registry.example:5000/team/postgres", "registry.example:5000/team/postgres"),
+])
+def test_sandbox_keeps_bootstrap_and_controller_sockets_inside_owned_tmpfs(
+    monkeypatch, requested, stored
+):
     from types import SimpleNamespace
 
     import docker
@@ -87,7 +97,8 @@ def test_sandbox_keeps_bootstrap_and_controller_sockets_inside_owned_tmpfs(monke
     from tests.test_publication_migration_backup_docker import configure_isolated_settings
 
     configure_isolated_settings(monkeypatch)
-    image = "postgres@sha256:" + "a" * 64
+    image = requested + "@sha256:" + "a" * 64
+    stored_image = stored + "@sha256:" + "a" * 64
 
     class CapturedCreate(Exception):
         pass
@@ -111,11 +122,33 @@ def test_sandbox_keeps_bootstrap_and_controller_sockets_inside_owned_tmpfs(monke
         raise CapturedCreate
 
     client = SimpleNamespace(
-        images=SimpleNamespace(get=lambda _: SimpleNamespace(attrs={"RepoDigests": [image]})),
+        # No pull/tag methods exist: aliases must use the same local immutable image.
+        images=SimpleNamespace(
+            get=lambda _: SimpleNamespace(attrs={"RepoDigests": [stored_image]})
+        ),
         containers=SimpleNamespace(get=absent, create=create),
     )
     with pytest.raises(CapturedCreate):
         implementation().RestoreSandbox(client, uuid4(), uuid4(), image).__enter__()
+
+
+@pytest.mark.parametrize("digests", [
+    None, "postgres@sha256:" + "a" * 64, {"postgres": "a" * 64}, [None], ["invalid"],
+    ["postgres@sha256:" + "a" * 64, "invalid"],
+    ["registry.example/library/postgres@sha256:" + "a" * 64],
+    ["docker.io/other/postgres@sha256:" + "a" * 64],
+    ["docker.io/library/other@sha256:" + "a" * 64],
+    ["docker.io/library/postgres@sha256:" + "b" * 64],
+    ["https://docker.io/library/postgres@sha256:" + "a" * 64],
+])
+def test_sandbox_image_alias_guard_rejects_untrusted_repo_digests_before_create(digests):
+    from types import SimpleNamespace
+
+    m = implementation()
+    client = SimpleNamespace(images=SimpleNamespace(
+        get=lambda _: SimpleNamespace(attrs={"RepoDigests": digests})))
+    with pytest.raises(m.MigrationIOError, match="migration_verifier_image_unavailable"):
+        m.RestoreSandbox(client, uuid4(), uuid4(), "postgres@sha256:" + "a" * 64).__enter__()
 
 
 @pytest.fixture(autouse=True)

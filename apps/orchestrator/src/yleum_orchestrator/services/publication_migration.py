@@ -25,6 +25,7 @@ from yleum_orchestrator.schemas.publication_migration import (
     PublicationMigrationStatus,
 )
 from yleum_orchestrator.services.project_machine import write_controller_json
+from yleum_orchestrator.services.publication_migration_pg import MigrationIOError
 
 ACTIVE_STATES = frozenset({"preparing", "applying", "reconciling"})
 STATES = ACTIVE_STATES | {"prepared", "applied", "failed", "stale", "blocked"}
@@ -41,6 +42,55 @@ ERROR_CODES = frozenset(
         "migration_recovery_blocked",
     }
 )
+PRIVATE_FAILURE_CODES = frozenset(
+    {
+        "migration_verifier_image_untrusted",
+        "migration_verifier_image_unavailable",
+        "migration_source_changed",
+        "migration_source_unavailable",
+        "migration_source_database_stopped",
+        "migration_accepted_seal_unavailable",
+        "migration_data_contract_changed",
+        "migration_backup_write_failed",
+        "migration_backup_authentication_failed",
+        "migration_verifier_start_failed",
+        "migration_backup_restore_mismatch",
+        "migration_full_schema_mismatch",
+        "migration_docker_sql_failed",
+        "migration_pending_replay_unsupported",
+        "migration_sandbox_effect_changed",
+        "migration_storage_changed",
+        "migration_globals_changed",
+        "migration_target_changed",
+    }
+)
+
+
+def _failure_diagnostic(exc: BaseException, *, apply: bool) -> dict[str, str]:
+    """Private static metadata only: never stringify an exception or copy its class name."""
+    types = {
+        MigrationIOError: "MigrationIOError",
+        CellIdentityConflict: "CellIdentityConflict",
+        ValidationError: "ValidationError",
+        asyncio.CancelledError: "CancelledError",
+        TimeoutError: "TimeoutError",
+        OSError: "OSError",
+        RuntimeError: "RuntimeError",
+        ValueError: "ValueError",
+        TypeError: "TypeError",
+    }
+    result = {
+        "phase": "apply" if apply else "preparation",
+        "type": types.get(type(exc), "OtherError"),
+    }
+    if (
+        type(exc) is MigrationIOError
+        and len(exc.args) == 1
+        and type(exc.args[0]) is str
+        and exc.args[0] in PRIVATE_FAILURE_CODES
+    ):
+        result["code"] = exc.args[0]
+    return result
 
 
 def migration_active(record: dict[str, Any]) -> bool:
@@ -376,7 +426,8 @@ class PublicationMigrationService:
                     self._public(candidate)
                     self._save(candidate)
                     record.update(candidate)
-            except (Exception, asyncio.CancelledError):
+            except (Exception, asyncio.CancelledError) as exc:
+                record["failure_diagnostic"] = _failure_diagnostic(exc, apply=apply)
                 if record["effect_possible"]:
                     record.update(state="reconciling", error_code="migration_outcome_unknown")
                 else:

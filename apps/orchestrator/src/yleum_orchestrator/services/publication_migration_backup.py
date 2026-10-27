@@ -289,6 +289,37 @@ def final_postmaster_options(options: object) -> bool:
     )
 
 
+def _pinned_image_identity(value: object) -> tuple[str, str] | None:
+    """Normalize Docker Hub spelling only; keep repository and digest identities exact."""
+    if not isinstance(value, str) or len(value) > 512:
+        return None
+    component = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
+    match = re.fullmatch(
+        rf"({component}(?::[0-9]+)?(?:/{component})*)@sha256:([0-9a-f]{{64}})", value
+    )
+    if match is None:
+        return None
+    repository, digest = match.groups()
+    first, *rest = repository.split("/")
+    if first in ("docker.io", "index.docker.io"):
+        if not rest:
+            return None
+        repository = "/".join(rest)
+    elif "." in first or ":" in first or first == "localhost":
+        return repository, digest  # Other registries never alias Docker Hub.
+    if "/" not in repository:
+        repository = "library/" + repository
+    return "docker.io/" + repository, digest
+
+
+def _has_exact_local_image(reference: str, repo_digests: object) -> bool:
+    expected = _pinned_image_identity(reference)
+    if expected is None or not isinstance(repo_digests, list) or not repo_digests:
+        return False
+    identities = [_pinned_image_identity(item) for item in repo_digests]
+    return all(identity is not None for identity in identities) and expected in identities
+
+
 class RestoreSandbox(AbstractContextManager[DockerPG]):
     """New tmpfs only: neither a live volume nor a host path is ever accepted."""
 
@@ -313,7 +344,7 @@ class RestoreSandbox(AbstractContextManager[DockerPG]):
         # Never implicitly pull or retag: deployment must provision the actual image digest.
         image = self.client.images.get(self.image)
         require(
-            self.image in (image.attrs.get("RepoDigests") or []),
+            _has_exact_local_image(self.image, image.attrs.get("RepoDigests")),
             "migration_verifier_image_unavailable",
         )
         try:

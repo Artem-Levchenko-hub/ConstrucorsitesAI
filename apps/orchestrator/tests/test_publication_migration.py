@@ -87,6 +87,86 @@ async def test_prepare_is_durable_idempotent_and_public_projection_is_safe(tmp_p
     assert io.prepares == 1
 
 
+@pytest.mark.parametrize("code", [
+    "migration_verifier_image_untrusted", "migration_verifier_image_unavailable",
+    "migration_full_schema_mismatch", "migration_docker_sql_failed",
+])
+async def test_preparation_records_exact_owned_failure_code_privately(tmp_path, code):
+    from yleum_orchestrator.services.publication_migration_pg import MigrationIOError
+
+    service, _, io = setup(tmp_path)
+
+    async def failed(*args):
+        raise MigrationIOError(code)
+
+    io.prepare = failed
+    status = await prepared(service)
+    record = service._load(request().project_id, status.operation_id)
+    assert record["failure_diagnostic"] == {
+        "phase": "preparation", "type": "MigrationIOError",
+        "code": code,
+    }
+    assert status.state == "failed" and not status.effect_possible
+    assert status.error_code == "migration_preparation_failed"
+    assert "failure_diagnostic" not in status.model_dump_json()
+    assert code not in status.model_dump_json()
+
+
+@pytest.mark.parametrize(
+    "kind", ["owned_unknown", "multi_args", "foreign_owned_name", "private_type", "cancelled"]
+)
+async def test_failure_diagnostic_rejects_untrusted_messages_and_types(tmp_path, kind):
+    from yleum_orchestrator.services.publication_migration_pg import MigrationIOError
+
+    service, _, io = setup(tmp_path)
+    if kind == "owned_unknown":
+        error = MigrationIOError("migration_secret_canary_lowercase")
+        expected = "MigrationIOError"
+    elif kind == "multi_args":
+        error = MigrationIOError("migration_verifier_image_untrusted", "secret_canary")
+        expected = "MigrationIOError"
+    elif kind == "cancelled":
+        error = asyncio.CancelledError("secret_canary")
+        expected = "CancelledError"
+    else:
+        name = "MigrationIOError" if kind == "foreign_owned_name" else "secret_canary_type"
+        error = type(name, (Exception,), {"__str__": lambda _: pytest.fail("must not stringify")})(
+            "migration_verifier_image_untrusted", "secret_canary")
+        expected = "OtherError"
+
+    async def failed(*args):
+        raise error
+
+    io.prepare = failed
+    status = await prepared(service)
+    record = service._load(request().project_id, status.operation_id)
+    assert record["failure_diagnostic"] == {"phase": "preparation", "type": expected}
+    journal = service._path(request().project_id, status.operation_id).read_text()
+    assert "secret_canary" not in journal
+    assert status.state == "failed" and not status.effect_possible
+    assert status.error_code == "migration_preparation_failed"
+
+
+async def test_apply_exception_diagnostic_preserves_unknown_effect_exclusion(tmp_path):
+    service, _, io = setup(tmp_path)
+    status = await prepared(service)
+
+    async def failed(request, prepared, persist):
+        persist({"intent_xid": "12345", "effect_possible": True})
+        raise TimeoutError("private SQL URL secret_canary")
+
+    io.apply = failed
+    await service.confirm(request(), status.operation_id, status.plan_sha256, True)
+    await service.drain()
+    record = service._load(request().project_id, status.operation_id)
+    assert record["failure_diagnostic"] == {"phase": "apply", "type": "TimeoutError"}
+    assert record["state"] == "reconciling" and record["effect_possible"] is True
+    assert record["prepared"]["intent_xid"] == "12345"
+    assert record["error_code"] == "migration_outcome_unknown"
+    journal = service._path(request().project_id, status.operation_id).read_text()
+    assert "secret_canary" not in journal
+
+
 async def test_explicit_intent_exact_hash_and_request_binding_required(tmp_path):
     service, _, io = setup(tmp_path)
     status = await prepared(service)

@@ -178,8 +178,9 @@ def test_isolated_dispatch_settings_ignore_dotenv_and_keep_real_guard(monkeypatc
     os.environ.get("QA_MIGRATION_DOCKER_IMAGE") is None,
     reason="requires explicit disposable Docker CI image",
 )
+@pytest.mark.parametrize("fully_qualified_alias", [False, True])
 def test_network_none_restore_proves_full_schema_and_original_rows_before_and_after_plan(
-    monkeypatch,
+    monkeypatch, fully_qualified_alias,
 ):
     import docker
 
@@ -189,13 +190,18 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
         == "unix:///var/run/docker.sock"
     )
     image = os.environ["QA_MIGRATION_DOCKER_IMAGE"]
-    assert re.fullmatch(r"[^\s]+@sha256:[0-9a-f]{64}", image)
+    assert re.fullmatch(
+        r"(?:(?:docker\.io|index\.docker\.io)/)?(?:library/)?postgres@sha256:[0-9a-f]{64}", image
+    )
+    restore_image = (
+        "docker.io/library/postgres@" + image.split("@", 1)[1] if fully_qualified_alias else image
+    )
     configure_isolated_settings(monkeypatch)
     client = docker.DockerClient(base_url="unix:///var/run/docker.sock", timeout=20)
     diagnose_first_empty_sandbox(monkeypatch, client)
     project = uuid4()
     source = RestoreSandbox(client, project, uuid4(), image)
-    restored = RestoreSandbox(client, project, uuid4(), image)
+    restored = RestoreSandbox(client, project, uuid4(), restore_image)
     try:
         with source as live:
             live.sql(
@@ -243,6 +249,8 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
             live.sql(plan)
             after = live.full_schema()
             with restored as verify:
+                assert restored.container.image.id == source.container.image.id
+                assert restored.container.attrs["Config"]["Image"] == restore_image
                 restore_backup(verify, packed)
                 assert verify.full_schema() == before
                 assert row_proofs(verify, tables) == rows

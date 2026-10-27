@@ -40,6 +40,8 @@ export function MaxDataMigration({ projectId, snapshotId }: { projectId: string;
   const uncertain = Boolean(record?.effect_possible) || record?.state === "reconciling";
   const busy = prepare.isPending || confirm.isPending || Boolean(record && ACTIVE.has(record.state));
   const unexpired = Boolean(record?.expires_at && Date.parse(record.expires_at) > now);
+  const stalePreparation = Boolean(record && (!current || record.state === "stale" ||
+    record.state === "prepared" && !unexpired));
   const canConfirm = current && record?.state === "prepared" && record.backup_verified &&
     !uncertain && unexpired && Boolean(record.plan_sha256) && !status.isError && !confirm.isError && !busy;
   const needsObservation = status.isError || prepare.isError || confirm.isError;
@@ -87,7 +89,7 @@ export function MaxDataMigration({ projectId, snapshotId }: { projectId: string;
         <Button onClick={() => confirm.mutate({ operation: record!.operation_id, plan: record!.plan_sha256! })}>Применить изменения данных</Button>
       </> : <>
         <p>Перед обновлением нужна проверенная резервная копия. Проверка сначала восстановит её в отдельной среде и проверит сохранность записей.</p>
-        {record && <p role="status">{!current || record.state === "stale" || !unexpired ? "Версия или срок проверки изменились. Нужна новая проверка." : "Проверку не удалось подтвердить. Опубликованная версия продолжает работать."}</p>}
+        {record && <p role="status">{stalePreparation ? "Версия или срок проверки изменились. Нужна новая проверка." : "Проверку не удалось подтвердить. Опубликованная версия продолжает работать."}</p>}
         {!needsObservation && <Button onClick={startPreparation}>Проверить и создать копию</Button>}
       </>}
     {needsObservation && <div role="alert"><p>Не удалось получить подтверждённый результат. Сначала уточните состояние проверки.</p><Button variant="outline" disabled={status.isFetching} onClick={() => void observe()}>Уточнить статус</Button></div>}
