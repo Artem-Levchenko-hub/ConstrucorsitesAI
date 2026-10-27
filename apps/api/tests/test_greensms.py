@@ -36,7 +36,8 @@ async def test_green_sms_posts_one_private_request_and_masks_otp_in_provider_his
         assert form["to"] == ["79991234567"]
         assert form["from"] == ["GREENSMS"]
         assert form["hidden"] == ["123456"]
-        assert form["txt"] == ["Yleum: код 123456. Никому не сообщайте. Действует 10 минут."]
+        # Green SMS's no-monthly-fee route only accepts the confirmation template.
+        assert form["txt"] == ["Ваш код подтверждения: 123456"]
         assert len(form["txt"][0]) <= 70
         assert "user" not in form and "pass" not in form
         return httpx.Response(200, json={"request_id": receipt})

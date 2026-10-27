@@ -54,7 +54,7 @@ async def send_verification_sms(
             data={
                 "to": phone.removeprefix("+"),
                 "from": settings.greensms_sender.strip(),
-                "txt": f"Yleum: код {code}. Никому не сообщайте. Действует 10 минут.",
+                "txt": f"Ваш код подтверждения: {code}",
                 "hidden": code,
             },
             follow_redirects=False,
