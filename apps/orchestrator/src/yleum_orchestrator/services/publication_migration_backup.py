@@ -294,7 +294,8 @@ class RestoreSandbox(AbstractContextManager[DockerPG]):
                 "-c",
                 "listen_addresses=",
                 "-c",
-                "unix_socket_directories=/tmp",
+                # Entrypoint initialization uses libpq's default socket; clients use /tmp.
+                "unix_socket_directories=/tmp,/var/run/postgresql",
                 "-c",
                 "shared_buffers=16MB",
                 "-c",
