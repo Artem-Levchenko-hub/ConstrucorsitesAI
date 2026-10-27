@@ -30,7 +30,7 @@ _NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _SUFFIX = re.compile(r"^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 _WORKSPACE_PATH = re.compile(r"^/internal/workspaces/([0-9a-fA-F-]{36})(?:/|$)")
 _PUBLICATION_PATH = re.compile(
-    r"^/internal/projects/([0-9a-fA-F-]{36})/(?:cell-deploy|deploy)(?:/|$)"
+    r"^/internal/projects/([0-9a-fA-F-]{36})/(?:cell-deploy|deploy|publication-migrations)(?:/|$)"
 )
 _CACHE_LIMIT = 8192
 
@@ -256,8 +256,10 @@ async def host_for_path(path: str) -> str | None:
     """Route an internal orchestrator call by the identity in its path.
 
     `/internal/workspaces/<id>/…` follows the workspace; a project's publication
-    (`/internal/projects/<id>/cell-deploy…`, `…/deploy…`) follows the cell of that
-    project. Everything else (legacy slug-keyed runtime, capabilities, health)
+    (`/internal/projects/<id>/cell-deploy`, `…/deploy`, `…/publication-migrations`,
+    including nested operation/confirmation paths) follows the cell of that
+    project. Route families require a slash or end boundary. Everything else
+    (legacy slug-keyed runtime, capabilities, health)
     stays on the default host. Returns None when nothing is configured.
     """
     reg = registry()

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 from uuid import UUID, uuid4
 
+import httpx
 import pytest
 from pydantic import SecretStr
 
@@ -184,6 +185,7 @@ async def test_single_host_mode_never_looks_anything_up(monkeypatch: pytest.Monk
 
     monkeypatch.setattr(orchestrator_hosts, "_lookup", explode)
     assert await host_for_path(f"/internal/workspaces/{uuid4()}/agent/exec") is None
+    assert await host_for_path(f"/internal/projects/{uuid4()}/publication-migrations") is None
     assert await host_for_workspace(uuid4()) == "core"
 
 
@@ -255,6 +257,84 @@ async def test_transport_targets_the_bound_host(monkeypatch: pytest.MonkeyPatch)
         f"http://10.10.0.3:8003/internal/workspaces/{workspace}/resources",
         "http://172.19.0.1:8003/internal/health-ish",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("binding", ["cached", "database"])
+async def test_migration_clients_follow_project_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    binding: str,
+) -> None:
+    _configure(monkeypatch, TWO_HOSTS)
+    workspace, project, owner, operation = (uuid4() for _ in range(4))
+    queries = []
+
+    class Session:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_):
+            pass
+
+        async def execute(self, statement):
+            queries.append(statement)
+            assert list(statement.compile().params.values()) == [project]
+            assert statement.whereclause.left.name == "project_id"
+            return SimpleNamespace(first=lambda: (workspace, project, "commerce"))
+
+    # Exercise the real ORM lookup and cache path; only the DB driver is substituted.
+    monkeypatch.setattr(orchestrator_hosts, "_session_factory", lambda: Session)
+    if binding == "cached":
+        remember_workspace_host(workspace, project, "commerce")
+    requests = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(200, json={"migration": None})
+
+    real_client = httpx.AsyncClient
+    monkeypatch.setattr(
+        orchestrator_client.httpx,
+        "AsyncClient",
+        lambda **kwargs: real_client(
+            transport=httpx.MockTransport(respond),
+            **kwargs,
+        ),
+    )
+    payload = {"owner_id": str(owner), "snapshot_id": str(uuid4())}
+    await orchestrator_client.get_publication_migration(project, owner)
+    await orchestrator_client.prepare_publication_migration(project, payload)
+    await orchestrator_client.confirm_publication_migration(project, operation, payload)
+    base = f"/internal/projects/{project}/publication-migrations"
+    assert [(r.method, r.url.host, r.url.path) for r in requests] == [
+        ("GET", "10.10.0.3", base),
+        ("POST", "10.10.0.3", base),
+        ("POST", "10.10.0.3", f"{base}/{operation}/confirm"),
+    ]
+    assert dict(requests[0].url.params) == {"owner_id": str(owner)}
+    assert [json.loads(r.content) for r in requests[1:]] == [payload, payload]
+    assert await host_for_path(f"{base}/{operation}") == "commerce"
+    assert len(queries) == (1 if binding == "database" else 0)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "family",
+    [
+        "publication-migrations-extra",
+        "publication-migrations2",
+        "publication-migration",
+        "agent/build",
+    ],
+)
+async def test_migration_route_requires_exact_family_boundary(
+    monkeypatch: pytest.MonkeyPatch,
+    family: str,
+) -> None:
+    _configure(monkeypatch, TWO_HOSTS)
+    project = uuid4()
+    remember_workspace_host(uuid4(), project, "commerce")
+    assert await host_for_path(f"/internal/projects/{project}/{family}") == "core"
 
 
 # ------------------------------------------------------------------ previews
