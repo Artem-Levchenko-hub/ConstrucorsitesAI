@@ -14,6 +14,18 @@ def implementation():
     return importlib.import_module(name)
 
 
+def test_administrator_psql_uses_catalog_only_search_path_at_startup():
+    import shlex
+
+    options = shlex.split(implementation().psql_command()[1].removeprefix("PGOPTIONS="))
+    settings = dict(
+        value.split("=", 1)
+        for flag, value in zip(options[::2], options[1::2], strict=True)
+        if flag == "-c"
+    )
+    assert settings["search_path"] == "pg_catalog"
+
+
 @pytest.mark.parametrize(
     "file_contents, accepted",
     [("16\n", True), ("16\r\n", True), ("16", True),

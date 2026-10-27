@@ -30,6 +30,8 @@ LEDGER = "__omnia_project_migrations"
 MIGRATION_PGOPTIONS = (
     TRUSTED_ADMIN_PGOPTIONS + " -c timezone=UTC -c datestyle=ISO,YMD -c extra_float_digits=3"
     " -c statement_timeout=45000 -c lock_timeout=5000"
+    # Set this at startup, before even catalog probes can resolve public overloads.
+    " -c search_path=pg_catalog"
 )
 
 

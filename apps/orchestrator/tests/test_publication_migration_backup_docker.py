@@ -249,8 +249,90 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
                 verify.sql(plan)
                 assert verify.full_schema() == after
                 assert row_proofs(verify, tables) == rows
-                verify.sql("INSERT INTO orders(id,amount,pickup) VALUES(3,270,'now');")
-                assert verify.json("SELECT count(*) FROM orders;") == 3
+                verify.sql("INSERT INTO public.orders(id,amount,pickup) VALUES(3,270,'now');")
+                assert verify.json("SELECT count(*) FROM public.orders;") == 3
         assert source.cleaned and restored.cleaned
+    finally:
+        client.close()
+
+
+@pytest.mark.skipif(
+    os.environ.get("QA_MIGRATION_DOCKER_IMAGE") is None,
+    reason="requires explicit disposable Docker CI image",
+)
+def test_catalog_observers_never_execute_public_aggregate_overloads(monkeypatch):
+    import docker
+
+    from yleum_orchestrator.services.publication_migration_pg import (
+        MigrationIOError,
+        pg_identity,
+        psql_command,
+        verify_ledger,
+    )
+    from yleum_orchestrator.services.restoration_database import TRUSTED_ADMIN_PGOPTIONS
+
+    assert os.environ.get("CI") == "true" and os.name == "posix"
+    assert os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock") == (
+        "unix:///var/run/docker.sock"
+    )
+    image = os.environ["QA_MIGRATION_DOCKER_IMAGE"]
+    assert re.fullmatch(r"(?:(?:docker\.io/)?library/)?postgres@sha256:[0-9a-f]{64}", image)
+    configure_isolated_settings(monkeypatch)
+    client = docker.DockerClient(base_url="unix:///var/run/docker.sock", timeout=20)
+    diagnose_first_empty_sandbox(monkeypatch, client)
+    sandbox = RestoreSandbox(client, uuid4(), uuid4(), image)
+    try:
+        assert client.info()["OSType"] == "linux"
+        with sandbox as pg:
+            pg.sql(
+                "CREATE SEQUENCE public.observer_invocations;"
+                "CREATE TABLE public.orders(id bigint PRIMARY KEY, amount integer NOT NULL);"
+                "CREATE TABLE public.__omnia_project_migrations(name text PRIMARY KEY,"
+                "sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now());"
+            )
+            for sql_type in ("name", "json", "text"):
+                pg.sql(
+                    f"CREATE FUNCTION public.spy_{sql_type}(acc bigint,item pg_catalog.{sql_type}) "
+                    "RETURNS bigint LANGUAGE plpgsql AS $body$ BEGIN "
+                    "PERFORM pg_catalog.nextval("
+                    "'public.observer_invocations'::pg_catalog.regclass);"
+                    "RETURN acc+1; END; $body$;"
+                    f"CREATE AGGREGATE public.json_agg(pg_catalog.{sql_type}) "
+                    f"(SFUNC=public.spy_{sql_type},STYPE=pg_catalog.int8,INITCOND='0');"
+                )
+
+            def untouched():
+                return (
+                    pg.json(
+                        "SELECT pg_catalog.to_json(NOT is_called) FROM public.observer_invocations;"
+                    )
+                    is True
+                )
+
+            assert pg_identity(pg)["pg_version"] == "16"
+            assert verify_ledger(pg, required=True)
+            assert [table.name for table in read_catalog(pg)] == ["orders"]
+            assert untouched(), "strict observers executed an untrusted transition function"
+
+            class UnsafeOldOptions:
+                def json(self, sql):
+                    # Explicit old-startup control only inside this fresh nonce-owned DB.
+                    # The nested env overrides the safe wrapper for this one QA command.
+                    output = pg.command(
+                        ["env", "PGOPTIONS=" + TRUSTED_ADMIN_PGOPTIONS, *psql_command()[6:]],
+                        data=sql.encode(),
+                    )
+                    return json.loads(output)
+
+            with pytest.raises(MigrationIOError):
+                pg_identity(UnsafeOldOptions())
+            assert not untouched(), "unsafe control did not actually execute the public overload"
+            pg.sql("ALTER SEQUENCE public.observer_invocations RESTART WITH 1;")
+            assert untouched()
+            assert pg_identity(pg)["pg_version"] == "16"
+            assert verify_ledger(pg, required=True)
+            assert [table.name for table in read_catalog(pg)] == ["orders"]
+            assert untouched(), "fixed observers executed the public overload after control"
+        assert sandbox.cleaned
     finally:
         client.close()
