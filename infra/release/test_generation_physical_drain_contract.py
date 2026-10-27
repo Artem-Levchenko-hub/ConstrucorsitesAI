@@ -232,6 +232,8 @@ class PhysicalContractTests(unittest.TestCase):
         (proc / "1/task/1").mkdir(parents=True)
         (proc / "1/cgroup").write_text("0::/init.scope\n")
         (proc / "1/task/1/cgroup").write_text("0::/init.scope\n")
+        for member in (proc / "1", proc / "1/task/1"):
+            (member / "stat").write_text("1 (fixture) S " + "0 " * 18 + "100\n")
         (proc / "sys/kernel/random").mkdir(parents=True)
         (proc / "sys/kernel/random/boot_id").write_text(WORKSPACE)
         (proc / "container-namespace").write_text("container namespace")
@@ -322,6 +324,9 @@ class PhysicalContractTests(unittest.TestCase):
             os.link(proc / "container-namespace", directory / "ns/pid")
             fields = ["S", str(parent), *(["0"] * 17), str(1000 + pid)]
             (directory / "stat").write_text(f"{pid} (fixture) " + " ".join(fields))
+            (directory / "task" / str(pid) / "stat").write_text(
+                f"{pid} (fixture) " + " ".join(fields)
+            )
             (directory / "status").write_text(
                 f"Pid:\t{pid}\nTgid:\t{pid}\nNSpid:\t{pid}\t{pid - 99}\nNoNewPrivs:\t1\n"
                 + "".join(
@@ -388,6 +393,114 @@ class PhysicalContractTests(unittest.TestCase):
                     self.assertRaises(self.module.PhysicalDrainError),
                 ):
                     self.module.require_physical_writers_drained(state, client)
+
+    def test_stopped_race_restarts_both_samples_and_docker_observations(self):
+        for kind in ("process", "task"):
+            for failing_sample in (1, 2):
+                with self.subTest(kind=kind, sample=failing_sample), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    state, proc, groups, client, container, _ = self.kernel_fixture(
+                        root, service=False, group="owned"
+                    )
+                    container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+                    container.attrs["HostConfig"]["CgroupParent"] = ""
+                    task = proc / "100/task/101"
+                    task.mkdir()
+                    (task / "stat").write_text("101 (fixture) S " + "0 " * 18 + "100\n")
+                    (task / "cgroup").write_text("0::/owned\n")
+                    samples, group_scans = [], []
+                    container.reload = lambda: samples.append(True)
+                    original_iterdir, original_read = Path.iterdir, self.module._kernel_read
+
+                    def scan(path):
+                        if path == groups:
+                            group_scans.append(True)
+                        if kind == "process" and path == proc / "100/task" and len(samples) == failing_sample:
+                            (proc / "100").rename(root / "retired")
+                        return original_iterdir(path)
+
+                    def read(path):
+                        if kind == "task" and path == task / "cgroup" and len(samples) == failing_sample:
+                            task.rename(root / "retired")
+                        return original_read(path)
+
+                    with patch.object(self.module, "_PROC_ROOT", proc), patch.object(
+                        self.module, "_CGROUP_ROOT", groups
+                    ), patch.object(Path, "iterdir", scan), patch.object(self.module, "_kernel_read", read):
+                        self.module._require_current_command_absence(state, client, [container])
+                    self.assertEqual(len(samples), failing_sample + 2)
+                    self.assertEqual(len(group_scans), failing_sample + 2)
+
+    def test_stopped_scan_live_missing_file_reuse_permission_and_cgroup_error_do_not_retry(self):
+        for damage in ("membership", "permission", "reuse", "cgroup", "docker_timeout"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as tmp:
+                state, proc, groups, client, container, _ = self.kernel_fixture(
+                    Path(tmp), service=False, group="owned"
+                )
+                container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+                container.attrs["HostConfig"]["CgroupParent"] = ""
+                samples = []
+
+                def reload():
+                    samples.append(True)
+                    if damage == "docker_timeout":
+                        raise TimeoutError("synthetic Docker timeout")
+
+                container.reload = reload
+                original_read, original_iterdir = self.module._kernel_read, Path.iterdir
+
+                def read(path):
+                    if path == proc / "100/cgroup":
+                        if damage == "membership":
+                            raise FileNotFoundError("live membership missing")
+                        if damage == "permission":
+                            raise PermissionError("denied")
+                        if damage == "reuse":
+                            (proc / "100/stat").write_text("100 (new) S " + "0 " * 18 + "999\n")
+                    return original_read(path)
+
+                def scan(path):
+                    if damage == "cgroup" and path == groups / "owned":
+                        raise FileNotFoundError("cgroup missing")
+                    return original_iterdir(path)
+
+                with patch.object(self.module, "_PROC_ROOT", proc), patch.object(
+                    self.module, "_CGROUP_ROOT", groups
+                ), patch.object(self.module, "_kernel_read", read), patch.object(Path, "iterdir", scan):
+                    with self.assertRaises(self.module.PhysicalDrainError):
+                        self.module._require_current_command_absence(state, client, [container])
+                self.assertEqual(len(samples), 1)
+
+    def test_stopped_process_race_exhaustion_is_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state, proc, groups, client, container, _ = self.kernel_fixture(
+                root, service=False, group="owned"
+            )
+            container.attrs["State"].update(Status="exited", Running=False, Pid=0)
+            container.attrs["HostConfig"]["CgroupParent"] = ""
+            samples = []
+
+            def reload():
+                samples.append(True)
+                if not (proc / "100").exists():
+                    (proc / "100/task/100").mkdir(parents=True)
+                    (proc / "100/stat").write_text("100 (new) S " + "0 " * 18 + "100\n")
+
+            container.reload = reload
+            original = Path.iterdir
+
+            def scan(path):
+                if path == proc / "100/task":
+                    (proc / "100").rename(root / f"retired-{len(samples)}")
+                return original(path)
+
+            with patch.object(self.module, "_PROC_ROOT", proc), patch.object(
+                self.module, "_CGROUP_ROOT", groups
+            ), patch.object(Path, "iterdir", scan):
+                with self.assertRaises(self.module.ProcessDisappeared):
+                    self.module._require_current_command_absence(state, client, [container])
+            self.assertEqual(len(samples), 5)
 
     def test_stopped_development_requires_kernel_absence(self):
         for damage in (

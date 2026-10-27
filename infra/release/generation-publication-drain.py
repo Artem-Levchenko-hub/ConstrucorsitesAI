@@ -328,6 +328,29 @@ def _docker_cgroup_id(parts) -> str | None:
     return found[0] if found else None
 
 
+def _process_memberships(process: Path, inventory_reason: str):
+    """Read every member under exact PID/start proof; never skip a disappearing row."""
+    _kernel_need(not process.is_symlink(), "process_path")
+    with _observed_process(process):
+        start = _process_start(process)
+        tasks = list((process / "task").iterdir())
+    _kernel_need(any(task.name == process.name for task in tasks), inventory_reason)
+    for member in [process, *tasks]:
+        _kernel_need(member.name.isdecimal() and not member.is_symlink(), "process_path")
+        with _observed_process(member):
+            member_start = _process_start(member)
+            membership = _kernel_read(member / "cgroup").decode("ascii").strip()
+            _kernel_need(
+                _process_start(member) == member_start, "quiescence_process_identity_changed"
+            )
+        _kernel_need(
+            membership.startswith("0::/") and "\n" not in membership, "cgroup_v2_required"
+        )
+        yield membership
+    with _observed_process(process):
+        _kernel_need(_process_start(process) == start, "quiescence_process_identity_changed")
+
+
 def _require_no_orphan_docker_processes(known_ids: set[str]) -> dict:
     """Complete host scope, including tasks and nested membership; root only."""
     boot = _kernel_boot_id()
@@ -350,36 +373,10 @@ def _require_no_orphan_docker_processes(known_ids: set[str]) -> dict:
     for process in _PROC_ROOT.iterdir():
         if not process.name.isdecimal():
             continue
-        _kernel_need(not process.is_symlink(), "process_path")
-        with _observed_process(process):
-            start = _process_start(process)
-            tasks = list((process / "task").iterdir())
-        _kernel_need(
-            any(task.name == process.name for task in tasks),
-            "quiescence_task_inventory",
-        )
-        for member in [process, *tasks]:
-            _kernel_need(
-                member.name.isdecimal() and not member.is_symlink(), "process_path"
-            )
-            with _observed_process(member):
-                member_start = _process_start(member)
-                membership = _kernel_read(member / "cgroup").decode("ascii").strip()
-                _kernel_need(
-                    _process_start(member) == member_start,
-                    "quiescence_process_identity_changed",
-                )
-            _kernel_need(
-                membership.startswith("0::/") and "\n" not in membership,
-                "cgroup_v2_required",
-            )
+        for membership in _process_memberships(process, "quiescence_task_inventory"):
             identity = _docker_cgroup_id(Path(membership[3:]).parts)
             _kernel_need(
                 identity is None or identity in known_ids, "quiescence_orphan_process"
-            )
-        with _observed_process(process):
-            _kernel_need(
-                _process_start(process) == start, "quiescence_process_identity_changed"
             )
     _kernel_need(_kernel_boot_id() == boot, "host_boot_changed")
     return {"boot_id": boot, "no_orphan_docker_membership": True}
@@ -739,7 +736,8 @@ def _stopped_kernel_absence(container_id: str):
     """Default Docker cgroup namespace only; any matching residual denies.
 
     Read every cgroup directory and process membership, including nested groups.
-    Failed or racing reads cannot establish absence. No process is signalled.
+    Only a proven process disappearance permits a fresh complete attempt.
+    Other failed/racing reads cannot establish absence. No process is signalled.
     """
     boot = _kernel_boot_id()
     names = {container_id, "docker-" + container_id + ".scope"}
@@ -755,20 +753,7 @@ def _stopped_kernel_absence(container_id: str):
     for process in _PROC_ROOT.iterdir():
         if not process.name.isdecimal():
             continue
-        _kernel_need(not process.is_symlink(), "process_path")
-        tasks = list((process / "task").iterdir())
-        _kernel_need(
-            any(task.name == process.name for task in tasks), "stopped_task_inventory"
-        )
-        for member in [process, *tasks]:
-            _kernel_need(
-                member.name.isdecimal() and not member.is_symlink(), "process_path"
-            )
-            membership = _kernel_read(member / "cgroup").decode("ascii").strip()
-            _kernel_need(
-                membership.startswith("0::/") and "\n" not in membership,
-                "cgroup_v2_required",
-            )
+        for membership in _process_memberships(process, "stopped_task_inventory"):
             _kernel_need(
                 not (set(Path(membership[3:]).parts) & names), "stopped_process_present"
             )
@@ -997,14 +982,21 @@ def _require_current_command_absence(
     Called solely after strict terminal journal validation and exact Docker404.
     External admission/ingress closure must span this read-only sample.
     """
-    try:
-        first = [_command_absence_sample(client, state_parent, c) for c in containers]
-        second = [_command_absence_sample(client, state_parent, c) for c in containers]
-        _kernel_need(first == second, "current command absence sample changed")
-    except PhysicalDrainError:
-        raise
-    except Exception as exc:
-        raise PhysicalDrainError("current command absence is unknown") from exc
+    for attempt in range(5):
+        try:
+            # Retry only a proven exit, discarding BOTH samples and every Docker/
+            # cgroup observation. A missing live entry or PID reuse is not an exit.
+            first = [_command_absence_sample(client, state_parent, c) for c in containers]
+            second = [_command_absence_sample(client, state_parent, c) for c in containers]
+            _kernel_need(first == second, "current command absence sample changed")
+            return
+        except ProcessDisappeared:
+            if attempt == 4:
+                raise
+        except PhysicalDrainError:
+            raise
+        except Exception as exc:
+            raise PhysicalDrainError("current command absence is unknown") from exc
 
 
 def _journal(path: Path) -> dict | None:

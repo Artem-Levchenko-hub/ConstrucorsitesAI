@@ -322,6 +322,160 @@ class ProcessObservationRetryTests(unittest.TestCase):
                     self.checker._process_start(path)
 
 
+class StoppedProcessObservationRetryTests(unittest.TestCase):
+    """Portable real /proc fixture; Docker sample boundary remains independently checked."""
+
+    setUp = ProcessObservationRetryTests.setUp
+    process = ProcessObservationRetryTests.process
+
+    def observe(self):
+        self.samples = []
+
+        def sample(*_):
+            self.samples.append(True)
+            return self.checker._stopped_kernel_absence("a" * 64)
+
+        with patch.object(self.checker, "_command_absence_sample", sample):
+            self.checker._require_current_command_absence(self.root, None, [None])
+
+    def race(self, *, task=False, second=False):
+        original_iterdir, original_read = Path.iterdir, self.checker._kernel_read
+        scans = []
+        victim = self.proc / ("42/task/77" if task else "42")
+        if task:
+            victim.mkdir()
+            (victim / "stat").write_text("77 (fixture) S " + "0 " * 18 + "100\n")
+            (victim / "cgroup").write_text("0::/init.scope\n")
+        failing_sample = 2 if second else 1
+
+        def scan(path):
+            if path == self.groups:
+                scans.append(True)
+            if not task and path == victim / "task" and len(self.samples) == failing_sample:
+                victim.rename(self.root / "retired")
+            return original_iterdir(path)
+
+        def read(path):
+            if task and path == victim / "cgroup" and len(self.samples) == failing_sample:
+                victim.rename(self.root / "retired")
+            return original_read(path)
+
+        with patch.object(Path, "iterdir", scan), patch.object(self.checker, "_kernel_read", read):
+            self.observe()
+        self.assertEqual(len(self.samples), failing_sample + 2)
+        self.assertEqual(len(scans), failing_sample + 2)
+
+    def test_gone_process_restarts_complete_pair(self):
+        self.race()
+
+    def test_second_sample_process_exit_discards_first_sample(self):
+        self.race(second=True)
+
+    def test_gone_task_restarts_complete_pair(self):
+        self.race(task=True)
+
+    def test_second_sample_task_exit_discards_first_sample(self):
+        self.race(task=True, second=True)
+
+    def test_live_membership_missing_is_not_retried(self):
+        (self.proc / "42/cgroup").unlink()
+        with self.assertRaises(self.checker.PhysicalDrainError) as caught:
+            self.observe()
+        self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
+        self.assertEqual(len(self.samples), 1)
+
+    def test_start_identity_change_is_not_retried(self):
+        original = self.checker._kernel_read
+
+        def read(path):
+            result = original(path)
+            if path == self.proc / "42/cgroup":
+                (self.proc / "42/stat").write_text("42 (new) S " + "0 " * 18 + "999\n")
+            return result
+
+        with patch.object(self.checker, "_kernel_read", read), self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "process_identity_changed"
+        ):
+            self.observe()
+        self.assertEqual(len(self.samples), 1)
+
+    def test_repeated_process_exit_stops_after_five_complete_attempts(self):
+        original = Path.iterdir
+
+        def scan(path):
+            if path == self.proc and not (self.proc / "42").exists():
+                self.process(42)
+            elif path == self.proc / "42/task":
+                (self.proc / "42").rename(self.root / f"retired-{len(self.samples)}")
+            return original(path)
+
+        with patch.object(Path, "iterdir", scan), self.assertRaises(self.checker.ProcessDisappeared):
+            self.observe()
+        self.assertEqual(len(self.samples), 5)
+
+    def test_permission_and_missing_cgroup_directory_are_not_retried(self):
+        original = Path.iterdir
+        for failure in (PermissionError("denied"), FileNotFoundError("missing cgroup")):
+            def scan(path):
+                if path == self.groups:
+                    raise failure
+                return original(path)
+
+            with patch.object(Path, "iterdir", scan), self.assertRaises(
+                self.checker.PhysicalDrainError
+            ) as caught:
+                self.observe()
+            self.assertIs(caught.exception.__cause__, failure)
+            self.assertEqual(len(self.samples), 1)
+
+    def test_unknown_process_and_docker_timeout_do_not_retry_sample(self):
+        for failure in (self.checker.PhysicalDrainError("unknown_process"), TimeoutError("Docker")):
+            with patch.object(self.checker, "_command_absence_sample", side_effect=failure) as sample:
+                with self.assertRaises(self.checker.PhysicalDrainError) as caught:
+                    self.checker._require_current_command_absence(self.root, None, [None])
+            self.assertEqual(sample.call_count, 1)
+            if isinstance(failure, self.checker.PhysicalDrainError):
+                self.assertIs(caught.exception, failure)
+            else:
+                self.assertIs(caught.exception.__cause__, failure)
+
+    def test_restart_observes_new_residual_instead_of_skipping_lost_process(self):
+        original = Path.iterdir
+
+        def scan(path):
+            if path == self.proc / "42/task":
+                (self.proc / "42").rename(self.root / "retired")
+                (self.groups / ("docker-" + "a" * 64 + ".scope")).mkdir()
+            return original(path)
+
+        with patch.object(Path, "iterdir", scan), self.assertRaisesRegex(
+            self.checker.PhysicalDrainError, "stopped_cgroup_present"
+        ):
+            self.observe()
+        self.assertEqual(len(self.samples), 2)
+
+    def test_missing_task_membership_in_live_task_and_task_reuse_are_not_retried(self):
+        member = self.proc / "42/task/42"
+        original = self.checker._kernel_read
+        for reuse in (False, True):
+            def read(path):
+                if path == member / "cgroup":
+                    if not reuse:
+                        raise FileNotFoundError("live task membership missing")
+                    (member / "stat").write_text("42 (new) S " + "0 " * 18 + "999\n")
+                return original(path)
+
+            with patch.object(self.checker, "_kernel_read", read), self.assertRaises(
+                self.checker.PhysicalDrainError
+            ) as caught:
+                self.observe()
+            if reuse:
+                self.assertEqual(str(caught.exception), "quiescence_process_identity_changed")
+            else:
+                self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
+            self.assertEqual(len(self.samples), 1)
+
+
 @unittest.skipUnless(
     AVAILABLE and os.name == "posix" and os.geteuid() == 0,
     "requires root Linux fixture and cached orchestrator dependencies",
