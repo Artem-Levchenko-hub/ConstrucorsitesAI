@@ -74,6 +74,31 @@ Ubuntu 24.04.5, ядро 6.8.0-139, пользователь `zeuszcz` (sudo б�
   kubeconfig и `ARTIFACT_BASE_URL` (откуда init-контейнеры качают тёплые артефакты; ufw на core
   открывает 8003 для `10.10.0.0/24` и pod-сети runtime `10.44.0.0/16`). Сам флаг
   `PUBLICATION_BACKEND` эти фазы не включают.
+- **Чтение PV для безопасной миграции публикации** — отдельный шаг после успешного
+  canonical FULL release целевой ревизии. Из корня чистого checkout этой же ревизии,
+  с существующим admin kubeconfig и поднятым штатным `kube-tunnel.sh`:
+  ```bash
+  export KUBECONFIG="$HOME/.kube/max-studio.yaml"
+  python3 infra/release/publication-migration-access.py --expected-revision "$TARGET_SHA" --check
+  # Только если проверка сообщает grant_absent и создание согласовано:
+  python3 infra/release/publication-migration-access.py --expected-revision "$TARGET_SHA" --apply
+  python3 infra/release/publication-migration-access.py --expected-revision "$TARGET_SHA" --check
+  ```
+  `TARGET_SHA` — полный SHA доставленного релиза, не произвольный текущий HEAD.
+  Контекст жёстко задан `max-runtime`. Helper создаёт только отсутствующие
+  `ClusterRole` и `ClusterRoleBinding` `omnia-orchestrator-publication-pv-reader`:
+  единственное право `get persistentvolumes`, существующий SA
+  `max-system/omnia-orchestrator`. Старые RBAC, токен и kubeconfig не изменяются.
+  Drift любого объекта блокирует запись; потеря ответа на create не повторяется.
+  После частичного/неопределённого результата сначала выполнить read-only `--check`
+  и проверить оба объекта; повторный `--apply` — отдельное осознанное действие.
+  Проверить от имени SA: `get persistentvolumes=yes`, а
+  `list/watch/create/update/patch/delete/deletecollection persistentvolumes=no`;
+  затем повторить read-only production `KubernetesPG.identify()` probe.
+  Для rollback администратор сначала сверяет UID, точные owner-labels, rules,
+  roleRef и subject обоих новых объектов с helper и сохранённой метаинформацией;
+  удаляет только этот binding с UID precondition, затем эту role с UID precondition.
+  Чужие или изменённые объекты не удалять. Старый publisher binding не трогать.
 - **Второй хост ячеек агента** (Фаза 3, этап B) — commerce с тем же Docker-стеком, что на core:
   `cells/10-cell-host-prep.sh` (servicelb off, публичный IP на lo, Docker mtu 1400, nginx-catch-all,
   acme.sh, uv, каталоги, ufw: контейнеры/ячейки/WG → 8003 и 80/443) и `cells/20-cell-host-orchestrator.sh`
