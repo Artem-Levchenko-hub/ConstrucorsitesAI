@@ -2,10 +2,10 @@ import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="Политика конфиденциальности" updated="26 октября 2026">
+    <LegalPage title="Политика конфиденциальности" updated="27 октября 2026">
       <LegalSection title="1. О документе">
         <p>
-          <a href="/legal/archive/2026-10-07/privacy">Предыдущая редакция от 7 октября 2026</a>.
+          <a href="/legal/archive/2026-10-26/privacy">Предыдущая редакция от 26 октября 2026</a>.
         </p>
         <p>
           Политика описывает обработку данных пользователей Yleum и
@@ -56,7 +56,7 @@ export default function PrivacyPage() {
         </p>
         <p>
           Для доставки одноразового кода номер телефона и сообщение с кодом
-          передаются сервису SMS Aero. Код действует 10 минут; Yleum не хранит
+          передаются сервису Green SMS. Код действует 10 минут; Yleum не хранит
           его в открытом виде.
         </p>
         <p>

@@ -230,7 +230,7 @@ export async function maxRegisterAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-26",
+      process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-27",
   });
   if (error) return { error };
   return { error: null, registered: { phone, email, next: safeNext(formData.get("next")) ?? DEFAULT_LANDING } };
@@ -265,7 +265,7 @@ export async function oauthCompleteAction(
     personal_data_accepted: true,
     marketing_accepted: formData.get("marketing_accepted") === "on",
     document_version:
-      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-26",
+      documentVersion || process.env.NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION || "2026-10-27",
   });
   if (error) return { error };
   redirect(safeNext(formData.get("next")) ?? DEFAULT_LANDING);

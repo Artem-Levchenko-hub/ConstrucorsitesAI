@@ -42,7 +42,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     // Same-origin requests are relative ("/api/..."), so resolve like a browser.
     const path = new URL(url, window.location.origin).pathname;
-    if (path === "/api/max/account/access") return Response.json({ authenticated: true, email_verified: true, email_delivery_configured: true, can_create_project: true, reason: null, legal_document_version: "2026-10-26", payments_configured: true });
+    if (path === "/api/max/account/access") return Response.json({ authenticated: true, email_verified: true, email_delivery_configured: true, can_create_project: true, reason: null, legal_document_version: "2026-10-27", payments_configured: true });
     if (init?.method === "POST") { const body = JSON.parse(String(init.body)); requests.push(body); return post(body); }
     if (path === "/api/payments/config") return Response.json(config);
     if (path === "/api/payments") return payments instanceof Error ? Promise.reject(payments) : Response.json(payments);
@@ -201,12 +201,12 @@ it("includes current legal consent only after explicit renewal opt-in", async ()
     await wait(() => expect(button("Выбрать Pro")).toBeDefined()); await click("Выбрать Pro");
     await act(async () => document.querySelector<HTMLInputElement>('[role="dialog"] input[type="checkbox"]')!.click());
     await click("Перейти к оплате в ЮKassa"); await wait(() => expect(requests).toHaveLength(1));
-    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: "2026-10-26" });
+    expect(requests[0]).toMatchObject({ plan_code: "pro", auto_renew: true, consent_version: "2026-10-27" });
   } finally { await app.close(); }
 });
 it.each([
-  [undefined, "2026-10-26"],
-  ["", "2026-10-26"],
+  [undefined, "2026-10-27"],
+  ["", "2026-10-27"],
   ["2026-11-01", "2026-11-01"],
 ])("sends the renewal consent version for checkout and restore (%s)", async (configured, expected) => {
   vi.stubEnv("NEXT_PUBLIC_LEGAL_DOCUMENT_VERSION", configured);

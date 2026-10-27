@@ -3,14 +3,8 @@
 import httpx
 
 from yleum_api.core.config import get_settings
-
-
-class SmsDeliveryFailed(Exception):
-    pass
-
-
-class SmsDeliveryAmbiguous(SmsDeliveryFailed):
-    pass
+from yleum_api.services.sms_delivery import SmsDeliveryAmbiguous as SmsDeliveryAmbiguous
+from yleum_api.services.sms_delivery import SmsDeliveryFailed as SmsDeliveryFailed
 
 
 def sms_delivery_configured() -> bool:

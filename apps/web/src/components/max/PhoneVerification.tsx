@@ -67,7 +67,7 @@ export function PhoneVerification({ email, initialPhone = "", available, onVerif
       <h2 id="phone-verification-title" className="text-2xl font-semibold">Подтвердите телефон</h2>
       <p className="mt-2 text-sm leading-6 text-fg-secondary">Это нужно один раз. Затем входите по email и паролю, без SMS. Email {email} сохранён для входа и восстановления пароля; подтверждать его необязательно.</p>
       <p className="mt-2 text-sm text-fg-tertiary">Регистрация бесплатна. Генерация расходует баланс, публикация зависит от тарифа.</p>
-      <p className="mt-2 text-sm leading-6 text-fg-secondary">Для доставки кода передадим номер и SMS сервису SMS Aero. <Link href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Политика конфиденциальности</Link>.</p>
+      <p className="mt-2 text-sm leading-6 text-fg-secondary">Для доставки кода передадим номер и SMS сервису Green SMS. <Link href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">Политика конфиденциальности</Link>.</p>
     </div>
     {!available && <p role="status" className="text-sm text-warning">SMS временно недоступны. Аккаунт сохранён. Попробуйте позже или обновите статус.</p>}
     <form data-phone-request className="space-y-3" onSubmit={event => { event.preventDefault(); void send(); }}>

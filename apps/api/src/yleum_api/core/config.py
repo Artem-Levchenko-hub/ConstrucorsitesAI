@@ -161,6 +161,9 @@ class Settings(BaseSettings):
 
     # Explicit rollout policy. Missing credentials never turn an enabled gate off.
     phone_verification_enabled: bool = Field(default=False)
+    sms_provider: Literal["smsaero", "greensms"] = Field(default="greensms")
+    greensms_token: SecretStr | None = Field(default=None)
+    greensms_sender: str = Field(default="GREENSMS", max_length=11)
     smsaero_email: str | None = Field(default=None)
     smsaero_api_key: SecretStr | None = Field(default=None)
     smsaero_sign: str = Field(default="SMS Aero")
@@ -175,7 +178,7 @@ class Settings(BaseSettings):
     legal_operator_inn: str | None = Field(default=None)
     legal_operator_address: str | None = Field(default=None)
     legal_support_email: str = Field(default="support@yleum.ru")
-    legal_document_version: str = Field(default="2026-10-26")
+    legal_document_version: str = Field(default="2026-10-27")
     admin_emails: str = Field(default="")
 
     yookassa_shop_id: str | None = Field(default=None)

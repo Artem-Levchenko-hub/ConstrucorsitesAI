@@ -19,7 +19,7 @@ from yleum_api.services.accounts import (
 from yleum_api.services.max_access import max_studio_access_reason
 from yleum_api.services.phone_verification import phone_verification_required
 from yleum_api.services.registration_verification import registration_verification_reason
-from yleum_api.services.smsaero import sms_delivery_configured
+from yleum_api.services.sms_delivery import sms_delivery_configured
 from yleum_api.services.transactional_email import email_delivery_configured
 
 router = APIRouter(prefix="/api/max/account", tags=["max-account"])

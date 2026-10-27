@@ -309,6 +309,52 @@ async def test_forgot_password_stays_silent_for_an_unknown_address(client, outbo
 # ── delivery failures ─────────────────────────────────────────────────────────
 
 
+async def test_green_phone_proof_survives_email_login_and_password_recovery_without_more_sms(
+    client, outbox, monkeypatch,
+):
+    from pydantic import SecretStr
+
+    from yleum_api.services import phone_verification
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "phone_verification_enabled", True)
+    monkeypatch.setattr(settings, "sms_provider", "greensms")
+    monkeypatch.setattr(settings, "greensms_token", SecretStr("qa-key"))
+    monkeypatch.setattr(settings, "smsaero_email", None)
+    codes = []
+
+    async def capture_sms(_phone, code):
+        codes.append(code)
+        return "qa-message"
+
+    monkeypatch.setattr(phone_verification, "send_verification_sms", capture_sms)
+    await _register(client)
+    requested = await client.post("/api/auth/phone/request", json={"phone": "+79991234567"})
+    assert requested.status_code == 202
+    assert (await client.post("/api/auth/phone/verify", json={"code": codes[0]})).status_code == 200
+    assert (await client.post("/api/auth/logout")).status_code == 204
+    logged_in = await client.post("/api/auth/login", json={"email": EMAIL, "password": PASSWORD})
+    assert logged_in.status_code == 200
+    assert logged_in.json()["phone_e164"] == "+79991234567"
+    assert logged_in.json()["email_verified_at"] is None
+    assert (await client.get("/api/max/account/access")).json()["can_create_project"] is True
+    forgot = await client.post("/api/auth/password/forgot", json={"email": EMAIL})
+    assert forgot.status_code == 202
+    reset = await client.post(
+        "/api/auth/password/reset", json={"token": outbox.token(), "password": "new-green-456"},
+    )
+    assert reset.status_code == 200
+    logged_in = await client.post(
+        "/api/auth/login", json={"email": EMAIL, "password": "new-green-456"},
+    )
+    assert logged_in.status_code == 200
+    assert logged_in.json()["phone_e164"] == "+79991234567"
+    assert logged_in.json()["email_verified_at"] is None
+    assert logged_in.json()["phone_verification_required"] is False
+    assert (await client.get("/api/max/account/access")).json()["can_create_project"] is True
+    assert len(codes) == 1
+
+
 @pytest.mark.parametrize(
     "failure", [EmailDeliveryNotConfigured("no smtp"), EmailDeliveryFailed("smtp said no")]
 )
