@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import socket
 import stat
@@ -253,6 +254,41 @@ class DockerPG:
         return legacy_schema_digest(self.command(schema_command()).decode("utf-8"))
 
 
+SANDBOX_POSTGRES_COMMAND = (
+    "postgres",
+    "-c",
+    "listen_addresses=",
+    "-c",
+    "unix_socket_directories=/tmp,/var/run/postgresql",
+    "-c",
+    "shared_buffers=16MB",
+    "-c",
+    "max_wal_size=64MB",
+    "-c",
+    "min_wal_size=32MB",
+)
+
+
+def final_postmaster_options(options: object) -> bool:
+    """The official entrypoint's temporary server appends options, including -p.
+
+    Require the exact final argv instead of accepting a temporary server's SELECT 1.
+    Both bootstrap and final sockets remain inside the owned tmpfs mounts.
+    """
+    # The bounded file read cannot prove that an exactly-full response was complete.
+    if not isinstance(options, str) or len(options) >= 4096:
+        return False
+    try:
+        argv = shlex.split(options)
+    except ValueError:
+        return False
+    return bool(
+        argv
+        and argv[0].rsplit("/", 1)[-1] == "postgres"
+        and tuple(argv[1:]) == SANDBOX_POSTGRES_COMMAND[1:]
+    )
+
+
 class RestoreSandbox(AbstractContextManager[DockerPG]):
     """New tmpfs only: neither a live volume nor a host path is ever accepted."""
 
@@ -289,20 +325,7 @@ class RestoreSandbox(AbstractContextManager[DockerPG]):
         self.container = reader_dispatch(
             self.client.containers.create,
             self.image,
-            [
-                "postgres",
-                "-c",
-                "listen_addresses=",
-                "-c",
-                # Entrypoint initialization uses libpq's default socket; clients use /tmp.
-                "unix_socket_directories=/tmp,/var/run/postgresql",
-                "-c",
-                "shared_buffers=16MB",
-                "-c",
-                "max_wal_size=64MB",
-                "-c",
-                "min_wal_size=32MB",
-            ],
+            list(SANDBOX_POSTGRES_COMMAND),
             name=self.name,
             # Daemon-enforced lifespan also covers controller death during verification.
             entrypoint=["timeout", "-s", "KILL", "300", "docker-entrypoint.sh"],
@@ -337,10 +360,16 @@ class RestoreSandbox(AbstractContextManager[DockerPG]):
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 try:
-                    if pg.sql("SELECT 1;").strip() == b"1":
+                    options = pg.json(
+                        "SELECT to_json(pg_catalog.pg_read_file("
+                        "current_setting('data_directory')||'/postmaster.opts',0,4096));"
+                    )
+                    if final_postmaster_options(options) and pg.sql("SELECT 1;").strip() == b"1":
                         return pg
                 except Exception:
-                    time.sleep(0.5)
+                    pass
+                # Poll the deterministic argv proof; elapsed stability proves nothing.
+                time.sleep(0.5)
             raise MigrationIOError("migration_verifier_start_failed")
         except Exception:
             self.__exit__()

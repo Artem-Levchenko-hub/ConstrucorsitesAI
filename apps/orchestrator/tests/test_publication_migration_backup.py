@@ -13,6 +13,72 @@ def implementation():
     return importlib.import_module(name)
 
 
+@pytest.mark.parametrize("extra", ["", ' "-c" "listen_addresses=" "-p" "5432"'])
+def test_readiness_distinguishes_final_postmaster_from_entrypoint_bootstrap(extra):
+    m = implementation()
+    arguments = (
+        '"/usr/local/bin/postgres" "-c" "listen_addresses=" "-c" '
+        '"unix_socket_directories=/tmp,/var/run/postgresql" "-c" "shared_buffers=16MB" '
+        '"-c" "max_wal_size=64MB" "-c" "min_wal_size=32MB"'
+    )
+    assert m.final_postmaster_options(arguments + extra + "\n") is (not extra)
+
+
+@pytest.mark.parametrize("options", [None, "", '"unterminated', '"/bin/sh" "-c" "postgres"'])
+def test_readiness_rejects_unknown_or_malformed_postmaster_options(options):
+    assert implementation().final_postmaster_options(options) is False
+
+
+def test_readiness_rejects_potentially_truncated_options():
+    import shlex
+
+    m = implementation()
+    final = shlex.join(m.SANDBOX_POSTGRES_COMMAND)
+    assert m.final_postmaster_options(final.ljust(4096)) is False
+    assert m.final_postmaster_options(final.ljust(4097)) is False
+
+
+def test_sandbox_does_not_return_during_successful_bootstrap_server(monkeypatch):
+    import shlex
+    from types import SimpleNamespace
+
+    import docker
+
+    from tests.test_publication_migration_backup_docker import configure_isolated_settings
+
+    configure_isolated_settings(monkeypatch)
+    m = implementation()
+    image = "postgres@sha256:" + "a" * 64
+    final = shlex.join(m.SANDBOX_POSTGRES_COMMAND)
+    observed = iter([final + " -c listen_addresses= -p 5432", final])
+    calls = []
+
+    def json_probe(statement):
+        assert "postmaster.opts" in statement
+        calls.append("argv")
+        return next(observed)
+
+    def sql_probe(statement):
+        assert statement == "SELECT 1;"
+        calls.append("select")
+        return b"1\n"
+
+    pg = SimpleNamespace(json=json_probe, sql=sql_probe)
+    container = SimpleNamespace(start=lambda: None)
+
+    def absent(name):
+        raise docker.errors.NotFound("owned test name absent")
+
+    client = SimpleNamespace(
+        images=SimpleNamespace(get=lambda _: SimpleNamespace(attrs={"RepoDigests": [image]})),
+        containers=SimpleNamespace(get=absent, create=lambda *args, **kwargs: container),
+    )
+    monkeypatch.setattr(m, "DockerPG", lambda *_: pg)
+    monkeypatch.setattr(m.time, "sleep", lambda *_: None)
+    assert m.RestoreSandbox(client, uuid4(), uuid4(), image).__enter__() is pg
+    assert calls == ["argv", "argv", "select"]
+
+
 def test_sandbox_keeps_bootstrap_and_controller_sockets_inside_owned_tmpfs(monkeypatch):
     from types import SimpleNamespace
 
