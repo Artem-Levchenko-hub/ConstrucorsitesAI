@@ -7,6 +7,7 @@ import { z } from "zod";
 import { schema, withMaxUser } from "@/lib/db";
 import { forwardMaxAnalytics } from "@/lib/omnia/analytics";
 import { getMaxUser } from "@/lib/max/session";
+import { maxActivityKind, type MaxActivityType } from "@/lib/omnia/activity";
 
 const DEFAULT_ACTION_LIMIT = 250;
 const MAX_ACTION_LIMIT = 1000;
@@ -170,7 +171,8 @@ export async function POST(request: Request) {
   });
   if (result.status === 201 && "action" in result.body && result.body.action &&
       !input.actionType.startsWith("omnia_health_")) {
-    await forwardMaxAnalytics(user.id, result.body.action.id, "action");
+    await forwardMaxAnalytics(user.id, result.body.action.id, "action",
+      maxActivityKind(input.actionType) === "action" ? input.actionType as MaxActivityType : undefined);
   }
   return NextResponse.json(result.body, { status: result.status,
     headers: { "Cache-Control": "no-store", ...("action" in result.body && result.body.action ? { ETag: result.body.action.revision } : {}) } });

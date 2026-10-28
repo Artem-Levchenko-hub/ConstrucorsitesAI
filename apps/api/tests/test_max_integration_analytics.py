@@ -42,6 +42,7 @@ async def test_signed_confirmed_lead_with_unknown_note_counts_once(client, db_se
     events = list((await db_session.scalars(select(MaxAnalyticsEvent))).all())
     assert len(events) == 1
     assert events[0].event_id == lead.id and events[0].kind == "action"
+    assert events[0].event_type == "lead_created"
     result = await aggregate_events(db_session, lead.project_id, 7)
     assert result["actions"] == 1 and result["users"] == 1
 
@@ -249,6 +250,7 @@ async def test_signed_order_counts_actual_receipt_once_and_no_receipt_never_coun
     row = (await db_session.scalars(select(IntegrationOperation))).one()
     event = (await db_session.scalars(select(MaxAnalyticsEvent))).one()
     assert row.kind == "customer_order" and row.status == "succeeded" and event.event_id == row.id
+    assert event.event_type == "order_created"
 
     async def no_receipt(*_args, **_kwargs):
         return {"provider": "moysklad", "id": str(uuid4())}

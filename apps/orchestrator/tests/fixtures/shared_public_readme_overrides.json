@@ -12,8 +12,11 @@
     "sha256": "5749162d6ca7dcf0ef6d664e439e03af8f27bfe2b4ce8b4b560a5bcec804ab7b"
   },
   "max-miniapp-nextjs/README.md": {
-    "mode": "100644",
-    "bytes": 2288,
-    "sha256": "d8b54b419b6356b7fbc9dcd185a31a368d6d0dbe134cefa5cefc855840f56f97"
+    "sha256": "3e71479e28447bac03d206a69cf7fb7afae3c0706c66d2866a275285de82a42d",
+    "mode": "100644"
+  },
+  "max-miniapp-nextjs/SYSTEM_PROMPT.md": {
+    "sha256": "cace8e428d01bc9bae810d2946c5a0f30a2bb3377d929c50106512e8ce60522d",
+    "mode": "100644"
   }
 }

@@ -154,6 +154,8 @@ def apply_public_core_overlay(core: Any) -> None:
         "src/app/api/max/session/route.ts",
         "src/lib/max/session.ts",
         "src/lib/omnia/analytics.ts",
+        "src/lib/omnia/activity.ts",
+        "src/app/api/omnia/telemetry/route.ts",
         "src/app/api/omnia/actions/route.ts",
         "src/app/api/omnia/events/route.ts",
     )

@@ -12,6 +12,8 @@ const {randomUUID}=require('node:crypto');
 const root=process.env.OMNIA_ACTION_TEST_TEMPLATE_ROOT || resolve(__dirname,'../../templates/max-miniapp-nextjs');
 const qaRequire=createRequire(resolve(process.env.OMNIA_TEST_NODE_ROOT || root,'package.json'));
 const ts=qaRequire('typescript');
+const activity={exports:{}};
+vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,'src/lib/omnia/activity.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,activity);
 let zod; try {zod=qaRequire('zod');} catch {zod=qaRequire('next/dist/compiled/zod');}
 function fixture() {
   const rows=[], audits=[], forwarded=[];
@@ -34,13 +36,16 @@ function fixture() {
     // disposable HTTP and platform tests; never send network requests here.
     '@/lib/omnia/analytics':{forwardMaxAnalytics:async(...args)=>{
       assert.equal(inTransaction,false,'analytics must follow transaction completion');
-      assert.equal(args.length,3);const [actor,eventId,kind]=args;
+      assert.equal(args.length,4);const [actor,eventId,kind,eventType]=args;
       assert.equal(actor,'test-actor');assert.equal(kind,'action');
       assert.ok(rows.some(row=>row.id===eventId && row.maxUserId===actor));
+      const action=rows.find(row=>row.id===eventId);
+      assert.equal(eventType,activity.exports.maxActivityKind(action.actionType)==='action'?action.actionType:undefined);
       assert.ok(audits.some(receipt=>receipt.maxUserId===actor && receipt.details.actionId===eventId && receipt.details.healthProbe===false));
       forwarded.push(args);
     }},
     '@/lib/max/session':{getMaxUser:async()=>({id:'test-actor'})},
+    '@/lib/omnia/activity':activity.exports,
   };
   const load=(relative)=>{const context={exports:{},require:name=>{assert.ok(name in modules,`Unexpected import ${name}`);return modules[name];},TextEncoder,Date};vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,relative),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);return context.exports;};
   const item=load('src/app/api/omnia/actions/[id]/route.ts');
@@ -49,15 +54,19 @@ function fixture() {
 function request(body,headers={}){return new Request('https://test.invalid/api/omnia/actions',{method:'POST',headers:{'Content-Type':'application/json',...headers},body:JSON.stringify(body)});}
 const input={actionType:'booking',payload:{slot:'2026-10-20T10:00:00Z'}};
 test('create rejects a missing operation identity before any durable insert',async()=>{const f=fixture();const response=await f.post(request(input));assert.equal(response.status,428);assert.equal(f.rows.length,0);});
+test('confirmed typed action forwards its exact canonical type after commit',async()=>{
+ const f=fixture();const saved=await(await f.post(request({...input,actionType:'booking_created',operationKey:randomUUID()}))).json();
+ assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action','booking_created']]);
+});
 test('same operation identity replays the original server ID after a lost response',async()=>{const f=fixture(),operationKey=randomUUID();const first=await f.post(request({...input,operationKey}));const original=await first.json();const replay=await f.post(request({...input,operationKey}));assert.equal(replay.status,201);assert.equal((await replay.json()).action.id,original.action.id);assert.equal(f.rows.length,1);});
 test('reusing an operation identity for changed payload returns conflict',async()=>{const f=fixture(),operationKey=randomUUID();await f.post(request({...input,operationKey}));const response=await f.post(request({...input,payload:{slot:'2026-10-20T11:00:00Z'},operationKey}));assert.equal(response.status,409);assert.equal(f.rows.length,1);});
 test('analytics forwards the durable successful receipt after commit; retries keep its UUID and denied/health/update/delete writes do not forward',async()=>{
  const f=fixture(),operationKey=randomUUID();
  const saved=await(await f.post(request({...input,operationKey}))).json();
- assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action']]);
+ assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action',undefined]]);
  const replay=await f.post(request({...input,operationKey}));assert.equal(replay.status,201);
  assert.equal((await replay.json()).action.id,saved.action.id);
- assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action'],['test-actor',saved.action.id,'action']]);
+ assert.deepEqual(f.forwarded,[['test-actor',saved.action.id,'action',undefined],['test-actor',saved.action.id,'action',undefined]]);
  assert.equal(f.rows.length,1);assert.equal(f.audits.length,1);
  assert.equal((await f.post(request({...input,operationKey,payload:{slot:'changed'}}))).status,409);
  assert.equal((await f.post(request(input))).status,428);
@@ -183,7 +192,7 @@ test('a later authorization denial cannot clear an earlier unknown commit identi
 
 test('legacy client module create uses the same retry-safe managed helper and actor precondition',async()=>{
  const sent=[];const fetch=async(_url,init)=>{sent.push(JSON.parse(init.body));if(sent.length===1)throw Error('lost committed response');return Response.json({action:{id:randomUUID()}},{status:201});};
- const canonical=clientFixture(fetch);const context={exports:{},fetch,require:name=>{if(name==='@/lib/omnia/integration-client')return canonical;assert.equal(name,'@/lib/max/bridge');return{getMaxWebApp:()=>null};},URLSearchParams};
+ const canonical=clientFixture(fetch);const context={exports:{},fetch,require:name=>{if(name==='@/lib/omnia/integration-client')return canonical;if(name==='@/lib/omnia/activity')return activity.exports;assert.equal(name,'@/lib/max/bridge');return{getMaxWebApp:()=>null};},URLSearchParams};
  vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root,'src/lib/omnia/client.ts'),'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2022}}).outputText,context);
  const legacy=context.exports;await assert.rejects(legacy.createMaxAction(input.actionType,input.payload));await legacy.createMaxAction(input.actionType,input.payload);
  assert.equal(typeof sent[0].operationKey,'string');assert.equal(sent[1].operationKey,sent[0].operationKey);assert.equal(legacy.createMaxAction,canonical.createMaxAction);

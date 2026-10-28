@@ -223,14 +223,15 @@ def _normalize_analytics(files):
             encoding="utf-8"
         )
     )
-    added = "src/lib/omnia/analytics.ts"
+    helper = "src/lib/omnia/analytics.ts"
+    added = {helper, "src/lib/omnia/activity.ts", "src/app/api/omnia/telemetry/route.ts"}
     assert legacy["revision"] == "20382350beccf2da361db1f6c9e9425a91b9267c"
-    assert set(overrides) == set(_LEGACY_ANALYTICS_HASHES) | {added}
+    assert set(overrides) == set(_LEGACY_ANALYTICS_HASHES) | added
     assert set(legacy["files"]) == set(_LEGACY_ANALYTICS_HASHES)
     normalized = dict(files)
     for path, entry in overrides.items():
         actual = files[path]
-        if path == added:
+        if path == helper:
             match = re.search(r'^  const project = ("[^"\n]*");$', actual, re.M)
             assert match is not None
             identity = json.loads(match.group(1))
@@ -239,7 +240,7 @@ def _normalize_analytics(files):
                 match.group(0), '  const project = process.env.OMNIA_PROJECT_ID || "";', 1
             )
         assert hashlib.sha256(actual.encode()).hexdigest() == entry["sha256"], path
-        if path == added:
+        if path in added:
             normalized.pop(path)
         else:
             baseline = legacy["files"][path]["source"]

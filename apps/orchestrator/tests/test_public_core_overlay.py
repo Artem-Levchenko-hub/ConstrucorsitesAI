@@ -40,6 +40,8 @@ def test_public_overlay_uploads_real_shipped_webhook_from_any_cwd(
             "src/app/api/max/session/route.ts",
             "src/lib/max/session.ts",
             "src/lib/omnia/analytics.ts",
+            "src/lib/omnia/activity.ts",
+            "src/app/api/omnia/telemetry/route.ts",
             "src/app/api/omnia/actions/route.ts",
             "src/app/api/omnia/events/route.ts",
         }

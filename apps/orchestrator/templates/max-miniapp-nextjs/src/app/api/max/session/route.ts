@@ -107,7 +107,7 @@ export async function POST(request: Request) {
       path: "/",
       maxAge: session.maxAge,
     });
-    await forwardMaxAnalytics(user.id, eventId, "open");
+    await forwardMaxAnalytics(user.id, eventId, "open", "app_open");
     return response;
   } catch (error) {
     console.error("[max-auth] session persistence failed", {

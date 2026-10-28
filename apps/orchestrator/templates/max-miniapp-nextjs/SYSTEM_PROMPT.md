@@ -58,8 +58,21 @@
   store the visitor's name, username, language or photo from MAX; if a feature
   truly needs a name or contact, ask for it in the product with explicit consent
   and a stated purpose, and keep it only as long as that purpose exists.
-- Track key funnel events through `/api/omnia/events`; do not send personal data
-  to third-party analytics by default.
+- For new/updated flows, import `trackMaxActivity` from `@/lib/omnia/client`.
+  Supported codes: `screen_view`, `item_view`, `button_click`, `cart_add`,
+  `checkout_start`, `form_submit`, `order_created`, `booking_created`, `lead_created`.
+  Emit only after the named UI transition or business write succeeds. Allocate
+  one UUID per logical event and pass `{ eventId }`; retain it for telemetry
+  retries. Handle telemetry errors separately: never repeat an already successful
+  business write because analytics failed. The authenticated `/api/omnia/telemetry`
+  route requires no stock business/events tables and forwards no properties.
+  Do not emit a second event for an action already counted by `createMaxAction`;
+  exact canonical action types get their detail automatically. Arbitrary legacy
+  action names stay generic; never infer meaning from their text.
+  `trackMaxEvent` retains app-local properties for stock-compatible schemas.
+  Do not send personal data, names, contacts or MAX profiles to analytics.
+  `app_open` is recorded only by verified login. Existing custom flows gain
+  detailed activity only after their product code adopts these explicit calls.
 - Support loading, empty, error, retry and success states for every async flow.
 - Use the Bot API for start/help/open-app flows and the Bridge wrappers for
   links, sharing, contacts, storage, haptics and the BackButton.

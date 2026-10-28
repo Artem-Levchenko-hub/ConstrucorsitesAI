@@ -114,7 +114,7 @@ export function MaxStudioProjectCard({ project }: { project: Project }) {
         <small>{state.hint}</small>
       </div>
       <div className="max-project-actions">
-        <Link href={nextHref} className="max-project-next">{nextStage?.actionLabel ?? (live ? "Открыть управление" : "Открыть проект")}<ArrowRight className="size-4 shrink-0" /></Link>
+        <Link href={nextHref} className="max-project-next">{nextStage?.actionLabel ?? (live ? "Статистика" : "Открыть проект")}<ArrowRight className="size-4 shrink-0" /></Link>
         <DropdownMenu>
           <DropdownMenuTrigger asChild><Button type="button" variant="ghost" size="icon" aria-label={`Действия с проектом ${project.name}`} className="size-11 shrink-0"><MoreVertical className="size-4" /></Button></DropdownMenuTrigger>
           <DropdownMenuContent data-max-studio align="end">

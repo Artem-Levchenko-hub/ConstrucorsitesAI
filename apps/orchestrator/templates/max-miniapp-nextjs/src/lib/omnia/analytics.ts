@@ -1,5 +1,6 @@
 /** Immutable server hook: fixed categories, no customer payloads or profiles. */
 import { createHash, createHmac } from "node:crypto";
+import { maxActivityKind, type MaxActivityType } from "@/lib/omnia/activity";
 
 export function analyticsEventId(identity: string): string {
   const hex = createHash("sha256").update(`omnia:analytics:v1:${identity}`).digest("hex");
@@ -8,14 +9,22 @@ export function analyticsEventId(identity: string): string {
 
 export async function forwardMaxAnalytics(
   actor: string, eventId: string, kind: "open" | "action" | "event",
-): Promise<void> {
+  eventType?: MaxActivityType | "app_open",
+): Promise<boolean> {
   // Owner previews and activation probes are never customer traffic.
   const project = process.env.OMNIA_PROJECT_ID || "";
   const token = process.env.MAX_BOT_TOKEN;
-  if (!project || !token || !process.env.OMNIA_PUBLIC_APP_ORIGIN ||
-      !/^[1-9][0-9]{0,19}$/.test(actor)) return;
+  if (!process.env.OMNIA_PUBLIC_APP_ORIGIN || !/^[1-9][0-9]{0,19}$/.test(actor)) return true;
+  if (!project || !token) return false;
+  if (eventType !== undefined) {
+    const family = maxActivityKind(eventType);
+    if (eventType === "app_open" ? kind !== "open" :
+        !family || kind === "open" || (kind === "action" && family !== "action")) return false;
+  }
   const path = `/api/runtime/projects/${project}/analytics`;
-  const body = JSON.stringify({ event_id: eventId, kind });
+  const body = JSON.stringify({ event_id: eventId, kind,
+    ...(eventType === undefined ? {} : { event_type: eventType }),
+  });
   const issued = Math.floor(Date.now() / 1000);
   const encoded = Buffer.from(JSON.stringify({
     project_id: project, max_user_id: actor, iat: issued, exp: issued + 60,
@@ -25,15 +34,17 @@ export async function forwardMaxAnalytics(
   const signed = `v1.${encoded}`;
   const assertion = `${signed}.${createHmac("sha256", key).update(signed).digest("hex")}`;
   const platform = (process.env.OMNIA_PLATFORM_API_URL || "https://yleum.ru").replace(/\/$/, "");
-  // Both attempts carry the same durable event receipt. Collection failure must
-  // never change an already committed user action or expose credentials in logs.
+  // Both attempts carry the same receipt. Callers with committed business data
+  // ignore delivery failure; lightweight telemetry reports failure for retry.
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const response = await fetch(`${platform}${path}`, {
         method: "POST", body, cache: "no-store", signal: AbortSignal.timeout(2_000),
         headers: { "Content-Type": "application/json", "X-Omnia-Integration-Assertion": assertion },
       });
-      if (response.ok || (response.status < 500 && response.status !== 429)) return;
-    } catch { /* The app-local durable record remains authoritative. */ }
+      if (response.ok) return true;
+      if (response.status < 500 && response.status !== 429) return false;
+    } catch { /* Unknown delivery outcome: retry only the same receipt. */ }
   }
+  return false;
 }

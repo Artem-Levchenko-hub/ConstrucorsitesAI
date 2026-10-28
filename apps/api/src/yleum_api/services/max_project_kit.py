@@ -15,7 +15,7 @@ from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 # Increment whenever the managed file set changes in a way that existing MAX
 # projects must receive. It deliberately does not follow the public config
 # schema version: this is a deployment revision of platform-owned source files.
-MAX_MANAGED_KIT_VERSION = 30
+MAX_MANAGED_KIT_VERSION = 31
 # v30: keep legal footer links and keyboard focus clear of fixed bottom navigation.
 # v29 adds authenticated exact lead receipt lookup for safe legacy adoption.
 # Kit v18 shipped encrypted owner-scoped CRUD. v19 retires exactly those
@@ -171,6 +171,8 @@ def render_max_managed_files(
             "src/app/api/omnia/consents/route.ts"
         ),
         "src/app/api/omnia/events/route.ts": _template_file("src/app/api/omnia/events/route.ts"),
+        "src/app/api/omnia/telemetry/route.ts": _template_file("src/app/api/omnia/telemetry/route.ts"),
+        "src/lib/omnia/activity.ts": _template_file("src/lib/omnia/activity.ts"),
         "src/lib/omnia/consent.ts": _template_file("src/lib/omnia/consent.ts"),
         "src/lib/omnia/analytics.ts": _template_file("src/lib/omnia/analytics.ts").replace(
             'process.env.OMNIA_PROJECT_ID || ""', project_literal, 1
@@ -331,9 +333,11 @@ MAX_SECURITY_LOCKED_FILES = frozenset(
         "src/app/api/omnia/actions/[id]/route.ts",
         "src/app/api/omnia/consents/route.ts",
         "src/app/api/omnia/events/route.ts",
+        "src/app/api/omnia/telemetry/route.ts",
         "src/lib/omnia/max-config.ts",
         "src/lib/omnia/client.ts",
         "src/lib/omnia/analytics.ts",
+        "src/lib/omnia/activity.ts",
         "src/lib/omnia/consent.ts",
         "src/app/api/omnia/config/route.ts",
         "src/lib/omnia/integration-client.ts",
@@ -417,6 +421,21 @@ feature APIs outside the reserved `/api/max/*` and `/api/omnia/*` namespaces.
 Every user-owned query MUST call `requireMaxUser()` and scope reads/writes by
 `maxUserId: user.id`; never trust an id from the request body. Without the attested
 sandbox, fall back to the managed action client.
+For new/updated product flows, import `trackMaxActivity` from `@/lib/omnia/client`.
+Its only event codes are `screen_view`, `item_view`, `button_click`, `cart_add`,
+`checkout_start`, `form_submit`, `order_created`, `booking_created`, `lead_created`.
+Emit the matching code only after the named UI transition or business write
+succeeds. The typed helper sends no arbitrary properties and works with custom
+schemas through the authenticated `/api/omnia/telemetry` route. Allocate one UUID
+per logical event and pass `{ eventId }`; reuse it for telemetry retries, never
+repeat a business write because telemetry failed. Catch delivery errors separately
+from business success. Do not duplicate a receipt already forwarded by
+`createMaxAction`: exact canonical action types automatically supply their detail;
+legacy arbitrary names remain generic and must not be guessed from free text.
+`trackMaxEvent` remains the local-properties API for compatible stock schemas.
+Do not send names, contacts, payloads or MAX profiles to platform analytics.
+Never call a public helper for `app_open`; only verified login records opens.
+Updating the managed kit alone does not instrument existing custom product flows.
 When the brief requests AI, use the exact typed call
 `const { answer } = await requestYleumAI({ message, instructions, context })`
 from `@/lib/omnia/integration-client`; the managed Google model runs server-side.

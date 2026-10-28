@@ -14,16 +14,18 @@ const {stripTypeScriptTypes}=require('node:module');
 const input=JSON.parse(fs.readFileSync(0,'utf8'));const sent=[];
 const ctx={exports:{},Buffer,Date,AbortSignal,setTimeout,
 process:{env:{OMNIA_PROJECT_ID:input.project,MAX_BOT_TOKEN:'test-max-token',OMNIA_PUBLIC_APP_ORIGIN:'https://app.test'}},
-require:n=>require(n),fetch:async(url,options)=>{sent.push({url,...options});
+require:n=>n==='@/lib/omnia/activity'?load(require('node:path').join(require('node:path').dirname(input.helper),'activity.ts')):require(n),fetch:async(url,options)=>{sent.push({url,...options});
 if(input.failure==='network')throw new Error('test private credential');
 return new Response(null,{status:input.failure==='upstream'?503:204});}};
-let source=stripTypeScriptTypes(fs.readFileSync(input.helper,'utf8'));
+function load(path){const local={...ctx,exports:{}};
+let source=stripTypeScriptTypes(fs.readFileSync(path,'utf8'));
 source=source.replace(/import\s+\{([^}]+)\}\s+from\s+["']([^"']+)["'];?/g,
 (_,b,n)=>`const {${b}}=require('${n}');`);
 const exported=[];source=source.replace(/export\s+((?:async\s+)?(?:function|class|const)\s+(\w+))/g,
 (_,d,n)=>{exported.push(n);return d;});
-vm.runInNewContext(source+'\nObject.assign(exports,{'+exported.join(',')+'});',ctx);
-ctx.exports.forwardMaxAnalytics(input.actor,input.id,'action').then(()=>console.log(JSON.stringify(sent)));
+vm.runInNewContext(source+'\nObject.assign(exports,{'+exported.join(',')+'});',local);
+return local.exports;}
+load(input.helper).forwardMaxAnalytics(input.actor,input.id,'action').then(()=>console.log(JSON.stringify(sent)));
 """
 
 

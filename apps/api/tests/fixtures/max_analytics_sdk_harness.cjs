@@ -3,7 +3,7 @@ const fs = require('node:fs'), vm = require('node:vm');
 const { stripTypeScriptTypes } = require('node:module');
 const input = JSON.parse(fs.readFileSync(0, 'utf8'));
 const text = fs.readFileSync(input.client, 'utf8');
-const begin = text.indexOf('export async function trackMaxEvent(');
+const begin = text.indexOf('function activityReceipt(');
 const end = text.indexOf('\nexport async function saveMaxConsent', begin);
 if (begin < 0 || end < 0) throw new Error('SDK function boundary missing');
 const calls = [], timeouts = [], cleared = [];
@@ -29,7 +29,7 @@ const context = {
 };
 context.post = (url, payload) => context.fetch(url, {method:'POST', credentials:'include',
   headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)});
-const source = stripTypeScriptTypes(text.slice(begin, end)).replace('export async function', 'async function');
+const source = stripTypeScriptTypes(text.slice(begin, end)).replaceAll('export async function', 'async function');
 vm.runInNewContext(source + '\nthis.trackMaxEvent = trackMaxEvent;', context);
 context.trackMaxEvent(input.name || 'checkout', input.properties || {}, input.options || {})
   .then(() => console.log(JSON.stringify({calls,timeouts,cleared,error:null})))

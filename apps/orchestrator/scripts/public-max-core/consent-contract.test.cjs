@@ -9,6 +9,8 @@ const vm = require('node:vm');
 const root = process.env.OMNIA_CONSENT_TEST_TEMPLATE_ROOT || resolve(__dirname, '../../templates/max-miniapp-nextjs');
 const qaRequire = createRequire(resolve(process.env.OMNIA_TEST_NODE_ROOT || root, 'package.json'));
 const ts = qaRequire('typescript');
+const activity = { exports: {} };
+vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root, 'src/lib/omnia/activity.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, activity);
 let zod; try { zod = qaRequire('zod'); } catch { zod = qaRequire('next/dist/compiled/zod'); }
 const project = '00000000-0000-4000-8000-000000000005';
 const policy = { enabled: true, policy_version: '2026-10-11', policy_hash: 'a'.repeat(64) };
@@ -146,6 +148,7 @@ function sdk(fetch) {
   const context = { exports: {}, require(name) {
     if (name === '@/lib/max/bridge') return { getMaxWebApp: () => null };
     if (name === '@/lib/omnia/integration-client') return {};
+    if (name === '@/lib/omnia/activity') return activity.exports;
     throw Error('unexpected module ' + name);
   }, crypto: { randomUUID }, fetch, AbortSignal, AbortController, setTimeout, clearTimeout, URLSearchParams };
   vm.runInNewContext(ts.transpileModule(readFileSync(resolve(root, 'src/lib/omnia/client.ts'), 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, context);

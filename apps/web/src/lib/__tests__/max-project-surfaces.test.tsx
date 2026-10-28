@@ -8,6 +8,7 @@ import type { DeployStatus, MaxReadiness, Project } from "@/lib/api/types";
 import { relativeDateLabel } from "@/lib/relative-date";
 
 const api = vi.hoisted(() => ({ readiness: vi.fn(), deploy: vi.fn(), history: vi.fn(), runtime: vi.fn(), integration: vi.fn() }));
+vi.mock("@/components/max/MaxOwnerAnalytics", () => ({ MaxOwnerAnalytics: () => <section data-testid="owner-analytics" /> }));
 vi.mock("@/lib/api/max-studio", async (original) => ({ ...await original<object>(), getMaxReadiness: api.readiness }));
 vi.mock("@/lib/api/runtime", async (original) => ({ ...await original<object>(), getLastDeploy: api.deploy, getDeployHistory: api.history, getRuntime: api.runtime }));
 vi.mock("@/lib/api/max-integration", async (original) => ({ ...await original<object>(), getMaxIntegration: api.integration }));
@@ -38,6 +39,15 @@ async function mount(node: ReactNode) {
 }
 async function settle(check: () => void) { await act(async () => { await vi.waitFor(check); }); }
 const dashboard = () => <MaxPostLaunchDashboard projectId={project.id} projectName={project.name} />;
+
+it("puts statistics first and keeps technical details collapsed", async () => {
+  await mount(dashboard());
+  const analytics = container.querySelector('[data-testid="owner-analytics"]')!;
+  const operations = container.querySelector(".max-dashboard-operations")!;
+  expect(analytics.compareDocumentPosition(operations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(container.querySelector("h1")?.textContent).toBe("Статистика");
+  expect(container.querySelector(".max-dashboard-inspect")?.hasAttribute("open")).toBe(false);
+});
 
 it("keeps optional services discoverable outside collapsed readiness details and offers no own-server hosting", async () => {
   await mount(<MaxLaunchPanel project={project} />);
@@ -166,7 +176,7 @@ it.each(["done", "queued", "failed"] as const)("keeps the actual published addre
   await mount(dashboard());
   await settle(() => expect(container.querySelector('a[href="https://app.example.com"]')).not.toBeNull());
   expect(container.textContent).toContain("Изменения не опубликованы");
-  expect(container.textContent).toContain("После последней публикации появились изменения");
+  expect(container.textContent).toContain("Есть неопубликованные изменения");
   expect(container.textContent).not.toContain("Приложение опубликовано");
   if (phase === "failed") expect(container.textContent).toContain("Последняя публикация не завершилась");
   expect(api.history).not.toHaveBeenCalled();

@@ -1,6 +1,9 @@
 "use client";
 
 import { getMaxWebApp } from "@/lib/max/bridge";
+import { maxActivityKind, type MaxActivityType } from "@/lib/omnia/activity";
+
+export type { MaxActivityType } from "@/lib/omnia/activity";
 
 async function post(path: string, payload: unknown): Promise<Response> {
   return fetch(path, {
@@ -11,34 +14,52 @@ async function post(path: string, payload: unknown): Promise<Response> {
   });
 }
 
+function activityReceipt(options: { eventId?: string }): string {
+  const eventId = options.eventId === undefined ? crypto.randomUUID() : options.eventId;
+  if (typeof eventId !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventId)) {
+    throw new Error("Analytics event failed");
+  }
+  return eventId.toLowerCase();
+}
+
+async function deliverActivity(path: string, body: string, ignoreUnauthorized = false): Promise<void> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const response = await fetch(path, {
+        method: "POST", credentials: "include", signal: controller.signal,
+        headers: { "Content-Type": "application/json" }, body,
+      });
+      if (response.ok || (ignoreUnauthorized && response.status === 401)) return;
+      if (response.status < 500 && response.status !== 429) break;
+    } catch { /* Unknown delivery outcome: retry only the same receipt. */ }
+    finally { clearTimeout(timeout); }
+  }
+  throw new Error("Analytics event failed");
+}
+
 /** Reuse eventId only when retrying the same logical event, including reloads. */
 export async function trackMaxEvent(
   eventName: string,
   properties: Record<string, unknown> = {},
   options: { eventId?: string } = {},
 ): Promise<void> {
-  const eventId = options.eventId === undefined ? crypto.randomUUID() : options.eventId;
-  if (typeof eventId !== "string" ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventId)) {
-    throw new Error("Analytics event failed");
-  }
-  // Snapshot once so delivery retries cannot create a second receipt or change
-  // an event's body. No actor, launch data, token or browser storage is added.
-  const body = JSON.stringify({ eventName, properties, eventId: eventId.toLowerCase() });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5_000);
-    try {
-      const response = await fetch("/api/omnia/events", {
-        method: "POST", credentials: "include", signal: controller.signal,
-        headers: { "Content-Type": "application/json" }, body,
-      });
-      if (response.ok || response.status === 401) return;
-      if (response.status < 500 && response.status !== 429) break;
-    } catch { /* Unknown delivery outcome: retry only the same receipt. */ }
-    finally { clearTimeout(timeout); }
-  }
-  throw new Error("Analytics event failed");
+  // Preserve the existing local-properties contract and its anonymous no-op.
+  const body = JSON.stringify({ eventName, properties, eventId: activityReceipt(options) });
+  await deliverActivity("/api/omnia/events", body, true);
+}
+
+/** Call after confirmed UI/business success. No properties or stock DB required. */
+export async function trackMaxActivity(
+  eventType: MaxActivityType,
+  options: { eventId?: string } = {},
+): Promise<void> {
+  if (!maxActivityKind(eventType)) throw new Error("Analytics event failed");
+  // Freeze once: retries never generate a second receipt or change the body.
+  const body = JSON.stringify({ eventType, eventId: activityReceipt(options) });
+  await deliverActivity("/api/omnia/telemetry", body);
 }
 
 export async function saveMaxConsent(

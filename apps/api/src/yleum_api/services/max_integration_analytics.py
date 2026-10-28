@@ -7,10 +7,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine, AsyncSession, async_sessionmaker
 
 from yleum_api.models.integration_operation import IntegrationOperation
+from yleum_api.models.max_analytics import AnalyticsEventType
 from yleum_api.services import max_analytics
 
 logger = logging.getLogger(__name__)
-CREATION_KINDS = {("amocrm", "lead"), ("bitrix24", "lead"), ("moysklad", "customer_order")}
+CREATION_TYPES: dict[tuple[str, str], AnalyticsEventType] = {
+    ("amocrm", "lead"): "lead_created",
+    ("bitrix24", "lead"): "lead_created",
+    ("moysklad", "customer_order"): "order_created",
+}
 
 
 async def record_confirmed_action(
@@ -22,7 +27,8 @@ async def record_confirmed_action(
     kind: str,
     client_key: str,
 ) -> None:
-    if (provider, kind) not in CREATION_KINDS or type(user_id) is not int or user_id <= 0:
+    event_type = CREATION_TYPES.get((provider, kind))
+    if event_type is None or type(user_id) is not int or user_id <= 0:
         return
     try:
         bind = getattr(session, "bind", None)
@@ -46,7 +52,7 @@ async def record_confirmed_action(
                 )
                 if event_id is not None:
                     await max_analytics.record_event(
-                        analytics_session, project_id, user_id, event_id, "action"
+                        analytics_session, project_id, user_id, event_id, "action", event_type
                     )
             except Exception:
                 await analytics_session.rollback()

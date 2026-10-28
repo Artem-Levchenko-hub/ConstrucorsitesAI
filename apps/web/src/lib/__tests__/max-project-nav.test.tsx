@@ -29,35 +29,36 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => root.unmount()); container.remove(); client.clear(); });
 
-async function render(projectId: string, active: "editor" | "dashboard" | "integrations" | "publish", done: string[]) {
+async function render(projectId: string, active: "editor" | "dashboard" | "integrations" | "publish", done: string[], variant: "sidebar" | "mobile" = "sidebar") {
   client.setQueryData<MaxReadiness>(["max-readiness", projectId], {
     ready_to_launch: done.length === 5, progress: done.length * 20, items: items(done),
   });
   await act(async () => root.render(
     <QueryClientProvider client={client}>
-      <MaxProjectNav projectId={projectId} active={active} />
+      <MaxProjectNav projectId={projectId} active={active} variant={variant} />
     </QueryClientProvider>,
   ));
   return [...container.querySelectorAll("nav a")];
 }
 
-it("называет разделы делом и умещает проект в четыре пункта", async () => {
+it("даёт статистике постоянное место рядом с запуском", async () => {
   // «MAX» — название мессенджера, «После запуска» — момент времени: владелец не
   // понимал, где искать адрес приложения и куда вставлять токен бота.
   const links = await render("p2", "editor", ["build", "legal"]);
   expect(links.map(link => link.textContent?.trim())).toEqual([
-    "Сборка", "Данные приложения", "Бот и подключения", "Запуск и адрес",
+    "Сборка", "Данные приложения", "Бот и подключения", "Запуск и адрес", "Статистика",
   ]);
   expect(links.map(link => link.getAttribute("href"))).toEqual([
-    "/max/p2", "/max/p2?data=details", "/max/p2?panel=max", "/max/p2?panel=publish",
+    "/max/p2", "/max/p2?data=details", "/max/p2?panel=max", "/max/p2?panel=publish", "/max/p2/dashboard",
   ]);
 });
 
-it("после публикации «Запуск и адрес» ведёт туда, где адрес и история", async () => {
-  const links = await render("p3", "dashboard", ["build", "legal", "bot", "publish", "max_url"]);
-  const launch = links.at(-1)!;
-  expect(launch.getAttribute("href")).toBe("/max/p3/dashboard");
-  expect(launch.getAttribute("aria-current")).toBe("page");
+it.each(["sidebar", "mobile"] as const)("не подменяет запуск статистикой после публикации: %s", async variant => {
+  const links = await render("p3", "dashboard", ["build", "legal", "bot", "publish", "max_url"], variant);
+  expect(links[3].getAttribute("href")).toBe("/max/p3?panel=publish");
+  expect(links[3].hasAttribute("aria-current")).toBe(false);
+  expect(links[4].getAttribute("href")).toBe("/max/p3/dashboard");
+  expect(links[4].getAttribute("aria-current")).toBe("page");
 });
 
 it("старые разделы продолжают подсвечивать свой пункт", async () => {

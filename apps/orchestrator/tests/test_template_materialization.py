@@ -76,6 +76,8 @@ assert set(ANALYTICS_OVERRIDES) == {
     "src/app/api/omnia/actions/route.ts",
     "src/app/api/omnia/events/route.ts",
     "src/lib/omnia/analytics.ts",
+    "src/lib/omnia/activity.ts",
+    "src/app/api/omnia/telemetry/route.ts",
 }
 CONSENT_OVERRIDES = json.loads(
     (Path(__file__).parent / "fixtures/max_template_consent_overrides.json").read_text(
@@ -92,6 +94,7 @@ assert set(CONSENT_OVERRIDES) == {
 # are pinned as explicit overrides instead of rewriting historical hashes.
 assert set(README_OVERRIDES) == {
     "max-miniapp-nextjs/README.md",
+    "max-miniapp-nextjs/SYSTEM_PROMPT.md",
     "max-miniapp-nextjs/src/app/api/omnia/integrations/[...path]/route.ts",
     "max-miniapp-nextjs/src/lib/omnia/integration-client.ts",
 }

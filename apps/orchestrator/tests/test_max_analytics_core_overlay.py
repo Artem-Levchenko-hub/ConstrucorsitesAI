@@ -22,6 +22,9 @@ def test_actual_overlay_delivers_new_route_import_closure_in_one_archive(tmp_pat
     shutil.copytree(TEMPLATE / "src", tmp_path / "src")
     helper = "src/lib/omnia/analytics.ts"
     (tmp_path / helper).unlink()
+    additions = {"src/lib/omnia/activity.ts", "src/app/api/omnia/telemetry/route.ts"}
+    for relative in additions:
+        (tmp_path / relative).unlink()
     routes = (
         "src/app/api/max/session/route.ts",
         "src/app/api/omnia/actions/route.ts",
@@ -58,11 +61,11 @@ def test_actual_overlay_delivers_new_route_import_closure_in_one_archive(tmp_pat
 
     core = Core()
     apply_public_core_overlay(core)
-    assert uploads == [set(routes) | {helper}]
+    assert uploads == [set(routes) | {helper} | additions]
     apply_public_core_overlay(core)
     assert len(uploads) == 1
     assert product.read_text().endswith("'Coffee';}")
-    for route in ("max/session", "omnia/actions", "omnia/events"):
+    for route in ("max/session", "omnia/actions", "omnia/events", "omnia/telemetry"):
         result = subprocess.run(
             ["node", str(HARNESS)],
             input=json.dumps(
@@ -70,7 +73,8 @@ def test_actual_overlay_delivers_new_route_import_closure_in_one_archive(tmp_pat
                     "project": str(uuid4()),
                     "tree": str(tmp_path / "src"),
                     "route": route,
-                    "body": {"initData": "forged"},
+                    "body": {"eventType": "item_view", "eventId": str(uuid4())}
+                    if route == "omnia/telemetry" else {"initData": "forged"},
                     "actor": None,
                     "public": True,
                 }

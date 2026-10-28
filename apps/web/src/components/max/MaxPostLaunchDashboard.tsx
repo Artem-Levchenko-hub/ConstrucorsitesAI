@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Check, CircleAlert, ExternalLink, Loader2, RefreshCw } from "lucide-react";
+import { ArrowUpRight, Check, ChevronDown, CircleAlert, ExternalLink, Loader2, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { MaxOwnerAnalytics } from "@/components/max/MaxOwnerAnalytics";
 import { MaxSectionShell } from "@/components/max/MaxSectionShell";
@@ -14,6 +14,7 @@ import { getMaxPublicationState } from "@/lib/max-publication-state";
 import { isMaxDeployActive } from "@/lib/max-launch-state";
 import { relativeDateLabel } from "@/lib/relative-date";
 import { MAX_STATUS_COPY, MAX_UNKNOWN_LABEL } from "@/lib/max-status-copy";
+import "./max-dashboard.css";
 
 const phaseLabels: Record<DeployPhase, string> = {
   idle: "Ещё не запускалась", queued: "В очереди", building: "Сборка", pushing: "Передача сборки",
@@ -59,28 +60,29 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
   function refreshStatus() { void readiness.refetch(); void deploy.refetch(); void runtime.refetch(); void integration.refetch(); }
 
   return (
-    <MaxSectionShell projectId={projectId} projectName={projectName} active="dashboard" eyebrow="Управление" title="Обзор приложения" lead="Публикация и подключения вашего приложения.">
-      <div className="max-dashboard-overview">
+    <MaxSectionShell projectId={projectId} projectName={projectName} active="dashboard" eyebrow={projectName} title="Статистика" lead="Пользователи и действия в приложении">
+      <MaxOwnerAnalytics projectId={projectId} />
+      <section className="max-dashboard-operations" aria-label="Публикация и подключения">
         <section className="max-dashboard-project" aria-label="Ваше приложение">
+          <div className="max-dashboard-status-line">
           <p className={statusError ? "text-danger-fg" : published ? "text-success-fg" : "text-fg-secondary"} role="status">{published ? <Check className="size-4" /> : statusError ? <CircleAlert className="size-4" /> : <Loader2 className={`size-4 ${readiness.isPending || deploy.isPending ? "animate-spin" : ""}`} />}{statusLabel}</p>
-          <h2>{projectName}</h2>
-          {url ? <a className="max-dashboard-url" href={url} target="_blank" rel="noreferrer">{url}<ExternalLink className="size-4 shrink-0" /></a> : <p className="text-sm text-fg-secondary">{statusError ? MAX_STATUS_COPY.publication.hint : "Постоянный адрес приложения появится после публикации."}</p>}
           <div className="max-dashboard-actions">
             {url ? <Button asChild><a href={url} target="_blank" rel="noreferrer">Открыть приложение <ArrowUpRight className="size-4" /></a></Button>
               : <Button asChild><Link href={`/max/${projectId}?panel=publish`}>{active ? "Ход публикации" : "Подготовить запуск"}</Link></Button>}
             <Button asChild variant="outline"><Link href={`/max/${projectId}`}>Редактировать</Link></Button>
           </div>
-          {!statusError && (hasActiveProjection ? activePublication && readiness.isSuccess && !currentPublished : publicationState === "outdated") && <p className="max-launch-notice">После последней публикации появились изменения. Проверьте их в редакторе и опубликуйте обновление.</p>}
+          </div>
+          {statusError && <p className="max-dashboard-status-hint">{MAX_STATUS_COPY.publication.hint}</p>}
+          {!statusError && (hasActiveProjection ? activePublication && readiness.isSuccess && !currentPublished : publicationState === "outdated") && <p className="max-launch-notice">Есть неопубликованные изменения.</p>}
           {active && <p className="max-launch-notice" role="status">{phaseLabels[deploy.data!.phase]} — публикация выполняется на сервере.</p>}
           {latest?.phase === "failed" && <div role="alert" className="max-dashboard-error"><strong>Последняя публикация не завершилась</strong><p>{latest.error ?? "Проверьте готовность и повторите попытку."}</p></div>}
           {statusError && <Button variant="outline" className="mt-3" onClick={refreshStatus}>{MAX_STATUS_COPY.publication.retry}</Button>}
-          <Link className="max-dashboard-settings-link" href={`/max/${projectId}?data=details`}>Данные и настройки приложения <ArrowUpRight className="size-4" /></Link>
         </section>
+        <details className="max-dashboard-inspect">
+          <summary>Публикация и подключения<ChevronDown className="size-4" aria-hidden="true" /></summary>
+          <div className="max-dashboard-overview">
         <section className="max-dashboard-release" aria-labelledby="max-release-heading">
-          <h2 id="max-release-heading">Последняя публикация</h2>
-          {/* Раньше здесь стояли прочерки в трёх полях из четырёх: пустой
-              прочерк читается как поломка, а не как «этого ещё не было».
-              Пока публикаций нет, вместо таблицы — одна честная строка. */}
+          <h2 id="max-release-heading">Опубликованная версия</h2>
           {!everPublished ? (
             <p className="max-dashboard-empty">
               {statusError
@@ -89,7 +91,7 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
                   ? "Проверяем, была ли публикация…"
                   : hasActiveProjection
                     ? "Опубликованная версия не подтверждена. Адрес появится после успешной публикации."
-                    : "Публикаций ещё не было. Здесь появится, что именно опубликовано и по какому адресу открывается."}
+                    : "Публикаций ещё не было."}
             </p>
           ) : (
             <dl>
@@ -102,20 +104,18 @@ export function MaxPostLaunchDashboard({ projectId, projectName }: { projectId: 
           )}
           <p className="max-dashboard-monitoring-note">Приложение проверяется при каждой публикации. Постоянного наблюдения за доступностью пока нет: если приложение перестанет открываться между публикациями, мы не узнаем об этом сами — напишите нам.</p>
         </section>
-      </div>
-
-      <MaxOwnerAnalytics projectId={projectId} />
-
       <section className="max-dashboard-system" aria-labelledby="max-system-heading">
-        <header><div><h2 id="max-system-heading">Состояние и подключения</h2><p>Данные среды разработки и связи с MAX</p></div><Button variant="outline" onClick={refreshStatus} disabled={runtime.isFetching || integration.isFetching || readiness.isFetching || deploy.isFetching}><RefreshCw className="size-4" />Обновить</Button></header>
+        <header><h2 id="max-system-heading">Подключения</h2><Button variant="outline" aria-label="Обновить подключения" onClick={refreshStatus} disabled={runtime.isFetching || integration.isFetching || readiness.isFetching || deploy.isFetching}><RefreshCw className="size-4" /></Button></header>
         <div className="max-dashboard-system-row"><div><h3>Рабочая среда редактора</h3><p>В ней открывается живое превью, пока вы правите приложение. На опубликованное приложение у пользователей она не влияет.</p></div>
           <div className="max-dashboard-runtime">{runtime.isError ? <p className="text-danger-fg">{MAX_UNKNOWN_LABEL}</p> : runtime.isPending ? <p>Проверяем…</p> : <p>{runtime.data ? runtimeLabels[runtime.data.state] : "Нет данных"}</p>}</div>
         </div>
         <div className="max-dashboard-system-row"><div><h3>Безопасный вход MAX</h3><p>Подключение бота для входа пользователей</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integrationLabel}</span><Button asChild variant="outline" size="sm"><Link href={`/max/${projectId}?panel=max`}>Настроить MAX</Link></Button></div>
-        <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3><p>Через неё MAX сообщает приложению о событиях: новых пользователях, нажатиях, сообщениях боту</p></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? MAX_UNKNOWN_LABEL : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
+        <div className="max-dashboard-system-row"><div><h3>Связь с MAX</h3></div><span className={integration.isError ? "text-danger-fg" : "text-fg-secondary"}>{integration.isError ? MAX_UNKNOWN_LABEL : integration.isPending ? "Проверяем…" : integration.data?.status === "active" ? "Подключена" : "Не активна"}</span></div>
       </section>
-
-
+          </div>
+          <Link className="max-dashboard-settings-link" href={`/max/${projectId}?data=details`}>Данные и настройки<ArrowUpRight className="size-4" /></Link>
+        </details>
+      </section>
     </MaxSectionShell>
   );
 }

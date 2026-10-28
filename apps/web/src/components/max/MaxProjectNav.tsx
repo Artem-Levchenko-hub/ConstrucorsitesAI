@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import {
   Bot,
+  ChartNoAxesCombined,
   Check,
   FileCheck2,
   Rocket,
@@ -22,23 +23,13 @@ export type MaxProjectNavKey =
   | "publish"
   | "dashboard";
 
-/**
- * Четыре пункта вместо шести.
- *
- * «MAX» — это название мессенджера, а не раздел; «После запуска» — момент
- * времени, а не место. Владелец не понимал, где искать адрес приложения и куда
- * вставлять токен бота. Пункты названы делом и объединены по делу: бот и прочие
- * подключения — одно, подготовка запуска и адрес после него — другое. Старые
- * ключи разделов сохранены: страницы и ссылки на них продолжают работать.
- */
+// Постоянные адреса разделов: статистика не скрывается за пунктом запуска.
 const navigation: Array<{
   key: MaxProjectNavKey;
   /** Ключи разделов, которые подсвечивают этот пункт. */
   keys: MaxProjectNavKey[];
   label: string;
   suffix: string;
-  /** Куда ведёт пункт, когда приложение уже опубликовано. */
-  publishedSuffix?: string;
   icon: typeof Smartphone;
   stageId?: MaxJourneyStageId;
 }> = [
@@ -60,13 +51,13 @@ const navigation: Array<{
   },
   {
     key: "publish",
-    keys: ["publish", "dashboard"],
+    keys: ["publish"],
     label: "Запуск и адрес",
     suffix: "?panel=publish",
-    publishedSuffix: "/dashboard",
     icon: Rocket,
     stageId: "publish",
   },
+  { key: "dashboard", keys: ["dashboard"], label: "Статистика", suffix: "/dashboard", icon: ChartNoAxesCombined },
 ];
 
 export function MaxProjectNav({
@@ -86,11 +77,8 @@ export function MaxProjectNav({
     retry: false,
   });
   const journey = getMaxJourney(projectId, readiness.data?.items ?? []);
-  // После публикации «Запуск» перестаёт быть подготовкой и становится адресом
-  // и историей — ведём туда, где владелец их и ищет.
-  const published = readiness.isSuccess && journey.currentStage === undefined;
   const hrefFor = (item: (typeof navigation)[number]) =>
-    `/max/${projectId}${published && item.publishedSuffix ? item.publishedSuffix : item.suffix}`;
+    `/max/${projectId}${item.suffix}`;
 
   if (variant === "mobile") {
     return (
@@ -104,7 +92,7 @@ export function MaxProjectNav({
               href={hrefFor(item)}
               aria-current={selected ? "page" : undefined}
               className={cn(
-                "inline-flex h-10 items-center gap-2 rounded-[8px] px-3 text-xs",
+                "inline-flex h-11 items-center gap-2 rounded-[8px] px-3 text-xs",
                 selected
                   ? "bg-surface-base font-medium text-fg-primary"
                   : "text-fg-secondary hover:bg-surface-base",

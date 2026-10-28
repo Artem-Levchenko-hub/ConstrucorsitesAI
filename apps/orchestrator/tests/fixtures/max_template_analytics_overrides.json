@@ -1,18 +1,26 @@
 {
   "src/app/api/max/session/route.ts": {
-    "sha256": "ad1ae8cac635e7a69c4f58c26bb75d5a3b0cf63153eb44de900274fa1f3b4bf0",
+    "sha256": "087e755bf51da11ed34862eca4588da479e5ca3d05e08d5cd77fd1c16e9d4c9c",
     "mode": "100644"
   },
   "src/app/api/omnia/actions/route.ts": {
-    "sha256": "3778eb2cb18e6ed57dacf0eed20a2fe7a6e881df047cbbb5cb198345d3b14a10",
+    "sha256": "7ddc9f2591b568e746491720dbd9ae8d2349f2f38cfa72da1c38d8b00448cbf5",
     "mode": "100644"
   },
   "src/app/api/omnia/events/route.ts": {
-    "sha256": "e0a4a0c8312188d840dad670ab66d7b59ba0d3bb2e7619055cdf277cc7962d79",
+    "sha256": "ae21d269b4b0fa24668eead496fd1903d36ab5cdb87be79c432e4f17470ccf1e",
     "mode": "100644"
   },
   "src/lib/omnia/analytics.ts": {
-    "sha256": "59e7befebd89287831fbc484329d74c79acd321a4da62429202c8205d87fd2c4",
+    "sha256": "760cf529cc3ec4872eb1ce2418fdebe6421932e56f9932b4f33a9adb93993a14",
+    "mode": "100644"
+  },
+  "src/lib/omnia/activity.ts": {
+    "sha256": "d5ee0d5d87e72d660ec9cefd9e1d9c1ee55a0684d9b317436f082989043b5937",
+    "mode": "100644"
+  },
+  "src/app/api/omnia/telemetry/route.ts": {
+    "sha256": "3cd0a59e62ec3cbac039752234dbd5c0d063a8d1edbfb8870dcded3b319d6221",
     "mode": "100644"
   }
 }

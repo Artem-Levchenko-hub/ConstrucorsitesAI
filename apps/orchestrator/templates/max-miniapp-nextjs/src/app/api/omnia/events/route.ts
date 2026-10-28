@@ -4,6 +4,7 @@ import { z } from "zod";
 import { schema, withMaxUser } from "@/lib/db";
 import { analyticsEventId, forwardMaxAnalytics } from "@/lib/omnia/analytics";
 import { getMaxUser } from "@/lib/max/session";
+import { maxActivityKind, type MaxActivityType } from "@/lib/omnia/activity";
 
 const Event = z.object({
   eventName: z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/),
@@ -27,7 +28,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Payload too large" }, { status: 413 });
   }
   const eventId = input.eventId
-    ? analyticsEventId(`event:${user.id}:${input.eventId}`) : crypto.randomUUID();
+    ? analyticsEventId(`event:${user.id}:${input.eventId.toLowerCase()}`) : crypto.randomUUID();
   await withMaxUser(user.id, (tx) =>
     tx.insert(schema.maxAnalyticsEvents).values({
       id: eventId,
@@ -37,7 +38,8 @@ export async function POST(request: Request) {
     }).onConflictDoNothing({ target: schema.maxAnalyticsEvents.id }),
   );
   if (!input.eventName.startsWith("omnia_health_")) {
-    await forwardMaxAnalytics(user.id, eventId, "event");
+    await forwardMaxAnalytics(user.id, eventId, "event",
+      maxActivityKind(input.eventName) ? input.eventName as MaxActivityType : undefined);
   }
   return new NextResponse(null, { status: 204 });
 }
