@@ -92,19 +92,51 @@ function normalize(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
-/** Ties become explicit choices rather than an invented account-specific answer. */
-export function findSupportAnswers(question: string): readonly SupportAnswer[] {
+/** At most one typo in a substantial word; short identifiers and error codes remain exact. */
+function oneEdit(sample: string, term: string): boolean {
+  if (Math.abs(sample.length - term.length) > 1) return false;
+  let left = 0, right = 0, edits = 0;
+  while (left < sample.length && right < term.length) {
+    if (sample[left] === term[right]) { left++; right++; continue; }
+    if (++edits > 1) return false;
+    if (sample.length === term.length && sample[left] === term[right + 1] && sample[left + 1] === term[right]) { left += 2; right += 2; continue; }
+    if (sample.length >= term.length) left++;
+    if (sample.length <= term.length) right++;
+  }
+  return edits + sample.length - left + term.length - right <= 1;
+}
+
+function nearWord(word: string, term: string): boolean {
+  return term.length >= 5 && word.length >= 4 && [term.length - 1, term.length, term.length + 1].some(size => oneEdit(word.slice(0, size), term));
+}
+
+function rankedAnswers(question: string, partial: boolean) {
   const text = normalize(question.slice(0, 500));
   if (!text) return [];
   const words = text.split(" ");
-  const ranked = supportAnswers.map(answer => ({
+  return supportAnswers.map(answer => ({
     answer,
     score: answer.keywords.reduce((score, keyword) => {
       const term = normalize(keyword);
-      const matches = term.includes(" ") ? text.includes(term)
-        : words.some(word => term === "pro" ? word === term : word.startsWith(term));
-      return score + (matches ? term.includes(" ") ? 3 : 1 : 0);
+      if (term.includes(" ")) return score + (text.includes(term) ? 3 : 0);
+      if (words.some(word => term === "pro" || /^\d+$/.test(term) ? word === term : word.startsWith(term))) return score + 1;
+      if (partial && words.some(word => nearWord(word, term))) return score + 0.5;
+      return score + (partial && words.some(word => word.length >= 3 && term.startsWith(word)) ? 0.25 : 0);
     }, 0),
   })).filter(item => item.score > 0).sort((a, b) => b.score - a.score);
+}
+
+/** Suggestions are choices, never an automatic submission of a partial question. */
+export function searchSupportAnswers(question: string): readonly SupportAnswer[] {
+  if (normalize(question).length < 3) return [];
+  return rankedAnswers(question, true).slice(0, 3).map(item => item.answer);
+}
+export function relatedSupportAnswers(answer: SupportAnswer): readonly SupportAnswer[] {
+  return supportAnswers.filter(item => item.topic === answer.topic && item.id !== answer.id).slice(0, 2);
+}
+
+/** Ties become explicit choices rather than an invented account-specific answer. */
+export function findSupportAnswers(question: string): readonly SupportAnswer[] {
+  const ranked = rankedAnswers(question, false);
   return ranked.filter(item => item.score === ranked[0]?.score).slice(0, 3).map(item => item.answer);
 }
