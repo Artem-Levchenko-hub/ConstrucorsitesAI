@@ -26,6 +26,10 @@ from yleum_orchestrator.schemas.publication_migration import (
 )
 from yleum_orchestrator.services.project_machine import write_controller_json
 from yleum_orchestrator.services.publication_migration_pg import MigrationIOError
+from yleum_orchestrator.services.publication_migration_schema import (
+    SchemaMismatchError,
+    schema_failure_evidence,
+)
 
 ACTIVE_STATES = frozenset({"preparing", "applying", "reconciling"})
 STATES = ACTIVE_STATES | {"prepared", "applied", "failed", "stale", "blocked"}
@@ -66,10 +70,11 @@ PRIVATE_FAILURE_CODES = frozenset(
 )
 
 
-def _failure_diagnostic(exc: BaseException, *, apply: bool) -> dict[str, str]:
+def _failure_diagnostic(exc: BaseException, *, apply: bool) -> dict[str, Any]:
     """Private static metadata only: never stringify an exception or copy its class name."""
     types = {
         MigrationIOError: "MigrationIOError",
+        SchemaMismatchError: "SchemaMismatchError",
         CellIdentityConflict: "CellIdentityConflict",
         ValidationError: "ValidationError",
         asyncio.CancelledError: "CancelledError",
@@ -79,7 +84,7 @@ def _failure_diagnostic(exc: BaseException, *, apply: bool) -> dict[str, str]:
         ValueError: "ValueError",
         TypeError: "TypeError",
     }
-    result = {
+    result: dict[str, Any] = {
         "phase": "apply" if apply else "preparation",
         "type": types.get(type(exc), "OtherError"),
     }
@@ -90,6 +95,10 @@ def _failure_diagnostic(exc: BaseException, *, apply: bool) -> dict[str, str]:
         and exc.args[0] in PRIVATE_FAILURE_CODES
     ):
         result["code"] = exc.args[0]
+    schema = schema_failure_evidence(exc)
+    if schema is not None:
+        result["code"] = "migration_full_schema_mismatch"
+        result["schema"] = schema
     return result
 
 

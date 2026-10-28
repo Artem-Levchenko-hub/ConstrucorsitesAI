@@ -112,6 +112,83 @@ async def test_preparation_records_exact_owned_failure_code_privately(tmp_path, 
     assert code not in status.model_dump_json()
 
 
+@pytest.mark.parametrize("apply", [False, True])
+@pytest.mark.parametrize("malformed", [False, True])
+async def test_schema_evidence_is_private_and_never_releases_unknown_effect(
+    tmp_path, apply, malformed,
+):
+    from yleum_orchestrator.services.publication_migration_schema import require_schema_dump
+
+    service, _, io = setup(tmp_path)
+
+    async def failed(*args):
+        if apply:
+            args[2]({"intent_xid": "12345", "effect_possible": True})
+        observed = "SELECT 'private_schema_canary" + ("" if malformed else "';")
+        require_schema_dump(observed, "SELECT 1;", stage="backup_restore")
+
+    if apply:
+        status = await prepared(service)
+        io.apply = failed
+        await service.confirm(request(), status.operation_id, status.plan_sha256, True)
+        await service.drain()
+        status = service.get(request().project_id, request().owner_id)
+    else:
+        io.prepare = failed
+        status = await prepared(service)
+    record = service._load(request().project_id, status.operation_id)
+    diagnostic = record["failure_diagnostic"]
+    assert diagnostic["type"] == "SchemaMismatchError"
+    assert diagnostic["code"] == "migration_full_schema_mismatch"
+    assert diagnostic["schema"]["stage"] == "backup_restore"
+    assert diagnostic["schema"]["first_difference"]["observed_kind"] == "sql_other"
+    assert diagnostic["schema"]["same_nonblank_lines"] is False
+    assert diagnostic["schema"]["same_statement_stream"] is (None if malformed else False)
+    assert record["state"] == ("reconciling" if apply else "failed")
+    assert record["effect_possible"] is apply
+    expected_code = "migration_outcome_unknown" if apply else "migration_preparation_failed"
+    assert status.error_code == expected_code
+    public = status.model_dump_json()
+    for hidden in (
+        "SchemaMismatchError", "backup_restore", "observed_sha256", "failure_diagnostic",
+        "same_nonblank_lines", "same_statement_stream",
+    ):
+        assert hidden not in public
+    assert "private_schema_canary" not in service._path(
+        request().project_id, status.operation_id,
+    ).read_text()
+
+
+@pytest.mark.parametrize("damage", [
+    "extra", "kind", "args", "subclass", "same_nonblank_lines", "same_statement_stream",
+])
+def test_schema_diagnostic_boundary_rejects_tampered_owned_attributes(damage):
+    from yleum_orchestrator.services.publication_migration import _failure_diagnostic
+    from yleum_orchestrator.services.publication_migration_schema import (
+        SchemaMismatchError,
+        require_schema_dump,
+    )
+
+    with pytest.raises(SchemaMismatchError) as caught:
+        require_schema_dump("SELECT 1;", "SELECT 2;", stage="source_recheck")
+    error = caught.value
+    if damage == "extra":
+        error.evidence["raw_sql"] = "private_schema_canary"
+    elif damage == "kind":
+        error.evidence["first_difference"]["observed_kind"] = "private_schema_canary"
+    elif damage == "args":
+        error.args = ("private_schema_canary",)
+    elif damage.startswith("same_"):
+        error.evidence[damage] = "private_schema_canary"
+    else:
+        error = type("private_schema_canary", (SchemaMismatchError,), {})(error.evidence)
+    result = _failure_diagnostic(error, apply=False)
+    assert "schema" not in result
+    assert "private_schema_canary" not in repr(result)
+    if damage == "subclass":
+        assert result["type"] == "OtherError"
+
+
 @pytest.mark.parametrize(
     "kind", ["owned_unknown", "multi_args", "foreign_owned_name", "private_type", "cancelled"]
 )

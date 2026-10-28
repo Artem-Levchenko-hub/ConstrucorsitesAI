@@ -15,6 +15,7 @@ from pglast.stream import RawStream
 
 from yleum_orchestrator.schemas.cell_publication import CellDeployRequest
 from yleum_orchestrator.services.machine_environment import MachineEnvironmentStore
+from yleum_orchestrator.services.project_database_schema_proof import legacy_schema_digest
 from yleum_orchestrator.services.project_machine import machine_effect
 from yleum_orchestrator.services.project_migrations import LEGACY_PATHS
 from yleum_orchestrator.services.publication_additive_plan import (
@@ -52,6 +53,10 @@ from yleum_orchestrator.services.publication_migration_pg import (
     require,
     row_proofs,
     verify_ledger,
+)
+from yleum_orchestrator.services.publication_migration_schema import (
+    read_schema_dump,
+    require_schema_dump,
 )
 
 
@@ -308,10 +313,12 @@ class PublicationMigrationIO:
         container = source._project_postgres()
         require(container is not None, "migration_source_database_stopped")
         source_pg = DockerPG(source.client, container)
-        source_schema = source_pg.full_schema()
+        source_dump = read_schema_dump(source_pg)
+        source_schema = legacy_schema_digest(source_dump)
         require_schema(source_schema, sealed["schema_digest"])
         source_tables = read_catalog(source_pg)
-        live_schema = target.full_schema()
+        live_dump = read_schema_dump(target)
+        live_schema = legacy_schema_digest(live_dump)
         require_schema(live_schema, self.service._accepted_schema_digest(active))
         globals_dump = target.globals()
         globals_hash = legacy_globals_hash(globals_dump)
@@ -386,7 +393,7 @@ class PublicationMigrationIO:
         sandbox = RestoreSandbox(source.client, request.project_id, operation, storage["image"])
         with sandbox as restored:
             restore_backup(restored, packed)
-            require_schema(restored.full_schema(), live_schema)
+            require_schema_dump(read_schema_dump(restored), live_dump, stage="backup_restore")
             require(
                 read_catalog(restored) == live_tables and row_proofs(restored, live_tables) == rows,
                 "migration_backup_restore_mismatch",
@@ -403,7 +410,7 @@ class PublicationMigrationIO:
                 + ";".join(plan.statements)
                 + ";COMMIT;"
             )
-            require_schema(restored.full_schema(), source_schema)
+            require_schema_dump(read_schema_dump(restored), source_dump, stage="trial_migration")
             require(
                 read_catalog(restored) == source_tables
                 and row_proofs(restored, live_tables) == rows,
@@ -414,8 +421,8 @@ class PublicationMigrationIO:
             target.identify() == storage and legacy_globals_hash(target.globals()) == globals_hash,
             "migration_target_changed",
         )
-        require_schema(target.full_schema(), live_schema)
-        require_schema(source_pg.full_schema(), source_schema)
+        require_schema_dump(read_schema_dump(target), live_dump, stage="live_recheck")
+        require_schema_dump(read_schema_dump(source_pg), source_dump, stage="source_recheck")
         public_fields = [
             {"table": old.name, "name": c.name, "type": c.sql_type}
             for old, new in zip(live_tables, source_tables, strict=True)
@@ -656,6 +663,4 @@ class PublicationMigrationIO:
 
 
 def legacy_globals_hash(data: bytes) -> str:
-    from yleum_orchestrator.services.project_database_schema_proof import legacy_schema_digest
-
     return legacy_schema_digest(data.decode("utf-8"))
