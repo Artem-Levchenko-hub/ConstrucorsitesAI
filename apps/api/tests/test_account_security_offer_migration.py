@@ -105,7 +105,7 @@ def test_upgrade_adds_schema_and_empty_rollback_preserves_contracts(
         "email_notifications",
     )
     before = {table: _rows(db, table) for table in protected}
-    db.upgrade("head")
+    db.upgrade(NEW)
     names = {
         row[0] for row in db.fetch("SELECT tablename FROM pg_tables WHERE schemaname='public'")
     }
