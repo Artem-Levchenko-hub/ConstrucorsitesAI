@@ -20,14 +20,35 @@
 .balance-details summary { display: flex; gap: 10px; justify-content: space-between; align-items: center; min-height: 48px; cursor: pointer; list-style: none; color: var(--color-fg-primary); }
 .balance-details summary::-webkit-details-marker { display: none; }
 .balance-details summary > span { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.balance-details summary small { display: block; color: var(--color-fg-secondary); font-size: 14px; }
 .balance-details summary > svg { flex-shrink: 0; color: var(--color-fg-tertiary); transition: transform 220ms ease; }
 .balance-details[open] summary > svg { transform: rotate(180deg); }
-.balance-details dl { display: grid; gap: 8px; padding-bottom: 12px; }
-.balance-details dl > div { display: flex; justify-content: space-between; gap: 12px; }
-.balance-details dt { color: var(--color-fg-secondary); }
-.balance-details dd { font-variant-numeric: tabular-nums; }
-.balance-details p { font-size: 14px; color: var(--color-fg-secondary); margin-bottom: 12px; }
+.balance-details-body { display: grid; gap: 14px; padding: 2px 0 14px; }
+.balance-card .balance-details-body p { font-size: 14px; line-height: 1.5; margin: 0; }
+.balance-details[open] .balance-details-body { animation: balance-details-in 200ms ease-out; }
+.balance-package-breakdown, .balance-package-empty { padding: 14px; border: 1px solid var(--color-border-subtle); border-radius: 10px; background: var(--color-surface-2); }
+.balance-package-empty { display: flex; align-items: center; gap: 10px; color: var(--color-fg-secondary); }
+.balance-package-empty > svg { flex-shrink: 0; color: var(--color-fg-tertiary); }
+.balance-caption { color: var(--color-fg-secondary); }
+.balance-package-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin: 12px 0; }
+.balance-package-grid > div { min-width: 0; }
+.balance-package-grid > div + div { padding-left: 16px; border-left: 1px solid var(--color-border-default); }
+.balance-package-grid dt { color: var(--color-fg-secondary); font-size: 14px; }
+.balance-package-grid dd { font-size: 16px; font-weight: 550; font-variant-numeric: tabular-nums; margin-top: 4px; overflow-wrap: anywhere; }
+.balance-package-choice, .balance-edit-only { color: var(--color-fg-secondary); }
+.balance-card .balance-details-body .balance-edit-only { display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; }
+.balance-edit-only svg { flex-shrink: 0; margin-top: 2px; }
+.balance-conversion { display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); gap: 8px; align-items: center; min-height: 48px; padding: 10px; border: 1px solid var(--color-border-default); border-radius: 10px; }
+.balance-conversion > span { min-width: 0; display: flex; align-items: center; justify-content: center; gap: 6px; line-height: 1.5; }
+.balance-conversion svg { flex-shrink: 0; color: var(--color-accent-secondary); }
+.balance-conversion > svg { color: var(--color-fg-tertiary); }
+.balance-details-meta { display: grid; gap: 12px; }
+.balance-details-meta:empty { display: none; }
+.balance-reserve, .balance-period { display: flex; gap: 10px; align-items: flex-start; color: var(--color-fg-secondary); }
+.balance-details-meta svg { flex-shrink: 0; margin-top: 3px; }
+.balance-details-meta small, .balance-details-meta time { display: block; font-size: 14px; line-height: 1.5; margin-top: 2px; }
+.balance-details-meta time { color: var(--color-fg-primary); font-variant-numeric: tabular-nums; }
+.balance-card .balance-details-body .balance-payment-note { display: flex; align-items: flex-start; gap: 10px; padding-top: 12px; border-top: 1px solid var(--color-border-subtle); color: var(--color-fg-secondary); }
+.balance-payment-note svg { flex-shrink: 0; margin-top: 2px; color: var(--color-accent-secondary); }
 .balance-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; font-size: 14px; }
 .balance-actions a { display: inline-flex; justify-content: center; align-items: center; gap: 7px; min-height: 44px; border-radius: 8px; padding: 9px 10px; color: var(--color-accent-secondary); transition: background 180ms ease; }
 .balance-actions .balance-topup { background: var(--color-accent); color: var(--color-accent-fg); font-weight: 500; padding-inline: 14px; }
@@ -38,6 +59,8 @@
 .balance-card .balance-loading { font-size: 14px; color: var(--color-fg-secondary); }
 #billing-packages { scroll-margin-top: 24px; }
 @keyframes balance-reveal { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes balance-details-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@media (max-width: 380px) { .balance-conversion > span > svg { display: none; } }
 @media (max-width: 1100px) and (min-width: 801px) {
   .balance-card .balance-heading h2 { flex: 1; }
   .balance-state { margin-top: 4px; }
@@ -53,4 +76,5 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .balance-card *, .balance-card *::before, .balance-card *::after { animation: none; transition: none; }
+  .balance-details[open] .balance-details-body { animation: none; }
 }

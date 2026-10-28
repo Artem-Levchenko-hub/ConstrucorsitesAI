@@ -35,7 +35,7 @@ it("shows separate available generations and edits without counting held units t
   expect(container.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("44");
   expect(container.textContent).not.toContain("₽");
   expect(api.wallet).not.toHaveBeenCalled();
-  expect(container.textContent).toContain("7");
+  expect(container.querySelector(".balance-reserve")?.textContent).toContain("Учтено в остатке");
   expect(container.querySelector('a[href="#billing-packages"]')).not.toBeNull();
 });
 
@@ -80,4 +80,44 @@ it("shows placeholders while credits are loading", async () => {
   expect(container.querySelector('[aria-label="Доступно генераций"]')?.textContent).toBe("—");
   expect(container.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("—");
   expect(container.textContent).not.toContain("Лимиты исчерпаны");
+});
+
+it("opens a package breakdown in generation/edit units with an explicit alternative budget", async () => {
+  const container = await mount(credits);
+  await wait(() => expect(container.querySelector(".balance-details")).not.toBeNull());
+  const details = container.querySelector<HTMLDetailsElement>(".balance-details")!;
+  expect(details.open).toBe(false);
+  await act(async () => details.querySelector("summary")!.click());
+  expect(details.open).toBe(true);
+  const breakdown = details.querySelector('[aria-label="Лимиты из пакетов"]')!;
+  expect([...breakdown.querySelectorAll("dd")].map(e => e.textContent)).toEqual(["3", "20"]);
+  expect(details.textContent).toContain("Из них 5 — только для правок");
+  expect(details.querySelector(".balance-conversion")?.textContent).toContain("1 генерация");
+  expect(details.querySelector(".balance-conversion")?.textContent).toContain("5 правок");
+  expect(details.textContent).toContain("Общий остаток: генерации или правки");
+  expect(details.querySelector("time")?.getAttribute("datetime")).toBe(credits.period_end);
+  expect(details.textContent).not.toMatch(/единиц|Денежный|₽/);
+  await act(async () => details.querySelector("summary")!.click());
+  expect(details.open).toBe(false);
+});
+
+it("shows a concise empty package state without an imaginary reserve or renewal date", async () => {
+  const container = await mount({ ...credits, available_units: 0, flexible_units: 0,
+    edit_only_units: 0, reserved_units: 0, period_end: null });
+  await wait(() => expect(container.querySelector(".balance-package-empty")).not.toBeNull());
+  const details = container.querySelector(".balance-details")!;
+  expect(details.textContent).toContain("В пакетах пока нет правок");
+  expect(details.querySelector('[aria-label="Лимиты из пакетов"]')).toBeNull();
+  expect(details.querySelector(".balance-reserve")).toBeNull();
+  expect(details.querySelector("time")).toBeNull();
+});
+
+it("derives the conversion from API costs and avoids invalid or fractional equivalents", async () => {
+  let container = await mount({ ...credits, initial_build_units: 6, edit_units: 2 });
+  await wait(() => expect(container.querySelector(".balance-conversion")?.textContent).toContain("3 правки"));
+  await cleanup?.(); cleanup = undefined;
+  container = await mount({ ...credits, initial_build_units: 5, edit_units: 3 });
+  await wait(() => expect(container.querySelector(".balance-details")).not.toBeNull());
+  expect(container.querySelector(".balance-conversion")).toBeNull();
+  expect(container.textContent).not.toMatch(/NaN|Infinity/);
 });

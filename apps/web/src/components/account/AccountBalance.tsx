@@ -1,9 +1,9 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { ArrowUpRight, Boxes, ChevronDown, PencilLine, WalletCards } from "lucide-react";
+import { ArrowUpRight, BadgeCheck, Boxes, CalendarDays, ChevronDown, Clock3, Equal, PencilLine, WalletCards } from "lucide-react";
 import Link from "next/link";
-import { getGenerationCredits } from "@/lib/api/account";
+import { getGenerationCredits, type GenerationCredits } from "@/lib/api/account";
 import { allowanceCount } from "@/lib/billing-allowances";
 import { date, QueryError } from "./account-presentation";
 import "./account-balance.css";
@@ -18,6 +18,37 @@ function PlanRemainder({ remaining, limit, label }: { remaining: number; limit: 
       <span style={{ width: `${limit > 0 ? value / limit * 100 : 0}%` }} />
     </span>
   </div>;
+}
+
+function CreditDetails({ data, generations, edits }: { data: GenerationCredits; generations: number; edits: number }) {
+  const editOnly = data.edit_units > 0 ? Math.floor(data.edit_only_units / data.edit_units) : 0;
+  const exchange = data.edit_units > 0 ? data.initial_build_units / data.edit_units : 0;
+  const hasExchange = exchange > 0 && Number.isInteger(exchange);
+
+  return <details className="balance-details">
+    <summary><span>Подробности</span><ChevronDown size={16} aria-hidden="true" /></summary>
+    <div className="balance-details-body">
+      {data.available_units > 0 ? <div className="balance-package-breakdown">
+        <p className="balance-caption">Из пакетов</p>
+        <dl className="balance-package-grid" aria-label="Лимиты из пакетов">
+          <div><dt>Генерации</dt><dd>{generations.toLocaleString("ru-RU")}</dd></div>
+          <div><dt>Правки</dt><dd>{edits.toLocaleString("ru-RU")}</dd></div>
+        </dl>
+        <p className="balance-package-choice">Общий остаток: генерации или правки</p>
+        {editOnly > 0 && <p className="balance-edit-only"><PencilLine size={16} aria-hidden="true" />Из них {editOnly} — только для правок</p>}
+      </div> : <div className="balance-package-empty"><Boxes size={20} aria-hidden="true" /><p>В пакетах пока нет правок</p></div>}
+      {hasExchange && <div className="balance-conversion" aria-label="Расход общего пакета">
+        <span><Boxes size={16} aria-hidden="true" />1 генерация</span>
+        <Equal size={16} aria-label="равно" />
+        <span><PencilLine size={16} aria-hidden="true" />{allowanceCount(exchange, "edits")}</span>
+      </div>}
+      <div className="balance-details-meta">
+        {data.reserved_units > 0 && <div className="balance-reserve"><Clock3 size={16} aria-hidden="true" /><span>Запросы в работе<small>Учтено в остатке</small></span></div>}
+        {data.period_end && <div className="balance-period"><CalendarDays size={16} aria-hidden="true" /><span>Период тарифа до<time dateTime={data.period_end}>{date(data.period_end)}</time></span></div>}
+      </div>
+      <p className="balance-payment-note"><BadgeCheck size={16} aria-hidden="true" /><span>Пакет начислим после подтверждения оплаты.</span></p>
+    </div>
+  </details>;
 }
 
 /** Availability in the product's two units: initial generations and edits. */
@@ -52,17 +83,7 @@ export function AccountBalance() {
     </div>
     {credits.isPending && <p className="balance-loading" role="status">Загружаем остатки…</p>}
     <QueryError error={credits.error} retry={() => void credits.refetch()} />
-    {data && <details className="balance-details">
-      <summary><span>Подробности{data.available_units > 0 && <small>В пакетах: {allowanceCount(packageEdits, "edits")}</small>}</span><ChevronDown size={16} aria-hidden="true" /></summary>
-      <dl>
-        <div><dt>В пакетах</dt><dd>{allowanceCount(packageEdits, "edits")}</dd></div>
-        <div><dt>Только для правок</dt><dd>{data.edit_only_units}</dd></div>
-        {data.reserved_units > 0 && <div><dt>В работе · уже учтено</dt><dd>{data.reserved_units}</dd></div>}
-      </dl>
-      <p>Пакет общий для генераций и правок. Новая генерация — {data.initial_build_units} единиц, правка — {data.edit_units}.</p>
-      {data.period_end && <p>Период тарифа до <time dateTime={data.period_end}>{date(data.period_end)}</time>.</p>}
-      <p>Начисления — после подтверждения оплаты.</p>
-    </details>}
+    {data && <CreditDetails data={data} generations={packageBuilds} edits={packageEdits} />}
     <footer className="balance-actions">
       <a href="#billing-packages" className="balance-topup">Выбрать пакет<ArrowUpRight size={17} aria-hidden="true" /></a>
       <Link href="/billing/transactions">Операции<ArrowUpRight size={16} aria-hidden="true" /></Link>
