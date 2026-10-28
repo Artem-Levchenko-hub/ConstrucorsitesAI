@@ -202,13 +202,14 @@ def test_exactly_one_head() -> None:
     assert len(heads) == 1, f"expected exactly one head, found {sorted(heads)}"
 
 
-def test_account_security_extends_the_only_migration_head() -> None:
+def test_security_and_analytics_extend_the_only_migration_head() -> None:
     # Mutation caught: placing execution ownership on the wrong parent or forking.
     chain = _chain()
     downs = {down for down in chain.values() if down is not None}
     heads = sorted(revision for revision in chain if revision not in downs)
     assert heads == [_CURRENT_HEAD]
-    assert chain[_CURRENT_HEAD] == "0099_pro_payment_check_price"
+    assert chain[_CURRENT_HEAD] == "0100_credit_adjustments"
+    assert chain["0100_credit_adjustments"] == "0099_pro_payment_check_price"
     assert chain["0099_pro_payment_check_price"] == "0098_account_security_offers"
     assert chain["0098_account_security_offers"] == "0097_public_prices"
     assert chain["0097_public_prices"] == "0096_support_tickets"
