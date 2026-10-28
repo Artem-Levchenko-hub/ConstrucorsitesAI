@@ -17,6 +17,11 @@ function SupportHeader() {
   return <header className="support-header"><span className="support-brand"><YleumMark tone="mono" /></span><div><DialogTitle>Поддержка Yleum</DialogTitle><DialogDescription>Помощник и команда поддержки</DialogDescription></div></header>;
 }
 
+function preserveSuggestionEscape(event: KeyboardEvent) {
+  // Radix handles Escape on document capture, before the assistant returns focus.
+  if (event.target instanceof Element && event.target.closest(".support-suggestions")) event.preventDefault();
+}
+
 function subscribeViewport(changed: () => void) {
   const viewport = window.visualViewport;
   viewport?.addEventListener("resize", changed); viewport?.addEventListener("scroll", changed);
@@ -125,7 +130,7 @@ function SupportSession({ context, available, open, checking, newCount }: { cont
     finally { busy.current = false; setPending(false); }
   }
   if (!open || !available) return null;
-  return <DialogContent data-max-studio className="support-dialog" overlayClassName="support-overlay" style={viewport.style} data-compact={viewport.compact || undefined}>
+  return <DialogContent data-max-studio className="support-dialog" overlayClassName="support-overlay" style={viewport.style} data-compact={viewport.compact || undefined} onEscapeKeyDown={preserveSuggestionEscape}>
     <SupportHeader />
     {context.is_admin && <a className="support-admin-link" href="/admin/max?tab=support">Обращения пользователей{newCount ? " · " + newCount + " новых" : ""}</a>}
     {checking && <p className="support-checking" role="status">Проверяем доступ…</p>}

@@ -30,6 +30,19 @@ it("retains the assistant conversation and unsent question when closed and reope
   await click("Новый диалог"); expect(document.querySelector('[role="log"]')).toBeNull();
   expect(posts).toHaveLength(0);
 });
+it("returns Escape from a suggestion to the composer before closing the actual dialog", async () => {
+  await mount(); await click("Открыть поддержку"); await fill("Вопрос автопомощнику", "оплата");
+  const suggestion = document.querySelector<HTMLButtonElement>(".support-suggestions button")!;
+  const input = document.querySelector<HTMLTextAreaElement>('[aria-label="Вопрос автопомощнику"]')!;
+  suggestion.focus();
+  await act(async () => suggestion.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+  expect(document.activeElement).toBe(input);
+  expect(input.value).toBe("оплата");
+  await act(async () => input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(posts).toHaveLength(0);
+});
 it("preserves the operator draft when only the assistant dialogue is restarted", async () => {
   await open(); await fill("Тема обращения", "Личная тема"); await fill("Сообщение", "Не терять этот текст");
   await click("Автопомощник"); await click("Новый диалог"); await click("Написать оператору");
