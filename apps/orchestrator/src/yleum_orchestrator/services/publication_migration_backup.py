@@ -33,10 +33,13 @@ from yleum_orchestrator.services.publication_migration_pg import (
     MAX_DUMP,
     MAX_OUTPUT,
     MIGRATION_PGOPTIONS,
+    PUBLIC_SCHEMA_OWNER_STATEMENTS,
     MigrationIOError,
     psql_command,
+    read_public_schema_owner,
     require,
     schema_command,
+    validated_public_schema_owner,
 )
 from yleum_orchestrator.services.restoration_database import (
     close_controller_socket,
@@ -430,7 +433,8 @@ class RestoreSandbox(AbstractContextManager[DockerPG]):
             raise MigrationIOError("migration_verifier_cleanup_unconfirmed") from None
 
 
-def restore_backup(pg: DockerPG, packed: bytes) -> None:
+def restore_backup(pg: DockerPG, packed: bytes, *, public_schema_owner: str) -> None:
+    owner = validated_public_schema_owner(public_schema_owner)
     globals_dump, database_dump = unpack_backup(packed)
     pg.sql(restore_globals(globals_dump.decode("utf-8")))
     pg.command(
@@ -448,3 +452,7 @@ def restore_backup(pg: DockerPG, packed: bytes) -> None:
         ],
         data=database_dump,
     )
+    # Keep global no-owner/no-privileges restoration. Only public's validated
+    # owner must match: pg_dump emits its schema TOC entry for nondefault owners.
+    pg.sql(PUBLIC_SCHEMA_OWNER_STATEMENTS[owner])
+    require(read_public_schema_owner(pg) == owner, "migration_public_schema_owner_changed")

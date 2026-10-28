@@ -443,6 +443,83 @@ async def test_real_prepare_apply_preserves_old_rows_and_concurrent_insert(real_
     assert case.live.json("SELECT to_json(pickup) FROM public.orders WHERE id=6;") == "scheduled"
 
 
+@pytest.mark.parametrize("reader_mode", ["standalone", "backup_snapshot", "reconcile"])
+async def test_real_owner_read_waits_then_uses_fresh_snapshot(real_migration, reader_mode):
+    from yleum_orchestrator.services.publication_migration_io import _begin_backup_snapshot
+    from yleum_orchestrator.services.publication_migration_pg import read_public_schema_owner
+
+    case = real_migration
+    for pg in (case.source, case.live):
+        pg.sql("CREATE ROLE omnia_project_owner NOLOGIN; ALTER SCHEMA public OWNER TO postgres;")
+    case.active["schema_digest"] = case.live.full_schema()
+    if reader_mode == "reconcile":
+        prepared = await prepare(case)
+        applied = await case.io.apply(case.request, prepared, case.persist)
+        assert applied["state"] == "applied", safe_fault_summary(case, applied)
+    before = case.live.full_schema()
+
+    def standalone():
+        # Exercise real one-exec Docker transport with an adversarial default.
+        pg = SimpleNamespace(json=lambda sql: case.live.json(
+            "SET default_transaction_isolation='repeatable read'; " + sql,
+        ))
+        return read_public_schema_owner(pg)
+
+    def backup_snapshot():
+        with case.target.session() as session:
+            session.sql("SET default_transaction_isolation='repeatable read';")
+            _begin_backup_snapshot(session)
+            owner = read_public_schema_owner(session, standalone=False)
+            session.sql("COMMIT;")
+            # The same backend survives COMMIT; no session-level hold may remain.
+            assert session.json(
+                "SELECT pg_catalog.to_json(NOT EXISTS(SELECT FROM pg_catalog.pg_locks "
+                "WHERE locktype='advisory' AND pid=pg_catalog.pg_backend_pid()));"
+            ) is True
+            return owner
+
+    with case.target.session() as holder:
+        holder.sql(
+            "BEGIN; SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtext('omnia:project:roles:v1')); "
+            "ALTER SCHEMA public OWNER TO omnia_project_owner;"
+        )
+        if reader_mode == "reconcile":
+            task = asyncio.create_task(case.new_io().reconcile(case.saved))
+        else:
+            call = standalone if reader_mode == "standalone" else backup_snapshot
+            task = asyncio.create_task(asyncio.to_thread(call))
+        committed = False
+        try:
+            deadline = time.monotonic() + 3
+            waiting = False
+            while time.monotonic() < deadline and not task.done():
+                waiting = holder.json(
+                    "SELECT pg_catalog.to_json(EXISTS(SELECT FROM pg_catalog.pg_locks l "
+                    "WHERE l.locktype='advisory' AND NOT l.granted "
+                    "AND l.pid<>pg_catalog.pg_backend_pid() AND l.objid="
+                    "(pg_catalog.hashtext('omnia:project:roles:v1')::bigint & 4294967295)));"
+                )
+                if waiting:
+                    break
+                await asyncio.sleep(0.01)
+            assert waiting is True, "reader did not reach the real conflicting roles lock"
+            holder.sql("COMMIT;")
+            committed = True
+            result = await asyncio.wait_for(asyncio.shield(task), 15)
+        finally:
+            if not committed:
+                holder.sql("ROLLBACK;")
+            if not task.done():
+                await asyncio.wait_for(asyncio.shield(task), 15)
+    # Both owners are nondefault: the legacy no-owner dump cannot detect this drift.
+    assert case.live.full_schema() == before
+    if reader_mode == "reconcile":
+        assert result["state"] == "reconciling" and result["effect_possible"] is True
+    else:
+        assert result == "omnia_project_owner"
+
+
 @pytest.mark.parametrize(
     "unsupported",
     [

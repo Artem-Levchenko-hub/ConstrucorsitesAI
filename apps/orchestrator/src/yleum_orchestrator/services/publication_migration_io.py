@@ -50,14 +50,59 @@ from yleum_orchestrator.services.publication_migration_pg import (
     identifier,
     pg_identity,
     read_catalog,
+    read_public_schema_owner,
     require,
     row_proofs,
+    validated_public_schema_owner,
     verify_ledger,
 )
 from yleum_orchestrator.services.publication_migration_schema import (
     read_schema_dump,
     require_schema_dump,
 )
+
+
+def _prepared_public_schema_owner(prepared: dict[str, Any]) -> str:
+    owner = validated_public_schema_owner(prepared.get("public_schema_owner"))
+    aad = prepared.get("backup_aad")
+    require(type(aad) is dict, "migration_public_schema_owner_binding_invalid")
+    bound_owner = cast(dict[str, Any], aad).get("public_schema_owner")
+    require(
+        validated_public_schema_owner(bound_owner) == owner,
+        "migration_public_schema_owner_binding_invalid",
+    )
+    return owner
+
+
+def _require_public_schema_owner(session: Any, owner: str, *, standalone: bool = True) -> None:
+    require(
+        read_public_schema_owner(session, standalone=standalone) == owner,
+        "migration_public_schema_owner_changed",
+    )
+
+
+def _begin_backup_snapshot(session: Any) -> None:
+    # Wait BEFORE creating the repeatable-read snapshot, then hand ownership
+    # to the transaction lock. Never rely on websocket close to release it.
+    session.sql(
+        "SELECT pg_catalog.pg_advisory_lock(pg_catalog.hashtext('omnia:project:roles:v1'));"
+    )
+    try:
+        session.sql(
+            "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; "
+            "SET LOCAL statement_timeout='45s'; SET LOCAL lock_timeout='5s'; "
+            "SET LOCAL idle_in_transaction_session_timeout='180s'; "
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtext('omnia:project:roles:v1'));"
+        )
+    except Exception:
+        session.sql("ROLLBACK;")
+        raise
+    finally:
+        require(session.json(
+            "SELECT pg_catalog.to_json(pg_catalog.pg_advisory_unlock("
+            "pg_catalog.hashtext('omnia:project:roles:v1')));"
+        ) is True, "migration_owner_lock_release_unconfirmed")
 
 
 def verify_pending(
@@ -313,6 +358,7 @@ class PublicationMigrationIO:
         container = source._project_postgres()
         require(container is not None, "migration_source_database_stopped")
         source_pg = DockerPG(source.client, container)
+        public_schema_owner = read_public_schema_owner(source_pg)
         source_dump = read_schema_dump(source_pg)
         source_schema = legacy_schema_digest(source_dump)
         require_schema(source_schema, sealed["schema_digest"])
@@ -323,12 +369,9 @@ class PublicationMigrationIO:
         globals_dump = target.globals()
         globals_hash = legacy_globals_hash(globals_dump)
         with target.session() as session:
-            session.sql(
-                "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; "
-                "SET LOCAL statement_timeout='45s'; SET LOCAL lock_timeout='5s'; "
-                "SET LOCAL idle_in_transaction_session_timeout='180s';"
-            )
+            _begin_backup_snapshot(session)
             snapshot = session.json("SELECT to_json(pg_catalog.pg_export_snapshot());")
+            _require_public_schema_owner(session, public_schema_owner, standalone=False)
             require(
                 isinstance(snapshot, str) and re.fullmatch(r"[0-9A-F-]+", snapshot) is not None,
                 "migration_snapshot_invalid",
@@ -366,6 +409,7 @@ class PublicationMigrationIO:
             "live_schema": live_schema,
             "target_schema": source_schema,
             "contract": contract,
+            "public_schema_owner": public_schema_owner,
         }
         backup = PrivateBackup(self.service.root, fingerprint_key(self.service.root))
         backup_receipt = backup.save(request.project_id, operation, packed, aad)
@@ -392,7 +436,7 @@ class PublicationMigrationIO:
         )
         sandbox = RestoreSandbox(source.client, request.project_id, operation, storage["image"])
         with sandbox as restored:
-            restore_backup(restored, packed)
+            restore_backup(restored, packed, public_schema_owner=public_schema_owner)
             require_schema_dump(read_schema_dump(restored), live_dump, stage="backup_restore")
             require(
                 read_catalog(restored) == live_tables and row_proofs(restored, live_tables) == rows,
@@ -423,6 +467,9 @@ class PublicationMigrationIO:
         )
         require_schema_dump(read_schema_dump(target), live_dump, stage="live_recheck")
         require_schema_dump(read_schema_dump(source_pg), source_dump, stage="source_recheck")
+        _require_public_schema_owner(source_pg, public_schema_owner)
+        with target.session() as session:
+            _require_public_schema_owner(session, public_schema_owner)
         public_fields = [
             {"table": old.name, "name": c.name, "type": c.sql_type}
             for old, new in zip(live_tables, source_tables, strict=True)
@@ -448,6 +495,7 @@ class PublicationMigrationIO:
             "pending_migrations": pending,
             "backup": backup_receipt,
             "backup_aad": aad,
+            "public_schema_owner": public_schema_owner,
             "backup_verified": True,
             "sandbox_before_sha256": live_schema,
             "sandbox_after_sha256": source_schema,
@@ -506,6 +554,7 @@ class PublicationMigrationIO:
                 prepared.get("effect_possible") is False and prepared.get("intent_xid") is None,
                 "migration_effect_already_possible",
             )
+            public_schema_owner = _prepared_public_schema_owner(prepared)
             require(
                 _source_binding(request) == prepared["source_binding"]
                 and datetime.now(UTC) < datetime.fromisoformat(prepared["expires_at"]),
@@ -539,11 +588,14 @@ class PublicationMigrationIO:
                 "migration_data_contract_changed",
             )
             source_pg = DockerPG(source.client, source._project_postgres())
+            _require_public_schema_owner(source_pg, public_schema_owner)
             require_schema(source_pg.full_schema(), sealed["schema_digest"])
             require_schema(sealed["schema_digest"], plan.binding.target_schema_sha256)
             target, _ = self._target(request, prepared)
             require(target.identify() == prepared["storage"], "migration_storage_changed")
             require_schema(target.full_schema(), plan.binding.live_schema_sha256)
+            with target.session() as session:
+                _require_public_schema_owner(session, public_schema_owner)
             require(
                 legacy_globals_hash(target.globals()) == prepared["globals_sha256"],
                 "migration_globals_changed",
@@ -559,6 +611,7 @@ class PublicationMigrationIO:
                     "SELECT pg_catalog.pg_advisory_xact_lock("
                     "hashtext('omnia:project:migrations:v1'));"
                 )
+                _require_public_schema_owner(session, public_schema_owner, standalone=False)
                 lock_tables = sorted([t.name for t in live_tables] + [LEDGER])
                 session.sql(
                     "LOCK TABLE "
@@ -606,6 +659,7 @@ class PublicationMigrationIO:
                     and row_proofs(session, live_tables) == before_rows,
                     "migration_transaction_postcondition_failed",
                 )
+                _require_public_schema_owner(session, public_schema_owner, standalone=False)
                 patch = {
                     "precommit_verified": True,
                     "precommit_rows_sha256": digest(before_rows),
@@ -644,16 +698,27 @@ class PublicationMigrationIO:
             target, _ = self._target(prepared=prepared)
             require(target.identify() == prepared["storage"], "migration_recovery_identity_changed")
             with target.session() as session:
+                session.sql(
+                    "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; "
+                    "SELECT pg_catalog.pg_advisory_xact_lock("
+                    "pg_catalog.hashtext('omnia:project:roles:v1'));"
+                )
                 status = session.json(
                     "SELECT to_json(pg_catalog.pg_xact_status('" + cast(str, xid) + "'::xid8));"
                 )
+                if status == "committed":
+                    _require_public_schema_owner(
+                        session, _prepared_public_schema_owner(prepared), standalone=False,
+                    )
+                # Keep the roles lock until the no-owner schema observation finishes.
+                matches = (
+                    status == "committed"
+                    and target.full_schema() == prepared["binding"]["target_schema_sha256"]
+                )
+                session.sql("ROLLBACK;")
             precommit = (
                 prepared.get("precommit_verified") is True
                 and prepared.get("precommit_plan_sha256") == prepared["plan_sha256"]
-            )
-            matches = (
-                status == "committed"
-                and target.full_schema() == prepared["binding"]["target_schema_sha256"]
             )
             return recovery_patch(
                 status, precommit=precommit, schema_matches=matches, xid=cast(str, xid)

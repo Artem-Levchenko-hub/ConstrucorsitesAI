@@ -184,6 +184,14 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
 ):
     import docker
 
+    from yleum_orchestrator.services.project_database_schema_proof import legacy_schema_digest
+    from yleum_orchestrator.services.publication_migration_pg import (
+        PUBLIC_SCHEMA_OWNER_STATEMENTS,
+        MigrationIOError,
+        read_public_schema_owner,
+    )
+    from yleum_orchestrator.services.publication_migration_schema import _lines, read_schema_dump
+
     assert os.environ.get("CI") == "true"
     assert (
         os.environ.get("DOCKER_HOST", "unix:///var/run/docker.sock")
@@ -205,12 +213,16 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
     try:
         with source as live:
             live.sql(
+                "CREATE ROLE omnia_project_owner NOLOGIN;"
+                "ALTER SCHEMA public OWNER TO omnia_project_owner;"
                 "CREATE TABLE public.orders(id bigint PRIMARY KEY, amount integer NOT NULL);"
                 "INSERT INTO public.orders VALUES(1,630),(2,650);"
                 "CREATE TABLE public.__omnia_project_migrations(name text PRIMARY KEY,"
                 "sha256 text NOT NULL,applied_at timestamptz NOT NULL DEFAULT now());"
             )
             before = live.full_schema()
+            before_dump = read_schema_dump(live)
+            assert read_public_schema_owner(live) == "omnia_project_owner"
             tables = read_catalog(live)
             rows = row_proofs(live, tables)
             packed = pack_backup(
@@ -251,7 +263,27 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
             with restored as verify:
                 assert restored.container.image.id == source.container.image.id
                 assert restored.container.attrs["Config"]["Image"] == restore_image
-                restore_backup(verify, packed)
+                # Observe the exact old no-owner restore before the real fix's
+                # one public-owner statement. Do not repeat restore or fabricate proof.
+                before_owner = []
+                original_sql = verify.sql
+
+                def observe_owner_restore(sql):
+                    if sql == PUBLIC_SCHEMA_OWNER_STATEMENTS["omnia_project_owner"]:
+                        assert read_public_schema_owner(verify) == "pg_database_owner"
+                        before_owner.append(read_schema_dump(verify))
+                    return original_sql(sql)
+
+                with monkeypatch.context() as observer:
+                    observer.setattr(verify, "sql", observe_owner_restore)
+                    restore_backup(verify, packed, public_schema_owner="omnia_project_owner")
+                assert len(before_owner) == 1
+                assert legacy_schema_digest(before_owner[0]) != before
+                assert len(_lines(before_dump)) - len(_lines(before_owner[0])) == 3
+                assert [s for s in _lines(before_dump) if s.strip()] == [
+                    s for s in _lines(before_owner[0]) if s.strip()
+                ]
+                assert read_public_schema_owner(verify) == "omnia_project_owner"
                 assert verify.full_schema() == before
                 assert row_proofs(verify, tables) == rows
                 verify.sql(plan)
@@ -259,6 +291,11 @@ def test_network_none_restore_proves_full_schema_and_original_rows_before_and_af
                 assert row_proofs(verify, tables) == rows
                 verify.sql("INSERT INTO public.orders(id,amount,pickup) VALUES(3,270,'now');")
                 assert verify.json("SELECT count(*) FROM public.orders;") == 3
+                verify.sql("ALTER DATABASE postgres OWNER TO omnia_project_owner;")
+                with pytest.raises(
+                    MigrationIOError, match="migration_public_schema_owner_unsupported",
+                ):
+                    read_public_schema_owner(verify)
         assert source.cleaned and restored.cleaned
     finally:
         client.close()

@@ -171,6 +171,17 @@ def test_backup_roundtrip_is_private_bound_and_exclusive(tmp_path):
         store.save(project, operation, b"replacement", {"binding": "one"})
 
 
+def test_backup_owner_aad_cannot_be_rebound_even_to_another_allowed_owner(tmp_path):
+    m = implementation()
+    store = m.PrivateBackup(tmp_path, b"k" * 32, max_bytes=4096)
+    project, operation = uuid4(), uuid4()
+    aad = {"public_schema_owner": "omnia_project_owner"}
+    receipt = store.save(project, operation, b"private fixture rows", aad)
+    assert store.load(project, operation, receipt, aad) == b"private fixture rows"
+    with pytest.raises(m.MigrationIOError):
+        store.load(project, operation, receipt, {"public_schema_owner": "postgres"})
+
+
 def test_backup_corruption_and_oversize_fail_without_plaintext(tmp_path):
     m = implementation()
     store = m.PrivateBackup(tmp_path, b"k" * 32, max_bytes=32)
@@ -220,3 +231,36 @@ def test_project_backup_budget_rejects_unbounded_retention(tmp_path):
         store.save(project, uuid4(), b"x" * 32, {})
     with pytest.raises(m.MigrationIOError):
         store.save(project, uuid4(), b"x", {})
+
+
+@pytest.mark.parametrize("owner", ["postgres", "pg_database_owner", "omnia_project_owner"])
+def test_restore_reinstates_only_public_schema_owner_after_archive(monkeypatch, owner):
+    from types import SimpleNamespace
+
+    m = implementation()
+    calls = []
+    monkeypatch.setattr(m, "restore_globals", lambda _: "GLOBALS;")
+    pg = SimpleNamespace(
+        sql=lambda statement: calls.append(("sql", statement)),
+        command=lambda argv, **kwargs: calls.append(("archive", argv)),
+        json=lambda _: owner,
+    )
+    m.restore_backup(pg, m.pack_backup(b"globals", b"database"), public_schema_owner=owner)
+    assert calls == [
+        ("sql", "GLOBALS;"),
+        ("archive", ["pg_restore", "--exit-on-error", "--no-owner", "--no-privileges",
+                     "-h", "/tmp", "-U", "postgres", "-d", "postgres"]),
+        ("sql", 'ALTER SCHEMA public OWNER TO "' + owner + '";'),
+    ]
+
+
+@pytest.mark.parametrize("owner", [None, True, "unknown", 'postgres"; DROP SCHEMA public;--'])
+def test_restore_owner_is_validated_before_any_sandbox_sql(owner):
+    from types import SimpleNamespace
+
+    m = implementation()
+    calls = []
+    pg = SimpleNamespace(sql=lambda value: calls.append(value))
+    with pytest.raises(m.MigrationIOError):
+        m.restore_backup(pg, b"invalid archive", public_schema_owner=owner)
+    assert calls == []

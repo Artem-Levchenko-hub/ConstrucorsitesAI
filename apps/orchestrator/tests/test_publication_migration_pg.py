@@ -647,3 +647,57 @@ def test_metadata_transport_rejects_unbounded_resolution_before_client_creation(
     monkeypatch.setattr(kubernetes.client, "ApiClient", forbidden)
     with pytest.raises(m.MigrationIOError):
         m._KubernetesReader(config)
+@pytest.mark.parametrize("owner", ["postgres", "pg_database_owner", "omnia_project_owner"])
+def test_public_schema_owner_uses_only_trusted_catalog_and_exact_allowlist(owner):
+    m = implementation()
+    statements = []
+
+    def query(sql):
+        statements.append(sql)
+        return owner
+
+    assert m.read_public_schema_owner(SimpleNamespace(json=query)) == owner
+    assert len(statements) == 1
+    assert "pg_catalog.pg_namespace" in statements[0]
+    assert "pg_catalog.pg_roles" in statements[0]
+    assert "pg_catalog.to_json" in statements[0]
+    assert "n.nspname='public'" in statements[0]
+    assert "db_owner.rolname='postgres'" in statements[0]
+    assert "pg_catalog.pg_database" in statements[0]
+    assert "pg_catalog.pg_advisory_xact_lock" in statements[0]
+    assert "omnia:project:roles:v1" in statements[0]
+    assert statements[0].startswith(
+        "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; SELECT pg_catalog.pg_advisory_xact_lock("
+    )
+    assert ")); SELECT pg_catalog.to_json(" in statements[0]
+    assert "WITH owner_lock" not in statements[0]
+    assert statements[0].endswith("; COMMIT;")
+
+
+def test_public_owner_inside_existing_locked_transaction_does_not_begin_or_relock():
+    m = implementation()
+    statements = []
+    session = SimpleNamespace(json=lambda sql: statements.append(sql) or "postgres")
+    assert m.read_public_schema_owner(session, standalone=False) == "postgres"
+    assert statements[0].startswith("SELECT pg_catalog.to_json(")
+    assert "advisory" not in statements[0]
+    assert "BEGIN" not in statements[0] and "COMMIT" not in statements[0]
+
+
+@pytest.mark.parametrize("owner", [None, True, 1, "unknown", "postgres;SELECT 1", ["postgres"]])
+def test_public_schema_owner_rejects_unsupported_values(owner):
+    m = implementation()
+    with pytest.raises(m.MigrationIOError, match="migration_public_schema_owner_unsupported"):
+        m.read_public_schema_owner(SimpleNamespace(json=lambda _: owner))
+    with pytest.raises(m.MigrationIOError):
+        m.validated_public_schema_owner(owner)
+
+
+def test_public_schema_owner_rejects_string_subclasses():
+    m = implementation()
+
+    class Foreign(str):
+        pass
+
+    with pytest.raises(m.MigrationIOError):
+        m.validated_public_schema_owner(Foreign("postgres"))

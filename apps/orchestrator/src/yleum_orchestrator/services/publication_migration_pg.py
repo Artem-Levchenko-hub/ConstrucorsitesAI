@@ -46,6 +46,43 @@ def require(ok: bool, code: str) -> None:
         raise MigrationIOError(code)
 
 
+PUBLIC_SCHEMA_OWNER_STATEMENTS = {
+    "postgres": 'ALTER SCHEMA public OWNER TO "postgres";',
+    "pg_database_owner": 'ALTER SCHEMA public OWNER TO "pg_database_owner";',
+    "omnia_project_owner": 'ALTER SCHEMA public OWNER TO "omnia_project_owner";',
+}
+
+
+def validated_public_schema_owner(value: object) -> str:
+    require(
+        type(value) is str and value in PUBLIC_SCHEMA_OWNER_STATEMENTS,
+        "migration_public_schema_owner_unsupported",
+    )
+    return cast(str, value)
+
+
+def read_public_schema_owner(session: Any, *, standalone: bool = True) -> str:
+    # In an existing transaction the caller must already hold the roles lock.
+    # Otherwise use ONE exec/transaction (DockerPG calls use separate psqls).
+    # The lock and catalog SELECT must be separate statements: a SELECT's
+    # snapshot predates any wait inside it, even with a MATERIALIZED lock CTE.
+    query = (
+        "SELECT pg_catalog.to_json(CASE WHEN db_owner.rolname='postgres' "
+        "THEN owner.rolname ELSE NULL END) FROM pg_catalog.pg_namespace n "
+        "JOIN pg_catalog.pg_roles owner ON owner.oid=n.nspowner "
+        "JOIN pg_catalog.pg_database d ON d.datname=pg_catalog.current_database() "
+        "JOIN pg_catalog.pg_roles db_owner ON db_owner.oid=d.datdba "
+        "WHERE n.nspname='public';"
+    )
+    if standalone:
+        query = (
+            "BEGIN ISOLATION LEVEL READ COMMITTED READ ONLY; "
+            "SELECT pg_catalog.pg_advisory_xact_lock("
+            "pg_catalog.hashtext('omnia:project:roles:v1')); " + query + " COMMIT;"
+        )
+    return validated_public_schema_owner(session.json(query))
+
+
 def _literal_endpoint(url: str, schemes: tuple[str, ...]) -> None:
     """Socket timeouts cannot bound DNS; accept only addresses needing no resolution."""
     try:
