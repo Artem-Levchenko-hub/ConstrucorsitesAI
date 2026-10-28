@@ -210,7 +210,7 @@ async def test_feed_bounds_cursor_and_owner_guard(client, db_session, monkeypatc
     assert (await client.get(url)).json()["items"] == []
     assert (await client.get(f"/api/projects/{uuid4()}/max/analytics/events")).status_code == 404
     stored = await db_session.get(Project, UUID(project))
-    stored.template = "webapp"
+    stored.template = "landing"
     await db_session.commit()
     assert (await client.get(url)).status_code == 409
     client.cookies.clear()
@@ -260,7 +260,7 @@ async def test_feed_http_owner_guard_without_database(monkeypatch, scope, expect
         if scope == "missing"
         else SimpleNamespace(
             owner_id=uuid4() if scope == "foreign" else owner,
-            template="webapp" if scope == "web" else "max_miniapp",
+            template="landing" if scope == "web" else "max_miniapp",
         )
     )
     session = AsyncMock()
