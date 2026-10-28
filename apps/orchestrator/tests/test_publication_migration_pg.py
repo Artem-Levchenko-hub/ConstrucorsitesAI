@@ -663,6 +663,9 @@ def test_public_schema_owner_uses_only_trusted_catalog_and_exact_allowlist(owner
     assert "pg_catalog.to_json" in statements[0]
     assert "n.nspname='public'" in statements[0]
     assert "db_owner.rolname='postgres'" in statements[0]
+    # SQL NULL becomes an empty psql field, not JSON null. Keep the unsupported
+    # owner sentinel JSON-encodable so the exact owner validator classifies it.
+    assert "THEN owner.rolname ELSE '' END" in statements[0]
     assert "pg_catalog.pg_database" in statements[0]
     assert "pg_catalog.pg_advisory_xact_lock" in statements[0]
     assert "omnia:project:roles:v1" in statements[0]
@@ -684,7 +687,7 @@ def test_public_owner_inside_existing_locked_transaction_does_not_begin_or_reloc
     assert "BEGIN" not in statements[0] and "COMMIT" not in statements[0]
 
 
-@pytest.mark.parametrize("owner", [None, True, 1, "unknown", "postgres;SELECT 1", ["postgres"]])
+@pytest.mark.parametrize("owner", [None, True, 1, "", "unknown", "postgres;SELECT 1", ["postgres"]])
 def test_public_schema_owner_rejects_unsupported_values(owner):
     m = implementation()
     with pytest.raises(m.MigrationIOError, match="migration_public_schema_owner_unsupported"):

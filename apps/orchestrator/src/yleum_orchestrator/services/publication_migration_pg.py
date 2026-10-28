@@ -68,7 +68,7 @@ def read_public_schema_owner(session: Any, *, standalone: bool = True) -> str:
     # snapshot predates any wait inside it, even with a MATERIALIZED lock CTE.
     query = (
         "SELECT pg_catalog.to_json(CASE WHEN db_owner.rolname='postgres' "
-        "THEN owner.rolname ELSE NULL END) FROM pg_catalog.pg_namespace n "
+        "THEN owner.rolname ELSE '' END) FROM pg_catalog.pg_namespace n "
         "JOIN pg_catalog.pg_roles owner ON owner.oid=n.nspowner "
         "JOIN pg_catalog.pg_database d ON d.datname=pg_catalog.current_database() "
         "JOIN pg_catalog.pg_roles db_owner ON db_owner.oid=d.datdba "
