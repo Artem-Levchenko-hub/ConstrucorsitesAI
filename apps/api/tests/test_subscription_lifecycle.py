@@ -98,14 +98,14 @@ async def test_auto_renew_requires_consent_and_can_be_cancelled_then_restored(
     )
     assert created.status_code == 201
     assert create_calls[0]["save_payment_method"] is True
-    assert create_calls[0]["amount"] == "2990.00"
+    assert create_calls[0]["amount"] == "1.00"
     payment_id = created.json()["id"]
 
     async def fake_get_payment(_provider_id: str) -> dict[str, object]:
         return {
             "id": "provider-saved-method",
             "status": "succeeded",
-            "amount": {"value": "2990.00", "currency": "RUB"},
+            "amount": {"value": "1.00", "currency": "RUB"},
             "metadata": {"payment_id": payment_id},
             "payment_method": {
                 "id": "saved-method-1",

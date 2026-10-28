@@ -160,7 +160,7 @@ async def test_success_and_replay_preserve_subscription_credits_and_only_queue_t
     quote = (await client.get("/api/billing/purchase-offer")).json()
     assert quote["price_rub"] == "1.00"
     public = (await client.get("/api/billing/plans")).json()
-    assert next(p for p in public if p["code"] == "pro")["price_rub"] == "2990.00"
+    assert next(p for p in public if p["code"] == "pro")["price_rub"] == "1.00"
     created = await _checkout(client, offer)
     assert created.status_code == 201, created.text
     payment = await db_session.get(Payment, UUID(created.json()["id"]))

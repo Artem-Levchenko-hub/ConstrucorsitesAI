@@ -15,8 +15,8 @@ from yleum_api.services import payment_state, payment_submission
 
 def test_new_plan_versions_preserve_prior_contracts():
     latest = {plan["code"]: plan for plan in DEFAULT_BILLING_PLANS if plan["is_active"]}
-    assert [latest[code]["version"] for code in ("free", "pro", "business")] == [4, 4, 3]
-    assert latest["pro"]["price_rub"] == Decimal("2990.00")
+    assert [latest[code]["version"] for code in ("free", "pro", "business")] == [4, 5, 3]
+    assert latest["pro"]["price_rub"] == Decimal("1.00")
     assert all(plan["included_credit_rub"] == 0 for plan in latest.values())
     assert latest["free"]["entitlements"]["initial_generations_lifetime"] == 1
     assert latest["free"]["entitlements"]["edits_lifetime"] == 1

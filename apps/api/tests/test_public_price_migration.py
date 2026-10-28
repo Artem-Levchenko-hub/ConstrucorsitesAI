@@ -27,6 +27,7 @@ PRO_V4 = "00000000-0000-4000-8000-000000000011"
 
 def _seed_pending_pro_checkout(
     database: ProjectCellMigrationDatabase, subscription_id: str,
+    *, version: int = 3, amount: Decimal = Decimal("1.00"),
 ) -> None:
     subscription = database.fetch(
         "UPDATE subscriptions SET auto_renew = true, "
@@ -38,8 +39,8 @@ def _seed_pending_pro_checkout(
         id=uuid4(), user_id=subscription["user_id"],
         billing_account_id=subscription["billing_account_id"],
         subscription_id=UUID(subscription_id), purpose="subscription_initial",
-        idempotency_key=str(uuid4()), package_code="subscription:pro:v3",
-        amount_rub=Decimal("1.00"), credit_rub=Decimal("0.00"),
+        idempotency_key=str(uuid4()), package_code=f"subscription:pro:v{version}",
+        amount_rub=amount, credit_rub=Decimal("0.00"),
         edit_units=0, edits_only=False, package_version=None, status="pending",
         provider_payment_id=None, provider_payload={},
     )
@@ -48,14 +49,14 @@ def _seed_pending_pro_checkout(
         return_url="https://example.invalid/billing/plan", save_payment_method=True,
         now=datetime(2026, 10, 27, 6, tzinfo=UTC),
     )
-    assert payment.provider_payload["_submission"]["arguments"]["amount"] == "1.00"
+    assert payment.provider_payload["_submission"]["arguments"]["amount"] == f"{amount:.2f}"
     frozen = json.dumps(payment.provider_payload).replace("'", "''")
     database.fetchval(f"""
         INSERT INTO payments
             (id, user_id, billing_account_id, subscription_id, purpose,
              idempotency_key, package_code, amount_rub, credit_rub, status, provider_payload)
         SELECT '{payment.id}'::uuid, user_id, billing_account_id, id, 'subscription_initial',
-               '{payment.idempotency_key}', 'subscription:pro:v3', 1.00, 0.00, 'pending',
+               '{payment.idempotency_key}', '{payment.package_code}', {amount}, 0.00, 'pending',
                '{frozen}'::jsonb
         FROM subscriptions WHERE id = '{subscription_id}'::uuid RETURNING id
     """)
