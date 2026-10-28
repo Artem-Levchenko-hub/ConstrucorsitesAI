@@ -114,6 +114,13 @@ class UsageWalletPublic(BaseModel):
     charges: int = 0
 
 
+class UsageCreditsPublic(BaseModel):
+    """Accepted generation/edit operations, independent of the units funding them."""
+
+    initial_generations: int = 0
+    edits: int = 0
+
+
 class EntitlementUsagePublic(BaseModel):
     key: str
     label: str
@@ -136,6 +143,7 @@ class BillingUsagePublic(BaseModel):
     publications: UsagePublicationsPublic
     free_generations: UsageFreeGenerationsPublic
     wallet: UsageWalletPublic
+    credits: UsageCreditsPublic = Field(default_factory=UsageCreditsPublic)
     entitlements: list[EntitlementUsagePublic]
     total_ai_cost_rub: Decimal
     total_ai_cost_breakdown: UsageCostBreakdownPublic = Field(

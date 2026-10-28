@@ -1,16 +1,14 @@
 "use client";
+import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getBillingUsage, type EntitlementUsage } from "@/lib/api/account";
-import { CostSource } from "@/components/ui/CostSource";
-import { date, money, QueryError } from "./account-presentation";
+import { getBillingUsage, type BillingUsage, type EntitlementUsage } from "@/lib/api/account";
+import { date, QueryError } from "./account-presentation";
+import "./account-usage.css";
 
-/**
- * "Расход за период": what the account spent and how much of the plan it uses,
- * straight from GET /api/billing/usage. The period is the paid month or, on
- * Free, the current calendar month.
- */
+const tabs = ["Сборки", "Списания", "Лимиты"] as const;
 const periodLabel = (source: string) =>
-  source === "subscription" ? "текущий оплаченный период" : source === "custom" ? "выбранный период" : "текущий месяц";
+  source === "subscription" ? "Оплаченный период" : source === "custom" ? "Выбранный период" : "Текущий месяц";
+const percent = (used: number, limit: number) => limit > 0 ? Math.min(100, Math.max(0, used / limit * 100)) : 0;
 
 function entitlementValue(item: EntitlementUsage): string {
   if (item.kind === "flag") return item.enabled === false ? "не входит в тариф" : `подключено: ${item.used}`;
@@ -18,61 +16,107 @@ function entitlementValue(item: EntitlementUsage): string {
   return `${item.used} из ${item.limit}`;
 }
 
+function UsageMeter({ used, limit, label, valueText, exceeded = false }: {
+  used: number; limit: number; label: string; valueText: string; exceeded?: boolean;
+}) {
+  // A zero or unlimited allowance cannot have a meaningful finite meter.
+  if (limit <= 0) return null;
+  return <div className={`usage-meter${exceeded ? " usage-meter-exceeded" : ""}`} role="meter"
+    aria-label={label} aria-valuemin={0} aria-valuemax={limit} aria-valuenow={Math.max(0, Math.min(used, limit))} aria-valuetext={valueText}>
+    <span style={{ width: `${percent(used, limit)}%` }} />
+  </div>;
+}
+
+function BuildsPanel({ data }: { data: BillingUsage }) {
+  const { generations } = data;
+  const outcomes = [
+    { key: "completed", label: "Завершено", value: generations.completed },
+    { key: "failed", label: "С ошибкой", value: generations.failed },
+    { key: "active", label: "В работе", value: generations.active },
+    { key: "cancelled", label: "Отменено", value: generations.cancelled },
+  ];
+  return <>
+    <div className="usage-builds-hero">
+      <div className="usage-hero">
+        <p className="usage-eyebrow">Сборки приложений</p>
+        <strong className="usage-hero-value">{generations.total}</strong>
+        <p className="usage-caption">{generations.total === 0 ? "Пока нет сборок за период" : "за период"}</p>
+      </div>
+      <div className="usage-outcomes">
+        <div className="usage-outcome-bar" aria-hidden="true">
+          {outcomes.map(item => <span key={item.key} className={`usage-tone-${item.key}`} style={{ width: `${percent(item.value, generations.total)}%` }} />)}
+        </div>
+        <dl className="usage-outcome-legend">
+          {outcomes.map(item => <div key={item.key}><dt><i className={`usage-tone-${item.key}`} aria-hidden="true" />{item.label}</dt><dd>{item.value}</dd></div>)}
+        </dl>
+      </div>
+    </div>
+    <div className="usage-footnotes">
+      <div><span>Публикации</span><strong>{data.publications.total}</strong></div>
+      <div><span>Опубликовано приложений</span><strong>{data.publications.projects}</strong></div>
+    </div>
+  </>;
+}
+
+function SpendingPanel({ data }: { data: BillingUsage }) {
+  if (!data.credits) return <p className="usage-caption" role="status">Данные о списаниях временно недоступны</p>;
+  return <div className="usage-credit-debits">
+    <p className="usage-caption">Списано за период</p>
+    <dl className="usage-debit-grid">
+      <div><dt>Первичные генерации</dt><dd>{data.credits.initial_generations}</dd></div>
+      <div><dt>Правки</dt><dd>{data.credits.edits}</dd></div>
+    </dl>
+    <p className="usage-caption usage-debit-note">Только подтверждённые списания</p>
+  </div>;
+}
+
+function LimitsPanel({ data }: { data: BillingUsage }) {
+  return <>
+    <div className="usage-limits-heading"><p className="usage-eyebrow">Что включено в тариф</p><strong>{data.plan?.name ?? "Ваш тариф"}</strong></div>
+    {data.entitlements.length === 0 ? <p className="usage-caption">Нет данных о лимитах</p> : <ul className="usage-limits">
+      {data.entitlements.map(item => {
+        const value = entitlementValue(item);
+        return <li key={item.key} className={item.exceeded ? "usage-limit-exceeded" : undefined}>
+          <div className="usage-limit-label"><span>{item.label}</span><strong>{value}</strong></div>
+          {item.kind === "limit" && item.limit != null && <UsageMeter used={item.used} limit={item.limit} label={item.label} valueText={`${value}${item.exceeded ? ", сверх тарифа" : ""}`} exceeded={item.exceeded} />}
+          {item.exceeded && <em>сверх тарифа</em>}
+        </li>;
+      })}
+    </ul>}
+  </>;
+}
+
+/** Read-only views of the same billing period; changing tabs never requests a charge. */
 export function AccountUsage() {
   const usage = useQuery({ queryKey: ["billing-usage"], queryFn: () => getBillingUsage() });
+  const [activeTab, setActiveTab] = useState(0);
+  const id = useId();
+  const tabRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const data = usage.data;
-  return <section className="account-panel account-usage" aria-label="Расход за период">
-    <h2>Расход за период</h2>
+  function onTabKey(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    const next = event.key === "ArrowRight" ? (index + 1) % tabs.length
+      : event.key === "ArrowLeft" ? (index + tabs.length - 1) % tabs.length
+        : event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : null;
+    if (next === null) return;
+    event.preventDefault();
+    setActiveTab(next);
+    tabRefs.current[next]?.focus();
+  }
+  return <section className="account-panel account-usage usage-dashboard" aria-label="Расход за период">
+    <div className="usage-heading"><h2>Расход за период</h2>
+      {data && <details className="usage-period"><summary>{periodLabel(data.period.source)}</summary><p><time dateTime={data.period.start}>{date(data.period.start)}</time><span> — </span><time dateTime={data.period.end}>{date(data.period.end)}</time>{data.plan && <span> · тариф {data.plan.name}</span>}</p></details>}
+    </div>
     <QueryError error={usage.error} retry={() => void usage.refetch()} />
-    {usage.isPending && <p role="status">Считаем расход…</p>}
+    {usage.isPending && <p className="usage-loading" role="status">Считаем расход…</p>}
     {data && <>
-      <p className="account-hint">
-        {periodLabel(data.period.source)}: {date(data.period.start)} — {date(data.period.end)}
-        {data.plan ? ` · тариф ${data.plan.name}` : ""}
-      </p>
-      <dl className="account-usage-grid">
-        <div>
-          <dt>Сборки приложений</dt>
-          <dd>{data.generations.total}<small>{money(data.generations.cost_rub)} за модели · завершено {data.generations.completed}, с ошибкой {data.generations.failed}</small>
-            <CostSource label="Сборки приложений" breakdown={data.generations.cost_breakdown} calls={data.generations.calls} costRub={data.generations.cost_rub} />
-          </dd>
-        </div>
-        <div>
-          <dt>Ответы ИИ посетителям приложений</dt>
-          <dd>{data.app_ai_answers.calls}<small>{money(data.app_ai_answers.cost_rub)}</small>
-            <CostSource label="Ответы ИИ посетителям приложений" breakdown={data.app_ai_answers.cost_breakdown} calls={data.app_ai_answers.calls} costRub={data.app_ai_answers.cost_rub} />
-          </dd>
-        </div>
-        {data.other_ai.calls > 0 && <div>
-          <dt>Другие обращения к ИИ</dt>
-          <dd>{money(data.other_ai.cost_rub)}<CostSource label="Другие обращения к ИИ" breakdown={data.other_ai.cost_breakdown} calls={data.other_ai.calls} costRub={data.other_ai.cost_rub} /></dd>
-        </div>}
-        <div>
-          <dt>Все расходы на ИИ</dt>
-          <dd>{money(data.total_ai_cost_rub)}<CostSource label="Все расходы на ИИ" breakdown={data.total_ai_cost_breakdown}
-            calls={data.generations.calls + data.app_ai_answers.calls + data.other_ai.calls} costRub={data.total_ai_cost_rub} /></dd>
-        </div>
-        <div>
-          <dt>Публикации</dt>
-          <dd>{data.publications.total}<small>приложений опубликовано: {data.publications.projects}</small></dd>
-        </div>
-        <div>
-          <dt>Списано с баланса</dt>
-          <dd>{money(data.wallet.debited_rub)}<small>зачислено {money(data.wallet.credited_rub)} · операций {data.wallet.charges}</small></dd>
-        </div>
-        <div>
-          <dt>Бесплатные сборки</dt>
-          <dd>{data.free_generations.unlimited ? "без ограничений" : `осталось ${data.free_generations.left} из ${data.free_generations.limit}`}</dd>
-        </div>
-      </dl>
-      <h3>Что включено в тариф и сколько уже используется</h3>
-      <ul className="account-usage-entitlements">
-        {data.entitlements.map(item => <li key={item.key} className={item.exceeded ? "exceeded" : undefined}>
-          <span>{item.label}</span>
-          <strong>{entitlementValue(item)}</strong>
-          {item.exceeded && <em>сверх тарифа</em>}
-        </li>)}
-      </ul>
+      <div className="usage-tabs" role="tablist" aria-label="Показатели за период">
+        {tabs.map((tab, index) => <button key={tab} type="button" role="tab" id={`${id}-tab-${index}`} aria-controls={`${id}-panel`}
+          aria-selected={activeTab === index} tabIndex={activeTab === index ? 0 : -1} ref={element => { tabRefs.current[index] = element; }}
+          onClick={() => setActiveTab(index)} onKeyDown={event => onTabKey(event, index)}>{tab}</button>)}
+      </div>
+      <div key={activeTab} className="usage-tab-panel" role="tabpanel" id={`${id}-panel`} aria-labelledby={`${id}-tab-${activeTab}`} tabIndex={0}>
+        {activeTab === 0 ? <BuildsPanel data={data} /> : activeTab === 1 ? <SpendingPanel data={data} /> : <LimitsPanel data={data} />}
+      </div>
     </>}
   </section>;
 }

@@ -123,6 +123,8 @@ export type BillingUsage = {
   publications: { total: number; projects: number };
   free_generations: { limit: number; used: number; left: number; unlimited: boolean };
   wallet: { balance_rub: string; debited_rub: string; credited_rub: string; charges: number };
+  /** Confirmed product-unit debits, absent only on older API responses. */
+  credits?: { initial_generations: number; edits: number };
   entitlements: EntitlementUsage[];
   total_ai_cost_rub: string;
   total_ai_cost_breakdown?: CostBreakdown | null;

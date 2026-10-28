@@ -8,7 +8,7 @@ the tables it aggregates — nothing is read back from a mock.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -25,11 +25,16 @@ from tests.test_cell_publication_api import seed as seed_publication
 from yleum_api.core.config import get_settings
 from yleum_api.models.billing import BillingAccount, BillingPlan, Subscription
 from yleum_api.models.billing_usage_event import BillingUsageEvent
+from yleum_api.models.generation_credits import (
+    GenerationCreditAdjustment,
+    GenerationCreditReservation,
+)
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.project import Project
 from yleum_api.models.usage import Usage
 from yleum_api.models.user import User
 from yleum_api.models.wallet_charge import WalletCharge
+from yleum_api.schemas.billing import BillingUsagePublic
 from yleum_api.services import integration_providers, orchestrator_client, project_cell_runtime
 from yleum_api.services import repo as repo_svc
 
@@ -306,6 +311,77 @@ async def test_usage_report_aggregates_every_ledger_of_the_account(
 async def test_usage_report_requires_a_signed_in_user(client: httpx.AsyncClient) -> None:
     response = await client.get("/api/billing/usage")
     assert response.status_code == 401
+
+
+async def test_usage_credits_schema_defaults_to_zero() -> None:
+    credits = BillingUsagePublic.model_fields["credits"].get_default(call_default_factory=True)
+    assert credits.model_dump() == {"initial_generations": 0, "edits": 0}
+
+
+async def test_usage_credits_empty_account_reports_zero(
+    client: httpx.AsyncClient, db_session: AsyncSession,
+) -> None:
+    await _register(client, db_session, "credits-empty@example.com")
+    result = await client.get("/api/billing/usage")
+    assert result.status_code == 200, result.text
+    assert result.json()["credits"] == {"initial_generations": 0, "edits": 0}
+
+
+async def test_usage_credits_counts_settled_operations_for_owner_and_period(
+    client: httpx.AsyncClient, db_session: AsyncSession,
+) -> None:
+    user = await _register(client, db_session, "credits-usage@example.com")
+    account = (await db_session.execute(select(BillingAccount).where(
+        BillingAccount.personal_user_id == user.id,
+    ))).scalar_one()
+    foreign_user = User(id=uuid4(), is_anon=True)
+    db_session.add(foreign_user)
+    await db_session.flush()
+    foreign_account = BillingAccount(personal_user_id=foreign_user.id, scope="personal")
+    db_session.add(foreign_account)
+    await db_session.flush()
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    end = datetime(2026, 2, 1, tzinfo=UTC)
+
+    def reservation(
+        kind: str, *, state: str = "consumed", settled_at: datetime | None = start,
+        units: int = 1, owner: User = user, billing_account: BillingAccount = account,
+        created_at: datetime = start - timedelta(days=1),
+    ) -> GenerationCreditReservation:
+        # Deliberately no run/project rows: deleting that history cannot erase a debit.
+        return GenerationCreditReservation(
+            run_id=uuid4(), project_id=uuid4(), user_id=owner.id,
+            billing_account_id=billing_account.id, kind=kind, state=state, units=units,
+            allocations=[{"grant_id": str(uuid4()), "units": units}],
+            accepted_snapshot_id=uuid4() if state == "consumed" else None,
+            settled_at=settled_at, created_at=created_at,
+        )
+
+    db_session.add_all([
+        reservation("initial", units=5),  # Five flexible units buy one initial generation.
+        reservation("initial", settled_at=end - timedelta(microseconds=1)),
+        reservation("edit"),
+        reservation("edit", state="held", settled_at=None),
+        reservation("initial", state="released"),
+        reservation("edit", settled_at=start - timedelta(microseconds=1), created_at=start),
+        reservation("initial", settled_at=end, created_at=start),
+        reservation("edit", owner=foreign_user, billing_account=foreign_account),
+        reservation("initial", billing_account=foreign_account),
+        reservation("edit", owner=foreign_user),
+        GenerationCreditAdjustment(
+            id=uuid4(), billing_account_id=account.id, user_id=user.id,
+            actor_user_id=user.id, reason="Administrative adjustment excluded from operations",
+            allocations=[{"grant_id": str(uuid4()), "units": 10}], created_at=start,
+        ),
+    ])
+    await db_session.commit()
+    result = await client.get("/api/billing/usage", params={
+        "from": start.isoformat(), "to": end.isoformat(),
+    })
+    assert result.status_code == 200, result.text
+    assert result.json()["credits"] == {"initial_generations": 2, "edits": 1}
+    assert result.json()["generations"]["total"] == 0
+    assert result.json()["wallet"]["charges"] == 0
 
 
 async def test_cost_evidence_breakdown_uses_saved_amounts_and_owner_period_filters(

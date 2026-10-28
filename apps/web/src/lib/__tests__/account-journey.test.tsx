@@ -22,6 +22,7 @@ const usage = {
   publications: { total: 3, projects: 2 },
   free_generations: { limit: 3, used: 3, left: 0, unlimited: false },
   wallet: { balance_rub: "100.0000", debited_rub: "51.7000", credited_rub: "50.0000", charges: 7 },
+  credits: { initial_generations: 2, edits: 3 },
   entitlements: [
     { key: "max_projects", label: "Приложений", kind: "limit", limit: null, used: 2, exceeded: false },
     { key: "static_publish_slots", label: "Опубликованных приложений", kind: "limit", limit: 1, used: 2, exceeded: true },
@@ -306,9 +307,9 @@ it.each([[], new Error("Payments offline")])("does not infer success from return
   mocks.search = "payment=pay-1"; payments = value; const app = await mount("profile");
   try { await wait(() => expect(document.body.textContent).toContain(value instanceof Error ? "Не удалось проверить" : "Платёж не найден")); expect(document.body.textContent).not.toContain("Оплата подтверждена"); } finally { await app.close(); }
 });
-it("shows disabled provider reason and real wallet without offering checkout", async () => {
+it("shows disabled provider reason and unit balances without offering checkout", async () => {
   config = { ...(config as object), enabled: false, reason: "Магазин не подключён" }; const app = await mount("billing");
-  try { await wait(() => expect(document.body.textContent).toContain("Магазин не подключён")); expect(button("Выбрать").disabled).toBe(true); expect(document.body.textContent).toMatch(/1\s234/); } finally { await app.close(); }
+  try { await wait(() => expect(document.body.textContent).toContain("Магазин не подключён")); expect(button("Выбрать").disabled).toBe(true); expect(document.querySelector('[aria-label="Доступно правок"]')?.textContent).toBe("44"); expect(document.querySelector(".balance-card")?.textContent).not.toContain("₽"); } finally { await app.close(); }
 });
 it("reviews monthly server plan with auto-renew explicitly off by default", async () => {
   const app = await mount("plan");
@@ -431,12 +432,13 @@ it("shows the period's spend and the plan's use next to each limit", async () =>
     const panel = () => document.querySelector('[aria-label="Расход за период"]')!;
     await wait(() => expect(panel().textContent).toContain("Сборки приложений"));
     const text = panel().textContent!;
-    expect(text).toContain("текущий месяц");
+    expect(text).toContain("Текущий месяц");
     expect(text).toContain("тариф Free");
-    expect(text).toContain("завершено 4, с ошибкой 1");
-    expect(text).toContain("Ответы ИИ посетителям приложений30");
-    expect(text).toContain("приложений опубликовано: 2");
-    expect(text).toContain("осталось 0 из 3");
+    expect(text).toContain("Завершено4");
+    expect(text).toContain("С ошибкой1");
+    expect(text).toContain("Опубликовано приложений2");
+    expect(text).not.toContain("Бесплатные сборки");
+    await click("Лимиты");
     const rows = [...panel().querySelectorAll("li")].map(row => row.textContent);
     expect(rows).toContain("Приложений2 · без ограничений");
     expect(rows).toContain("Опубликованных приложений2 из 1сверх тарифа");
@@ -450,7 +452,7 @@ it.each([
   ["Смешанная стоимость", 1, 1, 1, "10"],
   ["Источник стоимости неизвестен", 0, 0, 1, "5"],
   ["Нет вызовов", 0, 0, 0, "0"],
-] as const)("shows account cost provenance as %s without changing wallet debits", async (label, confirmed, estimated, unknown, amount) => {
+] as const)("keeps internal %s costs out of the product-unit dashboard", async (_label, confirmed, estimated, unknown, amount) => {
   const breakdown = { confirmed: { calls: confirmed, cost_rub: "0" },
     estimated: { calls: estimated, cost_rub: estimated ? "5" : "0" },
     unknown: { calls: unknown, cost_rub: unknown ? "5" : "0" } };
@@ -459,21 +461,25 @@ it.each([
     generations: { ...usage.generations, calls: confirmed + estimated + unknown, cost_rub: amount, cost_breakdown: breakdown } };
   const app = await mount("billing");
   try {
-    await wait(() => expect(app.container.querySelector('[aria-label="Источник стоимости: Сборки приложений"]')?.textContent).toContain(label));
-    expect(app.container.querySelector('[aria-label="Источник стоимости: Все расходы на ИИ"]')?.textContent).toContain(label);
-    expect(app.container.textContent).toContain("Списано с баланса51,7 ₽");
-    if (unknown) expect(app.container.textContent).toContain("История без подтверждённого источника: 1 вызов, 5 ₽");
+    await wait(() => expect(button("Списания")).toBeDefined());
+    await click("Списания");
+    const panel = app.container.querySelector('[role="tabpanel"]')!;
+    expect([...panel.querySelectorAll(".usage-debit-grid dd")].map(e => e.textContent)).toEqual(["2", "3"]);
+    expect(panel.textContent).not.toContain("₽");
+    expect(app.container.querySelector(".balance-card")?.textContent).not.toContain("₽");
   } finally { await app.close(); }
 });
 
-it.each([undefined, null])("marks account history with missing/null breakdown %s as unknown", async breakdown => {
+it.each([undefined, null])("keeps unit debits available independently of model cost breakdown %s", async breakdown => {
   usageResponse = { ...usage, total_ai_cost_breakdown: breakdown,
     generations: { ...usage.generations, cost_breakdown: breakdown } };
   const app = await mount("billing");
   try {
-    await wait(() => expect(app.container.querySelector('[aria-label="Источник стоимости: Сборки приложений"]')?.textContent).toContain("Источник стоимости неизвестен"));
-    expect(app.container.textContent).toContain("История без подтверждённого источника: 12 вызовов, 48,5 ₽");
-    expect(app.container.textContent).not.toContain("Подтверждено провайдером");
+    await wait(() => expect(button("Списания")).toBeDefined());
+    await click("Списания");
+    const panel = app.container.querySelector('[role="tabpanel"]')!;
+    expect([...panel.querySelectorAll(".usage-debit-grid dd")].map(e => e.textContent)).toEqual(["2", "3"]);
+    expect(panel.textContent).not.toContain("₽");
   } finally { await app.close(); }
 });
 it("keeps every operation labelled and semantically tabular when mobile rows reflow", async () => {

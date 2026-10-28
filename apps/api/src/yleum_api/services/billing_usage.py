@@ -11,6 +11,7 @@ table that already records the event:
                        transcription, ...);
 * publications      -> ``billing_usage_events`` (kind ``publication``);
 * wallet movements  -> ``wallet_charges``;
+* credit operations -> consumed ``generation_credit_reservations`` by settlement;
 * entitlements      -> the live plan next to live counts (services.entitlements).
 """
 
@@ -19,6 +20,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Literal
+from uuid import UUID
 
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yleum_api.core.config import FREE_GENERATION_LIMIT, get_settings
 from yleum_api.core.errors import ApiError
 from yleum_api.models.billing_usage_event import BillingUsageEvent
+from yleum_api.models.generation_credits import GenerationCreditReservation
 from yleum_api.models.generation_run import GenerationRun
 from yleum_api.models.usage import Usage
 from yleum_api.models.user import User
@@ -36,6 +39,7 @@ from yleum_api.schemas.billing import (
     BillingUsagePublic,
     EntitlementUsagePublic,
     UsageAIBucketPublic,
+    UsageCreditsPublic,
     UsageFreeGenerationsPublic,
     UsageGenerationsPublic,
     UsagePeriodPublic,
@@ -93,6 +97,35 @@ def classify_usage_row(
     if stage == RUNTIME_AI_STAGE:
         return "app_ai"
     return "other"
+
+
+async def _consumed_credit_usage(
+    session: AsyncSession,
+    *,
+    account_id: UUID,
+    user_id: UUID,
+    start: datetime,
+    end: datetime,
+) -> UsageCreditsPublic:
+    # Count accepted operations, not funding units (an initial build may use five).
+    # No run/project join: deletion of application history must preserve debits.
+    reservation = GenerationCreditReservation
+    rows = (await session.execute(
+        select(reservation.kind, func.count(reservation.run_id))
+        .where(
+            reservation.billing_account_id == account_id,
+            reservation.user_id == user_id,
+            reservation.state == "consumed",
+            reservation.settled_at >= start,
+            reservation.settled_at < end,
+        )
+        .group_by(reservation.kind)
+    )).all()
+    counts = {kind: int(count) for kind, count in rows}
+    return UsageCreditsPublic(
+        initial_generations=counts.get("initial", 0),
+        edits=counts.get("edit", 0),
+    )
 
 
 async def build_usage_report(
@@ -185,7 +218,11 @@ async def build_usage_report(
     # Publications journaled for the account in the period.
     publications = UsagePublicationsPublic()
     wallet_public = UsageWalletPublic(balance_rub=Decimal("0"))
+    credits = UsageCreditsPublic()
     if context.account is not None:
+        credits = await _consumed_credit_usage(
+            session, account_id=context.account.id, user_id=user.id, start=start, end=end,
+        )
         publication_row = (
             await session.execute(
                 select(
@@ -266,6 +303,7 @@ async def build_usage_report(
         publications=publications,
         free_generations=free_generations,
         wallet=wallet_public,
+        credits=credits,
         entitlements=[
             EntitlementUsagePublic(
                 key=item.key,

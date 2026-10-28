@@ -1,0 +1,56 @@
+/* Quiet Yleum cabinet palette; reading 14px, headings 16px, numbers 44px. */
+.account-wallet.balance-card { min-width: 0; padding: 26px; background: var(--color-surface, #fff); border: 1px solid var(--color-border-default, #e3e0dc); border-radius: 16px; color: var(--color-fg-primary, #14141a); font-size: 14px; }
+.balance-heading { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.balance-icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--color-accent-subtle); color: var(--color-accent-secondary); }
+.balance-card .balance-heading h2 { margin: 0; font-size: 16px; font-weight: 550; letter-spacing: -.015em; }
+.balance-state { display: inline-flex; gap: 8px; align-items: center; width: 100%; padding-left: 44px; margin-top: -3px; font-size: 14px; line-height: 1.5; color: var(--color-fg-secondary); }
+.balance-state > span { width: 5px; height: 5px; background: var(--color-accent); border-radius: 50%; }
+.balance-state.is-empty > span { background: var(--color-fg-tertiary); }
+.balance-metrics { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin: 28px 0 22px; }
+.balance-metric { min-width: 0; padding-right: 20px; }
+.balance-metric + .balance-metric { padding-right: 0; padding-left: 20px; border-left: 1px solid var(--color-border-default); }
+.balance-label { display: flex; align-items: center; gap: 7px; color: var(--color-fg-secondary); font-size: 14px; }
+.balance-number { display: block; font-size: 44px; line-height: 1.2; font-weight: 550; letter-spacing: -.045em; font-variant-numeric: tabular-nums; margin: 12px 0 16px; overflow-wrap: anywhere; animation: balance-reveal 350ms ease both; }
+.balance-plan > span:first-child { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 4px 8px; font-size: 14px; color: var(--color-fg-secondary); }
+.balance-plan strong { color: var(--color-fg-primary); font-weight: 500; white-space: nowrap; }
+.balance-plan strong span { color: var(--color-fg-secondary); font-weight: 400; }
+.balance-track { display: block; height: 4px; margin-top: 10px; border-radius: 10px; overflow: hidden; background: var(--color-surface-3); }
+.balance-track > span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width 450ms cubic-bezier(.2,.7,.2,1); }
+.balance-details { border-top: 1px solid var(--color-border-default); font-size: 14px; }
+.balance-details summary { display: flex; gap: 10px; justify-content: space-between; align-items: center; min-height: 48px; cursor: pointer; list-style: none; color: var(--color-fg-primary); }
+.balance-details summary::-webkit-details-marker { display: none; }
+.balance-details summary > span { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.balance-details summary small { display: block; color: var(--color-fg-secondary); font-size: 14px; }
+.balance-details summary > svg { flex-shrink: 0; color: var(--color-fg-tertiary); transition: transform 220ms ease; }
+.balance-details[open] summary > svg { transform: rotate(180deg); }
+.balance-details dl { display: grid; gap: 8px; padding-bottom: 12px; }
+.balance-details dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.balance-details dt { color: var(--color-fg-secondary); }
+.balance-details dd { font-variant-numeric: tabular-nums; }
+.balance-details p { font-size: 14px; color: var(--color-fg-secondary); margin-bottom: 12px; }
+.balance-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 12px; font-size: 14px; }
+.balance-actions a { display: inline-flex; justify-content: center; align-items: center; gap: 7px; min-height: 44px; border-radius: 8px; padding: 9px 10px; color: var(--color-accent-secondary); transition: background 180ms ease; }
+.balance-actions .balance-topup { background: var(--color-accent); color: var(--color-accent-fg); font-weight: 500; padding-inline: 14px; }
+.balance-actions a:hover { background: var(--color-accent-subtle); }
+.balance-actions .balance-topup:hover { background: var(--color-accent-hover); }
+[data-max-studio] .balance-card :is(a,summary,button):focus-visible { outline: 2px solid var(--color-accent); outline-offset: 4px; }
+.balance-card .account-notice.error { color: var(--color-danger); background: #fff0ef; }
+.balance-card .balance-loading { font-size: 14px; color: var(--color-fg-secondary); }
+#billing-packages { scroll-margin-top: 24px; }
+@keyframes balance-reveal { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (max-width: 1100px) and (min-width: 801px) {
+  .balance-card .balance-heading h2 { flex: 1; }
+  .balance-state { margin-top: 4px; }
+  .balance-metric { padding-right: 12px; }
+  .balance-metric + .balance-metric { padding-left: 12px; }
+  .balance-plan > span:first-child { flex-direction: column; }
+}
+@media (max-width: 480px) {
+  .account-wallet.balance-card { padding: 22px; }
+  .balance-metric { padding-right: 16px; }
+  .balance-metric + .balance-metric { padding-left: 16px; }
+  .balance-plan > span:first-child { flex-wrap: wrap; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .balance-card *, .balance-card *::before, .balance-card *::after { animation: none; transition: none; }
+}

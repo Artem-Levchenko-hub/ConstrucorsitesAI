@@ -58,25 +58,14 @@
 .account-session { display: grid; grid-template-columns: 24px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 20px 0; border-bottom: 1px solid var(--color-border-subtle); }
 .account-session.current { background: #f0f9f4; padding-inline: 12px; margin-inline: -12px; border-radius: 6px; }
 .account-session p { font-size: 11px; color: var(--color-fg-secondary); margin-top: 4px; }
-.account-billing { display: grid; grid-template-columns: minmax(220px,.8fr) minmax(0,1.35fr); gap: 24px; align-items: start; }
-.account-wallet { background: #245dc2; color: white; padding: 28px; border-radius: 8px; }
-.account-wallet h2 { font-size: 38px; margin: 18px 0 8px; overflow-wrap: anywhere; }
-.account-wallet > p { font-size: 13px; color: #e0ebff; }
-.account-wallet-footer { margin-top: 40px; padding-top: 20px; border-top: 1px solid #ffffff40; font-size: 12px; }
-.account-wallet-footer a { display: inline-block; margin-top: 18px; text-decoration: underline; }
+.account-billing { display: grid; grid-template-columns: minmax(300px,1fr) minmax(0,1.15fr); gap: 24px; align-items: start; }
+@media (max-width: 1000px) { .account-billing { grid-template-columns: minmax(0,1fr); } }
 .account-package { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 0; border-top: 1px solid var(--color-border-subtle); }
+.account-package > div { min-width: 0; }
+.account-package > button { flex-shrink: 0; }
 .account-package strong { font-size: 22px; font-weight: 550; }
 .account-package p { font-size: 12px; color: var(--color-fg-secondary); margin-top: 5px; }
 .account-usage { grid-column: 1 / -1; }
-.account-usage h3 { font-size: 13px; font-weight: 550; margin: 26px 0 10px; }
-.account-usage-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 18px 24px; margin-top: 18px; }
-.account-usage-grid dt { font-size: 11px; color: var(--color-fg-secondary); }
-.account-usage-grid dd { font-size: 22px; font-weight: 550; margin-top: 6px; }
-.account-usage-grid dd small { display: block; font-size: 11px; font-weight: 400; color: var(--color-fg-secondary); margin-top: 4px; line-height: 1.5; }
-.account-usage-entitlements { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
-.account-usage-entitlements li { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--color-border-subtle); font-size: 13px; }
-.account-usage-entitlements strong { font-weight: 550; white-space: nowrap; }
-.account-usage-entitlements li.exceeded strong, .account-usage-entitlements em { color: #a22f28; font-style: normal; font-size: 11px; }
 .account-section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .account-section-heading label { margin: 0; }
 .account-section-heading select { margin-left: 8px; }

@@ -1,0 +1,66 @@
+/* Scoped to the period dashboard; account fonts and shared tokens remain inherited. */
+.account-usage.usage-dashboard { --usage-blue: var(--color-accent, #0062ee); padding: 26px; border-radius: 16px; font-size: 14px; }
+.usage-dashboard .usage-heading { display: flex; justify-content: space-between; align-items: baseline; gap: 8px 20px; flex-wrap: wrap; margin-bottom: 20px; }
+.usage-dashboard .usage-heading h2 { margin: 0; font-size: 16px; font-weight: 550; }
+.usage-dashboard .usage-period { color: var(--color-fg-secondary); font-size: 14px; max-width: 100%; }
+.usage-dashboard .usage-period summary { cursor: pointer; min-height: 44px; align-content: center; }
+.usage-dashboard .usage-period p { padding: 6px 0 12px; line-height: 1.8; overflow-wrap: anywhere; }
+.usage-dashboard .usage-tabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; width: min(100%, 420px); border-radius: 12px; background: var(--color-surface-2, #f1f5f8); }
+.usage-dashboard .usage-tabs button { min-height: 44px; min-width: 0; border: 0; border-radius: 9px; padding: 8px 12px; font: inherit; font-size: 14px; font-weight: 550; color: var(--color-fg-secondary); cursor: pointer; transition: color 180ms ease, background 180ms ease, box-shadow 180ms ease; }
+.usage-dashboard .usage-tabs button[aria-selected="true"] { background: var(--color-surface); color: var(--color-accent-secondary, #0877ba); box-shadow: 0 2px 8px #14365110; }
+.usage-dashboard .usage-tabs button:hover { color: var(--color-fg-primary); }
+.usage-dashboard :is(button, summary, [role="tabpanel"]):focus-visible { outline: 2px solid var(--usage-blue); outline-offset: 4px; }
+.usage-dashboard .usage-tab-panel { margin-top: 28px; animation: usage-panel-in 240ms ease-out; min-width: 0; }
+.usage-dashboard .usage-builds-hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: center; gap: 32px; padding: 8px 0 28px; }
+.usage-dashboard .usage-eyebrow { color: var(--color-fg-secondary); font-size: 14px; font-weight: 500; line-height: 1.6; margin: 0 0 8px; }
+.usage-dashboard .usage-hero-value { display: block; font-size: 44px; line-height: 1.2; font-weight: 550; letter-spacing: -.045em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.usage-dashboard .usage-caption { font-size: 14px; line-height: 1.6; color: var(--color-fg-secondary); margin: 8px 0 0; }
+.usage-dashboard .usage-outcome-bar { display: flex; height: 8px; overflow: hidden; border-radius: 12px; background: var(--color-surface-3, #e9eef3); margin-bottom: 22px; }
+.usage-dashboard .usage-outcome-bar span { height: 100%; flex-shrink: 0; }
+.usage-dashboard .usage-tone-completed { background: var(--usage-blue); }
+.usage-dashboard .usage-tone-failed { background: var(--color-danger); }
+.usage-dashboard .usage-tone-active { background: color-mix(in srgb, var(--usage-blue) 40%, white); }
+.usage-dashboard .usage-tone-cancelled { background: var(--color-fg-tertiary); }
+.usage-dashboard .usage-outcome-legend { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px 24px; }
+.usage-dashboard .usage-outcome-legend > div { display: flex; justify-content: space-between; gap: 8px; }
+.usage-dashboard .usage-outcome-legend dt { color: var(--color-fg-secondary); font-size: 14px; display: flex; gap: 7px; align-items: center; }
+.usage-dashboard .usage-outcome-legend i { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.usage-dashboard .usage-outcome-legend dd { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.usage-dashboard .usage-footnotes { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); padding-top: 22px; gap: 28px; border-top: 1px solid var(--color-border-default); }
+.usage-dashboard .usage-footnotes > div { min-width: 0; display: grid; align-content: start; }
+.usage-dashboard .usage-footnotes span { color: var(--color-fg-secondary); font-size: 14px; line-height: 1.65; }
+.usage-dashboard .usage-footnotes strong { font-size: 16px; font-weight: 550; letter-spacing: -.03em; margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+.usage-dashboard .usage-limits-heading { margin: 0 0 24px; }
+.usage-dashboard .usage-limits-heading > strong { font-size: 16px; font-weight: 550; letter-spacing: -.035em; }
+.usage-dashboard .usage-limits { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 32px; }
+.usage-dashboard .usage-limits li { min-width: 0; }
+.usage-dashboard .usage-limit-label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; color: var(--color-fg-secondary); }
+.usage-dashboard .usage-limit-label strong { font-size: 16px; font-weight: 550; color: var(--color-fg-primary); overflow-wrap: anywhere; }
+.usage-dashboard .usage-meter { height: 4px; border-radius: 8px; background: var(--color-surface-3, #e9eef3); overflow: hidden; margin-top: 12px; }
+.usage-dashboard .usage-meter > span { display: block; height: 100%; border-radius: inherit; background: var(--usage-blue); }
+.usage-dashboard .usage-meter-exceeded > span { background: var(--color-danger); }
+.usage-dashboard .usage-limit-exceeded em { display: block; font-size: 14px; color: var(--color-danger); font-style: normal; margin-top: 6px; }
+.usage-dashboard .usage-loading { padding: 28px 0; color: var(--color-fg-secondary); }
+@keyframes usage-panel-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 1000px) {
+  .usage-dashboard .usage-builds-hero { gap: 24px; grid-template-columns: minmax(0, 1fr); }
+  .usage-dashboard .usage-outcomes { max-width: 420px; }
+}
+@media (max-width: 440px) {
+  .account-usage.usage-dashboard { padding: 20px 16px; }
+  .usage-dashboard .usage-tabs button { padding-inline: 6px; font-size: 14px; }
+  .usage-dashboard .usage-footnotes { gap: 16px; }
+
+}
+@media (prefers-reduced-motion: reduce) {
+  .usage-dashboard .usage-tab-panel { animation: none; }
+  .usage-dashboard .usage-tabs button { transition: none; }
+}
+
+
+.usage-dashboard .usage-debit-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); margin: 20px 0 28px; }
+.usage-dashboard .usage-debit-grid > div { min-width: 0; padding-right: 22px; }
+.usage-dashboard .usage-debit-grid > div + div { padding-left: 22px; padding-right: 0; border-left: 1px solid var(--color-border-default); }
+.usage-dashboard .usage-debit-grid dt { min-height: 48px; font-size: 14px; line-height: 1.6; color: var(--color-fg-secondary); }
+.usage-dashboard .usage-debit-grid dd { font-size: 44px; line-height: 1.2; font-weight: 550; letter-spacing: -.045em; font-variant-numeric: tabular-nums; margin-top: 12px; overflow-wrap: anywhere; }
+.usage-dashboard .usage-debit-note { border-top: 1px solid var(--color-border-default); padding-top: 18px; }
