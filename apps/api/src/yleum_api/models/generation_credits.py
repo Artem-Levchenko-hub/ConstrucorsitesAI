@@ -55,6 +55,53 @@ class GenerationCreditGrant(Base):
     )
 
 
+class GenerationCreditAdjustment(Base):
+    """Append-only administrative debits and explicit reversals of those debits."""
+
+    __tablename__ = "generation_credit_adjustments"
+    id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), primary_key=True)
+    billing_account_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("billing_accounts.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    actor_user_id: Mapped[UUID] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    allocations: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False)
+    reverses_adjustment_id: Mapped[UUID | None] = mapped_column(
+        PGUUID(as_uuid=True),
+        ForeignKey("generation_credit_adjustments.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    __table_args__ = (
+        CheckConstraint(
+            "reason = btrim(reason) AND char_length(reason) BETWEEN 1 AND 500",
+            name="reason",
+        ),
+        CheckConstraint("jsonb_typeof(allocations)='array'", name="allocations"),
+        CheckConstraint(
+            "reverses_adjustment_id IS NULL OR allocations='[]'::jsonb",
+            name="reversal_allocations",
+        ),
+    )
+
+
 class GenerationCreditReservation(Base):
     __tablename__ = "generation_credit_reservations"
     # No cascading run/project FK: deleting application history cannot refund consumed units.

@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from yleum_api.core.errors import ApiError
 from yleum_api.models.account import Payment
 from yleum_api.models.billing import BillingAccount
+from yleum_api.models.generation_credits import GenerationCreditAdjustment
 from yleum_api.models.generation_credits import (
     GenerationCreditGrant as Grant,
 )
@@ -25,6 +26,7 @@ from yleum_api.services.billing_accounts import resolve_billing_account
 from yleum_api.services.entitlements import load_plan_context
 
 POLICY_VERSION = "accepted-units-v2"
+CREDIT_BUCKETS = ("initial", "edit", "edit_only", "flexible")
 
 
 def allocate_units(grants: list[dict[str, Any]], kind: str) -> list[dict[str, Any]]:
@@ -212,6 +214,32 @@ async def _free_grants(session: AsyncSession, account: Any, user_id: UUID) -> No
         )
 
 
+def _allocation_usage(
+    allocations: Any, grants: dict[str, Grant], *, require_bucket: bool = False
+) -> dict[str, int]:
+    """Fail closed on corrupt or cross-account ledger allocations, including expired sources."""
+    if not isinstance(allocations, list):
+        raise RuntimeError("Invalid credit ledger allocations")
+    spent: dict[str, int] = {}
+    for item in allocations:
+        if not isinstance(item, dict):
+            raise RuntimeError("Invalid credit ledger allocation")
+        try:
+            key = str(UUID(item["grant_id"]))
+        except (KeyError, TypeError, ValueError, AttributeError) as exc:
+            raise RuntimeError("Invalid credit ledger grant ID") from exc
+        grant = grants.get(key)
+        units = item.get("units")
+        if grant is None or type(units) is not int or units <= 0:
+            raise RuntimeError("Invalid credit ledger grant binding or units")
+        if require_bucket and (
+            item.get("bucket") not in CREDIT_BUCKETS or item["bucket"] != grant.bucket
+        ):
+            raise RuntimeError("Invalid credit ledger bucket binding")
+        spent[key] = spent.get(key, 0) + units
+    return spent
+
+
 async def _inventory(
     session: AsyncSession, account: Any, user_id: UUID
 ) -> tuple[list[dict[str, Any]], list[Hold], Any]:
@@ -221,21 +249,63 @@ async def _inventory(
     holds = list(
         (await session.scalars(select(Hold).where(Hold.billing_account_id == account.id))).all()
     )
+    all_grants = list(
+        (
+            await session.scalars(
+                select(Grant)
+                .where(Grant.billing_account_id == account.id)
+                .order_by(Grant.created_at, Grant.id)
+            )
+        ).all()
+    )
+    grant_map = {str(grant.id): grant for grant in all_grants}
     spent: dict[str, int] = {}
+
+    def add_usage(allocations: Any, *, require_bucket: bool = False) -> None:
+        for key, units in _allocation_usage(
+            allocations, grant_map, require_bucket=require_bucket
+        ).items():
+            spent[key] = spent.get(key, 0) + units
+
     for hold in holds:
         if hold.state in {"held", "consumed"}:
-            for item in hold.allocations:
-                key = str(item["grant_id"])
-                spent[key] = spent.get(key, 0) + int(item["units"])
+            add_usage(hold.allocations)
+    adjustments = list(
+        (
+            await session.scalars(
+                select(GenerationCreditAdjustment).where(
+                    GenerationCreditAdjustment.billing_account_id == account.id
+                )
+            )
+        ).all()
+    )
+    adjustment_map = {row.id: row for row in adjustments}
+    reversed_ids = set()
+    for row in adjustments:
+        if row.user_id != user_id:
+            raise RuntimeError("Invalid credit adjustment owner")
+        if row.reverses_adjustment_id is not None:
+            original = adjustment_map.get(row.reverses_adjustment_id)
+            if (
+                original is None
+                or original.reverses_adjustment_id is not None
+                or original.user_id != row.user_id
+                or row.allocations != []
+            ):
+                raise RuntimeError("Invalid credit reversal binding")
+            reversed_ids.add(original.id)
+        else:
+            # Reversed rows must remain valid historical evidence too.
+            _allocation_usage(row.allocations, grant_map, require_bucket=True)
+    for row in adjustments:
+        if row.reverses_adjustment_id is None and row.id not in reversed_ids:
+            add_usage(row.allocations, require_bucket=True)
     now = datetime.now(UTC)
     grants = []
-    for grant in (
-        await session.scalars(
-            select(Grant)
-            .where(Grant.billing_account_id == account.id)
-            .order_by(Grant.created_at, Grant.id)
-        )
-    ).all():
+    for grant in all_grants:
+        available = grant.units - spent.get(str(grant.id), 0)
+        if available < 0:
+            raise RuntimeError("Credit ledger overspent")
         if grant.scope == "free" and not (ctx.plan and ctx.plan.code == "free"):
             continue
         if grant.scope == "period" and (
@@ -252,9 +322,6 @@ async def _inventory(
             payment = await session.get(Payment, grant.payment_id)
             if not payment or payment.status != "succeeded":
                 continue
-        available = grant.units - spent.get(str(grant.id), 0)
-        if available < 0:
-            raise RuntimeError("Credit ledger overspent")
         grants.append(
             {
                 "id": str(grant.id),
