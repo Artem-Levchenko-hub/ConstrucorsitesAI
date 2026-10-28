@@ -18,6 +18,37 @@ let root: Root, host: HTMLDivElement, client: QueryClient;
 let identity: { user_id: string | null; email: string | null; is_admin: boolean };
 let posts: Record<string, unknown>[], failPost: boolean, paths: string[];
 let patches: Record<string, unknown>[], conflict: boolean, newCount: number, failContext: boolean;
+
+it("opens automatic help first and hands a question to the guest form without submitting", async () => {
+  await mount(); await click("Открыть поддержку");
+  await wait(() => expect(document.querySelector('[aria-label="Автопомощник Yleum"]')).not.toBeNull());
+  expect(document.querySelector<HTMLFormElement>(".support-form")?.hidden).toBe(true);
+  await fill("Вопрос автопомощнику", "Не приходит код");
+  await act(async () => document.querySelector(".support-bot-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  expect(document.querySelector('[role="log"]')?.textContent).toContain("Проверьте правильность email");
+  await click("Не помогло — передать вопрос оператору");
+  expect(document.querySelector<HTMLFormElement>(".support-form")?.hidden).toBe(false);
+  expect((document.querySelector('[aria-label="Сообщение"]') as HTMLTextAreaElement).value).toBe("Не приходит код");
+  expect(document.querySelector('[aria-label="Ваш email"]')).not.toBeNull();
+  expect(posts).toHaveLength(0);
+});
+it("preserves an existing operator draft when handing another assistant question over", async () => {
+  await open(); await fill("Тема обращения", "Сохранить мою тему"); await fill("Сообщение", "Мой исходный текст");
+  await click("Автопомощник"); await fill("Вопрос автопомощнику", "Другая проблема");
+  await click("Не помогло — передать вопрос оператору");
+  expect((document.querySelector('[aria-label="Тема обращения"]') as HTMLInputElement).value).toBe("Сохранить мою тему");
+  expect((document.querySelector('[aria-label="Сообщение"]') as HTMLTextAreaElement).value).toBe("Мой исходный текст");
+  expect(posts).toHaveLength(0);
+});
+it("clears assistant input and conversation when the signed-in identity changes", async () => {
+  identity = { user_id: "owner1", email: "owner@example.test", is_admin: false };
+  await mount(); await click("Открыть поддержку"); await click("Автопомощник");
+  await fill("Вопрос автопомощнику", "Private owner1 question");
+  identity = { user_id: "owner2", email: "second@example.test", is_admin: false };
+  await act(async () => { await client.invalidateQueries({ queryKey: ["support-context"] }); });
+  await wait(() => expect((document.querySelector('[aria-label="Вопрос автопомощнику"]') as HTMLInputElement)?.value).toBe(""));
+  expect(document.querySelector('[role="log"]')).toBeNull(); expect(posts).toHaveLength(0);
+});
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   localStorage.clear(); sessionStorage.clear(); window.history.replaceState({}, "", "/max");
@@ -40,7 +71,7 @@ const wait = async (check: () => void) => { await act(async () => { await vi.wai
 async function mount(admin = false) { await act(async () => root.render(<QueryClientProvider client={client}>{admin ? <AdminControlCenter currentEmail="admin@example.test" /> : <SupportWidget />}</QueryClientProvider>)); }
 async function click(label: string) { await wait(() => expect([...document.querySelectorAll<HTMLButtonElement>("button")].some(node => node.textContent?.trim() === label || node.getAttribute("aria-label") === label)).toBe(true)); const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(node => node.textContent?.trim() === label || node.getAttribute("aria-label") === label); expect(button).toBeTruthy(); await act(async () => button!.click()); }
 async function fill(label: string, value: string) { await wait(() => expect(document.querySelector(`[aria-label="${label}"]`)).not.toBeNull()); const el = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(`[aria-label="${label}"]`)!; expect(el).toBeTruthy(); await act(async () => { Object.getOwnPropertyDescriptor(el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype, "value")!.set!.call(el, value); el.dispatchEvent(new Event("input", { bubbles: true })); }); }
-async function open() { await mount(); await click("Открыть поддержку"); await wait(() => expect(document.querySelector('[aria-label="Тема обращения"]')).not.toBeNull()); }
+async function open() { await mount(); await click("Открыть поддержку"); await click("Написать оператору"); await wait(() => expect(document.querySelector('[aria-label="Тема обращения"]')).not.toBeNull()); }
 async function submit() { await act(async () => document.querySelector<HTMLFormElement>(".support-form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }))); }
 it("keeps a failed guest draft and retries the same capability/request without acknowledging early", async () => {
   await open(); await fill("Тема обращения", ticket.subject); await fill("Сообщение", "Помогите"); await fill("Ваш email", "guest@example.test");

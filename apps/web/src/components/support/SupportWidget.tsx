@@ -6,6 +6,7 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle, DialogTrigger } 
 import { useSupportEvents } from "@/hooks/useSupportEvents";
 import { clearGuestSupportDrafts, clearSupportReply, clearSupportDraft, readSupportDraft, saveSupportDraft, clearGuestTickets, createSupport, guestCapability, listSupport, readGuestTickets, saveGuestTickets, supportContextOptions, type GuestTicket, type SupportContext, type SupportCreate } from "@/lib/api/support";
 import { SupportThread } from "./SupportThread";
+import { SupportAssistant } from "./SupportAssistant";
 import "@/components/max/max-studio.css";
 import "./support.css";
 
@@ -47,6 +48,7 @@ function SupportSession({ context, available, open, checking, newCount }: { cont
   const client = useQueryClient();
   const scope = context.user_id ?? "guest";
   const [draft] = useState(() => readSupportDraft(scope));
+  const [view, setView] = useState<"help" | "contact">(() => draft ? "contact" : "help");
   const [guests, setGuests] = useState<GuestTicket[]>(() => context.user_id ? [] : readGuestTickets());
   const [selected, setSelected] = useState<string | null>(null);
   const [subject, setSubject] = useState(draft?.subject ?? "");
@@ -66,6 +68,13 @@ function SupportSession({ context, available, open, checking, newCount }: { cont
   // Keep unsent form state through transient context failures, but grant no UI or live access.
   useSupportEvents(available ? context.user_id : null, available && context.is_admin, available ? selectedGuest : undefined);
   const history = useQuery({ queryKey: ["support", scope, "history", offset], queryFn: ({ signal }) => listSupport(`limit=50&offset=${offset}`, false, signal), enabled: available && open && !!context.user_id && !checking, retry: false });
+  function contactOperator(question = "") {
+    // A handoff may prefill a fresh form, never overwrite an existing draft or send it.
+    if (question && !subject.trim() && !message.trim()) {
+      setSubject("Вопрос к поддержке"); setMessage(question);
+    }
+    setView("contact");
+  }
   async function submit() {
     if (!available || busy.current || !subject.trim() || !message.trim() || (!context.user_id && (!email.trim() || !consent))) return;
     busy.current = true; setPending(true); setError("");
@@ -90,11 +99,16 @@ function SupportSession({ context, available, open, checking, newCount }: { cont
   }
   if (!open || !available) return null;
   return <DialogContent data-max-studio className="support-dialog">
-    <DialogTitle>Поддержка Yleum</DialogTitle><DialogDescription>Опишите, что произошло. Ответим здесь и уведомим по email.</DialogDescription>
+    <DialogTitle>Поддержка Yleum</DialogTitle><DialogDescription>Быстрые ответы на частые вопросы и связь с оператором.</DialogDescription>
     {context.is_admin && <a className="support-admin-link" href="/admin/max?tab=support">Обращения пользователей{newCount ? ` · ${newCount} новых` : ""}</a>}
     {checking && <p role="status">Проверяем доступ…</p>}<div hidden={checking} inert={checking}>
       {selected ? <><button className="support-back" type="button" onClick={() => { setSelected(null); setReceipt(""); }}>← Все обращения</button>{receipt && <p role="status" className="support-receipt">Обращение {receipt} принято. Переписка сохранена.</p>}<SupportThread key={selected} id={selected} scope={scope} token={selectedGuest?.token} /></> : <>
-        <form className="support-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
+        <nav className="support-actions support-navigation" aria-label="Раздел поддержки">
+          <button type="button" aria-pressed={view === "help"} onClick={() => setView("help")}>Автопомощник</button>
+          <button type="button" aria-pressed={view === "contact"} onClick={() => contactOperator()}>Написать оператору</button>
+        </nav>
+        <div hidden={view !== "help"}><SupportAssistant onContact={contactOperator} /></div>
+        <form hidden={view !== "contact"} className="support-form" onSubmit={event => { event.preventDefault(); void submit(); }}>
           <label>Тема<input aria-label="Тема обращения" maxLength={160} required value={subject} disabled={pending} onChange={event => setSubject(event.target.value)} placeholder="Например, не получается опубликовать" /></label>
           <label>Сообщение<textarea aria-label="Сообщение" maxLength={8000} required rows={5} value={message} disabled={pending} onChange={event => setMessage(event.target.value)} placeholder="Что вы делали и что произошло?" /></label>
           {!context.user_id && <><label>Email для ответа<input aria-label="Ваш email" type="email" autoComplete="email" maxLength={254} required value={email} disabled={pending} onChange={event => setEmail(event.target.value)} /></label><label className="support-consent"><input type="checkbox" required checked={consent} disabled={pending} onChange={event => setConsent(event.target.checked)} /><span>Согласен на обработку данных обращения для ответа службы поддержки. <a href="/legal/privacy" target="_blank" rel="noreferrer">Политика конфиденциальности</a></span></label><p className="support-meta">История доступна в этом браузере. Не очищайте данные сайта, чтобы продолжить переписку.</p></>}
