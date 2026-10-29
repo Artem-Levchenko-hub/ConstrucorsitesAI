@@ -48,7 +48,10 @@ from yleum_api.schemas.integration_runtime import (
     RuntimePaymentStatusRequest,
 )
 from yleum_api.services import integration_providers
-from yleum_api.services.integration_auth import verify_integration_assertion
+from yleum_api.services.integration_auth import (
+    verify_business_analytics_assertion,
+    verify_integration_assertion,
+)
 from yleum_api.services.integration_consent import (
     actor_dispatch_guard,
     consent_state,
@@ -181,7 +184,8 @@ def _validate_init_data(init_data: str, bot_token: str) -> int:
 
 
 async def _runtime_context(
-    session: SessionDep, project_id: UUID, init_data: str, request: Request
+    session: SessionDep, project_id: UUID, init_data: str, request: Request,
+    *, business_analytics: bool = False,
 ) -> RuntimeContext:
     max_integration = (
         await session.execute(select(MaxIntegration).where(MaxIntegration.project_id == project_id))
@@ -194,11 +198,17 @@ async def _runtime_context(
         )
     try:
         token = decrypt_strong(max_integration.bot_token_enc)
-        assertion = request.headers.get("X-Omnia-Integration-Assertion")
+        assertion = request.headers.get(
+            "X-Yleum-Business-Assertion" if business_analytics else "X-Omnia-Integration-Assertion",
+        )
         if assertion:
             if request.url.query:
                 raise ValueError("unsigned integration query")
-            max_user_id = verify_integration_assertion(
+            verify = (
+                verify_business_analytics_assertion if business_analytics
+                else verify_integration_assertion
+            )
+            max_user_id = verify(
                 assertion,
                 token,
                 project_id=project_id,

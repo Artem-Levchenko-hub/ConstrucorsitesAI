@@ -2005,7 +2005,8 @@ async def test_cell_runtime_check_uses_workspace_session_not_legacy(
 
     harness = await _prepare_executor(monkeypatch, db_session, test_engine)
 
-    async def fake_probe(preview, *, path):
+    async def fake_probe(preview, *, path, management_resources=()):
+        assert management_resources == ()
         assert preview.workspace_id == harness.workspace_id
         assert path == "/products"
         return max_runtime_probe.MaxRuntimeProbe(True, "cell database verified")
@@ -2041,7 +2042,9 @@ async def test_portable_cell_runtime_check_falls_back_when_home_page_is_missing(
         fallback_paths=(),
         portable_project_id=None,
         expected_epoch=None,
+        management_resources=(),
     ):
+        assert management_resources == ()
         assert preview.workspace_id == harness.workspace_id
         assert path == "/"
         assert fallback_paths == ("/support",)

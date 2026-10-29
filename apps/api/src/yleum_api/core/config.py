@@ -131,6 +131,9 @@ class Settings(BaseSettings):
     default_orchestrator: str = Field(default="core", pattern=r"^[a-z][a-z0-9-]{0,31}$")
 
     web_base_url: str = Field(default="http://localhost:3000")
+    # Exact suffix for trusted owner-management RPC destinations. An unset
+    # environment deliberately disables the broker rather than guessing a host.
+    owner_management_apps_domain: str = Field(default="")
 
     # Вход через VK ID (OAuth 2.1 + PKCE) и Яндекс ID (OAuth 2.0) —
     # routers/auth_oauth.py + services/oauth_login.py. Кнопка провайдера

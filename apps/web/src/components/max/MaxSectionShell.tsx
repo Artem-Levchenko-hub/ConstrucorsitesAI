@@ -6,6 +6,7 @@ import "@/components/max/max-studio.css";
 import "@/components/max/max-project-workspace.css";
 
 const helpHref: Record<MaxProjectNavKey, string> = {
+  manage: "/max/guide#operations",
   editor: "/max/guide#builder", app: "/max/guide#settings", catalog: "/max/guide#settings",
   integrations: "/max/guide#integrations", bot: "/max/guide#max-bot",
   publish: "/max/guide#publish", dashboard: "/max/guide#operations",

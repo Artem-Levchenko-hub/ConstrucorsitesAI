@@ -9,15 +9,19 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import ipaddress
 import json
+import re
 import select
 import socket
 import socketserver
+import ssl
 import time
 from dataclasses import asdict, dataclass
 from typing import cast
 from urllib.parse import urlsplit
+from uuid import UUID
 
 
 class DestinationDenied(ValueError):
@@ -81,14 +85,98 @@ class GuardPolicy:
         return (address, port) == (self.proxy_ip, 3128) or (address, port) in self.data_endpoints
 
 
+BUSINESS_RELAY_PATH = "/__yleum/business-analytics"
+
+
+def business_relay_origin(origin: str) -> tuple[str, int]:
+    parsed = urlsplit(origin)
+    if (parsed.scheme != "https" or parsed.path not in {"", "/"}
+            or parsed.query or parsed.fragment):
+        raise DestinationDenied("invalid relay origin")
+    return parse_authority(parsed.netloc, 443)
+
+
+def deliver_business_receipt(origin: str, project: str, body: bytes, assertion: str) -> int:
+    """Fixed destination; the API verifies the purpose key and durable receipt ID.
+
+    Unlike general proxy requests this explicit capability may reach the public
+    platform address. It cannot select another host/path/method or follow redirects.
+    DNS is pinned before TLS, and the original hostname is verified by TLS.
+    """
+    host, port = business_relay_origin(origin)
+    path = f"/api/runtime/projects/{UUID(project)}/analytics"
+    addresses = checked_addresses(
+        [str(answer[4][0]) for answer in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)],
+        [],
+    )
+    connection = http.client.HTTPSConnection(host, port, timeout=2)
+    raw = socket.create_connection((addresses[0], port), timeout=2)
+    try:
+        connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host)
+        connection.request("POST", path, body, {
+            "Content-Type": "application/json", "X-Yleum-Business-Assertion": assertion,
+            "Connection": "close",
+        })
+        # No response body or redirect is proxied into the product namespace.
+        status = connection.getresponse().status
+        return status if status in {200, 201, 202, 204, 400, 401, 403, 409, 429} else 503
+    finally:
+        connection.close()
+        raw.close()
+
+
 class _Proxy(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
     request_queue_size = 32
     denied_cidrs: list[str]
+    analytics_project: str = ""
+    analytics_origin: str = ""
+    relay_only: bool = False
 
 
 class _Handler(socketserver.BaseRequestHandler):
+    def business_receipt(self, lines: list[str], body: bytes) -> None:
+        server = cast(_Proxy, self.server)
+        headers: dict[str, str] = {}
+        for line in lines[1:]:
+            key, separator, value = line.partition(":")
+            key = key.lower()
+            if not separator or key in headers:
+                raise DestinationDenied("invalid relay headers")
+            headers[key] = value.strip()
+        length = headers.get("content-length", "")
+        assertion = headers.get("x-yleum-business-assertion", "")
+        if (not server.analytics_project or not server.analytics_origin
+                or "transfer-encoding" in headers or not re.fullmatch(r"[0-9]{1,4}", length)
+                or not 1 <= int(length) <= 4096 or not 1 <= len(assertion) <= 4096):
+            raise DestinationDenied("invalid relay request")
+        self.request.settimeout(2)
+        while len(body) < int(length):
+            chunk = self.request.recv(int(length) - len(body))
+            if not chunk:
+                raise DestinationDenied("incomplete receipt")
+            body += chunk
+        if len(body) != int(length):
+            raise DestinationDenied("invalid receipt length")
+        value = json.loads(body)
+        if (not isinstance(value, dict) or set(value) != {"event_id", "kind", "event_type"}
+                or value["kind"] != "action" or not isinstance(value["event_type"], str)
+                or value["event_type"] not in {
+                    "order_created", "lead_created", "booking_created"}
+                or not isinstance(value["event_id"], str)):
+            raise DestinationDenied("invalid receipt")
+        UUID(value["event_id"])
+        try:
+            status = deliver_business_receipt(
+                server.analytics_origin, server.analytics_project, body, assertion,
+            )
+        except (OSError, http.client.HTTPException):
+            status = 503
+        self.request.sendall(
+            f"HTTP/1.1 {status} Receipt\r\nConnection: close\r\nContent-Length: 0\r\n\r\n".encode()
+        )
+
     def handle(self) -> None:
         remote = None
         try:
@@ -104,6 +192,11 @@ class _Handler(socketserver.BaseRequestHandler):
             method, target, version = lines[0].split(" ")
             if version not in ("HTTP/1.0", "HTTP/1.1"):
                 raise DestinationDenied("invalid protocol")
+            if method == "POST" and target == BUSINESS_RELAY_PATH:
+                self.business_receipt(lines, body)
+                return
+            if cast(_Proxy, self.server).relay_only:
+                raise DestinationDenied("only business receipts allowed")
             if method == "CONNECT":
                 host, port = parse_authority(target, 443)
                 request_data = body
@@ -183,11 +276,20 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bind", required=True)
     parser.add_argument("--deny", action="append", default=[])
+    parser.add_argument("--analytics-project", default="")
+    parser.add_argument("--analytics-origin", default="")
+    parser.add_argument("--relay-only", action="store_true")
     args = parser.parse_args()
+    if args.analytics_project or args.analytics_origin or args.relay_only:
+        UUID(args.analytics_project)
+        business_relay_origin(args.analytics_origin)
     for cidr in args.deny:
         ipaddress.ip_network(cidr)
     with _Proxy((args.bind, 3128), _Handler) as server:
         server.denied_cidrs = args.deny
+        server.analytics_project = args.analytics_project
+        server.analytics_origin = args.analytics_origin
+        server.relay_only = args.relay_only
         server.serve_forever()
 
 

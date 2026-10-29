@@ -7,6 +7,8 @@ import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import type { ManagementModule } from "@/lib/api/types";
+import { MAX_MANAGEMENT_MODULES } from "@/lib/max-brief";
 import { MAX_APP_TYPES, MAX_BRIEF_LENGTH, MAX_FEATURES, MAX_FEATURE_INFO, MAX_STYLES, type MaxAppTypeId, type MaxFeature, type MaxStyleId } from "@/lib/max-brief";
 import { MaxFeaturePreview } from "./MaxFeaturePreview";
 import { MaxProjectReview } from "./MaxProjectReview";
@@ -21,6 +23,7 @@ type WizardValues = {
   features: MaxFeature[];
   style: MaxStyleId;
   brandColors: string;
+  managementModules?: ManagementModule[];
 };
 
 const titles = ["Что создаём?", "Для кого приложение?", "Функции и оформление", "Проверьте описание"];
@@ -106,6 +109,27 @@ export function MaxProjectWizard({ open, onOpenChange, values, onChange, pending
               <div className="space-y-2"><Label htmlFor="max-action">Главное действие</Label><Input id="max-action" value={values.primaryAction} onChange={event => onChange({ primaryAction: event.target.value })} placeholder="Например, обменять баллы на награду" /></div>
             </>}
             {step === 2 && <>
+              <fieldset>
+                <legend className="text-sm font-medium">Управление в Yleum</legend>
+                <p className="max-wizard-note">Выберите, чем будете управлять обычными формами. Настройки и статистика доступны каждому приложению.</p>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  {MAX_MANAGEMENT_MODULES.map(module => <label key={module.id} className="max-wizard-option flex items-start gap-3">
+                    <input type="checkbox" className="mt-1 size-4" checked={values.managementModules?.includes(module.id) ?? false}
+                      onChange={event => {
+                        const selected = new Set(values.managementModules ?? []);
+                        if (event.target.checked) {
+                          selected.add(module.id);
+                          if (module.id === "orders" || module.id === "bookings") selected.add("catalog");
+                        } else {
+                          selected.delete(module.id);
+                          if (module.id === "catalog") { selected.delete("orders"); selected.delete("bookings"); }
+                        }
+                        onChange({ managementModules: MAX_MANAGEMENT_MODULES.filter(item => selected.has(item.id)).map(item => item.id) });
+                      }} />
+                    <span><span className="block text-sm font-medium">{module.label}</span><span className="mt-1 block text-xs leading-5 text-fg-secondary">{module.description}</span></span>
+                  </label>)}
+                </div>
+              </fieldset>
               <fieldset>
                 <legend className="text-sm font-medium">Функции</legend>
                 <p className="max-wizard-note">Нажмите на функцию, чтобы добавить её в приложение. Кнопка <Eye aria-hidden="true" className="inline size-3.5 -mt-0.5" /> показывает, как выглядит такой экран.</p>

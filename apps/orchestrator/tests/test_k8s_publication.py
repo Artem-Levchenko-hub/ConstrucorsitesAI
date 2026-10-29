@@ -86,6 +86,48 @@ def _container(workload: dict[str, Any], name: str) -> dict[str, Any]:
     return next(c for c in workload["spec"]["template"]["spec"]["containers"] if c["name"] == name)
 
 
+def test_owner_capability_is_controller_bound_and_not_a_bot_credential() -> None:
+    from yleum_orchestrator.services.owner_management_identity import owner_management_environment
+
+    spec = _spec(app_env={"YLEUM_OWNER_PUBLICATION_ID": "forged", "OMNIA_PROJECT_ID": "forged"})
+    app = _container(_by(kp.build_objects(spec), "Deployment", "app"), "app")
+    env = {item["name"]: item.get("value") for item in app["env"]}
+    expected = owner_management_environment(PROJECT, OWNER, spec.release_id, spec.runtime_env)
+    assert all(env.get(key) == value for key, value in expected.items())
+    assert env["OMNIA_PROJECT_ID"] == str(PROJECT)
+    assert "MAX_BOT_TOKEN" not in env and "bot-token" not in env.values()
+
+
+@pytest.mark.parametrize("previously_connected", [False, True])
+def test_absent_bot_retains_controller_binding_and_strips_forged_or_revoked_keys(
+    previously_connected: bool,
+) -> None:
+    stale_keys = {
+        "YLEUM_OWNER_ASSERTION_KEY": "forged-owner-key",
+        "YLEUM_BUSINESS_ANALYTICS_KEY": "forged-analytics-key",
+    }
+    if previously_connected:
+        connected = _container(_by(kp.build_objects(_spec()), "Deployment", "app"), "app")
+        connected_env = {item["name"]: item.get("value") for item in connected["env"]}
+        stale_keys = {key: connected_env[key] for key in stale_keys}
+        assert all(stale_keys.values())
+    spec = _spec(runtime_env={}, app_env={
+        **stale_keys,
+        "YLEUM_OWNER_PROJECT_ID": "forged-project",
+        "YLEUM_OWNER_ID": "forged-owner",
+        "YLEUM_OWNER_PUBLICATION_ID": "forged-release",
+    })
+    app = _container(_by(kp.build_objects(spec), "Deployment", "app"), "app")
+    env = {item["name"]: item.get("value") for item in app["env"]}
+    assert env["YLEUM_OWNER_PROJECT_ID"] == str(PROJECT)
+    assert env["YLEUM_OWNER_ID"] == str(OWNER)
+    assert env["YLEUM_OWNER_PUBLICATION_ID"] == "11111111-1111-4111-8111-111111111111"
+    assert "YLEUM_OWNER_ASSERTION_KEY" not in env
+    assert "YLEUM_BUSINESS_ANALYTICS_KEY" not in env
+    assert "MAX_BOT_TOKEN" not in env and "bot-token" not in env.values()
+    assert not set(stale_keys.values()).intersection(env.values())
+
+
 def test_build_objects_places_one_app_per_namespace_behind_the_boundary() -> None:
     objects = kp.build_objects(_spec())
     kinds = [(o["kind"], o["metadata"]["name"]) for o in objects]
@@ -320,7 +362,7 @@ def test_network_is_default_deny_with_explicit_paths() -> None:
         for e in policies["app"]["spec"]["egress"]
         if "app.kubernetes.io/component" in e["to"][0].get("podSelector", {}).get("matchLabels", {})
     ]
-    assert app_targets == ["project-postgres"]
+    assert app_targets == ["project-postgres", "analytics-relay"]
     core_egress = policies["core"]["spec"]["egress"]
     assert any("ipBlock" in e["to"][0] and e["ports"] == [{"port": 443}] for e in core_egress)
     # the ACME solver pod must stay reachable for Traefik, or no certificate is issued
@@ -419,6 +461,7 @@ def test_publish_applies_everything_then_waits_data_before_app_before_probing() 
         ("Deployment", "core"),
         ("StatefulSet", "project-postgres"),
         ("Deployment", "app"),
+        ("Deployment", "analytics-relay"),
         ("Deployment", "boundary"),
     ]
 
@@ -699,6 +742,7 @@ def test_runtime_class_sandboxes_user_code_but_not_the_databases() -> None:
         "Deployment/app",
         "Deployment/boundary",
         "Deployment/core",
+        "Deployment/analytics-relay",
     }
     assert all(
         "runtimeClassName" not in pod
@@ -871,3 +915,28 @@ def test_database_role_upgrade_can_prepare_without_guest_activation():
     assert ("Ingress", "public") not in applied
     assert result.namespace == _spec().namespace
     assert api.waited[-1] == ("StatefulSet", "project-postgres")
+
+
+def test_business_analytics_uses_dedicated_receipt_relay_not_core_or_direct_https():
+    objects = kp.build_objects(_spec())
+    app = _container(_by(objects, "Deployment", "app"), "app")
+    env = {item["name"]: item.get("value") for item in app["env"]}
+    assert env["YLEUM_BUSINESS_ANALYTICS_RELAY"] == "http://analytics-relay:3128/__yleum/business-analytics"
+    relay = _container(_by(objects, "Deployment", "analytics-relay"), "relay")
+    assert "--relay-only" in relay["command"]
+    assert str(PROJECT) == relay["command"][relay["command"].index("--analytics-project") + 1]
+    assert "MAX_BOT_TOKEN" not in str(relay)
+    policies = {o["metadata"]["name"]:o["spec"] for o in objects if o["kind"] == "NetworkPolicy"}
+    allowed = policies["app"]["egress"]
+    assert any(
+        e["to"][0].get("podSelector", {}).get("matchLabels")
+        == kp._selector(_spec(), "analytics-relay")
+        and e["ports"] == [{"port": 3128}]
+        for e in allowed
+    )
+    assert not any(e["ports"] == [{"port":443}] for e in allowed)
+    assert not any(
+        e["to"][0].get("podSelector", {}).get("matchLabels") == kp._selector(_spec(), "core")
+        for e in allowed
+    )
+    assert policies["analytics-relay"]["ingress"][0]["ports"] == [{"port":3128}]

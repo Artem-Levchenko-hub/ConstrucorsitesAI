@@ -227,6 +227,7 @@ def _normalize_analytics(files):
     added = {helper, "src/lib/omnia/activity.ts", "src/app/api/omnia/telemetry/route.ts"}
     assert legacy["revision"] == "20382350beccf2da361db1f6c9e9425a91b9267c"
     assert set(overrides) == set(_LEGACY_ANALYTICS_HASHES) | added
+    overrides[helper] = _owner_overrides()[helper]
     assert set(legacy["files"]) == set(_LEGACY_ANALYTICS_HASHES)
     normalized = dict(files)
     for path, entry in overrides.items():
@@ -237,7 +238,10 @@ def _normalize_analytics(files):
             identity = json.loads(match.group(1))
             assert identity == "" or str(UUID(identity)) == identity
             actual = actual.replace(
-                match.group(0), '  const project = process.env.OMNIA_PROJECT_ID || "";', 1
+                match.group(0),
+                ('  const project = process.env.OMNIA_PROJECT_ID || '
+                 'process.env.YLEUM_OWNER_PROJECT_ID || "";'),
+                1,
             )
         assert hashlib.sha256(actual.encode()).hexdigest() == entry["sha256"], path
         if path in added:
@@ -331,9 +335,47 @@ def _normalize_catalog(files):
     return normalized
 
 
+def _owner_overrides():
+    fixtures = Path(__file__).parents[2] / "orchestrator/tests/fixtures"
+    reviewed = json.loads(
+        (fixtures / "max_template_owner_management_overrides.json").read_text(encoding="utf-8")
+    )
+    assert set(reviewed) == {
+    'src/lib/omnia/management-config.ts',
+    'src/lib/omnia/management-auth.ts',
+    'src/lib/omnia/management-store.ts',
+    'src/lib/omnia/management-resources.ts',
+    'src/lib/omnia/business-client.ts',
+    'src/lib/omnia/business-server.ts',
+    'src/app/api/omnia/owner/route.ts',
+    'src/app/api/omnia/business/[resource]/route.ts',
+    'src/lib/omnia/app-profile-client.ts',
+    'src/lib/omnia/app-profile-actions.ts',
+    'drizzle/0003_owner_management.sql',
+    'next.config.ts',
+    'src/lib/omnia/analytics.ts',
+}
+    return reviewed
+
+
+def _normalize_owner_management(files):
+    reviewed = _owner_overrides()
+    normalized = dict(files)
+    for path, entry in reviewed.items():
+        if path == "src/lib/omnia/analytics.ts":
+            continue  # Has a project literal; checked by _normalize_analytics.
+        if path == "drizzle/0003_owner_management.sql" and path not in files:
+            continue  # Legacy configs must not acquire this migration.
+        assert hashlib.sha256(files[path].encode()).hexdigest() == entry["sha256"], path
+        # These are newly delivered managed files, including next.config.ts.
+        # The historical managed-render golden did not include that build file.
+        normalized.pop(path)
+    return normalized
+
+
 def _assert_render_golden(files, expected, *, portable=False):
     """Check reviewed changed files, then the unchanged original full SDK golden."""
-    files = _normalize_catalog(files)
+    files = _normalize_catalog(_normalize_owner_management(files))
     fixture_root = Path(__file__).parent / "fixtures"
     legacy = json.loads(
         (fixture_root / "max_config_render_legacy_dependencies.json").read_text(encoding="utf-8")
@@ -570,7 +612,7 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
                 "project_cell_handle": handle,
                 "base_agent_executor": AsyncMock(),
                 "max_shell_enabled": False,
-                "active_max_locked_files": frozenset(),
+                "active_max_locked_files": max_project_kit.MAX_SECURITY_LOCKED_FILES,
                 "agent_result": None,
             }
         ),
@@ -696,6 +738,9 @@ async def test_real_process_config_render(caller, stored, portable, fallback, fa
     "changed",
     [
         "src/lib/omnia/client.ts",
+        "src/lib/omnia/business-client.ts",
+        "src/lib/omnia/management-store.ts",
+        "next.config.ts",
         "src/lib/max/session.ts",
         "package.json",
         "package scripts",

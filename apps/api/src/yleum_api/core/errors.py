@@ -20,6 +20,13 @@ ErrorCode = Literal[
     "advice_unavailable",
     "internal_error",
     "conflict",
+    # Typed owner-management and managed-business failures.
+    "unsupported",
+    "unavailable",
+    "revision_conflict",
+    "operation_conflict",
+    "quote_changed",
+    "invalid_request",
     # Why a prompt (or another claim on the project) was refused with 409. The
     # client must not guess: only `generation_active` means "a build is running".
     "generation_active",

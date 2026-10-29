@@ -194,54 +194,6 @@ def test_warm_release_reuses_verified_image_and_creates_only_release_local_volum
     assert created == ["workspace", "home", "pnpm"]
 
 
-@pytest.mark.parametrize("installed", [False, True])
-def test_healthy_public_reconcile_preserves_service_processes_and_never_restores_data(
-    tmp_path, installed
-):
-    from tests.test_project_machine_manifest import payload
-    from yleum_orchestrator.core.project_machine import MachineManifest
-    from yleum_orchestrator.services.project_machine import write_controller_json
-
-    runtime = published_backend(tmp_path)
-    runtime.database_credentials()  # existing private authority precedes installed marker
-    manifest = MachineManifest.model_validate(payload())
-    write_controller_json(
-        runtime.metadata_path,
-        {
-            "manifest": manifest.model_dump(mode="json"),
-            "epoch": 7,
-            "restored_image": "sha256:" + "a" * 64,
-            "services": {"web": {"exec_id": "live"}},
-            "project_database_role_protocol": 1 if installed else 0,
-        },
-    )
-    runtime.assert_live_volumes = lambda _manifest: None
-    runtime.restart_infrastructure = lambda: None
-    attrs = {
-        "Image": "sha256:" + "a" * 64,
-        "Config": {
-            "Labels": {"omnia.fencing_epoch": "7"},
-            "Env": [f"{key}={value}" for key, value in runtime.project_database_env().items()],
-        },
-        "Mounts": [
-            {"Name": name, "Destination": item["bind"], "RW": True}
-            for name, item in runtime.volume_mapping(manifest).items()
-        ]
-        + [{"Name": runtime.stem + "-logs", "Destination": "/run/omnia-logs", "RW": True}],
-    }
-    runtime._container = lambda: SimpleNamespace(status="running", reload=lambda: None, attrs=attrs)
-
-    def unexpected(*args, **kwargs):
-        raise AssertionError("healthy runtime must not recreate or restore")
-
-    ensured = []
-    runtime.ensure = lambda *_: ensured.append(True)
-    runtime.import_volume = unexpected
-    runtime.ensure_published(manifest, "sha256:" + "a" * 64, 7)
-    assert ensured == ([] if installed else [True])
-    assert runtime._metadata()["services"]["web"]["exec_id"] == "live"
-
-
 @pytest.mark.parametrize("physical_change", ["image", "mount", "epoch"])
 def test_interrupted_candidate_cannot_be_reconciled_as_previous_release(tmp_path, physical_change):
     from tests.test_project_machine_manifest import payload

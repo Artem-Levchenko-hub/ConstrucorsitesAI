@@ -557,6 +557,24 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         if not 0 <= length <= 8 * 1024**2:
             return self._reply(413)
         public = config.get("public_mode") is True
+        owner_rpc = path == "/api/omnia/owner"
+        business_rpc = (
+            re.fullmatch(r"/api/omnia/business/(orders|leads|bookings)", path) is not None
+        )
+        if owner_rpc:
+            if not public:
+                return self._reply(404)
+            if self.command != "POST":
+                return self._reply(405)
+            if self.path != path:
+                return self._reply(400)
+            if length > 32 * 1024:
+                return self._reply(413)
+            assertions = self.headers.get_all("X-Yleum-Owner-Assertion") or []
+            if len(assertions) != 1 or not 0 < len(assertions[0]) <= 8192:
+                return self._reply(401)
+        if business_rpc and self.command not in {"GET", "POST"}:
+            return self._reply(405)
         preview_path = "/api/omnia/preview-session"
         if public and (path == preview_path or path.startswith(preview_path + "/")):
             return self._reply(404)
@@ -565,7 +583,7 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         )
         if (
             public and self.command not in {"GET", "HEAD", "OPTIONS"}
-            and path != "/api/max/webhook"
+            and path != "/api/max/webhook" and not owner_rpc
             and (user is not None or path == "/api/max/session")
         ):
             # SameSite=None needs an explicit CSRF boundary. Never trust Host or
@@ -579,12 +597,35 @@ class BoundaryHandler(http.server.BaseHTTPRequestHandler):
         if path.startswith(core_assets):
             upstream_path = "/_next/" + self.path[len(core_assets) :]
         personal_response = (
-            user is not None or path in {"/api/max/session", preview_path}
+            user is not None or owner_rpc or business_rpc
+            or path in {"/api/max/session", preview_path}
         ) and not path.startswith(core_assets + "static/")
-        managed = legal_page or any(
+        managed = not (owner_rpc or business_rpc) and (legal_page or any(
             path == prefix or path.startswith(prefix + "/") for prefix in ("/api/omnia", "/api/max")
-        )
-        if managed:
+        ))
+        if owner_rpc or business_rpc:
+            # These exact platform-owned app routes operate on the product DB.
+            # Every other reserved route remains isolated in the trusted core.
+            if business_rpc and user is None:
+                return self._reply(401, b"MAX authentication required")
+            product_port = route_port("/", cast(list[dict[str, Any]], config["routes"]))
+            if product_port is None:
+                return self._reply(404)
+            target, port = str(config["machine_host"]), product_port
+            if owner_rpc:
+                # Runtime verifies this capability before any DB access. Do not
+                # synthesize a customer identity or pass caller credentials.
+                headers = {
+                    "Content-Type": "application/json",
+                    "X-Yleum-Owner-Assertion": self.headers["X-Yleum-Owner-Assertion"],
+                }
+            else:
+                headers = product_headers(
+                    dict(self.headers), project_id=str(config["project_id"]),
+                    epoch=int(config["epoch"]), user=cast(dict[str, Any], user),
+                    origin=config.get("public_origin" if public else "preview_origin"),
+                )
+        elif managed:
             if public and user is None and not (
                 legal_page or path.startswith(core_assets) or path in _PUBLIC_ANONYMOUS
             ):

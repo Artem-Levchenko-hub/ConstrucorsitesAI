@@ -275,6 +275,24 @@ jobs:
       - name: Install frozen managed-footer browser fixture dependencies
         working-directory: apps/orchestrator/templates/max-miniapp-nextjs
         run: pnpm install --frozen-lockfile --ignore-scripts
+      - name: Verify owner business receipts and RLS on native PostgreSQL
+        if: matrix.shard == 1
+        working-directory: apps/api
+        env:
+          YLEUM_MANAGEMENT_TEST_DATABASE_URL: postgresql://omnia:omnia@127.0.0.1:5432/owner_management_test
+        run: |
+          uv run --frozen python - <<'PY'
+          import asyncio
+          import asyncpg
+          async def create():
+              connection = await asyncpg.connect('postgresql://omnia:omnia@127.0.0.1:5432/postgres')
+              try:
+                  await connection.execute('CREATE DATABASE owner_management_test')
+              finally:
+                  await connection.close()
+          asyncio.run(create())
+          PY
+          node --test tests/fixtures/max_management_sdk.test.mjs
       - name: Run API suite shard ${{ matrix.shard }} of 6 on disposable services
         working-directory: apps/api
         run: |
@@ -438,6 +456,8 @@ jobs:
           test_root=$(mktemp -d)
           cp templates/max-miniapp-nextjs/package.json templates/max-miniapp-nextjs/pnpm-lock.yaml "$test_root/"
           cp -R templates/max-miniapp-nextjs/drizzle templates/max-miniapp-nextjs/scripts "$test_root/"
+          node --test scripts/public-max-core/core-migrations.test.mjs
+          node scripts/public-max-core/core-migrations.mjs "$test_root/drizzle"
           cp scripts/public-max-core/bootstrap-database.mjs scripts/public-max-core/database-role.test.mjs "$test_root/scripts/"
           cd "$test_root"
           pnpm install --frozen-lockfile --prod --ignore-scripts
@@ -542,8 +562,9 @@ jobs:
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_consent_overrides.json,dst=/smoke/consent.json,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_compliance_overrides.json,dst=/smoke/compliance.json,readonly" \
             --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_catalog_overrides.json,dst=/smoke/catalog.json,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/apps/orchestrator/tests/fixtures/max_template_owner_management_overrides.json,dst=/smoke/owner-management.json,readonly" \
             --entrypoint /app/.venv/bin/python omnia-api:prod \
-            /smoke/verify.py /smoke/golden.json /smoke/readmes.json /smoke/dependencies.json /smoke/action-writes.json /smoke/support.json /smoke/preview-renewal.json /smoke/analytics.json /smoke/consent.json --catalog-overrides /smoke/catalog.json --compliance-overrides /smoke/compliance.json
+            /smoke/verify.py /smoke/golden.json /smoke/readmes.json /smoke/dependencies.json /smoke/action-writes.json /smoke/support.json /smoke/preview-renewal.json /smoke/analytics.json /smoke/consent.json --catalog-overrides /smoke/catalog.json --compliance-overrides /smoke/compliance.json --owner-management-overrides /smoke/owner-management.json
 
   workflow-lint:
     runs-on: ubuntu-latest

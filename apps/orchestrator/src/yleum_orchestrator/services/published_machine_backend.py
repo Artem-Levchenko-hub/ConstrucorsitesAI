@@ -27,6 +27,10 @@ from yleum_orchestrator.core.project_machine import MachineManifest
 from yleum_orchestrator.core.workspace_provider import WorkspaceSpec
 from yleum_orchestrator.services.docker_machine_backend import DockerMachineBackend
 from yleum_orchestrator.services.machine_environment import MachineEnvironmentRef
+from yleum_orchestrator.services.owner_management_identity import (
+    OWNER_CAPABILITY_KEYS,
+    owner_capabilities_match,
+)
 from yleum_orchestrator.services.project_machine import (
     machine_remaining_seconds,
     write_controller_json,
@@ -115,6 +119,7 @@ async def ensure_managed_infrastructure(manager: Any, state: Any) -> None:
 class PublishedMachineBackend(DockerMachineBackend):
     release_id: UUID | None = None
     release_layout: dict[str, str] = field(default_factory=dict)
+    owner_management_env: dict[str, str] | None = field(default=None, repr=False)
 
     def retire_compute(self) -> None:
         """Delete serving compute after durable disable; keep all data/backups."""
@@ -156,6 +161,7 @@ class PublishedMachineBackend(DockerMachineBackend):
     ) -> dict[str, Any]:
         options = super().container_options(manifest, namespace_id, epoch)
         options["labels"]["omnia.public_release_id"] = str(self.release_id)
+        options["environment"].update(self.owner_management_env or {})
         return options
 
     # P09: in production the project database, its volume and the guard's
@@ -329,6 +335,7 @@ class PublishedMachineBackend(DockerMachineBackend):
         self.ensure(manifest, epoch)
 
     def ensure_published(self, manifest: MachineManifest, image_id: str, epoch: int) -> None:
+        runtime = self
         self.assert_live_volumes(manifest)
         self.restart_infrastructure()
         container = self._container()
@@ -360,19 +367,44 @@ class PublishedMachineBackend(DockerMachineBackend):
                 or metadata.get("manifest") != manifest.model_dump(mode="json")
             ):
                 raise CellIdentityConflict("production runtime differs from accepted release")
-            if container.status == "running":
-                configured = dict(
-                    item.split("=", 1)
-                    for item in container.attrs.get("Config", {}).get("Env", [])
-                    if "=" in item
+            configured = dict(
+                item.split("=", 1)
+                for item in container.attrs.get("Config", {}).get("Env", [])
+                if "=" in item
+            )
+            expected = self.project_database_env()
+            capabilities_changed = self.owner_management_env is not None and (
+                not owner_capabilities_match(configured, self.owner_management_env)
+                or configured.get("YLEUM_BUSINESS_ANALYTICS_RELAY")
+                != (
+                    f"http://{metadata.get('proxy_ip', '127.0.0.1')}:3128"
+                    "/__yleum/business-analytics"
                 )
-                expected = self.project_database_env()
-                if metadata.get("project_database_role_protocol") == 1 and all(
-                    configured.get(key) == value for key, value in expected.items()
-                ):
-                    return
-                # Same accepted image/volumes, but its old administrator login
-                # must pass normal ensure/recreation before any guest resumes.
+            )
+            if (container.status == "running" and not capabilities_changed
+                    and metadata.get("project_database_role_protocol") == 1
+                    and all(configured.get(key) == value for key, value in expected.items())):
+                if self.owner_management_env is not None:
+                    internal = self.client.networks.get(self.internal_network)
+                    if not internal.attrs.get("Internal") or (
+                        internal.attrs.get("Labels") or {}
+                    ).get("omnia.workspace_id") != str(self.workspace_id):
+                        raise CellIdentityConflict("project data network identity mismatch")
+                    self._ensure_egress_proxy(internal)
+                return
+            if self.owner_management_env is None:
+                # Observation/recovery without supplied credentials is not revoke.
+                runtime = replace(self, owner_management_env={
+                    key: configured[key]
+                    for key in (*OWNER_CAPABILITY_KEYS, "OMNIA_PUBLIC_APP_ORIGIN")
+                    if key in configured
+                })
+            # Published compute always resumes from the accepted image. The
+            # development ensure/checkpoint path can capture rootfs and volumes,
+            # including on stopped machines or old database credentials.
+            if container.status not in {"created", "exited", "dead"}:
+                self.quiesce_current()
+            self.remove(expected_epoch=epoch)
         else:
             metadata = self._metadata()
             metadata.update(
@@ -384,7 +416,7 @@ class PublishedMachineBackend(DockerMachineBackend):
                 release_layout=self.release_layout,
             )
             write_controller_json(self.metadata_path, metadata)
-        self.ensure(manifest, epoch)
+        runtime.ensure(manifest, epoch)
 
     def rotate_seeded_postgres(self, source_password: str | None = None) -> None:
         """A retained physical seed is rekeyed through its own private authority.

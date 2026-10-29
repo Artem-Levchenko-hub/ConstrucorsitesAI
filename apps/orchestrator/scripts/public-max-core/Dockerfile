@@ -8,6 +8,9 @@ COPY --chown=node:node templates/max-miniapp-nextjs/src ./src
 COPY --chown=node:node templates/max-miniapp-nextjs/scripts ./scripts
 COPY --chown=node:node scripts/public-max-core/bootstrap-database.mjs ./scripts/bootstrap-database.mjs
 COPY --chown=node:node templates/max-miniapp-nextjs/drizzle ./drizzle
+COPY --chown=node:node scripts/public-max-core/core-migrations.mjs ./select-core-migrations.mjs
+# The kit may contain product migrations; the trusted core has its own inventory.
+RUN node select-core-migrations.mjs drizzle
 COPY --chown=node:node templates/max-miniapp-nextjs/next.config.ts ./next.config.ts
 COPY --chown=node:node scripts/public-max-core/prepare.mjs ./prepare-managed-core.mjs
 COPY --chown=node:node scripts/public-max-core/preview-auth.test.cjs ./preview-auth.test.cjs
@@ -64,6 +67,9 @@ COPY --from=build --chown=node:node /app/.next/standalone ./
 COPY --from=build --chown=node:node /app/.next/static ./.next/static
 COPY --from=build --chown=node:node /app/scripts ./scripts
 COPY --from=build --chown=node:node /app/drizzle ./drizzle
+COPY --from=build --chown=node:node /app/select-core-migrations.mjs ./select-core-migrations.mjs
+# COPY merges directories: remove migrations inherited from the runtime ancestor too.
+RUN node select-core-migrations.mjs drizzle
 USER node
 EXPOSE 3000
 CMD ["node", "server.js"]

@@ -46,6 +46,29 @@ CONSENT_OVERRIDES = json.loads(
     ).read_text(encoding="utf-8")
 )
 
+OWNER_OVERRIDES = json.loads(
+    (
+        Path(__file__).parents[2]
+        / "orchestrator/tests/fixtures"
+        / "max_template_owner_management_overrides.json"
+    ).read_text(encoding="utf-8")
+)
+assert set(OWNER_OVERRIDES) == {
+    'src/lib/omnia/management-config.ts',
+    'src/lib/omnia/management-auth.ts',
+    'src/lib/omnia/management-store.ts',
+    'src/lib/omnia/management-resources.ts',
+    'src/lib/omnia/business-client.ts',
+    'src/lib/omnia/business-server.ts',
+    'src/app/api/omnia/owner/route.ts',
+    'src/app/api/omnia/business/[resource]/route.ts',
+    'src/lib/omnia/app-profile-client.ts',
+    'src/lib/omnia/app-profile-actions.ts',
+    'drizzle/0003_owner_management.sql',
+    'next.config.ts',
+    'src/lib/omnia/analytics.ts',
+}
+
 CATALOG_OVERRIDES = json.loads(
     (
         Path(__file__).resolve().parents[2]
@@ -112,6 +135,7 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             expected.update(ANALYTICS_OVERRIDES)
             expected.update(CONSENT_OVERRIDES)
             expected.update(CATALOG_OVERRIDES)
+            expected.update(OWNER_OVERRIDES)
         for relative in expected:
             shared_public = relative in {
                 "public/omnia-inspector.js",
@@ -149,6 +173,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             str(fixtures / "max_template_preview_renewal_overrides.json"),
             str(fixtures / "max_template_analytics_overrides.json"),
             str(fixtures / "max_template_consent_overrides.json"),
+            "--owner-management-overrides",
+            str(fixtures / "max_template_owner_management_overrides.json"),
             "--catalog-overrides",
             str(fixtures / "max_template_catalog_overrides.json"),
             "--compliance-overrides",
@@ -180,6 +206,8 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
         str(fixtures / "max_template_preview_renewal_overrides.json"),
         str(fixtures / "max_template_analytics_overrides.json"),
         str(fixtures / "max_template_consent_overrides.json"),
+        "--owner-management-overrides",
+        str(fixtures / "max_template_owner_management_overrides.json"),
         "--catalog-overrides",
         str(fixtures / "max_template_catalog_overrides.json"),
         "--compliance-overrides",
@@ -311,6 +339,32 @@ def test_actual_export_smoke_with_clean_mounted_templates_outside_checkout(tmp_p
             "unexpected MAX catalog override paths" if mutation in ("extra", "missing")
             else "incomplete standalone export" if mutation == "omitted"
             else f"max-miniapp-nextjs/{catalog_path}"
+        )
+        assert expected_error in rejected.stderr
+    owner_index = valid_args.index("--owner-management-overrides")
+    owner_path = "src/lib/omnia/business-client.ts"
+    for mutation in ("extra", "missing", "hash", "omitted"):
+        invalid = dict(OWNER_OVERRIDES)
+        if mutation == "extra":
+            invalid["src/lib/omnia/unreviewed.ts"] = {"sha256": "0" * 64}
+        elif mutation == "missing":
+            invalid.pop(owner_path)
+        elif mutation == "hash":
+            invalid[owner_path] = {"sha256": "0" * 64, "mode": "100644"}
+        invalid_path = tmp_path / "untrusted-owner.json"
+        invalid_path.write_text(json.dumps(invalid), encoding="utf-8")
+        invalid_args = valid_args.copy()
+        invalid_args[owner_index + 1] = str(invalid_path)
+        if mutation == "omitted":
+            del invalid_args[owner_index:owner_index + 2]
+        rejected = subprocess.run(
+            invalid_args, cwd=tmp_path, env=env, text=True, capture_output=True, timeout=30,
+        )
+        assert rejected.returncode != 0
+        expected_error = (
+            "unexpected MAX owner management override paths" if mutation in ("extra", "missing")
+            else "incomplete standalone export" if mutation == "omitted"
+            else f"max-miniapp-nextjs/{owner_path}"
         )
         assert expected_error in rejected.stderr
     # The footer exception is exactly one reviewed path, never a source bypass.

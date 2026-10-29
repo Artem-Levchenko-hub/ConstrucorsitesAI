@@ -9,6 +9,7 @@ import {
   PackageOpen,
   Rocket,
   Smartphone,
+  SlidersHorizontal,
 } from "lucide-react";
 import Link from "next/link";
 
@@ -17,6 +18,7 @@ import { getMaxJourney, type MaxJourneyStageId } from "@/lib/max-journey";
 import { cn } from "@/lib/utils";
 
 export type MaxProjectNavKey =
+  | "manage"
   | "editor"
   | "app"
   | "catalog"
@@ -35,6 +37,7 @@ const navigation: Array<{
   icon: typeof Smartphone;
   stageId?: MaxJourneyStageId;
 }> = [
+  { key: "manage", keys: ["manage"], label: "Управление", suffix: "/manage", icon: SlidersHorizontal },
   { key: "editor", keys: ["editor"], label: "Сборка", suffix: "", icon: Smartphone, stageId: "build" },
   {
     key: "app",

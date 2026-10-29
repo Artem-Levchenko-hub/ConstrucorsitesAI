@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -11,6 +12,7 @@ from yleum_api.core.errors import ApiError
 from yleum_api.models.max_project_config import MaxProjectConfig
 from yleum_api.schemas.max_studio import MaxProjectConfigPayload
 from yleum_api.services.max_project_kit import (
+    MAX_MANAGEMENT_RUNTIME_FILES,
     MAX_RETIRED_MANAGED_FILES,
     _template_file,
     enable_catalog_runtime_manifest,
@@ -21,6 +23,8 @@ if TYPE_CHECKING:
 
 INTEGRATION_SDK_PATH = "src/lib/omnia/integration-client.ts"
 MANAGED_GENERATION_PATHS = (
+    *MAX_MANAGEMENT_RUNTIME_FILES,
+    "next.config.ts",
     INTEGRATION_SDK_PATH, "src/lib/omnia/client.ts",
     "src/lib/omnia/activity.ts",
     "src/lib/omnia/catalog-server.ts", "src/lib/omnia/catalog-actions.ts",
@@ -63,9 +67,16 @@ async def refresh_integration_sdk(
 ) -> None:
     """Stage one SDK import closure; preserve product files and executor dirty state."""
     current = await handle.snapshot_files()
+    from yleum_api.services.max_management_contract import parse_management_contract
+
+    raw_management = current.get(".omnia/management.json")
+    management_enabled = bool(
+        raw_management and parse_management_contract(json.loads(raw_management)).resources
+    )
     patch = {
         path: canonical
         for path, canonical in managed_generation_files(max_config_source).items()
+        if path != "drizzle/0003_owner_management.sql" or management_enabled
         if current.get(path) != canonical
     }
     manifest = current.get(".omnia/cell.json")

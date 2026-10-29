@@ -44,6 +44,7 @@ from yleum_orchestrator.services.app_business_config import (
     config_digest,
 )
 from yleum_orchestrator.services.k8s_config_observer import observe_in_subprocess
+from yleum_orchestrator.services.owner_management_identity import owner_management_environment
 from yleum_orchestrator.services.project_database_credentials import ProjectDatabaseCredentials
 from yleum_orchestrator.services.project_database_roles import (
     PROJECT_RUNTIME_ROLE,
@@ -604,6 +605,95 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
     )
     objects.append(_service(spec, "redis", 6379))
 
+    # Receipt-only relay uses the existing guard image's Python interpreter. The
+    # source is a versioned ConfigMap, so an old guard tag cannot omit the handler.
+    from yleum_orchestrator.services.studio_origins import platform_api_url
+
+    relay_source = Path(__file__).with_name("machine_egress.py").read_text(encoding="utf-8")
+    relay_origin = platform_api_url()
+    objects.extend(
+        [
+            {
+                "apiVersion": "v1",
+                "kind": "ConfigMap",
+                "metadata": {
+                    "name": "analytics-relay",
+                    "namespace": ns,
+                    "labels": _labels(spec, "analytics-relay"),
+                },
+                "data": {"relay.py": relay_source},
+            },
+            {
+                "apiVersion": "apps/v1",
+                "kind": "Deployment",
+                "metadata": {
+                    "name": "analytics-relay",
+                    "namespace": ns,
+                    "labels": _labels(spec, "analytics-relay"),
+                },
+                "spec": {
+                    "replicas": 1,
+                    "selector": {"matchLabels": _selector(spec, "analytics-relay")},
+                    "template": {
+                        "metadata": {
+                            "labels": _labels(spec, "analytics-relay"),
+                            "annotations": {
+                                "omnia.config-digest": _digest(relay_origin, relay_source)
+                            },
+                        },
+                        "spec": {
+                            **_sandbox(spec),
+                            "containers": [
+                                {
+                                    "name": "relay",
+                                    "image": spec.guard_image,
+                                    "command": [
+                                        "python3",
+                                        "/run/relay/relay.py",
+                                        "--bind",
+                                        "0.0.0.0",
+                                        "--relay-only",
+                                        "--analytics-project",
+                                        str(spec.project_id),
+                                        "--analytics-origin",
+                                        relay_origin,
+                                    ],
+                                    "ports": [{"containerPort": 3128, "name": "http"}],
+                                    "volumeMounts": [
+                                        {
+                                            "name": "relay",
+                                            "mountPath": "/run/relay",
+                                            "readOnly": True,
+                                        }
+                                    ],
+                                    "readinessProbe": {
+                                        "tcpSocket": {"port": 3128},
+                                        "periodSeconds": 3,
+                                    },
+                                    "resources": {
+                                        "requests": {"cpu": "10m", "memory": "16Mi"},
+                                        "limits": {"cpu": "100m", "memory": "64Mi"},
+                                    },
+                                    "securityContext": {
+                                        "runAsUser": 65534,
+                                        "runAsGroup": 65534,
+                                        "allowPrivilegeEscalation": False,
+                                        "capabilities": {"drop": ["ALL"]},
+                                        "readOnlyRootFilesystem": True,
+                                    },
+                                }
+                            ],
+                            "volumes": [
+                                {"name": "relay", "configMap": {"name": "analytics-relay"}}
+                            ],
+                        },
+                    },
+                },
+            },
+            _service(spec, "analytics-relay", 3128),
+        ]
+    )
+
     # --- managed MAX core ---
     core_env = {
         "NODE_ENV": "production",
@@ -819,7 +909,13 @@ def build_objects(spec: PublicationSpec) -> list[dict[str, Any]]:
         "PORT": str(app_port),
         "HOSTNAME": "0.0.0.0",
         "OMNIA_PUBLIC_APP_ORIGIN": spec.public_origin,
-        **spec.app_env,
+        **{key: value for key, value in spec.app_env.items()
+           if not key.startswith(("YLEUM_OWNER_", "YLEUM_BUSINESS_"))},
+        "OMNIA_PROJECT_ID": str(spec.project_id),
+        **owner_management_environment(
+            spec.project_id, spec.owner_id, spec.release_id, spec.runtime_env,
+        ),
+        "YLEUM_BUSINESS_ANALYTICS_RELAY": "http://analytics-relay:3128/__yleum/business-analytics",
         # User configuration cannot redirect the controller-owned database login.
         "PGHOST": "project-postgres",
         "PGPORT": "5432",
@@ -1267,7 +1363,34 @@ def _network_policies(spec: PublicationSpec, app_port: int) -> list[dict[str, An
             {
                 "policyTypes": ["Ingress", "Egress"],
                 "ingress": [{"from": [from_peer("boundary")], "ports": [{"port": app_port}]}],
-                "egress": [peer("project-postgres", 5432), dns, artifacts],
+                "egress": [
+                    peer("project-postgres", 5432),
+                    peer("analytics-relay", 3128),
+                    dns,
+                    artifacts,
+                ],
+            },
+        ),
+        policy(
+            "analytics-relay",
+            "analytics-relay",
+            {
+                "policyTypes": ["Ingress", "Egress"],
+                "ingress": [{"from": [from_peer("app")], "ports": [{"port": 3128}]}],
+                "egress": [
+                    dns,
+                    {
+                        "to": [
+                            {
+                                "ipBlock": {
+                                    "cidr": "0.0.0.0/0",
+                                    "except": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"],
+                                }
+                            }
+                        ],
+                        "ports": [{"port": 443}],
+                    },
+                ],
             },
         ),
         policy(
@@ -1699,6 +1822,7 @@ class KubernetesPublishedRuntime:
                 self.api.apply(obj)
         for kind, name in (
             ("Deployment", "app"),
+            ("Deployment", "analytics-relay"),
             ("Deployment", "boundary"),
         ):
             self.api.wait_ready(kind, name, ns, self.ready_timeout)
@@ -1808,6 +1932,9 @@ class KubernetesPublishedRuntime:
             ("apps/v1", "Deployment", "app"),
             ("apps/v1", "Deployment", "core"),
             ("apps/v1", "Deployment", "redis"),
+            ("apps/v1", "Deployment", "analytics-relay"),
+            ("v1", "ConfigMap", "analytics-relay"),
+            ("v1", "Service", "analytics-relay"),
             ("apps/v1", "StatefulSet", "core-postgres"),
             ("apps/v1", "StatefulSet", "project-postgres"),
             ("v1", "Secret", "boundary-config"),

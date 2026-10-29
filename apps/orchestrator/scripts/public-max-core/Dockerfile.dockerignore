@@ -12,3 +12,4 @@
 !templates/max-miniapp-nextjs/src/**
 !templates/max-miniapp-nextjs/scripts/**
 !templates/max-miniapp-nextjs/drizzle/**
+!scripts/public-max-core/core-migrations.mjs

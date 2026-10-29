@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from tests.test_generation_recovery_execution import _bootstrap_wait
 from tests.test_generation_worker import _queued_dispatch
+from tests.test_max_public_config_transports import receiver as config_receiver
 from yleum_api.core import db as core_db
 from yleum_api.core.config import get_settings
 from yleum_api.models.generation_recovery_effect import GenerationRecoveryEffect
@@ -62,6 +63,7 @@ from yleum_api.services.generation.recovery_contract import (
 )
 from yleum_api.services.generation.recovery_pipeline import PreparedAgentEntry
 from yleum_api.services.generation_runs import load_generation_dispatch, prompt_hash
+from yleum_api.services.max_content_delivery import config_digest, public_business_config
 from yleum_api.services.project_cell_control import ProjectCellControlReadiness
 from yleum_api.services.project_cells import (
     claim_cell_operation_committed,
@@ -210,8 +212,13 @@ class Controller:
                           else MaxProjectConfigPayload.default_for(project.name))
                 assert record is None or record.owner_id == run.user_id
                 assert json["version"] == (record.config_version if record else 0)
-                assert json["config"] == config.model_dump(
-                    mode="json", exclude={"max_url_attached"},
+                assert json["config"] == public_business_config(config)
+                envelope = jsonlib.loads(config_receiver.app_config_envelope(
+                    json["config"], json["version"],
+                ))
+                assert envelope["config_version"] == json["version"]
+                assert config_receiver.config_digest(envelope["config"]) == config_digest(
+                    public_business_config(config),
                 )
             self.calls.append(("business_config", workspace_id, json["fencing_epoch"]))
             # No opted-in app consumer exists in this synthetic recovery boundary.

@@ -73,6 +73,23 @@ _CATALOG_OVERRIDE_PATHS = {
 }
 
 
+_OWNER_MANAGEMENT_OVERRIDE_PATHS = {
+    'src/lib/omnia/management-config.ts',
+    'src/lib/omnia/management-auth.ts',
+    'src/lib/omnia/management-store.ts',
+    'src/lib/omnia/management-resources.ts',
+    'src/lib/omnia/business-client.ts',
+    'src/lib/omnia/business-server.ts',
+    'src/app/api/omnia/owner/route.ts',
+    'src/app/api/omnia/business/[resource]/route.ts',
+    'src/lib/omnia/app-profile-client.ts',
+    'src/lib/omnia/app-profile-actions.ts',
+    'drizzle/0003_owner_management.sql',
+    'next.config.ts',
+    'src/lib/omnia/analytics.ts',
+}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("golden", type=Path)
@@ -85,6 +102,7 @@ def main() -> None:
     parser.add_argument("consent_overrides", type=Path)
     parser.add_argument("--compliance-overrides", type=Path)
     parser.add_argument("--catalog-overrides", type=Path)
+    parser.add_argument("--owner-management-overrides", type=Path)
     args = parser.parse_args()
     golden = json.loads(args.golden.read_text(encoding="utf-8"))["templates"]
     overrides = json.loads(args.readme_overrides.read_text(encoding="utf-8"))
@@ -127,6 +145,18 @@ def main() -> None:
         assert set(catalog_overrides) == _CATALOG_OVERRIDE_PATHS, (
             "unexpected MAX catalog override paths"
         )
+    owner_overrides = {}
+    if args.owner_management_overrides is not None:
+        owner_overrides = json.loads(args.owner_management_overrides.read_text(encoding="utf-8"))
+        assert set(owner_overrides) == _OWNER_MANAGEMENT_OVERRIDE_PATHS, (
+            "unexpected MAX owner management override paths"
+        )
+    if owner_overrides:
+        # The successor overrides only this reviewed predecessor, never an
+        # arbitrary analytics manifest supplied alongside it.
+        assert analytics_overrides["src/lib/omnia/analytics.ts"]["sha256"] == (
+            "760cf529cc3ec4872eb1ce2418fdebe6421932e56f9932b4f33a9adb93993a14"
+        ), "max-miniapp-nextjs/src/lib/omnia/analytics.ts"
     for name, complete_tree in golden.items():
         if name == "max-miniapp-nextjs":
             complete_tree = (
@@ -136,6 +166,7 @@ def main() -> None:
                 | analytics_overrides
                 | consent_overrides
                 | catalog_overrides
+                | owner_overrides
             )
         omissions = _EXPORT_OMISSIONS[name]
         assert omissions <= complete_tree.keys(), f"unknown frozen export omissions: {name}"
@@ -152,6 +183,7 @@ def main() -> None:
                 entry = consent_overrides.get(relative, entry)
                 entry = compliance_overrides.get(relative, entry)
                 entry = catalog_overrides.get(relative, entry)
+                entry = owner_overrides.get(relative, entry)
             content = exported[relative]
             data = content.encode("utf-8") if isinstance(content, str) else content
             assert hashlib.sha256(data).hexdigest() == entry["sha256"], f"{name}/{relative}"

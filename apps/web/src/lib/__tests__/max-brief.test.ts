@@ -48,6 +48,12 @@ const longBrief = {
 it("preserves the complete long brief including its final requirement", () => {
   expect(buildMaxProjectPrompt(longBrief)).toContain(longBrief.idea);
 });
+
+it("includes explicit owner modules without exposing private diary data", () => {
+  const prompt = buildMaxProjectPrompt({ ...longBrief, managementModules: ["catalog", "orders"] });
+  expect(prompt).toContain("Управление в Yleum: Каталог, Заказы");
+  expect(buildMaxProjectPrompt({ ...longBrief, managementModules: [] })).toContain("без общего реестра личных данных");
+});
 it("rejects an oversized brief instead of sending a partial request", () => {
   expect(() => buildMaxProjectPrompt({ ...longBrief, idea: "я".repeat(20_001) })).toThrow();
 });

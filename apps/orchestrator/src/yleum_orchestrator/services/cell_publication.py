@@ -1000,6 +1000,14 @@ class CellPublicationService:
             trace.stage("start_app")
         await ensure_managed_infrastructure(manager, state)
         backend = self._backend(manager, state, release)
+        from yleum_orchestrator.services.owner_management_identity import (
+            owner_management_environment,
+        )
+
+        backend.owner_management_env = owner_management_environment(
+            request.project_id, request.owner_id, release["release_id"], request.runtime_env,
+        )
+        backend.owner_management_env["OMNIA_PUBLIC_APP_ORIGIN"] = str(release["prod_url"])
         manifest = MachineManifest.model_validate(release["manifest"])
         if manifest.app_config_protocol == 1:
             from yleum_orchestrator.services.app_business_config import write_app_config
@@ -1489,20 +1497,36 @@ class CellPublicationService:
             backend = self._backend(manager, state, release)
             manifest = MachineManifest.model_validate(release["manifest"])
             with machine_budget(240):
-                await machine_effect(
-                    manager.machine_runtime._start_boundary,
-                    state,
-                    manifest,
-                    backend,
-                    release["epoch"],
-                    public_mode=True,
-                    runtime_env={
-                        **request.runtime_env,
-                        "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"],
-                    },
-                    business_config_override=request.business_config,
-                    business_config_version=request.business_config_version,
+                product = await machine_effect(backend._container)
+                product_env = dict(
+                    item.split("=", 1)
+                    for item in (product.attrs.get("Config", {}).get("Env", []) if product else [])
+                    if "=" in item
                 )
+                binding = {
+                    "YLEUM_OWNER_PROJECT_ID": str(request.project_id),
+                    "YLEUM_OWNER_ID": str(request.owner_id),
+                    "YLEUM_OWNER_PUBLICATION_ID": str(release["release_id"]),
+                }
+                if all(product_env.get(key) == value for key, value in binding.items()):
+                    # A controller-bound release supports reconnect even without
+                    # a current key. Legacy apps have no such binding.
+                    backend = await self._start(manager, state, release, request, switch=False)
+                else:
+                    await machine_effect(
+                        manager.machine_runtime._start_boundary,
+                        state,
+                        manifest,
+                        backend,
+                        release["epoch"],
+                        public_mode=True,
+                        runtime_env={
+                            **request.runtime_env,
+                            "OMNIA_PUBLIC_APP_ORIGIN": release["prod_url"],
+                        },
+                        business_config_override=request.business_config,
+                        business_config_version=request.business_config_version,
+                    )
                 gateway = backend._lookup(
                     backend.client.containers, backend.stem + "-gateway", "max-gateway"
                 )
@@ -2136,8 +2160,8 @@ class CellPublicationService:
                 encoding="utf-8"
             )
         )
-        # Secrets and rollout annotations change; the app's claims and image do not,
-        # so only the core and the boundary restart.
+        # Ordinary metadata leaves the app pod unchanged. Bot-key rotation also
+        # rotates its purpose keys; Kubernetes rolls that same accepted image.
         with machine_budget(240):
             await machine_effect(
                 self._kubernetes().runtime.publish,
